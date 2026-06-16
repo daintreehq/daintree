@@ -625,6 +625,7 @@ export interface InstalledPluginRecord {
  * - `manifest_invalid` — `plugin.json` failed the strict Zod schema
  * - `engine_incompatible` — `engines.daintree` range doesn't satisfy the running version
  * - `namespace_unauthorized` — reserved `daintree.*` name or publisher/name disagreement
+ * - `name_collision` — the id matches a built-in or a launch-reserved plugin name; rejected before the swap so no broken dir is left
  * - `hash_failed` — couldn't compute the archive SHA-256
  * - `unload_failed` — the existing plugin's disposer cascade threw
  * - `swap_failed` — atomic rename failed but the prior state was restored
@@ -644,6 +645,7 @@ export type PluginInstallErrorCode =
   | "manifest_invalid"
   | "engine_incompatible"
   | "namespace_unauthorized"
+  | "name_collision"
   | "hash_failed"
   | "unload_failed"
   | "swap_failed"

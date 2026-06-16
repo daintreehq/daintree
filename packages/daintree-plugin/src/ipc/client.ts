@@ -1,7 +1,28 @@
 import net from "node:net";
-import { getCliSocketPath } from "../lib/socketPath.js";
+import { getCliSocketPath, readCliControlFile } from "../lib/socketPath.js";
 
 const REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * Resolve where to connect and which auth token to present (#10518). The host
+ * advertises both in its control-discovery file on startup; the CLI reads it so
+ * it can authenticate and (on Windows) find the per-launch randomized pipe name.
+ * An explicit `DAINTREE_CLI_SOCKET` override still wins for the path — the token
+ * is still pulled from the control file when one exists. With no control file
+ * the host isn't running; fall back to the default path so the connect surfaces
+ * a clean "not running" error naming it.
+ */
+async function resolveEndpoint(): Promise<{ socketPath: string; token?: string }> {
+  const override = process.env.DAINTREE_CLI_SOCKET;
+  const control = await readCliControlFile();
+  if (override && override.length > 0) {
+    return { socketPath: override, token: control?.token };
+  }
+  if (control) {
+    return { socketPath: control.socketPath, token: control.token };
+  }
+  return { socketPath: getCliSocketPath() };
+}
 
 /**
  * Daintree isn't reachable on the control socket. `ENOENT` means no instance is
@@ -30,8 +51,8 @@ interface CliResponse {
  * `result` (or reject with the `error.message`). Connection-level failures map
  * to {@link DaintreeUnavailableError} with a human-facing message.
  */
-export function sendCliRequest(method: string, params?: unknown): Promise<unknown> {
-  const socketPath = getCliSocketPath();
+export async function sendCliRequest(method: string, params?: unknown): Promise<unknown> {
+  const { socketPath, token } = await resolveEndpoint();
   return new Promise((resolve, reject) => {
     const socket = net.createConnection({ path: socketPath });
     let buffer = "";
@@ -52,7 +73,7 @@ export function sendCliRequest(method: string, params?: unknown): Promise<unknow
     socket.setEncoding("utf8");
 
     socket.on("connect", () => {
-      socket.write(JSON.stringify({ id: 1, method, params }) + "\n");
+      socket.write(JSON.stringify({ id: 1, method, params, token }) + "\n");
     });
 
     socket.on("data", (chunk: string) => {

@@ -167,6 +167,35 @@ export class PluginInstaller {
   }
 
   /**
+   * Revoke every TOFU consent pin for a plugin, durably. Shared by the uninstall
+   * flow and the upgrade path: a plugin's MCP consent pins are keyed by
+   * `(pluginId, serverId, toolName)` and survive a same-id reinstall/upgrade, so
+   * any code change must reset them or the new code silently inherits the prior
+   * version's approvals (a consent bypass; #10518).
+   *
+   * Durable + best-effort: if the in-memory drop succeeds but the persist fails,
+   * the pins rehydrate on the next launch and the bypass returns —
+   * `revokeAllForPlugin` returns whether the snapshot persisted, so retry once on
+   * a transient failure, then surface it loudly rather than swallow it. A failed
+   * purge must NEVER strand the caller (uninstall still deletes the dir; upgrade
+   * still installs): the worst case is a skipped re-prompt the user can revoke
+   * manually from the consent settings. `context` names the caller in the logs.
+   */
+  private _purgeConsentPins(pluginId: string, context: "uninstall" | "upgrade"): void {
+    try {
+      const consent = getPluginMcpConsentService();
+      const purged = consent.revokeAllForPlugin(pluginId) || consent.revokeAllForPlugin(pluginId);
+      if (!purged) {
+        console.error(
+          `[PluginService] consent purge for "${pluginId}" (${context}) failed to persist after a retry; stale TOFU pins may rehydrate on restart — revoke them manually from plugin-MCP consent settings`
+        );
+      }
+    } catch (err) {
+      console.error(`[PluginService] consent purge during ${context} of "${pluginId}" threw:`, err);
+    }
+  }
+
+  /**
    * Atomically install a plugin from a `.dntr` archive path or a pre-extracted
    * directory. This is the ONLY path that mutates {@link PluginInstallerDeps.getPluginsRoot}
    * — direct IPC writes to the plugins directory are a review blocker (#9292).
@@ -323,6 +352,28 @@ export class PluginInstaller {
         existing = false;
       }
 
+      // Reject a name collision BEFORE the swap (#10518). The `existing` probe
+      // only sees the user plugins root, so without this a `.dntr` whose id
+      // matches a built-in (never in the user root) or a launch-reserved name
+      // whose dir was removed would be swapped in, then rejected at load — and
+      // on a fresh install the rollback leaves a broken dir behind, a permanent
+      // collision on every future scan. A built-in can never be replaced; a
+      // reserved name with no on-disk dir (`!existing`) isn't ours to claim.
+      // Returning here (before the swap) leaves nothing on disk — the temp dir
+      // is reaped by the `finally`.
+      if (this.deps.getPlugin(pluginId)?.isBuiltin) {
+        return fail(
+          "name_collision",
+          `"${pluginId}" is a built-in plugin and can't be replaced by an installed one`
+        );
+      }
+      if (!existing && this.deps.reservedNames.has(pluginId)) {
+        return fail(
+          "name_collision",
+          `"${pluginId}" conflicts with a reserved plugin name and can't be installed`
+        );
+      }
+
       // Abort before the irreversible swap if the lock was compromised — a
       // second instance may now hold it and racing the rename would corrupt
       // the directory. Nothing has been written to the final location yet.
@@ -367,6 +418,20 @@ export class PluginInstaller {
       // The temp dir was renamed into place — drop the handle so the `finally`
       // cleanup doesn't delete the freshly installed plugin.
       tmpDir = null;
+
+      // An upgrade replaces the plugin's code under the SAME id, but its TOFU
+      // consent pins are keyed by `(pluginId, serverId, toolName)` — stable
+      // across the swap. Without a purge a compromised "latest" archive inherits
+      // the prior version's MCP approvals (a consent bypass; #10518). Treat any
+      // code change as a trust reset: revoke unconditionally on every upgrade so
+      // the new code must re-prompt, mirroring the uninstall purge. Done after
+      // the swap (the new code is now on disk) and before it loads/activates, so
+      // it can't use a stale pin. Best-effort + durable: a failed persist is
+      // logged loudly but never strands the install (worst case is a skipped
+      // re-prompt the user can revoke manually).
+      if (existing) {
+        this._purgeConsentPins(pluginId, "upgrade");
+      }
 
       // 5. Persist provenance and load the new plugin. On an upgrade over an
       // existing install (the swap path) preserve the original `installedAt`
@@ -691,9 +756,9 @@ export class PluginInstaller {
       // Follow redirects manually so every hop's host is revalidated through the
       // private/loopback guard — the original-host check above is bypassable by
       // a public URL that 30x-redirects to loopback/link-local/RFC1918 (SSRF).
-      // A literal-host guard only; a DNS-rebinding TOCTOU (a public hostname
-      // resolving to a private address at connect time) remains, matching the
-      // residual on the install path and the manifest allowedUrls validator.
+      // The guard also re-resolves each hop's DNS and rejects a private resolved
+      // IP, closing the DNS-rebinding TOCTOU (#10518); a sub-ms residual remains
+      // because net.fetch re-resolves independently (see pluginDownloadPolicy).
       let response: Awaited<ReturnType<typeof net.fetch>>;
       try {
         const guarded = await fetchWithPrivateHostGuard(net.fetch, url, {
@@ -703,8 +768,8 @@ export class PluginInstaller {
           return {
             status: "fetch-failed",
             message:
-              guarded.reason === "private-redirect"
-                ? "Refusing to follow a redirect to a private or loopback address"
+              guarded.reason === "private-redirect" || guarded.reason === "private-host"
+                ? "Refusing to fetch an update from a private or loopback address"
                 : "The update URL followed too many redirects",
           };
         }
@@ -919,32 +984,9 @@ export class PluginInstaller {
       // Purge every TOFU consent pin for the plugin unconditionally — pluginIds
       // are author-controlled, so a reinstall (or rebuild) must re-prompt rather
       // than inherit prior approvals. Decoupled from `wipeSettings`: stale pins
-      // are a consent-bypass risk even when secrets are kept.
-      //
-      // The purge must be DURABLE: if the in-memory drop succeeds but the
-      // persist fails, the stale pins rehydrate on the next launch and a
-      // same-name reinstall silently inherits prior consent (a consent bypass).
-      // `revokeAllForPlugin` returns whether the snapshot persisted; retry once
-      // on a transient failure, then surface it loudly rather than swallowing —
-      // a silent failure is the exact bug we're guarding against. A failed purge
-      // must NOT strand the uninstall: the on-disk deletion below still runs, so
-      // the plugin's code is gone even if its consent pins outlive it (the worst
-      // case is a re-prompt that was skipped, which the user can revoke manually
-      // from the consent settings).
-      try {
-        const consent = getPluginMcpConsentService();
-        const purged = consent.revokeAllForPlugin(pluginId) || consent.revokeAllForPlugin(pluginId);
-        if (!purged) {
-          console.error(
-            `[PluginService] consent purge for "${pluginId}" failed to persist after a retry; stale TOFU pins may rehydrate on restart — revoke them manually from plugin-MCP consent settings`
-          );
-        }
-      } catch (err) {
-        console.error(
-          `[PluginService] consent purge during uninstall of "${pluginId}" threw:`,
-          err
-        );
-      }
+      // are a consent-bypass risk even when secrets are kept. Shared with the
+      // upgrade path so both close the same consent-inheritance gap (#10518).
+      this._purgeConsentPins(pluginId, "uninstall");
 
       // Purge JIT host-capability grants for the same reason — a same-name
       // reinstall must re-prompt on first use of shell:exec / fs:*-write /

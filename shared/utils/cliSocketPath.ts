@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import fs from "node:fs/promises";
 
 /**
  * Single source of truth for the local control-socket path that lets the
@@ -21,4 +22,77 @@ export function getCliSocketPath(): string {
     return "\\\\.\\pipe\\daintree-cli";
   }
   return path.join(os.homedir(), ".daintree", "cli.sock");
+}
+
+/**
+ * Path to the control-discovery file the host writes on startup and the CLI
+ * reads to learn (a) which socket/pipe to connect to and (b) the per-launch auth
+ * token to present (#10518). Lives in the same `~/.daintree` directory the host
+ * locks to `0700`, so on Unix it inherits that owner-only protection; on Windows
+ * the user-profile NTFS ACL keeps other users out. Its absence is the canonical
+ * "no Daintree instance is running" signal. `DAINTREE_CLI_CONTROL_FILE` overrides
+ * it (used by tests to point at a temp file).
+ */
+export function getCliControlFilePath(): string {
+  const override = process.env.DAINTREE_CLI_CONTROL_FILE;
+  if (override && override.length > 0) {
+    return override;
+  }
+  return path.join(os.homedir(), ".daintree", "cli-control.json");
+}
+
+/**
+ * What the host advertises to the CLI: the bound socket/pipe path plus the
+ * per-launch auth token the CLI must echo on every request frame. The token is
+ * the actual peer-authentication gate — a same-user 0700 dir protects it on
+ * Unix, and on Windows it makes the broad default named-pipe ACL unexploitable
+ * (a process that can connect still can't read the token).
+ */
+export interface CliControlInfo {
+  socketPath: string;
+  token: string;
+}
+
+/**
+ * Persist the control-discovery file, owner-only. Creates `~/.daintree` at
+ * `0700` if missing and writes the file at `0600`, re-asserting the mode on Unix
+ * in case it pre-existed with looser bits (a crashed prior run). No-op-safe to
+ * call on every `listen()`.
+ */
+export async function writeCliControlFile(filePath: string, info: CliControlInfo): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  await fs.writeFile(filePath, JSON.stringify(info), { mode: 0o600 });
+  if (process.platform !== "win32") {
+    await fs.chmod(filePath, 0o600).catch(() => {});
+  }
+}
+
+/** Best-effort removal of the control-discovery file on host shutdown. */
+export async function removeCliControlFile(filePath: string): Promise<void> {
+  await fs.rm(filePath, { force: true }).catch(() => {});
+}
+
+/**
+ * Read + validate the control-discovery file. Returns `null` when it's absent
+ * (no instance running) or malformed, so the CLI maps either to a clean
+ * "Daintree isn't running" error rather than throwing a parse error.
+ */
+export async function readCliControlFile(
+  filePath: string = getCliControlFilePath()
+): Promise<CliControlInfo | null> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(filePath, "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<CliControlInfo>;
+    if (typeof parsed.socketPath === "string" && typeof parsed.token === "string") {
+      return { socketPath: parsed.socketPath, token: parsed.token };
+    }
+  } catch {
+    // fall through
+  }
+  return null;
 }
