@@ -41,10 +41,25 @@ describe("manifest-level actionId namespace gate (issue #10565)", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts a keybinding-driven built-in action (BuiltInKeyAction half of the union)", () => {
+    // BuiltInActionId = BuiltInKeyAction | BuiltInRuntimeActionId. The allowlist
+    // must cover both halves, or a legitimate keybinding to a key-action like
+    // app.settings is rejected and the whole plugin fails to load.
+    const result = schema.safeParse(
+      manifestWith({
+        contributes: { keybindings: [contributionEntry.keybindings("app.settings")] },
+      })
+    );
+    expect(result.success).toBe(true);
+  });
+
   it("accepts an own-namespace actionId even without a matching contributes.commands entry", () => {
     // Plugin actions are frequently registered imperatively via
     // host.registerAction, which is invisible at parse time — so an id in the
-    // plugin's own namespace must pass without a declared command.
+    // plugin's own namespace must pass without a declared command. A typo within
+    // the own namespace (e.g. acme.my-plugin.typoo) also passes — that is an
+    // intentional consequence of namespace-ownership gating, not a gap to close;
+    // catching a non-existent own-namespace suffix requires the runtime registry.
     const result = schema.safeParse(
       manifestWith({
         contributes: {
@@ -95,6 +110,32 @@ describe("manifest-level actionId namespace gate (issue #10565)", () => {
       }
     }
   );
+
+  it("reports a separate issue at the correct index for each invalid entry", () => {
+    const result = schema.safeParse(
+      manifestWith({
+        contributes: {
+          toolbarButtons: [
+            contributionEntry.toolbarButtons("acme.my-plugin.ok"),
+            contributionEntry.toolbarButtons("other.plugin.foo"),
+            contributionEntry.toolbarButtons("another.plugin.bar"),
+          ],
+        },
+      })
+    );
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const unknownNamespaceIssues = result.error.issues.filter(
+        (i) =>
+          (i as { params?: { errorCode?: string } }).params?.errorCode ===
+          "action_id_unknown_namespace"
+      );
+      expect(unknownNamespaceIssues.map((i) => i.path)).toEqual([
+        ["contributes", "toolbarButtons", 1, "actionId"],
+        ["contributes", "toolbarButtons", 2, "actionId"],
+      ]);
+    }
+  });
 
   it.each(CONTRIBUTION_ARRAYS)("accepts a built-in actionId contributed via %s", (arrayName) => {
     const result = schema.safeParse(

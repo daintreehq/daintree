@@ -8,7 +8,8 @@ import type { PluginHostApi, PluginIpcContext } from "../../../../shared/types/p
  * effect, and so a single read of this file maps 1:1 to the SDK contract.
  *
  * Declared in plugin.json: one toolbar button + one menu item pointing at the
- * `daintree.hello.ping` action, plus a `hello:*` file-decoration provider.
+ * imperatively-registered `daintree.hello.greet` action, plus a `hello:*`
+ * file-decoration provider.
  */
 export async function activate(host: PluginHostApi): Promise<() => void> {
   // IPC handler the renderer reaches over `plugin:daintree.hello:ping`.

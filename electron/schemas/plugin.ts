@@ -5,6 +5,7 @@ import { z } from "zod";
 import { BUILT_IN_PLUGIN_CAPABILITIES, PLUGIN_CATEGORY_IDS } from "../../shared/types/plugin.js";
 import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
 import { BUILT_IN_ACTION_IDS } from "../../shared/config/actionIds.js";
+import { KEY_ACTION_VALUES } from "../../shared/types/keymap.js";
 import type {
   PluginManifest,
   PanelContribution,
@@ -23,7 +24,16 @@ export const SAFE_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
 export const SCOPED_PLUGIN_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
-const BUILT_IN_ACTION_ID_SET: ReadonlySet<string> = new Set(BUILT_IN_ACTION_IDS);
+// The full set of built-in action ids a plugin contribution may reference:
+// `BuiltInActionId = BuiltInKeyAction | BuiltInRuntimeActionId`
+// (shared/types/actions.ts). `BUILT_IN_ACTION_IDS` covers only the runtime
+// half — keybinding-driven ids (nav.*, tab.*, app.settings, layout.undo, …)
+// live in `KEY_ACTION_VALUES` and are equally valid dispatch targets, so both
+// must seed the allowlist or a legitimate keybinding contribution is rejected.
+const BUILT_IN_ACTION_ID_SET: ReadonlySet<string> = new Set([
+  ...BUILT_IN_ACTION_IDS,
+  ...KEY_ACTION_VALUES,
+]);
 
 export const PanelContributionSchema = z
   .object({
