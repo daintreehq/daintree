@@ -103,8 +103,38 @@ describe("resolveForCwd", () => {
     });
     expect(result.providerId).toBe("gitea");
     expect(result.namespaceId).toBe("acme.gitea");
-    expect(result.repoRef).toEqual({ owner: "owner", repo: "repo" });
+    // `projectPath` is the worktree root, stamped onto the parsed ref (#10563).
+    expect(result.repoRef).toEqual({ owner: "owner", repo: "repo", projectPath: "/repo" });
     expect(parseRemote).toHaveBeenCalledWith("https://gitea.example.com/owner/repo.git");
+  });
+
+  it("stamps the worktree root onto repoRef.projectPath (#10563)", async () => {
+    gitServiceMock.getRepositoryRoot.mockResolvedValue("/repo-worktrees/feature");
+    const parseRemote = vi.fn(() => ({ owner: "owner", repo: "repo", rawData: null }));
+    registryMock.getForgeProviderImpl.mockReturnValue({ parseRemote });
+    resolverMock.resolveForgeProvider.mockReturnValue({
+      entry: giteaEntry,
+      resolvedVia: "hostname",
+    });
+
+    const result = await resolveForCwd("/repo-worktrees/feature/src");
+
+    expect(result.repoRef.projectPath).toBe("/repo-worktrees/feature");
+    expect(gitServiceMock.getRepositoryRoot).toHaveBeenCalledWith("/repo-worktrees/feature/src");
+  });
+
+  it("falls back to the raw cwd for projectPath when getRepositoryRoot fails (#10563)", async () => {
+    gitServiceMock.getRepositoryRoot.mockRejectedValue(new Error("not a git repo"));
+    const parseRemote = vi.fn(() => ({ owner: "owner", repo: "repo", rawData: null }));
+    registryMock.getForgeProviderImpl.mockReturnValue({ parseRemote });
+    resolverMock.resolveForgeProvider.mockReturnValue({
+      entry: giteaEntry,
+      resolvedVia: "hostname",
+    });
+
+    const result = await resolveForCwd("/repo/src");
+
+    expect(result.repoRef.projectPath).toBe("/repo/src");
   });
 
   it("looks up the project by the main worktree path, not the linked-worktree cwd", async () => {

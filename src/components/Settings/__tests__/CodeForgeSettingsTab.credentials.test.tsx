@@ -211,6 +211,22 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
     expect(screen.queryByTestId("forge-credential-form")).toBeNull();
   });
 
+  it("labels a local authless provider instead of 'No configuration needed' (#10563)", async () => {
+    const localProvider: ForgeProviderEntry = {
+      pluginId: "acme",
+      contribution: { id: "mock", name: "Mock Forge", matches: ["mock.local"], kind: "local" },
+    };
+    installForgeMocks({ providers: [localProvider] });
+
+    render(<CodeForgeSettingsTab activeSubtab="acme.mock" onSubtabChange={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Local provider — no authentication needed")).toBeTruthy();
+    });
+    expect(screen.queryByText("No configuration needed")).toBeNull();
+    expect(screen.queryByTestId("forge-credential-form")).toBeNull();
+  });
+
   it("reloads credential status when the selected provider changes", async () => {
     const { getCredentialStatus } = installForgeMocks({
       providers: [

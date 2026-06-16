@@ -63,6 +63,7 @@ function makeMockBridge(impl: ForgeProviderImpl) {
         remoteUrl: string | null;
         forgeProviderOverride: string | null;
         globalDefaultProviderId: string | null;
+        projectPath?: string | null;
       }) => Promise<ForgeResolveProviderResult>
     >(async () => ({
       status: "resolved",
@@ -464,6 +465,22 @@ describe("PullRequestService", () => {
 
     expect(bridge.resolveProvider).toHaveBeenCalledWith(
       expect.objectContaining({ remoteUrl: "https://github.com/originowner/originrepo.git" })
+    );
+
+    pullRequestService.destroy();
+  });
+
+  it("forwards the worktree cwd as projectPath so main can stamp the RepoRef (#10563)", async () => {
+    mockForgeProviderUnresolved();
+    const bridge = lastMockBridge!;
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+
+    pullRequestService.initialize("/repo-worktrees/feature");
+    await pullRequestService.refresh();
+
+    expect(bridge.resolveProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ projectPath: "/repo-worktrees/feature" })
     );
 
     pullRequestService.destroy();

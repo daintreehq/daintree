@@ -28,6 +28,16 @@ export interface RepoRef {
   owner: string;
   repo: string;
   rawData: unknown;
+  /**
+   * Absolute on-disk root of the worktree this call pertains to, injected by
+   * the host so a file- or CLI-backed provider doesn't have to reconstruct the
+   * directory from `repo` via `getActiveWorktree()`. Present on refs the host
+   * resolves for a concrete project/worktree; absent for synthetic refs or
+   * legacy callers, so consume it defensively (`if (repo.projectPath)`). A
+   * network provider ignores it. Never embed it in a remote API payload or a
+   * persisted cache key — it's host-local context, not repository identity.
+   */
+  projectPath?: string;
 }
 
 /**
@@ -984,6 +994,13 @@ export interface RegisteredForgeProvider {
 }
 
 /**
+ * Whether a forge provider reaches a remote forge over the network or serves a
+ * local/offline data source. Display-only signal; see
+ * {@link ForgeProviderContribution.kind}.
+ */
+export type ForgeProviderKind = "local" | "network";
+
+/**
  * `forgeProviders` manifest entry. Eager (manifest-driven) registration
  * populates the Preferences UI and remote-routing table before any plugin
  * code runs; the implementation handler binds lazily on first use.
@@ -993,6 +1010,16 @@ export interface ForgeProviderContribution {
   id: string;
   /** Display label in Preferences → Forge Integrations. */
   name: string;
+  /**
+   * Whether the provider talks to a remote forge over the network (`"network"`,
+   * the default when omitted) or serves a local/offline data source backed by
+   * files or a CLI (`"local"`). Display-only and frozen at 1.0: the host never
+   * gates auth or routing on it — a `"local"` provider still owns its auth
+   * methods (use {@link localAuthStubs} to satisfy them). Preferences uses it
+   * only to label a provider that declares no {@link credentialFields} as
+   * deliberately authless rather than unconfigured.
+   */
+  kind?: ForgeProviderKind;
   /**
    * Exact hostnames for git remote URLs; first matching provider wins.
    *
@@ -1061,6 +1088,8 @@ export interface ForgeProviderDescriptor {
   id: string;
   name?: string;
   matches?: string[];
+  /** See {@link ForgeProviderContribution.kind}. */
+  kind?: ForgeProviderKind;
   capabilities?: ForgeCapabilityHint[];
   settingsScopeRef?: string;
   viewRefs?: string[];

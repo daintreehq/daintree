@@ -115,7 +115,13 @@ export type {
   ForgeProviderImpl,
   ForgeProviderDescriptor,
   ForgeProviderContribution,
+  ForgeProviderKind,
 } from "./forge.js";
+
+// `localAuthStubs` is a runtime value (the no-op auth methods a local/offline
+// provider spreads into its impl), so it is a value export — `export type`
+// would strip the binding and break `{ ...localAuthStubs }` at runtime.
+export { localAuthStubs } from "../utils/forgeProviderHelpers.js";
 
 // ── File decoration provider contract ───────────────────────────────
 

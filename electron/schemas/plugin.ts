@@ -234,6 +234,7 @@ export const ForgeProviderContributionSchema = z
     id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
     name: z.string().min(1),
     matches: z.array(z.string().min(1)).min(1),
+    kind: z.enum(["local", "network"]).optional(),
     capabilities: z.array(z.string().min(1)).optional(),
     credentialFields: z.array(CredentialFieldSchema).optional(),
     settingsScopeRef: z.string().min(1).optional(),
