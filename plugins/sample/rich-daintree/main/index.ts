@@ -60,7 +60,9 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
         await host.storage.set(KEY, { n: 3 }, "worktree");
         report.worktree = await host.storage.get(KEY, "worktree");
       } catch (err) {
-        report.worktreeError = err instanceof Error ? err.message : String(err);
+        // String() (not the instanceof-Error ternary) keeps the sample plugin
+        // bundle dependency-free; the thrown host message is what the spec checks.
+        report.worktreeError = String(err);
       }
 
       // Delete is a real method (settings has none) — confirm it removes the key.
