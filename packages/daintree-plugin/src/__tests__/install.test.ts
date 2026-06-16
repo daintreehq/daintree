@@ -19,10 +19,15 @@ beforeEach(async () => {
       ? `\\\\.\\pipe\\daintree-install-test-${process.pid}-${randomUUID()}`
       : path.join(tmpDir, "cli.sock");
   process.env.DAINTREE_CLI_SOCKET = socketPath;
+  // Point control-file discovery at a path that never exists so the client
+  // can't accidentally read a real `~/.daintree/cli-control.json` on a dev box
+  // — the socket override drives the connection in these tests.
+  process.env.DAINTREE_CLI_CONTROL_FILE = path.join(tmpDir, "cli-control.json");
 });
 
 afterEach(async () => {
   delete process.env.DAINTREE_CLI_SOCKET;
+  delete process.env.DAINTREE_CLI_CONTROL_FILE;
   if (server) {
     await new Promise<void>((resolve) => server!.close(() => resolve()));
     server = null;
