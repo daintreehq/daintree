@@ -7732,9 +7732,7 @@ describe("Deferred activation — activatePlugin", () => {
               showInPalette: true,
             },
           ],
-          views: [
-            { id: "viewer", name: "Viewer", componentPath: "view.mjs", location: "panel" },
-          ],
+          views: [{ id: "viewer", name: "Viewer", componentPath: "view.mjs", location: "panel" }],
         },
       })
     );
@@ -7781,9 +7779,7 @@ describe("Deferred activation — activatePlugin", () => {
               showInPalette: true,
             },
           ],
-          views: [
-            { id: "viewer", name: "Viewer", componentPath: "view.mjs", location: "panel" },
-          ],
+          views: [{ id: "viewer", name: "Viewer", componentPath: "view.mjs", location: "panel" }],
         },
       })
     );
@@ -7828,9 +7824,7 @@ describe("Deferred activation — activatePlugin", () => {
               showInPalette: true,
             },
           ],
-          views: [
-            { id: "viewer", name: "Viewer", componentPath: "view.mjs", location: "panel" },
-          ],
+          views: [{ id: "viewer", name: "Viewer", componentPath: "view.mjs", location: "panel" }],
         },
       })
     );
