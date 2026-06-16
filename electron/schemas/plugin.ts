@@ -367,6 +367,11 @@ const PluginDetectionConfidenceSchema = z.number().min(0).max(1);
  */
 export const AgentDetectionConfigSchema = z
   .object({
+    // Required and non-empty, mirroring the host-internal `AgentDetectionConfig`
+    // type (where `primaryPatterns` is non-optional): a detection block exists to
+    // describe the working state, and an empty `primaryPatterns` makes
+    // `buildPatternConfig` return undefined anyway. A "prompt/completion only"
+    // agent without a working pattern is out of scope for the declared schema.
     primaryPatterns: PluginDetectionPatternArraySchema.min(1),
     fallbackPatterns: PluginDetectionPatternArraySchema.optional(),
     bootCompletePatterns: PluginDetectionPatternArraySchema.optional(),

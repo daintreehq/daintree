@@ -66,6 +66,30 @@ describe("pluginAgentRegistry (issue #9560)", () => {
     expect(config?.detection?.completionPatterns).toEqual(["done"]);
   });
 
+  it("round-trips every detection field onto the resolved config (#10587)", () => {
+    // Guards against silent truncation if contributionToAgentConfig ever stops
+    // forwarding the detection object wholesale.
+    const detection = {
+      primaryPatterns: ["working"],
+      fallbackPatterns: ["starting"],
+      bootCompletePatterns: ["ready"],
+      promptPatterns: ["waiting"],
+      promptHintPatterns: ["\\[y/n\\]"],
+      completionPatterns: ["done"],
+      scanLineCount: 12,
+      promptScanLineCount: 4,
+      debounceMs: 9000,
+      promptFastPathMinQuietMs: 9000,
+      primaryConfidence: 0.9,
+      fallbackConfidence: 0.7,
+      promptConfidence: 0.8,
+      completionConfidence: 0.85,
+      titleStatePatterns: { working: ["Running"], waiting: ["Idle"] },
+    };
+    registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, detection }]);
+    expect(getEffectiveAgentConfig("acme-agent")?.detection).toEqual(detection);
+  });
+
   it("omits the detection field entirely for a launch-only contribution (#10587)", () => {
     // The common case carries no detection block — it must stay absent rather
     // than land as `detection: undefined`, so output-volume state is the only

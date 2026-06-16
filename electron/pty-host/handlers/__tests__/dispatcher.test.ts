@@ -207,6 +207,52 @@ describe("createPtyHostMessageDispatcher", () => {
     }
   });
 
+  it("replaces the plugin-agent registry wholesale on a later sync (#10587)", () => {
+    clearPluginAgentRegistryForTests();
+    try {
+      const ctx = makeCtx();
+      const dispatch = createPtyHostMessageDispatcher(ctx);
+      const entry = (id: string) => ({
+        id,
+        name: id,
+        command: id,
+        color: "#3366ff",
+        iconId: "terminal",
+        supportsContextInjection: false,
+      });
+
+      dispatch({ type: "set-plugin-agent-registry", registry: { "plugin-a": entry("plugin-a") } });
+      expect(getEffectiveAgentConfig("plugin-a")).toBeDefined();
+
+      // A subsequent sync (e.g. plugin A unloaded, plugin B loaded) replaces the
+      // snapshot wholesale — the absent agent is gone.
+      dispatch({ type: "set-plugin-agent-registry", registry: { "plugin-b": entry("plugin-b") } });
+      expect(getEffectiveAgentConfig("plugin-a")).toBeUndefined();
+      expect(getEffectiveAgentConfig("plugin-b")).toBeDefined();
+    } finally {
+      clearPluginAgentRegistryForTests();
+    }
+  });
+
+  it("ignores a malformed plugin-agent registry shape without crashing (#10587)", () => {
+    clearPluginAgentRegistryForTests();
+    try {
+      const ctx = makeCtx();
+      const dispatch = createPtyHostMessageDispatcher(ctx);
+      // null and array are not valid Record shapes — the handler must no-op them
+      // rather than corrupt the snapshot.
+      expect(() =>
+        dispatch({ type: "set-plugin-agent-registry", registry: null as never })
+      ).not.toThrow();
+      expect(() =>
+        dispatch({ type: "set-plugin-agent-registry", registry: [] as never })
+      ).not.toThrow();
+      expect(getEffectiveAgentConfig("anything")).toBeUndefined();
+    } finally {
+      clearPluginAgentRegistryForTests();
+    }
+  });
+
   it("returns a promise for handlers that perform real async work", async () => {
     const ctx = makeCtx();
     ctx.ptyManager.gracefulKill = vi.fn(async () => "session-42");
