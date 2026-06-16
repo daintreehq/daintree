@@ -193,20 +193,25 @@ export default function Dashboard({ panelId, pluginId, disposeSignal }: PanelVie
 }
 ```
 
-The same view in a **raw ESM module** (no `@daintreehq/plugin-vite` bundling) cannot import `usePluginEvent` — subscribe through the host bridge instead. `window.electron.plugin.on(pluginId, channel, cb)` returns an unsubscribe function; return it from the effect for cleanup.
+The same view as a **raw ESM module** (loaded verbatim by `plugin://`, no `@daintreehq/plugin-vite` bundling) cannot import `usePluginEvent` — subscribe through the host bridge instead. Because nothing transpiles the file, it ships as valid browser ESM: the bare `react` specifier resolves through the host import map, and `createElement` avoids any JSX transform. `window.electron.plugin.on(pluginId, channel, cb)` returns an unsubscribe function; return it from the effect for cleanup.
 
-```tsx
-// src/dashboard.tsx — raw ESM variant
-import { useEffect, useState } from "react";
+```js
+// src/dashboard.js — raw ESM variant, served as-is over plugin://
+import { createElement, useEffect, useState } from "react";
 
-export default function Dashboard({ panelId, pluginId }) {
+export default function Dashboard(props) {
+  const { panelId, pluginId } = props;
   const [worktreeName, setWorktreeName] = useState(null);
   useEffect(() => {
     // Same payload host.postToPanel("worktree", …) pushes; usePluginEvent wraps this.
     const off = window.electron.plugin.on(pluginId, "worktree", (wt) => setWorktreeName(wt.name));
     return off;
   }, [pluginId]);
-  return <div data-panel-id={panelId}>Dashboard for {worktreeName ?? "no worktree"}</div>;
+  return createElement(
+    "div",
+    { "data-panel-id": panelId },
+    `Dashboard for ${worktreeName ?? "no worktree"}`
+  );
 }
 ```
 
