@@ -1339,6 +1339,33 @@ export interface PluginGitApi {
 }
 
 /**
+ * Host-mediated access to the OS clipboard, backing the `clipboard:read` /
+ * `clipboard:write` capability tokens. Text-only — the surface deliberately
+ * omits image/HTML/file-list variants so a plugin cannot read or smuggle
+ * richer payloads than it declared. Both methods run in the main process
+ * (Electron's `clipboard` module is unavailable in the plugin utility worker),
+ * so they remain callable from a headless plugin with no mounted panel.
+ *
+ * Like {@link PluginFsApi} and {@link PluginGitApi} this is NOT revoke-guarded:
+ * plugins read/write from post-activation timers and callbacks. Once the plugin
+ * is unloaded every method rejects.
+ */
+export interface PluginClipboardApi {
+  /**
+   * Replace the clipboard's contents with `text`. Gated on `clipboard:write`.
+   * Rejects with a `PAYLOAD_TOO_LARGE:` prefix when `text` exceeds 8 MiB by
+   * UTF-8 byte count (mirroring the renderer IPC clipboard guard).
+   */
+  writeText(text: string): Promise<void>;
+  /**
+   * Read the clipboard's text contents. Gated on `clipboard:read`. Resolves to
+   * `""` when the clipboard is empty or holds non-text content (image, file
+   * list) — it never rejects on content type.
+   */
+  readText(): Promise<string>;
+}
+
+/**
  * The revoke-guarded slice of {@link PluginHostApi}: the registration methods
  * that are only valid during `activate()`. The host revokes this surface once
  * activation resolves or times out — every method here throws if called
@@ -1772,6 +1799,14 @@ export interface PluginHostApi extends PluginActivationApi {
    * NOT revoke-guarded — same membership lifetime as {@link fs}.
    */
   readonly git: PluginGitApi;
+  /**
+   * Host-mediated OS clipboard surface. Reads gated on `clipboard:read`, writes
+   * on `clipboard:write`. Text-only; runs in the main process so it works from a
+   * headless plugin. See {@link PluginClipboardApi}.
+   *
+   * NOT revoke-guarded — same membership lifetime as {@link fs}.
+   */
+  readonly clipboard: PluginClipboardApi;
 }
 
 /**

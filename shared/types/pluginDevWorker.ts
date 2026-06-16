@@ -52,6 +52,8 @@ export type PluginHostCallMethod =
   | "git.diff"
   | "git.add"
   | "git.commit"
+  | "clipboard.writeText"
+  | "clipboard.readText"
   | "showQuickPick"
   | "showInputBox"
   | "showConfirm"
@@ -354,6 +356,11 @@ export interface GitOpParams {
   filePath?: string;
   paths?: string[];
   message?: string;
+}
+
+/** Params for `clipboard.writeText` (`host-call`). `clipboard.readText` takes no params. */
+export interface ClipboardWriteTextParams {
+  text: string;
 }
 
 /** Params for `process.spawn` (`host-call`). */
