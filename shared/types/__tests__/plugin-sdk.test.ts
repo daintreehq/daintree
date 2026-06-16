@@ -192,8 +192,9 @@ describe("plugin-sdk boundary", () => {
     });
 
     it("exports the built-in action catalog types (#10561)", () => {
-      // host.actions.list()/get() project the manifest; the typed BuiltInActionId
-      // union turns a wrong action id into a compile error at the dispatch site.
+      // host.actions.list()/get() project the manifest; the dispatch surface is
+      // typed against ActionId, which autocompletes built-ins while staying open
+      // to plugin-authored ids (#10581).
       expectTypeOf<PluginHostActionsApi>().toMatchTypeOf<object>();
       expectTypeOf<PluginActionManifestEntry>().toMatchTypeOf<object>();
       expectTypeOf<PluginCanDispatchResult>().toMatchTypeOf<string>();
@@ -277,6 +278,22 @@ describe("plugin-sdk boundary", () => {
       >();
       expectTypeOf<BuiltInActionId>().toMatchTypeOf<Parameters<PluginHostApi["dispatch"]>[0]>();
       expectTypeOf<string>().toMatchTypeOf<Parameters<PluginHostApi["dispatch"]>[0]>();
+
+      // Compile-only: the body is type-checked by tsc but never invoked, so the
+      // value access on `{} as PluginHostApi` (whose `actions`/`dispatch` are
+      // undefined at runtime) never throws.
+      const _typeChecks = (host: PluginHostApi, entry: PluginActionManifestEntry) => {
+        // The union is open to strings but still rejects non-string ids — guards
+        // against a regression to `unknown`/`any` on the param.
+        // @ts-expect-error — a numeric id is not an ActionId
+        void host.dispatch(42);
+        // A catalog entry's id round-trips back into dispatch/get/canDispatch
+        // with no cast — the reason PluginActionManifestEntry.id is ActionId.
+        void host.dispatch(entry.id);
+        void host.actions.get(entry.id);
+        void host.actions.canDispatch(entry.id);
+      };
+      void _typeChecks;
     });
 
     it("PluginCanDispatchResult is the three-state pre-flight verdict", () => {
