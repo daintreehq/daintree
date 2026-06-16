@@ -194,7 +194,7 @@ describe("fileDecorationRegistry — scope collision diagnostic", () => {
       { id: "c", scopes: ["worktree-files:/repo"] },
     ]);
     expect(warnSpy).toHaveBeenCalledTimes(2);
-    const named = warnSpy.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
+    const named = warnSpy.mock.calls.map((c: unknown[]) => String(c[0] ?? "")).join("\n");
     expect(named).toContain("first.plugin");
     expect(named).toContain("second.plugin");
   });
