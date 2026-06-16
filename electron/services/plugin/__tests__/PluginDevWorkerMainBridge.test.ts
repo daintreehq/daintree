@@ -359,6 +359,36 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(delReply).toMatchObject({ ok: true, result: undefined });
   });
 
+  // #10586: an omitted scope must reach the real host as `undefined` (not a
+  // defaulted "user") so the host resolves the key's manifest-declared scope. A
+  // forwarded "user" would make the host reject a project-scoped key.
+  it("forwards settings.get with an omitted scope as undefined", async () => {
+    const { host, workerHost } = makeBridge();
+    host.settings.get.mockResolvedValueOnce("project-value");
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "sgu",
+      method: "settings.get",
+      params: { key: "ref" },
+    });
+    await flush();
+    expect(host.settings.get).toHaveBeenCalledWith("ref", undefined);
+    const reply = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "sgu");
+    expect(reply).toMatchObject({ ok: true, result: "project-value" });
+  });
+
+  it("forwards an explicit settings.get scope unchanged", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "sge",
+      method: "settings.get",
+      params: { key: "ref", scope: "project" },
+    });
+    await flush();
+    expect(host.settings.get).toHaveBeenCalledWith("ref", "project");
+  });
+
   it("opens a storage subscription and pushes events to the worker", async () => {
     const { host, workerHost } = makeBridge();
     let emit: ((v: unknown) => void) | undefined;
