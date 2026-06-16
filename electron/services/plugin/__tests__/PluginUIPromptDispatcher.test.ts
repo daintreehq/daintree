@@ -28,7 +28,16 @@ const windowRefMock = vi.hoisted(() => ({
   getProjectViewManager: vi.fn((): unknown => null),
 }));
 
-vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
+const webContentsMock = vi.hoisted(() => {
+  const byId = new Map<number, unknown>();
+  return {
+    fromId: vi.fn((id: number) => byId.get(id) ?? undefined),
+    _register: (id: number, wc: unknown) => byId.set(id, wc),
+    _reset: () => byId.clear(),
+  };
+});
+
+vi.mock("electron", () => ({ ipcMain: ipcMainMock, webContents: webContentsMock }));
 vi.mock("../../../window/windowRef.js", () => ({
   getWindowRegistry: windowRefMock.getWindowRegistry,
   getProjectViewManager: windowRefMock.getProjectViewManager,
@@ -39,7 +48,7 @@ import type { PluginUiPromptParams } from "../../../../shared/types/pluginUiProm
 
 function makeWebContents(id: number) {
   const destroyed = new Set<() => void>();
-  return {
+  const wc = {
     id,
     isDestroyed: () => false,
     send: vi.fn(),
@@ -53,6 +62,9 @@ function makeWebContents(id: number) {
       for (const h of [...destroyed]) h();
     },
   };
+  // Register so `webContents.fromId(id)` resolves it (the cancel-targeting path).
+  webContentsMock._register(id, wc);
+  return wc;
 }
 
 /** Point the window registry at a single active WebContents. */
@@ -90,6 +102,8 @@ describe("PluginUIPromptDispatcher", () => {
     ipcMainMock.removeListener.mockClear();
     windowRefMock.getWindowRegistry.mockReset();
     windowRefMock.getProjectViewManager.mockReset();
+    webContentsMock._reset();
+    webContentsMock.fromId.mockClear();
   });
 
   it("sends the request to the active renderer and resolves with the response value", async () => {
@@ -134,6 +148,8 @@ describe("PluginUIPromptDispatcher", () => {
         result: { id: "x", label: "Forged" },
       }
     );
+    // Malformed payload (no promptId) — must be ignored, not throw.
+    ipcMainMock._emit(CHANNELS.PLUGIN_UI_PROMPT_RESPONSE, { sender: { id: 7 } }, {});
     // The genuine sender then answers.
     ipcMainMock._emit(
       CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
@@ -198,6 +214,28 @@ describe("PluginUIPromptDispatcher", () => {
       }
     );
     await expect(other).resolves.toEqual({ id: "k", label: "Kept" });
+  });
+
+  it("cancelForPlugin dismisses on the ORIGINAL window even after focus switches", async () => {
+    const wc1 = makeWebContents(7);
+    setActiveWebContents(wc1);
+    const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+
+    const promise = d.requestPrompt("mine", CONFIRM);
+
+    // User switches to another window/project before the plugin unloads.
+    const wc2 = makeWebContents(42);
+    setActiveWebContents(wc2);
+
+    d.cancelForPlugin("mine");
+
+    await expect(promise).resolves.toBe(false);
+    // The cancel must land on wc1 (where the prompt is shown), not the now-active wc2.
+    expect(wc1.send).toHaveBeenCalledWith(
+      CHANNELS.PLUGIN_UI_PROMPT_CANCEL,
+      expect.objectContaining({ pluginId: "mine" })
+    );
+    expect(wc2.send).not.toHaveBeenCalledWith(CHANNELS.PLUGIN_UI_PROMPT_CANCEL, expect.anything());
   });
 
   it("dispose resolves every pending prompt with its cancel value and removes the listener", async () => {

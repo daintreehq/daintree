@@ -54,6 +54,8 @@ import type {
   ActionHandler,
   PluginQuickPickItem,
   PluginQuickPickOptions,
+  PluginInputBoxOptions,
+  PluginConfirmOptions,
   BuiltInPluginCapability,
   PluginLoadError,
   PluginInstallResult,
@@ -393,6 +395,7 @@ function validateQuickPickItems(
   if (!Array.isArray(items)) {
     throw new Error(`Plugin "${pluginId}" showQuickPick: items must be an array`);
   }
+  const seen = new Set<string>();
   return items.map((item, index) => {
     if (!item || typeof item !== "object") {
       throw new Error(`Plugin "${pluginId}" showQuickPick: items[${index}] must be an object`);
@@ -405,6 +408,14 @@ function validateQuickPickItems(
     if (typeof item.label !== "string") {
       throw new Error(`Plugin "${pluginId}" showQuickPick: items[${index}].label must be a string`);
     }
+    // Ids must be unique — selection tracking and multi-select keys off the id,
+    // so a duplicate would toggle/return multiple rows in lockstep.
+    if (seen.has(item.id)) {
+      throw new Error(
+        `Plugin "${pluginId}" showQuickPick: duplicate item id "${item.id}" (ids must be unique)`
+      );
+    }
+    seen.add(item.id);
     return {
       id: item.id,
       label: item.label,
@@ -412,6 +423,54 @@ function validateQuickPickItems(
       ...(item.detail !== undefined ? { detail: String(item.detail) } : {}),
     };
   });
+}
+
+/**
+ * Coerce the string fields of the prompt option objects before they cross to
+ * the renderer. A buggy plugin passing a non-string (e.g. `{ message: {} }`)
+ * would otherwise crash the dialog inside its ErrorBoundary and strand the
+ * pending promise until unload — coercion keeps the round-trip serializable and
+ * the dialog renderable. Booleans are normalized with `Boolean(...)`.
+ */
+function sanitizeQuickPickOptions(options?: PluginQuickPickOptions): PluginQuickPickOptions {
+  if (!options || typeof options !== "object") return {};
+  return {
+    ...(options.title !== undefined ? { title: String(options.title) } : {}),
+    ...(options.placeholder !== undefined ? { placeholder: String(options.placeholder) } : {}),
+    ...(options.canSelectMany !== undefined
+      ? { canSelectMany: Boolean(options.canSelectMany) }
+      : {}),
+    ...(options.matchOnDescription !== undefined
+      ? { matchOnDescription: Boolean(options.matchOnDescription) }
+      : {}),
+  };
+}
+
+function sanitizeInputBoxOptions(options?: PluginInputBoxOptions): PluginInputBoxOptions {
+  if (!options || typeof options !== "object") return {};
+  return {
+    ...(options.title !== undefined ? { title: String(options.title) } : {}),
+    ...(options.prompt !== undefined ? { prompt: String(options.prompt) } : {}),
+    ...(options.placeholder !== undefined ? { placeholder: String(options.placeholder) } : {}),
+    ...(options.value !== undefined ? { value: String(options.value) } : {}),
+    ...(options.password !== undefined ? { password: Boolean(options.password) } : {}),
+    ...(options.validationPattern !== undefined
+      ? { validationPattern: String(options.validationPattern) }
+      : {}),
+    ...(options.validationMessage !== undefined
+      ? { validationMessage: String(options.validationMessage) }
+      : {}),
+  };
+}
+
+function sanitizeConfirmOptions(options: PluginConfirmOptions): PluginConfirmOptions {
+  return {
+    title: String(options.title),
+    ...(options.message !== undefined ? { message: String(options.message) } : {}),
+    ...(options.confirmLabel !== undefined ? { confirmLabel: String(options.confirmLabel) } : {}),
+    ...(options.cancelLabel !== undefined ? { cancelLabel: String(options.cancelLabel) } : {}),
+    ...(options.destructive !== undefined ? { destructive: Boolean(options.destructive) } : {}),
+  };
 }
 
 /**
@@ -2356,7 +2415,7 @@ export class PluginService {
         const value = await this.promptDispatcher.requestPrompt(pluginId, {
           kind: "quickPick",
           items: validItems,
-          options: options ?? {},
+          options: sanitizeQuickPickOptions(options),
         });
         return value as PluginQuickPickItem | PluginQuickPickItem[] | undefined;
       }) as PluginHostApi["showQuickPick"],
@@ -2364,7 +2423,7 @@ export class PluginService {
         if (!this.plugins.has(pluginId)) return undefined;
         const value = await this.promptDispatcher.requestPrompt(pluginId, {
           kind: "inputBox",
-          options: options ?? {},
+          options: sanitizeInputBoxOptions(options),
         });
         return value as string | undefined;
       },
@@ -2375,7 +2434,7 @@ export class PluginService {
         }
         const value = await this.promptDispatcher.requestPrompt(pluginId, {
           kind: "confirm",
-          options,
+          options: sanitizeConfirmOptions(options),
         });
         return value === true;
       },

@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { ipcMain, webContents } from "electron";
 import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getWindowRegistry, getProjectViewManager } from "../../window/windowRef.js";
@@ -205,10 +205,12 @@ export class PluginUIPromptDispatcher {
   }
 
   private sendCancel(webContentsId: number, pluginId: string): void {
-    const target = this.resolveActiveWebContents();
-    // Only signal the window we actually targeted; if it's gone the renderer is
-    // already tearing down its dialog state.
-    if (target && target.id === webContentsId && !target.isDestroyed()) {
+    // Target the window the prompt was originally sent to by id — NOT the
+    // currently-focused window. In a multi-window session the user may have
+    // switched projects between prompt-open and unload; resolving "active" here
+    // would deliver the dismiss to the wrong window and strand the dialog.
+    const target = webContents.fromId(webContentsId);
+    if (target && !target.isDestroyed()) {
       try {
         target.send(CHANNELS.PLUGIN_UI_PROMPT_CANCEL, { pluginId });
       } catch {
