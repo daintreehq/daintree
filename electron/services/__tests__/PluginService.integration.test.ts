@@ -920,6 +920,128 @@ describe("PluginService integration — file decoration provider contributions",
   });
 });
 
+describe("PluginService integration — panel badges (#10585)", () => {
+  interface BadgeHost {
+    setPanelBadge: (
+      panelId: string,
+      badge: { kind: string; text?: string; color?: string } | null
+    ) => void;
+  }
+
+  async function loadBadgeHost(name: string): Promise<{ service: PluginService; host: BadgeHost }> {
+    const pluginDir = await writePlugin(name, { name, version: "1.0.0" });
+    const mainFile = `badge-${randomUUID()}.mjs`;
+    await fs.writeFile(
+      path.join(pluginDir, mainFile),
+      `export function activate(host) { globalThis.__badgeHost = host; }\n`
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name, version: "1.0.0", main: mainFile })
+    );
+    const service = new PluginService(tmpDir, "0.0.0");
+    await initializeAndActivate(service);
+    const host = (globalThis as Record<string, unknown>).__badgeHost as BadgeHost;
+    return { service, host };
+  }
+
+  function badgeBroadcasts(eventName: string) {
+    return vi
+      .mocked(broadcastToRenderer)
+      .mock.calls.filter(
+        (c) => c[0] === "events:push" && (c[1] as { name?: string }).name === eventName
+      )
+      .map((c) => (c[1] as { payload: unknown }).payload);
+  }
+
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).__badgeHost;
+  });
+
+  it("broadcasts the plugin's complete badge map when a badge is set", async () => {
+    const { host } = await loadBadgeHost("acme.badge");
+    vi.mocked(broadcastToRenderer).mockClear();
+
+    host.setPanelBadge("panel-1", { kind: "label", text: "CI", color: "success" });
+
+    const payloads = badgeBroadcasts("plugin:panel-badges-changed");
+    expect(payloads).toContainEqual({
+      pluginId: "acme.badge",
+      badges: { "panel-1": { kind: "label", text: "CI", color: "success" } },
+    });
+  });
+
+  it("accumulates badges across panels and clears one with null", async () => {
+    const { host } = await loadBadgeHost("acme.badge2");
+    host.setPanelBadge("p1", { kind: "dot" });
+    host.setPanelBadge("p2", { kind: "dot", color: "error" });
+    vi.mocked(broadcastToRenderer).mockClear();
+
+    host.setPanelBadge("p1", null); // clear just p1
+
+    const last = badgeBroadcasts("plugin:panel-badges-changed").at(-1) as {
+      badges: Record<string, unknown>;
+    };
+    expect(last.badges).toEqual({ p2: { kind: "dot", color: "error" } });
+  });
+
+  it("rejects an invalid badge shape (label over the length cap) and a bad panelId", async () => {
+    const { host } = await loadBadgeHost("acme.badge3");
+    expect(() => host.setPanelBadge("p1", { kind: "label", text: "TOOLONG" })).toThrow(
+      /invalid badge/
+    );
+    expect(() => host.setPanelBadge("", { kind: "dot" })).toThrow(/non-empty string/);
+  });
+
+  it("broadcasts panel-badges-cleared on unload only when the plugin had badges", async () => {
+    const { service, host } = await loadBadgeHost("acme.badge4");
+    host.setPanelBadge("p1", { kind: "dot" });
+    vi.mocked(broadcastToRenderer).mockClear();
+
+    service.unloadPlugin("acme.badge4");
+
+    expect(badgeBroadcasts("plugin:panel-badges-cleared")).toContainEqual({
+      pluginId: "acme.badge4",
+    });
+  });
+
+  it("does not broadcast panel-badges-cleared when the plugin never set a badge", async () => {
+    const { service } = await loadBadgeHost("acme.badge5");
+    vi.mocked(broadcastToRenderer).mockClear();
+
+    service.unloadPlugin("acme.badge5");
+
+    expect(badgeBroadcasts("plugin:panel-badges-cleared")).toEqual([]);
+  });
+
+  it("setPanelBadge is a silent no-op after the plugin unloads", async () => {
+    const { service, host } = await loadBadgeHost("acme.badge6");
+    service.unloadPlugin("acme.badge6");
+    vi.mocked(broadcastToRenderer).mockClear();
+
+    expect(() => host.setPanelBadge("p1", { kind: "dot" })).not.toThrow();
+    expect(badgeBroadcasts("plugin:panel-badges-changed")).toEqual([]);
+  });
+
+  it("replays current badges to a cold-restored webContents via pushSnapshotTo", async () => {
+    const { service, host } = await loadBadgeHost("acme.badge7");
+    host.setPanelBadge("p1", { kind: "label", text: "2" });
+
+    const sent: Array<{ name: string; payload: unknown }> = [];
+    const fakeWc = {
+      isDestroyed: () => false,
+      send: (_channel: string, evt: { name: string; payload: unknown }) => sent.push(evt),
+    } as unknown as Electron.WebContents;
+
+    await service.pushSnapshotTo(fakeWc);
+
+    expect(sent).toContainEqual({
+      name: "plugin:panel-badges-changed",
+      payload: { pluginId: "acme.badge7", badges: { p1: { kind: "label", text: "2" } } },
+    });
+  });
+});
+
 describe("PluginService integration — main entry execution", () => {
   it("executes a plugin's main entry via dynamic import", async () => {
     const markerKey = makeMarkerKey();

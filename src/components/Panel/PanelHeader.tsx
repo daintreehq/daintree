@@ -55,6 +55,7 @@ import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { PluginPanelBadges } from "@/components/Panel/PluginPanelBadges";
 import { BellDot, FolderGit2 } from "@/components/icons";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
@@ -849,6 +850,9 @@ function PanelHeaderComponent({
               <BellDot className="w-3 h-3 animate-pulse motion-reduce:animate-none" />
             </span>
           )}
+
+          {/* Live plugin-contributed badges (host.setPanelBadge) for this panel */}
+          <PluginPanelBadges panelId={id} />
 
           {/* Add tab button for single panels */}
           {onAddTab && (

@@ -2,7 +2,11 @@ import path from "node:path";
 import ipaddr from "ipaddr.js";
 import * as semver from "semver";
 import { z } from "zod";
-import { BUILT_IN_PLUGIN_CAPABILITIES, PLUGIN_CATEGORY_IDS } from "../../shared/types/plugin.js";
+import {
+  BUILT_IN_PLUGIN_CAPABILITIES,
+  PLUGIN_CATEGORY_IDS,
+  PLUGIN_PANEL_BADGE_LABEL_MAX,
+} from "../../shared/types/plugin.js";
 import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
 import {
   BUILT_IN_ACTION_IDS,
@@ -693,6 +697,35 @@ export const PluginToastOptionsSchema = z
     durationMs: z.number().int().positive().max(60_000).optional(),
   })
   .strict();
+
+const PluginPanelBadgeColorSchema = z.enum(["default", "success", "warning", "error"]);
+const PluginPanelBadgeTooltipSchema = z.string().trim().min(1).max(200).optional();
+
+/**
+ * Validates a `host.setPanelBadge` badge at the host boundary. Discriminated on
+ * `kind`; the `label` text is rejected (not truncated) past
+ * {@link PLUGIN_PANEL_BADGE_LABEL_MAX} characters so it can't overflow the
+ * panel header — consistent with the reject-on-overflow convention of the other
+ * length-capped strings in this file. `null` (clear) is handled at the call
+ * site, not here.
+ */
+export const PluginPanelBadgeSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("dot"),
+      color: PluginPanelBadgeColorSchema.optional(),
+      tooltip: PluginPanelBadgeTooltipSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("label"),
+      text: z.string().trim().min(1).max(PLUGIN_PANEL_BADGE_LABEL_MAX),
+      color: PluginPanelBadgeColorSchema.optional(),
+      tooltip: PluginPanelBadgeTooltipSchema,
+    })
+    .strict(),
+]);
 
 /**
  * One `contributes.settings` field declaration (#9301). `type` is optional

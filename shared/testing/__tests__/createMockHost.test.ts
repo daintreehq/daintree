@@ -288,6 +288,16 @@ describe("createMockHost", () => {
     ]);
   });
 
+  it("records setPanelBadge calls, normalizing a cleared badge to null", async () => {
+    const host = createMockHost();
+    await host.setPanelBadge("panel-1", { kind: "label", text: "CI", color: "success" });
+    await host.setPanelBadge("panel-1", null);
+    expect(host.setPanelBadgeCalls).toEqual([
+      { panelId: "panel-1", badge: { kind: "label", text: "CI", color: "success" } },
+      { panelId: "panel-1", badge: null },
+    ]);
+  });
+
   it("returns initial worktree snapshots", async () => {
     const host = createMockHost({
       activeWorktree: sampleSnapshot,

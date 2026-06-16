@@ -518,6 +518,17 @@ export class PluginDevWorkerHostProxy {
         this.notify("invalidateFileDecorations", { scope, paths });
         return Promise.resolve();
       },
+      // Post-activation-safe sibling of invalidateFileDecorations: forward the
+      // badge fire-and-forget; the real host re-validates the badge shape.
+      setPanelBadge: (panelId, badge) => {
+        if (typeof panelId !== "string" || panelId.length === 0) {
+          throw new Error(
+            `Plugin "${this.pluginId}" setPanelBadge: panelId must be a non-empty string`
+          );
+        }
+        this.notify("setPanelBadge", { panelId, badge: badge ?? null });
+        return Promise.resolve();
+      },
       showToast: (options: PluginToastOptions) =>
         this.call<void>("showToast", {
           message: options?.message,

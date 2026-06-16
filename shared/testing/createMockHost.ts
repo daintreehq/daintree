@@ -37,6 +37,7 @@ import type {
   PluginWorktreeSnapshot,
   PluginAgentSnapshot,
   PluginGitCommitResult,
+  PluginPanelBadge,
   SettingDefinition,
   SettingsApi,
   StorageApi,
@@ -101,6 +102,12 @@ export interface InvalidationRecord {
   paths: string[] | undefined;
 }
 
+/** Captured `host.setPanelBadge(panelId, badge)` calls. `null` clears. */
+export interface SetPanelBadgeRecord {
+  panelId: string;
+  badge: PluginPanelBadge | null;
+}
+
 /** Captured `host.fs.writeFile(path, contents)` calls. */
 export interface FsWriteRecord {
   path: string;
@@ -124,6 +131,7 @@ export interface MockHostState {
   readonly registeredForgeProviders: ReadonlyArray<RegisteredForgeProviderRecord>;
   readonly registeredFileDecorationProviders: ReadonlyArray<RegisteredFileDecorationProviderRecord>;
   readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
+  readonly setPanelBadgeCalls: ReadonlyArray<SetPanelBadgeRecord>;
   readonly spawnCalls: ReadonlyArray<SpawnRecord>;
   readonly fsWriteCalls: ReadonlyArray<FsWriteRecord>;
   readonly gitCommitCalls: ReadonlyArray<GitCommitRecord>;
@@ -230,6 +238,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const registeredForgeProviders: RegisteredForgeProviderRecord[] = [];
   const registeredFileDecorationProviders: RegisteredFileDecorationProviderRecord[] = [];
   const invalidationCalls: InvalidationRecord[] = [];
+  const setPanelBadgeCalls: SetPanelBadgeRecord[] = [];
   const spawnCalls: SpawnRecord[] = [];
   const fsFiles = new Map<string, string>();
   const fsWriteCalls: FsWriteRecord[] = [];
@@ -698,6 +707,10 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       invalidationCalls.push({ scope, paths });
       return Promise.resolve();
     },
+    setPanelBadge(panelId, badge) {
+      setPanelBadgeCalls.push({ panelId, badge: badge ?? null });
+      return Promise.resolve();
+    },
     async showToast(opts: PluginToastOptions) {
       if (!opts.message) {
         throw new Error("showToast: message must be a non-empty string");
@@ -900,6 +913,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     registeredForgeProviders,
     registeredFileDecorationProviders,
     invalidationCalls,
+    setPanelBadgeCalls,
     spawnCalls,
     fsWriteCalls,
     gitCommitCalls,

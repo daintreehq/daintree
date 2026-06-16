@@ -30,6 +30,7 @@ interface AjvInstance {
 import {
   DEPRECATED_CONTRIBUTION_ALIASES,
   getPluginManifestSchema,
+  PluginPanelBadgeSchema,
   PluginToastOptionsSchema,
   SCOPED_PLUGIN_NAME_PATTERN,
 } from "../schemas/plugin.js";
@@ -79,6 +80,7 @@ import type {
   PluginGitStatus,
   PluginGitCommitOptions,
   PluginGitCommitResult,
+  PluginPanelBadge,
   ViewContribution,
 } from "../../shared/types/plugin.js";
 import { PluginInstalledRecordsStore } from "./plugin/PluginInstalledRecordsStore.js";
@@ -568,6 +570,16 @@ interface ExpandedFsPath {
 
 export class PluginService {
   private plugins = new Map<string, LoadedPlugin>();
+  /**
+   * Live panel badges set via `host.setPanelBadge`, keyed `pluginId → panelId →
+   * badge` (#10585). Plugin-first so {@link unloadPlugin} drops a plugin's whole
+   * set in O(1), and {@link pushSnapshotTo} can replay each plugin's current
+   * badges to a cold-restored WebContentsView (badges are ephemeral, not
+   * persisted, so without replay an LRU-evicted view loses them until the plugin
+   * next re-emits). The renderer store inverts this to `panelId → pluginId` for
+   * O(1) lookup at render time.
+   */
+  private pluginBadges = new Map<string, Map<string, PluginPanelBadge>>();
   /**
    * Per-plugin diagnostic log ring buffer, keyed by `pluginId` (= manifest
    * name). Written by `host.logger.*`, capped at {@link PLUGIN_LOG_BUFFER_MAX}
@@ -2577,6 +2589,46 @@ export class PluginService {
         return Promise.resolve();
       },
       // NOT revoke-guarded for the same reason as invalidateFileDecorations:
+      // plugins set badges from post-activation worktree/agent subscription
+      // callbacks. Liveness is plugin membership, so it no-ops once unloaded
+      // (unloadPlugin clears the plugin's whole badge set).
+      setPanelBadge: (panelId, badge) => {
+        if (!this.plugins.has(pluginId)) return Promise.resolve();
+        if (typeof panelId !== "string" || panelId.length === 0) {
+          throw new Error(`Plugin "${pluginId}" setPanelBadge: panelId must be a non-empty string`);
+        }
+        let validated: PluginPanelBadge | null = null;
+        if (badge !== null && badge !== undefined) {
+          const parsed = PluginPanelBadgeSchema.safeParse(badge);
+          if (!parsed.success) {
+            throw new Error(
+              `Plugin "${pluginId}" setPanelBadge: invalid badge — ${parsed.error.issues
+                .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+                .join("; ")}`
+            );
+          }
+          validated = parsed.data;
+        }
+        let panelMap = this.pluginBadges.get(pluginId);
+        if (validated === null) {
+          // Clear: drop just this panel's badge; prune the plugin's map when empty.
+          if (!panelMap || !panelMap.has(panelId)) return Promise.resolve();
+          panelMap.delete(panelId);
+          if (panelMap.size === 0) this.pluginBadges.delete(pluginId);
+        } else {
+          if (!panelMap) {
+            panelMap = new Map<string, PluginPanelBadge>();
+            this.pluginBadges.set(pluginId, panelMap);
+          }
+          panelMap.set(panelId, validated);
+        }
+        broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+          name: "plugin:panel-badges-changed",
+          payload: { pluginId, badges: this.serializePluginBadges(pluginId) },
+        });
+        return Promise.resolve();
+      },
+      // NOT revoke-guarded for the same reason as invalidateFileDecorations:
       // plugins fire toasts from post-activation callbacks and timers. Liveness
       // is plugin membership, so it no-ops silently once the plugin unloads.
       showToast: async (options) => {
@@ -4305,6 +4357,18 @@ export class PluginService {
 
     this.plugins.delete(pluginId);
 
+    // Drop any live panel badges this plugin set and tell the renderer to clear
+    // them (#10585). Only broadcast when the plugin actually had badges so an
+    // unload of a non-badging plugin stays silent.
+    if (this.pluginBadges.delete(pluginId)) {
+      runUnloadStep(pluginId, "clearPanelBadges", () => {
+        broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+          name: "plugin:panel-badges-cleared",
+          payload: { pluginId },
+        });
+      });
+    }
+
     if (decorationScopes && decorationScopes.length > 0) {
       runUnloadStep(pluginId, "broadcastDecorationsChanged", () => {
         for (const scope of new Set(decorationScopes)) {
@@ -4315,6 +4379,18 @@ export class PluginService {
         }
       });
     }
+  }
+
+  /**
+   * Flatten one plugin's live badges (`panelId → badge`) into a plain
+   * structured-clone-safe record for the `plugin:panel-badges-changed`
+   * broadcast. Empty when the plugin has no badges (the renderer reads that as
+   * "clear all of this plugin's badges").
+   */
+  private serializePluginBadges(pluginId: string): Record<string, PluginPanelBadge> {
+    const panelMap = this.pluginBadges.get(pluginId);
+    if (!panelMap || panelMap.size === 0) return {};
+    return Object.fromEntries(panelMap);
   }
 
   private flushPluginEventCleanups(pluginId: string): void {
@@ -4842,9 +4918,27 @@ export class PluginService {
    * against this snapshot — replay is authoritative for the target view but
    * conceptually identical to a coalesced "load tick" broadcast, not an
    * unload sweep.
+   *
+   * Panel badges (#10585) are replayed here too — one
+   * `plugin:panel-badges-changed` per badging plugin — so a cold-restored view
+   * recovers live badge state it missed while evicted, rather than waiting for
+   * each plugin to next re-emit from a subscription callback.
    */
-  pushSnapshotTo(webContents: Electron.WebContents): Promise<void> {
-    return this.broadcaster.pushSnapshotTo(webContents);
+  async pushSnapshotTo(webContents: Electron.WebContents): Promise<void> {
+    await this.broadcaster.pushSnapshotTo(webContents);
+    if (webContents.isDestroyed()) return;
+    // Each send is independently guarded against a TOCTOU destroy, matching the
+    // broadcaster's defensive pattern above.
+    for (const pluginId of this.pluginBadges.keys()) {
+      try {
+        webContents.send(CHANNELS.EVENTS_PUSH, {
+          name: "plugin:panel-badges-changed",
+          payload: { pluginId, badges: this.serializePluginBadges(pluginId) },
+        });
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
   }
 }
 
