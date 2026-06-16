@@ -731,6 +731,12 @@ export const CHANNELS = {
   // Shortcut Hints channels
   SHORTCUT_HINTS_GET_COUNTS: "shortcut-hints:get-counts",
   SHORTCUT_HINTS_INCREMENT_COUNT: "shortcut-hints:increment-count",
+  SHORTCUT_HINTS_GET_HINTED_HOVER: "shortcut-hints:get-hinted-hover",
+  SHORTCUT_HINTS_SET_HINTED_HOVER: "shortcut-hints:set-hinted-hover",
+
+  // Forge recommendation channels
+  FORGE_RECOMMENDATION_GET_DISMISSED: "forge-recommendation:get-dismissed",
+  FORGE_RECOMMENDATION_MARK_DISMISSED: "forge-recommendation:mark-dismissed",
 
   // GPU channels
   GPU_GET_STATUS: "gpu:get-status",

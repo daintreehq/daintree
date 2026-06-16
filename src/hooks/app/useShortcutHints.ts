@@ -6,13 +6,32 @@ export function useShortcutHints(isStateLoaded: boolean) {
   useEffect(() => {
     if (!isElectronAvailable() || !isStateLoaded) return;
 
-    window.electron?.shortcutHints
-      ?.getCounts()
-      .then((counts) => {
-        shortcutHintStore.getState().hydrateCounts(counts);
+    const hints = window.electron?.shortcutHints;
+    if (!hints) return;
+
+    // Seed the one-shot hover gate BEFORE counts hydration flips `hydrated`,
+    // which is what opens `isHoverEligible`. Loading these in parallel leaves a
+    // window where counts win the race, the gate opens with an empty set, and a
+    // hover re-shows an already-dismissed hint (and the late `hydrateHintedHover`
+    // would then wipe that in-session mark). `markHoverShown` is unreachable
+    // while `hydrated` is false, so sequencing closes the window entirely.
+    hints
+      .getHintedHover()
+      .then((keys) => {
+        shortcutHintStore.getState().hydrateHintedHover(keys);
       })
       .catch(() => {
-        shortcutHintStore.getState().hydrateCounts({});
+        shortcutHintStore.getState().hydrateHintedHover([]);
+      })
+      .finally(() => {
+        hints
+          .getCounts()
+          .then((counts) => {
+            shortcutHintStore.getState().hydrateCounts(counts);
+          })
+          .catch(() => {
+            shortcutHintStore.getState().hydrateCounts({});
+          });
       });
   }, [isStateLoaded]);
 

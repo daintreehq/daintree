@@ -317,6 +317,18 @@ export interface StoreSchema {
   };
   orchestrationMilestones: Record<string, boolean>;
   shortcutHintCounts: Record<string, number>;
+  /**
+   * One-shot hover-hint keys (`actionId@count`) already shown to the user.
+   * Persisted so keyboard-shortcut teaching tooltips don't reappear every
+   * session. Bounded by `|actionIds| × |HINT_MILESTONES|`.
+   */
+  shortcutHintHoveredKeys?: string[];
+  /**
+   * Project paths for which the "enable forge plugin" recommendation has
+   * already fired or been dismissed. Persisted so the nudge doesn't reappear
+   * on every launch. Bounded by the number of distinct projects opened.
+   */
+  forgeEnableDismissedPaths?: Record<string, true>;
   updateChannel: "stable" | "nightly";
   dismissedUpdateVersion?: string;
   dismissedUpdateAt?: number;
@@ -601,6 +613,8 @@ const storeOptions = {
     },
     orchestrationMilestones: {},
     shortcutHintCounts: {},
+    shortcutHintHoveredKeys: [],
+    forgeEnableDismissedPaths: {},
     updateChannel: "stable" as const,
     lastUpdateCheck: null,
     logLevelOverrides: {},

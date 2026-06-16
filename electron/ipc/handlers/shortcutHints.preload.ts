@@ -3,6 +3,8 @@ import type { IpcInvokeMap } from "../../types/index.js";
 export const SHORTCUT_HINTS_METHOD_CHANNELS = {
   getCounts: "shortcut-hints:get-counts",
   incrementCount: "shortcut-hints:increment-count",
+  getHintedHover: "shortcut-hints:get-hinted-hover",
+  setHintedHover: "shortcut-hints:set-hinted-hover",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof SHORTCUT_HINTS_METHOD_CHANNELS;

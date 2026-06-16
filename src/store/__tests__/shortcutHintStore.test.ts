@@ -14,6 +14,7 @@ describe("shortcutHintStore", () => {
       electron: {
         shortcutHints: {
           incrementCount: vi.fn(),
+          setHintedHover: vi.fn(),
         },
       },
     });
@@ -296,5 +297,63 @@ describe("shortcutHintStore", () => {
     // terminal.new hover tracking should still be present
     expect(s.isHoverEligible("nav.quickSwitcher")).toBe(true); // cleared + now at milestone 2
     expect(s.isHoverEligible("terminal.new")).toBe(false); // still tracked at count 2
+  });
+
+  // --- Persisted hover-gate hydration & flush ---
+
+  it("hydrateHintedHover seeds the one-shot gate so a persisted hint stays suppressed", () => {
+    const s = shortcutHintStore.getState();
+    s.hydrateCounts({ "nav.quickSwitcher": 1 });
+    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(true);
+
+    s.hydrateHintedHover(["nav.quickSwitcher@1"]);
+    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(false);
+  });
+
+  it("hydrateHintedHover replaces any prior in-memory gate state", () => {
+    const s = shortcutHintStore.getState();
+    s.hydrateCounts({ "nav.quickSwitcher": 0 });
+    s.markHoverShown("nav.quickSwitcher");
+    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(false);
+
+    s.hydrateHintedHover([]);
+    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(true);
+  });
+
+  it("markHoverShown persists the updated gate to IPC", () => {
+    const s = shortcutHintStore.getState();
+    s.hydrateCounts({ "nav.quickSwitcher": 1 });
+    s.markHoverShown("nav.quickSwitcher");
+
+    expect(window.electron?.shortcutHints?.setHintedHover).toHaveBeenCalledWith([
+      "nav.quickSwitcher@1",
+    ]);
+  });
+
+  it("markHoverShown flushes the full gate, preserving keys from a prior session", () => {
+    const s = shortcutHintStore.getState();
+    s.hydrateHintedHover(["nav.commandPalette@0"]);
+    s.hydrateCounts({ "nav.quickSwitcher": 1 });
+    s.markHoverShown("nav.quickSwitcher");
+
+    // The flushed array must include the pre-hydrated key, not just the new one.
+    expect(window.electron?.shortcutHints?.setHintedHover).toHaveBeenCalledWith([
+      "nav.commandPalette@0",
+      "nav.quickSwitcher@1",
+    ]);
+  });
+
+  it("incrementCount persists the cleared gate to IPC", () => {
+    const s = shortcutHintStore.getState();
+    s.hydrateCounts({ "nav.quickSwitcher": 1, "terminal.new": 2 });
+    s.markHoverShown("nav.quickSwitcher");
+    s.markHoverShown("terminal.new");
+
+    s.incrementCount("nav.quickSwitcher");
+
+    // The final flush (from incrementCount) drops nav.quickSwitcher@1, keeps terminal.new@2.
+    expect(window.electron?.shortcutHints?.setHintedHover).toHaveBeenLastCalledWith([
+      "terminal.new@2",
+    ]);
   });
 });

@@ -166,6 +166,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["forge-audit:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["forge-audit:set-enabled"]["result"]>;
   };
+  forgeRecommendation: {
+    getDismissed(
+      ...args: IpcInvokeMap["forge-recommendation:get-dismissed"]["args"]
+    ): Promise<IpcInvokeMap["forge-recommendation:get-dismissed"]["result"]>;
+    markDismissed(
+      ...args: IpcInvokeMap["forge-recommendation:mark-dismissed"]["args"]
+    ): Promise<IpcInvokeMap["forge-recommendation:mark-dismissed"]["result"]>;
+  };
   gemini: {
     enableAlternateBuffer(
       ...args: IpcInvokeMap["gemini:enable-alternate-buffer"]["args"]
@@ -565,9 +573,15 @@ export interface GeneratedElectronAPI {
     getCounts(
       ...args: IpcInvokeMap["shortcut-hints:get-counts"]["args"]
     ): Promise<IpcInvokeMap["shortcut-hints:get-counts"]["result"]>;
+    getHintedHover(
+      ...args: IpcInvokeMap["shortcut-hints:get-hinted-hover"]["args"]
+    ): Promise<IpcInvokeMap["shortcut-hints:get-hinted-hover"]["result"]>;
     incrementCount(
       ...args: IpcInvokeMap["shortcut-hints:increment-count"]["args"]
     ): Promise<IpcInvokeMap["shortcut-hints:increment-count"]["result"]>;
+    setHintedHover(
+      ...args: IpcInvokeMap["shortcut-hints:set-hinted-hover"]["args"]
+    ): Promise<IpcInvokeMap["shortcut-hints:set-hinted-hover"]["result"]>;
   };
   slashCommands: {
     list(

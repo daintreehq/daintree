@@ -18,9 +18,31 @@ import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
  *
  * Evaluation runs on project switch, not on toggle: a user who just disabled
  * a plugin must not be immediately nudged to undo their own action. Fired
- * or dismissed projects are remembered for the session.
+ * or dismissed projects are remembered across sessions: the in-memory set is
+ * the fast path, seeded once from electron-store so the nudge doesn't reappear
+ * on every launch.
  */
 const handledProjectPaths = new Set<string>();
+
+/**
+ * Seeds `handledProjectPaths` from persisted dismissals. Memoized so the IPC
+ * round-trip happens once per session regardless of how many hook instances
+ * mount; best-effort — failure falls back to per-session memory only.
+ */
+let dismissedHydration: Promise<void> | null = null;
+function hydrateDismissedPaths(): Promise<void> {
+  if (!dismissedHydration) {
+    dismissedHydration = window.electron.forgeRecommendation
+      .getDismissed()
+      .then((dismissed) => {
+        for (const path of Object.keys(dismissed)) {
+          handledProjectPaths.add(path);
+        }
+      })
+      .catch(() => {});
+  }
+  return dismissedHydration;
+}
 
 interface DisabledProviderMatch {
   pluginId: string;
@@ -84,6 +106,13 @@ export function useForgeEnableRecommendation(isStateLoaded: boolean): void {
     let cancelled = false;
 
     async function evaluate(projectPath: string) {
+      // Seed from persisted dismissals before evaluating so a recommendation
+      // dismissed in a previous session doesn't re-fire while hydration is
+      // still in flight on cold start.
+      await hydrateDismissedPaths();
+      if (cancelled) return;
+      if (handledProjectPaths.has(projectPath)) return;
+
       // Query main directly rather than the pluginRuntimeStore snapshot — on
       // cold start the project can load before the store's first pull lands,
       // and a missed evaluation here never re-runs for this project. The
@@ -114,6 +143,12 @@ export function useForgeEnableRecommendation(isStateLoaded: boolean): void {
       const { pluginId, displayName, providerName } = match;
 
       handledProjectPaths.add(projectPath);
+      // Persist at the same point as the in-memory guard so the nudge stays
+      // suppressed across restarts (mirrors session behaviour exactly — a
+      // project that showed the recommendation won't show it again).
+      safeFireAndForget(window.electron.forgeRecommendation.markDismissed(projectPath), {
+        context: "Persisting forge enable recommendation dismissal",
+      });
 
       const dismissSelf = (id: string | undefined) => {
         if (!id) return;
@@ -178,4 +213,5 @@ export function useForgeEnableRecommendation(isStateLoaded: boolean): void {
 /** Test-only: reset the per-session fired/dismissed project memory. */
 export function _resetForgeEnableRecommendationForTest(): void {
   handledProjectPaths.clear();
+  dismissedHydration = null;
 }
