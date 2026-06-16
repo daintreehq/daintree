@@ -124,6 +124,15 @@ export function registerWorkflowCreationActions(
         const rootPath = currentProject.path;
 
         if (recipeId) {
+          // Spawning recipe terminals is gated behind recipe.run (danger:"confirm"),
+          // which ActionService hard-blocks for plugin sources. Reject the same
+          // effect here so plugins can't bypass that gate by passing a recipeId to
+          // an otherwise-safe worktree action. Agent/user sources are unaffected.
+          if (ctx.dispatchSource === "plugin") {
+            throw new Error(
+              "Plugins cannot spawn recipe terminals through worktree creation. Dispatch recipe.run instead."
+            );
+          }
           const recipe = useRecipeStore.getState().getRecipeById(recipeId);
           if (!recipe) {
             throw new Error(
@@ -387,6 +396,15 @@ export function registerWorkflowCreationActions(
         }
 
         if (recipeId) {
+          // Spawning recipe terminals is gated behind recipe.run (danger:"confirm"),
+          // which ActionService hard-blocks for plugin sources. Reject the same
+          // effect here so plugins can't bypass that gate by passing a recipeId to
+          // an otherwise-safe worktree action. Agent/user sources are unaffected.
+          if (ctx.dispatchSource === "plugin") {
+            throw new Error(
+              "Plugins cannot spawn recipe terminals through worktree creation. Dispatch recipe.run instead."
+            );
+          }
           const recipe = useRecipeStore.getState().getRecipeById(recipeId);
           if (!recipe) {
             throw new Error(
