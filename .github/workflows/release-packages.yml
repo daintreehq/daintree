@@ -43,7 +43,9 @@ permissions:
   id-token: write
 
 concurrency:
-  group: release-packages-${{ github.ref }}
+  # Fixed (ref-independent) key so two near-simultaneous package tags serialize
+  # instead of racing each other into EPUBLISHCONFLICT on the shared registry.
+  group: release-packages
   cancel-in-progress: false
 
 env:
@@ -105,6 +107,29 @@ jobs:
             --workspace=packages/daintree-plugin \
             --workspace=packages/create-daintree-plugin
 
+      # On a tag push, assert the tag's version matches the triggering package's
+      # package.json. The tag is only a trigger — without this check a mistagged
+      # release (e.g. sdk-v0.2.0 while package.json still reads 0.1.0) would
+      # silently no-op via the version guard instead of failing loudly.
+      - name: Validate tag matches package version
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          case "$tag" in
+            create-daintree-plugin-v*) dir=packages/create-daintree-plugin; ver="${tag#create-daintree-plugin-v}" ;;
+            daintree-plugin-v*)        dir=packages/daintree-plugin;        ver="${tag#daintree-plugin-v}" ;;
+            plugin-vite-v*)            dir=packages/plugin-vite;            ver="${tag#plugin-vite-v}" ;;
+            plugin-testing-v*)         dir=packages/plugin-testing;         ver="${tag#plugin-testing-v}" ;;
+            sdk-v*)                    dir=packages/plugin-sdk;             ver="${tag#sdk-v}" ;;
+            *) echo "Unrecognized package tag: $tag" >&2; exit 1 ;;
+          esac
+          pkgver=$(node -p "require('./$dir/package.json').version")
+          if [ "$ver" != "$pkgver" ]; then
+            echo "Tag $tag implies version $ver but $dir/package.json is $pkgver" >&2
+            exit 1
+          fi
+          echo "Tag $tag matches $dir@$pkgver"
+
       # Publish in dependency order: plugin-sdk first (others peer/depend on it),
       # then plugin-testing, the vite preset, and the CLIs. Each publish is
       # guarded by a version-existence check so re-running after a partial
@@ -117,16 +142,27 @@ jobs:
         run: |
           publish_if_new() {
             local dir="$1"
-            local name version
+            local name version view_out view_status
             name=$(node -p "require('./$dir/package.json').name")
             version=$(node -p "require('./$dir/package.json').version")
-            if npm view "$name@$version" version >/dev/null 2>&1; then
+            # Capture stderr so a transient registry error (503/auth/rate-limit)
+            # isn't misread as "not published" — that would publish over an
+            # existing version and fail with EPUBLISHCONFLICT. Only a genuine
+            # 404 ("not found"/"E404") means the version is new; anything else
+            # aborts so the failure is loud rather than a corrupt publish.
+            if view_out=$(npm view "$name@$version" version 2>&1); then
               echo "Skipping $name@$version — already published"
-            else
+              return 0
+            fi
+            view_status=$?
+            if echo "$view_out" | grep -qiE "E404|not found|is not in this registry"; then
               # --access public is required on a scoped package's first publish
               # (scoped packages default to restricted); explicit here rather
               # than relying solely on each package's publishConfig.access.
               npm publish --workspace="$dir" --access public
+            else
+              echo "npm view failed for $name@$version (exit $view_status): $view_out" >&2
+              return 1
             fi
           }
           publish_if_new packages/plugin-sdk
