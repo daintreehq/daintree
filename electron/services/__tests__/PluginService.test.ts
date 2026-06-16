@@ -7027,8 +7027,22 @@ describe("Plugin agent-input host API (#10558)", () => {
     const bridge = vi.fn(async () => "approved-once" as const);
     consent.setConsentBridge(bridge);
     const { host } = await setupInputHost(["agent:input"]);
-    await expect(host.sendToActiveAgent("")).rejects.toThrow(/non-empty string/);
+    await expect(host.sendToActiveAgent("")).rejects.toThrow(/non-empty/);
     expect(bridge).not.toHaveBeenCalled();
+  });
+
+  it("rejects whitespace-only text without banking consent or writing (#10558)", async () => {
+    const fake = installFakePtyClient([
+      { id: "t1", detectedAgentId: "claude", agentState: "waiting", hasPty: true },
+    ]);
+    const bridge = vi.fn(async () => "approved-once" as const);
+    getPluginCapabilityConsentService().setConsentBridge(bridge);
+    const { host } = await setupInputHost(["agent:input"]);
+    await expect(host.sendToActiveAgent("\n")).rejects.toThrow(/non-empty/);
+    await expect(host.sendToActiveAgent("   ", { submit: true })).rejects.toThrow(/non-empty/);
+    expect(bridge).not.toHaveBeenCalled();
+    expect(fake.stage).not.toHaveBeenCalled();
+    expect(fake.submit).not.toHaveBeenCalled();
   });
 
   it("stages (no Enter) by default when submit is omitted", async () => {
@@ -7096,6 +7110,16 @@ describe("Plugin agent-input host API (#10558)", () => {
     const { host } = await setupInputHost(["agent:input"]);
     await host.sendToActiveAgent("x");
     expect(fake.stage).toHaveBeenCalledWith("mine", "x");
+  });
+
+  it("never crosses into another project's terminals (#10558)", async () => {
+    const fake = installFakePtyClient(
+      [{ id: "other", detectedAgentId: "claude", projectId: "p2", lastOutputTime: 999, hasPty: true }],
+      "p1"
+    );
+    const { host } = await setupInputHost(["agent:input"]);
+    await expect(host.sendToActiveAgent("x")).rejects.toThrow(/NO_ACTIVE_AGENT/);
+    expect(fake.stage).not.toHaveBeenCalled();
   });
 
   it("excludes exited, completed, and non-agent terminals", async () => {

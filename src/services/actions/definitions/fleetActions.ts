@@ -114,6 +114,9 @@ export function registerFleetActions(actions: ActionRegistry): void {
     category: "terminal",
     kind: "command",
     danger: "safe",
+    // Injects keystrokes into agent terminals — closed to plugin dispatch so it
+    // can't be an end-run around the `agent:input` capability (#10558).
+    denyPluginDispatch: true,
     scope: "renderer",
     run: async () => {
       const snap = snapshotArmed();
@@ -142,6 +145,8 @@ export function registerFleetActions(actions: ActionRegistry): void {
     category: "terminal",
     kind: "command",
     danger: "safe",
+    // Injects keystrokes into agent terminals — closed to plugin dispatch (#10558).
+    denyPluginDispatch: true,
     scope: "renderer",
     argsSchema: confirmedArgsSchema,
     run: async (args: unknown) => {
@@ -187,6 +192,8 @@ export function registerFleetActions(actions: ActionRegistry): void {
     category: "terminal",
     kind: "command",
     danger: "safe",
+    // Injects control keystrokes into agent terminals — closed to plugin dispatch (#10558).
+    denyPluginDispatch: true,
     scope: "renderer",
     argsSchema: confirmedArgsSchema,
     run: async (args: unknown) => {
@@ -342,6 +349,9 @@ export function registerFleetActions(actions: ActionRegistry): void {
     category: "terminal",
     kind: "command",
     danger: "safe",
+    // Re-broadcasts the last (arbitrary, often \r-terminated) payload into
+    // terminals — closed to plugin dispatch so it can't inject commands (#10558).
+    denyPluginDispatch: true,
     scope: "renderer",
     run: async () => {
       // Re-entrancy guard: a fast double-click on "Retry failed" would

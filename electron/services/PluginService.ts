@@ -2220,10 +2220,13 @@ export class PluginService {
         }
         // Validate BEFORE prompting for consent so an invalid call can't bank a
         // silent grant and then inject real text unprompted (mirrors the
-        // process.spawn ordering for #10524).
-        if (typeof text !== "string" || text.length === 0) {
+        // process.spawn ordering for #10524). Reject whitespace-only text too:
+        // it stages to nothing but with submit:true would fire a bare Enter,
+        // submitting whatever is already in the agent's input buffer — an effect
+        // the consent prompt never showed the user.
+        if (typeof text !== "string" || text.trim().length === 0) {
           throw new Error(
-            `Plugin "${pluginId}" sendToActiveAgent: text must be a non-empty string`
+            `Plugin "${pluginId}" sendToActiveAgent: text must be a non-empty, non-whitespace string`
           );
         }
         // JIT consent fires before any side effect — first use prompts the user;
@@ -3091,8 +3094,10 @@ export class PluginService {
   /**
    * Resolve the terminal id of the "active agent" for `host.sendToActiveAgent`
    * (#10558). Centralised here so plugins stop reinventing `terminal.list`-based
-   * selection heuristics that drift. Scopes to the active project when one is
-   * set (falling back to all terminals if it holds no agent), then ranks:
+   * selection heuristics that drift. Scopes strictly to the active project when
+   * one is set — it never crosses a project boundary, since "the active agent"
+   * the user consented to is the one in front of them; only when no project is
+   * active (e.g. before any project loads) does it consider all terminals. Ranks
    * focused/visible agent (`activityTier: "active"`) first, then a `waiting`
    * agent, then the most recently active by output — with a deterministic id
    * tiebreak. Terminals with no agent or in an ended state (`exited` /
@@ -3113,10 +3118,8 @@ export class PluginService {
       t.hasPty !== false &&
       t.agentState !== "exited" &&
       t.agentState !== "completed";
-    // Prefer the active project's terminals; fall back to all only if the active
-    // project has no eligible agent (e.g. plugin acting before a project loads).
-    const inProject = activeProjectId != null ? all.filter((t) => t.projectId === activeProjectId) : all;
-    const pool = inProject.some(eligible) ? inProject : all;
+    // Scope to the active project; never cross into another project's terminals.
+    const pool = activeProjectId != null ? all.filter((t) => t.projectId === activeProjectId) : all;
     const candidates = pool.filter(eligible);
     if (candidates.length === 0) {
       throw new Error(

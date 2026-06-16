@@ -543,6 +543,49 @@ describe("destructive-action danger metadata", () => {
   });
 });
 
+/**
+ * Built-in actions that inject text/keystrokes into terminals and therefore must
+ * be closed to plugin `host.dispatch` (#10558) — plugins inject only through the
+ * `agent:input`-gated `host.sendToActiveAgent`. If a new terminal-writing action
+ * is added without `denyPluginDispatch`, add it here AND set the flag, or the
+ * capability gate has a fresh side door.
+ */
+const PLUGIN_DENIED_INJECTION_ACTIONS: ReadonlyArray<ActionId> = [
+  "terminal.sendCommand",
+  "terminal.paste",
+  "fleet.accept",
+  "fleet.reject",
+  "fleet.interrupt",
+  "fleet.retryFailures",
+] as unknown as ActionId[];
+
+describe("plugin-dispatch injection guard (#10558)", () => {
+  it("rejects plugin-source dispatch with RESTRICTED for every injection action", async () => {
+    const { ActionService } = await import("../../ActionService");
+    const { registry } = await createRegistryWithAudit();
+    const service = new ActionService();
+    for (const [, factory] of registry) {
+      service.register(factory());
+    }
+    // Valid args so dispatch reaches the plugin-dispatch gate rather than
+    // short-circuiting on VALIDATION_ERROR (terminal.sendCommand requires both).
+    const args = { terminalId: "t-placeholder", command: "noop", url: "https://example.com" };
+
+    const failures: string[] = [];
+    for (const id of PLUGIN_DENIED_INJECTION_ACTIONS) {
+      const result = await service.dispatch(id, args, { source: "plugin" });
+      if (result.ok) {
+        failures.push(`${id} (plugin dispatch succeeded — side door open)`);
+        continue;
+      }
+      if (result.error.code !== "RESTRICTED") {
+        failures.push(`${id} (got "${result.error.code}", expected RESTRICTED)`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+});
+
 describe("dangerRationale backfill", () => {
   it("every EXPECTED_CONFIRM_DANGER action has a non-empty dangerRationale", async () => {
     const { registry } = await createRegistryWithAudit();
