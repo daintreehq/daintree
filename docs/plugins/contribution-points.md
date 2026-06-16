@@ -516,9 +516,20 @@ Registers a provider that decorates files (or other scoped resources) with statu
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. Must match the `id` passed when the provider binds at runtime. |
 | `scopes` | yes | Non-empty list of scope patterns the provider answers for. A scope like `worktree-diff:*` matches every resource the host routes under the `worktree-diff` namespace; the host dispatches decoration pulls to the first provider whose scope matches. |
 
+**Host-routed scopes:**
+
+| Scope | Surface | Notes |
+| --- | --- | --- |
+| `worktree-diff:<worktreePath>` | Review Hub changed-file rows (base-branch diff, linked PR) | Used by the first-party GitHub plugin to badge PR-review state. |
+| `worktree-files:<worktreePath>` | Local worktree file-change list (`FileChangeList` in the worktree card) | Local-only — no PR or remote required. Use this to badge a worktree's changed files from a lint/leak/status plugin. |
+
+Keep these scopes distinct: a provider registered for `worktree-diff:*` is **not** invoked on the local `worktree-files:*` list and vice versa, so PR-review badges don't leak onto the plain change list. The path strings the host passes (and that your provider keys its returned map by) are the worktree's changed-file paths as the surface renders them.
+
 The manifest entry is read eagerly so the host's decoration-routing table (`electron/services/fileDecorationRegistry.ts`) knows which provider owns a scope before any plugin code runs; the implementation binds lazily in `activate()`. See [Host API](./host-api.md) for the runtime registration signature.
 
-Today the only mounted decoration consumer is the worktree diff/review surface (the Review Hub's changed-file rows); the routing and host API are general, but no other path list in Daintree pulls decorations yet, so badges from a lint/leak/status plugin currently appear only there. (Widening this to arbitrary path lists is tracked separately — see #10512.) From your `activate()` subscriptions and timers, call `host.invalidateFileDecorations(scope, paths?)` to signal that a scope's decorations changed and any renderer showing them should re-pull.
+When two providers declare the **same exact scope string**, their decorations merge first-writer-wins per field in plugin load order — so the second provider's badge for a shared path can be silently dropped. The host emits a `console.warn` at registration time naming both plugins and the duplicated scope so the collision is detectable. (Broad/narrow coexistence — a `worktree-files:*` provider alongside a `worktree-files:/some/path` one — is intentional and not warned.)
+
+From your `activate()` subscriptions and timers, call `host.invalidateFileDecorations(scope, paths?)` to signal that a scope's decorations changed and any renderer showing them should re-pull.
 
 ## Agents — _Shipped (minimal tier)_
 

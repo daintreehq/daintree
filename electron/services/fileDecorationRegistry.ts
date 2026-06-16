@@ -41,6 +41,56 @@ function freezeContribution(c: FileDecorationContribution): FileDecorationContri
   });
 }
 
+/**
+ * Best-effort load-time diagnostic: warn when an incoming plugin declares a
+ * scope string that another already-registered plugin also declares verbatim.
+ * Such an exact collision makes the per-field, first-writer-wins merge in
+ * `handleFileDecorationsGet` order-dependent — the second provider's badge for
+ * a shared path is silently dropped — so surfacing it at registration time
+ * gives plugin authors something to act on (issue #10559).
+ *
+ * Only exact string equality is flagged. Wildcard-vs-exact coexistence
+ * (`worktree-files:*` alongside `worktree-files:/repo`) is a legitimate
+ * broad/narrow pattern, not a mistake, so it is intentionally not warned.
+ * Self-comparison is skipped so a plugin re-registering on hot-reload (which
+ * replaces its own entry via `.set()`) never warns about itself. Iteration is
+ * defensive — a partial unload may have left a malformed entry — and never
+ * throws, so a diagnostic can't block registration (lesson #9533).
+ */
+function warnOnScopeCollision(pluginId: string, contributions: FileDecorationContribution[]): void {
+  try {
+    const incoming = new Set<string>();
+    for (const c of contributions) {
+      if (!c || !Array.isArray(c.scopes)) continue;
+      for (const scope of c.scopes) {
+        if (typeof scope === "string" && scope.length > 0) incoming.add(scope);
+      }
+    }
+    if (incoming.size === 0) return;
+
+    for (const [existingPluginId, existingContributions] of PLUGIN_FILE_DECORATION_PROVIDERS) {
+      if (existingPluginId === pluginId) continue;
+      const reported = new Set<string>();
+      for (const c of existingContributions) {
+        if (!c || !Array.isArray(c.scopes)) continue;
+        for (const scope of c.scopes) {
+          if (!incoming.has(scope) || reported.has(scope)) continue;
+          reported.add(scope);
+          console.warn(
+            `[Plugin] fileDecorationProvider scope collision: "${pluginId}" and ` +
+              `"${existingPluginId}" both declare scope "${scope}". Decorations merge ` +
+              `first-writer-wins per field in plugin load order, so one provider's badge ` +
+              `for a shared path may be silently dropped.`
+          );
+        }
+      }
+    }
+  } catch {
+    // Diagnostics are best-effort; never let a malformed registry entry block
+    // registration of a well-formed plugin.
+  }
+}
+
 export function registerFileDecorationProviders(
   pluginId: string,
   contributions: FileDecorationContribution[]
@@ -50,6 +100,7 @@ export function registerFileDecorationProviders(
     PLUGIN_FILE_DECORATION_PROVIDERS.delete(pluginId);
     return;
   }
+  warnOnScopeCollision(pluginId, contributions);
   PLUGIN_FILE_DECORATION_PROVIDERS.set(pluginId, contributions.map(freezeContribution));
 }
 
