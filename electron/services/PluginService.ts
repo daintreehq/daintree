@@ -3,7 +3,7 @@ import { existsSync, watch as fsWatch, type FSWatcher } from "node:fs";
 import path from "path";
 import os from "os";
 import { pathToFileURL } from "url";
-import { app } from "electron";
+import { app, clipboard } from "electron";
 import * as semver from "semver";
 // Aliased to avoid colliding with Vite's auto-injected ESM shim
 // (`import { createRequire } from 'module'; const require = createRequire(import.meta.url);`),
@@ -75,6 +75,7 @@ import type {
   PluginFsDirEntry,
   PluginFsStat,
   PluginGitApi,
+  PluginClipboardApi,
   PluginGitStatus,
   PluginGitCommitOptions,
   PluginGitCommitResult,
@@ -2673,6 +2674,12 @@ export class PluginService {
       // this is the runtime enforcement of allowedPaths (formerly advisory).
       fs: this.buildFsApi(pluginId),
       git: this.buildGitApi(pluginId),
+      // Host-mediated OS clipboard surface backing the clipboard:read /
+      // clipboard:write tokens. Runs in the main process (Electron's clipboard
+      // module is unavailable in the dev-worker utility process), so it works
+      // from a headless plugin with no mounted panel. NOT revoke-guarded —
+      // liveness is plugin membership; once unloaded every method rejects.
+      clipboard: this.buildClipboardApi(pluginId),
       // NOT revoke-guarded: plugins read/write settings throughout their
       // lifetime (IPC handlers, timers), long after activate() resolves. The
       // store is the source of truth, so a late call is harmless.
@@ -3532,6 +3539,59 @@ export class PluginService {
           durationMs: 0,
         });
         return result;
+      },
+    };
+  }
+
+  /**
+   * Host-mediated OS clipboard surface backing the `clipboard:read` /
+   * `clipboard:write` tokens. Text-only; both methods run here in the main
+   * process because Electron's `clipboard` module is undefined inside the
+   * dev-worker utility process (a worker-side call would silently no-op). Like
+   * {@link buildGitApi} the liveness check precedes the capability check so a
+   * torn-down plugin reports `PLUGIN_UNLOADED`, not `PERMISSION_REQUIRED`
+   * (declaredCapabilities() also returns [] post-unload). Clipboard ops are
+   * stateless — no watchers or handles — so there is nothing to tear down on
+   * unload.
+   */
+  private buildClipboardApi(pluginId: string): PluginClipboardApi {
+    // Mirror the renderer IPC clipboard write guard (electron/ipc/handlers/
+    // clipboard.ts) so a runaway plugin can't exhaust the main-process heap.
+    const MAX_TEXT_BYTES = 8 * 1024 * 1024;
+    const requireLoaded = (op: string): void => {
+      if (!this.plugins.has(pluginId)) {
+        throw new Error(
+          `PLUGIN_UNLOADED: plugin "${pluginId}" clipboard.${op}: plugin is no longer loaded`
+        );
+      }
+    };
+    return {
+      writeText: async (text): Promise<void> => {
+        requireLoaded("writeText");
+        if (!this.declaredCapabilities(pluginId).has("clipboard:write")) {
+          throw new Error(
+            `PERMISSION_REQUIRED: plugin "${pluginId}" clipboard.writeText requires the "clipboard:write" capability, which is not declared in manifest.capabilities`
+          );
+        }
+        if (typeof text !== "string") {
+          throw new Error(`VALIDATION: plugin "${pluginId}" clipboard.writeText requires a string`);
+        }
+        if (Buffer.byteLength(text, "utf8") > MAX_TEXT_BYTES) {
+          throw new Error(
+            `PAYLOAD_TOO_LARGE: plugin "${pluginId}" clipboard.writeText text exceeds the ${MAX_TEXT_BYTES} byte limit`
+          );
+        }
+        clipboard.writeText(text);
+      },
+      readText: async (): Promise<string> => {
+        requireLoaded("readText");
+        if (!this.declaredCapabilities(pluginId).has("clipboard:read")) {
+          throw new Error(
+            `PERMISSION_REQUIRED: plugin "${pluginId}" clipboard.readText requires the "clipboard:read" capability, which is not declared in manifest.capabilities`
+          );
+        }
+        // Electron returns "" for empty or non-text clipboard content.
+        return clipboard.readText();
       },
     };
   }

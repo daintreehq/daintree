@@ -73,6 +73,7 @@ export type {
   PluginGitStatusFile,
   PluginGitCommitOptions,
   PluginGitCommitResult,
+  PluginClipboardApi,
 } from "./plugin.js";
 
 // ── Settings (host.settings) ────────────────────────────────────────

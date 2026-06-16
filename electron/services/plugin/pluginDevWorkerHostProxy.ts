@@ -635,6 +635,10 @@ export class PluginDevWorkerHostProxy {
             callOptions?.signal
           ),
       },
+      clipboard: {
+        writeText: (text) => this.call<void>("clipboard.writeText", { text }),
+        readText: () => this.call<string>("clipboard.readText", undefined),
+      },
       settings: {
         get: <T = unknown>(key: string, scope: PluginSettingsScope = "user") =>
           this.call<T | undefined>("settings.get", { key, scope }),

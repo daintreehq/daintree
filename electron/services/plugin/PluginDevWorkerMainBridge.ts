@@ -48,6 +48,7 @@ import type {
   FsWriteFileParams,
   FsWatchParams,
   GitOpParams,
+  ClipboardWriteTextParams,
   ProcessSpawnParams,
   ProcessHandleRefParams,
 } from "../../../shared/types/pluginDevWorker.js";
@@ -492,6 +493,12 @@ export class PluginDevWorkerMainBridge {
         const p = params as GitOpParams;
         return this.host.git.commit(p.worktreePath, { message: p.message ?? "" }, { signal });
       }
+      case "clipboard.writeText": {
+        await this.host.clipboard.writeText((params as ClipboardWriteTextParams).text);
+        return undefined;
+      }
+      case "clipboard.readText":
+        return this.host.clipboard.readText();
       default:
         throw new Error(`Unknown host-call method "${method}"`);
     }

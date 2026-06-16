@@ -114,6 +114,8 @@ export interface MockHostState {
   readonly spawnCalls: ReadonlyArray<SpawnRecord>;
   readonly fsWriteCalls: ReadonlyArray<FsWriteRecord>;
   readonly gitCommitCalls: ReadonlyArray<GitCommitRecord>;
+  /** Captured `host.clipboard.writeText(text)` calls, in order. */
+  readonly clipboardWriteCalls: ReadonlyArray<string>;
 
   /**
    * Replace the active worktree and notify every `onDidChangeActiveWorktree`
@@ -189,6 +191,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const fsFiles = new Map<string, string>();
   const fsWriteCalls: FsWriteRecord[] = [];
   const gitCommitCalls: GitCommitRecord[] = [];
+  const clipboardWriteCalls: string[] = [];
+  let clipboardText = "";
 
   const activeWorktreeSubs = new Set<(snapshot: PluginWorktreeSnapshot | null) => void>();
   const worktreesSubs = new Set<(snapshots: PluginWorktreeSnapshot[]) => void>();
@@ -719,6 +723,20 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         return { commit: `mock-${gitCommitCalls.length}`, message, preview: "" };
       },
     },
+    // In-memory clipboard mock. `writeText` records the text and updates the
+    // in-memory buffer `readText` returns, so a round-trip works in tests. No
+    // capability gating is modeled (matches the fs/git mocks — gating lives in
+    // PluginService and is unit-tested there); `readText` returns "" until the
+    // first write, mirroring Electron's empty-clipboard behaviour.
+    clipboard: {
+      async writeText(text) {
+        clipboardWriteCalls.push(text);
+        clipboardText = text;
+      },
+      async readText() {
+        return clipboardText;
+      },
+    },
     settings,
     storage,
     logger: {
@@ -739,6 +757,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     spawnCalls,
     fsWriteCalls,
     gitCommitCalls,
+    clipboardWriteCalls,
 
     simulateActiveWorktreeChange(snapshot) {
       activeWorktree = snapshot;

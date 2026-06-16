@@ -69,6 +69,10 @@ function makeHost() {
       stat: vi.fn(async () => ({})),
       watch: vi.fn(async (_paths: string[], _cb: (p: string) => void) => vi.fn()),
     },
+    clipboard: {
+      writeText: vi.fn(async () => {}),
+      readText: vi.fn(async () => "clip-contents"),
+    },
   };
 }
 
@@ -133,6 +137,48 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(host.getWorktrees).toHaveBeenCalled();
     const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c1");
     expect(result).toMatchObject({ ok: true, result: [{ id: "w1" }] });
+  });
+
+  it("routes clipboard.writeText to the host and replies with undefined", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "cw",
+      method: "clipboard.writeText",
+      params: { text: "hello" },
+    });
+    await flush();
+    expect(host.clipboard.writeText).toHaveBeenCalledWith("hello");
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "cw");
+    expect(result).toMatchObject({ ok: true, result: undefined });
+  });
+
+  it("routes clipboard.readText to the host and replies with its text", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "cr",
+      method: "clipboard.readText",
+      params: undefined,
+    });
+    await flush();
+    expect(host.clipboard.readText).toHaveBeenCalled();
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "cr");
+    expect(result).toMatchObject({ ok: true, result: "clip-contents" });
+  });
+
+  it("relays an empty clipboard read as ok:true with an empty string", async () => {
+    const { host, workerHost } = makeBridge();
+    host.clipboard.readText.mockResolvedValueOnce("");
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "ce",
+      method: "clipboard.readText",
+      params: undefined,
+    });
+    await flush();
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "ce");
+    expect(result).toMatchObject({ ok: true, result: "" });
   });
 
   it("replies host-result ok:false when the host method throws", async () => {
