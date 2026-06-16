@@ -16,6 +16,9 @@
     "forceConsistentCasingInFileNames": true,
     "noEmit": true
   },
-  "include": ["plugins/builtin/*/main/**/*.ts", "plugins/sample/*/main/**/*.ts"],
-  "exclude": ["**/__tests__/**", "**/*.test.ts", "**/*.spec.ts"]
+  "include": [
+    "plugins/builtin/*/main/**/*.ts",
+    "plugins/sample/*/main/**/*.ts",
+    "electron/types/**/*.d.ts"
+  ]
 }
