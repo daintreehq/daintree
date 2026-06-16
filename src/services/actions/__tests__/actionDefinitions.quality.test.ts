@@ -4,7 +4,7 @@ import { setCurrentViewStore } from "@/store/createWorktreeStore";
 import type { WorktreeViewStore, WorktreeViewStoreApi } from "@/store/createWorktreeStore";
 import type { WorktreeSnapshot } from "@shared/types";
 import { KEY_ACTION_VALUES } from "@shared/types/keymap";
-import { BUILT_IN_ACTION_IDS } from "@shared/config/actionIds";
+import { BUILT_IN_ACTION_IDS, DENY_PLUGIN_DISPATCH_ACTION_IDS } from "@shared/config/actionIds";
 import type { ActionId } from "@shared/types/actions";
 import type { ActionRegistry, ActionCallbacks } from "../actionTypes";
 import { DEFAULT_KEYBINDINGS } from "../../defaultKeybindings";
@@ -546,20 +546,32 @@ describe("destructive-action danger metadata", () => {
 /**
  * Built-in actions that inject text/keystrokes into terminals and therefore must
  * be closed to plugin `host.dispatch` (#10558) — plugins inject only through the
- * `agent:input`-gated `host.sendToActiveAgent`. If a new terminal-writing action
- * is added without `denyPluginDispatch`, add it here AND set the flag, or the
- * capability gate has a fresh side door.
+ * `agent:input`-gated `host.sendToActiveAgent`. The single source of truth is
+ * `DENY_PLUGIN_DISPATCH_ACTION_IDS` in `shared/config/actionIds.ts`, which the
+ * plugin manifest validator (#10580) also consumes; the completeness guard below
+ * asserts it stays in lockstep with the registry's `denyPluginDispatch: true`
+ * flags so a new injection action can't silently bypass either gate.
  */
-const PLUGIN_DENIED_INJECTION_ACTIONS: ReadonlyArray<ActionId> = [
-  "terminal.sendCommand",
-  "terminal.paste",
-  "fleet.accept",
-  "fleet.reject",
-  "fleet.interrupt",
-  "fleet.retryFailures",
-] as unknown as ActionId[];
+const PLUGIN_DENIED_INJECTION_ACTIONS: ReadonlyArray<ActionId> =
+  DENY_PLUGIN_DISPATCH_ACTION_IDS as unknown as ActionId[];
 
 describe("plugin-dispatch injection guard (#10558)", () => {
+  it("DENY_PLUGIN_DISPATCH_ACTION_IDS exactly matches the registry's denyPluginDispatch flags", async () => {
+    // `satisfies readonly BuiltInRuntimeActionId[]` on the constant only catches
+    // renames/removals — a newly-flagged action omitted from the list would slip
+    // through. This is the completeness guard (#10580, lesson #8341): the exported
+    // deny-list and the actual `denyPluginDispatch: true` definitions must be the
+    // same set, or both the runtime dispatch gate and the manifest validator drift.
+    const { registry } = await createRegistryWithAudit();
+    const flaggedInRegistry = new Set<string>();
+    for (const [id, factory] of registry) {
+      if (factory().denyPluginDispatch === true) {
+        flaggedInRegistry.add(id);
+      }
+    }
+    expect([...flaggedInRegistry].sort()).toEqual([...DENY_PLUGIN_DISPATCH_ACTION_IDS].sort());
+  });
+
   it("rejects plugin-source dispatch with RESTRICTED for every injection action", async () => {
     const { ActionService } = await import("../../ActionService");
     const { registry } = await createRegistryWithAudit();

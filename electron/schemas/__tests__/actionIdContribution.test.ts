@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { getPluginManifestSchema } from "../plugin.js";
+import { DENY_PLUGIN_DISPATCH_ACTION_IDS } from "../../../shared/config/actionIds.js";
 
 // A real built-in action id (see shared/config/actionIds.ts) — referencing one
 // from a plugin contribution is valid and common.
@@ -182,6 +183,72 @@ describe("manifest-level actionId namespace gate (issue #10565)", () => {
       }
     }
   );
+
+  it.each(DENY_PLUGIN_DISPATCH_ACTION_IDS)(
+    "rejects denyPluginDispatch built-in %s",
+    (deniedActionId) => {
+      // Cover every entry in the deny set — dropping any one of them would
+      // otherwise reopen a dead-button side door undetected.
+      const result = schema.safeParse(
+        manifestWith({
+          contributes: { toolbarButtons: [contributionEntry.toolbarButtons(deniedActionId)] },
+        })
+      );
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        const issue = result.error.issues.find(
+          (i) =>
+            (i as { params?: { errorCode?: string } }).params?.errorCode ===
+            "action_id_plugin_dispatch_denied"
+        );
+        expect(issue).toBeDefined();
+      }
+    }
+  );
+
+  it("treats an explicit empty contributes.commands array as the imperative escape hatch", () => {
+    const result = schema.safeParse(
+      manifestWith({
+        contributes: {
+          commands: [],
+          toolbarButtons: [contributionEntry.toolbarButtons("acme.my-plugin.greet")],
+        },
+      })
+    );
+    expect(result.success).toBe(true);
+  });
+
+  it("reports each distinct error code in one manifest (denied, foreign, undeclared own)", () => {
+    // A denied built-in, a foreign-namespace id, and a typo'd own-namespace id
+    // with commands declared should all surface independently — no early-exit
+    // should suppress a downstream issue.
+    const result = schema.safeParse(
+      manifestWith({
+        contributes: {
+          commands: [commandEntry("greet")],
+          toolbarButtons: [
+            contributionEntry.toolbarButtons("terminal.sendCommand"),
+            contributionEntry.toolbarButtons("other.plugin.foo"),
+            contributionEntry.toolbarButtons("acme.my-plugin.greet-typo"),
+          ],
+        },
+      })
+    );
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const codeFor = (index: number) =>
+        result.error.issues.find(
+          (i) =>
+            Array.isArray(i.path) &&
+            i.path[0] === "contributes" &&
+            i.path[1] === "toolbarButtons" &&
+            i.path[2] === index
+        ) as { params?: { errorCode?: string } } | undefined;
+      expect(codeFor(0)?.params?.errorCode).toBe("action_id_plugin_dispatch_denied");
+      expect(codeFor(1)?.params?.errorCode).toBe("action_id_unknown_namespace");
+      expect(codeFor(2)?.params?.errorCode).toBe("action_id_undeclared_command");
+    }
+  });
 
   it("rejects a foreign-namespace actionId with a precise error code and path", () => {
     const result = schema.safeParse(
