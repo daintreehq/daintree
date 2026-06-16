@@ -9,7 +9,7 @@
  * method this mock doesn't implement.
  */
 
-import type { ActionDispatchResult } from "../types/actions.js";
+import type { ActionDispatchResult, ActionId } from "../types/actions.js";
 import type {
   FileDecorationProviderDescriptor,
   FileDecorationProviderImpl,
@@ -70,7 +70,7 @@ export interface SpawnRecord {
 }
 
 export interface DispatchedActionRecord {
-  actionId: string;
+  actionId: ActionId;
   args: unknown;
 }
 
@@ -143,7 +143,7 @@ export interface MockHostState {
    * Pre-seed a deterministic `dispatch()` result for one action id. Overrides
    * the default in-memory routing (which resolves the registered handler).
    */
-  setDispatchResult(actionId: string, result: ActionDispatchResult): void;
+  setDispatchResult(actionId: ActionId, result: ActionDispatchResult): void;
 }
 
 export interface CreateMockHostOptions {
@@ -165,7 +165,7 @@ export interface CreateMockHostOptions {
    * matching `registerAction` handler, returning `NOT_FOUND` otherwise — which
    * mirrors `ActionService.dispatch` closely enough for activation-time tests.
    */
-  dispatch?: (actionId: string, args?: unknown) => Promise<ActionDispatchResult>;
+  dispatch?: (actionId: ActionId, args?: unknown) => Promise<ActionDispatchResult>;
 }
 
 /**
@@ -230,7 +230,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     worktree: new Map(),
   };
 
-  const dispatchOverrides = new Map<string, ActionDispatchResult>();
+  const dispatchOverrides = new Map<ActionId, ActionDispatchResult>();
 
   const settings: SettingsApi = {
     async get<T = unknown>(

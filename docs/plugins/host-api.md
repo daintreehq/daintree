@@ -66,7 +66,7 @@ interface PluginHostApi {
   invalidateFileDecorations(scope: string, paths?: string[]): void;
 
   // Action dispatch
-  dispatch(actionId: string, args?: unknown): Promise<ActionDispatchResult>;
+  dispatch(actionId: ActionId, args?: unknown): Promise<ActionDispatchResult>;
 
   // Settings
   readonly settings: SettingsApi;

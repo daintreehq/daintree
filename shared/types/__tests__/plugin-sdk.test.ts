@@ -65,6 +65,7 @@ import type {
   PluginActionManifestEntry,
   PluginCanDispatchResult,
   BuiltInActionId,
+  ActionId,
   ActionKind,
   ActionDanger,
   ActionExample,
@@ -197,6 +198,11 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf<PluginActionManifestEntry>().toMatchTypeOf<object>();
       expectTypeOf<PluginCanDispatchResult>().toMatchTypeOf<string>();
       expectTypeOf<BuiltInActionId>().toMatchTypeOf<string>();
+      // ActionId is the open union (BuiltInActionId | (string & {})) used by the
+      // dispatch surface — narrow enough to autocomplete built-ins, open enough
+      // to still accept a plugin-authored id without a cast (#10581).
+      expectTypeOf<ActionId>().toMatchTypeOf<string>();
+      expectTypeOf<BuiltInActionId>().toMatchTypeOf<ActionId>();
       expectTypeOf<ActionKind>().toMatchTypeOf<string>();
       expectTypeOf<ActionDanger>().toMatchTypeOf<string>();
       expectTypeOf<ActionExample>().toMatchTypeOf<object>();
@@ -256,11 +262,21 @@ describe("plugin-sdk boundary", () => {
         () => Promise<PluginActionManifestEntry[]>
       >();
       expectTypeOf<PluginHostApi["actions"]["get"]>().toEqualTypeOf<
-        (actionId: string) => Promise<PluginActionManifestEntry | null>
+        (actionId: ActionId) => Promise<PluginActionManifestEntry | null>
       >();
       expectTypeOf<PluginHostApi["actions"]["canDispatch"]>().toEqualTypeOf<
-        (actionId: string) => Promise<PluginCanDispatchResult>
+        (actionId: ActionId) => Promise<PluginCanDispatchResult>
       >();
+    });
+
+    it("PluginHostApi.dispatch accepts a BuiltInActionId and the open ActionId union (#10581)", () => {
+      // dispatch is typed against ActionId, so a built-in id autocompletes and a
+      // plugin-authored id (a plain string) still type-checks without a cast.
+      expectTypeOf<PluginHostApi["dispatch"]>().toEqualTypeOf<
+        (actionId: ActionId, args?: unknown) => Promise<ActionDispatchResult>
+      >();
+      expectTypeOf<BuiltInActionId>().toMatchTypeOf<Parameters<PluginHostApi["dispatch"]>[0]>();
+      expectTypeOf<string>().toMatchTypeOf<Parameters<PluginHostApi["dispatch"]>[0]>();
     });
 
     it("PluginCanDispatchResult is the three-state pre-flight verdict", () => {
@@ -274,7 +290,9 @@ describe("plugin-sdk boundary", () => {
 
     it("PluginActionManifestEntry drops renderer-internal manifest fields", () => {
       const entry = {} as PluginActionManifestEntry;
-      expectTypeOf(entry.id).toEqualTypeOf<string>();
+      // `id` is the open ActionId union so it round-trips straight into
+      // host.dispatch()/get()/canDispatch() without a cast (#10581).
+      expectTypeOf(entry.id).toEqualTypeOf<ActionId>();
       expectTypeOf(entry.danger).toEqualTypeOf<ActionDanger>();
       expectTypeOf(entry.requiresArgs).toEqualTypeOf<boolean>();
       // @ts-expect-error — `enabled` is live renderer-context state, not on the projection

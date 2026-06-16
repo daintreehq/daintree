@@ -196,6 +196,7 @@ export type {
   PluginActionManifestEntry,
   PluginCanDispatchResult,
   BuiltInActionId,
+  ActionId,
   ActionKind,
   ActionDanger,
   ActionExample,
