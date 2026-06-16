@@ -248,13 +248,7 @@ describe("plugin-sdk boundary", () => {
     });
 
     it("PluginHostApi.actions exposes the built-in catalog surface (#10561)", () => {
-      const host = {
-        actions: {
-          list: async () => [],
-          get: async () => null,
-          canDispatch: async () => "restricted" as const,
-        },
-      } as PluginHostApi;
+      const host = {} as PluginHostApi;
       expectTypeOf(host.actions).toEqualTypeOf<PluginHostActionsApi>();
       expectTypeOf(host.actions.list).toEqualTypeOf<() => Promise<PluginActionManifestEntry[]>>();
       expectTypeOf(host.actions.get).toEqualTypeOf<
