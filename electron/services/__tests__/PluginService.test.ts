@@ -4855,6 +4855,83 @@ describe("createHost — actions catalog (#10561)", () => {
     const restrictedPending = host.actions.canDispatch("some.restricted.action");
     replyGet(null);
     await expect(restrictedPending).resolves.toBe("restricted");
+
+    // fail closed: an unexpected danger value is NOT treated as dispatchable
+    const bogusPending = host.actions.canDispatch("some.bogus.action");
+    replyGet({ id: "some.bogus.action", danger: "bogus", requiresArgs: false });
+    await expect(bogusPending).resolves.toBe("restricted");
+  });
+
+  it("ignores a catalog response from an unexpected sender id (cross-window guard)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const wc = makeFakeWebContents(25);
+    setActiveWebContents(wc);
+    await writePlugin("actions-guard", { name: "acme.actions-guard", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ActionsHostShape }).createHost(
+      "acme.actions-guard"
+    );
+
+    const pending = host.actions.get("terminal.new");
+    const req = lastRequestFor(wc, CHANNELS.PLUGIN_ACTIONS_GET_REQUEST);
+    warnSpy.mockClear();
+
+    // Wrong sender — must be ignored and warned about, leaving the request pending.
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE,
+      { sender: { id: 999 } },
+      { requestId: req.requestId, entry: { id: "terminal.new", danger: "safe" } }
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("unexpected sender"));
+
+    // Correct sender — resolves with the real entry.
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE,
+      { sender: { id: 25 } },
+      { requestId: req.requestId, entry: { id: "terminal.new", danger: "safe" } }
+    );
+    await expect(pending).resolves.toMatchObject({ id: "terminal.new" });
+    warnSpy.mockRestore();
+  });
+
+  it("resolves concurrent list + get independently regardless of response order", async () => {
+    const wc = makeFakeWebContents(26);
+    setActiveWebContents(wc);
+    await writePlugin("actions-concurrent", {
+      name: "acme.actions-concurrent",
+      version: "1.0.0",
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ActionsHostShape }).createHost(
+      "acme.actions-concurrent"
+    );
+
+    const listPending = host.actions.list();
+    const getPending = host.actions.get("terminal.new");
+    const listReq = lastRequestFor(wc, CHANNELS.PLUGIN_ACTIONS_LIST_REQUEST);
+    const getReq = lastRequestFor(wc, CHANNELS.PLUGIN_ACTIONS_GET_REQUEST);
+
+    // Deliver the get response BEFORE the list response — the shared pending map
+    // keyed by requestId must not let one resolve the other.
+    const entry = { id: "terminal.new", danger: "safe", requiresArgs: false };
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE,
+      { sender: { id: 26 } },
+      { requestId: getReq.requestId, entry }
+    );
+    const entries = [{ id: "app.openSettings", danger: "safe", requiresArgs: false }];
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_ACTIONS_LIST_RESPONSE,
+      { sender: { id: 26 } },
+      { requestId: listReq.requestId, entries }
+    );
+
+    await expect(getPending).resolves.toEqual(entry);
+    await expect(listPending).resolves.toEqual(entries);
   });
 
   it("canDispatch() returns 'restricted' without a round-trip once the plugin is unloaded", async () => {

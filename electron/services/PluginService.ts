@@ -2598,8 +2598,10 @@ export class PluginService {
           const entry = await this.dispatcher.sendActionsGetToRenderer(actionId);
           if (!entry) return "restricted";
           if (entry.danger === "confirm") return "confirm";
-          if (entry.danger === "restricted") return "restricted";
-          return "ok";
+          // Fail closed: only an explicit "safe" entry is dispatchable without a
+          // prompt. Any other danger (including an unexpected value) → restricted.
+          if (entry.danger === "safe") return "ok";
+          return "restricted";
         },
       },
       // Imperative UI prompts (#10522). NOT revoke-guarded for the same reason

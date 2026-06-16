@@ -198,6 +198,21 @@ describe("PluginDevWorkerHostProxy host.actions (#10561)", () => {
     await expect(getPromise).resolves.toBeNull();
     await expect(canPromise).resolves.toBe("restricted");
   });
+
+  it("canDispatch honors the never-throws contract on a host error result", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.actions.canDispatch("terminal.new");
+    const call = sent.find((m) => m.type === "host-call" && m.method === "actions.get");
+    // Underlying get() host-call fails — canDispatch must degrade to "restricted",
+    // never reject.
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error: "boom",
+    });
+    await expect(promise).resolves.toBe("restricted");
+  });
 });
 
 describe("PluginDevWorkerHostProxy host.process (#10526)", () => {

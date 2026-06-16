@@ -535,15 +535,23 @@ export class PluginDevWorkerHostProxy {
         get: (actionId) =>
           this.callWithGrace<PluginActionManifestEntry | null>("actions.get", { actionId }, null),
         canDispatch: async (actionId) => {
-          const entry = await this.callWithGrace<PluginActionManifestEntry | null>(
-            "actions.get",
-            { actionId },
-            null
-          );
+          // Honor the never-throws contract: a host-side error on the underlying
+          // get() degrades to "restricted" rather than rejecting.
+          let entry: PluginActionManifestEntry | null;
+          try {
+            entry = await this.callWithGrace<PluginActionManifestEntry | null>(
+              "actions.get",
+              { actionId },
+              null
+            );
+          } catch {
+            return "restricted";
+          }
           if (!entry) return "restricted";
           if (entry.danger === "confirm") return "confirm";
-          if (entry.danger === "restricted") return "restricted";
-          return "ok";
+          // Fail closed: only an explicit "safe" entry maps to "ok".
+          if (entry.danger === "safe") return "ok";
+          return "restricted";
         },
       },
       // Imperative UI prompts (#10522). Post-activation-safe (no
