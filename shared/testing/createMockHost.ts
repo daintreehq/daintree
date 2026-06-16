@@ -74,6 +74,12 @@ export interface DispatchedActionRecord {
   args: unknown;
 }
 
+/** Captured `host.sendToActiveAgent(text, options)` calls. */
+export interface SentToActiveAgentRecord {
+  text: string;
+  submit: boolean;
+}
+
 export interface RegisteredForgeProviderRecord {
   descriptor: ForgeProviderDescriptor;
   impl: ForgeProviderImpl;
@@ -108,6 +114,7 @@ export interface MockHostState {
   readonly postToPanelCalls: ReadonlyArray<PostToPanelRecord>;
   readonly shownToasts: ReadonlyArray<ShownToastRecord>;
   readonly dispatchedActions: ReadonlyArray<DispatchedActionRecord>;
+  readonly sentToActiveAgentCalls: ReadonlyArray<SentToActiveAgentRecord>;
   readonly registeredForgeProviders: ReadonlyArray<RegisteredForgeProviderRecord>;
   readonly registeredFileDecorationProviders: ReadonlyArray<RegisteredFileDecorationProviderRecord>;
   readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
@@ -184,6 +191,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const postToPanelCalls: PostToPanelRecord[] = [];
   const shownToasts: ShownToastRecord[] = [];
   const dispatchedActions: DispatchedActionRecord[] = [];
+  const sentToActiveAgentCalls: SentToActiveAgentRecord[] = [];
   const registeredForgeProviders: RegisteredForgeProviderRecord[] = [];
   const registeredFileDecorationProviders: RegisteredFileDecorationProviderRecord[] = [];
   const invalidationCalls: InvalidationRecord[] = [];
@@ -483,6 +491,16 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     async getAgentState() {
       return lastAgentSnapshot;
     },
+    async sendToActiveAgent(text, options) {
+      // Mirrors PluginService.createHost: reject whitespace-only text (the
+      // production host rejects it so a no-op stage can't bank consent and
+      // submit:true can't fire a bare Enter). The mock has no PTY, so a valid
+      // call just records its intent for assertions.
+      if (typeof text !== "string" || text.trim().length === 0) {
+        throw new Error("sendToActiveAgent: text must be a non-empty, non-whitespace string");
+      }
+      sentToActiveAgentCalls.push({ text, submit: options?.submit === true });
+    },
     onDidChangeAgentState(callback) {
       agentStateSubs.add(callback);
       let disposed = false;
@@ -751,6 +769,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     postToPanelCalls,
     shownToasts,
     dispatchedActions,
+    sentToActiveAgentCalls,
     registeredForgeProviders,
     registeredFileDecorationProviders,
     invalidationCalls,
