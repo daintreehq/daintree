@@ -229,8 +229,12 @@ describe("makePluginViewHost", () => {
     vi.doUnmock("react");
   });
 
-  it("calls plugin.activateForView with the kind id before importing the view module (#10523)", async () => {
-    const activateForView = vi.fn().mockResolvedValue(undefined);
+  it("awaits plugin.activateForView with the kind id before importing the view module (#10523)", async () => {
+    // Reject activation with a sentinel so we can prove the import is *gated*
+    // on activation, not merely fired alongside it: if the `await` were dropped
+    // the factory would reject with the `plugin://` import error (module not
+    // found) instead of this sentinel.
+    const activateForView = vi.fn().mockRejectedValue(new Error("ACTIVATION_FAILED"));
     Object.defineProperty(window, "electron", {
       configurable: true,
       writable: true,
@@ -238,8 +242,7 @@ describe("makePluginViewHost", () => {
     });
 
     // Capture the lazy factory so we can drive it directly — the real
-    // `plugin://` import never resolves in jsdom, but the factory calls
-    // `activateForView` synchronously before it ever reaches `import()`.
+    // `plugin://` import never resolves in jsdom.
     let capturedFactory: (() => Promise<unknown>) | undefined;
     vi.doMock("react", async () => {
       const actual = await vi.importActual<typeof import("react")>("react");
@@ -268,11 +271,9 @@ describe("makePluginViewHost", () => {
     );
 
     await waitFor(() => expect(capturedFactory).toBeDefined());
-    // Invoking the factory calls activateForView synchronously (before the
-    // awaited `import()`); swallow the eventual import rejection in jsdom.
-    const settled = capturedFactory!().catch(() => {});
+    // Activation rejects, so the awaited call short-circuits before `import()`.
+    await expect(capturedFactory!()).rejects.toThrow("ACTIVATION_FAILED");
     expect(activateForView).toHaveBeenCalledWith("acme.dashboard");
-    await settled;
     vi.doUnmock("react");
   });
 

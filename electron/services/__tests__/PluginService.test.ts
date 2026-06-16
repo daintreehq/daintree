@@ -7836,7 +7836,7 @@ describe("Deferred activation — activatePlugin", () => {
     );
     await fs.writeFile(
       path.join(pluginDir, "main.mjs"),
-      "globalThis.__viewFailCount = (globalThis.__viewFailCount ?? 0) + 1; export function activate() { throw new Error('view-activate-boom'); }"
+      "export function activate() { globalThis.__viewFailActivateCount = (globalThis.__viewFailActivateCount ?? 0) + 1; throw new Error('view-activate-boom'); }"
     );
 
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -7848,14 +7848,17 @@ describe("Deferred activation — activatePlugin", () => {
       await expect(service.activatePluginForView("acme.view-fail.viewer")).resolves.toBeUndefined();
       expect(service.getPluginLoadError("acme.view-fail")?.message).toBe("view-activate-boom");
       expect(service.hasPlugin("acme.view-fail")).toBe(true);
+      expect((globalThis as Record<string, unknown>).__viewFailActivateCount).toBe(1);
 
       // Second open: the failed in-flight entry was cleared, so activation runs
-      // again (Settings → Retry / re-open semantics).
+      // again (Settings → Retry / re-open semantics) rather than returning a
+      // cached settled promise — proven by the activate() invocation count.
       await expect(service.activatePluginForView("acme.view-fail.viewer")).resolves.toBeUndefined();
       expect(service.getPluginLoadError("acme.view-fail")?.message).toBe("view-activate-boom");
+      expect((globalThis as Record<string, unknown>).__viewFailActivateCount).toBe(2);
     } finally {
       errorSpy.mockRestore();
-      delete (globalThis as Record<string, unknown>).__viewFailCount;
+      delete (globalThis as Record<string, unknown>).__viewFailActivateCount;
     }
   });
 

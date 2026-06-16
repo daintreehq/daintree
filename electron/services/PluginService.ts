@@ -1648,12 +1648,13 @@ export class PluginService {
   }
 
   /**
-   * Fan out activation for every plugin whose manifest opts into
-   * `"onStartupFinished"` (or whose `activationEvents` is unset / empty —
-   * see {@link shouldActivateOnStartup}). Activations run in parallel via
-   * `Promise.allSettled`; one slow plugin must not block the rest. Wired
-   * fire-and-forget from the `plugin-service` deferred task so the renderer
-   * keeps progressing while plugins warm up in the background.
+   * Fan out activation for every plugin that opts into `"onStartupFinished"`
+   * (see {@link shouldActivateOnStartup}). Plugins without `activationEvents`
+   * are lazy (#10523) and are deliberately excluded here — they activate on
+   * first use instead. Activations run in parallel via `Promise.allSettled`;
+   * one slow plugin must not block the rest. Wired fire-and-forget from the
+   * `plugin-service` deferred task so the renderer keeps progressing while
+   * plugins warm up in the background.
    */
   async activateStartupFinishedPlugins(): Promise<void> {
     try {
