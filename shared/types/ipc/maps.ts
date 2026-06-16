@@ -1513,6 +1513,32 @@ export interface IpcEventMap {
   };
 
   /**
+   * Plugin built-in action-catalog request (#10561). Main emits this on the
+   * active project WebContents when a plugin calls `host.actions.list()` and
+   * awaits a renderer `ipcRenderer.send` reply on
+   * `CHANNELS.PLUGIN_ACTIONS_LIST_RESPONSE`, correlated by `requestId`. The
+   * renderer projects `ActionService.list()` to {@link
+   * import("../actions.js").PluginActionManifestEntry}. The response channel is a
+   * renderer→main fire-and-forget send tracked in `DEAD_CHANNEL_ALLOWLIST` in
+   * channelDrift.test.ts.
+   */
+  "plugin:actions-list-request": {
+    requestId: string;
+  };
+
+  /**
+   * Plugin built-in action lookup request (#10561). Main emits this when a
+   * plugin calls `host.actions.get(id)` / `host.actions.canDispatch(id)` and
+   * awaits a renderer `ipcRenderer.send` reply on
+   * `CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE`, correlated by `requestId`. Same
+   * fire-and-forget response discipline as `plugin:actions-list-request`.
+   */
+  "plugin:actions-get-request": {
+    requestId: string;
+    actionId: string;
+  };
+
+  /**
    * Imperative plugin UI-prompt request (#10522). Main emits this on the active
    * project WebContents when a plugin calls `host.showQuickPick`/`showInputBox`/
    * `showConfirm`, and awaits a renderer `ipcRenderer.send` reply on

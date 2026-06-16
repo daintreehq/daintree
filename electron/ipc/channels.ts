@@ -901,6 +901,14 @@ export const CHANNELS = {
   PLUGIN_DISPATCH_ACTION_REQUEST: "plugin:dispatch-action-request",
   /** Bridge: renderer returns the plugin-sourced action dispatch result to the main process. */
   PLUGIN_DISPATCH_ACTION_RESPONSE: "plugin:dispatch-action-response",
+  /** Bridge: main process asks the renderer for the plugin-facing action catalog (#10561). */
+  PLUGIN_ACTIONS_LIST_REQUEST: "plugin:actions-list-request",
+  /** Bridge: renderer returns the projected action catalog to the main process. */
+  PLUGIN_ACTIONS_LIST_RESPONSE: "plugin:actions-list-response",
+  /** Bridge: main process asks the renderer for a single projected action entry (#10561). */
+  PLUGIN_ACTIONS_GET_REQUEST: "plugin:actions-get-request",
+  /** Bridge: renderer returns the single projected action entry (or null) to the main process. */
+  PLUGIN_ACTIONS_GET_RESPONSE: "plugin:actions-get-response",
   /** Bridge: main process asks the renderer to render an imperative plugin UI prompt (#10522). */
   PLUGIN_UI_PROMPT_REQUEST: "plugin:ui-prompt-request",
   /** Bridge: renderer returns the user's answer to a plugin UI prompt (fire-and-forget). */

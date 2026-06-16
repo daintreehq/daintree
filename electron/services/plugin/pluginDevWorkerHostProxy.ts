@@ -41,7 +41,10 @@ import type {
   ForgeProviderDescriptor,
   ForgeProviderImpl,
 } from "../../../shared/types/forge.js";
-import type { ActionDispatchResult } from "../../../shared/types/actions.js";
+import type {
+  ActionDispatchResult,
+  PluginActionManifestEntry,
+} from "../../../shared/types/actions.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type {
   PluginHostCallMethod,
@@ -522,6 +525,27 @@ export class PluginDevWorkerHostProxy {
           durationMs: options?.durationMs,
         }),
       dispatch: (actionId, args) => this.call<ActionDispatchResult>("dispatch", { actionId, args }),
+      // Built-in action catalog (#10561). list/get relay over the port like
+      // dispatch; canDispatch is derived locally from get() (no extra
+      // round-trip), mirroring the real host. callWithGrace resolves the
+      // empty/absent fallback ([] / null / "restricted") on plugin unload
+      // instead of rejecting, matching the host contract.
+      actions: {
+        list: () => this.callWithGrace<PluginActionManifestEntry[]>("actions.list", undefined, []),
+        get: (actionId) =>
+          this.callWithGrace<PluginActionManifestEntry | null>("actions.get", { actionId }, null),
+        canDispatch: async (actionId) => {
+          const entry = await this.callWithGrace<PluginActionManifestEntry | null>(
+            "actions.get",
+            { actionId },
+            null
+          );
+          if (!entry) return "restricted";
+          if (entry.danger === "confirm") return "confirm";
+          if (entry.danger === "restricted") return "restricted";
+          return "ok";
+        },
+      },
       // Imperative UI prompts (#10522). Post-activation-safe (no
       // assertActivationOpen): plugins prompt from command handlers. They use
       // callWithGrace so a plugin unload mid-prompt resolves the dismiss value

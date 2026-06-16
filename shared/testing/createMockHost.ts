@@ -629,6 +629,17 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     async showConfirm() {
       return false;
     },
+    actions: {
+      async list() {
+        return [];
+      },
+      async get() {
+        return null;
+      },
+      async canDispatch() {
+        return "restricted";
+      },
+    },
     process: {
       async spawn(command, options): Promise<PluginProcessHandle> {
         spawnCalls.push({ command, options });

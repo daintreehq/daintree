@@ -24,6 +24,7 @@ import type {
 } from "../../../shared/types/plugin.js";
 import type { FileDecoration, FileDecorationProviderImpl } from "../../../shared/types/forge.js";
 import type {
+  ActionsGetParams,
   BroadcastToRendererParams,
   DispatchParams,
   InvalidateFileDecorationsParams,
@@ -364,6 +365,12 @@ export class PluginDevWorkerMainBridge {
       case "dispatch": {
         const p = params as DispatchParams;
         return this.host.dispatch(p.actionId, p.args);
+      }
+      case "actions.list":
+        return this.host.actions.list();
+      case "actions.get": {
+        const p = params as ActionsGetParams;
+        return this.host.actions.get(p.actionId);
       }
       case "showQuickPick": {
         // Reuse the real host so validation/provenance/cancellation all match

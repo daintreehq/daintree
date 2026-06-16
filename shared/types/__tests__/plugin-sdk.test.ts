@@ -61,6 +61,13 @@ import type {
   ActionDispatchError,
   ActionError,
   ActionErrorCode,
+  PluginHostActionsApi,
+  PluginActionManifestEntry,
+  PluginCanDispatchResult,
+  BuiltInActionId,
+  ActionKind,
+  ActionDanger,
+  ActionExample,
 } from "../plugin-sdk.js";
 import { PLUGIN_PROCESS_STREAM_CHANNEL, localAuthStubs } from "../plugin-sdk.js";
 import type { UseHostChannelResult, PluginEventHandler } from "../plugin-sdk-react.js";
@@ -182,6 +189,18 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf<ActionError>().toMatchTypeOf<object>();
       expectTypeOf<ActionErrorCode>().toMatchTypeOf<string>();
     });
+
+    it("exports the built-in action catalog types (#10561)", () => {
+      // host.actions.list()/get() project the manifest; the typed BuiltInActionId
+      // union turns a wrong action id into a compile error at the dispatch site.
+      expectTypeOf<PluginHostActionsApi>().toMatchTypeOf<object>();
+      expectTypeOf<PluginActionManifestEntry>().toMatchTypeOf<object>();
+      expectTypeOf<PluginCanDispatchResult>().toMatchTypeOf<string>();
+      expectTypeOf<BuiltInActionId>().toMatchTypeOf<string>();
+      expectTypeOf<ActionKind>().toMatchTypeOf<string>();
+      expectTypeOf<ActionDanger>().toMatchTypeOf<string>();
+      expectTypeOf<ActionExample>().toMatchTypeOf<object>();
+    });
   });
 
   describe("structural contracts", () => {
@@ -226,6 +245,49 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf<"worktree">().toMatchTypeOf<PluginStorageScope>();
       expectTypeOf<PluginSettingsScope>().toMatchTypeOf<PluginStorageScope>();
       expectTypeOf<"worktree">().not.toMatchTypeOf<PluginSettingsScope>();
+    });
+
+    it("PluginHostApi.actions exposes the built-in catalog surface (#10561)", () => {
+      const host = {
+        actions: {
+          list: async () => [],
+          get: async () => null,
+          canDispatch: async () => "restricted" as const,
+        },
+      } as PluginHostApi;
+      expectTypeOf(host.actions).toEqualTypeOf<PluginHostActionsApi>();
+      expectTypeOf(host.actions.list).toEqualTypeOf<() => Promise<PluginActionManifestEntry[]>>();
+      expectTypeOf(host.actions.get).toEqualTypeOf<
+        (actionId: string) => Promise<PluginActionManifestEntry | null>
+      >();
+      expectTypeOf(host.actions.canDispatch).toEqualTypeOf<
+        (actionId: string) => Promise<PluginCanDispatchResult>
+      >();
+    });
+
+    it("PluginCanDispatchResult is the three-state pre-flight verdict", () => {
+      expectTypeOf("ok" as const).toMatchTypeOf<PluginCanDispatchResult>();
+      expectTypeOf("confirm" as const).toMatchTypeOf<PluginCanDispatchResult>();
+      expectTypeOf("restricted" as const).toMatchTypeOf<PluginCanDispatchResult>();
+      // @ts-expect-error — an arbitrary verdict is not part of the union
+      const _bad: PluginCanDispatchResult = "maybe";
+      void _bad;
+    });
+
+    it("PluginActionManifestEntry drops renderer-internal manifest fields", () => {
+      const entry = {} as PluginActionManifestEntry;
+      expectTypeOf(entry.id).toEqualTypeOf<string>();
+      expectTypeOf(entry.danger).toEqualTypeOf<ActionDanger>();
+      expectTypeOf(entry.requiresArgs).toEqualTypeOf<boolean>();
+      // @ts-expect-error — `enabled` is live renderer-context state, not on the projection
+      const _enabled = entry.enabled;
+      // @ts-expect-error — `name` is the MCP alias, not on the projection
+      const _name = entry.name;
+      // @ts-expect-error — palette state is renderer-only, not on the projection
+      const _paletteHidden = entry.paletteHidden;
+      // @ts-expect-error — mcpVisibility is MCP-internal, not on the projection
+      const _mcpVisibility = entry.mcpVisibility;
+      void [_enabled, _name, _paletteHidden, _mcpVisibility];
     });
 
     it("PluginHostApi extends the revoke-guarded PluginActivationApi", () => {

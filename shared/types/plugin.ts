@@ -12,7 +12,11 @@ import type {
   ResourceRef,
 } from "./forge.js";
 import type { NotificationType } from "./notification.js";
-import type { ActionDispatchResult } from "./actions.js";
+import type {
+  ActionDispatchResult,
+  PluginActionManifestEntry,
+  PluginCanDispatchResult,
+} from "./actions.js";
 import type { AgentState, WaitingReason } from "./agent.js";
 import type { z } from "zod";
 
@@ -1520,6 +1524,43 @@ export interface PluginActivationApi {
  * remain callable from subscription callbacks and timers for the plugin's whole
  * lifetime and degrade to a no-op once the plugin is unloaded.
  */
+/**
+ * Built-in action catalog surface on {@link PluginHostApi.actions} (#10561).
+ * Projects the app's `ActionService` manifest to plugins so an orchestration
+ * plugin can discover what `host.dispatch()` accepts — the ids, arg schemas, and
+ * danger classification — without reading Daintree's source.
+ *
+ * Like {@link PluginHostApi.dispatch} this is NOT revoke-guarded: plugins
+ * introspect from post-activation command handlers and timers. Once the plugin
+ * is unloaded `list()` resolves `[]` and `get()` / `canDispatch()` resolve as if
+ * the action were absent (`null` / `"restricted"`) — these never throw.
+ */
+export interface PluginHostActionsApi {
+  /**
+   * List every plugin-dispatchable action as a slim
+   * {@link PluginActionManifestEntry}. Mirrors `ActionService.list()`:
+   * `danger:"restricted"` actions are filtered out, so listed entries are always
+   * `"safe"` or `"confirm"`. Resolves `[]` when no renderer is available or the
+   * plugin has been unloaded.
+   */
+  list(): Promise<PluginActionManifestEntry[]>;
+  /**
+   * Look up a single action by id, or `null` when it doesn't exist or is
+   * `danger:"restricted"` (restricted actions are invisible to plugins, matching
+   * {@link list}). Prefer this over {@link list} for a single lookup — it avoids
+   * projecting the whole catalog.
+   */
+  get(actionId: string): Promise<PluginActionManifestEntry | null>;
+  /**
+   * Pre-flight a dispatch without triggering it: `"ok"` for a safe action,
+   * `"confirm"` for a confirm-gated one (which {@link PluginHostApi.dispatch}
+   * would reject with `CONFIRMATION_REQUIRED`), and `"restricted"` for an
+   * unknown or `danger:"restricted"` action. Lets a plugin warn the user before
+   * triggering a confirm prompt. See {@link PluginCanDispatchResult}.
+   */
+  canDispatch(actionId: string): Promise<PluginCanDispatchResult>;
+}
+
 export interface PluginHostApi extends PluginActivationApi {
   readonly pluginId: string;
   /**
@@ -1620,6 +1661,16 @@ export interface PluginHostApi extends PluginActivationApi {
    * dispatch.
    */
   dispatch(actionId: string, args?: unknown): Promise<ActionDispatchResult>;
+  /**
+   * Built-in action catalog: discover what `dispatch()` accepts (ids, arg
+   * schemas, danger) and pre-flight a dispatch. Projects the app's
+   * `ActionService` manifest to plugins (#10561). See {@link PluginHostActionsApi}.
+   *
+   * Like {@link dispatch} this is NOT revoke-guarded — it stays callable from
+   * post-activation callbacks and degrades to empty/absent results once the
+   * plugin is unloaded.
+   */
+  readonly actions: PluginHostActionsApi;
   /**
    * Imperatively prompt the user to pick from a list, rendered through the app's
    * searchable command-palette surface. Resolves with the chosen item (or an

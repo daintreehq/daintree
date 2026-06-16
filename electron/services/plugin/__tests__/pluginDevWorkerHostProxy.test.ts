@@ -145,6 +145,61 @@ function resolveCall(proxy: any, sent: any[], method: string, result: unknown): 
   proxy.handleMessage({ type: "host-result", requestId: call.requestId, ok: true, result });
 }
 
+describe("PluginDevWorkerHostProxy host.actions (#10561)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("relays list() as an actions.list host-call and resolves with the entries", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.actions.list();
+    const call = sent.find((m) => m.type === "host-call" && m.method === "actions.list");
+    expect(call).toBeDefined();
+    const entries = [{ id: "terminal.new", danger: "safe", requiresArgs: false }];
+    resolveCall(proxy, sent, "actions.list", entries);
+    await expect(promise).resolves.toEqual(entries);
+  });
+
+  it("relays get(id) as an actions.get host-call carrying the action id", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.actions.get("terminal.new");
+    const call = sent.find((m) => m.type === "host-call" && m.method === "actions.get");
+    expect(call).toMatchObject({ params: { actionId: "terminal.new" } });
+    const entry = { id: "terminal.new", danger: "safe", requiresArgs: false };
+    resolveCall(proxy, sent, "actions.get", entry);
+    await expect(promise).resolves.toEqual(entry);
+  });
+
+  it("canDispatch derives the verdict from a single actions.get round-trip", async () => {
+    const { proxy, sent } = makeProxy();
+
+    const okPromise = proxy.host.actions.canDispatch("worktree.createWithRecipe");
+    // Only actions.get is relayed — there is no dedicated canDispatch host-call.
+    expect(sent.some((m) => m.type === "host-call" && m.method === "actions.get")).toBe(true);
+    expect(sent.some((m) => m.method === "actions.canDispatch")).toBe(false);
+    resolveCall(proxy, sent, "actions.get", { id: "worktree.createWithRecipe", danger: "safe" });
+    await expect(okPromise).resolves.toBe("ok");
+
+    const confirmPromise = proxy.host.actions.canDispatch("recipe.run");
+    resolveCall(proxy, sent, "actions.get", { id: "recipe.run", danger: "confirm" });
+    await expect(confirmPromise).resolves.toBe("confirm");
+
+    const restrictedPromise = proxy.host.actions.canDispatch("nope");
+    resolveCall(proxy, sent, "actions.get", null);
+    await expect(restrictedPromise).resolves.toBe("restricted");
+  });
+
+  it("resolves the empty/absent fallback on dispose instead of rejecting", async () => {
+    const { proxy } = makeProxy();
+    const listPromise = proxy.host.actions.list();
+    const getPromise = proxy.host.actions.get("terminal.new");
+    const canPromise = proxy.host.actions.canDispatch("terminal.new");
+    proxy.dispose();
+    await expect(listPromise).resolves.toEqual([]);
+    await expect(getPromise).resolves.toBeNull();
+    await expect(canPromise).resolves.toBe("restricted");
+  });
+});
+
 describe("PluginDevWorkerHostProxy host.process (#10526)", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.restoreAllMocks());

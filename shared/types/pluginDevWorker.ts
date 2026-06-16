@@ -36,6 +36,8 @@ export type PluginHostCallMethod =
   | "getAgentState"
   | "showToast"
   | "dispatch"
+  | "actions.list"
+  | "actions.get"
   | "settings.get"
   | "settings.set"
   | "storage.get"
@@ -308,6 +310,15 @@ export interface ShowToastParams {
 export interface DispatchParams {
   actionId: string;
   args?: unknown;
+}
+
+/**
+ * Params for `actions.get` (`host-call`, #10561). `actions.list` takes no
+ * params. `actions.canDispatch` is derived worker-side from `actions.get`, so it
+ * has no dedicated host-call method.
+ */
+export interface ActionsGetParams {
+  actionId: string;
 }
 
 /** Params for `showQuickPick` (`host-call`). */
