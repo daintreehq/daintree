@@ -162,7 +162,7 @@ Views are the React components that render inside a panel. A view binds to a pan
 
 **Component contract:**
 
-> **Mixed availability.** `useHostChannel` and `usePluginEvent` are **shipped** under `@daintreehq/plugin-sdk/react` (see [Host API → React hooks](./host-api.md#react-hooks)) — the example below uses `usePluginEvent` to receive `host.postToPanel` pushes. `useWorktree` / `useWorktrees` / `useSetting` / `useCommand` are still **Planned (F15/F36)** and resolve to nothing in v1; until they ship, read worktree context and settings through the `host` API passed to `activate()` and push it into the panel via `postToPanel`.
+> **Mixed availability.** `useHostChannel` and `usePluginEvent` (see [Host API → React hooks](./host-api.md#react-hooks)) resolve **only when your view is bundled with `@daintreehq/plugin-vite`** — the preset bundles the SDK into your plugin output, so the hooks ship inside your bundle rather than resolving through the host import map. The import map serves only React specifiers; a **raw, un-bundled `plugin://` view** that bare-imports `@daintreehq/plugin-sdk/react` fails at runtime with an unresolved specifier. For a hand-authored view without the build preset, subscribe through the `window.electron.plugin.on(pluginId, channel, cb)` / `.invoke(pluginId, channel, …args)` bridge directly — the same bridge the hooks wrap (the raw-ESM example follows the bundled one below). `useWorktree` / `useWorktrees` / `useSetting` / `useCommand` are still **Planned (F15/F36)** and resolve to nothing in v1; until they ship, read worktree context and settings through the `host` API passed to `activate()` and push it into the panel via `postToPanel`.
 
 ```tsx
 // src/dashboard.tsx
@@ -189,6 +189,23 @@ export default function Dashboard({ panelId, pluginId, disposeSignal }: PanelVie
     };
   }, [pluginId, disposeSignal]);
 
+  return <div data-panel-id={panelId}>Dashboard for {worktreeName ?? "no worktree"}</div>;
+}
+```
+
+The same view in a **raw ESM module** (no `@daintreehq/plugin-vite` bundling) cannot import `usePluginEvent` — subscribe through the host bridge instead. `window.electron.plugin.on(pluginId, channel, cb)` returns an unsubscribe function; return it from the effect for cleanup.
+
+```tsx
+// src/dashboard.tsx — raw ESM variant
+import { useEffect, useState } from "react";
+
+export default function Dashboard({ panelId, pluginId }) {
+  const [worktreeName, setWorktreeName] = useState(null);
+  useEffect(() => {
+    // Same payload host.postToPanel("worktree", …) pushes; usePluginEvent wraps this.
+    const off = window.electron.plugin.on(pluginId, "worktree", (wt) => setWorktreeName(wt.name));
+    return off;
+  }, [pluginId]);
   return <div data-panel-id={panelId}>Dashboard for {worktreeName ?? "no worktree"}</div>;
 }
 ```

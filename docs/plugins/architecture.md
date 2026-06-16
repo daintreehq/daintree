@@ -291,7 +291,7 @@ The `@daintreehq/plugin-sdk` public type surface is defined in `shared/types/plu
 Two entry points:
 
 - `@daintreehq/plugin-sdk` — core types (manifest authoring, host API, forge providers, worktree projections)
-- `@daintreehq/plugin-sdk/react` — renderer-facing SDK types (`shared/types/plugin-sdk-react.ts`). Currently exposes `UseHostChannelResult` (the return shape of `useHostChannel`); runtime implementations live in `src/hooks/` and wire into this subpath when the SDK is extracted into its own package (F15/F36). Until then, plugins reference these types through the host bundle.
+- `@daintreehq/plugin-sdk/react` — renderer-facing SDK types (`shared/types/plugin-sdk-react.ts`). Currently exposes `UseHostChannelResult` (the return shape of `useHostChannel`); the runtime implementations (`useHostChannel`, `usePluginEvent`) live in `src/hooks/` and reach plugins by being bundled into the plugin output by `@daintreehq/plugin-vite` — which is how the hooks resolve today. This subpath is **not** in the host import map (which serves only React specifiers), so a raw, un-bundled `plugin://` view cannot bare-import it; those views talk to the host through `window.electron.plugin.on`/`.invoke` directly (see [Host API → React hooks](./host-api.md#react-hooks)). The subpath becomes a published, import-map-served package when the SDK is extracted into its own package (F15/F36).
 
 ### Manifest authoring
 
