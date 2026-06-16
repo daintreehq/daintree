@@ -587,6 +587,45 @@ describe("createMockHost", () => {
       expect(user).not.toHaveBeenCalledWith("pv");
       expect(project).toHaveBeenCalledWith("pv");
     });
+
+    // #10586: loose mode (no manifestSettings) keeps the silent "user" default;
+    // manifest-aware mode resolves a key's declared scope on read.
+    it("loose mode reads the user scope by default regardless of where a value is seeded", async () => {
+      const host = createMockHost({
+        settings: { user: {}, project: { ref: "from-project" } },
+      });
+      // No manifestSettings → a no-scope read targets "user", which is empty here.
+      expect(await host.settings.get("ref")).toBeUndefined();
+      expect(await host.settings.get("ref", "project")).toBe("from-project");
+    });
+
+    it("manifest-aware mode resolves a project-scoped key on a no-scope read", async () => {
+      const host = createMockHost({
+        settings: { project: { ref: "from-project" } },
+        manifestSettings: [{ id: "ref", type: "string", scope: "project" }],
+      });
+      expect(await host.settings.get<string>("ref")).toBe("from-project");
+    });
+
+    it("manifest-aware mode throws when the explicit scope conflicts with the declaration", async () => {
+      const host = createMockHost({
+        settings: { project: { ref: "from-project" } },
+        manifestSettings: [{ id: "ref", type: "string", scope: "project" }],
+      });
+      await expect(host.settings.get("ref", "user")).rejects.toThrow(
+        /settings\.get: key "ref" is declared in "project" scope, not "user"/
+      );
+    });
+
+    it("manifest-aware mode falls back to the caller scope for an undeclared key", async () => {
+      const host = createMockHost({
+        settings: { user: { loose: "u" }, project: { loose: "p" } },
+        manifestSettings: [{ id: "ref", type: "string", scope: "project" }],
+      });
+      // "loose" isn't declared, so it keeps the supplied (or default) scope.
+      expect(await host.settings.get("loose")).toBe("u");
+      expect(await host.settings.get("loose", "project")).toBe("p");
+    });
   });
 
   describe("dispatch", () => {

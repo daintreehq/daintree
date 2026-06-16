@@ -643,7 +643,11 @@ export class PluginDevWorkerHostProxy {
         readText: () => this.call<string>("clipboard.readText", undefined),
       },
       settings: {
-        get: <T = unknown>(key: string, scope: PluginSettingsScope = "user") =>
+        // Forward an omitted scope as `undefined` (not a defaulted "user") so the
+        // real host resolves the key's manifest-declared scope on read (#10586) —
+        // defaulting here would send an explicit "user" that a project-scoped key
+        // rejects.
+        get: <T = unknown>(key: string, scope?: PluginSettingsScope) =>
           this.call<T | undefined>("settings.get", { key, scope }),
         set: <T = unknown>(key: string, value: T, scope: PluginSettingsScope = "user") =>
           this.call<void>("settings.set", { key, value, scope }),
