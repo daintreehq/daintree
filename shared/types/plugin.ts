@@ -14,6 +14,7 @@ import type {
 import type { NotificationType } from "./notification.js";
 import type {
   ActionDispatchResult,
+  ActionId,
   PluginActionManifestEntry,
   PluginCanDispatchResult,
 } from "./actions.js";
@@ -35,7 +36,7 @@ export interface ToolbarButtonContribution {
   id: string;
   label: string;
   iconId: string;
-  actionId: string;
+  actionId: ActionId;
   priority?: 1 | 2 | 3 | 4 | 5;
 }
 
@@ -68,14 +69,14 @@ export type PluginCapability = BuiltInPluginCapability;
 
 export interface MenuItemContribution {
   label: string;
-  actionId: string;
+  actionId: ActionId;
   location: MenuItemLocation;
   accelerator?: string;
   when?: string;
 }
 
 export interface KeybindingContribution {
-  actionId: string;
+  actionId: ActionId;
   combo: string;
   scope?: string;
   description?: string;
@@ -88,7 +89,7 @@ export interface PluginKeybindingDescriptor {
 }
 
 export interface ContextMenuContribution {
-  actionId: string;
+  actionId: ActionId;
   location: ContextMenuLocation;
   label: string;
   when?: string;
@@ -1578,7 +1579,7 @@ export interface PluginHostActionsApi {
    * {@link list}). Prefer this over {@link list} for a single lookup — it avoids
    * projecting the whole catalog.
    */
-  get(actionId: string): Promise<PluginActionManifestEntry | null>;
+  get(actionId: ActionId): Promise<PluginActionManifestEntry | null>;
   /**
    * Pre-flight a dispatch without triggering it: `"ok"` for a safe action,
    * `"confirm"` for a confirm-gated one (which {@link PluginHostApi.dispatch}
@@ -1586,7 +1587,7 @@ export interface PluginHostActionsApi {
    * unknown or `danger:"restricted"` action. Lets a plugin warn the user before
    * triggering a confirm prompt. See {@link PluginCanDispatchResult}.
    */
-  canDispatch(actionId: string): Promise<PluginCanDispatchResult>;
+  canDispatch(actionId: ActionId): Promise<PluginCanDispatchResult>;
 }
 
 export interface PluginHostApi extends PluginActivationApi {
@@ -1713,7 +1714,7 @@ export interface PluginHostApi extends PluginActivationApi {
    * `{ ok: false, error: { code: "PLUGIN_UNLOADED" } }` without attempting a
    * dispatch.
    */
-  dispatch(actionId: string, args?: unknown): Promise<ActionDispatchResult>;
+  dispatch(actionId: ActionId, args?: unknown): Promise<ActionDispatchResult>;
   /**
    * Built-in action catalog: discover what `dispatch()` accepts (ids, arg
    * schemas, danger) and pre-flight a dispatch. Projects the app's

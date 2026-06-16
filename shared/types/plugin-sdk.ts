@@ -186,16 +186,18 @@ export type {
   ActionErrorCode,
 } from "./actions.js";
 
-// ── Built-in action catalog (host.actions.*) — #10561 ───────────────
-// host.actions.list()/get() project the ActionService manifest to plugins, and
-// the typed BuiltInActionId union turns a wrong action id into a compile error
-// at the dispatch site. ActionKind/ActionDanger/ActionExample appear on the
-// projected entry, so authors must be able to name them too.
+// ── Built-in action catalog (host.actions.*) — #10561, #10581 ───────
+// host.actions.list()/get() project the ActionService manifest to plugins. The
+// dispatch surface is typed against ActionId, which narrows to BuiltInActionId
+// for IDE autocomplete while staying open to plugin-authored ids (no cast
+// needed). ActionKind/ActionDanger/ActionExample appear on the projected entry,
+// so authors must be able to name them too.
 
 export type {
   PluginActionManifestEntry,
   PluginCanDispatchResult,
   BuiltInActionId,
+  ActionId,
   ActionKind,
   ActionDanger,
   ActionExample,

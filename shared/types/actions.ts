@@ -342,7 +342,7 @@ export interface ActionFrecencyEntry {
  */
 export interface PluginActionManifestEntry {
   /** The action id to pass to `host.dispatch()`. */
-  id: string;
+  id: ActionId;
   title: string;
   description: string;
   category: string;
