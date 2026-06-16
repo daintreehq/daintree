@@ -575,7 +575,7 @@ describe("agent.launch dispatch integration", () => {
     });
   });
 
-  it("rejects malformed args with a VALIDATION_ERROR targeting agentId and never invokes the callback", async () => {
+  it("rejects an empty agentId with a VALIDATION_ERROR targeting agentId and never invokes the callback", async () => {
     const { ActionService } = await import("../../../ActionService");
     const service = new ActionService();
 
@@ -587,11 +587,10 @@ describe("agent.launch dispatch integration", () => {
       service.register(factory());
     }
 
-    const result = await service.dispatch(
-      "agent.launch",
-      { agentId: "not-a-real-agent" },
-      { source: "user" }
-    );
+    // An empty string is the genuinely-malformed case: the schema now accepts
+    // arbitrary non-empty ids (plugin-contributed agents, #10560), but still
+    // rejects empty/missing ids at the boundary.
+    const result = await service.dispatch("agent.launch", { agentId: "" }, { source: "user" });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -599,6 +598,34 @@ describe("agent.launch dispatch integration", () => {
       expect(JSON.stringify(result.error.details)).toContain("agentId");
     }
     expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
+  it("accepts an unknown (plugin-contributed) agentId through the schema so plugin agents launch (#10560)", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+
+    const callbacks = makeCallbacks();
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+
+    for (const [, factory] of registry) {
+      service.register(factory());
+    }
+
+    // Plugin agent ids are dynamic and unknown at schema-definition time, so the
+    // schema must let them through; existence is resolved downstream in the
+    // launcher (an unresolved id falls back to a plain terminal, never a crash).
+    const result = await service.dispatch(
+      "agent.launch",
+      { agentId: "acme-agent", worktreeId: "wt-1", location: "grid" },
+      { source: "user" }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+      "acme-agent",
+      expect.objectContaining({ worktreeId: "wt-1", location: "grid" })
+    );
   });
 
   it("accepts dev-preview through the schema so worktree-card dev-preview launches don't silently fail", async () => {

@@ -79,6 +79,51 @@ describe("AgentContributionSchema (issue #9560)", () => {
     }
   });
 
+  it("accepts a bare PATH binary name as the command", () => {
+    expect(
+      AgentContributionSchema.safeParse({ ...VALID_AGENT, command: "claude-cli" }).success
+    ).toBe(true);
+  });
+
+  it("accepts a plugin-relative ./ command path (#10560)", () => {
+    for (const command of ["./bin/agent.mjs", "./agent", "./dist/cli/run.js"]) {
+      expect(AgentContributionSchema.safeParse({ ...VALID_AGENT, command }).success).toBe(true);
+    }
+  });
+
+  it("rejects relative paths without an explicit ./ prefix (#10560)", () => {
+    // A bare relative path is ambiguous with a PATH name, so it must be rejected
+    // — only ./-prefixed paths or separator-free PATH names are allowed.
+    expect(
+      AgentContributionSchema.safeParse({ ...VALID_AGENT, command: "bin/agent.mjs" }).success
+    ).toBe(false);
+  });
+
+  it("rejects traversal, absolute, and Windows-separator command paths (#10560)", () => {
+    for (const command of [
+      "../agent",
+      "./../agent",
+      "./bin/../../escape",
+      "/usr/bin/agent",
+      ".\\bin\\agent.cmd",
+      "./bin\\agent.cmd",
+    ]) {
+      expect(AgentContributionSchema.safeParse({ ...VALID_AGENT, command }).success).toBe(false);
+    }
+  });
+
+  it("rejects bare-dot and empty relative command paths (#10560)", () => {
+    for (const command of ["./", "./."]) {
+      expect(AgentContributionSchema.safeParse({ ...VALID_AGENT, command }).success).toBe(false);
+    }
+  });
+
+  it("rejects empty, current-dir, and trailing segments in relative command paths (#10560)", () => {
+    for (const command of ["./bin//agent", "./bin/./agent", "./bin/agent/"]) {
+      expect(AgentContributionSchema.safeParse({ ...VALID_AGENT, command }).success).toBe(false);
+    }
+  });
+
   it("rejects control characters in args and caps arg count at 20", () => {
     expect(
       AgentContributionSchema.safeParse({ ...VALID_AGENT, args: ["ok", "bad\nflag"] }).success

@@ -1,7 +1,7 @@
 // eager-import-allow: reads the CLI-availability cache via store.get synchronously
 import { execFile } from "child_process";
 import { access, constants } from "fs/promises";
-import { delimiter, dirname, join, win32 as pathWin32 } from "path";
+import { delimiter, dirname, isAbsolute, join, win32 as pathWin32 } from "path";
 import { homedir } from "os";
 import type {
   CliAvailability,
@@ -445,6 +445,13 @@ export class CliAvailabilityService {
     const command = config.command;
     if (typeof command !== "string" || !command.trim()) {
       return { status: "missing" };
+    }
+    // Plugin-contributed agents (#10560) resolve a `./`-relative manifest command
+    // to an absolute path at registration. Such a command has path separators and
+    // would be rejected by VALID_COMMAND_RE below, so probe the file directly
+    // instead — `probeNativePaths` checks existence + executability (X_OK).
+    if (isAbsolute(command)) {
+      return this.probeNativePaths([command]);
     }
     if (!CliAvailabilityService.VALID_COMMAND_RE.test(command)) {
       console.warn(

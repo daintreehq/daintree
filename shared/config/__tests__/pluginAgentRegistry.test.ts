@@ -137,6 +137,41 @@ describe("pluginAgentRegistry (issue #9560)", () => {
     expect(registry["claude"]).toBeDefined();
   });
 
+  it("resolves a ./-prefixed command to an absolute path against pluginDir (#10560)", () => {
+    registerPluginAgents(
+      "acme.plugin",
+      [{ ...ACME_AGENT, command: "./bin/agent.mjs" }],
+      "/plugins/acme"
+    );
+    expect(getEffectiveAgentConfig("acme-agent")?.command).toBe("/plugins/acme/bin/agent.mjs");
+  });
+
+  it("leaves a bare PATH command unchanged even when pluginDir is provided (#10560)", () => {
+    registerPluginAgents("acme.plugin", [ACME_AGENT], "/plugins/acme");
+    expect(getEffectiveAgentConfig("acme-agent")?.command).toBe("acme");
+  });
+
+  it("leaves a ./-prefixed command unresolved when no pluginDir is provided (#10560)", () => {
+    registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, command: "./bin/agent.mjs" }]);
+    expect(getEffectiveAgentConfig("acme-agent")?.command).toBe("./bin/agent.mjs");
+  });
+
+  it("joins a Windows-style pluginDir with backslashes (#10560)", () => {
+    registerPluginAgents(
+      "acme.plugin",
+      [{ ...ACME_AGENT, command: "./bin/agent.cmd" }],
+      String.raw`C:\plugins\acme`
+    );
+    expect(getEffectiveAgentConfig("acme-agent")?.command).toBe(
+      String.raw`C:\plugins\acme\bin\agent.cmd`
+    );
+  });
+
+  it("does not double a trailing separator on pluginDir (#10560)", () => {
+    registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, command: "./agent" }], "/plugins/acme/");
+    expect(getEffectiveAgentConfig("acme-agent")?.command).toBe("/plugins/acme/agent");
+  });
+
   it("does not let a reserved id pollute the snapshot prototype", () => {
     // The manifest schema rejects reserved ids, but the registry must also be
     // defensive: a `__proto__` id must not reassign the snapshot's prototype.

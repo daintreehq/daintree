@@ -5,7 +5,14 @@ import {
   PROJECT_SETTINGS_TAB_IDS,
 } from "@/components/Settings/settingsTabIds";
 
-export const AgentIdSchema = z.enum([...BUILT_IN_AGENT_IDS, "terminal", "browser", "dev-preview"]);
+// Built-in agent ids plus the synthetic terminal/browser kinds, OR any non-empty
+// string so plugin-contributed agent ids (#10560) validate through the action
+// system (`agent.launch`). Plugin ids are validated at registration time in
+// `pluginAgentRegistry`; this schema is not the authoritative boundary for them.
+export const AgentIdSchema = z.union([
+  z.enum([...BUILT_IN_AGENT_IDS, "terminal", "browser", "dev-preview"]),
+  z.string().min(1),
+]);
 
 export const LaunchLocationSchema = z
   .enum(["grid", "dock", "overlay"])

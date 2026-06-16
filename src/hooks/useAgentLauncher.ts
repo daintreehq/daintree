@@ -154,14 +154,22 @@ export function resolveAgentLaunchBaseCommand(
     detail.state !== "installed"
       ? detail.resolvedPath?.trim()
       : undefined;
-  if (!resolvedPath) return registryCommand;
+
+  // When there's no availability-resolved path, fall back to the registry
+  // command. A bare PATH binary name (built-in agents) passes through unchanged.
+  // A plugin-contributed command resolved to an absolute path (#10560) is
+  // escaped like a resolved path so spaces in the plugin dir — e.g. macOS's
+  // "Application Support" — don't split the spawned command string.
+  const effective = resolvedPath ?? registryCommand;
+  const isPathLike = effective.includes("/") || effective.includes("\\");
+  if (!resolvedPath && !isPathLike) return registryCommand;
 
   const useWindows = platform ? platform === "windows" : isWindows();
   if (useWindows) {
-    return `& ${escapePowerShellSingleQuoted(resolvedPath)}`;
+    return `& ${escapePowerShellSingleQuoted(effective)}`;
   }
 
-  return escapeShellArgOptional(resolvedPath, "posix");
+  return escapeShellArgOptional(effective, "posix");
 }
 
 async function getCurrentLaunchCliDetail(agentId: string): Promise<AgentCliDetail | undefined> {

@@ -1062,7 +1062,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "slash-commands:list": {
-    args: [payload: import("../slashCommands.js").SlashCommandListRequest];
+    args: [payload: { agentId: string; projectPath?: string | undefined }];
     result: import("../slashCommands.js").SlashCommand[];
   };
   "system-sleep:get-awake-time": {

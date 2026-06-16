@@ -1366,7 +1366,7 @@ export class PluginService {
     }
 
     if (manifest.contributes.agents.length > 0) {
-      registerPluginAgents(manifest.name, manifest.contributes.agents);
+      registerPluginAgents(manifest.name, manifest.contributes.agents, pluginDir);
       this.broadcaster.scheduleAgentsBroadcast(false);
     }
 

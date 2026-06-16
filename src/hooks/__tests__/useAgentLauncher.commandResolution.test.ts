@@ -57,4 +57,34 @@ describe("resolveAgentLaunchBaseCommand", () => {
       )
     ).toBe("claude");
   });
+
+  it("passes a bare PATH registry command through unchanged (built-in agents)", () => {
+    // No separator => not a path => never quoted, preserving existing behavior.
+    expect(resolveAgentLaunchBaseCommand("acme-cli", undefined, "posix")).toBe("acme-cli");
+  });
+
+  it("quotes a plugin-contributed absolute command path with spaces (#10560)", () => {
+    // A ./-relative manifest command resolves to an absolute path that may live
+    // under a spaced dir (e.g. macOS "Application Support"); it must be quoted so
+    // the space doesn't split the spawned command string.
+    expect(
+      resolveAgentLaunchBaseCommand(
+        "/Users/x/Application Support/Daintree/plugins/acme/bin/agent",
+        undefined,
+        "posix"
+      )
+    ).toBe("'/Users/x/Application Support/Daintree/plugins/acme/bin/agent'");
+  });
+
+  it("leaves a space-free absolute command path unquoted (#10560)", () => {
+    expect(resolveAgentLaunchBaseCommand("/plugins/acme/bin/agent", undefined, "posix")).toBe(
+      "/plugins/acme/bin/agent"
+    );
+  });
+
+  it("uses PowerShell call syntax for a plugin-contributed Windows command path (#10560)", () => {
+    expect(
+      resolveAgentLaunchBaseCommand(String.raw`C:\plugins\acme\bin\agent.cmd`, undefined, "windows")
+    ).toBe(String.raw`& 'C:\plugins\acme\bin\agent.cmd'`);
+  });
 });
