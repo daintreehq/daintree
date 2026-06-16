@@ -544,6 +544,42 @@ describe("useGettingStartedChecklist", () => {
       expect(result.current.collapsed).toBe(false);
     });
 
+    it("collapses when a push flips launchedAgent true while a panel is focused", async () => {
+      let pushHandler: ((next: ChecklistStateLike) => void) | null = null;
+      const onChecklistPushMock = vi.fn((fn: (next: ChecklistStateLike) => void) => {
+        pushHandler = fn;
+        return () => {};
+      });
+      const augmentedMock = onboardingMock as typeof onboardingMock & {
+        onChecklistPush: typeof onChecklistPushMock;
+      };
+      augmentedMock.onChecklistPush = onChecklistPushMock;
+
+      try {
+        terminalState = { panelsById: {}, panelIds: [], focusedId: "t1" };
+        const { result } = await mountLoaded();
+        expect(result.current.collapsed).toBe(false);
+        expect(pushHandler).not.toBeNull();
+
+        act(() => {
+          pushHandler!({
+            items: {
+              openedProject: true,
+              launchedAgent: true,
+              createdWorktree: false,
+              ranSecondParallelAgent: false,
+            },
+            dismissed: false,
+            celebrationShown: false,
+          });
+        });
+
+        expect(result.current.collapsed).toBe(true);
+      } finally {
+        delete (augmentedMock as Partial<typeof augmentedMock>).onChecklistPush;
+      }
+    });
+
     it("does not auto-collapse after the user opens it via Help > Getting Started", async () => {
       const { result } = await mountLoaded();
 

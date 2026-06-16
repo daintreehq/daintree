@@ -188,16 +188,18 @@ describe("useForgeTokenHealth", () => {
     expect(useNotificationHistoryStore.getState().unreadCount).toBe(0);
   });
 
-  it("keeps a single active row when the toolbar's notify() supersedes the backstop", async () => {
+  it("keeps a single active row when a higher-priority notify() with the same supersedeKey arrives", async () => {
     renderHook(() => useForgeTokenHealth());
     await act(async () => {});
 
     act(() => healthListener?.(payload("unhealthy")));
     await act(async () => {});
 
-    // Drive the toolbar's expiry-notification path through the real notify()
-    // so this exercises supersedeKey forwarding end-to-end, not a hand-rolled
-    // addEntry that could mask a notify() regression.
+    // Emit a high-priority notification sharing the supersedeKey through the
+    // real notify() so this exercises supersedeKey forwarding end-to-end, not a
+    // hand-rolled addEntry that could mask a notify() regression. (The toolbar
+    // toast that used to do this was removed; the supersede mechanic it relied
+    // on still must hold for any future same-key emitter.)
     act(() => {
       notify({
         type: "warning",

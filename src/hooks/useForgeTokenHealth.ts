@@ -54,6 +54,13 @@ export function _resetForgeProviderMetaCacheForTest(): void {
 export function useForgeTokenHealth(): void {
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
   const { providerId } = useResolvedForgeProvider(projectId);
+  // Tracks which providers have an active "token expired" inbox row this
+  // session, so the recovery row fires only after a warning was shown. Resets
+  // on remount: a token that expired in a prior session and is already healthy
+  // on a fresh mount won't emit a recovery row, so its stale warning row can
+  // persist in the inbox until the next expiry/recovery cycle. Pre-existing
+  // latch behavior (the removed `useForgeTokenExpiryNotification` shared it);
+  // acceptable for an inbox-only row.
   const inboxedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {

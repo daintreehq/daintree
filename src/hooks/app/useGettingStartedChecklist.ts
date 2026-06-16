@@ -137,6 +137,21 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
     setCollapsed((prev) => !prev);
   }, []);
 
+  // Collapse once the user has both launched an agent and interacted with a
+  // panel (`focusedId` is set by setFocused/openDockTerminal/activateTerminal
+  // — the canonical "touched a panel" signal). Reads the latest committed
+  // checklist via the ref so a just-marked `launchedAgent` is observed in the
+  // same tick. Stable identity so every caller (panel subscriber, mount
+  // reconcile, push handler) collapses through one latch.
+  const maybeAutoCollapse = useCallback(() => {
+    if (hasAutoCollapsed.current) return;
+    const cl = checklistRef.current;
+    if (!cl || cl.dismissed || !cl.items.launchedAgent) return;
+    if (usePanelStore.getState().focusedId === null) return;
+    hasAutoCollapsed.current = true;
+    setCollapsed(true);
+  }, []);
+
   // Hydrate checklist state and check onboarding completion
   useEffect(() => {
     if (!isElectronAvailable() || !isStateLoaded) return;
@@ -183,26 +198,21 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
     });
   }, []);
 
+  // Re-check auto-collapse whenever the committed checklist changes (hydration,
+  // a markItem, or a cross-window push that flips `launchedAgent`). Runs after
+  // commit so `checklistRef` is fresh; reads live `focusedId` from the panel
+  // store. The panel-store subscriber below covers the complementary case where
+  // focus changes after the agent already launched.
+  useEffect(() => {
+    maybeAutoCollapse();
+  }, [checklist, maybeAutoCollapse]);
+
   // Set up Zustand subscriptions for auto-completion + reconcile current state
   useEffect(() => {
     if (!isElectronAvailable() || !isStateLoaded) return;
 
     const getChecklist = () => checklistRef.current;
     const viewStore = getCurrentViewStore();
-
-    // Collapse once the user has both launched an agent and interacted with a
-    // panel (`focusedId` is set by setFocused/openDockTerminal/activateTerminal
-    // — the canonical "touched a panel" signal). Reads the latest committed
-    // checklist via the ref so a just-marked `launchedAgent` is observed in the
-    // same tick.
-    const maybeAutoCollapse = () => {
-      if (hasAutoCollapsed.current) return;
-      const cl = getChecklist();
-      if (!cl || cl.dismissed || !cl.items.launchedAgent) return;
-      if (usePanelStore.getState().focusedId === null) return;
-      hasAutoCollapsed.current = true;
-      setCollapsed(true);
-    };
 
     const unsubs = [
       useProjectStore.subscribe((state) => {
@@ -242,13 +252,11 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
     ];
 
     reconcileCurrentState(markItem, getChecklist);
-    // Handle the case where both conditions already hold on mount.
-    maybeAutoCollapse();
 
     return () => {
       for (const unsub of unsubs) unsub();
     };
-  }, [isStateLoaded, markItem]);
+  }, [isStateLoaded, markItem, maybeAutoCollapse]);
 
   // Listen for Help > Getting Started menu action
   useEffect(() => {
