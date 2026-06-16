@@ -153,10 +153,87 @@ function copyBuiltInWorkflows() {
 }
 
 /**
+ * Plugin source subdirectories the asset-copy step must NOT mirror verbatim:
+ * `main/` is compiled by esbuild into the same output tree, `renderer/` is
+ * consumed by the host's Vite renderer build (not loaded by the plugin at
+ * runtime), `shared/` holds `import type`-only siblings esbuild erases (never
+ * loaded at runtime — same compile-time category as `main`/`renderer`), and
+ * `__tests__/` is dev-only. Every other subdirectory a plugin bundles (`bin/`,
+ * `mcp/`, `view/`, …) is shipped as-is so `./`-relative `command`/`args` paths
+ * resolve at runtime instead of ENOENT-ing (#10579).
+ */
+export const PLUGIN_EXTRA_ASSET_SKIP_DIRS = new Set(["main", "renderer", "shared", "__tests__"]);
+
+/**
+ * True when `child` resolves to a path strictly inside `parent` — guards the
+ * asset copy/validation against `./`-relative manifest paths that escape the
+ * plugin directory via `..` segments. `mcpServers[].command` is not refined the
+ * way agent commands are (electron/schemas/plugin.ts), so a manifest can name
+ * `./../sibling` and pass schema validation.
+ */
+function isInsideDir(child, parent) {
+  const rel = path.relative(parent, child);
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+/**
+ * Read a plugin's `plugin.json` and return its `./`-relative `command`/`args`
+ * asset paths. Tolerant of a missing/unparseable manifest (returns `[]`) — the
+ * dedicated manifest validation step is what reports those loudly.
+ */
+function readManifestRelativeAssetPaths(pluginDir) {
+  const manifestPath = path.join(pluginDir, "plugin.json");
+  if (!fs.existsSync(manifestPath)) return [];
+  try {
+    return collectRelativeAssetPaths(JSON.parse(fs.readFileSync(manifestPath, "utf8")));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Mirror every non-compiled plugin asset next to the compiled main entry. Before
+ * #10579 only `plugin.json` (and a hardcoded `view/` for samples) was copied, so
+ * a plugin's `bin/` agent scripts or `mcp/` servers were silently dropped from
+ * the build and failed at spawn time. This copies all subdirectories except
+ * those in `PLUGIN_EXTRA_ASSET_SKIP_DIRS` verbatim, plus any top-level file a
+ * `./`-relative `command`/`args` path names directly (a script can live beside
+ * `plugin.json` rather than in a bundled dir). `fs.cpSync` preserves executable
+ * bits on macOS/Linux (Node 22).
+ */
+export function copyPluginExtraAssets(srcPluginDir, destPluginDir) {
+  if (!fs.existsSync(srcPluginDir)) return [];
+  const copied = [];
+  fs.mkdirSync(destPluginDir, { recursive: true });
+  for (const entry of fs.readdirSync(srcPluginDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (PLUGIN_EXTRA_ASSET_SKIP_DIRS.has(entry.name)) continue;
+    const src = path.join(srcPluginDir, entry.name);
+    const dest = path.join(destPluginDir, entry.name);
+    fs.cpSync(src, dest, { recursive: true });
+    copied.push(entry.name);
+  }
+  // Top-level asset files named by a `./`-relative command/arg that live beside
+  // the manifest rather than inside a bundled dir; files already shipped via
+  // their directory above are skipped (dest exists).
+  for (const relPath of readManifestRelativeAssetPaths(srcPluginDir)) {
+    const src = path.resolve(srcPluginDir, relPath);
+    if (!isInsideDir(src, srcPluginDir)) continue;
+    if (!fs.existsSync(src) || !fs.statSync(src).isFile()) continue;
+    const dest = path.resolve(destPluginDir, relPath);
+    if (fs.existsSync(dest)) continue;
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(src, dest);
+    copied.push(relPath);
+  }
+  return copied;
+}
+
+/**
  * Copy each built-in plugin's `plugin.json` next to its compiled main entry so
  * `PluginService.loadPlugin` can read the manifest from the same directory
  * tree it scans at runtime. The compiled JS lands via esbuild; this step
- * mirrors the static manifest alongside it.
+ * mirrors the static manifest and any bundled asset directories alongside it.
  */
 function copyBuiltInPluginManifests() {
   const pluginsRoot = path.join(root, "plugins/builtin");
@@ -164,17 +241,16 @@ function copyBuiltInPluginManifests() {
   const entries = fs.readdirSync(pluginsRoot, { withFileTypes: true });
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const manifestSrc = path.join(pluginsRoot, entry.name, "plugin.json");
+    const srcPluginDir = path.join(pluginsRoot, entry.name);
+    const manifestSrc = path.join(srcPluginDir, "plugin.json");
     if (!fs.existsSync(manifestSrc)) continue;
-    const manifestDest = path.join(
-      root,
-      "dist-electron/plugins/builtin",
-      entry.name,
-      "plugin.json"
-    );
-    fs.mkdirSync(path.dirname(manifestDest), { recursive: true });
+    const destPluginDir = path.join(root, "dist-electron/plugins/builtin", entry.name);
+    const manifestDest = path.join(destPluginDir, "plugin.json");
+    fs.mkdirSync(destPluginDir, { recursive: true });
     fs.copyFileSync(manifestSrc, manifestDest);
-    console.log(`[Build] Copied built-in plugin manifest: ${entry.name}`);
+    const copied = copyPluginExtraAssets(srcPluginDir, destPluginDir);
+    const extra = copied.length > 0 ? ` (+ ${copied.join(", ")})` : "";
+    console.log(`[Build] Copied built-in plugin manifest: ${entry.name}${extra}`);
   }
 }
 
@@ -190,26 +266,100 @@ function copySamplePluginManifests() {
   const entries = fs.readdirSync(pluginsRoot, { withFileTypes: true });
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const manifestSrc = path.join(pluginsRoot, entry.name, "plugin.json");
+    const srcPluginDir = path.join(pluginsRoot, entry.name);
+    const manifestSrc = path.join(srcPluginDir, "plugin.json");
     if (!fs.existsSync(manifestSrc)) continue;
-    const manifestDest = path.join(root, "dist-electron/plugins/sample", entry.name, "plugin.json");
-    fs.mkdirSync(path.dirname(manifestDest), { recursive: true });
+    const destPluginDir = path.join(root, "dist-electron/plugins/sample", entry.name);
+    const manifestDest = path.join(destPluginDir, "plugin.json");
+    fs.mkdirSync(destPluginDir, { recursive: true });
     fs.copyFileSync(manifestSrc, manifestDest);
-    console.log(`[Build] Copied sample plugin manifest: ${entry.name}`);
 
-    // Copy any hand-authored `view/` assets verbatim. Plugin view modules are
-    // browser-ready ESM served over `plugin://` with bare `react` specifiers
-    // resolved through the host import map — esbuild must NOT process them
-    // (it would bundle React in and break the single-instance contract), so
-    // these are copied, not built. Used by the rich-daintree panel-view E2E
-    // (#10512).
-    const viewSrc = path.join(pluginsRoot, entry.name, "view");
-    if (fs.existsSync(viewSrc)) {
-      const viewDest = path.join(root, "dist-electron/plugins/sample", entry.name, "view");
-      fs.cpSync(viewSrc, viewDest, { recursive: true });
-      console.log(`[Build] Copied sample plugin view assets: ${entry.name}`);
+    // Copy every bundled asset directory verbatim — `view/` (browser-ready ESM
+    // served over `plugin://`; esbuild must NOT process it or it would bundle
+    // React in and break the single-instance contract — used by the
+    // rich-daintree panel-view E2E #10512), plus any `bin/`/`mcp/` scripts a
+    // plugin spawns via `./`-relative `command`/`args` (#10579).
+    const copied = copyPluginExtraAssets(srcPluginDir, destPluginDir);
+    const extra = copied.length > 0 ? ` (+ ${copied.join(", ")})` : "";
+    console.log(`[Build] Copied sample plugin manifest: ${entry.name}${extra}`);
+  }
+}
+
+/**
+ * Collect the `./`-relative file paths a copied plugin manifest will spawn —
+ * agent `command`/`args` and MCP server `command`/`args`. Bare PATH binaries
+ * (`echo`, `node`) and absolute/`..` paths are rejected at manifest-validation
+ * time, so only `./`-prefixed entries name a file the build must have shipped.
+ */
+function collectRelativeAssetPaths(manifest) {
+  const paths = [];
+  const contributes = manifest?.contributes ?? {};
+  const sources = [...(contributes.agents ?? []), ...(contributes.mcpServers ?? [])];
+  for (const source of sources) {
+    for (const value of [source?.command, ...(source?.args ?? [])]) {
+      if (typeof value === "string" && value.startsWith("./")) paths.push(value);
     }
   }
+  return paths;
+}
+
+/**
+ * Walk the copied plugin output and report every `./`-relative `command`/`args`
+ * path that does not resolve to a real file. The copy step ships whole
+ * directories, but a manifest can still reference a path the author never
+ * created — that surfaced only as a runtime ENOENT before #10579. Pure (no
+ * exit/logging) and parameterized on the dist plugins root so it is unit
+ * testable; `distPluginsRoot` missing entirely (cold build) yields `[]`.
+ */
+export function findMissingPluginAssets(distPluginsRoot) {
+  const missing = [];
+  for (const tier of ["builtin", "sample"]) {
+    const tierRoot = path.join(distPluginsRoot, tier);
+    if (!fs.existsSync(tierRoot)) continue;
+    for (const entry of fs.readdirSync(tierRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const pluginDir = path.join(tierRoot, entry.name);
+      const manifestPath = path.join(pluginDir, "plugin.json");
+      if (!fs.existsSync(manifestPath)) continue;
+      let manifest;
+      try {
+        manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      } catch (error) {
+        missing.push(`${tier}/${entry.name}: unreadable plugin.json (${error.message})`);
+        continue;
+      }
+      for (const relPath of collectRelativeAssetPaths(manifest)) {
+        const resolved = path.resolve(pluginDir, relPath);
+        if (!isInsideDir(resolved, pluginDir)) {
+          missing.push(`${tier}/${entry.name}: "${relPath}" escapes the plugin directory`);
+          continue;
+        }
+        if (!fs.existsSync(resolved)) {
+          missing.push(`${tier}/${entry.name}: "${relPath}" not found in built output`);
+        }
+      }
+    }
+  }
+  return missing;
+}
+
+/**
+ * After the manifests and their asset directories are copied, fail the build if
+ * any `./`-relative `command`/`args` path is missing from the output. In watch
+ * mode unresolved paths only warn (a cold build may not have emitted output
+ * yet); in a single/production build they fail the build loudly.
+ */
+function validateCopiedPluginAssets() {
+  const missing = findMissingPluginAssets(path.join(root, "dist-electron/plugins"));
+  if (missing.length === 0) return;
+
+  const detail = missing.map((m) => `  - ${m}`).join("\n");
+  if (isWatch) {
+    console.warn(`[Build] Plugin asset paths missing from output:\n${detail}`);
+    return;
+  }
+  console.error(`[Build] Plugin asset paths missing from output:\n${detail}`);
+  process.exit(1);
 }
 
 function createReadyMarkerPlugin() {
@@ -307,12 +457,14 @@ async function run() {
       copyBuiltInWorkflows();
       copyBuiltInPluginManifests();
       copySamplePluginManifests();
+      validateCopiedPluginAssets();
       console.log("[Build] Watching for changes...");
     } else {
       await Promise.all([build(esmConfig), build(cjsConfig)]);
       copyBuiltInWorkflows();
       copyBuiltInPluginManifests();
       copySamplePluginManifests();
+      validateCopiedPluginAssets();
       writeBuildReadyMarker();
       console.log("[Build] Complete.");
     }
@@ -322,4 +474,8 @@ async function run() {
   }
 }
 
-run();
+// Only kick off a build when run as a script (`node scripts/build-main.mjs`),
+// not when a test imports the exported copy/validate helpers.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  run();
+}
