@@ -61,11 +61,12 @@ export const usePluginPanelBadgeStore = create<PluginPanelBadgeState>((set, get)
   badgesByPanelId: {},
   init: () => {
     if (initialized) return;
-    initialized = true;
 
     // Rendered from every panel header, so tolerate a partially-stubbed bridge
     // (component tests that don't mock the plugin namespace) — absent bridge ⇒
-    // no badges, matching prod before the first snapshot.
+    // no badges, matching prod before the first snapshot. Don't latch
+    // `initialized` until the bridge is actually present, so a no-bridge early
+    // return stays retryable (a later mount with a real bridge can subscribe).
     const plugin = window.electron?.plugin;
     if (
       typeof plugin?.onPanelBadgesChanged !== "function" ||
@@ -73,6 +74,7 @@ export const usePluginPanelBadgeStore = create<PluginPanelBadgeState>((set, get)
     ) {
       return;
     }
+    initialized = true;
 
     unsubscribeChanged = plugin.onPanelBadgesChanged(({ pluginId, badges }) => {
       set({ badgesByPanelId: applyPluginBadges(get().badgesByPanelId, pluginId, badges) });

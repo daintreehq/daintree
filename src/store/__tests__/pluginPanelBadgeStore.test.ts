@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { PluginPanelBadge } from "@shared/types/plugin";
 
@@ -111,20 +112,47 @@ describe("pluginPanelBadgeStore", () => {
     expect(after).toBe(before);
   });
 
-  it("usePanelBadges returns a stable empty object for an unknown panel", async () => {
+  it("usePanelBadges selector returns the same frozen empty object for two unknown panels", async () => {
+    const { renderHook } = await import("@testing-library/react");
     const mod = await load();
-    const a = mod.usePluginPanelBadgeStore.getState().badgesByPanelId.unknown;
-    expect(a).toBeUndefined();
-    // The selector's fallback is exercised through the store's frozen empty.
-    changedCb!({ pluginId: "p1", badges: {} });
-    expect(mod.usePluginPanelBadgeStore.getState().badgesByPanelId).toEqual({});
+    const a = renderHook(() => mod.usePanelBadges("ghost-1"));
+    const b = renderHook(() => mod.usePanelBadges("ghost-2"));
+    expect(a.result.current).toEqual({});
+    // Stable reference across panels and unrelated updates → no churn re-renders.
+    expect(a.result.current).toBe(b.result.current);
+    changedCb!({ pluginId: "p1", badges: { other: dot() } });
+    a.rerender();
+    expect(a.result.current).toBe(b.result.current);
   });
 
-  it("tolerates an absent bridge without throwing", async () => {
-    (globalThis as unknown as { window: { electron: { plugin: object } } }).window.electron.plugin =
-      {};
+  it("usePanelBadges selector reflects a badge set on its panel", async () => {
+    const { renderHook } = await import("@testing-library/react");
+    const { act } = await import("@testing-library/react");
+    const mod = await load();
+    const { result } = renderHook(() => mod.usePanelBadges("panelA"));
+    expect(result.current).toEqual({});
+    act(() => changedCb!({ pluginId: "p1", badges: { panelA: label("CI") } }));
+    expect(result.current).toEqual({ p1: { kind: "label", text: "CI" } });
+  });
+
+  it("tolerates an absent bridge and stays retryable once a real bridge appears", async () => {
+    const win = globalThis as unknown as {
+      window: { electron: { plugin: Record<string, unknown> } };
+    };
+    win.window.electron.plugin = {}; // no badge subscription methods yet
     const mod = await import("../pluginPanelBadgeStore");
     mod._resetPluginPanelBadgeStoreForTest();
     expect(() => mod.usePluginPanelBadgeStore.getState().init()).not.toThrow();
+    expect(onChangedMock).not.toHaveBeenCalled();
+
+    // A later mount with the real bridge present must still subscribe — the
+    // absent-bridge early return did not latch `initialized`.
+    win.window.electron.plugin = {
+      onPanelBadgesChanged: onChangedMock,
+      onPanelBadgesCleared: onClearedMock,
+    };
+    mod.usePluginPanelBadgeStore.getState().init();
+    expect(onChangedMock).toHaveBeenCalledTimes(1);
+    expect(onClearedMock).toHaveBeenCalledTimes(1);
   });
 });

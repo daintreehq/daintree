@@ -1735,7 +1735,11 @@ export interface PluginHostApi extends PluginActivationApi {
    * becomes a silent no-op once the plugin is unloaded (all of the plugin's
    * badges are cleared on unload). An invalid `panelId` or badge shape (e.g. a
    * `label` longer than {@link PLUGIN_PANEL_BADGE_LABEL_MAX} characters) rejects
-   * so authoring mistakes surface loudly.
+   * so authoring mistakes surface loudly. (For a dev-mode plugin running in the
+   * hot-reload worker this is fire-and-forget like
+   * {@link invalidateFileDecorations}: a malformed badge shape is logged in the
+   * host rather than rejected back to the `await`, though an empty `panelId` is
+   * still rejected synchronously worker-side.)
    */
   setPanelBadge(panelId: string, badge: PluginPanelBadge | null): Promise<void>;
   /**
