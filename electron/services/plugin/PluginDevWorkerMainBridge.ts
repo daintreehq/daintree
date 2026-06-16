@@ -32,6 +32,7 @@ import type {
   LoggerParams,
   PluginWorkerToHostMessage,
   PostToPanelParams,
+  SetPanelBadgeParams,
   RegisterActionParams,
   RegisterFileDecorationProviderParams,
   RegisterHandlerParams,
@@ -575,6 +576,11 @@ export class PluginDevWorkerMainBridge {
       case "invalidateFileDecorations": {
         const p = params as InvalidateFileDecorationsParams;
         await this.host.invalidateFileDecorations(p.scope, p.paths);
+        return;
+      }
+      case "setPanelBadge": {
+        const p = params as SetPanelBadgeParams;
+        await this.host.setPanelBadge(p.panelId, p.badge);
         return;
       }
       case "registerFileDecorationProvider": {

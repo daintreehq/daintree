@@ -41,6 +41,27 @@ export interface ToolbarButtonContribution {
   priority?: 1 | 2 | 3 | 4 | 5;
 }
 
+/**
+ * Semantic color for a {@link PluginPanelBadge}. Maps to the app's status
+ * palette in the renderer — plugins pick intent, not a raw hex value, so badges
+ * stay theme-consistent. `"default"` is the neutral accent-free tint.
+ */
+export type PluginPanelBadgeColor = "default" | "success" | "warning" | "error";
+
+/**
+ * A small live indicator a plugin overlays on a panel's title chrome via
+ * {@link PluginHostApi.setPanelBadge}, keyed by panel id. Lets per-worktree /
+ * per-agent state (notes present, CI pass/fail, review status) surface without
+ * opening the panel. Two shapes: a bare status `dot`, or a short `label`
+ * (text capped at 6 characters host-side so it can't overflow the header).
+ */
+export type PluginPanelBadge =
+  | { kind: "dot"; color?: PluginPanelBadgeColor; tooltip?: string }
+  | { kind: "label"; text: string; color?: PluginPanelBadgeColor; tooltip?: string };
+
+/** Max length of a {@link PluginPanelBadge} `label` text, enforced host-side. */
+export const PLUGIN_PANEL_BADGE_LABEL_MAX = 6;
+
 export type MenuItemLocation = "terminal" | "file" | "view" | "help";
 // `"panel"` was removed (#10512): no renderer surface ever mounted
 // `usePluginContextMenuItems("panel")`, so a contributed panel context-menu item
@@ -1702,6 +1723,25 @@ export interface PluginHostApi extends PluginActivationApi {
    * unloaded.
    */
   invalidateFileDecorations(scope: string, paths?: string[]): Promise<void>;
+  /**
+   * Set (or clear) a small live badge on the title chrome of the panel with the
+   * given `panelId` — a status `dot` or a short `label` — so per-worktree /
+   * per-agent state surfaces without opening the panel. Pass `null` to clear
+   * this plugin's badge on that panel. Badges are keyed by `(pluginId, panelId)`,
+   * so plugins never clobber each other's badge on the same panel.
+   *
+   * Like {@link invalidateFileDecorations} this is NOT revoke-guarded: plugins
+   * call it from post-activation subscription callbacks and timers, and it
+   * becomes a silent no-op once the plugin is unloaded (all of the plugin's
+   * badges are cleared on unload). An invalid `panelId` or badge shape (e.g. a
+   * `label` longer than {@link PLUGIN_PANEL_BADGE_LABEL_MAX} characters) rejects
+   * so authoring mistakes surface loudly. (For a dev-mode plugin running in the
+   * hot-reload worker this is fire-and-forget like
+   * {@link invalidateFileDecorations}: a malformed badge shape is logged in the
+   * host rather than rejected back to the `await`, though an empty `panelId` is
+   * still rejected synchronously worker-side.)
+   */
+  setPanelBadge(panelId: string, badge: PluginPanelBadge | null): Promise<void>;
   /**
    * Surface a toast notification. The host namespaces the message as
    * `{pluginId}: {message}` for provenance — a plugin cannot spoof another

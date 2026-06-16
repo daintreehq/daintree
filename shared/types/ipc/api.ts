@@ -1649,6 +1649,22 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: { scope: string; paths?: string[] }) => void
     ): () => void;
     /**
+     * Subscribe to plugin panel-badge changes (#10585). The callback fires with
+     * one plugin's COMPLETE current badge map (`panelId → badge`); an empty map
+     * clears that plugin's badges. Returns a cleanup.
+     */
+    onPanelBadgesChanged(
+      callback: (payload: {
+        pluginId: string;
+        badges: Record<string, import("../plugin.js").PluginPanelBadge>;
+      }) => void
+    ): () => void;
+    /**
+     * Subscribe to plugin-unload badge clears (#10585). Fires with the unloaded
+     * plugin's id so the renderer drops all of its panel badges. Returns a cleanup.
+     */
+    onPanelBadgesCleared(callback: (payload: { pluginId: string }) => void): () => void;
+    /**
      * Subscribe to `daintree://` deep-link intents (#9559). Fires when the OS
      * hands the app a deep link; the callback opens the Plugin Manager. Returns
      * a cleanup.

@@ -1874,6 +1874,21 @@ export interface IpcEventMap {
     paths?: string[];
   };
 
+  // Plugin panel-badge state changed (main → renderer, #10585). Carries this
+  // plugin's COMPLETE current badge map (panelId → badge) — never a delta — so
+  // the renderer replaces all of `pluginId`'s badges in one shot. An empty
+  // `badges` clears the plugin's badges. Authoritative per plugin, so no
+  // `complete` flag is needed (each event fully describes one plugin's state).
+  "plugin:panel-badges-changed": {
+    pluginId: string;
+    badges: Record<string, import("../plugin.js").PluginPanelBadge>;
+  };
+
+  // Plugin unloaded — drop all of its panel badges (main → renderer, #10585).
+  "plugin:panel-badges-cleared": {
+    pluginId: string;
+  };
+
   // Plugin provenance record changed (main → renderer). Signal-only — the
   // renderer re-pulls via `plugin:list` for the full data.
   "plugin:provenance-changed": Record<string, never>;
@@ -1995,6 +2010,9 @@ export type IpcEventBusMap = Pick<
   | "plugin:agents-changed"
   // Plugin file-decoration invalidation (global broadcast)
   | "plugin:decorations-changed"
+  // Plugin panel-badge state (global broadcast)
+  | "plugin:panel-badges-changed"
+  | "plugin:panel-badges-cleared"
   // Plugin provenance record changed (global broadcast)
   | "plugin:provenance-changed"
   // Run history changed (global broadcast)

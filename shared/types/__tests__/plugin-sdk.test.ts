@@ -9,6 +9,8 @@ import type {
   PluginActivate,
   PanelContribution,
   ToolbarButtonContribution,
+  PluginPanelBadge,
+  PluginPanelBadgeColor,
   MenuItemContribution,
   MenuItemLocation,
   ViewContribution,
@@ -85,6 +87,8 @@ describe("plugin-sdk boundary", () => {
     it("exports manifest authoring types", () => {
       expectTypeOf<PanelContribution>().toMatchTypeOf<object>();
       expectTypeOf<ToolbarButtonContribution>().toMatchTypeOf<object>();
+      expectTypeOf<PluginPanelBadge>().toMatchTypeOf<object>();
+      expectTypeOf<PluginPanelBadgeColor>().toMatchTypeOf<string>();
       expectTypeOf<MenuItemContribution>().toMatchTypeOf<object>();
       expectTypeOf<MenuItemLocation>().toMatchTypeOf<string>();
       expectTypeOf<ViewContribution>().toMatchTypeOf<object>();

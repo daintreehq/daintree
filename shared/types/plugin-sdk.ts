@@ -57,6 +57,8 @@ export type {
   PluginHostSubscriptionOptions,
   ActionHandler,
   PluginToastOptions,
+  PluginPanelBadge,
+  PluginPanelBadgeColor,
   PluginQuickPickItem,
   PluginQuickPickOptions,
   PluginInputBoxOptions,

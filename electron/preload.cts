@@ -147,6 +147,7 @@ import type {
   PluginKeybindingDescriptor,
   ContextMenuContribution,
   PluginDeepLinkIntent,
+  PluginPanelBadge,
 } from "../shared/types/plugin.js";
 import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
 import type { ToolbarButtonConfig } from "../shared/config/toolbarButtonRegistry.js";
@@ -2653,6 +2654,11 @@ function buildElectronApi(): ElectronAPI {
       ) => _eventBusOn("plugin:context-menu-items-changed", callback),
       onDecorationsChanged: (callback: (payload: { scope: string; paths?: string[] }) => void) =>
         _eventBusOn("plugin:decorations-changed", callback),
+      onPanelBadgesChanged: (
+        callback: (payload: { pluginId: string; badges: Record<string, PluginPanelBadge> }) => void
+      ) => _eventBusOn("plugin:panel-badges-changed", callback),
+      onPanelBadgesCleared: (callback: (payload: { pluginId: string }) => void) =>
+        _eventBusOn("plugin:panel-badges-cleared", callback),
       onDeepLink: (callback: (intent: PluginDeepLinkIntent) => void) =>
         _eventBusOn("plugin:deep-link", callback),
     },

@@ -32,6 +32,7 @@ function makeHost() {
     registerForgeProvider: vi.fn(() => vi.fn()),
     registerFileDecorationProvider: vi.fn(() => vi.fn()),
     invalidateFileDecorations: vi.fn(),
+    setPanelBadge: vi.fn(async () => {}),
     showToast: vi.fn(async () => {}),
     dispatch: vi.fn(async () => ({ ok: true, result: undefined })),
     actions: {
@@ -260,6 +261,32 @@ describe("PluginDevWorkerMainBridge", () => {
       result: "hello world",
     });
     await expect(resultPromise).resolves.toBe("hello world");
+  });
+
+  it("forwards setPanelBadge host-notify to the real host (#10585)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "setPanelBadge",
+      params: { panelId: "panel-1", badge: { kind: "label", text: "CI", color: "success" } },
+    });
+    await flush();
+    expect(host.setPanelBadge).toHaveBeenCalledWith("panel-1", {
+      kind: "label",
+      text: "CI",
+      color: "success",
+    });
+  });
+
+  it("forwards a null setPanelBadge (clear) host-notify to the real host (#10585)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "setPanelBadge",
+      params: { panelId: "panel-1", badge: null },
+    });
+    await flush();
+    expect(host.setPanelBadge).toHaveBeenCalledWith("panel-1", null);
   });
 
   it("fails closed on a typed handler whose required capability is undeclared", async () => {

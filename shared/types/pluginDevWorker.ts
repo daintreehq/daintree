@@ -26,6 +26,7 @@ import type {
   PluginInputBoxOptions,
   PluginConfirmOptions,
   PluginProcessSpawnOptions,
+  PluginPanelBadge,
 } from "./plugin.js";
 
 /** Async host methods the worker proxy relays to main and awaits a reply for. */
@@ -68,6 +69,7 @@ export type PluginHostNotifyMethod =
   | "broadcastToRenderer"
   | "postToPanel"
   | "invalidateFileDecorations"
+  | "setPanelBadge"
   | "registerFileDecorationProvider"
   | "unregisterFileDecorationProvider"
   | "logger.info"
@@ -244,6 +246,12 @@ export interface PostToPanelParams {
 export interface InvalidateFileDecorationsParams {
   scope: string;
   paths?: string[];
+}
+
+/** Params for `setPanelBadge` (`host-notify`). `null` clears the badge. */
+export interface SetPanelBadgeParams {
+  panelId: string;
+  badge: PluginPanelBadge | null;
 }
 
 /**
