@@ -34,7 +34,7 @@ import {
 } from "../schemas/plugin.js";
 import { getPluginMcpSupervisor } from "./PluginMcpSupervisor.js";
 import { PluginProcessManager } from "./plugin/PluginProcessManager.js";
-import { resolveContainedPath } from "./plugin/pluginFsContainment.js";
+import { resolveContainedPath, PluginPathNotAllowedError } from "./plugin/pluginFsContainment.js";
 import { PluginHostGit, type HostGitFactory } from "./plugin/pluginHostGit.js";
 import {
   PLUGIN_PROCESS_STREAM_CHANNEL,
@@ -443,6 +443,19 @@ function isParkedOrTempDirName(name: string): boolean {
 }
 
 type WorkspaceWorktreeEvent = "worktree-update" | "worktree-activated" | "worktree-removed";
+
+/**
+ * Capability class of an expanded `scopes.fs.allowedPaths` root. Project /
+ * worktree roots gate on `fs:project-*`; the implicit per-plugin data dir and
+ * any path under the user's home dir gate on `fs:user-data-*`.
+ */
+type FsRootClass = "project" | "user-data";
+
+/** An `allowedPaths` entry after token expansion, with its capability class. */
+interface ExpandedFsPath {
+  path: string;
+  rootClass: FsRootClass;
+}
 
 export class PluginService {
   private plugins = new Map<string, LoadedPlugin>();
@@ -2566,6 +2579,94 @@ export class PluginService {
     return this.plugins.get(pluginId)?.manifest.scopes?.fs?.allowedPaths ?? [];
   }
 
+  /** The implicit per-plugin data dir, always an allowed `user-data` root. */
+  private pluginDataDir(pluginId: string): string {
+    return path.join(os.homedir(), ".daintree", "plugin-data", pluginId);
+  }
+
+  /** Lexical containment: is `candidate` inside (or equal to) `root`? */
+  private isPathUnder(root: string, candidate: string): boolean {
+    const rel = path.relative(root, candidate);
+    return (
+      rel === "" || (rel !== ".." && !rel.startsWith(".." + path.sep) && !path.isAbsolute(rel))
+    );
+  }
+
+  /**
+   * Expand the plugin's declared `scopes.fs.allowedPaths` into concrete,
+   * capability-classified roots at call time. `${project}` / `${worktree}`
+   * tokens resolve against the live worktree snapshots — fail-closed: a token
+   * with no matching live worktree contributes NO root (it is dropped, never
+   * resolved to a fallback or empty path that could widen scope — #9492), so a
+   * path that only that token would have matched is still rejected by
+   * containment. Dropping just the unresolvable entry (rather than aborting the
+   * whole expansion) preserves the always-on data dir and any literal / other
+   * resolvable token roots. When `includeDataDir`, the implicit per-plugin data
+   * dir is prepended as a `user-data` root so every plugin always has a private
+   * scratch space. Literal absolute paths are classified by home-dir membership.
+   *
+   * The caller is responsible for `requireLoaded()` re-checks around the await
+   * (the plugin may unload mid-call — #9533).
+   */
+  private async expandAllowedPathEntries(
+    pluginId: string,
+    opts: { includeDataDir: boolean }
+  ): Promise<ExpandedFsPath[]> {
+    const declared = this.declaredAllowedPaths(pluginId);
+    const needsSnapshots = declared.some(
+      (entry) => entry.startsWith("${project}") || entry.startsWith("${worktree}")
+    );
+    const snapshots = needsSnapshots ? await this.fetchAllWorktreeSnapshots() : [];
+
+    const entries: ExpandedFsPath[] = [];
+    if (opts.includeDataDir) {
+      entries.push({ path: this.pluginDataDir(pluginId), rootClass: "user-data" });
+    }
+    for (const raw of declared) {
+      try {
+        entries.push(this.expandAllowedPathEntry(pluginId, raw, snapshots));
+      } catch (err) {
+        // Fail-closed on a token with no live worktree: drop just that entry
+        // (it contributes no root, so a path that only matched it is still
+        // rejected by containment) rather than discarding the whole list — the
+        // implicit data dir and any literal/other-token roots stay usable.
+        if (err instanceof PluginPathNotAllowedError) continue;
+        throw err;
+      }
+    }
+    return entries;
+  }
+
+  /** Expand a single `allowedPaths` entry (token or literal) into a typed root. */
+  private expandAllowedPathEntry(
+    pluginId: string,
+    raw: string,
+    snapshots: readonly WorktreeSnapshot[]
+  ): ExpandedFsPath {
+    const token = raw.startsWith("${worktree}")
+      ? "worktree"
+      : raw.startsWith("${project}")
+        ? "project"
+        : null;
+    if (token === null) {
+      // Literal absolute path: a path under the user's home dir is user-data
+      // class; anything else (project trees, system paths) is project class.
+      return {
+        path: raw,
+        rootClass: this.isPathUnder(os.homedir(), raw) ? "user-data" : "project",
+      };
+    }
+    const base =
+      token === "worktree"
+        ? snapshots.find((s) => s.isCurrent === true)?.path
+        : snapshots.find((s) => s.isMainWorktree === true)?.path;
+    if (typeof base !== "string" || base.length === 0) {
+      throw new PluginPathNotAllowedError(pluginId, raw);
+    }
+    const suffix = raw.slice(`\${${token}}`.length);
+    return { path: suffix.length > 0 ? path.join(base, suffix) : base, rootClass: "project" };
+  }
+
   /**
    * Build the host-mediated `host.fs` surface for one plugin. Every path
    * argument is realpath-contained to the declared `scopes.fs.allowedPaths`
@@ -2581,7 +2682,9 @@ export class PluginService {
         );
       }
     };
-    const requireReadCap = (op: string): void => {
+    // Fast-fail before any filesystem work: a plugin with no fs read/write cap
+    // of any class can't touch the surface at all.
+    const requireAnyReadCap = (op: string): void => {
       const caps = this.declaredCapabilities(pluginId);
       if (!caps.has("fs:project-read") && !caps.has("fs:user-data-read")) {
         throw new Error(
@@ -2589,7 +2692,7 @@ export class PluginService {
         );
       }
     };
-    const requireWriteCap = (op: string): void => {
+    const requireAnyWriteCap = (op: string): void => {
       const caps = this.declaredCapabilities(pluginId);
       if (!caps.has("fs:project-write") && !caps.has("fs:user-data-write")) {
         throw new Error(
@@ -2597,16 +2700,55 @@ export class PluginService {
         );
       }
     };
-    const contain = (targetPath: string): Promise<string> =>
-      resolveContainedPath(pluginId, targetPath, this.declaredAllowedPaths(pluginId));
+    // Precise per-root-class gate, applied AFTER containment resolves which root
+    // class the path falls under: project/worktree paths need `fs:project-*`,
+    // the data dir / home paths need `fs:user-data-*`. A plugin can't reach a
+    // project path with only a user-data cap (or vice versa).
+    const requireReadCapForClass = (op: string, rootClass: FsRootClass): void => {
+      const needed = rootClass === "project" ? "fs:project-read" : "fs:user-data-read";
+      if (!this.declaredCapabilities(pluginId).has(needed)) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" fs.${op} requires the "${needed}" capability for ${rootClass} paths, which is not declared in manifest.capabilities`
+        );
+      }
+    };
+    const requireWriteCapForClass = (op: string, rootClass: FsRootClass): void => {
+      const needed = rootClass === "project" ? "fs:project-write" : "fs:user-data-write";
+      if (!this.declaredCapabilities(pluginId).has(needed)) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" fs.${op} requires the "${needed}" capability for ${rootClass} paths, which is not declared in manifest.capabilities`
+        );
+      }
+    };
+    // Contain against the call-time-expanded roots and report which root class
+    // matched. We contain per-entry so the matched entry's class is exact (the
+    // first containing root wins, same "any allowed root" semantics as before).
+    const containWithClass = async (
+      targetPath: string
+    ): Promise<{ resolved: string; rootClass: FsRootClass }> => {
+      const entries = await this.expandAllowedPathEntries(pluginId, { includeDataDir: true });
+      let lastErr: unknown;
+      for (const entry of entries) {
+        try {
+          const resolved = await resolveContainedPath(pluginId, targetPath, [entry.path]);
+          return { resolved, rootClass: entry.rootClass };
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      throw lastErr instanceof Error
+        ? lastErr
+        : new PluginPathNotAllowedError(pluginId, targetPath);
+    };
 
     return {
       readFile: async (filePath, options) => {
         options?.signal?.throwIfAborted();
         requireLoaded("readFile");
-        requireReadCap("readFile");
-        const resolved = await contain(filePath);
+        requireAnyReadCap("readFile");
+        const { resolved, rootClass } = await containWithClass(filePath);
         requireLoaded("readFile");
+        requireReadCapForClass("readFile", rootClass);
         // Deliberately no 500KB / binary cap — this is a sanctioned plugin API,
         // not the size-limited files.read preview path. The signal cancels the
         // read itself (Node honors it) as well as the boundary checks above.
@@ -2614,12 +2756,40 @@ export class PluginService {
       },
       writeFile: async (filePath, contents) => {
         requireLoaded("writeFile");
-        requireWriteCap("writeFile");
+        requireAnyWriteCap("writeFile");
         if (typeof contents !== "string") {
           throw new Error(`Plugin "${pluginId}" fs.writeFile: contents must be a string`);
         }
-        const resolved = await contain(filePath);
+        // Lazily materialize the implicit per-plugin data dir before containment
+        // when the target (lexically) lands inside it — resolveContainedPath
+        // realpaths every root and skips ones that don't exist, so a first write
+        // into a not-yet-created data dir would otherwise fail containment. The
+        // lexical check only gates the mkdir; realpath containment below stays
+        // the security authority.
+        const dataDir = this.pluginDataDir(pluginId);
+        // Identify a data-dir write from the (lexical) request path, not the
+        // realpath-resolved one: on macOS the resolved path picks up the
+        // /private prefix while `dataDir` does not, so comparing against
+        // `resolved` would wrongly miss the match. The realpath containment
+        // below remains the security authority either way.
+        const isDataDirWrite =
+          path.isAbsolute(filePath) && this.isPathUnder(dataDir, path.normalize(filePath));
+        if (isDataDirWrite) {
+          // A data-dir write is always user-data class — gate before the mkdir
+          // so a plugin lacking the cap doesn't materialize the dir as a side
+          // effect (the post-containment check below re-asserts it).
+          requireWriteCapForClass("writeFile", "user-data");
+          await fs.mkdir(dataDir, { recursive: true });
+        }
         requireLoaded("writeFile");
+        const { resolved, rootClass } = await containWithClass(filePath);
+        requireLoaded("writeFile");
+        requireWriteCapForClass("writeFile", rootClass);
+        // Create intermediate dirs for a nested write inside the data dir so a
+        // plugin can lay out its own subtree without a separate mkdir API.
+        if (isDataDirWrite) {
+          await fs.mkdir(path.dirname(resolved), { recursive: true });
+        }
         await fs.writeFile(resolved, contents, "utf-8");
         // Audit every write so host-mediated filesystem mutation is observable.
         safeAppendAudit({
@@ -2636,10 +2806,11 @@ export class PluginService {
       readdir: async (dirPath, options) => {
         options?.signal?.throwIfAborted();
         requireLoaded("readdir");
-        requireReadCap("readdir");
-        const resolved = await contain(dirPath);
+        requireAnyReadCap("readdir");
+        const { resolved, rootClass } = await containWithClass(dirPath);
         options?.signal?.throwIfAborted();
         requireLoaded("readdir");
+        requireReadCapForClass("readdir", rootClass);
         const entries = await fs.readdir(resolved, { withFileTypes: true });
         return entries.map(
           (e): PluginFsDirEntry => ({
@@ -2653,10 +2824,11 @@ export class PluginService {
       stat: async (targetPath, options) => {
         options?.signal?.throwIfAborted();
         requireLoaded("stat");
-        requireReadCap("stat");
-        const resolved = await contain(targetPath);
+        requireAnyReadCap("stat");
+        const { resolved, rootClass } = await containWithClass(targetPath);
         options?.signal?.throwIfAborted();
         requireLoaded("stat");
+        requireReadCapForClass("stat", rootClass);
         const s = await fs.stat(resolved);
         return {
           isDirectory: s.isDirectory(),
@@ -2669,7 +2841,7 @@ export class PluginService {
       watch: async (paths, callback, options) => {
         options?.signal?.throwIfAborted();
         requireLoaded("watch");
-        requireReadCap("watch");
+        requireAnyReadCap("watch");
         if (typeof callback !== "function") {
           throw new Error(`Plugin "${pluginId}" fs.watch: callback must be a function`);
         }
@@ -2678,10 +2850,12 @@ export class PluginService {
           throw new Error(`Plugin "${pluginId}" fs.watch: paths must be a non-empty array`);
         }
         // Contain every path up front so an out-of-scope watch target rejects
-        // before any watcher is created.
-        const resolvedTargets = await Promise.all(targets.map((p) => contain(p)));
+        // before any watcher is created; gate each on its own root class.
+        const contained = await Promise.all(targets.map((p) => containWithClass(p)));
         options?.signal?.throwIfAborted();
         requireLoaded("watch");
+        for (const c of contained) requireReadCapForClass("watch", c.rootClass);
+        const resolvedTargets = contained.map((c) => c.resolved);
 
         const watchers: FSWatcher[] = [];
         let disposed = false;
@@ -2773,10 +2947,25 @@ export class PluginService {
       }
     };
     // A worktree the plugin may access = one contained inside its declared
-    // allowedPaths. We resolve the worktree root itself (not a child) so the git
-    // ops run against the realpath-verified directory.
-    const containWorktree = (worktreePath: string): Promise<string> =>
-      resolveContainedPath(pluginId, worktreePath, this.declaredAllowedPaths(pluginId));
+    // allowedPaths (with `${project}` / `${worktree}` tokens expanded at call
+    // time). We resolve the worktree root itself (not a child) so the git ops
+    // run against the realpath-verified directory. The implicit per-plugin data
+    // dir is NOT an allowed git root — git ops gate on git:read/git:write and
+    // should never reach into a plugin's private scratch space.
+    const containWorktree = async (worktreePath: string): Promise<string> => {
+      const entries = await this.expandAllowedPathEntries(pluginId, { includeDataDir: false });
+      let lastErr: unknown;
+      for (const entry of entries) {
+        try {
+          return await resolveContainedPath(pluginId, worktreePath, [entry.path]);
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      throw lastErr instanceof Error
+        ? lastErr
+        : new PluginPathNotAllowedError(pluginId, worktreePath);
+    };
     const git = new PluginHostGit(pluginId, this.hostGitFactory);
 
     return {

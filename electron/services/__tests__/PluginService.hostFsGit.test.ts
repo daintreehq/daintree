@@ -1,10 +1,11 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { mkdtempSync, rmSync, mkdirSync, existsSync } from "node:fs";
 import fs from "node:fs/promises";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
 import { join } from "node:path";
 import path from "node:path";
+import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 
 vi.mock("electron", () => ({
   app: {
@@ -37,6 +38,20 @@ import type { PluginManifest, PluginHostApi } from "../../../shared/types/plugin
 let svc: PluginService;
 let baseDir: string;
 let allowed: string;
+let homeDir: string;
+let homedirSpy: MockInstance<() => string>;
+
+/** The implicit per-plugin data dir for the fixture plugin under the faked home. */
+function dataDir(): string {
+  return join(homeDir, ".daintree", "plugin-data", "acme.fsgit");
+}
+
+/** Inject a fake WorkspaceClient that returns the given worktree snapshots. */
+function setWorktrees(snapshots: Array<Partial<WorktreeSnapshot> & { path: string }>): void {
+  (svc as unknown as { setWorkspaceClient(c: unknown): void }).setWorkspaceClient({
+    getAllStatesAsync: async () => snapshots,
+  });
+}
 
 interface FakeLoadedPlugin {
   manifest: PluginManifest;
@@ -76,10 +91,17 @@ beforeEach(async () => {
   mkdirSync(pluginsRoot, { recursive: true });
   allowed = join(baseDir, "allowed");
   await fs.mkdir(allowed, { recursive: true });
+  // Redirect the home dir into the fixture so the implicit per-plugin data dir
+  // (~/.daintree/plugin-data/{id}/) lands under the temp tree, never the real
+  // home. PluginService imports the same `os` singleton, so this spy is shared.
+  homeDir = join(baseDir, "home");
+  await fs.mkdir(homeDir, { recursive: true });
+  homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(homeDir);
   svc = new PluginService(pluginsRoot);
 });
 
 afterEach(() => {
+  homedirSpy.mockRestore();
   rmSync(baseDir, { recursive: true, force: true });
 });
 
@@ -231,5 +253,185 @@ describe("host.git capability gating + commit safeguard", () => {
     )._setHostGitFactoryForTests(async () => git);
     const host = registerPlugin(["git:read"], [allowed]);
     await expect(host.git.status(path.join(baseDir, "other"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+  });
+});
+
+describe("host.fs ${worktree}/${project} token expansion", () => {
+  it("expands ${worktree} to the active worktree and contains within it", async () => {
+    const worktree = join(baseDir, "wt-feature");
+    await fs.mkdir(worktree, { recursive: true });
+    setWorktrees([{ path: worktree, isCurrent: true }]);
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], ["${worktree}"]);
+
+    const target = join(worktree, "note.txt");
+    await host.fs.writeFile(target, "hi");
+    expect(await host.fs.readFile(target)).toBe("hi");
+    // A sibling outside the active worktree is rejected.
+    await expect(host.fs.readFile(join(baseDir, "elsewhere.txt"))).rejects.toThrow(
+      /PATH_NOT_ALLOWED/
+    );
+  });
+
+  it("expands ${project} to the main worktree, distinct from the active one", async () => {
+    const project = join(baseDir, "wt-main");
+    const feature = join(baseDir, "wt-other");
+    await fs.mkdir(project, { recursive: true });
+    await fs.mkdir(feature, { recursive: true });
+    setWorktrees([
+      { path: project, isMainWorktree: true },
+      { path: feature, isCurrent: true },
+    ]);
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], ["${project}"]);
+
+    const target = join(project, "p.txt");
+    await host.fs.writeFile(target, "x");
+    expect(await host.fs.readFile(target)).toBe("x");
+    // ${project} must NOT reach the active (non-main) worktree.
+    await fs.writeFile(join(feature, "f.txt"), "y");
+    await expect(host.fs.readFile(join(feature, "f.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+  });
+
+  it("supports a /suffix on a token (scoping to a subdirectory)", async () => {
+    const worktree = join(baseDir, "wt");
+    const sub = join(worktree, "sub");
+    await fs.mkdir(sub, { recursive: true });
+    setWorktrees([{ path: worktree, isCurrent: true }]);
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], ["${worktree}/sub"]);
+
+    await host.fs.writeFile(join(sub, "ok.txt"), "ok");
+    expect(await host.fs.readFile(join(sub, "ok.txt"))).toBe("ok");
+    // The worktree root itself is above the scoped subdir → rejected.
+    await fs.writeFile(join(worktree, "root.txt"), "z");
+    await expect(host.fs.readFile(join(worktree, "root.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+  });
+
+  it("treats coinciding ${project} and ${worktree} (single worktree) as one root", async () => {
+    const only = join(baseDir, "only");
+    await fs.mkdir(only, { recursive: true });
+    setWorktrees([{ path: only, isCurrent: true, isMainWorktree: true }]);
+    const host = registerPlugin(
+      ["fs:project-read", "fs:project-write"],
+      ["${project}", "${worktree}"]
+    );
+    await host.fs.writeFile(join(only, "a.txt"), "a");
+    expect(await host.fs.readFile(join(only, "a.txt"))).toBe("a");
+  });
+
+  it("fails closed when ${worktree} has no active worktree (no fallback path)", async () => {
+    setWorktrees([{ path: join(baseDir, "main"), isMainWorktree: true }]);
+    const host = registerPlugin(["fs:project-read"], ["${worktree}"]);
+    await expect(host.fs.readFile(join(baseDir, "main", "x.txt"))).rejects.toThrow(
+      /PATH_NOT_ALLOWED/
+    );
+  });
+
+  it("fails closed when no WorkspaceClient is wired and a token is declared", async () => {
+    const host = registerPlugin(["fs:project-read"], ["${worktree}"]);
+    await expect(host.fs.readFile(join(baseDir, "x.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+  });
+
+  it("fails closed (no fallback) when getAllStatesAsync rejects", async () => {
+    (svc as unknown as { setWorkspaceClient(c: unknown): void }).setWorkspaceClient({
+      getAllStatesAsync: async () => {
+        throw new Error("client unavailable");
+      },
+    });
+    const host = registerPlugin(["fs:project-read"], ["${worktree}"]);
+    await expect(host.fs.readFile(join(baseDir, "x.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+  });
+
+  it("still serves a co-declared literal root when a token can't resolve", async () => {
+    // No active worktree → ${worktree} drops out, but the literal stays usable.
+    setWorktrees([{ path: join(baseDir, "main"), isMainWorktree: true }]);
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed, "${worktree}"]);
+    await host.fs.writeFile(join(allowed, "ok.txt"), "ok");
+    expect(await host.fs.readFile(join(allowed, "ok.txt"))).toBe("ok");
+  });
+});
+
+describe("host.fs implicit per-plugin data dir", () => {
+  it("auto-grants the data dir to a user-data plugin and creates it lazily on write", async () => {
+    const host = registerPlugin(["fs:user-data-read", "fs:user-data-write"], []);
+    expect(existsSync(dataDir())).toBe(false);
+
+    const target = join(dataDir(), "state.json");
+    await host.fs.writeFile(target, "{}");
+    expect(existsSync(dataDir())).toBe(true);
+    expect(await host.fs.readFile(target)).toBe("{}");
+  });
+
+  it("creates intermediate dirs for a nested write inside the data dir", async () => {
+    const host = registerPlugin(["fs:user-data-read", "fs:user-data-write"], []);
+    const nested = join(dataDir(), "cache", "v1", "blob.bin");
+    await host.fs.writeFile(nested, "data");
+    expect(await host.fs.readFile(nested)).toBe("data");
+  });
+
+  it("stays reachable even when a co-declared token can't resolve", async () => {
+    // The always-on data dir must survive a failing ${worktree} expansion.
+    const host = registerPlugin(["fs:user-data-read", "fs:user-data-write"], ["${worktree}"]);
+    const target = join(dataDir(), "state.json");
+    await host.fs.writeFile(target, "{}");
+    expect(await host.fs.readFile(target)).toBe("{}");
+  });
+
+  it("denies the data dir to a plugin holding only project caps", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    await expect(host.fs.writeFile(join(dataDir(), "x.txt"), "x")).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+    // The deny must not have created the data dir as a side effect.
+    expect(existsSync(dataDir())).toBe(false);
+  });
+});
+
+describe("host.fs per-root-class capability gating", () => {
+  it("denies a project path to a plugin holding only user-data caps", async () => {
+    const host = registerPlugin(["fs:user-data-read", "fs:user-data-write"], [allowed]);
+    const target = join(allowed, "x.txt");
+    await fs.writeFile(target, "x");
+    await expect(host.fs.readFile(target)).rejects.toThrow(/PERMISSION_REQUIRED/);
+    await expect(host.fs.writeFile(target, "y")).rejects.toThrow(/PERMISSION_REQUIRED/);
+  });
+
+  it("allows a project path with project caps and the data dir with user-data caps", async () => {
+    const host = registerPlugin(
+      ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write"],
+      [allowed]
+    );
+    await host.fs.writeFile(join(allowed, "p.txt"), "p");
+    expect(await host.fs.readFile(join(allowed, "p.txt"))).toBe("p");
+    await host.fs.writeFile(join(dataDir(), "u.txt"), "u");
+    expect(await host.fs.readFile(join(dataDir(), "u.txt"))).toBe("u");
+  });
+});
+
+describe("host.git token expansion", () => {
+  function fakeGitFactory(): SimpleGit {
+    return {
+      status: vi.fn().mockResolvedValue({ files: [] }),
+      diff: vi.fn().mockResolvedValue(""),
+      add: vi.fn().mockResolvedValue(undefined),
+      commit: vi.fn().mockResolvedValue({ commit: "abc1234" }),
+    } as unknown as SimpleGit;
+  }
+
+  it("expands ${worktree} for git ops but never the implicit data dir", async () => {
+    const worktree = join(baseDir, "wt");
+    await fs.mkdir(worktree, { recursive: true });
+    setWorktrees([{ path: worktree, isCurrent: true }]);
+    const git = fakeGitFactory();
+    (
+      svc as unknown as { _setHostGitFactoryForTests(f: () => Promise<SimpleGit>): void }
+    )._setHostGitFactoryForTests(async () => git);
+    const host = registerPlugin(["git:read"], ["${worktree}"]);
+
+    // diff uses the mocked SimpleGit factory (status would hit the real
+    // changes provider, which needs an actual git repo on disk).
+    await expect(host.git.diff(worktree)).resolves.toBeDefined();
+    // The per-plugin data dir is an fs root, never a git root — rejected at
+    // containment before any git work runs.
+    await fs.mkdir(dataDir(), { recursive: true });
+    await expect(host.git.diff(dataDir())).rejects.toThrow(/PATH_NOT_ALLOWED/);
   });
 });
