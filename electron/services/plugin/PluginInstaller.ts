@@ -167,19 +167,21 @@ export class PluginInstaller {
   }
 
   /**
-   * Revoke every TOFU consent pin for a plugin, durably. Shared by the uninstall
-   * flow and the upgrade path: a plugin's MCP consent pins are keyed by
-   * `(pluginId, serverId, toolName)` and survive a same-id reinstall/upgrade, so
-   * any code change must reset them or the new code silently inherits the prior
-   * version's approvals (a consent bypass; #10518).
+   * Revoke a plugin's consent — BOTH the MCP TOFU pins (keyed by
+   * `(pluginId, serverId, toolName)`) and the JIT host-capability grants
+   * (shell:exec / fs:*-write / git:write) — durably. Shared by the uninstall
+   * flow and the upgrade path: both survive a same-id reinstall/upgrade, so any
+   * code change must reset them or the new code silently inherits the prior
+   * version's approvals (a consent bypass; #10518 for MCP, #10524 for caps).
    *
-   * Durable + best-effort: if the in-memory drop succeeds but the persist fails,
-   * the pins rehydrate on the next launch and the bypass returns —
-   * `revokeAllForPlugin` returns whether the snapshot persisted, so retry once on
-   * a transient failure, then surface it loudly rather than swallow it. A failed
-   * purge must NEVER strand the caller (uninstall still deletes the dir; upgrade
-   * still installs): the worst case is a skipped re-prompt the user can revoke
-   * manually from the consent settings. `context` names the caller in the logs.
+   * Durable + best-effort. MCP: `revokeAllForPlugin` returns whether the snapshot
+   * persisted; the `|| ` retry covers a transient first-call failure (the second
+   * call no-ops once the in-memory map is already cleared, so it only re-attempts
+   * the flush). Capability: the store retries the flush internally, so a single
+   * call suffices. A failed purge must NEVER strand the caller (uninstall still
+   * deletes the dir; upgrade still installs) — worst case is a skipped re-prompt
+   * the user can revoke manually. `context` names the caller in the logs. Each
+   * service is purged in its own try/catch so one throwing can't skip the other.
    */
   private _purgeConsentPins(pluginId: string, context: "uninstall" | "upgrade"): void {
     try {
@@ -192,6 +194,19 @@ export class PluginInstaller {
       }
     } catch (err) {
       console.error(`[PluginService] consent purge during ${context} of "${pluginId}" threw:`, err);
+    }
+    try {
+      const capConsent = getPluginCapabilityConsentService();
+      if (!capConsent.revokeAllForPlugin(pluginId)) {
+        console.error(
+          `[PluginService] capability consent purge for "${pluginId}" (${context}) failed to persist after a retry; stale grants may rehydrate on restart — revoke them manually from plugin capability settings`
+        );
+      }
+    } catch (err) {
+      console.error(
+        `[PluginService] capability consent purge during ${context} of "${pluginId}" threw:`,
+        err
+      );
     }
   }
 
@@ -983,33 +998,13 @@ export class PluginInstaller {
         console.error(`[PluginService] MCP shutdown during uninstall of "${pluginId}" threw:`, err);
       }
 
-      // Purge every TOFU consent pin for the plugin unconditionally — pluginIds
-      // are author-controlled, so a reinstall (or rebuild) must re-prompt rather
-      // than inherit prior approvals. Decoupled from `wipeSettings`: stale pins
-      // are a consent-bypass risk even when secrets are kept. Shared with the
-      // upgrade path so both close the same consent-inheritance gap (#10518).
+      // Purge all consent — MCP TOFU pins AND JIT host-capability grants —
+      // unconditionally: pluginIds are author-controlled, so a reinstall (or
+      // rebuild) must re-prompt rather than inherit prior approvals. Decoupled
+      // from `wipeSettings`: stale consent is a bypass risk even when secrets are
+      // kept. Shared with the upgrade path so both close the same gap (#10518 MCP,
+      // #10524 capabilities).
       this._purgeConsentPins(pluginId, "uninstall");
-
-      // Purge JIT host-capability grants for the same reason — a same-name
-      // reinstall must re-prompt on first use of shell:exec / fs:*-write /
-      // git:write rather than inherit a prior grant (#10524). Durable by
-      // contract: revokeAllForPlugin retries the flush internally, so a single
-      // call already covers a transient persist failure (a caller-side
-      // `x() || x()` retry would no-op the second call).
-      try {
-        const capConsent = getPluginCapabilityConsentService();
-        const purged = capConsent.revokeAllForPlugin(pluginId);
-        if (!purged) {
-          console.error(
-            `[PluginService] capability consent purge for "${pluginId}" failed to persist after a retry; stale grants may rehydrate on restart — revoke them manually from plugin capability settings`
-          );
-        }
-      } catch (err) {
-        console.error(
-          `[PluginService] capability consent purge during uninstall of "${pluginId}" threw:`,
-          err
-        );
-      }
 
       // Drop the plugin's rate-limit buckets so a same-name reinstall starts
       // with a full burst budget instead of inheriting throttle debt.

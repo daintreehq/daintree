@@ -34,6 +34,7 @@ const storeMock = vi.hoisted(() => {
 // installer's uninstall/upgrade purge; stub them so the upgrade-consent-reset
 // test can assert the revoke without standing up the real persistence.
 const consentMock = vi.hoisted(() => ({ revokeAllForPlugin: vi.fn(() => true) }));
+const capConsentMock = vi.hoisted(() => ({ revokeAllForPlugin: vi.fn(() => true) }));
 const rateLimiterMock = vi.hoisted(() => ({ dropPlugin: vi.fn() }));
 
 vi.mock("electron", () => ({ app: appMock, ipcMain: { on: vi.fn(), removeListener: vi.fn() } }));
@@ -103,6 +104,9 @@ vi.mock("../../utils/fs.js", async (importOriginal) => {
 vi.mock("../plugin-mcp/instances.js", () => ({
   getPluginMcpConsentService: () => consentMock,
   getPluginMcpRateLimiter: () => rateLimiterMock,
+}));
+vi.mock("../plugin-capability/instances.js", () => ({
+  getPluginCapabilityConsentService: () => capConsentMock,
 }));
 
 import { PluginService } from "../PluginService.js";
@@ -722,11 +726,14 @@ describe("installPlugin — consent reset on upgrade (#10518)", () => {
     expect(consentMock.revokeAllForPlugin).not.toHaveBeenCalled();
 
     consentMock.revokeAllForPlugin.mockClear();
+    capConsentMock.revokeAllForPlugin.mockClear();
     const v2 = await makeArchive({ name: "acme.consent-reset", version: "2.0.0" });
     expect((await service.installPlugin(v2)).status).toBe("installed");
 
-    // Any code change forces a consent re-prompt: the upgrade purges the pins.
+    // Any code change forces a consent re-prompt: the upgrade purges BOTH the MCP
+    // TOFU pins and the JIT host-capability grants.
     expect(consentMock.revokeAllForPlugin).toHaveBeenCalledWith("acme.consent-reset");
+    expect(capConsentMock.revokeAllForPlugin).toHaveBeenCalledWith("acme.consent-reset");
 
     service.dispose();
   });
@@ -738,11 +745,13 @@ describe("installPlugin — consent reset on upgrade (#10518)", () => {
     expect((await service.installPlugin(v1)).status).toBe("installed");
 
     consentMock.revokeAllForPlugin.mockClear();
+    capConsentMock.revokeAllForPlugin.mockClear();
     await service.uninstallPlugin("acme.uninstall-consent");
 
     // Uninstall is the other half of the consent-reset guarantee — a same-name
-    // reinstall must not inherit the removed plugin's approvals.
+    // reinstall must not inherit the removed plugin's MCP or capability approvals.
     expect(consentMock.revokeAllForPlugin).toHaveBeenCalledWith("acme.uninstall-consent");
+    expect(capConsentMock.revokeAllForPlugin).toHaveBeenCalledWith("acme.uninstall-consent");
 
     service.dispose();
   });
