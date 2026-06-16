@@ -167,6 +167,20 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(result).toMatchObject({ ok: true, result: "clip-contents" });
   });
 
+  it("relays an empty clipboard read as ok:true with an empty string", async () => {
+    const { host, workerHost } = makeBridge();
+    host.clipboard.readText.mockResolvedValueOnce("");
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "ce",
+      method: "clipboard.readText",
+      params: undefined,
+    });
+    await flush();
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "ce");
+    expect(result).toMatchObject({ ok: true, result: "" });
+  });
+
   it("replies host-result ok:false when the host method throws", async () => {
     const { host, workerHost } = makeBridge();
     host.getWorktrees.mockRejectedValueOnce(new Error("boom"));

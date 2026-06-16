@@ -162,6 +162,16 @@ describe("host.clipboard write size guard", () => {
     expect(mockClipboard.writeText).not.toHaveBeenCalled();
   });
 
+  it("accepts multi-byte text exactly at the byte limit", async () => {
+    const host = registerPlugin(["clipboard:write"]);
+    // 4-byte emoji × (LIMIT / 4) === exactly 8 MiB UTF-8, well under LIMIT by
+    // .length — exercises the boundary on the byte axis, not the char axis.
+    const atLimit = "😀".repeat(LIMIT / 4);
+    expect(Buffer.byteLength(atLimit, "utf8")).toBe(LIMIT);
+    await expect(host.clipboard.writeText(atLimit)).resolves.toBeUndefined();
+    expect(mockClipboard.writeText).toHaveBeenCalledWith(atLimit);
+  });
+
   it("measures by UTF-8 byte length, not JS string length (multi-byte chars)", async () => {
     const host = registerPlugin(["clipboard:write"]);
     // "😀" is 2 UTF-16 code units (.length === 2) but 4 UTF-8 bytes. A string
