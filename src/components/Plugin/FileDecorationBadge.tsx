@@ -28,15 +28,17 @@ export function FileDecorationBadge({ decoration, className }: FileDecorationBad
   const label = decoration?.tooltip ?? badge;
   const url =
     typeof decoration?.url === "string" && decoration.url.length > 0 ? decoration.url : null;
-  // Provider-authored color is opt-in; fall back to a neutral muted surface so
-  // a decoration without an explicit color is never mistaken for the scarce
-  // accent (CLAUDE.md accent-restraint rule).
-  const style = decoration?.color ? { color: decoration.color } : undefined;
 
+  // Provider-authored `color` is an opaque token/class passed straight to
+  // `className` (per the `FileDecoration.color` contract), layered after the
+  // neutral default so a provider can override it; absent it, the muted surface
+  // keeps the badge from being mistaken for the scarce accent (CLAUDE.md
+  // accent-restraint rule).
   const shared = cn(
     "shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full",
     "text-[10px] font-semibold tabular-nums",
     "bg-overlay-subtle text-daintree-text/80",
+    decoration?.color,
     className
   );
 
@@ -44,9 +46,14 @@ export function FileDecorationBadge({ decoration, className }: FileDecorationBad
     return (
       <button
         type="button"
-        onClick={() => void systemClient.openExternal(url)}
+        // Stop the click from bubbling to an enclosing row handler (e.g. a
+        // `FileChangeList` row opens the diff modal on click) — a URL badge
+        // should open its link and nothing else.
+        onClick={(e) => {
+          e.stopPropagation();
+          void systemClient.openExternal(url);
+        }}
         aria-label={label}
-        style={style}
         className={cn(
           shared,
           "hover:bg-tint/10 transition-colors cursor-pointer",
@@ -59,7 +66,7 @@ export function FileDecorationBadge({ decoration, className }: FileDecorationBad
   }
 
   return (
-    <span aria-label={label} title={label} style={style} className={shared}>
+    <span aria-label={label} title={label} className={shared}>
       {badge}
     </span>
   );

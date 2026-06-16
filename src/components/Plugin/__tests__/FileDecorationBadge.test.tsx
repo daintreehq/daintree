@@ -44,4 +44,29 @@ describe("FileDecorationBadge", () => {
     fireEvent.click(btn);
     expect(openExternalMock).toHaveBeenCalledWith("https://x/report");
   });
+
+  it("applies provider color as a className token, not an inline style", async () => {
+    const FileDecorationBadge = await load();
+    // Per the FileDecoration.color contract the value is an opaque class token
+    // passed to className — it must not land in the inline style attribute.
+    const deco: FileDecoration = { badge: "3", tooltip: "warn", color: "text-status-warning" };
+    render(<FileDecorationBadge decoration={deco} />);
+    const el = screen.getByLabelText("warn");
+    expect(el.className).toContain("text-status-warning");
+    expect(el.getAttribute("style")).toBeNull();
+  });
+
+  it("stops a url-badge click from bubbling to an enclosing row handler", async () => {
+    const FileDecorationBadge = await load();
+    const parentClick = vi.fn();
+    const deco: FileDecoration = { badge: "↗", tooltip: "Open PR", url: "https://x/pr" };
+    render(
+      <div onClick={parentClick}>
+        <FileDecorationBadge decoration={deco} />
+      </div>
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open PR" }));
+    expect(openExternalMock).toHaveBeenCalledWith("https://x/pr");
+    expect(parentClick).not.toHaveBeenCalled();
+  });
 });

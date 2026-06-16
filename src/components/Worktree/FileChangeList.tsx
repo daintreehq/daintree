@@ -8,6 +8,8 @@ import { isAbsolute, basename, dirname, normalize, join } from "@shared/utils/pa
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
 import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
+import { useFileTreeDecorations } from "@/hooks/useFileTreeDecorations";
+import { FileDecorationBadge } from "@/components/Plugin/FileDecorationBadge";
 
 function getRelativePath(from: string, to: string): string {
   const normalizedFrom = normalize(from);
@@ -124,6 +126,16 @@ export function FileChangeList({
         return a.path.localeCompare(b.path);
       });
   }, [changes, rootPath]);
+
+  // Plugin-contributed file decorations for the local worktree file list. Pulled
+  // once for the whole list under a `worktree-files:<root>` scope — distinct from
+  // the Review Hub's `worktree-diff:` scope so a PR-review provider's badges don't
+  // leak onto the local change list. Keyed by the same `change.path` strings that
+  // were sent to the host, so `decorations[change.path]` resolves per row. The
+  // hook early-outs (stable empty map) when no plugin registers the scope, so this
+  // costs nothing on a zero-plugin file list.
+  const decorationPaths = useMemo(() => sortedChanges.map((c) => c.path), [sortedChanges]);
+  const decorations = useFileTreeDecorations(`worktree-files:${rootPath}`, decorationPaths);
 
   // Map each row key to its position in `sortedChanges` so file stepping spans
   // the whole change set (not just the visible cap) and grouped rows resolve to
@@ -283,6 +295,7 @@ export function FileChangeList({
               {(change.deletions ?? 0) > 0 && (
                 <span className="text-status-error/80">-{change.deletions}</span>
               )}
+              <FileDecorationBadge decoration={decorations[change.path]} />
             </div>
           </div>
         </TooltipTrigger>
