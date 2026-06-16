@@ -11,6 +11,7 @@ import type { AgentState, AgentId, WaitingReason } from "./agent.js";
 import type { PanelKind, TerminalFlowStatus, PanelTitleMode } from "./panel.js";
 import type { ResourceProfile } from "./resourceProfile.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
+import type { AgentConfig } from "../config/agentRegistry.js";
 import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js";
 
 export type { TerminalFlowStatus };
@@ -193,6 +194,15 @@ export type PtyHostRequest =
   | { type: "set-session-persist-suppressed"; suppressed: boolean }
   | { type: "set-resource-profile"; profile: ResourceProfile }
   | { type: "set-process-tree-poll-interval"; ms: number }
+  /**
+   * Mirror the main-process plugin-agent registry into the pty-host (#10587).
+   * The pty-host runs the activity monitor and resolves `getEffectiveAgentConfig`
+   * for detection patterns, but never registers plugin agents itself — main is
+   * authoritative. Carries the flattened, command-resolved snapshot; the host
+   * applies it via `setPluginAgentRegistry`. Replayed on every host-ready so a
+   * restarted host re-syncs before any spawn replay.
+   */
+  | { type: "set-plugin-agent-registry"; registry: Record<string, AgentConfig> }
   | { type: "get-flow-control-snapshot"; requestId: string };
 
 /** Per-terminal flow-control state in a {@link FlowControlSnapshot}. */

@@ -4,6 +4,7 @@ import {
 } from "../../../shared/types/resourceProfile.js";
 import { setLogLevelOverrides } from "../../utils/logger.js";
 import { setPortBatchThroughputDelayMs } from "../portBatcher.js";
+import { setPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
 import type { HandlerMap, HostContext } from "./types.js";
 
 export function createResourceConfigHandlers(ctx: HostContext): HandlerMap {
@@ -42,6 +43,19 @@ export function createResourceConfigHandlers(ctx: HostContext): HandlerMap {
         }
       }
       setLogLevelOverrides(sanitized);
+    },
+
+    // Mirror main's plugin-agent registry so `getEffectiveAgentConfig` resolves
+    // plugin detection patterns in this process (the one running the activity
+    // monitor). Main is authoritative; the pty-host only ever mirrors (#10587).
+    // Guard the shape at the process boundary: only a plain object is a valid
+    // registry — an array (or null) would corrupt the snapshot's spread.
+    "set-plugin-agent-registry": (msg) => {
+      const registry =
+        msg.registry != null && typeof msg.registry === "object" && !Array.isArray(msg.registry)
+          ? msg.registry
+          : {};
+      setPluginAgentRegistry(registry);
     },
   };
 }

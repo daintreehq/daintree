@@ -19,6 +19,7 @@ import type {
   PluginCanDispatchResult,
 } from "./actions.js";
 import type { AgentState, WaitingReason } from "./agent.js";
+import type { AgentDetectionConfig } from "../config/agentRegistry.js";
 import type { z } from "zod";
 
 export interface PanelContribution {
@@ -227,10 +228,15 @@ export interface PluginManifestScopes {
  * at parse time, and built-in entries always shadow plugin entries in
  * `getEffectiveRegistry`. Cross-plugin ID conflicts resolve first-registered-wins.
  *
- * Plugin agents launch as named, untracked terminals: the 1.0 schema surfaces
- * `id`, `name`, `command`, `args`, `color`, `iconId`, and
- * `supportsContextInjection`. Output-pattern detection is not part of the 1.0
- * plugin schema — built-in agents own the live PTY matcher.
+ * Plugin agents launch as named, untracked terminals: the schema surfaces
+ * `id`, `name`, `command`, `args`, `color`, `iconId`,
+ * `supportsContextInjection`, and an optional `detection` block. The
+ * `detection` field (#10587) lets a contributed agent describe its
+ * working/waiting/completed output patterns so it participates in the
+ * agent-state UI like a built-in — output-volume state already works from the
+ * launch hint, and declared patterns add the richer prompt/completion cues.
+ * Threaded onto the resolved {@link AgentConfig} by `contributionToAgentConfig`
+ * and consumed by the pty-host activity monitor.
  */
 export interface PluginAgentContribution {
   id: string;
@@ -240,6 +246,13 @@ export interface PluginAgentContribution {
   color: string;
   iconId: string;
   supportsContextInjection?: boolean;
+  /**
+   * Optional output-pattern detection config (#10587). Passive observation
+   * only — patterns are matched against terminal output to drive the
+   * working/waiting/completed state machine, consistent with the agent-config
+   * boundary (Daintree never modifies the agent's own config).
+   */
+  detection?: AgentDetectionConfig;
 }
 
 /**

@@ -51,12 +51,50 @@ describe("pluginAgentRegistry (issue #9560)", () => {
     expect(isBuiltInAgent("acme-agent")).toBe(false);
   });
 
-  it("never carries a detection field onto the resolved config (cut in 1.0, #10460)", () => {
-    // contributionToAgentConfig maps fields explicitly rather than spreading,
-    // so even a stray `detection` on the input must not reach the registry.
+  it("forwards a declared detection block onto the resolved config (#10587)", () => {
+    // contributionToAgentConfig now threads `detection` through so a plugin
+    // agent can drive the working/waiting/completed UI via output patterns.
     registerPluginAgents("acme.plugin", [
-      { ...ACME_AGENT, detection: { primaryPatterns: ["thinking"] } } as PluginAgentContribution,
+      {
+        ...ACME_AGENT,
+        detection: { primaryPatterns: ["thinking"], completionPatterns: ["done"] },
+      },
     ]);
+    const config = getEffectiveAgentConfig("acme-agent");
+    expect(config).toBeDefined();
+    expect(config?.detection?.primaryPatterns).toEqual(["thinking"]);
+    expect(config?.detection?.completionPatterns).toEqual(["done"]);
+  });
+
+  it("round-trips every detection field onto the resolved config (#10587)", () => {
+    // Guards against silent truncation if contributionToAgentConfig ever stops
+    // forwarding the detection object wholesale.
+    const detection = {
+      primaryPatterns: ["working"],
+      fallbackPatterns: ["starting"],
+      bootCompletePatterns: ["ready"],
+      promptPatterns: ["waiting"],
+      promptHintPatterns: ["\\[y/n\\]"],
+      completionPatterns: ["done"],
+      scanLineCount: 12,
+      promptScanLineCount: 4,
+      debounceMs: 9000,
+      promptFastPathMinQuietMs: 9000,
+      primaryConfidence: 0.9,
+      fallbackConfidence: 0.7,
+      promptConfidence: 0.8,
+      completionConfidence: 0.85,
+      titleStatePatterns: { working: ["Running"], waiting: ["Idle"] },
+    };
+    registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, detection }]);
+    expect(getEffectiveAgentConfig("acme-agent")?.detection).toEqual(detection);
+  });
+
+  it("omits the detection field entirely for a launch-only contribution (#10587)", () => {
+    // The common case carries no detection block — it must stay absent rather
+    // than land as `detection: undefined`, so output-volume state is the only
+    // path and nothing downstream sees an empty pattern config.
+    registerPluginAgents("acme.plugin", [ACME_AGENT]);
     const config = getEffectiveAgentConfig("acme-agent");
     expect(config).toBeDefined();
     expect("detection" in (config as object)).toBe(false);
