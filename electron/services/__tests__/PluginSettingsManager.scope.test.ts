@@ -96,6 +96,20 @@ describe("PluginSettingsManager declared-scope enforcement", () => {
     expect(() => mgr.assertSettingScope("acme.scope-test", "other", "user")).not.toThrow();
   });
 
+  it("getDeclaredScope resolves the declared scope, defaulting to user, and undefined for undeclared keys (#10586)", () => {
+    const mgr = managerFor([
+      { id: "ref", type: "string", scope: "project" },
+      { id: "token", type: "string", scope: "user" },
+      { id: "implicit", type: "string" },
+    ]);
+    expect(mgr.getDeclaredScope("acme.scope-test", "ref")).toBe("project");
+    expect(mgr.getDeclaredScope("acme.scope-test", "token")).toBe("user");
+    // No explicit scope on the declaration defaults to "user".
+    expect(mgr.getDeclaredScope("acme.scope-test", "implicit")).toBe("user");
+    // Undeclared key — undefined so the read path keeps its permissive fallback.
+    expect(mgr.getDeclaredScope("acme.scope-test", "missing")).toBeUndefined();
+  });
+
   it("accepts any key when contributes.settings is an empty array", () => {
     const mgr = managerFor([]);
     expect(() => mgr.assertSettingDeclared("acme.scope-test", "anything", "project")).not.toThrow();

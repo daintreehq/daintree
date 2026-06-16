@@ -519,6 +519,12 @@ export interface SettingsApi {
   /**
    * Read a setting. Resolves to `undefined` when the key is unset, or (for
    * `"project"` scope) when no project is active.
+   *
+   * When the key is declared in `contributes.settings`, its declared `scope`
+   * (default `"user"`) is authoritative: omitting `scope` reads from the declared
+   * scope, and passing a `scope` that conflicts with the declaration throws — the
+   * read counterpart to the `set`/`onDidChange` scope guards. Undeclared keys (or
+   * manifests with no declarations) fall back to the supplied `scope` or `"user"`.
    */
   get<T = unknown>(key: string, scope?: PluginSettingsScope): Promise<T | undefined>;
   /**

@@ -32,6 +32,7 @@ import type {
   PluginWorktreeSnapshot,
   PluginAgentSnapshot,
   PluginGitCommitResult,
+  SettingDefinition,
   SettingsApi,
   StorageApi,
 } from "../types/plugin.js";
@@ -154,6 +155,15 @@ export interface CreateMockHostOptions {
     user?: Record<string, unknown>;
     project?: Record<string, unknown>;
   };
+  /**
+   * Opt-in `contributes.settings` declarations (`id` + `scope` are what matter)
+   * so the mock's `settings.get` resolves a key's declared scope the way the real
+   * host does (#10586): a `scope: "project"` key reads from the project store when
+   * no scope arg is given, and an explicit conflicting scope throws. Omitted by
+   * default — the mock has no manifest model (#9878), so loose mode keeps the
+   * `scope ?? "user"` default and existing manifest-free tests are unaffected.
+   */
+  manifestSettings?: SettingDefinition[];
   /** Pre-seed private `host.storage` values per scope. */
   storage?: {
     user?: Record<string, unknown>;
@@ -232,12 +242,27 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
 
   const dispatchOverrides = new Map<ActionId, ActionDispatchResult>();
 
+  // Resolve the declared scope for a key from the opt-in `manifestSettings`,
+  // mirroring PluginSettingsManager.getDeclaredScope. Returns undefined when no
+  // declarations are provided (loose mode) or the key is undeclared.
+  const getDeclaredSettingScope = (key: string): PluginSettingsScope | undefined => {
+    const def = options.manifestSettings?.find((s) => s.id === key);
+    return def ? ((def.scope ?? "user") as PluginSettingsScope) : undefined;
+  };
+
   const settings: SettingsApi = {
-    async get<T = unknown>(
-      key: string,
-      scope: PluginSettingsScope = "user"
-    ): Promise<T | undefined> {
-      return settingsStore[scope].get(key) as T | undefined;
+    async get<T = unknown>(key: string, scope?: PluginSettingsScope): Promise<T | undefined> {
+      // Manifest-aware mode: a declared key resolves to its declared scope, and an
+      // explicit conflicting scope throws — matching the real host (#10586). Loose
+      // mode (no manifestSettings) keeps the `scope ?? "user"` default.
+      const declaredScope = getDeclaredSettingScope(key);
+      if (scope !== undefined && declaredScope !== undefined && declaredScope !== scope) {
+        throw new Error(
+          `settings.get: key "${key}" is declared in "${declaredScope}" scope, not "${scope}"`
+        );
+      }
+      const effectiveScope = declaredScope ?? scope ?? "user";
+      return settingsStore[effectiveScope].get(key) as T | undefined;
     },
     async set<T = unknown>(
       key: string,

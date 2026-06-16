@@ -273,7 +273,12 @@ export interface LoggerParams {
 /** Params for `settings.get` (`host-call`). */
 export interface SettingsGetParams {
   key: string;
-  scope: PluginSettingsScope;
+  /**
+   * Omitted (`undefined`) when the plugin passed no scope, so the host resolves
+   * the key's manifest-declared scope on read (#10586) rather than a defaulted
+   * "user" that a project-scoped key would reject.
+   */
+  scope?: PluginSettingsScope;
 }
 
 /** Params for `settings.set` (`host-call`). */

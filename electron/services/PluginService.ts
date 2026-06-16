@@ -2729,15 +2729,25 @@ export class PluginService {
       settings: {
         get: async <T = unknown>(
           key: string,
-          scope: PluginSettingsScope = "user"
+          scope?: PluginSettingsScope
         ): Promise<T | undefined> => {
           assertSettingsKey(pluginId, "get", key);
-          const filePath = this.settings.resolveSettingsFilePath(pluginId, scope);
+          // Resolve the manifest-declared scope so a read targets the same scope
+          // the write path enforces — otherwise a `scope: "project"` key read
+          // with no scope arg silently reads the wrong ("user") store (#10586).
+          const declaredScope = this.settings.getDeclaredScope(pluginId, key);
+          if (scope !== undefined && declaredScope !== undefined && declaredScope !== scope) {
+            throw new Error(
+              `Plugin "${pluginId}" settings.get: key "${key}" is declared in "${declaredScope}" scope, not "${scope}"`
+            );
+          }
+          const effectiveScope = declaredScope ?? scope ?? "user";
+          const filePath = this.settings.resolveSettingsFilePath(pluginId, effectiveScope);
           // Project scope with no active project: read resolves to undefined
           // rather than throwing, matching the "unset key" return.
           if (!filePath) return undefined;
           return this.settings
-            .getOrCreateSettingsStore(pluginId, scope, filePath)
+            .getOrCreateSettingsStore(pluginId, effectiveScope, filePath)
             .get<T>(key, { secret: this.settings.isSecretKey(pluginId, key) });
         },
         set: async <T = unknown>(

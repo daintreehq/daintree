@@ -8889,15 +8889,15 @@ type SettingsHostShape = (pluginId: string) => {
 };
 
 async function setupSettingsService(
-  pluginId: string
+  pluginId: string,
+  settings?: Array<{ id: string; type: string; scope?: SettingsScope }>
 ): Promise<{ service: PluginService; settingsRoot: string }> {
   const pluginsRoot = path.join(tmpDir, "plugins");
   const dir = path.join(pluginsRoot, pluginId);
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(
-    path.join(dir, "plugin.json"),
-    JSON.stringify({ name: pluginId, version: "1.0.0" })
-  );
+  const manifest: Record<string, unknown> = { name: pluginId, version: "1.0.0" };
+  if (settings) manifest.contributes = { settings };
+  await fs.writeFile(path.join(dir, "plugin.json"), JSON.stringify(manifest));
   const service = new PluginService(pluginsRoot);
   await service.initialize();
   // User-scope settings live as a sibling of the plugins dir.
@@ -9057,6 +9057,64 @@ describe("createHost — settings", () => {
     expect(() => host.settings.onDidChange("token", () => {})).toThrow(/host revoked/);
     await expect(host.settings.set("token", "still-works")).resolves.toBeUndefined();
     expect(await host.settings.get<string>("token")).toBe("still-works");
+  });
+
+  // #10586: get must honor a key's manifest-declared scope rather than silently
+  // defaulting to "user", mirroring the set/onDidChange scope guards.
+  it("get resolves a project-scoped declared key from the project store with no scope arg", async () => {
+    const projectDir = path.join(tmpDir, "proj-declared");
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projectDir });
+    const { service } = await setupSettingsService("acme.settings-declared-proj", [
+      { id: "ref", type: "string", scope: "project" },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-declared-proj");
+    // Written to project scope; a no-scope read must resolve there, not "user".
+    await host.settings.set("ref", "branch-x", "project");
+    expect(await host.settings.get<string>("ref")).toBe("branch-x");
+    // The value lives in the project file — proving the read didn't fall back to
+    // the (empty) user store.
+    const raw = await fs.readFile(
+      path.join(projectDir, ".daintree", "plugin-settings", "acme.settings-declared-proj.json"),
+      "utf-8"
+    );
+    expect(JSON.parse(raw)).toEqual({ ref: "branch-x" });
+  });
+
+  it("get throws when the explicit scope conflicts with the declared scope", async () => {
+    const projectDir = path.join(tmpDir, "proj-conflict");
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projectDir });
+    const { service } = await setupSettingsService("acme.settings-declared-conflict", [
+      { id: "ref", type: "string", scope: "project" },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-declared-conflict");
+    await expect(host.settings.get("ref", "user")).rejects.toThrow(
+      /settings\.get: key "ref" is declared in "project" scope, not "user"/
+    );
+  });
+
+  it("get falls back to user scope for an undeclared key", async () => {
+    const { service, settingsRoot } = await setupSettingsService("acme.settings-undeclared", [
+      { id: "declared", type: "string", scope: "user" },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-undeclared");
+    // "loose" isn't declared, so a write would be rejected — seed the user-scope
+    // file directly to prove the read still resolves the permissive "user"
+    // default for undeclared keys.
+    await fs.mkdir(settingsRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(settingsRoot, "acme.settings-undeclared.json"),
+      JSON.stringify({ loose: "v" })
+    );
+    expect(await host.settings.get<string>("loose")).toBe("v");
+  });
+
+  it("get resolves a user-declared key from the user store with no scope arg", async () => {
+    const { service } = await setupSettingsService("acme.settings-declared-user", [
+      { id: "token", type: "string", scope: "user" },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-declared-user");
+    await host.settings.set("token", "sk-1", "user");
+    expect(await host.settings.get<string>("token")).toBe("sk-1");
   });
 });
 

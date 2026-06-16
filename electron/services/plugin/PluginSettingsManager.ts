@@ -141,6 +141,19 @@ export class PluginSettingsManager {
   }
 
   /**
+   * Resolve the manifest-declared scope for a key so the read path (`settings.get`)
+   * can target the same scope the write path enforces via {@link assertSettingDeclared}.
+   * Returns the declared scope (default `"user"`) when the key is declared, or
+   * `undefined` when the manifest declares no settings or doesn't declare this key —
+   * the same permissive fallback the write/secret guards take, so reads of undeclared
+   * keys keep working against the caller-supplied (or `"user"`) scope.
+   */
+  getDeclaredScope(pluginId: string, key: string): PluginSettingsScope | undefined {
+    const def = this.deps.getManifest(pluginId)?.contributes.settings?.find((s) => s.id === key);
+    return def ? (def.scope ?? "user") : undefined;
+  }
+
+  /**
    * Both settings write paths (host `settings.set` and the UI bridge) persist
    * through `PluginSettingsStore.cloneValue`, which JSON-round-trips the value.
    * Probe serializability up front so a non-serializable value surfaces a clear
