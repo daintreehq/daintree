@@ -54,6 +54,13 @@ export function _resetForgeProviderMetaCacheForTest(): void {
 export function useForgeTokenHealth(): void {
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
   const { providerId } = useResolvedForgeProvider(projectId);
+  // Tracks which providers have an active "token expired" inbox row this
+  // session, so the recovery row fires only after a warning was shown. Resets
+  // on remount: a token that expired in a prior session and is already healthy
+  // on a fresh mount won't emit a recovery row, so its stale warning row can
+  // persist in the inbox until the next expiry/recovery cycle. Pre-existing
+  // latch behavior (the removed `useForgeTokenExpiryNotification` shared it);
+  // acceptable for an inbox-only row.
   const inboxedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -84,14 +91,16 @@ export function useForgeTokenHealth(): void {
 
       if (isUnhealthy && !wasUnhealthy && !inboxedRef.current.has(id)) {
         inboxedRef.current.add(id);
-        // Inbox-only backstop (priority "low" → no toast) for the no-project
-        // case where the toolbar's `useForgeTokenExpiryNotification` isn't
-        // mounted. Shares `supersedeKey` with that hook so whichever fires
-        // second archives the first — one active row per token-expiry event.
+        // Inbox-only signal (priority "low" → no toast) for an expired token.
+        // The persistent `<ForgeTokenBanner />` and toolbar indicator are the
+        // primary surfaces; this row gives keyboard/screen-reader users a
+        // durable record without the intrusive toast that used to fire here.
+        // Shares `supersedeKey` with the recovery row below so the recovery
+        // archives it — one active row per token-expiry event.
         // No `correlationId`: it would only thread this row so that a second
-        // expiry cycle (after the toolbar archived the first row) re-promotes
-        // the backstop into an unwanted toast via the un-snooze re-toast path.
-        // The supersede dedup runs on `supersedeKey` alone.
+        // expiry cycle re-promotes the backstop into an unwanted toast via the
+        // un-snooze re-toast path. The supersede dedup runs on `supersedeKey`
+        // alone.
         void resolveProviderMeta(id).then(({ name }) => {
           if (cancelled) return;
           const display = name ?? id;
@@ -107,8 +116,26 @@ export function useForgeTokenHealth(): void {
         });
       }
 
-      if (!isUnhealthy) {
+      if (!isUnhealthy && inboxedRef.current.has(id)) {
         inboxedRef.current.delete(id);
+        // Recovery acknowledgement — inbox-only (priority "low" → no toast),
+        // emitted only when a warning row was previously written for this
+        // provider. Shares `supersedeKey` so it archives the active warning
+        // row, leaving one resolved row per expiry/recovery cycle so
+        // keyboard/screen-reader users get an explicit "working again" signal.
+        void resolveProviderMeta(id).then(({ name }) => {
+          if (cancelled) return;
+          const display = name ?? id;
+          notify({
+            type: "success",
+            priority: "low",
+            title: `${display} token validated`,
+            message: `Your ${display} token is working again.`,
+            supersedeKey: forgeTokenSupersedeKey(id),
+            countable: false,
+            context: { eventKind: "connectivity" },
+          });
+        });
       }
     };
 

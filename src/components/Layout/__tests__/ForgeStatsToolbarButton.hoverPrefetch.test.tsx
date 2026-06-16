@@ -49,10 +49,6 @@ vi.mock("@/hooks/useRepositoryStats", () => ({
   }),
 }));
 
-vi.mock("@/hooks/useForgeTokenExpiryNotification", () => ({
-  useForgeTokenExpiryNotification: () => {},
-}));
-
 vi.mock("@/hooks/useResolvedForgeProvider", () => ({
   useResolvedForgeProvider: () => ({
     entry: {
