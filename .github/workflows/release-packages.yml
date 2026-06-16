@@ -1,16 +1,24 @@
 name: Release (Plugin Packages)
 
-# Manual npm publish for the plugin-ecosystem workspace packages
+# npm publish for the plugin-ecosystem workspace packages
 # (@daintreehq/plugin-sdk, @daintreehq/plugin-testing, @daintreehq/plugin-vite,
 # daintree-plugin, create-daintree-plugin). Kept separate from the Electron app
-# release workflows (release-{macos,linux,windows}.yml): those fire on `v*`
-# tags, so this one is `workflow_dispatch`-only to avoid tag collisions. Once a
-# versioning scheme for the packages is agreed, a `packages/v*` tag trigger can
-# be added here without touching the app release tags.
+# release workflows (release-{macos,linux,windows}.yml), which fire on `v*`
+# tags. Each package versions independently via its own per-package tag
+# (`sdk-v*`, `plugin-vite-v*`, `plugin-testing-v*`, `daintree-plugin-v*`,
+# `create-daintree-plugin-v*`); pushing any of them publishes (the
+# version-existence guard below skips already-published packages, so a tag for
+# one package re-runs the others as no-ops). `workflow_dispatch` remains for
+# manual/dry runs.
 #
-# Requires the `NPM_TOKEN` secret (an npm automation token with publish rights
-# to the @daintreehq scope). Until it is provisioned, run with dry_run=true to
-# exercise the build + pack steps without publishing.
+# Auth: npm Trusted Publishing (OIDC) is the intended path — once this repo +
+# workflow is registered as a Trusted Publisher for each package on npmjs.com,
+# publishing uses short-lived OIDC credentials and no stored secret is needed
+# (`id-token: write` is already granted below). Classic automation tokens were
+# revoked by npm on 2025-12-09, so the fallback until OIDC is provisioned is a
+# Granular Access Token (read+write, @daintreehq scope, 90-day max) stored as
+# the `NPM_TOKEN` secret. Run with dry_run=true to exercise build + pack without
+# publishing.
 
 on:
   workflow_dispatch:
@@ -20,9 +28,19 @@ on:
         required: false
         type: boolean
         default: true
+  push:
+    tags:
+      - "sdk-v*"
+      - "plugin-vite-v*"
+      - "plugin-testing-v*"
+      - "daintree-plugin-v*"
+      - "create-daintree-plugin-v*"
 
 permissions:
   contents: read
+  # Lets the runner mint a short-lived OIDC token for npm Trusted Publishing.
+  # Harmless when publishing via NPM_TOKEN; required once OIDC is provisioned.
+  id-token: write
 
 concurrency:
   group: release-packages-${{ github.ref }}
@@ -70,8 +88,16 @@ jobs:
           npm run typecheck --workspace=packages/daintree-plugin
           npm run typecheck --workspace=packages/create-daintree-plugin
 
+      # Gate the publish on the plugin contract tests: the hello-daintree sample
+      # plugin exercised against the mock host re-exported by plugin-testing.
+      # A regression here means the published SDK/host contract is broken.
+      - name: Contract tests (hello-daintree)
+        run: npx vitest run plugins/sample/hello-daintree
+
+      # Tag pushes always publish (no dry_run input), so pack only on a manual
+      # dispatch that explicitly requested it.
       - name: Pack (dry run)
-        if: ${{ inputs.dry_run }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
         run: |
           npm pack --workspace=packages/plugin-sdk \
             --workspace=packages/plugin-testing \
@@ -85,7 +111,7 @@ jobs:
       # failure skips already-published versions instead of erroring on
       # EPUBLISHCONFLICT and blocking the remaining packages.
       - name: Publish to npm
-        if: ${{ inputs.dry_run != true }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false) }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
@@ -97,7 +123,10 @@ jobs:
             if npm view "$name@$version" version >/dev/null 2>&1; then
               echo "Skipping $name@$version — already published"
             else
-              npm publish --workspace="$dir"
+              # --access public is required on a scoped package's first publish
+              # (scoped packages default to restricted); explicit here rather
+              # than relying solely on each package's publishConfig.access.
+              npm publish --workspace="$dir" --access public
             fi
           }
           publish_if_new packages/plugin-sdk
