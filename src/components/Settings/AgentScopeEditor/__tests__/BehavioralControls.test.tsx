@@ -36,8 +36,8 @@ describe("BehavioralControls — skip permissions control", () => {
   it("renders the skip-permissions control as three radios, not text inputs (issue #10530)", () => {
     const { container } = render(<BehavioralControls {...makeProps()} />);
     const region = container.querySelector("#agents-skip-permissions");
-    expect(region).toBeTruthy();
-    const scoped = within(region as HTMLElement);
+    if (!(region instanceof HTMLElement)) throw new Error("skip-permissions region not found");
+    const scoped = within(region);
     expect(scoped.getAllByRole("radio")).toHaveLength(3);
     expect(scoped.queryAllByRole("textbox")).toHaveLength(0);
   });
