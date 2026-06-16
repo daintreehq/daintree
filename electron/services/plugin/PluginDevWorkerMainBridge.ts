@@ -15,7 +15,11 @@
 
 import { createLogger } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import type { PluginHostApi, PluginIpcContext } from "../../../shared/types/plugin.js";
+import type {
+  PluginHostApi,
+  PluginIpcContext,
+  PluginProcessHandle,
+} from "../../../shared/types/plugin.js";
 import type { FileDecoration, FileDecorationProviderImpl } from "../../../shared/types/forge.js";
 import type {
   BroadcastToRendererParams,
@@ -36,7 +40,10 @@ import type {
   UnregisterFileDecorationProviderParams,
   FsPathParams,
   FsWriteFileParams,
+  FsWatchParams,
   GitOpParams,
+  ProcessSpawnParams,
+  ProcessHandleRefParams,
 } from "../../../shared/types/pluginDevWorker.js";
 import type { PluginDevWorkerHost } from "./PluginDevWorkerHost.js";
 
@@ -57,8 +64,12 @@ export interface PluginDevWorkerMainBridgeDeps {
    * Fires on EVERY activation outcome — the initial activation and each reload.
    * Lets the owner keep the provenance `loadError` in sync across reloads (the
    * first-activation promise settles once and can't observe later outcomes).
+   * `stack` carries the worker's `activate-error` stack so the provenance record
+   * keeps it (parity with the old in-process `toPluginLoadError` path).
    */
-  onActivationResult?: (result: { ok: true } | { ok: false; error: string }) => void;
+  onActivationResult?: (
+    result: { ok: true } | { ok: false; error: string; stack?: string }
+  ) => void;
 }
 
 interface PendingInvoke {
@@ -73,7 +84,7 @@ export class PluginDevWorkerMainBridge {
   private readonly getCapabilities: () => readonly string[];
   private readonly clearPriorRegistrations: () => void;
   private readonly onActivationResult?: (
-    result: { ok: true } | { ok: false; error: string }
+    result: { ok: true } | { ok: false; error: string; stack?: string }
   ) => void;
 
   private disposed = false;
@@ -91,6 +102,11 @@ export class PluginDevWorkerMainBridge {
    * host, keyed by provider id. Torn down on reload and dispose so a reloaded
    * generation re-registers cleanly. */
   private readonly providerDisposers = new Map<string, () => void>();
+  /** Live handles for processes the worker spawned via `host.process.spawn`,
+   * keyed by the host-assigned handle id. The worker addresses `kill` /
+   * `restart` / `onExit` / `onCrash` by id; all are killed on reload and dispose
+   * (a reloaded generation re-spawns from its fresh module realm). */
+  private readonly processHandles = new Map<string, PluginProcessHandle>();
 
   /** First-activation gate. Resolved on `activated`, rejected on activate/crash
    * errors. Subsequent reload activations don't re-await this. */
@@ -111,6 +127,12 @@ export class PluginDevWorkerMainBridge {
       this.activationResolve = resolve;
       this.activationReject = reject;
     });
+    // Guard the first-activation promise so a rejection that lands before any
+    // consumer awaited it (dispose / crash-loop right after construction) can't
+    // surface as an unhandled rejection. The real consumer still observes the
+    // rejection via `waitForActivation()`. Mirrors `PluginDevWorkerHost`'s
+    // `readyPromise.catch` guard.
+    this.activationPromise.catch(() => undefined);
 
     this.workerHost.on("worker-message", this.onWorkerMessage);
     this.workerHost.on("reloading", this.onReloading);
@@ -137,6 +159,7 @@ export class PluginDevWorkerMainBridge {
     }
     this.subscriptionDisposers.clear();
     this.disposeProviders();
+    this.disposeProcessHandles();
     this.abortAllHostCalls();
     for (const pending of this.pendingInvokes.values()) {
       pending.reject(new Error("Plugin dev worker bridge disposed"));
@@ -169,6 +192,19 @@ export class PluginDevWorkerMainBridge {
     this.providerDisposers.clear();
   }
 
+  /** Kill every process the worker spawned (worker is going away or reloading —
+   * a fresh generation re-spawns from its own module realm). */
+  private disposeProcessHandles(): void {
+    for (const handle of this.processHandles.values()) {
+      try {
+        handle.kill();
+      } catch {
+        // best-effort
+      }
+    }
+    this.processHandles.clear();
+  }
+
   private onReloading = (): void => {
     // The new worker generation will re-register from scratch; drop the prior
     // generation's activate-time registrations and tear down subscriptions so
@@ -184,6 +220,7 @@ export class PluginDevWorkerMainBridge {
     }
     this.subscriptionDisposers.clear();
     this.disposeProviders();
+    this.disposeProcessHandles();
     this.abortAllHostCalls();
     for (const pending of this.pendingInvokes.values()) {
       pending.reject(new Error("Plugin reloaded before invocation completed"));
@@ -219,7 +256,7 @@ export class PluginDevWorkerMainBridge {
         logger.error(`[${this.pluginId}] activate() failed: ${msg.error}`, {
           stack: msg.stack,
         });
-        this.onActivationResult?.({ ok: false, error: msg.error });
+        this.onActivationResult?.({ ok: false, error: msg.error, stack: msg.stack });
         this.rejectActivation(new Error(msg.error));
         return;
       case "error":
@@ -358,6 +395,62 @@ export class PluginDevWorkerMainBridge {
         return this.host.fs.readdir((params as FsPathParams).path, { signal });
       case "fs.stat":
         return this.host.fs.stat((params as FsPathParams).path, { signal });
+      case "fs.watch": {
+        const p = params as FsWatchParams;
+        const generation = this.reloadGeneration;
+        // The real watcher lives in main; relay each change as a
+        // subscription-event keyed by the worker-supplied subscription id.
+        const dispose = await this.host.fs.watch(
+          p.paths,
+          (changedPath) => {
+            if (this.disposed) return;
+            this.workerHost.send({
+              type: "subscription-event",
+              subscriptionId: p.subscriptionId,
+              payload: changedPath,
+            });
+          },
+          { signal }
+        );
+        // Disposed or reloaded while the watch was settling — tear it down
+        // rather than leak it past the cleanup pass that already ran.
+        if (this.disposed || generation !== this.reloadGeneration) {
+          try {
+            dispose();
+          } catch {
+            // best-effort
+          }
+          return undefined;
+        }
+        this.subscriptionDisposers.set(p.subscriptionId, dispose);
+        return undefined;
+      }
+      case "process.spawn": {
+        const p = params as ProcessSpawnParams;
+        const generation = this.reloadGeneration;
+        const handle = await this.host.process.spawn(p.command, p.options);
+        // Disposed or reloaded while the spawn was settling — the worker that
+        // requested it is gone; kill the orphan rather than leak it.
+        if (this.disposed || generation !== this.reloadGeneration) {
+          try {
+            handle.kill();
+          } catch {
+            // best-effort
+          }
+          return { id: handle.id };
+        }
+        this.processHandles.set(handle.id, handle);
+        return { id: handle.id };
+      }
+      case "process.restart": {
+        const p = params as ProcessHandleRefParams;
+        const handle = this.processHandles.get(p.processId);
+        if (!handle) {
+          throw new Error(`No live process "${p.processId}" to restart`);
+        }
+        await handle.restart();
+        return undefined;
+      }
       case "git.status":
         return this.host.git.status((params as GitOpParams).worktreePath, { signal });
       case "git.diff": {
@@ -504,6 +597,13 @@ export class PluginDevWorkerMainBridge {
         this.host.logger[level](p.message, p.fields);
         return;
       }
+      case "process.kill": {
+        // `PluginProcessHandle.kill()` is sync (no reply) — fire-and-forget. A
+        // no-op if the handle already exited or was torn down on reload.
+        const { processId } = params as ProcessHandleRefParams;
+        this.processHandles.get(processId)?.kill();
+        return;
+      }
       default:
         logger.warn(`[${this.pluginId}] unknown host-notify method "${method}"`);
     }
@@ -513,11 +613,14 @@ export class PluginDevWorkerMainBridge {
     msg: Extract<PluginWorkerToHostMessage, { type: "subscribe" }>
   ): Promise<void> {
     const { subscriptionId, kind } = msg;
+    const generation = this.reloadGeneration;
     const push = (payload: unknown): void => {
-      if (this.disposed) return;
+      // Drop events queued before a reload tore this subscription down: the new
+      // worker generation resets its requestId/subscriptionId counter, so a
+      // stale event could otherwise misdeliver to a same-id new subscription.
+      if (this.disposed || generation !== this.reloadGeneration) return;
       this.workerHost.send({ type: "subscription-event", subscriptionId, payload });
     };
-    const generation = this.reloadGeneration;
     try {
       let dispose: () => void;
       if (kind === "active-worktree") {
@@ -528,6 +631,23 @@ export class PluginDevWorkerMainBridge {
         });
       } else if (kind === "agent-state") {
         dispose = await this.host.onDidChangeAgentState((snapshot) => push(snapshot));
+      } else if (kind === "process-exit" || kind === "process-crash") {
+        if (!msg.processId) {
+          logger.warn(`[${this.pluginId}] ${kind} subscribe missing processId`);
+          return;
+        }
+        const handle = this.processHandles.get(msg.processId);
+        if (!handle) {
+          // The handle was killed (reload/dispose) between spawn and subscribe.
+          logger.warn(
+            `[${this.pluginId}] ${kind} subscribe for unknown process "${msg.processId}"`
+          );
+          return;
+        }
+        dispose =
+          kind === "process-exit"
+            ? handle.onExit((info) => push(info))
+            : handle.onCrash((info) => push(info));
       } else {
         // settings
         if (!msg.key) {

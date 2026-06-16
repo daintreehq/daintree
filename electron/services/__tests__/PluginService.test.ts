@@ -131,6 +131,7 @@ const devWorkerMock = vi.hoisted(() => {
     pluginId: string;
     pluginDir: string;
     bundlePath: string;
+    mode?: "dev" | "prod";
   }
   const instances: MockPluginDevWorkerHost[] = [];
   const bridges: MockPluginDevWorkerMainBridge[] = [];
@@ -146,11 +147,56 @@ const devWorkerMock = vi.hoisted(() => {
       instances.push(this);
     }
   }
+  // The real worker forks a child that imports the plugin bundle, runs
+  // `activate(host)`, and reports the outcome via `onActivationResult`. vitest
+  // can't fork, so the mock bridge does that import + activate in-process
+  // against the real host and drives the same callback — exercising
+  // PluginService's activation/provenance wiring without a worker. (#10526)
+  interface MockBridgeDeps {
+    workerHost: { opts: DevWorkerOpts };
+    host: unknown;
+    onActivationResult?: (
+      result: { ok: true } | { ok: false; error: string; stack?: string }
+    ) => void;
+  }
   class MockPluginDevWorkerMainBridge {
-    deps: unknown;
-    waitForActivation = vi.fn(async () => undefined);
-    dispose = vi.fn();
-    constructor(deps: unknown) {
+    deps: MockBridgeDeps;
+    private cleanup: (() => void) | null = null;
+    waitForActivation = vi.fn(async () => {
+      const bundlePath = this.deps.workerHost?.opts?.bundlePath;
+      const onResult = this.deps.onActivationResult;
+      if (!bundlePath) {
+        onResult?.({ ok: true });
+        return;
+      }
+      const { pathToFileURL } = await import("node:url");
+      const { formatErrorMessage } = await import("../../../shared/utils/errorMessage.js");
+      try {
+        const mod = (await import(pathToFileURL(bundlePath).href)) as { activate?: unknown };
+        if (typeof mod.activate === "function") {
+          const result = await (mod.activate as (h: unknown) => unknown)(this.deps.host);
+          if (typeof result === "function") this.cleanup = result as () => void;
+        }
+        onResult?.({ ok: true });
+      } catch (err) {
+        // Mirror the worker entry's failure shaping (formatErrorMessage + raw
+        // Error stack) so provenance records match the real path.
+        onResult?.({
+          ok: false,
+          error: formatErrorMessage(err, "activate() threw"),
+          stack: err instanceof Error ? err.stack : undefined,
+        });
+      }
+    });
+    dispose = vi.fn(() => {
+      try {
+        this.cleanup?.();
+      } catch {
+        // best-effort
+      }
+      this.cleanup = null;
+    });
+    constructor(deps: MockBridgeDeps) {
       this.deps = deps;
       bridges.push(this);
     }
@@ -8171,16 +8217,16 @@ describe("Deferred activation — activatePlugin", () => {
     }
   });
 
-  it("import() with a hanging top-level await times out instead of stalling forever", async () => {
+  it("a hanging activation times out instead of stalling forever", async () => {
     const pluginDir = path.join(tmpDir, "hanging-import");
     await fs.mkdir(pluginDir);
     await fs.writeFile(
       path.join(pluginDir, "plugin.json"),
       JSON.stringify({ name: "acme.hanging-import", version: "1.0.0", main: "main.mjs" })
     );
-    // Top-level `await new Promise(() => {})` hangs forever. Without the
-    // import-timeout guard this would pin `_doActivate` and any
-    // `Promise.allSettled` fan-out behind it.
+    // Top-level `await new Promise(() => {})` hangs the worker's import forever.
+    // The worker is isolated (it can't stall main), but the activation gate must
+    // still time out so `Promise.allSettled` startup fan-outs aren't pinned.
     await fs.writeFile(
       path.join(pluginDir, "main.mjs"),
       "await new Promise(() => {}); export function activate() {}"
@@ -8190,12 +8236,12 @@ describe("Deferred activation — activatePlugin", () => {
     try {
       const service = new PluginService(tmpDir);
       await service.initialize();
-      // The promise resolves (it doesn't reject — `activatePlugin` swallows)
-      // and the timeout error is persisted as the loadError so diagnostics
+      // The promise resolves (it doesn't reject — `activatePlugin` swallows) and
+      // the activation-timeout error is persisted as the loadError so diagnostics
       // surface why the plugin never came up.
       await service.activatePlugin("acme.hanging-import");
       const record = service.getPluginLoadError("acme.hanging-import");
-      expect(record?.message).toContain("timed out");
+      expect(record?.message).toContain("did not settle");
     } finally {
       errorSpy.mockRestore();
     }
@@ -8637,11 +8683,12 @@ describe("dev-mode hot reload (#9304)", () => {
     expect(devWorkerMock.instances).toHaveLength(1);
     expect(devWorkerMock.instances[0].opts.pluginId).toBe("acme.dev");
     expect(devWorkerMock.instances[0].opts.bundlePath).toMatch(/dist[/\\]index\.js$/);
+    expect(devWorkerMock.instances[0].opts.mode).toBe("dev");
     expect(devWorkerMock.instances[0].start).toHaveBeenCalledTimes(1);
     expect(devWorkerMock.bridges[0].waitForActivation).toHaveBeenCalledTimes(1);
   });
 
-  it("does not fork a worker for a plugin without a marker", async () => {
+  it("forks a prod-mode worker for a plugin without a dev marker (#10526)", async () => {
     const dir = path.join(tmpDir, "prod-plugin");
     await fs.mkdir(path.join(dir, "dist"), { recursive: true });
     await fs.writeFile(
@@ -8653,9 +8700,40 @@ describe("dev-mode hot reload (#9304)", () => {
     await service.initialize();
     await service.activatePlugin("acme.prod");
 
-    expect(devWorkerMock.instances).toHaveLength(0);
+    // Every user plugin runs out-of-process now: a prod plugin forks the same
+    // worker as a dev plugin, but in "prod" mode (no hot-reload file watcher).
+    expect(devWorkerMock.instances).toHaveLength(1);
+    expect(devWorkerMock.instances[0].opts.pluginId).toBe("acme.prod");
+    expect(devWorkerMock.instances[0].opts.mode).toBe("prod");
     const info = service.listPlugins().find((p) => p.manifest.name === "acme.prod");
     expect(info?.devMode).toBe(false);
+  });
+
+  it("activates a built-in plugin in-process, NOT via a worker (#10526)", async () => {
+    // Built-ins stay on the in-process loader: they're trusted app-bundled code
+    // that may use synchronous host surfaces (registerForgeProvider) which can't
+    // cross the worker's async port — routing them through it would break forge.
+    const builtinRoot = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-builtin-route-"));
+    try {
+      const dir = path.join(builtinRoot, "daintree.builtin");
+      await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+      await fs.writeFile(
+        path.join(dir, "plugin.json"),
+        JSON.stringify({ name: "daintree.builtin", version: "1.0.0", main: "dist/index.js" })
+      );
+      await fs.writeFile(path.join(dir, "dist", "index.js"), "export function activate() {}");
+
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinRoot });
+      await service.initialize();
+      await service.activatePlugin("daintree.builtin");
+
+      // No worker forked for the built-in; it activated via the in-process loader.
+      expect(devWorkerMock.instances).toHaveLength(0);
+      const info = service.listPlugins().find((p) => p.manifest.name === "daintree.builtin");
+      expect(info?.isBuiltin).toBe(true);
+    } finally {
+      await fs.rm(builtinRoot, { recursive: true, force: true });
+    }
   });
 
   it("disposes the worker and bridge when the dev plugin is unloaded", async () => {
@@ -8708,7 +8786,7 @@ describe("dev-mode hot reload (#9304)", () => {
     // worker re-registers. Manifest commands must survive — only imperative
     // (host.registerAction) actions are dropped.
     const clearPriorRegistrations = (
-      devWorkerMock.bridges[0].deps as { clearPriorRegistrations: () => void }
+      devWorkerMock.bridges[0].deps as unknown as { clearPriorRegistrations: () => void }
     ).clearPriorRegistrations;
     clearPriorRegistrations();
 

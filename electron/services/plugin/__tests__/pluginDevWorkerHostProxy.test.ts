@@ -132,9 +132,157 @@ describe("PluginDevWorkerHostProxy file decoration providers", () => {
     const { proxy, sent } = makeProxy();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const dispose = await proxy.host.registerForgeProvider({ id: "gh" } as any, {} as any);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("not supported in dev mode"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("is not supported"));
     expect(sent.find((m) => m.type === "host-notify")).toBeUndefined();
     expect(typeof dispose).toBe("function");
     expect(dispose()).toBeUndefined();
+  });
+});
+
+/** Reply to the most recent pending `host-call` of `method` with a success result. */
+function resolveCall(proxy: any, sent: any[], method: string, result: unknown): void {
+  const call = [...sent].reverse().find((m) => m.type === "host-call" && m.method === method);
+  proxy.handleMessage({ type: "host-result", requestId: call.requestId, ok: true, result });
+}
+
+describe("PluginDevWorkerHostProxy host.process (#10526)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  async function spawnHandle(): Promise<{ proxy: any; sent: any[]; handle: any }> {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.process.spawn("node", { args: ["x.js"] });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "process.spawn");
+    expect(call).toMatchObject({ params: { command: "node", options: { args: ["x.js"] } } });
+    resolveCall(proxy, sent, "process.spawn", { id: "p1" });
+    const handle = await promise;
+    return { proxy, sent, handle };
+  }
+
+  it("relays spawn over a host-call and returns a handle addressed by id", async () => {
+    const { handle } = await spawnHandle();
+    expect(handle.id).toBe("p1");
+  });
+
+  it("kill posts a fire-and-forget process.kill notify keyed by id", async () => {
+    const { sent, handle } = await spawnHandle();
+    handle.kill();
+    expect(sent.find((m) => m.type === "host-notify" && m.method === "process.kill")).toMatchObject(
+      {
+        params: { processId: "p1" },
+      }
+    );
+  });
+
+  it("restart awaits a process.restart host-call", async () => {
+    const { proxy, sent, handle } = await spawnHandle();
+    const restarted = handle.restart();
+    const call = sent.find((m) => m.type === "host-call" && m.method === "process.restart");
+    expect(call).toMatchObject({ params: { processId: "p1" } });
+    resolveCall(proxy, sent, "process.restart", undefined);
+    await expect(restarted).resolves.toBeUndefined();
+  });
+
+  it("onExit opens a processId-scoped subscription and delivers exit events", async () => {
+    const { proxy, sent, handle } = await spawnHandle();
+    const onExit = vi.fn();
+    const dispose = handle.onExit(onExit);
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "process-exit");
+    expect(sub).toMatchObject({ processId: "p1" });
+
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: { exitCode: 0, signal: null },
+    });
+    expect(onExit).toHaveBeenCalledWith({ exitCode: 0, signal: null });
+
+    dispose();
+    expect(
+      sent.find((m) => m.type === "unsubscribe" && m.subscriptionId === sub.subscriptionId)
+    ).toBeDefined();
+  });
+
+  it("onCrash opens a process-crash subscription", async () => {
+    const { sent, handle } = await spawnHandle();
+    const onCrash = vi.fn();
+    handle.onCrash(onCrash);
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "process-crash");
+    expect(sub).toMatchObject({ processId: "p1" });
+  });
+
+  it("propagates a spawn rejection (e.g. missing shell:exec capability)", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.process.spawn("node");
+    const call = sent.find((m) => m.type === "host-call" && m.method === "process.spawn");
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error: "PERMISSION_REQUIRED: shell:exec",
+    });
+    await expect(promise).rejects.toThrow(/PERMISSION_REQUIRED/);
+  });
+});
+
+describe("PluginDevWorkerHostProxy host.fs.watch (#10526)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("relays watch as a host-call, delivers change events, and disposes via unsubscribe", async () => {
+    const { proxy, sent } = makeProxy();
+    const onChange = vi.fn();
+    const promise = proxy.host.fs.watch(["/repo/a.ts"], onChange);
+    const call = sent.find((m) => m.type === "host-call" && m.method === "fs.watch");
+    expect(call.params.paths).toEqual(["/repo/a.ts"]);
+    const subscriptionId = call.params.subscriptionId;
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: true,
+      result: undefined,
+    });
+    const dispose = await promise;
+
+    proxy.handleMessage({ type: "subscription-event", subscriptionId, payload: "/repo/a.ts" });
+    expect(onChange).toHaveBeenCalledWith("/repo/a.ts");
+
+    dispose();
+    expect(
+      sent.find((m) => m.type === "unsubscribe" && m.subscriptionId === subscriptionId)
+    ).toBeDefined();
+  });
+
+  it("rejects when the host watch fails and stops delivering events", async () => {
+    const { proxy, sent } = makeProxy();
+    const onChange = vi.fn();
+    const promise = proxy.host.fs.watch(["/nope"], onChange);
+    const call = sent.find((m) => m.type === "host-call" && m.method === "fs.watch");
+    const subscriptionId = call.params.subscriptionId;
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error: "PERMISSION_REQUIRED: fs:project-read",
+    });
+    await expect(promise).rejects.toThrow(/PERMISSION_REQUIRED/);
+
+    // The change callback was removed on rejection — a late event is a no-op.
+    proxy.handleMessage({ type: "subscription-event", subscriptionId, payload: "/nope" });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("PluginDevWorkerHostProxy host-call post failure (#10526)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("rejects (and drops the pending call) when post throws a DataCloneError", async () => {
+    const post = vi.fn(() => {
+      throw new Error("DataCloneError: value could not be cloned");
+    });
+    const proxy = new PluginDevWorkerHostProxy("acme.demo", post);
+    await expect(proxy.host.getWorktrees()).rejects.toThrow(/could not be cloned/);
+    // The proxy isn't wedged — the failed call posted exactly once and rejected.
+    expect(post).toHaveBeenCalledTimes(1);
   });
 });

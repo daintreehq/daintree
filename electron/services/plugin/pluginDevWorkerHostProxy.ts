@@ -32,6 +32,7 @@ import type {
   PluginFsStat,
   PluginGitStatus,
   PluginGitCommitResult,
+  PluginProcessHandle,
 } from "../../../shared/types/plugin.js";
 import type {
   FileDecorationProviderDescriptor,
@@ -271,7 +272,16 @@ export class PluginDevWorkerHostProxy {
         };
         signal.addEventListener("abort", onAbort, { once: true });
       }
-      this.post({ type: "host-call", requestId, method, params });
+      try {
+        this.post({ type: "host-call", requestId, method, params });
+      } catch (err) {
+        // A non-structured-clone-safe `params` makes `postMessage` throw
+        // (DataCloneError). Drop the pending entry so it doesn't leak until
+        // dispose, then reject the caller.
+        this.pendingCalls.delete(requestId);
+        cleanup();
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
     });
   }
 
@@ -438,16 +448,17 @@ export class PluginDevWorkerHostProxy {
       },
       registerForgeProvider: (descriptor: ForgeProviderDescriptor, _impl: ForgeProviderImpl) => {
         this.assertActivationOpen("registerForgeProvider");
-        // Forge providers can't run from the dev worker: `ForgeProviderImpl`'s
+        // Forge providers can't run from the worker: `ForgeProviderImpl`'s
         // required `parseRemote` (the routing gate), URL builders, and
         // `classifyPushError` are SYNCHRONOUS — the host calls them and uses the
-        // return value immediately — but every dev-worker host call is async
-        // over this MessagePort. A partial async-only proxy would be worse than
+        // return value immediately — but every worker host call is async over
+        // this MessagePort. A partial async-only proxy would be worse than
         // honest: the provider would never become routable because
-        // `parseRemote` resolves to a Promise. Package + install to test forge
-        // providers; a fix needs the forge API's sync surface to change.
+        // `parseRemote` resolves to a Promise. This is the ONE permanent
+        // dev/prod-identical gap — both run in the worker, so neither supports
+        // it; a fix needs the forge API's sync surface to change.
         console.warn(
-          `[plugin-dev:${this.pluginId}] registerForgeProvider("${descriptor?.id}") is not supported in dev mode — forge providers require synchronous host methods (parseRemote, URL builders) that can't cross the dev worker's async boundary. Package + install the plugin to test forge providers.`
+          `[plugin:${this.pluginId}] registerForgeProvider("${descriptor?.id}") is not supported — forge providers require synchronous host methods (parseRemote, URL builders) that can't cross the worker's async boundary.`
         );
         return Promise.resolve(() => {});
       },
@@ -529,24 +540,22 @@ export class PluginDevWorkerHostProxy {
         error: (message, fields) => this.notify("logger.error", { message, fields }),
       },
       process: {
-        // Managed child processes can't run from the dev worker. The
-        // `PluginProcessHandle` returned by spawn exposes SYNCHRONOUS `kill()`
-        // and registers `onExit`/`onCrash` callbacks the host invokes directly
-        // — none of that survives the structured-clone async MessagePort. The
-        // streaming would also fan out from main, not the worker. Mirror the
-        // forge-provider stance: reject honestly in dev mode rather than ship a
-        // half-working proxy. Package + install to exercise host.process.
-        spawn: (_command, _options) => {
-          const message = `[plugin-dev:${this.pluginId}] host.process.spawn is not supported in dev mode — managed processes use synchronous handle methods (kill, onExit/onCrash callbacks) that can't cross the dev worker's async boundary. Package + install the plugin to test host.process.`;
-          console.warn(message);
-          return Promise.reject(new Error(message));
+        // The real `PluginProcessHandle` lives in main (PluginProcessManager);
+        // `spawn` relays over the port and returns a proxy handle whose id
+        // addresses `kill` / `restart` and the exit/crash subscriptions. `kill`
+        // is sync (a fire-and-forget notify); `restart` awaits the host. Late
+        // exit/crash events ride the existing subscription-event channel.
+        spawn: async (command, options) => {
+          const { id } = await this.call<{ id: string }>("process.spawn", { command, options });
+          return this.buildProcessHandle(id);
         },
       },
       // host.fs request/response methods are fully async, so they relay over the
       // port to the real (contained, capability-gated) host like settings/get.
-      // `watch` is the exception — it returns a disposer and fires a callback
-      // back, a subscription whose teardown semantics don't survive a whole-
-      // worker reload cleanly; reject it honestly in dev mode (mirrors process).
+      // `watch` is a host-call that BOTH wires the watcher (rejecting on a
+      // missing capability / out-of-scope path, preserving the in-process
+      // contract) and opens a subscription whose change events arrive over the
+      // subscription-event channel keyed by the same id.
       fs: {
         readFile: (filePath, options) =>
           this.call<string>("fs.readFile", { path: filePath }, options?.signal),
@@ -556,10 +565,24 @@ export class PluginDevWorkerHostProxy {
           this.call<PluginFsDirEntry[]>("fs.readdir", { path: dirPath }, options?.signal),
         stat: (targetPath, options) =>
           this.call<PluginFsStat>("fs.stat", { path: targetPath }, options?.signal),
-        watch: (_paths, _callback, _options) => {
-          const message = `[plugin-dev:${this.pluginId}] host.fs.watch is not supported in dev mode — the watcher subscription's disposer and change callback can't survive a whole-worker reload. Package + install the plugin to test host.fs.watch.`;
-          console.warn(message);
-          return Promise.reject(new Error(message));
+        watch: async (paths, callback, options) => {
+          const subscriptionId = `s${this.nextId++}`;
+          // Register the change callback before the call so an event can't race
+          // ahead of the subscription map; tear it down if the watch rejects.
+          this.subscriptions.set(subscriptionId, (payload) => callback(payload as string));
+          try {
+            await this.call<void>("fs.watch", { subscriptionId, paths }, options?.signal);
+          } catch (err) {
+            this.subscriptions.delete(subscriptionId);
+            throw err;
+          }
+          let disposed = false;
+          return () => {
+            if (disposed) return;
+            disposed = true;
+            this.subscriptions.delete(subscriptionId);
+            this.post({ type: "unsubscribe", subscriptionId });
+          };
         },
       },
       git: {
@@ -611,14 +634,49 @@ export class PluginDevWorkerHostProxy {
     debounceMs?: number
   ): () => void {
     const subscriptionId = `s${this.nextId++}`;
-    this.subscriptions.set(subscriptionId, callback);
-    this.post({ type: "subscribe", subscriptionId, kind, key, scope, debounceMs });
+    return this.openSubscription(
+      { type: "subscribe", subscriptionId, kind, key, scope, debounceMs },
+      callback
+    );
+  }
+
+  /** Register `callback`, post the (fully-formed) subscribe message, and return
+   * an idempotent disposer that drops the callback and posts `unsubscribe`. */
+  private openSubscription(
+    message: Extract<PluginWorkerToHostMessage, { type: "subscribe" }>,
+    callback: (payload: unknown) => void
+  ): () => void {
+    this.subscriptions.set(message.subscriptionId, callback);
+    this.post(message);
     let disposed = false;
     return () => {
       if (disposed) return;
       disposed = true;
-      this.subscriptions.delete(subscriptionId);
-      this.post({ type: "unsubscribe", subscriptionId });
+      this.subscriptions.delete(message.subscriptionId);
+      this.post({ type: "unsubscribe", subscriptionId: message.subscriptionId });
+    };
+  }
+
+  /** Build a worker-side {@link PluginProcessHandle} proxy for a process the host
+   * spawned on our behalf, addressing it by the host-assigned `id`. */
+  private buildProcessHandle(id: string): PluginProcessHandle {
+    const subscribeLifecycle = (
+      kind: "process-exit" | "process-crash",
+      callback: (info: { exitCode: number | null; signal: string | null }) => void
+    ): (() => void) =>
+      this.openSubscription(
+        { type: "subscribe", subscriptionId: `s${this.nextId++}`, kind, processId: id },
+        (payload) => callback(payload as { exitCode: number | null; signal: string | null })
+      );
+    return {
+      id,
+      kill: () => {
+        // Sync in the public contract — fire-and-forget over the port.
+        this.notify("process.kill", { processId: id });
+      },
+      restart: () => this.call<void>("process.restart", { processId: id }),
+      onExit: (callback) => subscribeLifecycle("process-exit", callback),
+      onCrash: (callback) => subscribeLifecycle("process-crash", callback),
     };
   }
 }

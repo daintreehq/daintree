@@ -707,13 +707,14 @@ export class PluginService {
    */
   private hostGitFactory: HostGitFactory | undefined = undefined;
   /**
-   * Live dev-mode hot-reload workers, keyed by pluginId (#9304). Each holds the
-   * forked `utilityProcess` lifecycle, the message bridge to the real host, and
-   * the host `revoke` to call on unload. Disposed via the {@link cleanupMap}
-   * disposer registered at activation, so `unloadPlugin` tears the worker down
-   * through its normal cascade.
+   * Live plugin workers, keyed by pluginId (#9304, #10526). Every user-installed
+   * plugin (dev and prod) runs in a forked `utilityProcess`; built-ins activate
+   * in-process and are absent here. Each entry holds that lifecycle, the message
+   * bridge to the real host, and the host `revoke` to call on unload. Disposed
+   * via the {@link cleanupMap} disposer registered at activation, so
+   * `unloadPlugin` tears the worker down through its normal cascade.
    */
-  private devWorkers = new Map<
+  private pluginWorkers = new Map<
     string,
     { workerHost: PluginDevWorkerHost; bridge: PluginDevWorkerMainBridge; revoke: () => void }
   >();
@@ -1543,13 +1544,24 @@ export class PluginService {
   private async _doActivate(pluginId: string): Promise<void> {
     const plugin = this.plugins.get(pluginId);
     if (!plugin || !plugin.resolvedMain) return;
-    // Dev-mode plugins run inside a hot-reload worker instead of the in-process
-    // import() loader (#9304).
-    if (plugin.devMode) {
-      return this.activateViaDevWorker(pluginId, plugin);
+    // User-installed plugins activate inside a `utilityProcess.fork` worker
+    // (#10526). Dev plugins hot-reload on each `dist/index.js` rebuild; packaged
+    // prod plugins run the same worker without the file watcher. Out-of-process
+    // gives each a fresh module realm per lifecycle — so uninstall/disable/reload
+    // truly reclaims its module state by killing the worker (no ESM cache leak)
+    // — plus OS-level crash isolation.
+    //
+    // Built-in plugins stay on the in-process `import()` loader: they are trusted
+    // app-bundled code, never uninstalled, and never dev-symlinked, so the
+    // unload/divergence problems don't apply. Crucially, the GitHub built-in's
+    // `host.registerForgeProvider` binds a forge impl whose `parseRemote` and URL
+    // builders are SYNCHRONOUS — they can't cross the worker's async MessagePort
+    // (#8879), so routing built-ins through the worker would silently break forge.
+    if (!plugin.isBuiltin) {
+      return this.activateViaWorker(pluginId, plugin);
     }
     try {
-      // Bound the dynamic import — a plugin with a hanging top-level await
+      // Bound the dynamic import — a built-in with a hanging top-level await
       // would otherwise pin this promise forever and stall `Promise.allSettled`
       // fan-outs (file-decoration scope, startup activation).
       const mod = (await this.runImport(pluginId, plugin.resolvedMain)) as {
@@ -1562,9 +1574,8 @@ export class PluginService {
           const cleanup = await this.runActivate(pluginId, activate, host);
           // Guard against an unload that ran concurrently with this activation:
           // by the time `runActivate` resolves, `unloadPlugin` may have already
-          // cleared `cleanupMap` — writing a cleanup back after that fires
-          // would leak (e.g. a setInterval the plugin set up in activate()
-          // would never be cleared). Drop it on the floor instead.
+          // cleared `cleanupMap` — writing a cleanup back after that fires would
+          // leak. Drop it on the floor instead (#9428).
           if (typeof cleanup === "function" && this.plugins.has(pluginId)) {
             this.cleanupMap.set(pluginId, cleanup);
           }
@@ -1572,52 +1583,45 @@ export class PluginService {
           revoke();
         }
       }
-      // Successful activation (or a main with no activate fn) clears any
-      // diagnostic record left over from a prior failed attempt — persisted
-      // to the provenance record so it survives a host restart. Plugins with
-      // a load-time error that is independent of `main` activation (e.g. a
-      // manifest command id collision, #9281) are exempted: their diagnostic
-      // is a manifest-level fact that doesn't go away when `main` activates.
-      if (!plugin.isBuiltin && !this.pluginsWithLoadTimeErrors.has(pluginId)) {
-        this.records.upsertInstalledRecord(pluginId, { loadError: null });
-      }
     } catch (err) {
-      const loadError = toPluginLoadError(err);
-      if (!plugin.isBuiltin) {
-        this.records.upsertInstalledRecord(pluginId, { loadError });
-      }
+      // Built-ins don't carry a provenance record (they're not user-installed),
+      // so a failure is logged but not persisted — mirrors the prior loader.
       console.error(`[PluginService] Failed to load main entry for ${pluginId}:`, err);
       throw err;
     }
   }
 
   /**
-   * Activate a dev-mode plugin inside a hot-reload worker (#9304). The plugin's
-   * code runs in a `utilityProcess.fork` child; the real host (from
-   * {@link createHost}) is bridged to the worker over MessagePort. The worker
-   * watches `dist/index.js` and respawns on every rebuild, so module-scope state
-   * never leaks across reloads (the robust fix for the Vite ESM cache leak).
+   * Activate a plugin inside a `utilityProcess.fork` worker (#9304, #10526).
+   * The plugin's code runs in the child; the real host (from {@link createHost})
+   * is bridged to the worker over MessagePort. Dev plugins (`mode: "dev"`) watch
+   * `dist/index.js` and respawn on every rebuild, so module-scope state never
+   * leaks across reloads (the robust fix for the Vite ESM cache leak); prod
+   * plugins (`mode: "prod"`) run the same worker without the watcher, getting a
+   * fresh module realm per load/unload — uninstall truly reclaims their memory.
    *
-   * The host is left un-revoked for the worker's lifetime — unlike the
-   * in-process path, the worker legitimately re-registers on every reload, and
-   * the activation-window contract is enforced worker-side by its own proxy.
+   * The host is left un-revoked for the worker's lifetime: the worker
+   * legitimately re-registers on every reload, post-activation host calls
+   * (dispatch, toast, spawn, fs.watch) keep relaying at runtime, and the
+   * activation-window contract is enforced worker-side by its own proxy.
    *
-   * A failed `activate()` is recorded but does NOT tear the worker down: the
+   * A failed `activate()` is recorded but does NOT tear the worker down: a dev
    * worker keeps watching so the author can fix the error and save to reload.
    * Only a fork failure (no worker at all) rejects.
    */
-  private async activateViaDevWorker(pluginId: string, plugin: LoadedPlugin): Promise<void> {
+  private async activateViaWorker(pluginId: string, plugin: LoadedPlugin): Promise<void> {
     if (!plugin.resolvedMain) return;
     // A re-activation while a worker is already live is a no-op — the worker
     // owns its own reload cycle; activatePlugin's idempotency normally prevents
     // this, but guard defensively against the unload-race re-entry path.
-    if (this.devWorkers.has(pluginId)) return;
+    if (this.pluginWorkers.has(pluginId)) return;
 
     const { host, revoke } = this.createHost(pluginId);
     const workerHost = new PluginDevWorkerHost({
       pluginId,
       pluginDir: plugin.dir,
       bundlePath: plugin.resolvedMain,
+      mode: plugin.devMode ? "dev" : "prod",
     });
     const bridge = new PluginDevWorkerMainBridge({
       pluginId,
@@ -1639,6 +1643,7 @@ export class PluginService {
       // and a freshly-introduced one is recorded — the first-activation promise
       // alone can't see post-reload outcomes.
       onActivationResult: (result) => {
+        lastActivationOk = result.ok;
         if (plugin.isBuiltin) return;
         if (result.ok) {
           if (!this.pluginsWithLoadTimeErrors.has(pluginId)) {
@@ -1646,14 +1651,20 @@ export class PluginService {
           }
         } else {
           this.records.upsertInstalledRecord(pluginId, {
-            loadError: { message: result.error, at: Date.now() },
+            loadError: { message: result.error, stack: result.stack, at: Date.now() },
           });
         }
       },
     });
 
+    // Tracks the most recent activate() outcome reported by the bridge. A failed
+    // first activation must not be cached as "activated" (#10523 retry-on-reopen):
+    // for a prod worker — which has no file watcher to auto-recover — we tear the
+    // worker down below so a re-open (Settings → Retry) re-forks and re-runs.
+    let lastActivationOk: boolean | undefined;
+
     const entry = { workerHost, bridge, revoke };
-    this.devWorkers.set(pluginId, entry);
+    this.pluginWorkers.set(pluginId, entry);
 
     // Register the teardown disposer up front so a concurrent unloadPlugin()
     // during fork/activation tears the worker down through the normal cascade.
@@ -1661,8 +1672,8 @@ export class PluginService {
       bridge.dispose();
       workerHost.dispose();
       revoke();
-      if (this.devWorkers.get(pluginId) === entry) {
-        this.devWorkers.delete(pluginId);
+      if (this.pluginWorkers.get(pluginId) === entry) {
+        this.pluginWorkers.delete(pluginId);
       }
     };
     this.cleanupMap.set(pluginId, cleanup);
@@ -1676,12 +1687,12 @@ export class PluginService {
       if (!plugin.isBuiltin) {
         this.records.upsertInstalledRecord(pluginId, { loadError });
       }
-      console.error(`[PluginService] Failed to start dev worker for ${pluginId}:`, err);
+      console.error(`[PluginService] Failed to start worker for ${pluginId}:`, err);
       throw err;
     }
 
     // If an unload raced the fork, the cleanup already disposed everything.
-    if (!this.plugins.has(pluginId) || this.devWorkers.get(pluginId) !== entry) {
+    if (!this.plugins.has(pluginId) || this.pluginWorkers.get(pluginId) !== entry) {
       cleanup();
       return;
     }
@@ -1689,10 +1700,10 @@ export class PluginService {
     // Bound the first activation so a plugin with a hanging `activate()` (or a
     // never-resolving top-level await in the worker) can't stall the
     // `Promise.allSettled` startup gate forever. On timeout the worker stays
-    // alive and watching — `onActivationResult` will clear/record the error if
-    // activation eventually settles or a reload follows. Mirrors the in-process
-    // ACTIVATE_TIMEOUT_MS contract. The provenance `loadError` is owned by
-    // `onActivationResult`; this catch only logs and unblocks startup.
+    // alive — `onActivationResult` will clear/record the error if activation
+    // eventually settles (or, for a dev worker, a reload follows). The
+    // provenance `loadError` is owned by `onActivationResult`; this catch only
+    // logs and unblocks startup.
     let timer: NodeJS.Timeout | undefined;
     try {
       await Promise.race([
@@ -1701,7 +1712,7 @@ export class PluginService {
           timer = setTimeout(() => {
             reject(
               new Error(
-                `Dev plugin "${pluginId}" activate() did not settle within ${ACTIVATE_TIMEOUT_MS}ms`
+                `Plugin "${pluginId}" activate() did not settle within ${ACTIVATE_TIMEOUT_MS}ms`
               )
             );
           }, ACTIVATE_TIMEOUT_MS);
@@ -1709,9 +1720,32 @@ export class PluginService {
         }),
       ]);
     } catch (err) {
-      console.error(`[PluginService] Dev plugin "${pluginId}" activation:`, err);
+      // The worker didn't settle in time — typically a hanging `activate()` or a
+      // never-resolving top-level await in the bundle. The worker stays alive in
+      // isolation (it can't stall the main process); record the timeout as the
+      // provenance loadError so diagnostics surface why the plugin never came up.
+      // If activation eventually settles (or a dev reload follows),
+      // `onActivationResult` overwrites this.
+      if (!plugin.isBuiltin) {
+        this.records.upsertInstalledRecord(pluginId, { loadError: toPluginLoadError(err) });
+      }
+      console.error(`[PluginService] Plugin "${pluginId}" activation:`, err);
     } finally {
       if (timer) clearTimeout(timer);
+    }
+
+    // A failed first activation must not be cached as a successful one
+    // (#10523): `activatePlugin` adds the id to `activatedPlugins` when this
+    // method resolves, which would short-circuit every later re-open. A dev
+    // worker keeps watching so the author can fix the error and save to reload —
+    // its retry path is the watcher, not a re-activation — so leave it alive.
+    // A prod worker has no watcher, so the only recovery is a re-open / Settings
+    // → Retry that re-runs `activatePlugin`; tear the failed worker down and
+    // rethrow so the in-flight entry is dropped and the id is never cached,
+    // mirroring the in-process loader's rethrow-on-activate-failure semantics.
+    if (lastActivationOk === false && !plugin.devMode) {
+      cleanup();
+      throw new Error(`Plugin "${pluginId}" activate() failed`);
     }
   }
 
@@ -3442,6 +3476,11 @@ export class PluginService {
     return dispose;
   }
 
+  /**
+   * Run a built-in plugin's `activate(host)` bounded by a timeout so a hanging
+   * activate can't stall the host. Used only for the in-process built-in path;
+   * user plugins activate in the worker (see {@link activateViaWorker}).
+   */
   private async runActivate(
     pluginId: string,
     activate: PluginActivate,

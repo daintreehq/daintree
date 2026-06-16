@@ -24,6 +24,7 @@ import type {
   PluginQuickPickOptions,
   PluginInputBoxOptions,
   PluginConfirmOptions,
+  PluginProcessSpawnOptions,
 } from "./plugin.js";
 
 /** Async host methods the worker proxy relays to main and awaits a reply for. */
@@ -40,13 +41,16 @@ export type PluginHostCallMethod =
   | "fs.writeFile"
   | "fs.readdir"
   | "fs.stat"
+  | "fs.watch"
   | "git.status"
   | "git.diff"
   | "git.add"
   | "git.commit"
   | "showQuickPick"
   | "showInputBox"
-  | "showConfirm";
+  | "showConfirm"
+  | "process.spawn"
+  | "process.restart";
 
 /** Fire-and-forget host methods (no reply needed). */
 export type PluginHostNotifyMethod =
@@ -59,14 +63,21 @@ export type PluginHostNotifyMethod =
   | "unregisterFileDecorationProvider"
   | "logger.info"
   | "logger.warn"
-  | "logger.error";
+  | "logger.error"
+  | "process.kill";
 
-/** Event subscriptions the worker proxy can open against the host. */
+/**
+ * Event subscriptions the worker proxy can open against the host. The
+ * `process-exit` / `process-crash` kinds wire a spawned process's lifecycle
+ * callbacks back to the worker, keyed by the handle id carried in `processId`.
+ */
 export type PluginWorkerSubscriptionKind =
   | "active-worktree"
   | "worktrees"
   | "settings"
-  | "agent-state";
+  | "agent-state"
+  | "process-exit"
+  | "process-crash";
 
 /**
  * Callback kinds main invokes back in the worker. `file-decoration-method`
@@ -167,6 +178,8 @@ export type PluginWorkerToHostMessage =
        * Ignored for other kinds. Mirrors `PluginHostSubscriptionOptions.debounceMs`.
        */
       debounceMs?: number;
+      /** Handle id for `process-exit` / `process-crash` subscriptions. */
+      processId?: string;
     }
   /** Close a previously opened subscription. */
   | { type: "unsubscribe"; subscriptionId: string }
@@ -308,9 +321,47 @@ export interface GitOpParams {
   message?: string;
 }
 
+/** Params for `process.spawn` (`host-call`). */
+export interface ProcessSpawnParams {
+  command: string;
+  options?: PluginProcessSpawnOptions;
+}
+
+/**
+ * Result of `process.spawn` (`host-call`). The host-assigned handle id the
+ * worker proxy uses to address `process.kill` / `process.restart` and to open
+ * the `process-exit` / `process-crash` subscriptions.
+ */
+export interface ProcessSpawnResult {
+  id: string;
+}
+
+/** Params for `process.kill` (`host-notify`) and `process.restart` (`host-call`). */
+export interface ProcessHandleRefParams {
+  processId: string;
+}
+
+/**
+ * Params for `fs.watch` (`host-call`). The call both establishes the watcher —
+ * rejecting on a missing capability / out-of-scope path so the in-process
+ * `watch` rejection contract is preserved — and opens the subscription whose
+ * change events arrive as `subscription-event`s keyed by `subscriptionId`.
+ */
+export interface FsWatchParams {
+  subscriptionId: string;
+  paths: string[];
+}
+
 /**
  * Env var name set on the forked worker so the worker module can assert it is
  * running in the intended utility-process kind (mirrors the
  * `DAINTREE_UTILITY_PROCESS_KIND` convention used by the other hosts).
  */
 export const PLUGIN_DEV_WORKER_KIND = "plugin-dev-worker";
+
+/**
+ * Sibling of {@link PLUGIN_DEV_WORKER_KIND} for production plugins. They run in
+ * the same `utilityProcess.fork` worker but without the dev hot-reload file
+ * watcher; the distinct kind keeps the two apart in process-monitor logs.
+ */
+export const PLUGIN_PROD_WORKER_KIND = "plugin-prod-worker";
