@@ -147,8 +147,10 @@ host.broadcastToRenderer("sync-status", { status: "syncing" });
 ```
 
 ```ts
-// renderer side (in a view component) — useHostChannel ships under the
-// @daintreehq/plugin-sdk/react subpath. See "React hooks" below.
+// renderer side (in a view component) — useHostChannel resolves when the view is
+// bundled with @daintreehq/plugin-vite (the SDK is bundled into your output; it is
+// NOT served by the host import map). In a raw, un-bundled plugin:// view, call
+// window.electron.plugin.invoke(pluginId, "sync-now", args) directly. See "React hooks" below.
 import { useHostChannel } from "@daintreehq/plugin-sdk/react";
 
 const { invoke } = useHostChannel<SyncArgs, SyncResult>(pluginId, "sync-now");
@@ -177,7 +179,10 @@ setInterval(async () => {
 ```
 
 ```ts
-// renderer side (in a view component)
+// renderer side (in a view component) — usePluginEvent resolves when the view is
+// bundled with @daintreehq/plugin-vite. In a raw, un-bundled plugin:// view, call
+// window.electron.plugin.on(pluginId, "build-status", cb) directly; it returns an
+// unsubscribe function. See "React hooks" below.
 import { usePluginEvent } from "@daintreehq/plugin-sdk/react";
 
 usePluginEvent<BuildStatus>(pluginId, "build-status", (status) => {
@@ -444,6 +449,8 @@ const { commit, preview } = await host.git.commit("/Users/me/project", {
 
 The `@daintreehq/plugin-sdk/react` subpath carries the renderer hooks for plugin view components. It is a separate import path so non-view code (your `main`) doesn't pull React into the main-process bundle. The runtime implementations live in Daintree's `src/hooks/` — the renderer's home, where the `window.electron` ambient global is in scope — and are re-exported verbatim by the SDK so plugin authors and the host share one implementation.
 
+**These hooks resolve only in a bundled view.** `@daintreehq/plugin-vite` bundles the SDK into your plugin output, so the hooks ship inside your bundle. The host import map serves only React specifiers — it has no `@daintreehq/plugin-sdk/react` entry — so a raw, un-bundled `plugin://` view that bare-imports this subpath fails at runtime with an unresolved specifier. For hand-authored views without the build preset, use the `window.electron.plugin` bridge directly ([Raw ESM views](#raw-esm-views--windowelectronplugin) below) — it is exactly what these hooks wrap.
+
 ```ts
 import { useHostChannel, usePluginEvent } from "@daintreehq/plugin-sdk/react";
 ```
@@ -470,6 +477,24 @@ usePluginEvent<BuildStatus>(pluginId, "build-status", (status) => {
 `usePluginEvent(pluginId, channel, handler)` subscribes over `window.electron.plugin.on` to every payload your `main` pushes via `host.postToPanel(channel, payload)` (or a one-shot `broadcastToRenderer` during activation). The handler is kept ref-stable, so passing an inline closure does not re-subscribe on every render; the subscription is torn down automatically on unmount. Payloads arrive untyped over IPC — `TPayload` narrows the call site, the hook does no runtime validation (the plugin owns the shape it pushes, mirroring `useHostChannel`'s host-owns-validation contract).
 
 Together these are the two halves of the panel ↔ main channel: `useHostChannel` pulls on demand, `usePluginEvent` receives pushes. Both follow standard React rules — call them at the top of a component, never conditionally.
+
+### Raw ESM views — `window.electron.plugin`
+
+A hand-authored `plugin://` view that doesn't go through `@daintreehq/plugin-vite` can't bare-import `@daintreehq/plugin-sdk/react` (the host import map doesn't serve it). Use the host bridge directly — it is the same transport the hooks above wrap.
+
+```ts
+// Subscription (the push half) — mirrors usePluginEvent. Returns a () => void
+// disposer; wire it into a useEffect cleanup so the listener is torn down on unmount.
+const off = window.electron.plugin.on(pluginId, "build-status", (status) => {
+  setBuildStatus(status as BuildStatus);
+});
+// later: off();
+
+// Request/response (the pull half) — mirrors useHostChannel's invoke().
+const result = await window.electron.plugin.invoke(pluginId, "sync-now", { team: "engineering" });
+```
+
+`window.electron.plugin.on(pluginId, channel, callback)` subscribes to every payload your `main` pushes via `host.postToPanel(channel, payload)` (or a one-shot `broadcastToRenderer` during activation) and returns a `() => void` disposer. `window.electron.plugin.invoke(pluginId, channel, ...args)` calls your `registerHandler(channel, …)` and resolves with its result. Payloads and results arrive untyped over IPC — cast at the call site (the bundled hooks do the same; the plugin owns the shape it pushes). Prefer the hooks when you bundle with `@daintreehq/plugin-vite`; reach for this bridge only when authoring a raw ESM module.
 
 ## Disposables
 
