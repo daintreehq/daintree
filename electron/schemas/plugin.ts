@@ -288,6 +288,31 @@ export const FileDecorationContributionSchema = z
  */
 const RESERVED_AGENT_IDS = new Set(["__proto__", "constructor", "prototype"]);
 
+/**
+ * Validate a `contributes.agents` `command` before it is registered and later
+ * spawned by node-pty. Two shapes are allowed: a bare PATH-resolvable binary
+ * name (no path separators — the original `SAFE_ID_PATTERN` behavior), or an
+ * explicit plugin-relative POSIX path prefixed with `./` that resolves against
+ * the plugin's install dir at registration time (`pluginAgentRegistry`). The
+ * `./` prefix is required for relative paths so intent is unambiguous — a bare
+ * `bin/agent.mjs` would be ambiguous with a PATH name. Rejects absolute paths,
+ * Windows separators, NUL, and any `..` traversal segment so the failure is a
+ * loud manifest error rather than a spawn-time ENOENT or an escape from the
+ * plugin dir. node-pty resolves the command before switching cwd, so the
+ * relative form is resolved to an absolute path at registration, not spawn.
+ */
+function isSafePluginAgentCommand(command: string): boolean {
+  // Bare PATH-resolvable binary name (e.g. "claude", "node") — original behavior.
+  if (SAFE_ID_PATTERN.test(command)) return true;
+  // Otherwise only an explicit plugin-relative POSIX path is allowed.
+  if (!command.startsWith("./")) return false;
+  if (command.includes("\\")) return false;
+  if (command.includes("\0")) return false;
+  const normalized = command.slice(2);
+  if (normalized === "" || normalized === ".") return false;
+  return !command.split("/").includes("..");
+}
+
 export const AgentContributionSchema = z
   .object({
     id: z
@@ -299,7 +324,10 @@ export const AgentContributionSchema = z
         message: "Agent id cannot be a reserved key (__proto__, constructor, prototype)",
       }),
     name: z.string().min(1).max(100),
-    command: z.string().min(1).max(256).regex(SAFE_ID_PATTERN),
+    command: z.string().min(1).max(256).refine(isSafePluginAgentCommand, {
+      message:
+        "command must be a bare PATH binary name or a plugin-relative path starting with ./ (no absolute path, backslash, NUL, or .. segments)",
+    }),
     args: z
       .array(
         z

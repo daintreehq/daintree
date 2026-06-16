@@ -65,13 +65,33 @@ export function getPluginAgentRegistrySnapshot(): Record<string, AgentConfig> {
   return snapshot;
 }
 
-function contributionToAgentConfig(contribution: PluginAgentContribution): AgentConfig {
+/**
+ * Resolve a plugin-relative `./` command to an absolute path against the
+ * plugin's install dir so node-pty can spawn it (node-pty resolves the command
+ * before switching cwd, so a relative path would ENOENT). A bare PATH name
+ * (e.g. "claude") is returned unchanged. Done with a pure separator-aware join
+ * rather than `node:path` so this module stays safe to bundle in the renderer
+ * (which imports it via `agentRegistry`); the manifest schema
+ * (`AgentContributionSchema.command`) already guarantees the relative form is
+ * POSIX (`./seg/seg`) with no backslashes or `..` traversal segments.
+ */
+function resolvePluginAgentCommand(command: string, pluginDir?: string): string {
+  if (!pluginDir || !command.startsWith("./")) return command;
+  const sep = pluginDir.includes("\\") && !pluginDir.includes("/") ? "\\" : "/";
+  const base = pluginDir.endsWith(sep) ? pluginDir.slice(0, -1) : pluginDir;
+  return base + sep + command.slice(2).split("/").join(sep);
+}
+
+function contributionToAgentConfig(
+  contribution: PluginAgentContribution,
+  pluginDir?: string
+): AgentConfig {
   // Surface only the launch-relevant fields. Plugin agents launch as named,
   // untracked terminals; output-pattern detection is not part of the 1.0 schema.
   return {
     id: contribution.id,
     name: contribution.name,
-    command: contribution.command,
+    command: resolvePluginAgentCommand(contribution.command, pluginDir),
     args: contribution.args,
     color: contribution.color,
     iconId: contribution.iconId,
@@ -108,11 +128,14 @@ function rebuildSnapshot(): void {
 /**
  * Register the agents one plugin contributes. Replaces any prior set for the
  * same `pluginId` (idempotent reload). Pass an empty array to clear the
- * plugin's entries. Main-process only.
+ * plugin's entries. `pluginDir` is the plugin's install dir; when provided, a
+ * `./`-prefixed command is resolved to an absolute path against it (see
+ * {@link resolvePluginAgentCommand}). Main-process only.
  */
 export function registerPluginAgents(
   pluginId: string,
-  contributions: PluginAgentContribution[]
+  contributions: PluginAgentContribution[],
+  pluginDir?: string
 ): void {
   if (typeof pluginId !== "string" || pluginId.length === 0) return;
   if (!Array.isArray(contributions) || contributions.length === 0) {
@@ -121,7 +144,7 @@ export function registerPluginAgents(
   }
   const agents = new Map<string, AgentConfig>();
   for (const contribution of contributions) {
-    agents.set(contribution.id, Object.freeze(contributionToAgentConfig(contribution)));
+    agents.set(contribution.id, Object.freeze(contributionToAgentConfig(contribution, pluginDir)));
   }
   byPlugin.set(pluginId, agents);
   rebuildSnapshot();

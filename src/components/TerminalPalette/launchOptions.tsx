@@ -1,15 +1,14 @@
 import { SquareTerminal, Globe, Settings } from "lucide-react";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import type { PanelKind } from "@/types";
-import type { BuiltInAgentId } from "@shared/config/agentIds";
 import { AGENT_REGISTRY } from "@/config/agents";
-import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { resolveAgentIcon } from "@/config/agentIcons";
 
 export interface LaunchOption {
   id: string;
-  /** Agent id when this option launches an agent; absent for plain terminal/browser. */
-  launchAgentId?: BuiltInAgentId;
+  /** Agent id when this option launches an agent; absent for plain terminal/browser. Plain string so plugin-contributed agent ids are accepted, not just built-ins. */
+  launchAgentId?: string;
   kind?: PanelKind;
   label: string;
   description: string;
@@ -17,11 +16,16 @@ export interface LaunchOption {
 }
 
 export function getLaunchOptions(): LaunchOption[] {
-  const agentOptions: LaunchOption[] = BUILT_IN_AGENT_IDS.map((id) => {
-    const config = AGENT_REGISTRY[id];
+  // Iterate the effective registry so plugin-contributed agents (merged below
+  // built-ins by `getEffectiveRegistry`) are launchable here too, not just the
+  // built-in set. Built-in metadata (presets, tooltip) lives in the richer
+  // renderer `AGENT_REGISTRY`; plugin agents fall back to the effective config.
+  const agentOptions: LaunchOption[] = getEffectiveAgentIds().map((id) => {
+    const builtIn = AGENT_REGISTRY[id];
+    const config = builtIn ?? getEffectiveAgentConfig(id);
     const Icon = resolveAgentIcon(config?.iconId ?? id);
-    const presetCount = config?.presets?.length ?? 0;
-    const description = config?.tooltip ?? "";
+    const presetCount = builtIn?.presets?.length ?? 0;
+    const description = builtIn?.tooltip ?? "";
     const presetSuffix = presetCount > 0 ? ` (${presetCount} presets)` : "";
     return {
       id,

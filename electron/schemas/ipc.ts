@@ -329,7 +329,10 @@ export const FileSearchPayloadSchema = z.object({
 });
 
 export const SlashCommandListRequestSchema = z.object({
-  agentId: z.enum(BUILT_IN_AGENT_IDS),
+  // Accept plugin-contributed agent ids too (#10560), not just built-ins. The
+  // handler's `SlashCommandService.list()` returns [] for any unrecognized id,
+  // so plugin agents simply have no slash commands rather than erroring.
+  agentId: LaunchAgentIdSchema,
   projectPath: z.string().optional(),
 });
 
