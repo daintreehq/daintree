@@ -4,6 +4,8 @@ import {
   evaluatePanelLimit,
   shouldShowSoftWarning,
   computeHardwareDefaults,
+  preflightSpawnBatchLimit,
+  usePanelLimitStore,
   DEFAULT_SOFT_WARNING_LIMIT,
   DEFAULT_CONFIRMATION_LIMIT,
   DEFAULT_HARD_LIMIT,
@@ -115,6 +117,93 @@ describe("computeHardwareDefaults", () => {
     expect(computeHardwareDefaults(16 * GB + 1)).toEqual({ soft: 24, confirm: 48, hard: 72 });
     // Just over 32GB -> 64GB+ tier
     expect(computeHardwareDefaults(32 * GB + 1)).toEqual({ soft: 32, confirm: 64, hard: 100 });
+  });
+});
+
+describe("preflightSpawnBatchLimit", () => {
+  // Single-panel adds dropped the blocking confirm (#10547). Batch spawns keep
+  // it because adding many panels at once is not trivially reversible — these
+  // tests guard that the batch gate survives.
+  const originalRequestConfirmation = usePanelLimitStore.getState().requestConfirmation;
+
+  afterEach(() => {
+    usePanelLimitStore.setState({
+      softWarningLimit: DEFAULT_SOFT_WARNING_LIMIT,
+      confirmationLimit: DEFAULT_CONFIRMATION_LIMIT,
+      hardLimit: DEFAULT_HARD_LIMIT,
+      warningsDisabled: false,
+      requestConfirmation: originalRequestConfirmation,
+    });
+  });
+
+  it("returns 0 allowed when no requested panels", async () => {
+    const confirm = vi.fn().mockResolvedValue(true);
+    usePanelLimitStore.setState({ requestConfirmation: confirm });
+    expect(await preflightSpawnBatchLimit(0, 0)).toEqual({ allowed: 0 });
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("does not confirm when the projected total stays at or below the confirm limit", async () => {
+    const confirm = vi.fn().mockResolvedValue(true);
+    usePanelLimitStore.setState({
+      confirmationLimit: 20,
+      hardLimit: 32,
+      warningsDisabled: false,
+      requestConfirmation: confirm,
+    });
+    // 10 + 5 = 15, below the 20 confirm threshold.
+    expect(await preflightSpawnBatchLimit(10, 5)).toEqual({ allowed: 5 });
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("confirms and allows the full batch when the user accepts crossing the confirm limit", async () => {
+    const confirm = vi.fn().mockResolvedValue(true);
+    usePanelLimitStore.setState({
+      confirmationLimit: 20,
+      hardLimit: 32,
+      warningsDisabled: false,
+      requestConfirmation: confirm,
+    });
+    // 18 + 5 = 23, crosses the 20 confirm threshold.
+    expect(await preflightSpawnBatchLimit(18, 5)).toEqual({ allowed: 5 });
+    expect(confirm).toHaveBeenCalledWith(23, null);
+  });
+
+  it("allows nothing when the user declines the confirm", async () => {
+    const confirm = vi.fn().mockResolvedValue(false);
+    usePanelLimitStore.setState({
+      confirmationLimit: 20,
+      hardLimit: 32,
+      warningsDisabled: false,
+      requestConfirmation: confirm,
+    });
+    expect(await preflightSpawnBatchLimit(18, 5)).toEqual({ allowed: 0 });
+    expect(confirm).toHaveBeenCalledWith(23, null);
+  });
+
+  it("skips the confirm entirely when warnings are disabled", async () => {
+    const confirm = vi.fn().mockResolvedValue(true);
+    usePanelLimitStore.setState({
+      confirmationLimit: 20,
+      hardLimit: 32,
+      warningsDisabled: true,
+      requestConfirmation: confirm,
+    });
+    expect(await preflightSpawnBatchLimit(18, 5)).toEqual({ allowed: 5 });
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("clamps the allowed count to the hard ceiling", async () => {
+    const confirm = vi.fn().mockResolvedValue(true);
+    usePanelLimitStore.setState({
+      confirmationLimit: 20,
+      hardLimit: 32,
+      warningsDisabled: false,
+      requestConfirmation: confirm,
+    });
+    // 30 open, 10 requested, only 2 slots before the hard limit of 32.
+    expect(await preflightSpawnBatchLimit(30, 10)).toEqual({ allowed: 2 });
+    expect(confirm).toHaveBeenCalledWith(32, null);
   });
 });
 

@@ -97,15 +97,15 @@ export const createAddPanelActions = (
   get: Get
 ): Pick<PanelRegistrySlice, "addPanel"> => ({
   addPanel: async (options) => {
-    // Panel limit enforcement (Tier 2: confirmation, Tier 3: hard block)
+    // Panel limit enforcement: only the hard ceiling blocks a single-panel add.
+    // The confirm band (>= confirmationLimit) is intentionally non-blocking —
+    // adding a panel is reversible (one-click close), so the step-throttled
+    // `TerminalCountWarning` banner (shown from `softWarningLimit` upward, with
+    // no upper bound) is the right calibration, not a focus-stealing modal. The
+    // blocking confirm survives only for batch spawns (`preflightSpawnBatchLimit`),
+    // where the blast radius of many panels at once warrants it. See #10547.
     if (!options.bypassLimits) {
-      const {
-        softWarningLimit,
-        confirmationLimit,
-        hardLimit,
-        warningsDisabled,
-        requestConfirmation,
-      } = usePanelLimitStore.getState();
+      const { softWarningLimit, confirmationLimit, hardLimit } = usePanelLimitStore.getState();
       const globalCount = countNonTrashTerminals(get());
       const tier = evaluatePanelLimit(globalCount, {
         softWarningLimit,
@@ -122,27 +122,6 @@ export const createAddPanelActions = (
           duration: 5000,
         });
         return null;
-      }
-
-      if (tier === "confirm" && !warningsDisabled) {
-        // Pass `null` for memory rather than blocking the dialog on a metrics
-        // IPC — same call `preflightSpawnBatchLimit` makes; the dialog renders
-        // without the memory hint, never waits on it.
-        const confirmed = await requestConfirmation(globalCount, null);
-        if (!confirmed) return null;
-
-        // Re-check count after confirmation in case panels were closed during the dialog
-        const postConfirmCount = countNonTrashTerminals(get());
-        if (postConfirmCount >= hardLimit) {
-          notify({
-            type: "warning",
-            priority: "high",
-            title: "Panel limit reached",
-            message: `Maximum of ${hardLimit} panels reached. Close some panels before adding new ones.`,
-            duration: 5000,
-          });
-          return null;
-        }
       }
     }
 
