@@ -427,6 +427,17 @@ export interface PluginPickPathFilter {
 export type PluginSettingsScope = "user" | "project";
 
 /**
+ * Scope for the private {@link StorageApi} key/value store. Unlike
+ * {@link PluginSettingsScope} this adds a `"worktree"` scope that auto-resolves
+ * the currently-active worktree at call time (parallel to how `"project"`
+ * resolves the active project), so a plugin can keep per-worktree machine state
+ * without hand-rolling its own per-worktree keying inside a project blob. Kept a
+ * distinct type from `PluginSettingsScope` so the settings UI / manifest schema
+ * never has to reason about `"worktree"`.
+ */
+export type PluginStorageScope = "user" | "project" | "worktree";
+
+/**
  * Snapshot of one plugin's stored setting values for a single scope, returned to
  * the settings UI (#9301). Secret values are deliberately never included —
  * `secretsSet` only reports *which* secret keys have a stored value so the form
@@ -525,6 +536,57 @@ export interface SettingsApi {
     key: string,
     callback: (value: T | undefined) => void,
     scope?: PluginSettingsScope
+  ): Promise<() => void>;
+}
+
+/**
+ * Private, plugin-scoped key/value storage exposed on
+ * {@link PluginHostApi.storage}. This is the machine-owned counterpart to
+ * {@link SettingsApi}: values never surface in the plugin settings UI and are
+ * NOT gated by `contributes.settings` declarations, so a plugin can persist its
+ * own working state freely without declaring every key. Values are stored as
+ * plaintext JSON (no secret encryption — never store credentials here) at
+ * `~/.daintree/plugin-storage/{pluginId}.json` (user scope),
+ * `<projectRoot>/.daintree/plugin-storage/{pluginId}.json` (project scope), or
+ * `<worktreePath>/.daintree/plugin-storage/{pluginId}.json` (worktree scope),
+ * with `chmod 0o600` applied on POSIX.
+ *
+ * `scope` defaults to `"user"`. The `"project"` and `"worktree"` scopes resolve
+ * the active project / active worktree at call time, so they track switches:
+ * `get` and `delete` resolve to a no-op (returning `undefined` / void) and
+ * `set` throws when no project / worktree is active.
+ */
+export interface StorageApi {
+  /**
+   * Read a stored value. Resolves to `undefined` when the key is unset, or when
+   * the requested `"project"` / `"worktree"` scope has no active target.
+   */
+  get<T = unknown>(key: string, scope?: PluginStorageScope): Promise<T | undefined>;
+  /**
+   * Persist a value. Rejects `undefined` and non-JSON-serializable values. For
+   * `"project"` / `"worktree"` scope with no active target, throws.
+   */
+  set<T = unknown>(key: string, value: T, scope?: PluginStorageScope): Promise<void>;
+  /**
+   * Remove a stored value. A missing key (or a `"project"` / `"worktree"` scope
+   * with no active target) resolves to a no-op rather than throwing.
+   */
+  delete(key: string, scope?: PluginStorageScope): Promise<void>;
+  /**
+   * Subscribe to in-process writes of `key` in `scope` (default `"user"`). The
+   * callback fires with the new value after each `set`/`delete` that changes it.
+   * Edits made to the JSON file by other processes do NOT fire until the plugin
+   * reloads. Must be called during `activate()` — subscribing is revoke-guarded.
+   * Resolves to a disposer; calling it more than once is a no-op. All
+   * subscriptions are automatically disposed when the plugin is unloaded.
+   *
+   * @throws {Error} If called after activation resolves or times out — the host
+   *   is revoked and the subscription is rejected (the promise rejects).
+   */
+  onDidChange<T = unknown>(
+    key: string,
+    callback: (value: T | undefined) => void,
+    scope?: PluginStorageScope
   ): Promise<() => void>;
 }
 
@@ -1603,6 +1665,18 @@ export interface PluginHostApi extends PluginActivationApi {
    * `chmod 0o600` on POSIX — no OS keychain (#9167). See {@link SettingsApi}.
    */
   readonly settings: SettingsApi;
+  /**
+   * Private, plugin-scoped key/value storage — the machine-owned counterpart to
+   * {@link settings}. Values never surface in the settings UI and are not gated
+   * by `contributes.settings` declarations. Plaintext JSON, three scopes
+   * (`"user"`, `"project"`, `"worktree"`). See {@link StorageApi}.
+   *
+   * Like {@link settings} this is NOT revoke-guarded: plugins read/write storage
+   * throughout their lifetime. The store is the source of truth, so a late call
+   * is harmless. `onDidChange` is the one revoke-guarded member (subscribe only
+   * during `activate()`).
+   */
+  readonly storage: StorageApi;
   /**
    * Structured diagnostic logger backed by a bounded per-plugin ring buffer in
    * the main process. Lines are forwarded to the host console (prefixed

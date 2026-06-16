@@ -26,12 +26,14 @@ import type {
   PluginProcessHandle,
   PluginProcessSpawnOptions,
   PluginSettingsScope,
+  PluginStorageScope,
   PluginToastOptions,
   PluginTypedIpcHandler,
   PluginWorktreeSnapshot,
   PluginAgentSnapshot,
   PluginGitCommitResult,
   SettingsApi,
+  StorageApi,
 } from "../types/plugin.js";
 
 export interface RegisteredActionRecord {
@@ -143,6 +145,12 @@ export interface CreateMockHostOptions {
     user?: Record<string, unknown>;
     project?: Record<string, unknown>;
   };
+  /** Pre-seed private `host.storage` values per scope. */
+  storage?: {
+    user?: Record<string, unknown>;
+    project?: Record<string, unknown>;
+    worktree?: Record<string, unknown>;
+  };
   /**
    * Custom resolver for `host.dispatch`. The default routes the call to a
    * matching `registerAction` handler, returning `NOT_FOUND` otherwise — which
@@ -198,6 +206,18 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     project: new Map(),
   };
 
+  const storageStore: Record<PluginStorageScope, Map<string, unknown>> = {
+    user: new Map(Object.entries(options.storage?.user ?? {})),
+    project: new Map(Object.entries(options.storage?.project ?? {})),
+    worktree: new Map(Object.entries(options.storage?.worktree ?? {})),
+  };
+
+  const storageSubs: Record<PluginStorageScope, Map<string, Set<(value: unknown) => void>>> = {
+    user: new Map(),
+    project: new Map(),
+    worktree: new Map(),
+  };
+
   const dispatchOverrides = new Map<string, ActionDispatchResult>();
 
   const settings: SettingsApi = {
@@ -244,6 +264,68 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         if (set) {
           set.delete(cb);
           if (set.size === 0) settingsSubs[scope].delete(key);
+        }
+      };
+      return Promise.resolve(dispose);
+    },
+  };
+
+  // Private machine-owned storage (#10556). Mirrors the settings mock but adds
+  // the "worktree" scope and a `delete` method, and never gates on declared keys.
+  const storage: StorageApi = {
+    async get<T = unknown>(
+      key: string,
+      scope: PluginStorageScope = "user"
+    ): Promise<T | undefined> {
+      return storageStore[scope].get(key) as T | undefined;
+    },
+    async set<T = unknown>(
+      key: string,
+      value: T,
+      scope: PluginStorageScope = "user"
+    ): Promise<void> {
+      if (value === undefined) {
+        throw new Error("storage.set: value cannot be undefined");
+      }
+      const prev = storageStore[scope].get(key);
+      storageStore[scope].set(key, value);
+      if (!Object.is(prev, value)) {
+        const subs = storageSubs[scope].get(key);
+        if (subs) {
+          for (const cb of subs) cb(value as unknown);
+        }
+      }
+    },
+    async delete(key: string, scope: PluginStorageScope = "user"): Promise<void> {
+      const had = storageStore[scope].has(key);
+      storageStore[scope].delete(key);
+      if (had) {
+        const subs = storageSubs[scope].get(key);
+        if (subs) {
+          for (const cb of subs) cb(undefined);
+        }
+      }
+    },
+    onDidChange<T = unknown>(
+      key: string,
+      callback: (value: T | undefined) => void,
+      scope: PluginStorageScope = "user"
+    ): Promise<() => void> {
+      let subs = storageSubs[scope].get(key);
+      if (!subs) {
+        subs = new Set();
+        storageSubs[scope].set(key, subs);
+      }
+      const cb = callback as (value: unknown) => void;
+      subs.add(cb);
+      let disposed = false;
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        const set = storageSubs[scope].get(key);
+        if (set) {
+          set.delete(cb);
+          if (set.size === 0) storageSubs[scope].delete(key);
         }
       };
       return Promise.resolve(dispose);
@@ -622,6 +704,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       },
     },
     settings,
+    storage,
     logger: {
       info: () => {},
       warn: () => {},

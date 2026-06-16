@@ -20,6 +20,7 @@
 import type {
   PluginIpcContext,
   PluginSettingsScope,
+  PluginStorageScope,
   PluginQuickPickItem,
   PluginQuickPickOptions,
   PluginInputBoxOptions,
@@ -37,6 +38,9 @@ export type PluginHostCallMethod =
   | "dispatch"
   | "settings.get"
   | "settings.set"
+  | "storage.get"
+  | "storage.set"
+  | "storage.delete"
   | "fs.readFile"
   | "fs.writeFile"
   | "fs.readdir"
@@ -75,6 +79,7 @@ export type PluginWorkerSubscriptionKind =
   | "active-worktree"
   | "worktrees"
   | "settings"
+  | "storage"
   | "agent-state"
   | "process-exit"
   | "process-crash";
@@ -172,7 +177,7 @@ export type PluginWorkerToHostMessage =
       subscriptionId: string;
       kind: PluginWorkerSubscriptionKind;
       key?: string;
-      scope?: PluginSettingsScope;
+      scope?: PluginSettingsScope | PluginStorageScope;
       /**
        * Opt-in debounce for the `worktrees` subscription (host-side coalescing).
        * Ignored for other kinds. Mirrors `PluginHostSubscriptionOptions.debounceMs`.
@@ -271,6 +276,25 @@ export interface SettingsSetParams {
   key: string;
   value: unknown;
   scope: PluginSettingsScope;
+}
+
+/** Params for `storage.get` (`host-call`). */
+export interface StorageGetParams {
+  key: string;
+  scope: PluginStorageScope;
+}
+
+/** Params for `storage.set` (`host-call`). */
+export interface StorageSetParams {
+  key: string;
+  value: unknown;
+  scope: PluginStorageScope;
+}
+
+/** Params for `storage.delete` (`host-call`). */
+export interface StorageDeleteParams {
+  key: string;
+  scope: PluginStorageScope;
 }
 
 /** Params for `showToast` (`host-call`). */

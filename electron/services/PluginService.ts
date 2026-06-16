@@ -64,6 +64,7 @@ import type {
   PluginInstallOptions,
   PluginCheckUpdateResult,
   PluginSettingsScope,
+  PluginStorageScope,
   PluginSettingsUiValues,
   PluginWorktreeStatus,
   PluginAgentSnapshot,
@@ -84,6 +85,7 @@ import { PluginContributionBroadcaster } from "./plugin/PluginContributionBroadc
 import { PluginRendererDispatcher } from "./plugin/PluginRendererDispatcher.js";
 import { PluginUIPromptDispatcher } from "./plugin/PluginUIPromptDispatcher.js";
 import { PluginSettingsManager, assertSettingsKey } from "./plugin/PluginSettingsManager.js";
+import { PluginStorageManager, assertStorageKey } from "./plugin/PluginStorageManager.js";
 import { PluginChannelRegistry, isChannelSchema } from "./plugin/PluginChannelRegistry.js";
 import { PluginInstaller } from "./plugin/PluginInstaller.js";
 import { PluginDevWorkerHost } from "./plugin/PluginDevWorkerHost.js";
@@ -779,6 +781,15 @@ export class PluginService {
    */
   private readonly settings: PluginSettingsManager;
   /**
+   * Owns the per-(plugin, scope, path) private-storage store cache, scope and
+   * file-path resolution (including the `"worktree"` scope that resolves the
+   * active worktree at call time), and subscriber notification for the machine-
+   * owned `host.storage` API. Deliberately separate from {@link settings}: storage
+   * has no declared-key gating, no secret routing, and never surfaces in the
+   * settings UI.
+   */
+  private readonly storage: PluginStorageManager;
+  /**
    * Owns the atomic install/upgrade orchestration, the manual update-check
    * download/compare flow, the uninstall flow, and the stale-temp-dir sweep at
    * init. Reaches core lifecycle (load/unload/activate, record CRUD, archive
@@ -822,6 +833,19 @@ export class PluginService {
       // renders a settings form whether or not the plugin is running.
       getManifest: (pluginId) =>
         (this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId))?.manifest,
+    });
+
+    this.storage = new PluginStorageManager({
+      getPluginsRoot: () => this.pluginsRoot,
+      // Resolve the active worktree's path the same way host.getActiveWorktree
+      // does — first isCurrent snapshot — so "worktree"-scoped storage tracks the
+      // user's active worktree. Returns undefined when none is active or the
+      // workspace client isn't wired yet, which the storage API treats as
+      // "no target" (read → undefined, write → throw).
+      getActiveWorktreePath: async () => {
+        const snapshots = await this.fetchAllWorktreeSnapshots();
+        return snapshots.find((s) => s.isCurrent === true)?.path;
+      },
     });
 
     this.channels = new PluginChannelRegistry({
@@ -2701,6 +2725,99 @@ export class PluginService {
           return Promise.resolve(dispose);
         },
       },
+      // Private machine-owned key/value storage (#10556). NOT revoke-guarded
+      // (except onDidChange): plugins read/write storage throughout their
+      // lifetime. The "worktree"/"project" scopes resolve their target
+      // asynchronously, so set/delete re-check liveness after the await — a
+      // plugin unloaded mid-resolution silently no-ops rather than writing into
+      // a torn-down plugin's file (lessons #9322/#9428/#9533).
+      storage: {
+        get: async <T = unknown>(
+          key: string,
+          scope: PluginStorageScope = "user"
+        ): Promise<T | undefined> => {
+          assertStorageKey(pluginId, "get", key);
+          const filePath = await this.storage.resolveStorageFilePath(pluginId, scope);
+          // No active project/worktree (or unset key): read resolves to undefined
+          // rather than throwing, matching the "unset key" return.
+          if (!filePath || !isBound()) return undefined;
+          return this.storage.getOrCreateStorageStore(pluginId, scope, filePath).get<T>(key);
+        },
+        set: async <T = unknown>(
+          key: string,
+          value: T,
+          scope: PluginStorageScope = "user"
+        ): Promise<void> => {
+          assertStorageKey(pluginId, "set", key);
+          if (value === undefined) {
+            throw new Error(
+              `Plugin "${pluginId}" storage.set: value for "${key}" is undefined — storage cannot store undefined`
+            );
+          }
+          this.storage.assertStorageSerializable(pluginId, key, value);
+          const filePath = await this.storage.resolveStorageFilePath(pluginId, scope);
+          // Re-check liveness after the async resolve so a racing unloadPlugin()
+          // doesn't write into a torn-down plugin's storage file.
+          if (!isBound()) return;
+          if (!filePath) {
+            throw new Error(
+              `Plugin "${pluginId}" storage.set: no active ${scope} — "${scope}" scope has no target`
+            );
+          }
+          const store = this.storage.getOrCreateStorageStore(pluginId, scope, filePath);
+          const changed = await store.set(key, value);
+          if (changed) this.storage.notifyStorageSubscribers(pluginId, scope, key, value);
+        },
+        delete: async (key: string, scope: PluginStorageScope = "user"): Promise<void> => {
+          assertStorageKey(pluginId, "delete", key);
+          const filePath = await this.storage.resolveStorageFilePath(pluginId, scope);
+          // Missing target or unloaded plugin: a delete is a no-op rather than a
+          // throw (matching the "already absent" return of the store).
+          if (!filePath || !isBound()) return;
+          const store = this.storage.getOrCreateStorageStore(pluginId, scope, filePath);
+          const changed = await store.delete(key);
+          if (changed) this.storage.notifyStorageSubscribers(pluginId, scope, key, undefined);
+        },
+        onDidChange: <T = unknown>(
+          key: string,
+          callback: (value: T | undefined) => void,
+          scope: PluginStorageScope = "user"
+        ): Promise<() => void> => {
+          if (revoked) {
+            throw new Error(
+              `Plugin "${pluginId}" host revoked: storage.onDidChange called after activate() returned or timed out`
+            );
+          }
+          assertStorageKey(pluginId, "onDidChange", key);
+          if (typeof callback !== "function") {
+            throw new Error(
+              `Plugin "${pluginId}" storage.onDidChange: callback must be a function`
+            );
+          }
+          const sub = { key, scope, cb: callback as (value: unknown) => void };
+          this.storage.addSubscriber(pluginId, sub);
+
+          let disposed = false;
+          const dispose = (): void => {
+            if (disposed) return;
+            disposed = true;
+            this.storage.removeSubscriber(pluginId, sub);
+            const list = this.pluginEventCleanups.get(pluginId);
+            if (!list) return;
+            const idx = list.indexOf(dispose);
+            if (idx >= 0) list.splice(idx, 1);
+            if (list.length === 0) this.pluginEventCleanups.delete(pluginId);
+          };
+
+          let list = this.pluginEventCleanups.get(pluginId);
+          if (!list) {
+            list = [];
+            this.pluginEventCleanups.set(pluginId, list);
+          }
+          list.push(dispose);
+          return Promise.resolve(dispose);
+        },
+      },
     };
     return {
       host,
@@ -3925,6 +4042,13 @@ export class PluginService {
     // store caches so a reload starts from disk.
     runUnloadStep(pluginId, "clearPluginSettingsState", () =>
       this.settings.clearPluginSettingsState(pluginId)
+    );
+    // Same teardown for private storage: drops leftover subscriber-set entries
+    // and the in-memory storage store caches so a reload starts from disk. A
+    // discrete step (not bundled with settings) per the unload-cascade contract
+    // — a throw here can't strand later cleanup (lessons #9322/#9533).
+    runUnloadStep(pluginId, "clearPluginStorageState", () =>
+      this.storage.clearPluginStorageState(pluginId)
     );
 
     // Kill every child process this plugin spawned via host.process.spawn
