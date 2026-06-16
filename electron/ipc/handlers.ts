@@ -43,6 +43,7 @@ import { registerSentryHandlers } from "./handlers/sentry.js";
 import { registerOnboardingHandlers } from "./handlers/onboarding.js";
 import { registerMilestonesHandlers } from "./handlers/milestones.js";
 import { registerShortcutHintsHandlers } from "./handlers/shortcutHints.js";
+import { registerForgeRecommendationHandlers } from "./handlers/forgeRecommendation.js";
 import { registerForgeHandlers } from "./handlers/forge.js";
 import { registerForgeDataHandlers } from "./handlers/forgeData.js";
 import { registerForgeSettingsHandlers } from "./handlers/forgeSettings.js";
@@ -156,6 +157,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerOnboardingHandlers());
     register(() => registerMilestonesHandlers());
     register(() => registerShortcutHintsHandlers());
+    register(() => registerForgeRecommendationHandlers());
     register(() => registerForgeSettingsHandlers());
     register(() => registerForgeHandlers());
     register(() => registerForgeDataHandlers());

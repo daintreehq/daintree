@@ -14,6 +14,7 @@ describe("shortcutHintStore", () => {
       electron: {
         shortcutHints: {
           incrementCount: vi.fn(),
+          setHintedHover: vi.fn(),
         },
       },
     });
@@ -296,5 +297,49 @@ describe("shortcutHintStore", () => {
     // terminal.new hover tracking should still be present
     expect(s.isHoverEligible("nav.quickSwitcher")).toBe(true); // cleared + now at milestone 2
     expect(s.isHoverEligible("terminal.new")).toBe(false); // still tracked at count 2
+  });
+
+  // --- Persisted hover-gate hydration & flush ---
+
+  it("hydrateHintedHover seeds the one-shot gate so a persisted hint stays suppressed", () => {
+    const s = shortcutHintStore.getState();
+    s.hydrateCounts({ "nav.quickSwitcher": 1 });
+    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(true);
+
+    s.hydrateHintedHover(["nav.quickSwitcher@1"]);
+    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(false);
+  });
+
+  it("hydrateHintedHover replaces any prior in-memory gate state", () => {
+    const s = shortcutHintStore.getState();
+    s.hydrateCounts({ "nav.quickSwitcher": 0 });
+    s.markHoverShown("nav.quickSwitcher");
+    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(false);
+
+    s.hydrateHintedHover([]);
+    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(true);
+  });
+
+  it("markHoverShown persists the updated gate to IPC", () => {
+    const s = shortcutHintStore.getState();
+    s.hydrateCounts({ "nav.quickSwitcher": 1 });
+    s.markHoverShown("nav.quickSwitcher");
+
+    expect(window.electron?.shortcutHints?.setHintedHover).toHaveBeenCalledWith([
+      "nav.quickSwitcher@1",
+    ]);
+  });
+
+  it("incrementCount persists the cleared gate to IPC", () => {
+    const s = shortcutHintStore.getState();
+    s.hydrateCounts({ "nav.quickSwitcher": 1, "terminal.new": 2 });
+    s.markHoverShown("nav.quickSwitcher");
+    s.markHoverShown("terminal.new");
+
+    (window.electron!.shortcutHints!.setHintedHover as ReturnType<typeof vi.fn>).mockClear();
+    s.incrementCount("nav.quickSwitcher");
+
+    // nav.quickSwitcher@1 dropped, terminal.new@2 retained
+    expect(window.electron?.shortcutHints?.setHintedHover).toHaveBeenCalledWith(["terminal.new@2"]);
   });
 });

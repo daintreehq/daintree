@@ -319,6 +319,14 @@ export interface GeneratedIpcInvokeMap {
     args: [enabled: boolean];
     result: { enabled: boolean; maxRecords: number };
   };
+  "forge-recommendation:get-dismissed": {
+    args: [];
+    result: Record<string, true>;
+  };
+  "forge-recommendation:mark-dismissed": {
+    args: [projectPath: string];
+    result: void;
+  };
   "forge:get-first-page-cache": {
     args: [payload: { cwd: string }];
     result: import("./forge.js").ForgeFirstPageCachePayload | null;
@@ -1033,8 +1041,16 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: Record<string, number>;
   };
+  "shortcut-hints:get-hinted-hover": {
+    args: [];
+    result: string[];
+  };
   "shortcut-hints:increment-count": {
     args: [actionId: string];
+    result: void;
+  };
+  "shortcut-hints:set-hinted-hover": {
+    args: [keys: string[]];
     result: void;
   };
   "slash-commands:list": {

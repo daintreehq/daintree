@@ -8,6 +8,16 @@ function hoverOneShotKey(actionId: string, count: number): string {
   return `${actionId}@${count}`;
 }
 
+/**
+ * Persist the one-shot hover gate so teaching tooltips don't reappear next
+ * session. Called only when the set actually mutates — adds are one-shot
+ * gated (`markHoverShown` runs once per actionId@count) and clears happen on
+ * `incrementCount`, so this never fires on every hover (lesson #7586).
+ */
+function flushHintedHover(hintedHover: Set<string>): void {
+  window.electron?.shortcutHints?.setHintedHover([...hintedHover])?.catch(() => {});
+}
+
 export interface ShortcutHintState {
   counts: Record<string, number>;
   hydrated: boolean;
@@ -19,6 +29,8 @@ export interface ShortcutHintState {
 
 export interface ShortcutHintActions {
   hydrateCounts(counts: Record<string, number>): void;
+  /** Seeds the one-shot hover gate from persisted keys (`actionId@count`). */
+  hydrateHintedHover(keys: string[]): void;
   recordPointer(x: number, y: number): void;
   show(actionId: string, displayCombo: string, position?: { x: number; y: number }): boolean;
   hide(): void;
@@ -40,6 +52,10 @@ export const shortcutHintStore = createStore<ShortcutHintStore>((set, get) => ({
 
   hydrateCounts(counts: Record<string, number>) {
     set({ counts, hydrated: true });
+  },
+
+  hydrateHintedHover(keys: string[]) {
+    set({ hintedHover: new Set(keys) });
   },
 
   recordPointer(x: number, y: number) {
@@ -86,6 +102,7 @@ export const shortcutHintStore = createStore<ShortcutHintStore>((set, get) => ({
     }
     set({ counts: updated, hintedHover: newHintedHover });
     window.electron?.shortcutHints?.incrementCount(actionId)?.catch(() => {});
+    flushHintedHover(newHintedHover);
   },
 
   isHoverEligible(actionId: string): boolean {
@@ -109,5 +126,6 @@ export const shortcutHintStore = createStore<ShortcutHintStore>((set, get) => ({
     const next = new Set(hintedHover);
     next.add(hoverOneShotKey(actionId, count));
     set({ hintedHover: next });
+    flushHintedHover(next);
   },
 }));

@@ -46,6 +46,8 @@ vi.mock("@/utils/logger", () => ({
 const listMock = vi.fn();
 const listRemotesMock = vi.fn();
 const setEnabledMock = vi.fn(async () => {});
+const getDismissedMock = vi.fn(async (): Promise<Record<string, true>> => ({}));
+const markDismissedMock = vi.fn(async () => {});
 
 interface PluginRow {
   name: string;
@@ -69,6 +71,7 @@ function installElectronMocks(opts: { plugins: PluginRow[]; remotes: string[] })
   window.electron = {
     plugin: { list: listMock, setEnabled: setEnabledMock },
     project: { listRemotes: listRemotesMock },
+    forgeRecommendation: { getDismissed: getDismissedMock, markDismissed: markDismissedMock },
   } as unknown as typeof window.electron;
 }
 
@@ -82,6 +85,8 @@ const githubPlugin = (disabled: boolean): PluginRow => ({
 beforeEach(() => {
   vi.clearAllMocks();
   notifyMock.mockReturnValue("notif-1");
+  getDismissedMock.mockResolvedValue({});
+  markDismissedMock.mockResolvedValue(undefined);
   _resetForgeEnableRecommendationForTest();
   currentProjectRef.value = { path: "/Users/test/Projects/sample" };
 });
@@ -219,5 +224,45 @@ describe("useForgeEnableRecommendation", () => {
     renderHook(() => useForgeEnableRecommendation(true));
     await new Promise((r) => setTimeout(r, 0));
     expect(notifyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists the dismissal at evaluation time, not only on a Not now click", async () => {
+    installElectronMocks({
+      plugins: [githubPlugin(true)],
+      remotes: ["git@github.com:owner/repo.git"],
+    });
+
+    renderHook(() => useForgeEnableRecommendation(true));
+
+    await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
+    // Persisted as soon as the nudge fires — no user click required.
+    expect(markDismissedMock).toHaveBeenCalledWith("/Users/test/Projects/sample");
+  });
+
+  it("does not re-fire across restart for a path persisted as dismissed", async () => {
+    installElectronMocks({
+      plugins: [githubPlugin(true)],
+      remotes: ["git@github.com:owner/repo.git"],
+    });
+    // Simulate a fresh session where the path was dismissed previously.
+    getDismissedMock.mockResolvedValue({ "/Users/test/Projects/sample": true });
+
+    renderHook(() => useForgeEnableRecommendation(true));
+
+    await waitFor(() => expect(getDismissedMock).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to evaluating when reading persisted dismissals fails", async () => {
+    installElectronMocks({
+      plugins: [githubPlugin(true)],
+      remotes: ["git@github.com:owner/repo.git"],
+    });
+    getDismissedMock.mockRejectedValue(new Error("store unavailable"));
+
+    renderHook(() => useForgeEnableRecommendation(true));
+
+    await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
   });
 });

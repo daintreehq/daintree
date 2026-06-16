@@ -14,6 +14,15 @@ export function useShortcutHints(isStateLoaded: boolean) {
       .catch(() => {
         shortcutHintStore.getState().hydrateCounts({});
       });
+
+    window.electron?.shortcutHints
+      ?.getHintedHover()
+      .then((keys) => {
+        shortcutHintStore.getState().hydrateHintedHover(keys);
+      })
+      .catch(() => {
+        shortcutHintStore.getState().hydrateHintedHover([]);
+      });
   }, [isStateLoaded]);
 
   // Track mouse position for hint placement
