@@ -84,9 +84,14 @@ vi.mock("@/store/projectStore", () => ({
   },
 }));
 
-let terminalState = {
-  panelsById: {} as Record<string, TerminalLike>,
-  panelIds: [] as string[],
+let terminalState: {
+  panelsById: Record<string, TerminalLike>;
+  panelIds: string[];
+  focusedId?: string | null;
+} = {
+  panelsById: {},
+  panelIds: [],
+  focusedId: null,
 };
 let terminalSubscribers: Array<(state: typeof terminalState, prev: typeof terminalState) => void> =
   [];
@@ -127,7 +132,7 @@ describe("useGettingStartedChecklist", () => {
     vi.clearAllMocks();
     mockReducedMotion = false;
     projectState = { currentProject: null };
-    terminalState = { panelsById: {}, panelIds: [] };
+    terminalState = { panelsById: {}, panelIds: [], focusedId: null };
     worktreeState = { worktrees: new Map() };
     projectSubscribers = [];
     terminalSubscribers = [];
@@ -473,6 +478,90 @@ describe("useGettingStartedChecklist", () => {
         await vi.advanceTimersByTimeAsync(0);
       });
       expect(result.current.showCelebration).toBe(false);
+    });
+  });
+
+  describe("auto-collapse", () => {
+    const launchedPanel = {
+      t1: { id: "t1", kind: "terminal", launchAgentId: "claude", agentState: "idle" },
+    } as Record<string, TerminalLike>;
+    const plainPanel = { t1: { id: "t1", kind: "terminal" } } as Record<string, TerminalLike>;
+
+    async function mountLoaded() {
+      const hook = renderHook(() => useGettingStartedChecklist(true));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      return hook;
+    }
+
+    function fireTerminal(next: typeof terminalState) {
+      const prev = { panelsById: {}, panelIds: [], focusedId: null };
+      terminalState = next;
+      act(() => {
+        for (const sub of terminalSubscribers) sub(next, prev);
+      });
+    }
+
+    it("collapses once the user has launched an agent and focused a panel", async () => {
+      const { result } = await mountLoaded();
+      expect(result.current.collapsed).toBe(false);
+
+      fireTerminal({ panelsById: launchedPanel, panelIds: ["t1"], focusedId: "t1" });
+
+      expect(result.current.collapsed).toBe(true);
+    });
+
+    it("does not collapse when an agent launched but no panel is focused", async () => {
+      const { result } = await mountLoaded();
+
+      fireTerminal({ panelsById: launchedPanel, panelIds: ["t1"], focusedId: null });
+
+      expect(onboardingMock.markChecklistItem).toHaveBeenCalledWith("launchedAgent");
+      expect(result.current.collapsed).toBe(false);
+    });
+
+    it("does not collapse when a panel is focused but no agent has launched", async () => {
+      const { result } = await mountLoaded();
+
+      fireTerminal({ panelsById: plainPanel, panelIds: ["t1"], focusedId: "t1" });
+
+      expect(onboardingMock.markChecklistItem).not.toHaveBeenCalledWith("launchedAgent");
+      expect(result.current.collapsed).toBe(false);
+    });
+
+    it("collapses only once — a later user-expand is not undone by the latch", async () => {
+      const { result } = await mountLoaded();
+
+      fireTerminal({ panelsById: launchedPanel, panelIds: ["t1"], focusedId: "t1" });
+      expect(result.current.collapsed).toBe(true);
+
+      act(() => result.current.toggleCollapse());
+      expect(result.current.collapsed).toBe(false);
+
+      // A later panel event with both conditions still true must not re-collapse.
+      fireTerminal({ panelsById: launchedPanel, panelIds: ["t1"], focusedId: "t1" });
+      expect(result.current.collapsed).toBe(false);
+    });
+
+    it("does not auto-collapse after the user opens it via Help > Getting Started", async () => {
+      const { result } = await mountLoaded();
+
+      const showCall = vi
+        .mocked(window.addEventListener)
+        .mock.calls.find((c) => c[0] === "daintree:show-getting-started");
+      expect(showCall).toBeDefined();
+      const handleShow = showCall![1] as () => void;
+
+      await act(async () => {
+        handleShow();
+        await Promise.resolve();
+      });
+      expect(result.current.collapsed).toBe(false);
+
+      // Even with both engagement conditions now true, the explicit show wins.
+      fireTerminal({ panelsById: launchedPanel, panelIds: ["t1"], focusedId: "t1" });
+      expect(result.current.collapsed).toBe(false);
     });
   });
 });

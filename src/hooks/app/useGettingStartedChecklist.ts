@@ -77,6 +77,11 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
   const [forceShow, setForceShow] = useState(false);
   const [showCelebration, setShowCelebration] = useState(false);
   const checklistRef = useRef(checklist);
+  // Auto-collapse the checklist to its minimized state once, after the user is
+  // clearly engaged (launched an agent AND interacted with a panel). Mount-
+  // scoped so Help > Getting Started can always reopen it: a forced show sets
+  // the latch (below) so it won't be re-collapsed against the user's intent.
+  const hasAutoCollapsed = useRef(false);
 
   const prefersReducedMotion = useReducedMotion();
   const celebrationClearMs = prefersReducedMotion ? 0 : CELEBRATION_CLEAR_MS;
@@ -185,6 +190,20 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
     const getChecklist = () => checklistRef.current;
     const viewStore = getCurrentViewStore();
 
+    // Collapse once the user has both launched an agent and interacted with a
+    // panel (`focusedId` is set by setFocused/openDockTerminal/activateTerminal
+    // — the canonical "touched a panel" signal). Reads the latest committed
+    // checklist via the ref so a just-marked `launchedAgent` is observed in the
+    // same tick.
+    const maybeAutoCollapse = () => {
+      if (hasAutoCollapsed.current) return;
+      const cl = getChecklist();
+      if (!cl || cl.dismissed || !cl.items.launchedAgent) return;
+      if (usePanelStore.getState().focusedId === null) return;
+      hasAutoCollapsed.current = true;
+      setCollapsed(true);
+    };
+
     const unsubs = [
       useProjectStore.subscribe((state) => {
         const cl = getChecklist();
@@ -211,6 +230,7 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
         if (!cl.items.ranSecondParallelAgent && countActiveAgentPanels(state.panelsById) >= 2) {
           markItem("ranSecondParallelAgent");
         }
+        maybeAutoCollapse();
       }),
       viewStore.subscribe((state) => {
         const cl = getChecklist();
@@ -222,6 +242,8 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
     ];
 
     reconcileCurrentState(markItem, getChecklist);
+    // Handle the case where both conditions already hold on mount.
+    maybeAutoCollapse();
 
     return () => {
       for (const unsub of unsubs) unsub();
@@ -233,6 +255,9 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
     const handleShow = () => {
       setForceShow(true);
       setCollapsed(false);
+      // The user explicitly opened the checklist — don't auto-collapse it out
+      // from under them for the rest of this mount.
+      hasAutoCollapsed.current = true;
       if (isElectronAvailable() && window.electron?.onboarding) {
         window.electron.onboarding
           .getChecklist()
