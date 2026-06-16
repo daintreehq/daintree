@@ -22,6 +22,8 @@ import type {
   PluginIpcHandler,
   PluginSettingsScope,
   PluginToastOptions,
+  PluginQuickPickItem,
+  PluginQuickPickOptions,
   PluginTypedIpcHandler,
   PluginWorktreeSnapshot,
   PluginWorktreeStatus,
@@ -52,6 +54,13 @@ interface PendingCall {
   reject: (error: Error) => void;
   /** Detach the abort listener once the call settles (no-op when no signal was passed). */
   cleanup?: () => void;
+  /**
+   * When set, {@link PluginDevWorkerHostProxy.dispose} resolves this call with
+   * `grace.value` instead of rejecting it. Used by the imperative UI prompts
+   * (#10522), whose contract is to resolve the dismiss value (undefined/false)
+   * on plugin unload rather than throw.
+   */
+  grace?: { value: unknown };
 }
 
 interface RegisteredHandler {
@@ -90,7 +99,11 @@ export class PluginDevWorkerHostProxy {
     this.disposed = true;
     for (const pending of this.pendingCalls.values()) {
       pending.cleanup?.();
-      pending.reject(new Error("Plugin dev worker disposed"));
+      if (pending.grace) {
+        pending.resolve(pending.grace.value);
+      } else {
+        pending.reject(new Error("Plugin dev worker disposed"));
+      }
     }
     this.pendingCalls.clear();
     this.actionHandlers.clear();
@@ -201,7 +214,29 @@ export class PluginDevWorkerHostProxy {
     return legacy(ctx, ...args);
   }
 
-  private call<T>(method: PluginHostCallMethod, params: unknown, signal?: AbortSignal): Promise<T> {
+  /**
+   * Like {@link call} but, instead of rejecting when the proxy is disposed
+   * (plugin unload), resolves the pending promise with `graceValue`. Used by the
+   * imperative UI prompts (#10522): their host contract resolves the dismiss
+   * value (undefined / false) on unload rather than throwing.
+   */
+  private callWithGrace<T>(
+    method: PluginHostCallMethod,
+    params: unknown,
+    graceValue: T
+  ): Promise<T> {
+    if (this.disposed) {
+      return Promise.resolve(graceValue);
+    }
+    return this.call<T>(method, params, undefined, { value: graceValue });
+  }
+
+  private call<T>(
+    method: PluginHostCallMethod,
+    params: unknown,
+    signal?: AbortSignal,
+    grace?: { value: unknown }
+  ): Promise<T> {
     if (this.disposed) {
       return Promise.reject(new Error("Plugin dev worker disposed"));
     }
@@ -219,6 +254,7 @@ export class PluginDevWorkerHostProxy {
         resolve: resolve as (value: unknown) => void,
         reject,
         cleanup,
+        grace,
       });
       if (signal) {
         onAbort = (): void => {
@@ -463,6 +499,19 @@ export class PluginDevWorkerHostProxy {
           durationMs: options?.durationMs,
         }),
       dispatch: (actionId, args) => this.call<ActionDispatchResult>("dispatch", { actionId, args }),
+      // Imperative UI prompts (#10522). Post-activation-safe (no
+      // assertActivationOpen): plugins prompt from command handlers. They use
+      // callWithGrace so a plugin unload mid-prompt resolves the dismiss value
+      // (undefined / false) instead of rejecting — matching the host contract.
+      showQuickPick: ((items: PluginQuickPickItem[], options?: PluginQuickPickOptions) =>
+        this.callWithGrace<PluginQuickPickItem | PluginQuickPickItem[] | undefined>(
+          "showQuickPick",
+          { items, options },
+          undefined
+        )) as PluginHostApi["showQuickPick"],
+      showInputBox: (options) =>
+        this.callWithGrace<string | undefined>("showInputBox", { options }, undefined),
+      showConfirm: (options) => this.callWithGrace<boolean>("showConfirm", { options }, false),
       logger: {
         info: (message, fields) => this.notify("logger.info", { message, fields }),
         warn: (message, fields) => this.notify("logger.warn", { message, fields }),

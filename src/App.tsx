@@ -41,6 +41,7 @@ import { stashViewDiffRequest } from "./components/Worktree/pendingViewDiffReque
 import { useMcpBridge } from "./hooks/useMcpBridge";
 import { useMcpAnomalyStats } from "./hooks/useMcpAnomalyStats";
 import { usePluginBridge } from "./hooks/usePluginBridge";
+import { usePluginPromptBridge } from "./hooks/usePluginPromptBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { notifyViewPainted, removeStartupSkeleton } from "./utils/removeStartupSkeleton";
 import { useAppBoot } from "./hooks/app/useAppBoot";
@@ -318,6 +319,22 @@ const LazyPluginMcpConfirmDialog = lazy(() =>
   preloadPluginMcpConfirmDialog().then((m) => ({ default: m.PluginMcpConfirmDialog }))
 );
 
+const LazyPluginQuickPickDialog = lazy(() =>
+  import("./components/Plugin/PluginQuickPickDialog").then((m) => ({
+    default: m.PluginQuickPickDialog,
+  }))
+);
+const LazyPluginInputBoxDialog = lazy(() =>
+  import("./components/Plugin/PluginInputBoxDialog").then((m) => ({
+    default: m.PluginInputBoxDialog,
+  }))
+);
+const LazyPluginConfirmPromptDialog = lazy(() =>
+  import("./components/Plugin/PluginConfirmPromptDialog").then((m) => ({
+    default: m.PluginConfirmPromptDialog,
+  }))
+);
+
 function preloadPanelLimitConfirmDialog() {
   return import("./components/Terminal/PanelLimitConfirmDialog");
 }
@@ -532,6 +549,7 @@ function AppInner() {
   useMcpBridge();
   useMcpAnomalyStats();
   usePluginBridge();
+  usePluginPromptBridge();
   const { homeDir } = useHomeDir();
 
   // Grid navigation hook for directional terminal switching
@@ -1513,6 +1531,27 @@ function AppInner() {
               >
                 <Suspense fallback={null}>
                   <LazyPluginMcpConfirmDialog />
+                </Suspense>
+              </ErrorBoundary>
+            )}
+            {isStateLoaded && (
+              <ErrorBoundary variant="component" componentName="PluginQuickPickDialog">
+                <Suspense fallback={null}>
+                  <LazyPluginQuickPickDialog />
+                </Suspense>
+              </ErrorBoundary>
+            )}
+            {isStateLoaded && (
+              <ErrorBoundary variant="component" componentName="PluginInputBoxDialog">
+                <Suspense fallback={null}>
+                  <LazyPluginInputBoxDialog />
+                </Suspense>
+              </ErrorBoundary>
+            )}
+            {isStateLoaded && (
+              <ErrorBoundary variant="component" componentName="PluginConfirmPromptDialog">
+                <Suspense fallback={null}>
+                  <LazyPluginConfirmPromptDialog />
                 </Suspense>
               </ErrorBoundary>
             )}

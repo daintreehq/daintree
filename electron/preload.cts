@@ -2555,6 +2555,24 @@ function buildElectronApi(): ElectronAPI {
       }) => {
         ipcRenderer.send(CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE, payload);
       },
+
+      onUiPromptRequest: (
+        callback: (
+          payload: import("../shared/types/pluginUiPrompt.js").PluginUiPromptRequest
+        ) => void
+      ) => _typedOn(CHANNELS.PLUGIN_UI_PROMPT_REQUEST, callback),
+
+      sendUiPromptResponse: (
+        payload: import("../shared/types/pluginUiPrompt.js").PluginUiPromptResponse
+      ) => {
+        ipcRenderer.send(CHANNELS.PLUGIN_UI_PROMPT_RESPONSE, payload);
+      },
+
+      onUiPromptCancel: (
+        callback: (
+          payload: import("../shared/types/pluginUiPrompt.js").PluginUiPromptCancel
+        ) => void
+      ) => _typedOn(CHANNELS.PLUGIN_UI_PROMPT_CANCEL, callback),
     },
 
     plugin: {

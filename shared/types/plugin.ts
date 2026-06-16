@@ -912,6 +912,72 @@ export interface PluginToastOptions {
 }
 
 /**
+ * One selectable row in a {@link PluginHostApi.showQuickPick} list. `id` is the
+ * stable identity used for selection tracking and search keys; `label` is the
+ * primary line. `description` renders inline after the label (dimmed) and
+ * `detail` on a second muted line — both are optional and searched when
+ * {@link PluginQuickPickOptions.matchOnDescription} is set. All fields are plain
+ * strings so the item survives the structured-clone IPC boundary.
+ */
+export interface PluginQuickPickItem {
+  id: string;
+  label: string;
+  description?: string;
+  detail?: string;
+}
+
+/** Options for {@link PluginHostApi.showQuickPick}. */
+export interface PluginQuickPickOptions {
+  /** Dialog title line. Defaults to a generic "Select an option". */
+  title?: string;
+  /** Search-input placeholder. */
+  placeholder?: string;
+  /** Allow selecting multiple items. Changes the resolved value to an array. */
+  canSelectMany?: boolean;
+  /** Also fuzzy-match against each item's `description`/`detail`, not just `label`. */
+  matchOnDescription?: boolean;
+}
+
+/** Options for {@link PluginHostApi.showInputBox}. */
+export interface PluginInputBoxOptions {
+  /** Dialog title line. Defaults to a generic "Enter a value". */
+  title?: string;
+  /** Prompt text shown above the input describing what to enter. */
+  prompt?: string;
+  /** Placeholder shown in the empty input. */
+  placeholder?: string;
+  /** Pre-filled initial value. */
+  value?: string;
+  /** Render the input as a password field (masked). */
+  password?: boolean;
+  /**
+   * Regular-expression source string the entered value must match before the
+   * input can be submitted. Validated client-side at submit time (no per-keystroke
+   * IPC round-trip); an invalid pattern is ignored rather than blocking the user.
+   */
+  validationPattern?: string;
+  /** Message shown when {@link validationPattern} fails. Defaults to a generic hint. */
+  validationMessage?: string;
+}
+
+/** Options for {@link PluginHostApi.showConfirm}. */
+export interface PluginConfirmOptions {
+  /** Dialog title — a sentence-case question naming the entity (e.g. `Delete 'foo'?`). */
+  title: string;
+  /** Body text stating the specific consequence of confirming. */
+  message?: string;
+  /**
+   * Primary-button label. For a {@link destructive} confirm use a verb-noun
+   * label (e.g. `Delete file`), never a bare `OK`/`Confirm`. Defaults to `Confirm`.
+   */
+  confirmLabel?: string;
+  /** Secondary-button label. Defaults to `Cancel`. */
+  cancelLabel?: string;
+  /** Style the primary button as destructive (red) to signal an irreversible action. */
+  destructive?: boolean;
+}
+
+/**
  * Runtime handler bound to a plugin-registered action via
  * {@link PluginHostApi.registerAction}. Receives the dispatch args payload
  * (the renderer-side synthetic action forwards a single args object) and
@@ -1410,6 +1476,46 @@ export interface PluginHostApi extends PluginActivationApi {
    * dispatch.
    */
   dispatch(actionId: string, args?: unknown): Promise<ActionDispatchResult>;
+  /**
+   * Imperatively prompt the user to pick from a list, rendered through the app's
+   * searchable command-palette surface. Resolves with the chosen item (or an
+   * array when `options.canSelectMany` is set), or `undefined` if the user
+   * dismisses the palette (Escape / click-away).
+   *
+   * Like {@link showToast} this is async and NOT revoke-guarded: plugins call it
+   * from command handlers that run long after `activate()` resolves. If the
+   * plugin is unloaded while the palette is open the pending call resolves
+   * `undefined` (it never throws). Invalid items reject so authoring mistakes
+   * surface loudly.
+   */
+  showQuickPick(
+    items: PluginQuickPickItem[],
+    options: PluginQuickPickOptions & { canSelectMany: true }
+  ): Promise<PluginQuickPickItem[] | undefined>;
+  showQuickPick(
+    items: PluginQuickPickItem[],
+    options?: PluginQuickPickOptions
+  ): Promise<PluginQuickPickItem | undefined>;
+  /**
+   * Imperatively prompt the user for a line of text, rendered through the app's
+   * dialog surface. Resolves with the entered string, or `undefined` if the user
+   * cancels (Escape / Cancel). A non-empty {@link PluginInputBoxOptions.validationPattern}
+   * is enforced client-side at submit time.
+   *
+   * Async and NOT revoke-guarded for the same reason as {@link showQuickPick};
+   * resolves `undefined` if the plugin is unloaded while the dialog is open.
+   */
+  showInputBox(options?: PluginInputBoxOptions): Promise<string | undefined>;
+  /**
+   * Imperatively ask the user to confirm an action, rendered through the app's
+   * `ConfirmDialog`. Resolves `true` if confirmed, `false` if cancelled,
+   * dismissed, or the plugin is unloaded while the dialog is open.
+   *
+   * Async and NOT revoke-guarded for the same reason as {@link showQuickPick}.
+   * For an irreversible action set {@link PluginConfirmOptions.destructive} and
+   * use a verb-noun `confirmLabel`.
+   */
+  showConfirm(options: PluginConfirmOptions): Promise<boolean>;
   /**
    * Persistent, plugin-scoped key/value settings. Plaintext JSON storage with
    * `chmod 0o600` on POSIX — no OS keychain (#9167). See {@link SettingsApi}.

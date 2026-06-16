@@ -17,7 +17,14 @@
 // Every message is structured-clone-safe: no functions, no Zod instances, no
 // class instances. Requests that expect a reply carry a `requestId`.
 
-import type { PluginIpcContext, PluginSettingsScope } from "./plugin.js";
+import type {
+  PluginIpcContext,
+  PluginSettingsScope,
+  PluginQuickPickItem,
+  PluginQuickPickOptions,
+  PluginInputBoxOptions,
+  PluginConfirmOptions,
+} from "./plugin.js";
 
 /** Async host methods the worker proxy relays to main and awaits a reply for. */
 export type PluginHostCallMethod =
@@ -35,7 +42,10 @@ export type PluginHostCallMethod =
   | "git.status"
   | "git.diff"
   | "git.add"
-  | "git.commit";
+  | "git.commit"
+  | "showQuickPick"
+  | "showInputBox"
+  | "showConfirm";
 
 /** Fire-and-forget host methods (no reply needed). */
 export type PluginHostNotifyMethod =
@@ -256,6 +266,22 @@ export interface ShowToastParams {
 export interface DispatchParams {
   actionId: string;
   args?: unknown;
+}
+
+/** Params for `showQuickPick` (`host-call`). */
+export interface ShowQuickPickParams {
+  items: PluginQuickPickItem[];
+  options?: PluginQuickPickOptions;
+}
+
+/** Params for `showInputBox` (`host-call`). */
+export interface ShowInputBoxParams {
+  options?: PluginInputBoxOptions;
+}
+
+/** Params for `showConfirm` (`host-call`). */
+export interface ShowConfirmParams {
+  options: PluginConfirmOptions;
 }
 
 /** Params for `fs.readFile` / `fs.readdir` / `fs.stat` (`host-call`). */

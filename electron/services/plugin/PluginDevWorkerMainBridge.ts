@@ -30,6 +30,9 @@ import type {
   SettingsGetParams,
   SettingsSetParams,
   ShowToastParams,
+  ShowQuickPickParams,
+  ShowInputBoxParams,
+  ShowConfirmParams,
   UnregisterFileDecorationProviderParams,
   FsPathParams,
   FsWriteFileParams,
@@ -317,6 +320,21 @@ export class PluginDevWorkerMainBridge {
       case "dispatch": {
         const p = params as DispatchParams;
         return this.host.dispatch(p.actionId, p.args);
+      }
+      case "showQuickPick": {
+        // Reuse the real host so validation/provenance/cancellation all match
+        // the installed-plugin path. On reload the dialog auto-resolves when the
+        // user dismisses or the plugin unloads (promptDispatcher.cancelForPlugin).
+        const p = params as ShowQuickPickParams;
+        return this.host.showQuickPick(p.items, p.options ?? {});
+      }
+      case "showInputBox": {
+        const p = params as ShowInputBoxParams;
+        return this.host.showInputBox(p.options);
+      }
+      case "showConfirm": {
+        const p = params as ShowConfirmParams;
+        return this.host.showConfirm(p.options);
       }
       case "settings.get": {
         const p = params as SettingsGetParams;

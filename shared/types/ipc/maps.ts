@@ -1513,6 +1513,24 @@ export interface IpcEventMap {
   };
 
   /**
+   * Imperative plugin UI-prompt request (#10522). Main emits this on the active
+   * project WebContents when a plugin calls `host.showQuickPick`/`showInputBox`/
+   * `showConfirm`, and awaits a renderer `ipcRenderer.send` reply on
+   * `CHANNELS.PLUGIN_UI_PROMPT_RESPONSE`, correlated by `promptId`. The response
+   * channel is a renderer→main fire-and-forget send tracked in
+   * `DEAD_CHANNEL_ALLOWLIST` in channelDrift.test.ts.
+   */
+  "plugin:ui-prompt-request": import("../pluginUiPrompt.js").PluginUiPromptRequest;
+
+  /**
+   * Cancel pending plugin UI prompts (#10522). Main broadcasts this to the
+   * active renderer when a plugin is unloaded with a prompt still open so the
+   * renderer can dismiss the dialog and resolve its queued promise. Omitting
+   * `promptId` cancels every prompt for `pluginId`.
+   */
+  "plugin:ui-prompt-cancel": import("../pluginUiPrompt.js").PluginUiPromptCancel;
+
+  /**
    * Targeted push: a help-session tool call was denied because its tier
    * doesn't permit the tool. Sent to the pinned WebContents so the renderer
    * can surface an inline approval banner. Tier is `string` (not `McpTier`)
