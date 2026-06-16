@@ -1642,6 +1642,7 @@ export class PluginService {
       // and a freshly-introduced one is recorded — the first-activation promise
       // alone can't see post-reload outcomes.
       onActivationResult: (result) => {
+        lastActivationOk = result.ok;
         if (plugin.isBuiltin) return;
         if (result.ok) {
           if (!this.pluginsWithLoadTimeErrors.has(pluginId)) {
@@ -1654,6 +1655,12 @@ export class PluginService {
         }
       },
     });
+
+    // Tracks the most recent activate() outcome reported by the bridge. A failed
+    // first activation must not be cached as "activated" (#10523 retry-on-reopen):
+    // for a prod worker — which has no file watcher to auto-recover — we tear the
+    // worker down below so a re-open (Settings → Retry) re-forks and re-runs.
+    let lastActivationOk: boolean | undefined;
 
     const entry = { workerHost, bridge, revoke };
     this.pluginWorkers.set(pluginId, entry);
@@ -1724,6 +1731,20 @@ export class PluginService {
       console.error(`[PluginService] Plugin "${pluginId}" activation:`, err);
     } finally {
       if (timer) clearTimeout(timer);
+    }
+
+    // A failed first activation must not be cached as a successful one
+    // (#10523): `activatePlugin` adds the id to `activatedPlugins` when this
+    // method resolves, which would short-circuit every later re-open. A dev
+    // worker keeps watching so the author can fix the error and save to reload —
+    // its retry path is the watcher, not a re-activation — so leave it alive.
+    // A prod worker has no watcher, so the only recovery is a re-open / Settings
+    // → Retry that re-runs `activatePlugin`; tear the failed worker down and
+    // rethrow so the in-flight entry is dropped and the id is never cached,
+    // mirroring the in-process loader's rethrow-on-activate-failure semantics.
+    if (lastActivationOk === false && !plugin.devMode) {
+      cleanup();
+      throw new Error(`Plugin "${pluginId}" activate() failed`);
     }
   }
 
