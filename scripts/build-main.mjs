@@ -1,4 +1,5 @@
 import { build, context } from "esbuild";
+import { spawnSync } from "node:child_process";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -102,6 +103,43 @@ function discoverBuiltInPluginMainEntries() {
     .filter((rel) => fs.existsSync(path.join(root, rel)));
 }
 
+/**
+ * Discover each sample plugin's main entry (`plugins/sample/<name>/main/index.ts`)
+ * so adding a new sample plugin needs no build-config edit. Mirrors
+ * `discoverBuiltInPluginMainEntries` and `copySamplePluginManifests`. A
+ * manifest-only sample dir (no `main/index.ts`) is skipped here but still has its
+ * manifest validated and copied by the manifest steps.
+ */
+function discoverSamplePluginMainEntries() {
+  const pluginsRoot = path.join(root, "plugins/sample");
+  if (!fs.existsSync(pluginsRoot)) return [];
+  const entries = fs.readdirSync(pluginsRoot, { withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => `plugins/sample/${entry.name}/main/index.ts`)
+    .filter((rel) => fs.existsSync(path.join(root, rel)));
+}
+
+/**
+ * Validate every `plugins/{builtin,sample}/*\/plugin.json` against the runtime
+ * Zod schema (`electron/schemas/plugin.ts`) before any output is emitted, so a
+ * malformed manifest fails the build loudly instead of surfacing only when the
+ * app loads the plugin. Runs in a `tsx` child process — the schema is TypeScript
+ * and this build script is plain ESM. Exits non-zero on the first invalid
+ * manifest (the child prints the offending file + field).
+ */
+function validatePluginManifests() {
+  const validator = path.join(root, "scripts/validate-plugin-manifests.ts");
+  const result = spawnSync(process.execPath, ["--import", "tsx/esm", validator], {
+    stdio: "inherit",
+    cwd: root,
+  });
+  if (result.status !== 0) {
+    console.error("[Build] Plugin manifest validation failed.");
+    process.exit(1);
+  }
+}
+
 function copyBuiltInWorkflows() {
   const workflowsSrcDir = path.join(root, "electron/workflows");
   const workflowsDestDir = path.join(root, "dist-electron/workflows");
@@ -191,6 +229,11 @@ async function run() {
   console.log(`[Build] Starting build in ${isWatch ? "watch" : "single"} mode...`);
   removeBuildReadyMarker();
 
+  // Gate the build on valid plugin manifests before cleaning or emitting any
+  // output, so an invalid `plugin.json` neither wipes the prior build nor ships
+  // a broken plugin (#10564).
+  validatePluginManifests();
+
   if (isProd && !isWatch) {
     // Clean both the electron host bundles and the built-in plugin outputs
     // so a renamed source file or removed contribution does not survive
@@ -228,13 +271,11 @@ async function run() {
       // esbuild emits a standalone bundle at the resolved worker path.
       "electron/services/voice/openaiVadWorker.ts",
       ...discoverBuiltInPluginMainEntries(),
-      // Sample plugin compiled for the host-contract e2e harness (#9286).
-      // Sideloaded via `DAINTREE_E2E_SIDELOAD_PLUGIN_DIR`; absent in prod
-      // because no `pluginsRoot` defaults to this directory.
-      "plugins/sample/hello-daintree/main/index.ts",
-      // Capability- and settings-rich sample for the full-plugins E2E bucket
-      // (#9592). Sideloaded from the same dir as hello-daintree.
-      "plugins/sample/rich-daintree/main/index.ts",
+      // Sample plugins compiled for the host-contract e2e harness (#9286, #9592).
+      // Sideloaded via `DAINTREE_E2E_SIDELOAD_PLUGIN_DIR`; absent in prod because
+      // no `pluginsRoot` defaults to this directory. Auto-discovered so adding a
+      // new sample plugin needs no build-config edit (#10564).
+      ...discoverSamplePluginMainEntries(),
     ],
     outdir: "dist-electron",
     outbase: ".",
