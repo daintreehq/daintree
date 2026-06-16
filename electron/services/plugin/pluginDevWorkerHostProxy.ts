@@ -556,8 +556,7 @@ export class PluginDevWorkerHostProxy {
       },
       // Capability check, consent prompt, active-agent resolution, and the PTY
       // write all run on the real main-side host — the worker only relays.
-      sendToActiveAgent: (text, options) =>
-        this.call<void>("sendToActiveAgent", { text, options }),
+      sendToActiveAgent: (text, options) => this.call<void>("sendToActiveAgent", { text, options }),
       // Imperative UI prompts (#10522). Post-activation-safe (no
       // assertActivationOpen): plugins prompt from command handlers. They use
       // callWithGrace so a plugin unload mid-prompt resolves the dismiss value

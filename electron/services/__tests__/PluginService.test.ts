@@ -7016,7 +7016,9 @@ describe("Plugin agent-input host API (#10558)", () => {
       { id: "t1", detectedAgentId: "claude", agentState: "waiting", hasPty: true },
     ]);
     const { host } = await setupInputHost(["agent:read"]);
-    await expect(host.sendToActiveAgent("hello")).rejects.toThrow(/PERMISSION_REQUIRED.*agent:input/);
+    await expect(host.sendToActiveAgent("hello")).rejects.toThrow(
+      /PERMISSION_REQUIRED.*agent:input/
+    );
     expect(fake.submit).not.toHaveBeenCalled();
     expect(fake.stage).not.toHaveBeenCalled();
   });
@@ -7091,8 +7093,20 @@ describe("Plugin agent-input host API (#10558)", () => {
 
   it("falls back to most-recently-active agent when none are focused/waiting", async () => {
     const fake = installFakePtyClient([
-      { id: "old", detectedAgentId: "claude", agentState: "idle", lastOutputTime: 10, hasPty: true },
-      { id: "new", detectedAgentId: "claude", agentState: "idle", lastOutputTime: 99, hasPty: true },
+      {
+        id: "old",
+        detectedAgentId: "claude",
+        agentState: "idle",
+        lastOutputTime: 10,
+        hasPty: true,
+      },
+      {
+        id: "new",
+        detectedAgentId: "claude",
+        agentState: "idle",
+        lastOutputTime: 99,
+        hasPty: true,
+      },
     ]);
     const { host } = await setupInputHost(["agent:input"]);
     await host.sendToActiveAgent("x");
@@ -7102,7 +7116,13 @@ describe("Plugin agent-input host API (#10558)", () => {
   it("scopes selection to the active project when one is set", async () => {
     const fake = installFakePtyClient(
       [
-        { id: "other", detectedAgentId: "claude", projectId: "p2", lastOutputTime: 999, hasPty: true },
+        {
+          id: "other",
+          detectedAgentId: "claude",
+          projectId: "p2",
+          lastOutputTime: 999,
+          hasPty: true,
+        },
         { id: "mine", detectedAgentId: "claude", projectId: "p1", lastOutputTime: 1, hasPty: true },
       ],
       "p1"
@@ -7114,7 +7134,15 @@ describe("Plugin agent-input host API (#10558)", () => {
 
   it("never crosses into another project's terminals (#10558)", async () => {
     const fake = installFakePtyClient(
-      [{ id: "other", detectedAgentId: "claude", projectId: "p2", lastOutputTime: 999, hasPty: true }],
+      [
+        {
+          id: "other",
+          detectedAgentId: "claude",
+          projectId: "p2",
+          lastOutputTime: 999,
+          hasPty: true,
+        },
+      ],
       "p1"
     );
     const { host } = await setupInputHost(["agent:input"]);
@@ -7128,7 +7156,13 @@ describe("Plugin agent-input host API (#10558)", () => {
       { id: "exited", detectedAgentId: "claude", agentState: "exited", hasPty: true },
       { id: "completed", detectedAgentId: "claude", agentState: "completed", hasPty: true },
       { id: "dead", detectedAgentId: "claude", agentState: "idle", hasPty: false },
-      { id: "live", detectedAgentId: "claude", agentState: "idle", lastOutputTime: 5, hasPty: true },
+      {
+        id: "live",
+        detectedAgentId: "claude",
+        agentState: "idle",
+        lastOutputTime: 5,
+        hasPty: true,
+      },
     ]);
     const { host } = await setupInputHost(["agent:input"]);
     await host.sendToActiveAgent("x");
