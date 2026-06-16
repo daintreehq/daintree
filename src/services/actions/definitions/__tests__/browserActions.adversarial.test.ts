@@ -22,13 +22,22 @@ function setupActions() {
   };
 }
 
+const addPanelSpy = vi.fn<(options: unknown) => Promise<string | null>>();
+const setBrowserUrlSpy = vi.fn<(id: string, url: string) => void>();
+const activateTerminalSpy = vi.fn<(id: string | null) => void>();
+
 function setPanelState(state: {
   focusedId?: string | null;
-  panelsById?: Record<string, { browserUrl?: string; kind?: string }>;
+  panelsById?: Record<string, { id?: string; browserUrl?: string; kind?: string }>;
+  panelIds?: string[];
 }) {
   panelStoreMock.getState.mockReturnValue({
     focusedId: state.focusedId ?? null,
     panelsById: state.panelsById ?? {},
+    panelIds: state.panelIds ?? [],
+    addPanel: addPanelSpy,
+    setBrowserUrl: setBrowserUrlSpy,
+    activateTerminal: activateTerminalSpy,
   });
 }
 
@@ -39,6 +48,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   dispatchSpy.mockReset().mockReturnValue(true);
   clipboardSpy.mockReset().mockResolvedValue(undefined);
+  addPanelSpy.mockReset().mockResolvedValue("new-panel");
+  setBrowserUrlSpy.mockReset();
+  activateTerminalSpy.mockReset();
   systemClientMock.openExternal.mockResolvedValue(undefined);
   Object.defineProperty(globalThis.window, "dispatchEvent", {
     value: dispatchSpy,
@@ -77,6 +89,47 @@ describe("browserActions adversarial", () => {
       detail: { id: string };
     };
     expect(event.detail.id).toBe("b2");
+  });
+
+  it("browser.navigate throws when no target panel exists (no silent ok:true)", async () => {
+    setPanelState({ focusedId: null });
+    const run = setupActions();
+
+    await expect(run("browser.navigate", { url: "https://a.example" })).rejects.toThrow(
+      /No browser panel/
+    );
+    expect(dispatchSpy).not.toHaveBeenCalled();
+  });
+
+  it("browser.openUrl reuses an existing browser panel instead of creating one", async () => {
+    setPanelState({
+      panelIds: ["t1", "b1"],
+      panelsById: {
+        t1: { id: "t1", kind: "terminal" },
+        b1: { id: "b1", kind: "browser", browserUrl: "https://old.example" },
+      },
+    });
+    const run = setupActions();
+    await run("browser.openUrl", { url: "https://new.example" });
+
+    expect(setBrowserUrlSpy).toHaveBeenCalledWith("b1", "https://new.example");
+    expect(activateTerminalSpy).toHaveBeenCalledWith("b1");
+    expect(addPanelSpy).not.toHaveBeenCalled();
+  });
+
+  it("browser.openUrl creates a new browser panel when none exists (no focusPolicy)", async () => {
+    setPanelState({
+      panelIds: ["t1"],
+      panelsById: { t1: { id: "t1", kind: "terminal" } },
+    });
+    const run = setupActions();
+    await run("browser.openUrl", { url: "https://fresh.example" });
+
+    expect(addPanelSpy).toHaveBeenCalledTimes(1);
+    const options = addPanelSpy.mock.calls[0]![0] as Record<string, unknown>;
+    expect(options).toEqual({ kind: "browser", browserUrl: "https://fresh.example" });
+    expect(options.focusPolicy).toBeUndefined();
+    expect(setBrowserUrlSpy).not.toHaveBeenCalled();
   });
 
   it("browser.back with no target is a silent no-op (no event dispatched)", async () => {

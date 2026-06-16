@@ -359,6 +359,7 @@ export const BUILT_IN_ACTION_IDS = [
   // -- browserActions --
   "browser.reload",
   "browser.navigate",
+  "browser.openUrl",
   "browser.back",
   "browser.forward",
   "browser.openExternal",

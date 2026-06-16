@@ -97,6 +97,9 @@ export const ACTION_TIER_ADDONS = [
   "workflow.startWorkOnIssue",
   "workflow.focusNextAttention",
 
+  "browser.navigate",
+  "browser.openUrl",
+
   "app.theme.pick",
   "app.theme.browser.open",
   "app.theme.toggle",

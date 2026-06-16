@@ -62,10 +62,43 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     run: async (args: unknown) => {
       const { url, terminalId } = args as { url: string; terminalId?: string };
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
-      if (!targetId) return;
+      // No silent no-op: a no-target dispatch used to return `undefined`, which
+      // ActionService wraps as `{ ok: true }` — a false success that left plugin
+      // callers unable to detect that nothing navigated. Throw so the failure is
+      // explicit. Use `browser.openUrl` to open-or-focus a panel when none exists.
+      if (!targetId) {
+        throw new Error("No browser panel: pass terminalId or focus a browser panel first");
+      }
       window.dispatchEvent(
         new CustomEvent("daintree:browser-navigate", { detail: { id: targetId, url } })
       );
+    },
+  }));
+
+  actions.set("browser.openUrl", () => ({
+    id: "browser.openUrl",
+    title: "Open URL in Browser",
+    description: "Open a URL in a browser panel, reusing an existing one or creating a new one",
+    category: "browser",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["web", "navigate", "panel", "tab"],
+    argsSchema: z.object({ url: z.string() }),
+    run: async (args: unknown) => {
+      const { url } = args as { url: string };
+      const store = usePanelStore.getState();
+      const existing = store.panelIds
+        .map((id) => store.panelsById[id])
+        .find((panel) => panel && isBrowserPanel(panel));
+      if (existing) {
+        store.setBrowserUrl(existing.id, url);
+        store.activateTerminal(existing.id);
+        return;
+      }
+      // Omit focusPolicy so the store resolves "auto" vs "preserve" via its MCP
+      // focus-suppression guard (#9035) — never steal focus from a typing user.
+      await store.addPanel({ kind: "browser", browserUrl: url });
     },
   }));
 
