@@ -167,9 +167,11 @@ describe("PluginDevWorkerHostProxy host.process (#10526)", () => {
   it("kill posts a fire-and-forget process.kill notify keyed by id", async () => {
     const { sent, handle } = await spawnHandle();
     handle.kill();
-    expect(sent.find((m) => m.type === "host-notify" && m.method === "process.kill")).toMatchObject({
-      params: { processId: "p1" },
-    });
+    expect(sent.find((m) => m.type === "host-notify" && m.method === "process.kill")).toMatchObject(
+      {
+        params: { processId: "p1" },
+      }
+    );
   });
 
   it("restart awaits a process.restart host-call", async () => {
@@ -234,7 +236,12 @@ describe("PluginDevWorkerHostProxy host.fs.watch (#10526)", () => {
     const call = sent.find((m) => m.type === "host-call" && m.method === "fs.watch");
     expect(call.params.paths).toEqual(["/repo/a.ts"]);
     const subscriptionId = call.params.subscriptionId;
-    proxy.handleMessage({ type: "host-result", requestId: call.requestId, ok: true, result: undefined });
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: true,
+      result: undefined,
+    });
     const dispose = await promise;
 
     proxy.handleMessage({ type: "subscription-event", subscriptionId, payload: "/repo/a.ts" });

@@ -450,7 +450,9 @@ describe("PluginDevWorkerMainBridge", () => {
       const { host, workerHost } = makeBridge();
       await spawn(workerHost, host);
       expect(host.process.spawn).toHaveBeenCalledWith("node", { args: ["x.js"] });
-      const res = workerHost.sent.find((m: any) => m.type === "host-result" && m.requestId === "spawn1");
+      const res = workerHost.sent.find(
+        (m: any) => m.type === "host-result" && m.requestId === "spawn1"
+      );
       expect(res).toMatchObject({ ok: true, result: { id: "p1" } });
     });
 
@@ -477,7 +479,9 @@ describe("PluginDevWorkerMainBridge", () => {
       });
       await flush();
       expect(handle.restart).toHaveBeenCalled();
-      const res = workerHost.sent.find((m: any) => m.type === "host-result" && m.requestId === "r1");
+      const res = workerHost.sent.find(
+        (m: any) => m.type === "host-result" && m.requestId === "r1"
+      );
       expect(res).toMatchObject({ ok: true });
     });
 
@@ -490,7 +494,9 @@ describe("PluginDevWorkerMainBridge", () => {
         params: { processId: "ghost" },
       });
       await flush();
-      const res = workerHost.sent.find((m: any) => m.type === "host-result" && m.requestId === "r2");
+      const res = workerHost.sent.find(
+        (m: any) => m.type === "host-result" && m.requestId === "r2"
+      );
       expect(res).toMatchObject({ ok: false });
       expect(res.error).toMatch(/No live process/);
     });
@@ -592,7 +598,9 @@ describe("PluginDevWorkerMainBridge", () => {
         params: { subscriptionId: "fs3", paths: ["/nope"] },
       });
       await flush();
-      const res = workerHost.sent.find((m: any) => m.type === "host-result" && m.requestId === "w3");
+      const res = workerHost.sent.find(
+        (m: any) => m.type === "host-result" && m.requestId === "w3"
+      );
       expect(res).toMatchObject({ ok: false });
       expect(res.error).toMatch(/PERMISSION_REQUIRED/);
     });

@@ -633,7 +633,9 @@ export class PluginDevWorkerMainBridge {
         const handle = this.processHandles.get(msg.processId);
         if (!handle) {
           // The handle was killed (reload/dispose) between spawn and subscribe.
-          logger.warn(`[${this.pluginId}] ${kind} subscribe for unknown process "${msg.processId}"`);
+          logger.warn(
+            `[${this.pluginId}] ${kind} subscribe for unknown process "${msg.processId}"`
+          );
           return;
         }
         dispose =
