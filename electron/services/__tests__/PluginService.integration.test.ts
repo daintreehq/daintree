@@ -385,9 +385,9 @@ describe("PluginService integration — panel contributions", () => {
       contributes: {
         panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#abc" }],
         toolbarButtons: [
-          { id: "btn", label: "B", iconId: "i", actionId: "real-plugin.act", priority: 2 },
+          { id: "btn", label: "B", iconId: "i", actionId: "acme.real-plugin.act", priority: 2 },
         ],
-        menuItems: [{ label: "M", actionId: "real-plugin.act", location: "view" }],
+        menuItems: [{ label: "M", actionId: "acme.real-plugin.act", location: "view" }],
       },
     });
 
@@ -417,7 +417,7 @@ describe("PluginService integration — toolbar button contributions", () => {
             id: "my-btn",
             label: "My Button",
             iconId: "puzzle",
-            actionId: "toolbar-plugin.doThing",
+            actionId: "acme.toolbar-plugin.doThing",
             priority: 4,
           },
         ],
@@ -433,7 +433,7 @@ describe("PluginService integration — toolbar button contributions", () => {
       id: "acme.toolbar-plugin.my-btn",
       label: "My Button",
       iconId: "puzzle",
-      actionId: "toolbar-plugin.doThing",
+      actionId: "acme.toolbar-plugin.doThing",
       priority: 4,
       pluginId: "acme.toolbar-plugin",
     });
@@ -449,7 +449,7 @@ describe("PluginService integration — toolbar button contributions", () => {
             id: "btn",
             label: "Btn",
             iconId: "icon",
-            actionId: "default-prio.action",
+            actionId: "acme.default-prio.action",
           },
         ],
       },
@@ -471,7 +471,7 @@ describe("PluginService integration — menu item contributions", () => {
         menuItems: [
           {
             label: "Do Something",
-            actionId: "menu-plugin.doSomething",
+            actionId: "acme.menu-plugin.doSomething",
             location: "terminal",
           },
         ],
@@ -487,7 +487,7 @@ describe("PluginService integration — menu item contributions", () => {
       pluginId: "acme.menu-plugin",
       item: {
         label: "Do Something",
-        actionId: "menu-plugin.doSomething",
+        actionId: "acme.menu-plugin.doSomething",
         location: "terminal",
       },
     });
@@ -964,8 +964,8 @@ describe("PluginService integration — main entry execution", () => {
         main: mainFile,
         contributes: {
           panels: [{ id: "p", name: "P", iconId: "i", color: "#000" }],
-          toolbarButtons: [{ id: "b", label: "B", iconId: "i", actionId: "bad-main.a" }],
-          menuItems: [{ label: "M", actionId: "bad-main.a", location: "view" }],
+          toolbarButtons: [{ id: "b", label: "B", iconId: "i", actionId: "acme.bad-main.a" }],
+          menuItems: [{ label: "M", actionId: "acme.bad-main.a", location: "view" }],
         },
       })
     );
@@ -1328,9 +1328,9 @@ describe("PluginService integration — full contribution fan-out", () => {
         contributes: {
           panels: [{ id: "v", name: "V", iconId: "eye", color: "#abc" }],
           toolbarButtons: [
-            { id: "b", label: "B", iconId: "i", actionId: "all-in-one.act", priority: 2 },
+            { id: "b", label: "B", iconId: "i", actionId: "acme.all-in-one.act", priority: 2 },
           ],
-          menuItems: [{ label: "M", actionId: "all-in-one.act", location: "view" }],
+          menuItems: [{ label: "M", actionId: "acme.all-in-one.act", location: "view" }],
         },
       })
     );
@@ -1343,7 +1343,7 @@ describe("PluginService integration — full contribution fan-out", () => {
     expect(getPluginMenuItems()).toEqual([
       {
         pluginId: "acme.all-in-one",
-        item: { label: "M", actionId: "all-in-one.act", location: "view" },
+        item: { label: "M", actionId: "acme.all-in-one.act", location: "view" },
       },
     ]);
     expect(readMarker(markerKey)).toBe(1);

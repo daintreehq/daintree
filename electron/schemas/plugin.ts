@@ -4,7 +4,10 @@ import * as semver from "semver";
 import { z } from "zod";
 import { BUILT_IN_PLUGIN_CAPABILITIES, PLUGIN_CATEGORY_IDS } from "../../shared/types/plugin.js";
 import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
-import { BUILT_IN_ACTION_IDS } from "../../shared/config/actionIds.js";
+import {
+  BUILT_IN_ACTION_IDS,
+  DENY_PLUGIN_DISPATCH_ACTION_IDS,
+} from "../../shared/config/actionIds.js";
 import { KEY_ACTION_VALUES } from "../../shared/types/keymap.js";
 import type {
   PluginManifest,
@@ -34,6 +37,11 @@ const BUILT_IN_ACTION_ID_SET: ReadonlySet<string> = new Set([
   ...BUILT_IN_ACTION_IDS,
   ...KEY_ACTION_VALUES,
 ]);
+
+// Built-in actions a plugin contribution may never dispatch (terminal input
+// injection, fleet command relays). The host refuses these at runtime, so a
+// contribution wired to one is a dead button — reject it at parse time (#10580).
+const DENY_PLUGIN_DISPATCH_SET: ReadonlySet<string> = new Set(DENY_PLUGIN_DISPATCH_ACTION_IDS);
 
 export const PanelContributionSchema = z
   .object({
@@ -896,15 +904,27 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
       });
 
       // Every contributed `actionId` (toolbar buttons, menu items, keybindings,
-      // context menus) must resolve to a real action at runtime, else the
-      // contribution paints an inert button/binding that silently does nothing
-      // when invoked (#10565). An `actionId` resolves if it is a built-in action
-      // or lives in the plugin's own namespace — the latter is either declared in
-      // `contributes.commands` (namespaced `{name}.{id}` at load) or registered
-      // imperatively via `host.registerAction`, which is invisible at parse time,
-      // so we gate on namespace ownership rather than command membership. A
-      // reference into a foreign namespace can never resolve and is rejected.
+      // context menus) must resolve to a real, dispatchable action at runtime,
+      // else the contribution paints an inert button/binding that silently does
+      // nothing when invoked (#10565, #10580). The resolution rules, in order:
+      //
+      //  1. A built-in flagged `denyPluginDispatch: true` is rejected outright —
+      //     the host refuses plugin dispatch for it, so the button is dead even
+      //     though the id exists (#10580). This precedes the allowlist check
+      //     because these ids ARE in `BUILT_IN_ACTION_ID_SET`.
+      //  2. Any other built-in action id resolves.
+      //  3. An id in the plugin's own namespace is cross-checked against the
+      //     declared `contributes.commands` (namespaced `{name}.{id}` at load).
+      //     If commands are declared, an own-namespace id that matches none of
+      //     them is a typo for a command that will never exist, so it is rejected
+      //     (#10580). If NO commands are declared, the plugin registers actions
+      //     imperatively via `host.registerAction` (invisible at parse time), so
+      //     any own-namespace id is allowed — the imperative escape hatch.
+      //  4. A reference into a foreign namespace can never resolve and is rejected.
       const ownNamespacePrefix = `${manifest.name}.`;
+      const declaredCommandActionIds = new Set(
+        manifest.contributes.commands.map((cmd) => `${manifest.name}.${cmd.id}`)
+      );
       const actionIdContributions = [
         ["toolbarButtons", manifest.contributes.toolbarButtons],
         ["menuItems", manifest.contributes.menuItems],
@@ -914,12 +934,39 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
       for (const [arrayName, entries] of actionIdContributions) {
         entries.forEach((entry, index) => {
           const { actionId } = entry;
-          if (BUILT_IN_ACTION_ID_SET.has(actionId) || actionId.startsWith(ownNamespacePrefix)) {
+          const issuePath = ["contributes", arrayName, index, "actionId"] as const;
+
+          if (DENY_PLUGIN_DISPATCH_SET.has(actionId)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [...issuePath],
+              message: `Contributed actionId "${actionId}" is a built-in action closed to plugin dispatch — the host refuses it at runtime, so the contribution can never fire.`,
+              params: { errorCode: "action_id_plugin_dispatch_denied" },
+            });
             return;
           }
+
+          if (BUILT_IN_ACTION_ID_SET.has(actionId)) {
+            return;
+          }
+
+          if (actionId.startsWith(ownNamespacePrefix)) {
+            // Cross-check own-namespace ids against declared commands only when
+            // commands exist; an empty set means the plugin is fully imperative.
+            if (declaredCommandActionIds.size > 0 && !declaredCommandActionIds.has(actionId)) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [...issuePath],
+                message: `Contributed actionId "${actionId}" is in this plugin's "${manifest.name}" namespace but matches no entry in contributes.commands — likely a typo for a declared command.`,
+                params: { errorCode: "action_id_undeclared_command" },
+              });
+            }
+            return;
+          }
+
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            path: ["contributes", arrayName, index, "actionId"],
+            path: [...issuePath],
             message: `Contributed actionId "${actionId}" does not reference a built-in action or an action in this plugin's "${manifest.name}" namespace — it can never resolve.`,
             params: { errorCode: "action_id_unknown_namespace" },
           });
