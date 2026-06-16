@@ -415,6 +415,10 @@ class PullRequestService {
         remoteUrl,
         forgeProviderOverride: this.forgeProviderOverride,
         globalDefaultProviderId: this.globalDefaultProviderId,
+        // This service is a project-level singleton initialized with the project
+        // root, so `this.cwd` is the main worktree path main stamps onto
+        // `RepoRef.projectPath` (#10563).
+        projectPath: this.cwd,
       });
       if (resolved.status !== "resolved") {
         this.providerResolutionStatus = resolved.status;

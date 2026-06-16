@@ -374,4 +374,92 @@ describe("resolveProvider miss discrimination (#9997)", () => {
       value: { status: "resolved", namespacedId: NAMESPACED_ID, repo: { owner: "owner" } },
     });
   });
+
+  it("stamps projectPath from the opts onto the returned repo (#10563)", async () => {
+    registerForgeProviders(PLUGIN_ID, [
+      { id: CONTRIBUTION_ID, name: "Test Provider", matches: ["gitlab.com"] },
+    ]);
+    registerForgeProviderImpl(PLUGIN_ID, CONTRIBUTION_ID, makeImpl());
+    const { send, sent } = captureSender();
+
+    await dispatchForgeRpc(
+      {
+        forgeRequestId: "resolve-path",
+        method: "resolveProvider",
+        args: [
+          {
+            remoteUrl: "https://gitlab.com/owner/repo.git",
+            forgeProviderOverride: null,
+            globalDefaultProviderId: null,
+            projectPath: "/repo-worktrees/feature",
+          },
+        ],
+      },
+      send
+    );
+
+    expect(sent[0]).toMatchObject({
+      ok: true,
+      value: {
+        status: "resolved",
+        repo: { owner: "owner", projectPath: "/repo-worktrees/feature" },
+      },
+    });
+  });
+
+  it("leaves repo unchanged when no projectPath is supplied (#10563)", async () => {
+    registerForgeProviders(PLUGIN_ID, [
+      { id: CONTRIBUTION_ID, name: "Test Provider", matches: ["gitlab.com"] },
+    ]);
+    registerForgeProviderImpl(PLUGIN_ID, CONTRIBUTION_ID, makeImpl());
+    const { send, sent } = captureSender();
+
+    await dispatchResolve(send);
+
+    if (sent[0].ok) {
+      expect((sent[0].value as { repo: RepoRef }).repo.projectPath).toBeUndefined();
+    }
+  });
+
+  it("does not coalesce resolves that differ only by projectPath (#10563)", async () => {
+    registerForgeProviders(PLUGIN_ID, [
+      { id: CONTRIBUTION_ID, name: "Test Provider", matches: ["gitlab.com"] },
+    ]);
+    const parseRemote = vi.fn(() => repo);
+    registerForgeProviderImpl(PLUGIN_ID, CONTRIBUTION_ID, makeImpl({ parseRemote }));
+    const { send, sent } = captureSender();
+
+    const mk = (projectPath: string, forgeRequestId: string) =>
+      dispatchForgeRpc(
+        {
+          forgeRequestId,
+          method: "resolveProvider",
+          args: [
+            {
+              remoteUrl: "https://gitlab.com/owner/repo.git",
+              forgeProviderOverride: null,
+              globalDefaultProviderId: null,
+              projectPath,
+            },
+          ],
+        },
+        send
+      );
+
+    await Promise.all([mk("/repo-a", "ra"), mk("/repo-b", "rb")]);
+
+    // Distinct projectPaths must each produce their own parse rather than sharing
+    // one in-flight result, or one worktree would get the other's path.
+    expect(parseRemote).toHaveBeenCalledTimes(2);
+
+    // And each request must receive its OWN projectPath back — a fan-out bug that
+    // delivered one waiter's result to both would slip past the call-count check.
+    const pathFor = (id: string) => {
+      const result = sent.find((s) => s.forgeRequestId === id);
+      if (!result?.ok) throw new Error(`no ok result for ${id}`);
+      return (result.value as { repo: RepoRef }).repo.projectPath;
+    };
+    expect(pathFor("ra")).toBe("/repo-a");
+    expect(pathFor("rb")).toBe("/repo-b");
+  });
 });

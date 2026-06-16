@@ -58,6 +58,9 @@ export class ForgeBridge {
     remoteUrl: string | null;
     forgeProviderOverride: string | null;
     globalDefaultProviderId: string | null;
+    // Worktree root this resolution is for; main stamps it onto the returned
+    // `RepoRef.projectPath` so the provider gets the on-disk path (#10563).
+    projectPath?: string | null;
   }): Promise<ForgeResolveProviderResult> {
     return this.invoke<ForgeResolveProviderResult>("resolveProvider", undefined, [opts]);
   }

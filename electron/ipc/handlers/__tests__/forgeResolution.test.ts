@@ -103,8 +103,45 @@ describe("resolveForCwd", () => {
     });
     expect(result.providerId).toBe("gitea");
     expect(result.namespaceId).toBe("acme.gitea");
-    expect(result.repoRef).toEqual({ owner: "owner", repo: "repo" });
+    // `projectPath` is the worktree root, stamped onto the parsed ref (#10563).
+    expect(result.repoRef).toEqual({ owner: "owner", repo: "repo", projectPath: "/repo" });
     expect(parseRemote).toHaveBeenCalledWith("https://gitea.example.com/owner/repo.git");
+  });
+
+  it("stamps the project root (main worktree), not the linked-worktree cwd, onto projectPath (#10563)", async () => {
+    gitServiceMock.listWorktrees.mockResolvedValue([
+      { path: "/repo", branch: "main", bare: false, isMainWorktree: true },
+      { path: "/repo-worktrees/feature", branch: "feature", bare: false, isMainWorktree: false },
+    ]);
+    const parseRemote = vi.fn(() => ({ owner: "owner", repo: "repo", rawData: null }));
+    registryMock.getForgeProviderImpl.mockReturnValue({ parseRemote });
+    resolverMock.resolveForgeProvider.mockReturnValue({
+      entry: giteaEntry,
+      resolvedVia: "hostname",
+    });
+
+    const result = await resolveForCwd("/repo-worktrees/feature/src");
+
+    // Project root, not the linked worktree the call came from — matches the
+    // path PullRequestService stamps on the RPC path.
+    expect(result.repoRef.projectPath).toBe("/repo");
+  });
+
+  it("falls back to getRepositoryRoot for projectPath when no worktree is marked main (#10563)", async () => {
+    gitServiceMock.listWorktrees.mockResolvedValue([
+      { path: "/elsewhere", branch: "x", bare: false, isMainWorktree: false },
+    ]);
+    gitServiceMock.getRepositoryRoot.mockResolvedValue("/repo");
+    const parseRemote = vi.fn(() => ({ owner: "owner", repo: "repo", rawData: null }));
+    registryMock.getForgeProviderImpl.mockReturnValue({ parseRemote });
+    resolverMock.resolveForgeProvider.mockReturnValue({
+      entry: giteaEntry,
+      resolvedVia: "hostname",
+    });
+
+    const result = await resolveForCwd("/repo/src");
+
+    expect(result.repoRef.projectPath).toBe("/repo");
   });
 
   it("looks up the project by the main worktree path, not the linked-worktree cwd", async () => {

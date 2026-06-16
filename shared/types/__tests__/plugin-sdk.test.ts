@@ -31,6 +31,7 @@ import type {
   ForgeProviderImpl,
   ForgeProviderDescriptor,
   ForgeProviderContribution,
+  ForgeProviderKind,
   FileDecorationProviderImpl,
   FileDecorationProviderDescriptor,
   FileDecorationContribution,
@@ -59,7 +60,7 @@ import type {
   ActionError,
   ActionErrorCode,
 } from "../plugin-sdk.js";
-import { PLUGIN_PROCESS_STREAM_CHANNEL } from "../plugin-sdk.js";
+import { PLUGIN_PROCESS_STREAM_CHANNEL, localAuthStubs } from "../plugin-sdk.js";
 import type { UseHostChannelResult, PluginEventHandler } from "../plugin-sdk-react.js";
 
 /**
@@ -120,6 +121,15 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf<ForgeProviderImpl>().toMatchTypeOf<object>();
       expectTypeOf<ForgeProviderDescriptor>().toMatchTypeOf<object>();
       expectTypeOf<ForgeProviderContribution>().toMatchTypeOf<object>();
+      expectTypeOf<ForgeProviderKind>().toEqualTypeOf<"local" | "network">();
+    });
+
+    it("exports localAuthStubs as a runtime value (#10563)", () => {
+      // Value export, not type-only — a local/offline provider spreads it into
+      // its impl at runtime, so a type-only re-export would emit `undefined`.
+      expect(typeof localAuthStubs.getCredentials).toBe("function");
+      expect(typeof localAuthStubs.validateCredentials).toBe("function");
+      expect(typeof localAuthStubs.validateToken).toBe("function");
     });
 
     it("exports file decoration contract", () => {

@@ -90,4 +90,22 @@ describe("ForgeProviderContributionSchema (issue #10471)", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it("accepts the local/network kind values (#10563)", () => {
+    for (const kind of ["local", "network"] as const) {
+      expect(ForgeProviderContributionSchema.safeParse({ ...base, kind }).success).toBe(true);
+    }
+  });
+
+  it("rejects an unknown kind value", () => {
+    expect(ForgeProviderContributionSchema.safeParse({ ...base, kind: "offline" }).success).toBe(
+      false
+    );
+  });
+
+  it("treats kind as optional (minimal contribution still valid)", () => {
+    const result = ForgeProviderContributionSchema.safeParse(base);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.kind).toBeUndefined();
+  });
 });

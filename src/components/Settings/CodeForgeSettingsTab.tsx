@@ -391,7 +391,11 @@ function ProviderSettingsBody({ providerId, pluginId, contribution }: ProviderSe
           fields={credentialFields}
         />
       ) : (
-        <p className="text-xs text-daintree-text/50">No configuration needed</p>
+        <p className="text-xs text-daintree-text/50">
+          {contribution.kind === "local"
+            ? "Local provider — no authentication needed"
+            : "No configuration needed"}
+        </p>
       )}
 
       <div className="space-y-2 pt-2 border-t border-daintree-border">
