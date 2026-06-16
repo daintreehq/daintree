@@ -57,7 +57,14 @@ export function useNewTerminalPalette({
 
   const options = useMemo(() => {
     const allOptions = getLaunchOptions();
-    const registryAgentIds = new Set(getEffectiveAgentIds());
+    // Union plugin agent ids (mirrored by pluginAgentSnapshot) with the effective
+    // set so this memo recomputes when plugins register/unregister mid-session;
+    // getEffectiveAgentIds already includes them, so the union is purely a
+    // recompute trigger.
+    const registryAgentIds = new Set([
+      ...getEffectiveAgentIds(),
+      ...Object.keys(pluginAgentSnapshot),
+    ]);
 
     // Before availability is known, show all agents (avoids startup flicker).
     // Once known, hide built-in agents that are not installed. Plugin-contributed
