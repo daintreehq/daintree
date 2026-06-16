@@ -114,7 +114,7 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(34);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(35);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:install", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:set-enabled", expect.any(Function));
@@ -147,6 +147,10 @@ describe("registerPluginHandlers", () => {
       expect.any(Function)
     );
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:panel-kinds-get", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:activate-for-view",
+      expect.any(Function)
+    );
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:agents-get", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith(
       "plugin:forge-providers-get",
