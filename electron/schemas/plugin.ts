@@ -476,10 +476,19 @@ export const PluginAuthorSchema = z.strictObject({
 });
 
 /**
- * Per-entry validator for `scopes.fs.allowedPaths`. Each entry must be a
- * literal absolute path with no `..` segment and no `*` glob — the schema
- * boundary is the load-bearing gate (#4593, #4702), so substring `..` checks
- * are insufficient (segment-by-segment rejection).
+ * Matches a dynamic scope token (`${project}` / `${worktree}`) at the start of
+ * an `allowedPaths` entry, with an optional `/sub/path` suffix. These expand at
+ * call time against the live active project / worktree root (PluginService),
+ * letting a plugin scope to "the active worktree" without a hardcoded path.
+ */
+const ALLOWED_PATH_TOKEN_RE = /^\$\{(?:project|worktree)\}(?:\/.*)?$/;
+
+/**
+ * Per-entry validator for `scopes.fs.allowedPaths`. Each entry must be either a
+ * literal absolute path or a dynamic scope token (`${project}` / `${worktree}`,
+ * optionally with a `/sub/path` suffix), with no `..` segment and no `*` glob —
+ * the schema boundary is the load-bearing gate (#4593, #4702), so substring
+ * `..` checks are insufficient (segment-by-segment rejection).
  */
 const PluginAllowedPathSchema = z.string().superRefine((value, ctx) => {
   if (value.includes("*")) {
@@ -490,10 +499,11 @@ const PluginAllowedPathSchema = z.string().superRefine((value, ctx) => {
     });
     return;
   }
-  if (!path.isAbsolute(value)) {
+  const isToken = ALLOWED_PATH_TOKEN_RE.test(value);
+  if (!isToken && !path.isAbsolute(value)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: `scopes.fs.allowedPaths entries must be absolute paths: "${value}"`,
+      message: `scopes.fs.allowedPaths entries must be absolute paths or a "\${project}"/"\${worktree}" token: "${value}"`,
       params: { errorCode: "scope_path_relative" },
     });
     return;
@@ -516,11 +526,13 @@ export const PluginNetworkScopeSchema = z
   .strict();
 
 /**
- * `scopes.fs.allowedPaths` is advisory: entries are schema-validated here but
- * not consulted at runtime — they neither gate filesystem access nor attenuate
- * the compound-capability lattice (unlike `scopes.network`, which suppresses
- * compound elevation). Validation is retained so frozen manifests carry
- * well-formed intent metadata.
+ * `scopes.fs.allowedPaths` is enforced at runtime: the host-mediated
+ * `host.fs` / `host.git` surface realpath-contains every path argument to these
+ * roots (PluginService), rejecting traversal and symlink escapes. Entries may be
+ * literal absolute paths or `${project}` / `${worktree}` tokens that expand at
+ * call time against the live active project / worktree. Independently, every
+ * plugin is always granted an implicit per-plugin data root
+ * (`~/.daintree/plugin-data/{pluginId}/`) so `allowedPaths` is optional.
  */
 export const PluginFsScopeSchema = z
   .object({
