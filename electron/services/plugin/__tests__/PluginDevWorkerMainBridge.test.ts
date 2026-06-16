@@ -40,6 +40,14 @@ function makeHost() {
       set: vi.fn(async () => {}),
       onDidChange: vi.fn(() => vi.fn()),
     },
+    storage: {
+      // Annotated `Promise<unknown>` so a test can `mockResolvedValueOnce` a
+      // concrete value (the default-inferred `Promise<undefined>` would reject it).
+      get: vi.fn(async (): Promise<unknown> => undefined),
+      set: vi.fn(async () => {}),
+      delete: vi.fn(async () => {}),
+      onDidChange: vi.fn((_key: any, _cb: any) => vi.fn()),
+    },
     process: {
       spawn: vi.fn(async () => ({
         id: "p0",
@@ -231,6 +239,76 @@ describe("PluginDevWorkerMainBridge", () => {
     await flush();
     workerHost.emit("worker-message", { type: "unsubscribe", subscriptionId: "s2" });
     expect(dispose).toHaveBeenCalled();
+  });
+
+  it("routes storage.get/set/delete host-calls to the real host", async () => {
+    const { host, workerHost } = makeBridge();
+    host.storage.get.mockResolvedValueOnce("stored");
+
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "sg",
+      method: "storage.get",
+      params: { key: "k", scope: "worktree" },
+    });
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "ss",
+      method: "storage.set",
+      params: { key: "k", value: 7, scope: "project" },
+    });
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "sd",
+      method: "storage.delete",
+      params: { key: "k", scope: "user" },
+    });
+    await flush();
+
+    expect(host.storage.get).toHaveBeenCalledWith("k", "worktree");
+    expect(host.storage.set).toHaveBeenCalledWith("k", 7, "project");
+    expect(host.storage.delete).toHaveBeenCalledWith("k", "user");
+
+    const getReply = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "sg");
+    expect(getReply).toMatchObject({ ok: true, result: "stored" });
+    const setReply = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "ss");
+    expect(setReply).toMatchObject({ ok: true, result: undefined });
+    const delReply = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "sd");
+    expect(delReply).toMatchObject({ ok: true, result: undefined });
+  });
+
+  it("opens a storage subscription and pushes events to the worker", async () => {
+    const { host, workerHost } = makeBridge();
+    let emit: ((v: unknown) => void) | undefined;
+    host.storage.onDidChange.mockImplementation((_key: any, cb: any) => {
+      emit = cb;
+      return vi.fn();
+    });
+    workerHost.emit("worker-message", {
+      type: "subscribe",
+      subscriptionId: "st1",
+      kind: "storage",
+      key: "k",
+      scope: "worktree",
+    });
+    await flush();
+    expect(host.storage.onDidChange).toHaveBeenCalledWith("k", expect.any(Function), "worktree");
+    emit?.("v9");
+    const evt = workerHost.sent.find((m) => m.type === "subscription-event");
+    expect(evt).toMatchObject({ subscriptionId: "st1", payload: "v9" });
+  });
+
+  it("drops a storage subscription that is missing its key", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "subscribe",
+      subscriptionId: "st2",
+      kind: "storage",
+    });
+    await flush();
+    expect(host.storage.onDidChange).not.toHaveBeenCalled();
+    // The bridge never sends a subscription-event for the dropped subscription.
+    expect(workerHost.sent.some((m) => m.type === "subscription-event")).toBe(false);
   });
 
   it("resolves waitForActivation on `activated` and rejects on `activate-error`", async () => {

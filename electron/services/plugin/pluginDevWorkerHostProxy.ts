@@ -21,6 +21,7 @@ import type {
   PluginIpcContext,
   PluginIpcHandler,
   PluginSettingsScope,
+  PluginStorageScope,
   PluginToastOptions,
   PluginQuickPickItem,
   PluginQuickPickOptions,
@@ -622,6 +623,28 @@ export class PluginDevWorkerHostProxy {
           return Promise.resolve(dispose);
         },
       },
+      storage: {
+        get: <T = unknown>(key: string, scope: PluginStorageScope = "user") =>
+          this.call<T | undefined>("storage.get", { key, scope }),
+        set: <T = unknown>(key: string, value: T, scope: PluginStorageScope = "user") =>
+          this.call<void>("storage.set", { key, value, scope }),
+        delete: (key: string, scope: PluginStorageScope = "user") =>
+          this.call<void>("storage.delete", { key, scope }),
+        onDidChange: <T = unknown>(
+          key: string,
+          callback: (value: T | undefined) => void,
+          scope: PluginStorageScope = "user"
+        ) => {
+          this.assertActivationOpen("storage.onDidChange");
+          const dispose = this.subscribe(
+            "storage",
+            (payload) => callback(payload as T | undefined),
+            key,
+            scope
+          );
+          return Promise.resolve(dispose);
+        },
+      },
     };
     return host;
   }
@@ -630,7 +653,7 @@ export class PluginDevWorkerHostProxy {
     kind: PluginWorkerSubscriptionKind,
     callback: (payload: unknown) => void,
     key?: string,
-    scope?: PluginSettingsScope,
+    scope?: PluginSettingsScope | PluginStorageScope,
     debounceMs?: number
   ): () => void {
     const subscriptionId = `s${this.nextId++}`;

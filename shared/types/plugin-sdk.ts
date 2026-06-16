@@ -83,6 +83,10 @@ export type {
   SettingFieldType,
 } from "./plugin.js";
 
+// ── Storage (host.storage) ──────────────────────────────────────────
+
+export type { StorageApi, PluginStorageScope } from "./plugin.js";
+
 // ── IPC (registerHandler, broadcastToRenderer) — ships in v1 ────────
 
 export type {

@@ -100,6 +100,8 @@ reports/
 *.deb
 *.rpm
 .daintree/daintree-remote
+# Private plugin storage (#10556) — machine-owned plugin state, never tracked.
+.daintree/plugin-storage/
 
 # Native addon build outputs (electron-rebuild + node-gyp)
 electron/native/*/build/

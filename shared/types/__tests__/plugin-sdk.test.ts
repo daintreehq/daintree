@@ -3,6 +3,8 @@ import type {
   PluginManifest,
   PluginHostApi,
   PluginActivationApi,
+  PluginSettingsScope,
+  PluginStorageScope,
   PluginHostCallOptions,
   PluginActivate,
   PanelContribution,
@@ -204,6 +206,28 @@ describe("plugin-sdk boundary", () => {
       >();
     });
 
+    it("PluginHostApi.storage exposes get/set/delete/onDidChange", () => {
+      // Purely type-level — `{} as PluginHostApi` has no runtime `storage`, so
+      // dereferencing it would throw; assert on the types directly.
+      expectTypeOf<PluginHostApi["storage"]["get"]>().toBeFunction();
+      expectTypeOf<PluginHostApi["storage"]["set"]>().toBeFunction();
+      expectTypeOf<PluginHostApi["storage"]["delete"]>().toBeFunction();
+      expectTypeOf<PluginHostApi["storage"]["onDidChange"]>().toBeFunction();
+      // The disposer return type guards against a regression to void / a
+      // non-promise disposer, matching the settings.onDidChange contract.
+      expectTypeOf<ReturnType<PluginHostApi["storage"]["onDidChange"]>>().toEqualTypeOf<
+        Promise<() => void>
+      >();
+    });
+
+    it("PluginStorageScope adds 'worktree' beyond the settings scopes", () => {
+      // "worktree" is assignable to the storage scope but not the settings scope —
+      // the two are intentionally distinct so the settings UI never sees it.
+      expectTypeOf<"worktree">().toMatchTypeOf<PluginStorageScope>();
+      expectTypeOf<PluginSettingsScope>().toMatchTypeOf<PluginStorageScope>();
+      expectTypeOf<"worktree">().not.toMatchTypeOf<PluginSettingsScope>();
+    });
+
     it("PluginHostApi extends the revoke-guarded PluginActivationApi", () => {
       // The full host surface is assignable to the activation slice, but not
       // vice versa — PluginHostApi adds the post-activation-safe methods.
@@ -248,6 +272,8 @@ describe("plugin-sdk boundary", () => {
       const _getAll = activation.getWorktrees;
       // @ts-expect-error — settings accessor is not on the slice
       const _settings = activation.settings;
+      // @ts-expect-error — storage accessor is not on the slice
+      const _storage = activation.storage;
       // @ts-expect-error — process accessor is post-activation-safe, not on the slice
       const _process = activation.process;
       expect([
@@ -259,8 +285,9 @@ describe("plugin-sdk boundary", () => {
         _getActive,
         _getAll,
         _settings,
+        _storage,
         _process,
-      ]).toHaveLength(9);
+      ]).toHaveLength(10);
     });
 
     it("PluginProcessHandle carries the lifecycle controls", () => {

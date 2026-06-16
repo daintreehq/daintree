@@ -19,6 +19,8 @@ import type {
   PluginHostApi,
   PluginIpcContext,
   PluginProcessHandle,
+  PluginSettingsScope,
+  PluginStorageScope,
 } from "../../../shared/types/plugin.js";
 import type { FileDecoration, FileDecorationProviderImpl } from "../../../shared/types/forge.js";
 import type {
@@ -33,6 +35,9 @@ import type {
   RegisterHandlerParams,
   SettingsGetParams,
   SettingsSetParams,
+  StorageGetParams,
+  StorageSetParams,
+  StorageDeleteParams,
   ShowToastParams,
   ShowQuickPickParams,
   ShowInputBoxParams,
@@ -384,6 +389,20 @@ export class PluginDevWorkerMainBridge {
         await this.host.settings.set(p.key, p.value, p.scope);
         return undefined;
       }
+      case "storage.get": {
+        const p = params as StorageGetParams;
+        return this.host.storage.get(p.key, p.scope);
+      }
+      case "storage.set": {
+        const p = params as StorageSetParams;
+        await this.host.storage.set(p.key, p.value, p.scope);
+        return undefined;
+      }
+      case "storage.delete": {
+        const p = params as StorageDeleteParams;
+        await this.host.storage.delete(p.key, p.scope);
+        return undefined;
+      }
       case "fs.readFile":
         return this.host.fs.readFile((params as FsPathParams).path, { signal });
       case "fs.writeFile": {
@@ -648,13 +667,27 @@ export class PluginDevWorkerMainBridge {
           kind === "process-exit"
             ? handle.onExit((info) => push(info))
             : handle.onCrash((info) => push(info));
+      } else if (kind === "storage") {
+        if (!msg.key) {
+          logger.warn(`[${this.pluginId}] storage subscribe missing key`);
+          return;
+        }
+        dispose = await this.host.storage.onDidChange(
+          msg.key,
+          (value) => push(value),
+          msg.scope as PluginStorageScope | undefined
+        );
       } else {
         // settings
         if (!msg.key) {
           logger.warn(`[${this.pluginId}] settings subscribe missing key`);
           return;
         }
-        dispose = await this.host.settings.onDidChange(msg.key, (value) => push(value), msg.scope);
+        dispose = await this.host.settings.onDidChange(
+          msg.key,
+          (value) => push(value),
+          msg.scope as PluginSettingsScope | undefined
+        );
       }
       // The bridge may have been disposed or reloaded while the subscription was
       // settling — tear it down rather than leak it past the cleanup pass.
