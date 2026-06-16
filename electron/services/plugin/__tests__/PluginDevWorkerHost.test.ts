@@ -233,6 +233,34 @@ describe("PluginDevWorkerHost", () => {
     expect(child.kill).toHaveBeenCalled();
   });
 
+  it("prod mode forks with the prod-worker kind and starts NO file watcher (#10526)", async () => {
+    const { PluginDevWorkerHost } = await loadModule();
+    const host = new PluginDevWorkerHost({ ...OPTS, mode: "prod" });
+    host.waitForReady().catch(() => {});
+    void host.start();
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", { type: "ready" });
+
+    // Forked with the prod kind for process-monitor observability...
+    const [, , options] = forkMock.mock.calls[0];
+    expect(options.env.DAINTREE_UTILITY_PROCESS_KIND).toBe("plugin-prod-worker");
+    // ...and crucially never arms the hot-reload bundle watcher.
+    expect(watchCalls).toHaveLength(0);
+    host.dispose();
+  });
+
+  it("dev mode arms the file watcher (contrast with prod) (#10526)", async () => {
+    const { PluginDevWorkerHost } = await loadModule();
+    const host = new PluginDevWorkerHost({ ...OPTS, mode: "dev" });
+    void host.start();
+    (mockChildren[0] as MockUtilityChild).emit("message", { type: "ready" });
+
+    expect(watchCalls).toHaveLength(1);
+    const [, , options] = forkMock.mock.calls[0];
+    expect(options.env.DAINTREE_UTILITY_PROCESS_KIND).toBe("plugin-dev-worker");
+    host.dispose();
+  });
+
   it("re-emits non-lifecycle worker messages as `worker-message`", async () => {
     const { PluginDevWorkerHost } = await loadModule();
     const host = new PluginDevWorkerHost(OPTS);

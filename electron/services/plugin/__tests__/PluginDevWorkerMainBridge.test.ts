@@ -40,6 +40,43 @@ function makeHost() {
       set: vi.fn(async () => {}),
       onDidChange: vi.fn(() => vi.fn()),
     },
+    process: {
+      spawn: vi.fn(async () => ({
+        id: "p0",
+        kill: vi.fn(),
+        restart: vi.fn(async () => {}),
+        onExit: vi.fn(() => vi.fn()),
+        onCrash: vi.fn(() => vi.fn()),
+      })),
+    },
+    fs: {
+      readFile: vi.fn(async () => ""),
+      writeFile: vi.fn(async () => {}),
+      readdir: vi.fn(async () => []),
+      stat: vi.fn(async () => ({})),
+      watch: vi.fn(async (_paths: string[], _cb: (p: string) => void) => vi.fn()),
+    },
+  };
+}
+
+/** A controllable spawned-process handle whose lifecycle callbacks can be fired. */
+function makeProcessHandle(id = "p1") {
+  let exitCb: ((info: unknown) => void) | undefined;
+  let crashCb: ((info: unknown) => void) | undefined;
+  return {
+    id,
+    kill: vi.fn(),
+    restart: vi.fn(async () => {}),
+    onExit: vi.fn((cb: (info: unknown) => void) => {
+      exitCb = cb;
+      return vi.fn();
+    }),
+    onCrash: vi.fn((cb: (info: unknown) => void) => {
+      crashCb = cb;
+      return vi.fn();
+    }),
+    emitExit: (info: unknown) => exitCb?.(info),
+    emitCrash: (info: unknown) => crashCb?.(info),
   };
 }
 
@@ -47,7 +84,7 @@ function makeBridge(
   overrides?: Partial<{
     capabilities: string[];
     clear: () => void;
-    onActivationResult: (r: { ok: true } | { ok: false; error: string }) => void;
+    onActivationResult: (r: { ok: true } | { ok: false; error: string; stack?: string }) => void;
   }>
 ) {
   const host = makeHost();
@@ -355,5 +392,186 @@ describe("PluginDevWorkerMainBridge", () => {
     workerHost.emit("reloading");
     expect(clear).toHaveBeenCalled();
     await expect(pending).rejects.toThrow(/reloaded/);
+  });
+
+  it("forwards the activate-error stack through onActivationResult (#10526)", async () => {
+    const onActivationResult = vi.fn();
+    const { workerHost, bridge } = makeBridge({ onActivationResult });
+    bridge.waitForActivation().catch(() => {});
+    workerHost.emit("worker-message", {
+      type: "activate-error",
+      error: "boom",
+      stack: "Error: boom\n  at activate",
+    });
+    expect(onActivationResult).toHaveBeenCalledWith({
+      ok: false,
+      error: "boom",
+      stack: "Error: boom\n  at activate",
+    });
+  });
+
+  describe("host.process relay (#10526)", () => {
+    async function spawn(workerHost: any, host: any, handle = makeProcessHandle("p1")) {
+      host.process.spawn.mockResolvedValueOnce(handle);
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "spawn1",
+        method: "process.spawn",
+        params: { command: "node", options: { args: ["x.js"] } },
+      });
+      await flush();
+      return handle;
+    }
+
+    it("relays spawn to the host and replies with the handle id", async () => {
+      const { host, workerHost } = makeBridge();
+      await spawn(workerHost, host);
+      expect(host.process.spawn).toHaveBeenCalledWith("node", { args: ["x.js"] });
+      const res = workerHost.sent.find((m: any) => m.type === "host-result" && m.requestId === "spawn1");
+      expect(res).toMatchObject({ ok: true, result: { id: "p1" } });
+    });
+
+    it("process.kill notify kills the stored handle", async () => {
+      const { host, workerHost } = makeBridge();
+      const handle = await spawn(workerHost, host);
+      workerHost.emit("worker-message", {
+        type: "host-notify",
+        method: "process.kill",
+        params: { processId: "p1" },
+      });
+      await flush();
+      expect(handle.kill).toHaveBeenCalled();
+    });
+
+    it("process.restart awaits the stored handle's restart", async () => {
+      const { host, workerHost } = makeBridge();
+      const handle = await spawn(workerHost, host);
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "r1",
+        method: "process.restart",
+        params: { processId: "p1" },
+      });
+      await flush();
+      expect(handle.restart).toHaveBeenCalled();
+      const res = workerHost.sent.find((m: any) => m.type === "host-result" && m.requestId === "r1");
+      expect(res).toMatchObject({ ok: true });
+    });
+
+    it("process.restart for an unknown process replies with an error", async () => {
+      const { workerHost } = makeBridge();
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "r2",
+        method: "process.restart",
+        params: { processId: "ghost" },
+      });
+      await flush();
+      const res = workerHost.sent.find((m: any) => m.type === "host-result" && m.requestId === "r2");
+      expect(res).toMatchObject({ ok: false });
+      expect(res.error).toMatch(/No live process/);
+    });
+
+    it("process-exit subscription pushes exit events to the worker", async () => {
+      const { host, workerHost } = makeBridge();
+      const handle = await spawn(workerHost, host);
+      workerHost.emit("worker-message", {
+        type: "subscribe",
+        subscriptionId: "s1",
+        kind: "process-exit",
+        processId: "p1",
+      });
+      expect(handle.onExit).toHaveBeenCalled();
+      handle.emitExit({ exitCode: 0, signal: null });
+      const evt = workerHost.sent.find(
+        (m: any) => m.type === "subscription-event" && m.subscriptionId === "s1"
+      );
+      expect(evt).toMatchObject({ payload: { exitCode: 0, signal: null } });
+    });
+
+    it("process-crash subscription wires onCrash", async () => {
+      const { host, workerHost } = makeBridge();
+      const handle = await spawn(workerHost, host);
+      workerHost.emit("worker-message", {
+        type: "subscribe",
+        subscriptionId: "s2",
+        kind: "process-crash",
+        processId: "p1",
+      });
+      expect(handle.onCrash).toHaveBeenCalled();
+    });
+
+    it("kills spawned processes on dispose", async () => {
+      const { host, workerHost, bridge } = makeBridge();
+      const handle = await spawn(workerHost, host);
+      bridge.dispose();
+      expect(handle.kill).toHaveBeenCalled();
+    });
+
+    it("kills spawned processes on reload", async () => {
+      const { host, workerHost, bridge } = makeBridge();
+      bridge.waitForActivation().catch(() => {});
+      const handle = await spawn(workerHost, host);
+      workerHost.emit("reloading");
+      expect(handle.kill).toHaveBeenCalled();
+    });
+  });
+
+  describe("host.fs.watch relay (#10526)", () => {
+    it("wires the host watcher and pushes change events keyed by subscription id", async () => {
+      const { host, workerHost } = makeBridge();
+      let changeCb: ((p: string) => void) | undefined;
+      host.fs.watch.mockImplementationOnce(async (_paths: string[], cb: (p: string) => void) => {
+        changeCb = cb;
+        return vi.fn();
+      });
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "w1",
+        method: "fs.watch",
+        params: { subscriptionId: "fs1", paths: ["/repo/a.ts"] },
+      });
+      await flush();
+      expect(host.fs.watch).toHaveBeenCalledWith(
+        ["/repo/a.ts"],
+        expect.any(Function),
+        expect.objectContaining({ signal: expect.anything() })
+      );
+      changeCb?.("/repo/a.ts");
+      const evt = workerHost.sent.find(
+        (m: any) => m.type === "subscription-event" && m.subscriptionId === "fs1"
+      );
+      expect(evt).toMatchObject({ payload: "/repo/a.ts" });
+    });
+
+    it("disposes the watcher on unsubscribe", async () => {
+      const { host, workerHost } = makeBridge();
+      const dispose = vi.fn();
+      host.fs.watch.mockResolvedValueOnce(dispose);
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "w2",
+        method: "fs.watch",
+        params: { subscriptionId: "fs2", paths: ["/repo"] },
+      });
+      await flush();
+      workerHost.emit("worker-message", { type: "unsubscribe", subscriptionId: "fs2" });
+      expect(dispose).toHaveBeenCalled();
+    });
+
+    it("replies with an error when the host watch rejects", async () => {
+      const { host, workerHost } = makeBridge();
+      host.fs.watch.mockRejectedValueOnce(new Error("PERMISSION_REQUIRED: fs:project-read"));
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "w3",
+        method: "fs.watch",
+        params: { subscriptionId: "fs3", paths: ["/nope"] },
+      });
+      await flush();
+      const res = workerHost.sent.find((m: any) => m.type === "host-result" && m.requestId === "w3");
+      expect(res).toMatchObject({ ok: false });
+      expect(res.error).toMatch(/PERMISSION_REQUIRED/);
+    });
   });
 });

@@ -49,6 +49,84 @@ vi.mock("../../store.js", () => ({
   },
 }));
 
+// Every plugin activates out-of-process via utilityProcess.fork (#10526), which
+// vitest can't run. Mock the worker host/bridge so the bridge imports the
+// fixture bundle and runs `activate(host)` IN-PROCESS against the real host —
+// preserving this suite's end-to-end coverage of real contribution registries.
+const devWorkerMock = vi.hoisted(() => {
+  interface DevWorkerOpts {
+    pluginId: string;
+    pluginDir: string;
+    bundlePath: string;
+    mode?: "dev" | "prod";
+  }
+  class MockPluginDevWorkerHost {
+    opts: DevWorkerOpts;
+    start = vi.fn(async () => undefined);
+    dispose = vi.fn();
+    isReady = (): boolean => true;
+    on = vi.fn();
+    off = vi.fn();
+    constructor(opts: DevWorkerOpts) {
+      this.opts = opts;
+    }
+  }
+  interface MockBridgeDeps {
+    workerHost: { opts: DevWorkerOpts };
+    host: unknown;
+    onActivationResult?: (
+      result: { ok: true } | { ok: false; error: string; stack?: string }
+    ) => void;
+  }
+  class MockPluginDevWorkerMainBridge {
+    deps: MockBridgeDeps;
+    private cleanup: (() => void) | null = null;
+    waitForActivation = vi.fn(async () => {
+      const bundlePath = this.deps.workerHost?.opts?.bundlePath;
+      const onResult = this.deps.onActivationResult;
+      if (!bundlePath) {
+        onResult?.({ ok: true });
+        return;
+      }
+      const { pathToFileURL } = await import("node:url");
+      const { formatErrorMessage } = await import("../../../shared/utils/errorMessage.js");
+      try {
+        const mod = (await import(pathToFileURL(bundlePath).href)) as { activate?: unknown };
+        if (typeof mod.activate === "function") {
+          const result = await (mod.activate as (h: unknown) => unknown)(this.deps.host);
+          if (typeof result === "function") this.cleanup = result as () => void;
+        }
+        onResult?.({ ok: true });
+      } catch (err) {
+        onResult?.({
+          ok: false,
+          error: formatErrorMessage(err, "activate() threw"),
+          stack: err instanceof Error ? err.stack : undefined,
+        });
+      }
+    });
+    dispose = vi.fn(() => {
+      try {
+        this.cleanup?.();
+      } catch {
+        // best-effort
+      }
+      this.cleanup = null;
+    });
+    constructor(deps: MockBridgeDeps) {
+      this.deps = deps;
+    }
+  }
+  return { MockPluginDevWorkerHost, MockPluginDevWorkerMainBridge };
+});
+vi.mock("../plugin/PluginDevWorkerHost.js", () => ({
+  PluginDevWorkerHost: devWorkerMock.MockPluginDevWorkerHost,
+  CRASH_WINDOW_MS: 30 * 60 * 1000,
+}));
+vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
+  PluginDevWorkerMainBridge: devWorkerMock.MockPluginDevWorkerMainBridge,
+}));
+
 import { PluginService } from "../PluginService.js";
 import type { PluginIpcContext } from "../../../shared/types/plugin.js";
 import {
@@ -898,9 +976,11 @@ describe("PluginService integration — main entry execution", () => {
       await initializeAndActivate(service);
 
       expect(service.hasPlugin("acme.bad-main")).toBe(true);
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to load main entry for acme.bad-main"),
-        expect.anything()
+      // The worker reports the import failure via onActivationResult, which
+      // PluginService persists as the provenance loadError (#10526) — the
+      // in-process console.error of the old loader is gone.
+      expect(service.getPluginLoadError("acme.bad-main")?.message).toContain(
+        "intentional fixture failure"
       );
       expect(getPanelKindConfig("acme.bad-main.p")).toBeDefined();
       expect(getToolbarButtonConfig("acme.bad-main.b")).toBeDefined();
@@ -1082,7 +1162,8 @@ describe("PluginService integration — activate() lifecycle", () => {
     );
     expect(result).toEqual({ echoed: { issue: 7 } });
 
-    // Unload tears the handler down — a later dispatch finds nothing.
+    // Unload tears the handler down — a later dispatch is short-circuited by
+    // the #10462 ownership guard (the plugin left `this.plugins`).
     service.unloadPlugin("acme.action-plugin");
     expect(service.listPluginActions()).toEqual([]);
     await expect(
@@ -1092,7 +1173,7 @@ describe("PluginService integration — activate() lifecycle", () => {
         makeCtx("acme.action-plugin"),
         [{}]
       )
-    ).rejects.toThrow(/No plugin handler registered/);
+    ).rejects.toThrow(/is not loaded/);
   });
 
   it("invokes activate's returned cleanup before handlers are removed on unload", async () => {
@@ -1161,7 +1242,7 @@ describe("PluginService integration — activate() lifecycle", () => {
     }
   });
 
-  it("logs an error and still registers the plugin when activate throws", async () => {
+  it("records a load error and still registers the plugin when activate throws", async () => {
     const pluginDir = await writePlugin("acme.throwing-activate", {
       name: "acme.throwing-activate",
       version: "1.0.0",
@@ -1180,19 +1261,13 @@ describe("PluginService integration — activate() lifecycle", () => {
       })
     );
 
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      const service = new PluginService(tmpDir, "0.0.0");
-      await initializeAndActivate(service);
+    const service = new PluginService(tmpDir, "0.0.0");
+    await initializeAndActivate(service);
 
-      expect(service.hasPlugin("acme.throwing-activate")).toBe(true);
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to load main entry for acme.throwing-activate"),
-        expect.anything()
-      );
-    } finally {
-      errorSpy.mockRestore();
-    }
+    expect(service.hasPlugin("acme.throwing-activate")).toBe(true);
+    // The worker's activate-error is persisted as the provenance loadError
+    // (#10526) — the in-process console.error of the old loader is gone.
+    expect(service.getPluginLoadError("acme.throwing-activate")?.message).toContain("boom");
   });
 
   it("host.registerHandler enforces the plugin's own namespace", async () => {
