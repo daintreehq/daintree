@@ -787,6 +787,14 @@ describe("createMockHost", () => {
       expect(await host.storage.get("seeded", "worktree")).toBe("value");
     });
 
+    it("drops the worktree seed when no worktree is active at construction", async () => {
+      // With no active worktree there is no target to seed; the value is not
+      // smuggled into the first worktree activated later.
+      const host = createMockHost({ storage: { worktree: { seeded: "value" } } });
+      host.simulateActiveWorktreeChange(sampleSnapshot);
+      expect(await host.storage.get("seeded", "worktree")).toBeUndefined();
+    });
+
     it("throws on set when no worktree is active", async () => {
       const host = createMockHost();
       await expect(host.storage.set("k", "v", "worktree")).rejects.toThrow(
@@ -852,6 +860,26 @@ describe("createMockHost", () => {
       await expect(
         host.fs.watch(["/tmp"], vi.fn(), { signal: AbortSignal.abort() })
       ).rejects.toThrow();
+    });
+
+    it("rejects a non-function callback (matches production)", async () => {
+      const host = createMockHost();
+      await expect(host.fs.watch(["/tmp"], null as unknown as (p: string) => void)).rejects.toThrow(
+        /callback must be a function/
+      );
+    });
+
+    it("rejects an empty paths array (matches production)", async () => {
+      const host = createMockHost();
+      await expect(host.fs.watch([], vi.fn())).rejects.toThrow(/paths must be a non-empty array/);
+    });
+
+    it("propagates a throwing watcher callback", async () => {
+      const host = createMockHost();
+      await host.fs.watch(["/tmp"], () => {
+        throw new Error("watcher boom");
+      });
+      expect(() => host.simulateFsWatch("/tmp/file.ts")).toThrow(/watcher boom/);
     });
   });
 });

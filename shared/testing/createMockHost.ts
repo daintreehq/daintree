@@ -820,6 +820,14 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       },
       async watch(paths, callback, options) {
         options?.signal?.throwIfAborted();
+        // Mirror PluginService.createHost fs.watch validation order so a watch
+        // call the production host would reject fails the mock the same way.
+        if (typeof callback !== "function") {
+          throw new Error(`Plugin "${pluginId}" fs.watch: callback must be a function`);
+        }
+        if (!Array.isArray(paths) || paths.length === 0) {
+          throw new Error(`Plugin "${pluginId}" fs.watch: paths must be a non-empty array`);
+        }
         // Record the watcher so `simulateFsWatch` can fire it. The disposer
         // removes the record (idempotent) — once disposed the watcher no longer
         // receives simulated changes.
@@ -917,7 +925,9 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       for (const entry of entries) actionCatalog.set(entry.id, entry);
     },
     simulateFsWatch(changedPath) {
-      for (const { callback } of fsWatchers) callback(changedPath);
+      // Snapshot before firing so a callback that registers/disposes a watcher
+      // doesn't mutate the set mid-iteration.
+      for (const { callback } of [...fsWatchers]) callback(changedPath);
     },
   };
 
