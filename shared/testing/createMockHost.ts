@@ -9,7 +9,12 @@
  * method this mock doesn't implement.
  */
 
-import type { ActionDispatchResult, ActionId } from "../types/actions.js";
+import type {
+  ActionDispatchResult,
+  ActionId,
+  PluginActionManifestEntry,
+  PluginCanDispatchResult,
+} from "../types/actions.js";
 import type {
   FileDecorationProviderDescriptor,
   FileDecorationProviderImpl,
@@ -145,6 +150,26 @@ export interface MockHostState {
    * the default in-memory routing (which resolves the registered handler).
    */
   setDispatchResult(actionId: ActionId, result: ActionDispatchResult): void;
+
+  /**
+   * Replace the action catalog that backs `host.actions.list/get/canDispatch`.
+   * Mirrors a snapshot of `ActionService.list()`: pass the slim
+   * {@link PluginActionManifestEntry} entries a plugin would discover, then
+   * assert how the plugin reacts. Replaces (does not merge) any prior seed;
+   * call with `[]` to reset. `canDispatch` derives its verdict from each
+   * entry's `danger` the same way production does — `"safe"` → `"ok"`,
+   * `"confirm"` → `"confirm"`, unknown id → `"restricted"`.
+   */
+  seedActionCatalog(entries: PluginActionManifestEntry[]): void;
+
+  /**
+   * Fire every active `host.fs.watch` callback with `changedPath`, simulating a
+   * filesystem change the watcher would observe. Like the other `simulate*`
+   * helpers it notifies every registered watcher without path filtering
+   * (containment is a production concern, not modeled here) and lets callback
+   * errors propagate so a test sees them.
+   */
+  simulateFsWatch(changedPath: string): void;
 }
 
 export interface CreateMockHostOptions {
@@ -228,12 +253,39 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     project: new Map(),
   };
 
-  const storageStore: Record<PluginStorageScope, Map<string, unknown>> = {
+  // `user`/`project` scopes are flat maps; `worktree` scope is isolated per
+  // active worktree path (#10578). Production resolves a different storage file
+  // per worktree, so a value written under worktree A is invisible after
+  // `simulateActiveWorktreeChange(B)`. The sub-map is created lazily on first
+  // write; the read path returns `undefined` for an unseen worktree.
+  const userProjectStore: Record<"user" | "project", Map<string, unknown>> = {
     user: new Map(Object.entries(options.storage?.user ?? {})),
     project: new Map(Object.entries(options.storage?.project ?? {})),
-    worktree: new Map(Object.entries(options.storage?.worktree ?? {})),
+  };
+  const worktreeStorageByPath = new Map<string, Map<string, unknown>>();
+  // Seed the worktree scope into the initial active worktree's sub-map. With no
+  // active worktree there is no target (production would throw on `set`), so the
+  // seed is silently dropped rather than placed in an anonymous map.
+  if (activeWorktree && options.storage?.worktree) {
+    worktreeStorageByPath.set(
+      activeWorktree.path,
+      new Map(Object.entries(options.storage.worktree))
+    );
+  }
+  /** The storage sub-map for the active worktree, created on demand. */
+  const worktreeStore = (): Map<string, unknown> | null => {
+    if (!activeWorktree) return null;
+    let store = worktreeStorageByPath.get(activeWorktree.path);
+    if (!store) {
+      store = new Map();
+      worktreeStorageByPath.set(activeWorktree.path, store);
+    }
+    return store;
   };
 
+  // Subscriptions stay keyed by storage key (not worktree path) for every
+  // scope, matching production: a worktree-scope `onDidChange` survives a
+  // worktree switch and then fires for the now-active worktree's value.
   const storageSubs: Record<PluginStorageScope, Map<string, Set<(value: unknown) => void>>> = {
     user: new Map(),
     project: new Map(),
@@ -241,6 +293,10 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   };
 
   const dispatchOverrides = new Map<ActionId, ActionDispatchResult>();
+  const actionCatalog = new Map<string, PluginActionManifestEntry>();
+  // Active `host.fs.watch` registrations; a watcher's disposer removes its
+  // record, and `simulateFsWatch` fires each one's callback.
+  const fsWatchers = new Set<{ paths: string[]; callback: (changedPath: string) => void }>();
 
   // Resolve the declared scope for a key from the opt-in `manifestSettings`,
   // mirroring PluginSettingsManager.getDeclaredScope. Returns undefined when no
@@ -309,12 +365,19 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
 
   // Private machine-owned storage (#10556). Mirrors the settings mock but adds
   // the "worktree" scope and a `delete` method, and never gates on declared keys.
+  // The "worktree" scope resolves its target from the current active worktree
+  // (#10578): set with no active worktree throws (matching production's "no
+  // active worktree" guard), get resolves undefined, and delete no-ops.
   const storage: StorageApi = {
     async get<T = unknown>(
       key: string,
       scope: PluginStorageScope = "user"
     ): Promise<T | undefined> {
-      return storageStore[scope].get(key) as T | undefined;
+      const store = scope === "worktree" ? worktreeStore() : userProjectStore[scope];
+      // No active worktree resolves to undefined rather than throwing, matching
+      // production's "unset key" return.
+      if (!store) return undefined;
+      return store.get(key) as T | undefined;
     },
     async set<T = unknown>(
       key: string,
@@ -324,9 +387,16 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       if (value === undefined) {
         throw new Error("storage.set: value cannot be undefined");
       }
-      const prev = storageStore[scope].get(key);
-      const had = storageStore[scope].has(key);
-      storageStore[scope].set(key, value);
+      const store = scope === "worktree" ? worktreeStore() : userProjectStore[scope];
+      if (!store) {
+        // worktree scope with no active worktree — mirror production's message.
+        throw new Error(
+          `Plugin "${pluginId}" storage.set: no active ${scope} — "${scope}" scope has no target`
+        );
+      }
+      const prev = store.get(key);
+      const had = store.has(key);
+      store.set(key, value);
       // Mirror the real store's `valuesEqual` (JSON) change detection rather than
       // `Object.is`, so two equal-but-distinct object literals fire onDidChange
       // exactly once — matching production, not reference identity.
@@ -339,8 +409,12 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       }
     },
     async delete(key: string, scope: PluginStorageScope = "user"): Promise<void> {
-      const had = storageStore[scope].has(key);
-      storageStore[scope].delete(key);
+      const store = scope === "worktree" ? worktreeStore() : userProjectStore[scope];
+      // No active worktree — a delete is a no-op rather than a throw (matching
+      // production and the "already absent" return of the store).
+      if (!store) return;
+      const had = store.has(key);
+      store.delete(key);
       if (had) {
         const subs = storageSubs[scope].get(key);
         if (subs) {
@@ -677,13 +751,23 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       return false;
     },
     actions: {
+      // Backed by the catalog seeded via `seedActionCatalog`. With no seed the
+      // catalog is empty — `list()` resolves `[]`, `get()` resolves `null`, and
+      // `canDispatch()` resolves `"restricted"`, matching an unloaded plugin.
       async list() {
-        return [];
+        return Array.from(actionCatalog.values());
       },
-      async get() {
-        return null;
+      async get(actionId) {
+        return actionCatalog.get(actionId) ?? null;
       },
-      async canDispatch() {
+      async canDispatch(actionId): Promise<PluginCanDispatchResult> {
+        const entry = actionCatalog.get(actionId);
+        // Mirror production: unknown/absent → "restricted", danger "safe" → "ok",
+        // danger "confirm" → "confirm" (dispatch would reject it), anything else
+        // (e.g. a "restricted" entry that slipped in) → "restricted".
+        if (!entry) return "restricted";
+        if (entry.danger === "safe") return "ok";
+        if (entry.danger === "confirm") return "confirm";
         return "restricted";
       },
     },
@@ -734,9 +818,27 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
           mtimeMs: 0,
         };
       },
-      async watch(_paths, _callback, options) {
+      async watch(paths, callback, options) {
         options?.signal?.throwIfAborted();
-        return () => {};
+        // Mirror PluginService.createHost fs.watch validation order so a watch
+        // call the production host would reject fails the mock the same way.
+        if (typeof callback !== "function") {
+          throw new Error(`Plugin "${pluginId}" fs.watch: callback must be a function`);
+        }
+        if (!Array.isArray(paths) || paths.length === 0) {
+          throw new Error(`Plugin "${pluginId}" fs.watch: paths must be a non-empty array`);
+        }
+        // Record the watcher so `simulateFsWatch` can fire it. The disposer
+        // removes the record (idempotent) — once disposed the watcher no longer
+        // receives simulated changes.
+        const record = { paths, callback };
+        fsWatchers.add(record);
+        let disposed = false;
+        return () => {
+          if (disposed) return;
+          disposed = true;
+          fsWatchers.delete(record);
+        };
       },
     },
     // In-memory git mock. `commit` mirrors the host's #7880 guard — an empty
@@ -817,6 +919,15 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     },
     setDispatchResult(actionId, result) {
       dispatchOverrides.set(actionId, result);
+    },
+    seedActionCatalog(entries) {
+      actionCatalog.clear();
+      for (const entry of entries) actionCatalog.set(entry.id, entry);
+    },
+    simulateFsWatch(changedPath) {
+      // Snapshot before firing so a callback that registers/disposes a watcher
+      // doesn't mutate the set mid-iteration.
+      for (const { callback } of [...fsWatchers]) callback(changedPath);
     },
   };
 

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createMockHost } from "../createMockHost.js";
 import type { PluginActionContribution, PluginWorktreeSnapshot } from "../../types/plugin.js";
+import type { PluginActionManifestEntry } from "../../types/actions.js";
 
 const sampleSnapshot: PluginWorktreeSnapshot = {
   id: "wt-1",
@@ -10,6 +11,36 @@ const sampleSnapshot: PluginWorktreeSnapshot = {
   isCurrent: true,
   linked: null,
   status: null,
+};
+
+const otherSnapshot: PluginWorktreeSnapshot = {
+  id: "wt-2",
+  worktreeId: "wt-2",
+  path: "/tmp/repo-feature",
+  name: "feature",
+  isCurrent: false,
+  linked: null,
+  status: null,
+};
+
+const safeCatalogEntry: PluginActionManifestEntry = {
+  id: "core.openFile",
+  title: "Open file",
+  description: "Open a file in the editor",
+  category: "Files",
+  kind: "command",
+  danger: "safe",
+  requiresArgs: true,
+};
+
+const confirmCatalogEntry: PluginActionManifestEntry = {
+  id: "core.deleteWorktree",
+  title: "Delete worktree",
+  description: "Remove a worktree",
+  category: "Worktrees",
+  kind: "command",
+  danger: "confirm",
+  requiresArgs: true,
 };
 
 const sampleAction: PluginActionContribution = {
@@ -689,6 +720,166 @@ describe("createMockHost", () => {
       const result = await host.dispatch("anything", { x: 1 });
       expect(dispatch).toHaveBeenCalledWith("anything", { x: 1 });
       expect(result).toEqual({ ok: true, result: 42 });
+    });
+  });
+
+  describe("actions catalog", () => {
+    it("returns an empty catalog with no verdicts until seeded", async () => {
+      const host = createMockHost();
+      expect(await host.actions.list()).toEqual([]);
+      expect(await host.actions.get("core.openFile")).toBeNull();
+      expect(await host.actions.canDispatch("core.openFile")).toBe("restricted");
+    });
+
+    it("lists and looks up seeded entries", async () => {
+      const host = createMockHost();
+      host.seedActionCatalog([safeCatalogEntry, confirmCatalogEntry]);
+      expect(await host.actions.list()).toEqual([safeCatalogEntry, confirmCatalogEntry]);
+      expect(await host.actions.get("core.openFile")).toEqual(safeCatalogEntry);
+      expect(await host.actions.get("core.deleteWorktree")).toEqual(confirmCatalogEntry);
+      expect(await host.actions.get("core.missing")).toBeNull();
+    });
+
+    it("derives canDispatch from each entry's danger", async () => {
+      const host = createMockHost();
+      host.seedActionCatalog([safeCatalogEntry, confirmCatalogEntry]);
+      expect(await host.actions.canDispatch("core.openFile")).toBe("ok");
+      expect(await host.actions.canDispatch("core.deleteWorktree")).toBe("confirm");
+      // Unknown id resolves restricted, never throws.
+      expect(await host.actions.canDispatch("core.missing")).toBe("restricted");
+    });
+
+    it("replaces (does not merge) the catalog on each seed", async () => {
+      const host = createMockHost();
+      host.seedActionCatalog([safeCatalogEntry, confirmCatalogEntry]);
+      host.seedActionCatalog([safeCatalogEntry]);
+      expect(await host.actions.list()).toEqual([safeCatalogEntry]);
+      expect(await host.actions.get("core.deleteWorktree")).toBeNull();
+      // Seeding [] resets to empty.
+      host.seedActionCatalog([]);
+      expect(await host.actions.list()).toEqual([]);
+    });
+  });
+
+  describe("storage worktree scope", () => {
+    it("isolates values per active worktree across simulateActiveWorktreeChange", async () => {
+      const host = createMockHost({ activeWorktree: sampleSnapshot });
+      await host.storage.set("draft", "from-A", "worktree");
+      expect(await host.storage.get("draft", "worktree")).toBe("from-A");
+
+      // Switching worktrees re-points the worktree-scope store; the key from A
+      // is invisible under B.
+      host.simulateActiveWorktreeChange(otherSnapshot);
+      expect(await host.storage.get("draft", "worktree")).toBeUndefined();
+      await host.storage.set("draft", "from-B", "worktree");
+      expect(await host.storage.get("draft", "worktree")).toBe("from-B");
+
+      // Switching back restores A's value.
+      host.simulateActiveWorktreeChange(sampleSnapshot);
+      expect(await host.storage.get("draft", "worktree")).toBe("from-A");
+    });
+
+    it("seeds initial worktree-scope values into the active worktree", async () => {
+      const host = createMockHost({
+        activeWorktree: sampleSnapshot,
+        storage: { worktree: { seeded: "value" } },
+      });
+      expect(await host.storage.get("seeded", "worktree")).toBe("value");
+    });
+
+    it("drops the worktree seed when no worktree is active at construction", async () => {
+      // With no active worktree there is no target to seed; the value is not
+      // smuggled into the first worktree activated later.
+      const host = createMockHost({ storage: { worktree: { seeded: "value" } } });
+      host.simulateActiveWorktreeChange(sampleSnapshot);
+      expect(await host.storage.get("seeded", "worktree")).toBeUndefined();
+    });
+
+    it("throws on set when no worktree is active", async () => {
+      const host = createMockHost();
+      await expect(host.storage.set("k", "v", "worktree")).rejects.toThrow(
+        /no active worktree — "worktree" scope has no target/
+      );
+    });
+
+    it("resolves get to undefined and no-ops delete when no worktree is active", async () => {
+      const host = createMockHost();
+      expect(await host.storage.get("k", "worktree")).toBeUndefined();
+      // delete is a no-op (resolves without throwing).
+      await expect(host.storage.delete("k", "worktree")).resolves.toBeUndefined();
+    });
+
+    it("keeps onDidChange subscriptions alive across a worktree switch", async () => {
+      const host = createMockHost({ activeWorktree: sampleSnapshot });
+      const cb = vi.fn();
+      await host.storage.onDidChange("draft", cb, "worktree");
+      await host.storage.set("draft", "from-A", "worktree");
+      expect(cb).toHaveBeenLastCalledWith("from-A");
+
+      // The subscription survives the switch and fires for the new worktree.
+      host.simulateActiveWorktreeChange(otherSnapshot);
+      await host.storage.set("draft", "from-B", "worktree");
+      expect(cb).toHaveBeenCalledTimes(2);
+      expect(cb).toHaveBeenLastCalledWith("from-B");
+    });
+  });
+
+  describe("fs.watch", () => {
+    it("fires the watcher callback via simulateFsWatch", async () => {
+      const host = createMockHost();
+      const cb = vi.fn();
+      await host.fs.watch(["/tmp/repo"], cb);
+      host.simulateFsWatch("/tmp/repo/file.ts");
+      expect(cb).toHaveBeenCalledTimes(1);
+      expect(cb).toHaveBeenCalledWith("/tmp/repo/file.ts");
+    });
+
+    it("fires every active watcher", async () => {
+      const host = createMockHost();
+      const a = vi.fn();
+      const b = vi.fn();
+      await host.fs.watch(["/a"], a);
+      await host.fs.watch(["/b"], b);
+      host.simulateFsWatch("/changed");
+      expect(a).toHaveBeenCalledWith("/changed");
+      expect(b).toHaveBeenCalledWith("/changed");
+    });
+
+    it("stops firing after the disposer runs, and is idempotent", async () => {
+      const host = createMockHost();
+      const cb = vi.fn();
+      const dispose = await host.fs.watch(["/tmp"], cb);
+      dispose();
+      dispose(); // idempotent — no throw, no double-removal effect
+      host.simulateFsWatch("/tmp/file.ts");
+      expect(cb).not.toHaveBeenCalled();
+    });
+
+    it("throws if the abort signal is already aborted", async () => {
+      const host = createMockHost();
+      await expect(
+        host.fs.watch(["/tmp"], vi.fn(), { signal: AbortSignal.abort() })
+      ).rejects.toThrow();
+    });
+
+    it("rejects a non-function callback (matches production)", async () => {
+      const host = createMockHost();
+      await expect(host.fs.watch(["/tmp"], null as unknown as (p: string) => void)).rejects.toThrow(
+        /callback must be a function/
+      );
+    });
+
+    it("rejects an empty paths array (matches production)", async () => {
+      const host = createMockHost();
+      await expect(host.fs.watch([], vi.fn())).rejects.toThrow(/paths must be a non-empty array/);
+    });
+
+    it("propagates a throwing watcher callback", async () => {
+      const host = createMockHost();
+      await host.fs.watch(["/tmp"], () => {
+        throw new Error("watcher boom");
+      });
+      expect(() => host.simulateFsWatch("/tmp/file.ts")).toThrow(/watcher boom/);
     });
   });
 });
