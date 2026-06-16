@@ -35,22 +35,71 @@ describe("AgentContributionSchema (issue #9560)", () => {
     expect(result.success).toBe(true);
   });
 
-  it("rejects a detection block as an unknown key — output detection is cut from the 1.0 schema (#10460)", () => {
+  it("accepts a detection block with valid regex patterns (#10587)", () => {
     const result = AgentContributionSchema.safeParse({
       ...VALID_AGENT,
-      detection: { primaryPatterns: ["thinking"] },
+      detection: {
+        primaryPatterns: ["thinking", "working\\.\\.\\."],
+        completionPatterns: ["completed"],
+        promptPatterns: ["waiting for approval"],
+        scanLineCount: 10,
+        primaryConfidence: 0.9,
+      },
     });
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      // Assert the failure is strict unknown-key rejection of `detection`
-      // specifically, not some unrelated validation error — so a future
-      // re-introduction of the field can't silently flip this to a pass.
-      const unknownKeyIssue = result.error.issues.find(
-        (issue) => issue.code === "unrecognized_keys"
-      );
-      expect(unknownKeyIssue).toBeDefined();
-      expect((unknownKeyIssue as { keys?: string[] }).keys).toContain("detection");
-    }
+    expect(result.success).toBe(true);
+  });
+
+  it("requires at least one primaryPattern when a detection block is present (#10587)", () => {
+    expect(
+      AgentContributionSchema.safeParse({ ...VALID_AGENT, detection: { primaryPatterns: [] } })
+        .success
+    ).toBe(false);
+    // Omitting primaryPatterns entirely is also invalid.
+    expect(
+      AgentContributionSchema.safeParse({
+        ...VALID_AGENT,
+        detection: { completionPatterns: ["done"] },
+      }).success
+    ).toBe(false);
+  });
+
+  it("rejects a detection pattern that is not a compilable regex (#10587)", () => {
+    expect(
+      AgentContributionSchema.safeParse({
+        ...VALID_AGENT,
+        detection: { primaryPatterns: ["("] },
+      }).success
+    ).toBe(false);
+  });
+
+  it("rejects an over-long detection pattern and an oversized pattern array (#10587)", () => {
+    expect(
+      AgentContributionSchema.safeParse({
+        ...VALID_AGENT,
+        detection: { primaryPatterns: ["a".repeat(257)] },
+      }).success
+    ).toBe(false);
+    expect(
+      AgentContributionSchema.safeParse({
+        ...VALID_AGENT,
+        detection: { primaryPatterns: Array.from({ length: 51 }, (_, i) => `p${i}`) },
+      }).success
+    ).toBe(false);
+  });
+
+  it("rejects an out-of-range confidence and unknown detection key (strict) (#10587)", () => {
+    expect(
+      AgentContributionSchema.safeParse({
+        ...VALID_AGENT,
+        detection: { primaryPatterns: ["x"], primaryConfidence: 1.5 },
+      }).success
+    ).toBe(false);
+    expect(
+      AgentContributionSchema.safeParse({
+        ...VALID_AGENT,
+        detection: { primaryPatterns: ["x"], bogusField: true },
+      }).success
+    ).toBe(false);
   });
 
   it("rejects unknown top-level fields (strict)", () => {
@@ -170,12 +219,24 @@ describe("manifest-level agent contribution gates (issue #9560)", () => {
     }
   });
 
-  it("rejects the whole manifest when an agent declares a detection block (cut in 1.0, #10460)", () => {
+  it("accepts a manifest whose agent declares a valid detection block (#10587)", () => {
     const result = schema.safeParse(
       manifestWith({
         capabilities: ["agent:register"],
         contributes: {
           agents: [{ ...VALID_AGENT, detection: { primaryPatterns: ["thinking"] } }],
+        },
+      })
+    );
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a manifest whose agent declares a malformed detection regex (#10587)", () => {
+    const result = schema.safeParse(
+      manifestWith({
+        capabilities: ["agent:register"],
+        contributes: {
+          agents: [{ ...VALID_AGENT, detection: { primaryPatterns: ["("] } }],
         },
       })
     );

@@ -1370,6 +1370,11 @@ export class PluginService {
     if (manifest.contributes.agents.length > 0) {
       registerPluginAgents(manifest.name, manifest.contributes.agents, pluginDir);
       this.broadcaster.scheduleAgentsBroadcast(false);
+      // Mirror the updated registry into the pty-host so its activity monitor
+      // resolves this agent's detection patterns at spawn time (#10587). The
+      // renderer is covered by the broadcast above; the pty-host is a separate
+      // process that never registers agents itself.
+      getPtyClient()?.syncPluginAgentRegistry();
     }
 
     // Insert the plugin into the registry BEFORE importing its main module so
@@ -4227,6 +4232,11 @@ export class PluginService {
     runUnloadStep(pluginId, "unregisterPluginAgents", () => unregisterPluginAgents(pluginId));
     runUnloadStep(pluginId, "scheduleAgentsBroadcast", () =>
       this.broadcaster.scheduleAgentsBroadcast(true)
+    );
+    // Re-mirror the (now-smaller) registry to the pty-host so it stops resolving
+    // detection patterns for the unloaded plugin's agents (#10587).
+    runUnloadStep(pluginId, "syncPluginAgentRegistryToPtyHost", () =>
+      getPtyClient()?.syncPluginAgentRegistry()
     );
     // Subscriber disposers already fired in flushPluginEventCleanups() above;
     // this drops any leftover subscriber-set entry and the in-memory settings

@@ -45,6 +45,7 @@ import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 import { createLogger, isValidLogOverrideLevel } from "../utils/logger.js";
 import { store } from "../store.js";
+import { getPluginAgentRegistry } from "../../shared/config/pluginAgentRegistry.js";
 
 const logger = createLogger("main:PtyClient");
 const logInfo = (msg: string, ctx?: Record<string, unknown>) =>
@@ -390,6 +391,12 @@ export class PtyClient extends EventEmitter {
       type: "set-log-level-overrides",
       overrides: this.logLevelOverridesCache,
     });
+    // Mirror the current plugin-agent registry to the (re)started host before
+    // any spawn replay below, so respawned plugin-agent terminals resolve their
+    // detection patterns from the first tick (#10587). Reads the authoritative
+    // main-process snapshot directly — no cache needed, and a host restart
+    // re-syncs whatever plugins are loaded now.
+    this.send({ type: "set-plugin-agent-registry", registry: getPluginAgentRegistry() });
     // Re-arm the watchdog on every successful ready — covers both the initial
     // boot and every auto-restart cycle. The original code armed it inside
     // startHost() before ready arrived, but the tick was a no-op until
@@ -544,6 +551,20 @@ export class PtyClient extends EventEmitter {
     this.logLevelOverridesCache = { ...overrides };
     if (this.lifecycle.isInitialized && this.lifecycle.child) {
       this.send({ type: "set-log-level-overrides", overrides: this.logLevelOverridesCache });
+    }
+  }
+
+  /**
+   * Push the current plugin-agent registry to the host so its activity monitor
+   * can resolve plugin detection patterns (#10587). Called by `PluginService`
+   * after a plugin load/unload changes the registry. Reads the authoritative
+   * main snapshot at call time; on a host restart the registry is replayed from
+   * the `ready` handler, so callers don't track restarts themselves. No-op when
+   * the host isn't ready yet — the ready replay covers that window.
+   */
+  syncPluginAgentRegistry(): void {
+    if (this.lifecycle.isInitialized && this.lifecycle.child) {
+      this.send({ type: "set-plugin-agent-registry", registry: getPluginAgentRegistry() });
     }
   }
 

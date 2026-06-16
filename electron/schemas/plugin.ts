@@ -325,6 +325,72 @@ function isSafePluginAgentCommand(command: string): boolean {
     .every((segment) => segment !== "" && segment !== "." && segment !== "..");
 }
 
+/**
+ * A single output-detection regex pattern (#10587). Compiled with `new RegExp`
+ * by the pty-host activity monitor, so it must be a valid JS regex. Bounded to
+ * 256 chars — the patterns run in the pty-host (a stall is observable, not a
+ * web-server DoS vector), and the length cap plus the activity monitor's
+ * bounded scan window keep catastrophic backtracking a contained risk without
+ * pulling in a new linear-time regex dependency.
+ */
+const PluginDetectionPatternSchema = z
+  .string()
+  .min(1)
+  .max(256)
+  .refine(
+    (pattern) => {
+      try {
+        // Call form (not `new`) compiles and validates the pattern without a
+        // constructed-but-unused instance — throws on a malformed regex.
+        RegExp(pattern);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    { message: "Detection pattern must be a valid regular expression" }
+  );
+
+/** A bounded array of detection regex patterns. Capped to keep a manifest from declaring an unbounded matcher set. */
+const PluginDetectionPatternArraySchema = z.array(PluginDetectionPatternSchema).max(50);
+
+/** Confidence weight in [0, 1] for a matched detection tier. */
+const PluginDetectionConfidenceSchema = z.number().min(0).max(1);
+
+/**
+ * Optional output-pattern detection for a contributed agent (#10587). Mirrors
+ * the host-internal `AgentDetectionConfig` (shared/config/agentRegistry.ts) so
+ * a plugin agent can describe its working/waiting/completed states and join the
+ * agent-state UI. Strict so a typo'd field is a loud manifest error. All
+ * pattern arrays validate each entry as a compilable regex; numeric tuning
+ * fields are bounded.
+ */
+export const AgentDetectionConfigSchema = z
+  .object({
+    primaryPatterns: PluginDetectionPatternArraySchema.min(1),
+    fallbackPatterns: PluginDetectionPatternArraySchema.optional(),
+    bootCompletePatterns: PluginDetectionPatternArraySchema.optional(),
+    promptPatterns: PluginDetectionPatternArraySchema.optional(),
+    promptHintPatterns: PluginDetectionPatternArraySchema.optional(),
+    completionPatterns: PluginDetectionPatternArraySchema.optional(),
+    scanLineCount: z.number().int().min(1).max(1000).optional(),
+    promptScanLineCount: z.number().int().min(1).max(1000).optional(),
+    debounceMs: z.number().int().min(0).max(600_000).optional(),
+    promptFastPathMinQuietMs: z.number().int().min(0).max(600_000).optional(),
+    primaryConfidence: PluginDetectionConfidenceSchema.optional(),
+    fallbackConfidence: PluginDetectionConfidenceSchema.optional(),
+    promptConfidence: PluginDetectionConfidenceSchema.optional(),
+    completionConfidence: PluginDetectionConfidenceSchema.optional(),
+    titleStatePatterns: z
+      .object({
+        working: z.array(z.string().min(1).max(256)).max(50),
+        waiting: z.array(z.string().min(1).max(256)).max(50),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
 export const AgentContributionSchema = z
   .object({
     id: z
@@ -354,6 +420,7 @@ export const AgentContributionSchema = z
     color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
     iconId: z.string().min(1).max(64),
     supportsContextInjection: z.boolean().default(false),
+    detection: AgentDetectionConfigSchema.optional(),
   })
   .strict();
 

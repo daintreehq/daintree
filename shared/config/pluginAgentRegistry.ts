@@ -86,8 +86,12 @@ function contributionToAgentConfig(
   contribution: PluginAgentContribution,
   pluginDir?: string
 ): AgentConfig {
-  // Surface only the launch-relevant fields. Plugin agents launch as named,
-  // untracked terminals; output-pattern detection is not part of the 1.0 schema.
+  // Surface the launch-relevant fields plus the optional output-pattern
+  // `detection` block (#10587) so a contributed agent can drive the
+  // working/waiting/completed UI. Mapped explicitly (not spread) so no other
+  // contribution field can leak onto the resolved config. `detection` is
+  // forwarded only when present, keeping the field absent for the common
+  // launch-only case.
   return {
     id: contribution.id,
     name: contribution.name,
@@ -96,6 +100,7 @@ function contributionToAgentConfig(
     color: contribution.color,
     iconId: contribution.iconId,
     supportsContextInjection: contribution.supportsContextInjection ?? false,
+    ...(contribution.detection ? { detection: contribution.detection } : {}),
   };
 }
 

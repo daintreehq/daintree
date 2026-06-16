@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createPtyHostMessageDispatcher } from "../index.js";
 import type { HostContext } from "../types.js";
+import { clearPluginAgentRegistryForTests } from "../../../../shared/config/pluginAgentRegistry.js";
+import { getEffectiveAgentConfig } from "../../../../shared/config/agentRegistry.js";
 
 function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
   const ptyManager = {
@@ -169,6 +171,40 @@ describe("createPtyHostMessageDispatcher", () => {
       id: "term-1",
       state: "payload",
     });
+  });
+
+  it("mirrors the plugin-agent registry into this process (#10587)", () => {
+    clearPluginAgentRegistryForTests();
+    try {
+      const ctx = makeCtx();
+      const dispatch = createPtyHostMessageDispatcher(ctx);
+
+      // Before the sync, the pty-host process has no knowledge of the agent.
+      expect(getEffectiveAgentConfig("plugin-agent")).toBeUndefined();
+
+      dispatch({
+        type: "set-plugin-agent-registry",
+        registry: {
+          "plugin-agent": {
+            id: "plugin-agent",
+            name: "Plugin Agent",
+            command: "plugin-agent",
+            color: "#3366ff",
+            iconId: "terminal",
+            supportsContextInjection: false,
+            detection: { primaryPatterns: ["thinking"] },
+          },
+        },
+      });
+
+      // After the sync, getEffectiveAgentConfig resolves the agent and its
+      // detection patterns — exactly what the activity monitor needs at spawn.
+      const config = getEffectiveAgentConfig("plugin-agent");
+      expect(config).toBeDefined();
+      expect(config?.detection?.primaryPatterns).toEqual(["thinking"]);
+    } finally {
+      clearPluginAgentRegistryForTests();
+    }
   });
 
   it("returns a promise for handlers that perform real async work", async () => {
