@@ -32,13 +32,13 @@ failed=0
 
 while IFS= read -r -d '' file; do
   filetype=$(file -b "$file")
-  if ! echo "$filetype" | grep -q "Mach-O"; then
+  if ! grep -q "Mach-O" <<<"$filetype"; then
     continue
   fi
 
   # Dylibs and .node addons are dlopen'd into a host process, not spawned, so
   # they legitimately lack the process-level hardened runtime flag.
-  if echo "$filetype" | grep -qE "dynamically linked shared library|bundle"; then
+  if grep -qE "dynamically linked shared library|bundle" <<<"$filetype"; then
     echo "  SKIP (loaded, not spawned): $file"
     continue
   fi
@@ -56,14 +56,14 @@ while IFS= read -r -d '' file; do
   for arch in $archs; do
     checked=$((checked + 1))
     info=$(codesign -dv --arch "$arch" "$file" 2>&1) || true
-    if echo "$info" | grep -q "code object is not signed at all"; then
+    if grep -q "code object is not signed at all" <<<"$info"; then
       unsigned=1
       break
     fi
     # The CodeDirectory flags line reads e.g. `flags=0x10000(runtime)`; multiple
     # flags appear comma-separated inside the parens, so match `runtime` anywhere
     # within them rather than the exact `(runtime)` substring.
-    if ! echo "$info" | grep -qE 'flags=0x[0-9a-fA-F]+\([^)]*runtime[^)]*\)'; then
+    if ! grep -qE 'flags=0x[0-9a-fA-F]+\([^)]*runtime[^)]*\)' <<<"$info"; then
       missing="$missing $arch"
     fi
   done

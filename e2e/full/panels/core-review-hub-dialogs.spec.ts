@@ -131,17 +131,23 @@ test.describe.serial("Core: Review Hub Git Confirm Dialogs", () => {
     const draftMessage = "draft: in-progress message";
     await textarea.fill(draftMessage);
     await expect(textarea).toHaveValue(draftMessage, { timeout: T_SHORT });
-    await textarea.evaluate((node) => {
-      const textareaNode = node as HTMLTextAreaElement;
-      textareaNode.focus();
-      const end = textareaNode.value.length;
-      textareaNode.setSelectionRange(end, end);
-    });
+    await textarea.evaluate(
+      (node, offset) =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => {
+            const textareaNode = node as HTMLTextAreaElement;
+            textareaNode.focus();
+            textareaNode.setSelectionRange(offset, offset);
+            resolve();
+          });
+        }),
+      4
+    );
     await expect
       .poll(() => textarea.evaluate((node) => (node as HTMLTextAreaElement).selectionStart), {
         timeout: T_SHORT,
       })
-      .toBe(draftMessage.length);
+      .toBe(4);
     await textarea.press("ArrowUp");
     await expect(textarea).toHaveValue(draftMessage, { timeout: T_SHORT });
 

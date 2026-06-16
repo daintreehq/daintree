@@ -3415,17 +3415,21 @@ describe("ReviewHub", () => {
       renderOpen();
       await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const getTextarea = () =>
+        screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
 
-      focusTextareaAt(textarea, 0);
-      fireEvent.keyDown(textarea, { key: "ArrowUp" });
-      await waitFor(() => expect(textarea.value).toBe("feat: most recent commit"), {
+      focusTextareaAt(getTextarea(), 0);
+      fireEvent.keyDown(getTextarea(), { key: "ArrowUp" });
+      await waitFor(() => expect(getTextarea().value).toBe("feat: most recent commit"), {
         timeout: 3000,
       });
 
+      const textarea = getTextarea();
       focusTextareaAt(textarea, textarea.value.length);
       fireEvent.keyDown(textarea, { key: "ArrowUp" });
-      await waitFor(() => expect(textarea.value).toBe("fix: older commit"), { timeout: 3000 });
+      await waitFor(() => expect(getTextarea().value).toBe("fix: older commit"), {
+        timeout: 3000,
+      });
     });
 
     it("ArrowDown unwinds through history and restores original draft", async () => {

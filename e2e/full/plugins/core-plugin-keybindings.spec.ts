@@ -22,7 +22,7 @@ test.describe.serial("Core: Plugin keybindings contribution", () => {
     const { ctx: launched, cleanup } = await launchWithSamplePlugin("plugin-keybindings");
     ctx = launched;
     fixtureCleanup = cleanup;
-    await waitForRichPluginReady(ctx.window);
+    await waitForRichPluginReady(ctx.app, ctx.window);
   });
 
   test.afterAll(async () => {

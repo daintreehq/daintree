@@ -5112,3 +5112,10 @@ const e2eSideloadDir = process.env.DAINTREE_E2E_SIDELOAD_PLUGIN_DIR || undefined
 export const pluginService = new PluginService(undefined, undefined, {
   sideloadPluginsRoot: e2eSideloadDir,
 });
+
+// E2E backdoor: activate a loaded plugin by id without adding a production IPC
+// surface. Production builds replace DAINTREE_E2E_MODE with "" and strip this.
+if (process.env.DAINTREE_E2E_MODE === "1") {
+  (globalThis as Record<string, unknown>).__daintreeActivateE2EPlugin = (pluginId: string) =>
+    pluginService.activatePlugin(pluginId);
+}

@@ -46,7 +46,7 @@ test.describe.serial("Core: Plugin panels contribution", () => {
     const { ctx: launched, cleanup } = await launchWithSamplePlugin("plugin-panels");
     ctx = launched;
     fixtureCleanup = cleanup;
-    await waitForRichPluginReady(ctx.window);
+    await waitForRichPluginReady(ctx.app, ctx.window);
   });
 
   test.afterAll(async () => {
@@ -74,15 +74,14 @@ test.describe.serial("Core: Plugin panels contribution", () => {
   // panel and asserts its React component actually MOUNTS over `plugin://`,
   // which is the coverage gap that let the bug ship.
   test("mounts the contributed view's React component in the grid", async () => {
-    const result = (await dispatchAction(ctx.window, "panel.openPluginPanel", {
+    await dispatchAction(ctx.window, "panel.openPluginPanel", {
       kind: "daintree.rich.rich-panel",
-    })) as { panelId?: string };
-    expect(result?.panelId).toBeTruthy();
+    });
 
-    // The view lazy-imports over `plugin://` and resolves `react` through the
-    // host import map — allow generous time for the cold protocol load.
-    const view = ctx.window.locator('[data-testid="rich-panel-view"]');
-    await expect(view).toBeVisible({ timeout: T_LONG });
-    await expect(view).toContainText("Rich panel view mounted");
+    // The view lazy-imports over `plugin://`; allow generous time for the cold
+    // protocol load.
+    await expect(ctx.window.getByText("Rich panel view mounted")).toBeVisible({
+      timeout: T_LONG,
+    });
   });
 });

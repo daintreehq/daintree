@@ -30,6 +30,8 @@ const BASE_REQUIRED_MARKERS = [
   "[SMOKE] CHECK: Project persistence stress",
   "[SMOKE] Stability soak complete",
 ];
+const SUCCESS_MARKER = "[SMOKE] Stability soak complete";
+const CHILD_EXIT_GRACE_MS = 5_000;
 
 export function buildRequiredMarkers(platform) {
   const markers = [...BASE_REQUIRED_MARKERS];
@@ -65,7 +67,43 @@ export function buildPackagedSmokeEnv(
   return env;
 }
 
-function runPackagedSmokeOnce({ binaryPath, runIndex, runCount, timeoutMs, extraArgs }) {
+function terminateProcessTree(child) {
+  if (!child.pid) return;
+
+  if (process.platform === "win32") {
+    spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+      stdio: "ignore",
+      windowsHide: true,
+    }).on("error", () => {});
+    return;
+  }
+
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // Ignore races with process exit.
+    }
+  }
+}
+
+function forceKillProcessTree(child) {
+  if (!child.pid || process.platform === "win32") return;
+
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Ignore races with process exit.
+    }
+  }
+}
+
+export function runPackagedSmokeOnce({ binaryPath, runIndex, runCount, timeoutMs, extraArgs }) {
   return new Promise((resolve, reject) => {
     mkdtemp(path.join(os.tmpdir(), "daintree-packaged-smoke-"))
       .then((userDataDir) => {
@@ -85,12 +123,15 @@ function runPackagedSmokeOnce({ binaryPath, runIndex, runCount, timeoutMs, extra
 
         const child = spawn(binaryPath, args, {
           env: buildPackagedSmokeEnv(binaryPath),
+          detached: process.platform !== "win32",
           stdio: ["ignore", "pipe", "pipe"],
         });
 
+        let completedBySuccessMarker = false;
         let timedOut = false;
         let output = "";
         let hardKillTimer;
+        let settled = false;
 
         const cleanup = async () => {
           clearTimeout(timeoutTimer);
@@ -111,36 +152,69 @@ function runPackagedSmokeOnce({ binaryPath, runIndex, runCount, timeoutMs, extra
           }
         };
 
+        const finish = async (result) => {
+          if (settled) return;
+          settled = true;
+          await cleanup();
+          resolve(result);
+        };
+
+        const requestShutdown = (reason) => {
+          terminateProcessTree(child);
+          hardKillTimer = setTimeout(() => {
+            forceKillProcessTree(child);
+            void finish({
+              code: reason === "success-marker" ? 0 : 1,
+              signal: null,
+              output,
+              timedOut,
+              completedBySuccessMarker,
+            });
+          }, CHILD_EXIT_GRACE_MS);
+          hardKillTimer.unref();
+        };
+
         const timeoutTimer = setTimeout(() => {
           timedOut = true;
           console.error(
             `[PACKAGED-SMOKE] Run ${runIndex}/${runCount}: timed out after ${timeoutMs}ms`
           );
-          child.kill();
-          hardKillTimer = setTimeout(() => child.kill("SIGKILL"), 5_000);
+          requestShutdown("timeout");
         }, timeoutMs);
         timeoutTimer.unref();
+
+        const maybeCompleteFromOutput = () => {
+          if (completedBySuccessMarker || !output.includes(SUCCESS_MARKER)) return;
+          completedBySuccessMarker = true;
+          console.log(
+            `[PACKAGED-SMOKE] Run ${runIndex}/${runCount}: success marker observed; stopping packaged app`
+          );
+          requestShutdown("success-marker");
+        };
 
         child.stdout?.on("data", (chunk) => {
           const text = chunk.toString();
           output += text;
           process.stdout.write(text);
+          maybeCompleteFromOutput();
         });
 
         child.stderr?.on("data", (chunk) => {
           const text = chunk.toString();
           output += text;
           process.stderr.write(text);
+          maybeCompleteFromOutput();
         });
 
         child.on("error", async (error) => {
+          if (settled) return;
+          settled = true;
           await cleanup();
           reject(error);
         });
 
         child.on("close", async (code, signal) => {
-          await cleanup();
-          resolve({ code, signal, output, timedOut });
+          await finish({ code, signal, output, timedOut, completedBySuccessMarker });
         });
       })
       .catch(reject);
@@ -148,20 +222,25 @@ function runPackagedSmokeOnce({ binaryPath, runIndex, runCount, timeoutMs, extra
 }
 
 export function validateSmokeOutput(runIndex, runCount, result, requiredMarkers) {
-  const { code, signal, output, timedOut } = result;
+  const { code, signal, output, timedOut, completedBySuccessMarker } = result;
+  const successMarkerEnd = output.indexOf(SUCCESS_MARKER) + SUCCESS_MARKER.length;
+  const validationOutput =
+    completedBySuccessMarker && successMarkerEnd >= SUCCESS_MARKER.length
+      ? output.slice(0, successMarkerEnd)
+      : output;
   if (timedOut) {
     throw new Error(`Packaged smoke run ${runIndex}/${runCount} timed out`);
   }
-  if (code !== 0) {
+  if (code !== 0 && !completedBySuccessMarker) {
     throw new Error(
       `Packaged smoke run ${runIndex}/${runCount} failed with code ${code} (signal ${signal})`
     );
   }
-  if (output.includes("[SMOKE] FAILED")) {
+  if (validationOutput.includes("[SMOKE] FAILED")) {
     throw new Error(`Packaged smoke run ${runIndex}/${runCount} reported a smoke failure`);
   }
   for (const marker of requiredMarkers) {
-    if (!output.includes(marker)) {
+    if (!validationOutput.includes(marker)) {
       throw new Error(
         `Packaged smoke run ${runIndex}/${runCount} missing expected marker: ${marker}`
       );

@@ -3,7 +3,7 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo, createMultiProjectFixture } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { runTerminalCommand, waitForTerminalText } from "../../helpers/terminal";
+import { waitForTerminalText, writeTerminalInput } from "../../helpers/terminal";
 import { getFirstGridPanel, getGridPanelCount, openTerminal } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
 import { T_LONG, T_SETTLE } from "../../helpers/timeouts";
@@ -20,6 +20,28 @@ import { addAndSwitchToProject, selectExistingProjectAndRefresh } from "../../he
 const MONITORED_CHANNELS = ["events:push", "terminal:activity", "terminal:data"];
 
 const RENDERER_CHANNELS = ["events:push", "terminal:activity"];
+
+async function runPtyCommand(panel: ReturnType<typeof getFirstGridPanel>, command: string) {
+  await writeTerminalInput(panel.page(), panel, `${command}\r`);
+}
+
+async function runPtyCommandAndWait(
+  panel: ReturnType<typeof getFirstGridPanel>,
+  command: string,
+  marker: string
+) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await runPtyCommand(panel, command);
+    try {
+      await waitForTerminalText(panel, marker, T_LONG);
+      return;
+    } catch (error) {
+      if (attempt === 3) throw error;
+      await writeTerminalInput(panel.page(), panel, "\u0003");
+      await panel.page().waitForTimeout(250);
+    }
+  }
+}
 
 test.describe.serial("Core: IPC Cleanup Verification", () => {
   let ctx: AppContext;
@@ -60,8 +82,7 @@ test.describe.serial("Core: IPC Cleanup Verification", () => {
 
       const panel = getFirstGridPanel(window);
       await expect(panel).toBeVisible({ timeout: T_LONG });
-      await runTerminalCommand(window, panel, "echo READY_" + i);
-      await waitForTerminalText(panel, "READY_" + i, T_LONG);
+      await runPtyCommandAndWait(panel, "echo READY_" + i, "READY_" + i);
 
       await panel.locator(SEL.panel.close).first().click({ force: true });
       await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(0);
@@ -88,8 +109,7 @@ test.describe.serial("Core: IPC Cleanup Verification", () => {
 
       const panel = getFirstGridPanel(window);
       await expect(panel).toBeVisible({ timeout: T_LONG });
-      await runTerminalCommand(window, panel, "echo NAV_READY_" + i);
-      await waitForTerminalText(panel, "NAV_READY_" + i, T_LONG);
+      await runPtyCommandAndWait(panel, "echo NAV_READY_" + i, "NAV_READY_" + i);
 
       await panel.locator(SEL.panel.close).first().click({ force: true });
       await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(0);

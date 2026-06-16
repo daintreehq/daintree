@@ -45,6 +45,7 @@ export const FORBIDDEN = [
   "__DAINTREE_E2E_IPC__",
   "__DAINTREE_E2E_MODE__",
   "__DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS__",
+  "__daintreeActivateE2EPlugin",
   ...STRIPPED_BY_BUILD,
 ];
 

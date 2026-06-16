@@ -17,7 +17,9 @@ const SHARED_MARKERS = [
 ];
 
 function fullOutputFor(platform) {
-  return buildRequiredMarkers(platform).join("\n") + "\n";
+  const markers = buildRequiredMarkers(platform);
+  const successMarker = "[SMOKE] Stability soak complete";
+  return markers.filter((marker) => marker !== successMarker).join("\n") + `\n${successMarker}\n`;
 }
 
 describe("buildRequiredMarkers", () => {
@@ -143,6 +145,32 @@ describe("validateSmokeOutput", () => {
         buildRequiredMarkers("linux")
       )
     ).toThrow(/failed with code 1/);
+  });
+
+  it("accepts a terminated process once the success marker completed the run", () => {
+    const markers = buildRequiredMarkers("win32");
+    const result = {
+      code: 1,
+      signal: null,
+      output: fullOutputFor("win32"),
+      timedOut: false,
+      completedBySuccessMarker: true,
+    };
+    expect(() => validateSmokeOutput(1, 1, result, markers)).not.toThrow();
+  });
+
+  it("ignores shutdown failure noise emitted after the success marker", () => {
+    const markers = buildRequiredMarkers("darwin");
+    const result = {
+      code: 1,
+      signal: null,
+      output:
+        fullOutputFor("darwin") +
+        "[SMOKE] FAILED — child process gone: type=GPU, reason=killed, exitCode=15\n",
+      timedOut: false,
+      completedBySuccessMarker: true,
+    };
+    expect(() => validateSmokeOutput(1, 1, result, markers)).not.toThrow();
   });
 
   it("throws when output contains [SMOKE] FAILED", () => {

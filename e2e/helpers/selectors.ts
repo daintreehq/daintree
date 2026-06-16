@@ -275,7 +275,7 @@ export const SEL = {
     closeButton: '[aria-label="Close settings"]',
     recipesTab: '.settings-sidebar button:has-text("Recipes")',
     addRecipeButton: 'button:has-text("Add Recipe")',
-    editRecipeButton: (name: string) => `[aria-label="Edit recipe ${name}"]`,
+    editRecipeButton: (name: string) => `[aria-label^="Edit recipe ${name}"]`,
     deleteRecipeButton: (name: string) => `[aria-label="Delete recipe ${name}"]`,
   },
   recipeEditor: {

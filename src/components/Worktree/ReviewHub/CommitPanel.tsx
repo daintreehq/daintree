@@ -226,10 +226,7 @@ export function CommitPanel({
       const isCaretAtStart =
         e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0;
       const visibleMessage = e.currentTarget.value;
-      const isCyclingHistory =
-        pendingFirstApplyRef.current ||
-        (historyIndexRef.current >= 0 &&
-          historyMessagesRef.current?.[historyIndexRef.current] === visibleMessage);
+      const isCyclingHistory = pendingFirstApplyRef.current || historyIndexRef.current >= 0;
 
       if (isHistoryKey && !hasModifier && (isCaretAtStart || isCyclingHistory)) {
         e.preventDefault();

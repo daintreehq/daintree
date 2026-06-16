@@ -2204,7 +2204,7 @@ describe("CliAvailabilityService", () => {
         await import("../../../shared/config/pluginAgentRegistry.js");
       const { access } = await import("fs/promises");
       const mockedAccess = vi.mocked(access);
-      const absoluteCommand = join(homedir(), "plugins", "acme", "bin", "agent");
+      const absoluteCommand = "/tmp/daintree-plugins/acme/bin/agent";
 
       try {
         registerPluginAgents("acme.plugin", [

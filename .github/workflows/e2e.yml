@@ -147,20 +147,30 @@ jobs:
 
           # Only the full-* buckets and the `full` meta-suite fan out. N=4 is
           # the tuned starting point from #8053 (39min → ~10min on Windows).
-          # Windows full-platform/full-terminal contain restart/persistence-heavy
-          # and PTY stress tests that still form >45m shards at smaller splits,
-          # so use 16 slices there.
+          # Windows full-platform contains restart/persistence-heavy tests that
+          # still form >45m shards at smaller splits, so use 16 slices there.
+          # Windows full-terminal has one very large serial terminal-panels file;
+          # 32 slices keeps that file isolated from terminal-link tests.
           # full-worktree has restart-heavy cross-project and deletion-cleanup
           # specs that can still exceed the 45m reusable workflow timeout at
           # 8 slices, so match full-platform's 16-slice Windows split. full-presets
           # has context-menu/custom-preset shards that also exceed the release
           # window at 8 slices, so it uses the same 16-slice Windows split.
-          # full-panels is lighter but still needs more than the default 4.
+          # full-panels has cold-launch-heavy settings/github/review files that
+          # can pack into one long shard; 32 slices separates the forge/github
+          # group from the specialized-palette group.
           # full-resilience's crash/error-recovery specs need the same Windows
           # split as other restart-heavy buckets; shard 2/8 can exceed the
           # 45-minute e2e job timeout when its crash-recovery files pack together.
           case "$SUITE" in
-            full-platform|full-terminal)
+            full-terminal)
+              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
+                SHARD_TOTAL=32
+              else
+                SHARD_TOTAL=4
+              fi
+              ;;
+            full-platform)
               if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
                 SHARD_TOTAL=16
               else
@@ -183,7 +193,7 @@ jobs:
               ;;
             full-panels)
               if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
-                SHARD_TOTAL=8
+                SHARD_TOTAL=32
               else
                 SHARD_TOTAL=4
               fi
@@ -212,18 +222,54 @@ jobs:
             const oses = JSON.parse(process.argv[1]);
             const total = Number(process.argv[2]);
             const requested = process.argv[3] ? Number(process.argv[3]) : null;
+            const suite = process.argv[4];
+            const longWindowsSuites = new Set([
+              "full-terminal",
+              "full-worktree",
+              "full-platform",
+              "full-panels",
+            ]);
+            function isLongWindowsShard(os) {
+              return os.name === "Windows" && longWindowsSuites.has(suite);
+            }
+            function timeoutMinutes(os) {
+              if (suite === "nightly") return 180;
+              if (suite === "demo" || suite === "full") return 120;
+              if (isLongWindowsShard(os)) return 90;
+              if (suite.startsWith("full-")) return 45;
+              return 90;
+            }
+            function watchdogTimeoutMinutes(os) {
+              if (suite === "nightly") return 170;
+              if (suite === "demo" || suite === "full") return 110;
+              if (isLongWindowsShard(os)) return 80;
+              if (suite.startsWith("full-")) return 40;
+              return 80;
+            }
             const include = [];
             for (const o of oses) {
               if (requested) {
-                include.push({ ...o, shard: requested, shardTotal: total });
+                include.push({
+                  ...o,
+                  shard: requested,
+                  shardTotal: total,
+                  timeoutMinutes: timeoutMinutes(o),
+                  watchdogTimeoutMinutes: watchdogTimeoutMinutes(o),
+                });
               } else {
                 for (let s = 1; s <= total; s++) {
-                  include.push({ ...o, shard: s, shardTotal: total });
+                  include.push({
+                    ...o,
+                    shard: s,
+                    shardTotal: total,
+                    timeoutMinutes: timeoutMinutes(o),
+                    watchdogTimeoutMinutes: watchdogTimeoutMinutes(o),
+                  });
                 }
               }
             }
             console.log(JSON.stringify({ include }));
-          ' "$OSES" "$SHARD_TOTAL" "$REQUESTED_SHARD")
+          ' "$OSES" "$SHARD_TOTAL" "$REQUESTED_SHARD" "$SUITE")
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
 
   e2e:
@@ -237,15 +283,15 @@ jobs:
     # Sharding shrinks most full-* buckets, so a hung shard should fail fast
     # and re-run cheaply rather than burn the old 180min ceiling (the "core
     # (Windows) hung past 53min" failure mode from #8053). Windows
-    # full-terminal and full-worktree still contain serial files that
-    # Playwright cannot split across shards, so Windows keeps the standard
+    # full-terminal, full-worktree, full-platform, and full-panels still contain serial files
+    # that Playwright cannot split across shards, so Windows keeps the standard
     # 90min E2E window for those buckets.
     # nightly is unsharded and its serialized leak suite legitimately runs
     # long, so it keeps the generous ceiling; `full` (meta — all seven buckets on
     # one runner) gets a wider window than a single full-* shard.
     # demo is unsharded, workers=1, and each spec records a 4K screencast with a
     # 30min per-test ceiling, so it gets a wide window like nightly/full.
-    timeout-minutes: ${{ (inputs.suite == 'nightly' && 180) || (inputs.suite == 'demo' && 120) || (inputs.suite == 'full' && 120) || ((inputs.suite == 'full-terminal' || inputs.suite == 'full-worktree') && matrix.name == 'Windows' && 90) || (startsWith(inputs.suite, 'full-') && 45) || 90 }}
+    timeout-minutes: ${{ matrix.timeoutMinutes }}
 
     steps:
       - name: Harden Windows for Electron E2E
@@ -339,9 +385,11 @@ jobs:
           set -euo pipefail
           mkdir -p ~/.cache/fontconfig
           source /etc/os-release
-          echo "ubuntu=${ID}-${VERSION_ID}-${VERSION_CODENAME}" >> "$GITHUB_OUTPUT"
-          echo "fc_version=$(fc-cache --version 2>&1 | head -1)" >> "$GITHUB_OUTPUT"
-          echo "font_pkg_hash=$(dpkg-query -W -f='${Package} ${Version}\n' 2>/dev/null | grep -E '^fonts-|^fontconfig' | LC_ALL=C sort | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          {
+            echo "ubuntu=${ID}-${VERSION_ID}-${VERSION_CODENAME}"
+            echo "fc_version=$(fc-cache --version 2>&1 | head -1)"
+            echo "font_pkg_hash=$(dpkg-query -W -f='${Package} ${Version}\n' 2>/dev/null | grep -E '^fonts-|^fontconfig' | LC_ALL=C sort | sha256sum | cut -d' ' -f1)"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Cache fontconfig
         id: cache-fontconfig
@@ -366,11 +414,11 @@ jobs:
         run: npm run build:e2e
 
       - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
+        run: node scripts/ci/npm-install-retry.mjs -g @anthropic-ai/claude-code
 
       - name: Install OpenCode
         if: inputs.suite == 'online'
-        run: npm install -g opencode-ai
+        run: node scripts/ci/npm-install-retry.mjs -g opencode-ai
 
       - name: Configure Claude Code (macOS/Linux)
         if: runner.os != 'Windows'
@@ -409,18 +457,7 @@ jobs:
           fi
           # Keep the command-level watchdog a few minutes under the job timeout
           # so Playwright can be killed and the always() artifact steps can run.
-          WATCHDOG_TIMEOUT_MINUTES=80
-          if [ "$SUITE" = "nightly" ]; then
-            WATCHDOG_TIMEOUT_MINUTES=170
-          elif [ "$SUITE" = "demo" ]; then
-            WATCHDOG_TIMEOUT_MINUTES=110
-          elif [ "$SUITE" = "full" ]; then
-            WATCHDOG_TIMEOUT_MINUTES=110
-          elif [ "${{ matrix.name }}" = "Windows" ] && { [ "$SUITE" = "full-terminal" ] || [ "$SUITE" = "full-worktree" ]; }; then
-            WATCHDOG_TIMEOUT_MINUTES=80
-          elif [[ "$SUITE" == full-* ]]; then
-            WATCHDOG_TIMEOUT_MINUTES=40
-          fi
+          WATCHDOG_TIMEOUT_MINUTES="${{ matrix.watchdogTimeoutMinutes }}"
           if [ -n "${{ inputs.test_file }}" ]; then
             echo "args=$PROJECT_ARGS $EXTRA ${{ inputs.test_file }}" >> "$GITHUB_OUTPUT"
           else
@@ -461,21 +498,22 @@ jobs:
           SUITE="${{ inputs.suite || 'core' }}"
           SHARD_INDEX="${{ matrix.shard }}"
           SHARD_TOTAL="${{ matrix.shardTotal }}"
+          RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT:-1}"
 
           RETRY_ARGS=""
           # On retry, pass --test-list with the prior attempt's failed specs.
           # Gate: (a) retry attempt, (b) failed-specs file was downloaded and is
           # non-empty, (c) suite has meaningful retry semantics, (d) not already
           # scoped to a single test file.
-          if [ "${{ github.run_attempt }}" -gt 1 ] \
+          if [ "$RUN_ATTEMPT" -gt 1 ] \
              && [ -f failed-specs.txt ] \
              && [ -s failed-specs.txt ] \
              && [ "$SUITE" != "nightly" ] \
              && [ "$SUITE" != "online" ] \
              && [ -z "${{ inputs.test_file }}" ]; then
             RETRY_ARGS="--test-list failed-specs.txt"
-            echo "[e2e] Retry attempt ${{ github.run_attempt }} — running with --test-list ($(wc -l < failed-specs.txt) specs)"
-          elif [ "${{ github.run_attempt }}" -gt 1 ] \
+            echo "[e2e] Retry attempt $RUN_ATTEMPT — running with --test-list ($(wc -l < failed-specs.txt) specs)"
+          elif [ "$RUN_ATTEMPT" -gt 1 ] \
              && [ "$SUITE" != "nightly" ] \
              && [ "$SUITE" != "online" ] \
              && [ -z "${{ inputs.test_file }}" ]; then
@@ -517,6 +555,7 @@ jobs:
           PLAYWRIGHT_BLOB_REPORT: ${{ inputs.enable_blob_report && '1' || '' }}
         run: |
           set -euo pipefail
+          # shellcheck disable=SC2086
           node scripts/ci/run-e2e-watchdog.mjs \
             --timeout-minutes "${{ steps.test-cmd.outputs.watchdog_timeout_minutes }}" \
             -- npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${RETRY_ARGS:-}
@@ -533,6 +572,7 @@ jobs:
           PLAYWRIGHT_BLOB_REPORT: ${{ inputs.enable_blob_report && '1' || '' }}
         run: |
           set -euo pipefail
+          # shellcheck disable=SC2086
           node scripts/ci/run-e2e-watchdog.mjs \
             --timeout-minutes "${{ steps.test-cmd.outputs.watchdog_timeout_minutes }}" \
             -- xvfb-run --auto-servernum npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${RETRY_ARGS:-}
@@ -563,6 +603,7 @@ jobs:
           PLAYWRIGHT_BLOB_REPORT: ${{ inputs.enable_blob_report && '1' || '' }}
         run: |
           set -euo pipefail
+          # shellcheck disable=SC2086
           node scripts/ci/run-e2e-watchdog.mjs \
             --timeout-minutes "${{ steps.test-cmd.outputs.watchdog_timeout_minutes }}" \
             -- npx playwright test ${{ steps.test-cmd.outputs.args }} ${SHARD_ARGS:-} ${RETRY_ARGS:-}

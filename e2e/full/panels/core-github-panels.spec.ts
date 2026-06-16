@@ -79,11 +79,15 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
     // stats state to a token error so the routing decision is deterministic.
     const pill = window.locator(SEL.github.statPillIssues);
     await expect(pill).toBeVisible({ timeout: T_MEDIUM });
-    await stubRepoStats(ctx.app, {
-      issueCount: null,
-      prCount: null,
-      error: "GitHub token not configured",
-    });
+    await stubRepoStats(
+      ctx.app,
+      {
+        issueCount: null,
+        prCount: null,
+        error: "GitHub token not configured",
+      },
+      window
+    );
     await expect(pill).toHaveAccessibleName(/Configure/, { timeout: T_MEDIUM });
     await pill.click();
 

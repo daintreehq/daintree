@@ -9,7 +9,11 @@ import {
 } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { runTerminalCommand, waitForTerminalText } from "../../helpers/terminal";
+import {
+  runTerminalCommand,
+  waitForTerminalText,
+  writeTerminalInput,
+} from "../../helpers/terminal";
 import { getFirstGridPanel, openTerminal } from "../../helpers/panels";
 import { T_LONG, T_MEDIUM, T_SETTLE } from "../../helpers/timeouts";
 import {
@@ -23,6 +27,28 @@ import {
 import { mkdtempSync, writeFileSync, existsSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
+
+async function runPtyCommand(panel: ReturnType<typeof getFirstGridPanel>, command: string) {
+  await writeTerminalInput(panel.page(), panel, `${command}\r`);
+}
+
+async function runPtyCommandAndWait(
+  panel: ReturnType<typeof getFirstGridPanel>,
+  command: string,
+  marker: string
+) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await runPtyCommand(panel, command);
+    try {
+      await waitForTerminalText(panel, marker, T_LONG);
+      return;
+    } catch (error) {
+      if (attempt === 3) throw error;
+      await writeTerminalInput(panel.page(), panel, "\u0003");
+      await panel.page().waitForTimeout(250);
+    }
+  }
+}
 
 test.describe("Core: Process Cleanup", () => {
   test.beforeAll(() => {
@@ -51,11 +77,10 @@ test.describe("Core: Process Cleanup", () => {
       await openTerminal(ctx.window);
       const panel = getFirstGridPanel(ctx.window);
       await expect(panel).toBeVisible({ timeout: T_LONG });
-      await runTerminalCommand(ctx.window, panel, "echo SHELL_READY_MARKER");
-      await waitForTerminalText(panel, "SHELL_READY_MARKER", T_LONG);
+      await runPtyCommandAndWait(panel, "echo SHELL_READY_MARKER", "SHELL_READY_MARKER");
 
       // Spawn a long-lived child process and wait for it to appear
-      await runTerminalCommand(ctx.window, panel, "sleep 9999");
+      await runPtyCommandAndWait(panel, "sh -c 'echo SLEEP_STARTED; sleep 9999'", "SLEEP_STARTED");
 
       // Collect PTY PID and poll for descendants until sleep is visible
       ptyPid = await getPtyPid(ctx.window, panel);
@@ -127,8 +152,7 @@ test.describe("Core: Process Cleanup", () => {
       await openTerminal(ctx.window);
       const panel = getFirstGridPanel(ctx.window);
       await expect(panel).toBeVisible({ timeout: T_LONG });
-      await runTerminalCommand(ctx.window, panel, "echo SHELL_READY_MARKER");
-      await waitForTerminalText(panel, "SHELL_READY_MARKER", T_LONG);
+      await runPtyCommandAndWait(panel, "echo SHELL_READY_MARKER", "SHELL_READY_MARKER");
 
       // TrashedPidTracker only needs a live PID/start-time entry from a previous
       // session. Use a test-owned detached process so this assertion is not

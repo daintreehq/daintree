@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { closeApp, type AppContext } from "../../helpers/launch";
 import { launchWithSamplePlugin, waitForRichPluginReady } from "../../helpers/plugins";
+import { SEL } from "../../helpers/selectors";
 
 const PLUGIN_ID = "daintree.rich";
 
@@ -24,6 +25,20 @@ async function dispatchAction(page: Page, actionId: string, args?: unknown): Pro
     },
     { actionId, args }
   );
+}
+
+async function dispatchConfirmedAction(
+  page: Page,
+  actionId: string,
+  args?: unknown
+): Promise<unknown> {
+  const result = dispatchAction(page, actionId, args);
+  const confirmButton = page.locator(SEL.confirmDialog.confirm).filter({
+    hasText: "Rich: Storage round-trip",
+  });
+  await expect(confirmButton).toBeVisible();
+  await confirmButton.click();
+  return result;
 }
 
 /** Read the rich plugin's stored user-scope setting values over IPC. */
@@ -51,7 +66,7 @@ test.describe.serial("Core: Plugin private storage", () => {
     const { ctx: launched, cleanup } = await launchWithSamplePlugin("plugin-storage");
     ctx = launched;
     fixtureCleanup = cleanup;
-    await waitForRichPluginReady(ctx.window);
+    await waitForRichPluginReady(ctx.app, ctx.window);
   });
 
   test.afterAll(async () => {
@@ -60,7 +75,10 @@ test.describe.serial("Core: Plugin private storage", () => {
   });
 
   test("round-trips values across scopes and honours delete", async () => {
-    const result = (await dispatchAction(ctx.window, `${PLUGIN_ID}.storage-roundtrip`)) as {
+    const result = (await dispatchConfirmedAction(
+      ctx.window,
+      `${PLUGIN_ID}.storage-roundtrip`
+    )) as {
       ok: boolean;
       result: Record<string, unknown>;
     };
@@ -86,7 +104,10 @@ test.describe.serial("Core: Plugin private storage", () => {
   });
 
   test("storage is a separate store from settings — no key collision leaks", async () => {
-    const result = (await dispatchAction(ctx.window, `${PLUGIN_ID}.storage-roundtrip`)) as {
+    const result = (await dispatchConfirmedAction(
+      ctx.window,
+      `${PLUGIN_ID}.storage-roundtrip`
+    )) as {
       ok: boolean;
       result: Record<string, unknown>;
     };

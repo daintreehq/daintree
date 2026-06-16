@@ -1299,7 +1299,7 @@ describe("PluginService integration — activate() lifecycle", () => {
         makeCtx("acme.action-plugin"),
         [{}]
       )
-    ).rejects.toThrow(/is not loaded/);
+    ).rejects.toThrow(/plugin "acme\.action-plugin" is not loaded/);
   });
 
   it("invokes activate's returned cleanup before handlers are removed on unload", async () => {
@@ -1837,12 +1837,32 @@ describe("PluginService integration — diagnostic logger", () => {
   });
 
   it("keeps per-plugin log buffers isolated", async () => {
-    await loadWithLoggerActivate("acme.logger-a", "__loggerHost6a", `host.logger.info("from-a");`);
-    const service = await loadWithLoggerActivate(
-      "acme.logger-b",
-      "__loggerHost6b",
-      `host.logger.info("from-b");`
-    );
+    async function writeLoggerPlugin(pluginName: string, hostKey: string, activateBody: string) {
+      globalMarkers.add(hostKey);
+      const pluginDir = await writePlugin(pluginName, { name: pluginName, version: "1.2.3" });
+      const mainFile = `logger-${randomUUID()}.mjs`;
+      await fs.writeFile(
+        path.join(pluginDir, mainFile),
+        `export function activate(host) {\n  globalThis[${JSON.stringify(hostKey)}] = host;\n  ${activateBody}\n}\n`
+      );
+      await fs.writeFile(
+        path.join(pluginDir, "plugin.json"),
+        JSON.stringify({
+          name: pluginName,
+          version: "1.2.3",
+          displayName: "Logger Plugin",
+          main: mainFile,
+        })
+      );
+    }
+
+    await writeLoggerPlugin("acme.logger-a", "__loggerHost6a", `host.logger.info("from-a");`);
+    await writeLoggerPlugin("acme.logger-b", "__loggerHost6b", `host.logger.info("from-b");`);
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+    await service.activatePlugin("acme.logger-a");
+    await service.activatePlugin("acme.logger-b");
 
     const snapshot = service.getDiagnosticsSnapshot();
     const a = snapshot.plugins.find((p) => p.pluginId === "acme.logger-a");

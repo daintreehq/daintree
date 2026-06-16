@@ -18,7 +18,7 @@ test.describe.serial("Core: Plugin context menus contribution", () => {
     const { ctx: launched, cleanup } = await launchWithSamplePlugin("plugin-context-menus");
     ctx = launched;
     fixtureCleanup = cleanup;
-    await waitForRichPluginReady(ctx.window);
+    await waitForRichPluginReady(ctx.app, ctx.window);
   });
 
   test.afterAll(async () => {

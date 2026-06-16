@@ -6,12 +6,13 @@ import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { saveCurrentProjectSettings } from "../../helpers/projectSettings";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_LONG } from "../../helpers/timeouts";
+import { T_SHORT } from "../../helpers/timeouts";
 
 let ctx: AppContext;
 let fixtureRepoPath: string;
 let fixtureCleanup: (() => void) | undefined;
 const PROJECT_NAME = "Next.js Turbopack Test";
+const DEV_SERVER_TIMEOUT = process.env.CI ? 60_000 : 30_000;
 
 /**
  * E2E test for issue #4557: Next.js dev server CSS rendering in Daintree's webview.
@@ -130,11 +131,11 @@ server.listen(0, '127.0.0.1', () => {
     // Wait for Running status
     const consoleBar = window.locator('[aria-controls^="console-drawer-"]').locator("..");
     const statusBadge = consoleBar.locator('[role="status"]');
-    await expect(statusBadge).toContainText("Running", { timeout: T_LONG });
+    await expect(statusBadge).toContainText("Running", { timeout: DEV_SERVER_TIMEOUT });
 
     // Verify address bar contains a localhost URL
     const addressBar = window.locator(SEL.browser.addressBar);
-    await expect(addressBar).toHaveValue(/localhost:\d+/, { timeout: T_LONG });
+    await expect(addressBar).toHaveValue(/localhost:\d+/, { timeout: DEV_SERVER_TIMEOUT });
 
     // --- Verify --turbopack was injected ---
 
@@ -159,7 +160,7 @@ server.listen(0, '127.0.0.1', () => {
             return "";
           }, terminalId);
         },
-        { timeout: T_LONG }
+        { timeout: DEV_SERVER_TIMEOUT }
       )
       .toContain("--turbopack");
 
@@ -168,7 +169,7 @@ server.listen(0, '127.0.0.1', () => {
     // --- Verify webview renders styled content ---
 
     const webview = window.locator("webview");
-    await expect(webview).toBeAttached({ timeout: T_LONG });
+    await expect(webview).toBeAttached({ timeout: DEV_SERVER_TIMEOUT });
 
     // Check that CSS background-color is applied in the webview.
     await expect
@@ -190,7 +191,7 @@ server.listen(0, '127.0.0.1', () => {
             return null;
           }
         },
-        { timeout: T_LONG }
+        { timeout: DEV_SERVER_TIMEOUT }
       )
       .toBe("rgb(30, 60, 120)");
   });

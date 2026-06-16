@@ -111,6 +111,12 @@ const config: KnipConfig = {
     // predicates. The current fail-closed menu path documents that producers
     // are not wired yet; keep this as deliberate feature scaffolding.
     "src/services/WhenClauseStore.ts",
+
+    // why: native assistant-host process wrapper added with the protocol and
+    // entry resolver, but not wired into a service yet. Keep the wrapper
+    // available while the integration lands without making the repo's knip
+    // gate fail on the scaffold file.
+    "electron/services/assistant-host/AssistantHostProcess.ts",
   ],
 
   ignoreBinaries: [

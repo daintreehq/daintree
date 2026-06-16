@@ -360,6 +360,7 @@ describe("verifyPluginArchive", () => {
         validManifest({
           main: "dist/index.js",
           contributes: {
+            panels: [{ id: "panel-view", name: "Panel View", iconId: "panel", color: "#000000" }],
             views: [
               {
                 id: "panel-view",
@@ -393,6 +394,7 @@ describe("verifyPluginArchive", () => {
         validManifest({
           main: "dist/index.js",
           contributes: {
+            panels: [{ id: "panel-view", name: "Panel View", iconId: "panel", color: "#000000" }],
             views: [
               {
                 id: "panel-view",

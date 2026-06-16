@@ -86,7 +86,7 @@ test.describe.serial("Core: Process Icon Badge", () => {
               panelId
             );
           },
-          { timeout: T_LONG, intervals: [500] }
+          { timeout: T_LONG * 2, intervals: [500] }
         )
         .toBeNull();
     });

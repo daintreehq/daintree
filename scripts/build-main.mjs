@@ -445,13 +445,15 @@ function runPluginTypecheck() {
     console.log("[Build] Plugin types skipped in watch mode — run npm run check to typecheck.");
     return;
   }
-  const tscBin = process.platform === "win32" ? "tsc.cmd" : "tsc";
-  const tscPath = path.join(root, "node_modules", ".bin", tscBin);
-  const result = spawnSync(tscPath, ["--noEmit", "-p", "tsconfig.plugins.json"], {
+  const tscPath = path.join(root, "node_modules", "typescript", "bin", "tsc");
+  const result = spawnSync(process.execPath, [tscPath, "--noEmit", "-p", "tsconfig.plugins.json"], {
     stdio: "inherit",
     cwd: root,
   });
   if (result.status !== 0) {
+    if (result.error) {
+      console.error("[Build] Plugin typecheck spawn failed:", result.error);
+    }
     console.error("[Build] Plugin typecheck failed.");
     process.exit(result.status ?? 1);
   }

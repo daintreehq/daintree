@@ -24,7 +24,7 @@ test.describe.serial("Core: Plugin agents contribution", () => {
     const { ctx: launched, cleanup } = await launchWithSamplePlugin("plugin-agents");
     ctx = launched;
     fixtureCleanup = cleanup;
-    await waitForRichPluginReady(ctx.window);
+    await waitForRichPluginReady(ctx.app, ctx.window);
   });
 
   test.afterAll(async () => {

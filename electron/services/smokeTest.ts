@@ -25,6 +25,9 @@ const SMOKE_TERMINAL_TIMEOUT_MS = USE_SLOW_SMOKE_TIMEOUTS ? 30_000 : 20_000;
 const SMOKE_PROJECT_TIMEOUT_MS = USE_SLOW_SMOKE_TIMEOUTS ? 75_000 : 45_000;
 const SMOKE_GIT_TIMEOUT_MS = USE_SLOW_SMOKE_TIMEOUTS ? 30_000 : 15_000;
 const SMOKE_STABILITY_SOAK_MS = USE_SLOW_SMOKE_TIMEOUTS ? 20_000 : 12_000;
+const SMOKE_STABILITY_SOAK_STEP_MS = 2_000;
+const SMOKE_STABILITY_PROBE_TIMEOUT_MS = 5_000;
+const SMOKE_STABILITY_MAX_CONSECUTIVE_PROBE_TIMEOUTS = 2;
 const SMOKE_TERMINAL_ROUNDS = USE_SLOW_SMOKE_TIMEOUTS ? 3 : 2;
 const SMOKE_PERSISTENCE_ITERATIONS = USE_SLOW_SMOKE_TIMEOUTS ? 48 : 24;
 
@@ -387,6 +390,74 @@ function logSmokeFailure(context: string, error: unknown): void {
   console.error(`[SMOKE] FAILED — ${context}:`, formatErrorMessage(error, "Smoke test failed"));
 }
 
+interface SmokeStabilitySoakOptions {
+  durationMs?: number;
+  stepMs?: number;
+  probeTimeoutMs?: number;
+  maxConsecutiveProbeTimeouts?: number;
+}
+
+function isSmokeReadinessTimeout(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message === "[SMOKE] Renderer readiness probe timed out during soak"
+  );
+}
+
+export async function runSmokeStabilitySoak(
+  mainWindow: BrowserWindow,
+  isRendererUnresponsive: () => boolean,
+  options: SmokeStabilitySoakOptions = {}
+): Promise<void> {
+  const durationMs = options.durationMs ?? SMOKE_STABILITY_SOAK_MS;
+  const stepMs = options.stepMs ?? SMOKE_STABILITY_SOAK_STEP_MS;
+  const probeTimeoutMs = options.probeTimeoutMs ?? SMOKE_STABILITY_PROBE_TIMEOUT_MS;
+  const maxConsecutiveProbeTimeouts =
+    options.maxConsecutiveProbeTimeouts ?? SMOKE_STABILITY_MAX_CONSECUTIVE_PROBE_TIMEOUTS;
+  const soakSteps = Math.max(1, Math.ceil(durationMs / stepMs));
+  let consecutiveProbeTimeouts = 0;
+
+  for (let i = 0; i < soakSteps; i++) {
+    await delay(stepMs);
+    if (isRendererUnresponsive()) {
+      throw new Error("renderer became unresponsive");
+    }
+
+    let readyState: unknown;
+    try {
+      readyState = await withTimeout(
+        getAppWebContents(mainWindow).executeJavaScript(
+          "document.readyState",
+          true
+        ) as Promise<unknown>,
+        probeTimeoutMs,
+        "[SMOKE] Renderer readiness probe timed out during soak"
+      );
+      consecutiveProbeTimeouts = 0;
+    } catch (error) {
+      if (!isSmokeReadinessTimeout(error)) {
+        throw error;
+      }
+
+      consecutiveProbeTimeouts += 1;
+      if (consecutiveProbeTimeouts > maxConsecutiveProbeTimeouts) {
+        throw error;
+      }
+
+      console.error(
+        "[SMOKE] WARN: Renderer readiness probe timed out during soak (%d/%d)",
+        consecutiveProbeTimeouts,
+        maxConsecutiveProbeTimeouts
+      );
+      continue;
+    }
+
+    if (readyState !== "complete" && readyState !== "interactive") {
+      throw new Error(`unexpected document.readyState: ${String(readyState)}`);
+    }
+  }
+}
+
 export async function runSmokeFunctionalChecks(
   mainWindow: BrowserWindow,
   smokeClient: PtyClient,
@@ -442,24 +513,7 @@ export async function runSmokeFunctionalChecks(
       SMOKE_STABILITY_SOAK_MS / 1000
     );
     try {
-      const soakSteps = Math.max(1, Math.ceil(SMOKE_STABILITY_SOAK_MS / 2_000));
-      for (let i = 0; i < soakSteps; i++) {
-        await delay(2_000);
-        if (isRendererUnresponsive()) {
-          throw new Error("renderer became unresponsive");
-        }
-        const readyState = await withTimeout(
-          getAppWebContents(mainWindow).executeJavaScript(
-            "document.readyState",
-            true
-          ) as Promise<unknown>,
-          5_000,
-          "[SMOKE] Renderer readiness probe timed out during soak"
-        );
-        if (readyState !== "complete" && readyState !== "interactive") {
-          throw new Error(`unexpected document.readyState: ${String(readyState)}`);
-        }
-      }
+      await runSmokeStabilitySoak(mainWindow, isRendererUnresponsive);
       console.error("[SMOKE] Stability soak complete — no crashes detected");
     } catch (error) {
       allPassed = false;

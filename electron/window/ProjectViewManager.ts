@@ -1332,11 +1332,15 @@ export class ProjectViewManager {
   ): number {
     let totalKb = 0;
     this.forEachGuest(hostWc, (guest) => {
-      const getPid = (guest as { getOSProcessId?: () => number }).getOSProcessId;
-      if (typeof getPid !== "function") return;
-      const pid = getPid.call(guest);
-      if (typeof pid !== "number" || pid <= 0) return;
-      totalKb += memoryByPid.get(pid) ?? 0;
+      try {
+        const getPid = (guest as { getOSProcessId?: () => number }).getOSProcessId;
+        if (typeof getPid !== "function") return;
+        const pid = getPid.call(guest);
+        if (typeof pid !== "number" || pid <= 0) return;
+        totalKb += memoryByPid.get(pid) ?? 0;
+      } catch {
+        // Guest telemetry is best-effort; keep the host sample intact.
+      }
     });
     return totalKb;
   }

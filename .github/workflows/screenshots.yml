@@ -103,10 +103,10 @@ jobs:
         run: npm run build
 
       - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
+        run: node scripts/ci/npm-install-retry.mjs -g @anthropic-ai/claude-code
 
       - name: Install OpenCode
-        run: npm install -g opencode-ai
+        run: node scripts/ci/npm-install-retry.mjs -g opencode-ai
 
       - name: Configure Claude Code
         run: |
