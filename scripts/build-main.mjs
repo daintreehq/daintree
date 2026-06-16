@@ -162,12 +162,7 @@ function copyBuiltInWorkflows() {
  * `mcp/`, `view/`, …) is shipped as-is so `./`-relative `command`/`args` paths
  * resolve at runtime instead of ENOENT-ing (#10579).
  */
-export const PLUGIN_EXTRA_ASSET_SKIP_DIRS = new Set([
-  "main",
-  "renderer",
-  "shared",
-  "__tests__",
-]);
+export const PLUGIN_EXTRA_ASSET_SKIP_DIRS = new Set(["main", "renderer", "shared", "__tests__"]);
 
 /**
  * True when `child` resolves to a path strictly inside `parent` — guards the
