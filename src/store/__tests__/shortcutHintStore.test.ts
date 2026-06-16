@@ -349,10 +349,11 @@ describe("shortcutHintStore", () => {
     s.markHoverShown("nav.quickSwitcher");
     s.markHoverShown("terminal.new");
 
-    (window.electron!.shortcutHints!.setHintedHover as ReturnType<typeof vi.fn>).mockClear();
     s.incrementCount("nav.quickSwitcher");
 
-    // nav.quickSwitcher@1 dropped, terminal.new@2 retained
-    expect(window.electron?.shortcutHints?.setHintedHover).toHaveBeenCalledWith(["terminal.new@2"]);
+    // The final flush (from incrementCount) drops nav.quickSwitcher@1, keeps terminal.new@2.
+    expect(window.electron?.shortcutHints?.setHintedHover).toHaveBeenLastCalledWith([
+      "terminal.new@2",
+    ]);
   });
 });
