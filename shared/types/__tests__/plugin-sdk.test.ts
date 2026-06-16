@@ -248,13 +248,17 @@ describe("plugin-sdk boundary", () => {
     });
 
     it("PluginHostApi.actions exposes the built-in catalog surface (#10561)", () => {
-      const host = {} as PluginHostApi;
-      expectTypeOf(host.actions).toEqualTypeOf<PluginHostActionsApi>();
-      expectTypeOf(host.actions.list).toEqualTypeOf<() => Promise<PluginActionManifestEntry[]>>();
-      expectTypeOf(host.actions.get).toEqualTypeOf<
+      // Pure type-level indexed access — `actions` is a nested object, so a value
+      // access (`host.actions.list`) on an empty `{} as PluginHostApi` would throw
+      // at runtime when `expectTypeOf` evaluates its argument.
+      expectTypeOf<PluginHostApi["actions"]>().toEqualTypeOf<PluginHostActionsApi>();
+      expectTypeOf<PluginHostApi["actions"]["list"]>().toEqualTypeOf<
+        () => Promise<PluginActionManifestEntry[]>
+      >();
+      expectTypeOf<PluginHostApi["actions"]["get"]>().toEqualTypeOf<
         (actionId: string) => Promise<PluginActionManifestEntry | null>
       >();
-      expectTypeOf(host.actions.canDispatch).toEqualTypeOf<
+      expectTypeOf<PluginHostApi["actions"]["canDispatch"]>().toEqualTypeOf<
         (actionId: string) => Promise<PluginCanDispatchResult>
       >();
     });
