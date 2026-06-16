@@ -167,6 +167,7 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 
 import { z } from "zod";
 import { PluginService } from "../PluginService.js";
+import { events } from "../events.js";
 import { PluginProcessManager, type ManagedChildProcess } from "../plugin/PluginProcessManager.js";
 import { getPluginActionAuditService } from "../PluginActionAuditService.js";
 import { isAuditedHandlerFailure } from "../../utils/pluginAuditMarker.js";
@@ -6289,6 +6290,258 @@ describe("Plugin worktree host API", () => {
     ]) {
       expect(removed in active).toBe(false);
     }
+  });
+});
+
+describe("Plugin agent-state host API (#10521)", () => {
+  type AgentHost = {
+    pluginId: string;
+    getAgentState: () => Promise<unknown>;
+    onDidChangeAgentState: (cb: (s: unknown) => void) => Promise<() => void>;
+  };
+
+  /**
+   * Load a plugin with the given capabilities and build a host for it. The
+   * `agent:read`-gated methods read declared capabilities off the loaded
+   * manifest, so the capability must be present on disk before initialize().
+   */
+  async function setupAgentHost(
+    capabilities: string[]
+  ): Promise<{ service: PluginService; host: AgentHost; revoke: () => void }> {
+    await writePlugin("agent-host", {
+      name: "acme.agent-host",
+      version: "1.0.0",
+      capabilities,
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    const { host, revoke } = (
+      service as unknown as {
+        createHost: (id: string) => { host: AgentHost; revoke: () => void };
+      }
+    ).createHost("acme.agent-host");
+    return { service, host, revoke };
+  }
+
+  function emitState(
+    over: Partial<{
+      agentId: string;
+      state: string;
+      previousState: string;
+      waitingReason: string;
+      sessionCost: number;
+      sessionTokens: number;
+      timestamp: number;
+    }> = {}
+  ): void {
+    events.emit("agent:state-changed", {
+      state: "working",
+      previousState: "idle",
+      trigger: "output",
+      confidence: 1,
+      timestamp: 1000,
+      ...over,
+    } as never);
+  }
+
+  it("getAgentState rejects with PERMISSION_REQUIRED when agent:read is not declared", async () => {
+    const { host } = await setupAgentHost([]);
+    await expect(host.getAgentState()).rejects.toThrow(/PERMISSION_REQUIRED/);
+  });
+
+  it("onDidChangeAgentState throws PERMISSION_REQUIRED when agent:read is not declared", async () => {
+    const { host } = await setupAgentHost([]);
+    // The capability guard throws synchronously before returning the disposer
+    // promise (same shape as onDidChangeWorktrees).
+    expect(() => host.onDidChangeAgentState(() => {})).toThrow(/PERMISSION_REQUIRED/);
+  });
+
+  it("getAgentState returns null before any agent state change is observed", async () => {
+    const { host } = await setupAgentHost(["agent:read"]);
+    expect(await host.getAgentState()).toBeNull();
+  });
+
+  it("onDidChangeAgentState delivers a frozen projected snapshot on state-changed", async () => {
+    const { host } = await setupAgentHost(["agent:read"]);
+    const received: Array<Record<string, unknown>> = [];
+    await host.onDidChangeAgentState((s) => received.push(s as Record<string, unknown>));
+
+    emitState({
+      agentId: "agent-1",
+      state: "waiting",
+      previousState: "working",
+      waitingReason: "question",
+      timestamp: 4242,
+    });
+
+    expect(received).toHaveLength(1);
+    const snap = received[0];
+    expect(snap.agentId).toBe("agent-1");
+    expect(snap.state).toBe("waiting");
+    expect(snap.previousState).toBe("working");
+    expect(snap.running).toBe(true);
+    expect(snap.waitingReason).toBe("question");
+    expect(snap.timestamp).toBe(4242);
+    expect(Object.isFrozen(snap)).toBe(true);
+  });
+
+  it("getAgentState returns the last projected snapshot after a state change", async () => {
+    const { host } = await setupAgentHost(["agent:read"]);
+    await host.onDidChangeAgentState(() => {});
+
+    emitState({ agentId: "agent-2", state: "completed", previousState: "working", timestamp: 99 });
+
+    const snap = (await host.getAgentState()) as Record<string, unknown>;
+    expect(snap).not.toBeNull();
+    expect(snap.agentId).toBe("agent-2");
+    expect(snap.state).toBe("completed");
+    expect(snap.running).toBe(false);
+  });
+
+  it("derives running=true only for working/waiting/directing", async () => {
+    const { host } = await setupAgentHost(["agent:read"]);
+    const received: Array<Record<string, unknown>> = [];
+    await host.onDidChangeAgentState((s) => received.push(s as Record<string, unknown>));
+
+    for (const state of ["idle", "working", "waiting", "directing", "completed", "exited"]) {
+      emitState({ state, previousState: "idle" });
+    }
+
+    const byState = new Map(received.map((s) => [s.state as string, s.running as boolean]));
+    expect(byState.get("idle")).toBe(false);
+    expect(byState.get("working")).toBe(true);
+    expect(byState.get("waiting")).toBe(true);
+    expect(byState.get("directing")).toBe(true);
+    expect(byState.get("completed")).toBe(false);
+    expect(byState.get("exited")).toBe(false);
+  });
+
+  it("the snapshot omits internal routing ids and activity-detector internals", async () => {
+    const { host } = await setupAgentHost(["agent:read"]);
+    const received: Array<Record<string, unknown>> = [];
+    await host.onDidChangeAgentState((s) => received.push(s as Record<string, unknown>));
+
+    events.emit("agent:state-changed", {
+      agentId: "agent-3",
+      state: "working",
+      previousState: "idle",
+      trigger: "output",
+      confidence: 0.9,
+      cwd: "/secret/path",
+      terminalId: "term-internal",
+      worktreeId: "wt-internal",
+      temperature: 42,
+      heatAdded: 7,
+      changedChars: 3,
+      timestamp: 1,
+    } as never);
+
+    const snap = received[0];
+    for (const leaked of [
+      "terminalId",
+      "worktreeId",
+      "cwd",
+      "trigger",
+      "confidence",
+      "temperature",
+      "heatAdded",
+      "changedChars",
+    ]) {
+      expect(leaked in snap).toBe(false);
+    }
+    expect(Object.keys(snap).sort()).toEqual([
+      "agentId",
+      "previousState",
+      "running",
+      "state",
+      "timestamp",
+    ]);
+  });
+
+  it("the disposer stops further callbacks and is safe to call twice", async () => {
+    const { host } = await setupAgentHost(["agent:read"]);
+    const received: unknown[] = [];
+    const dispose = await host.onDidChangeAgentState((s) => received.push(s));
+
+    emitState({ state: "working" });
+    expect(received).toHaveLength(1);
+
+    dispose();
+    dispose(); // double-dispose must not throw
+    emitState({ state: "idle" });
+    expect(received).toHaveLength(1);
+  });
+
+  it("unloading the plugin disposes the subscription and stops callbacks", async () => {
+    const { service, host } = await setupAgentHost(["agent:read"]);
+    const received: unknown[] = [];
+    await host.onDidChangeAgentState((s) => received.push(s));
+
+    emitState({ state: "working" });
+    expect(received).toHaveLength(1);
+
+    (service as unknown as { unloadPlugin: (id: string) => void }).unloadPlugin("acme.agent-host");
+
+    emitState({ state: "idle" });
+    expect(received).toHaveLength(1);
+  });
+
+  it("getAgentState returns null (not an error) after the plugin is unloaded", async () => {
+    const { service, host } = await setupAgentHost(["agent:read"]);
+    await host.onDidChangeAgentState(() => {});
+    emitState({ agentId: "a-pre", state: "working", previousState: "idle" });
+    expect(await host.getAgentState()).not.toBeNull();
+
+    (service as unknown as { unloadPlugin: (id: string) => void }).unloadPlugin("acme.agent-host");
+
+    // declaredCapabilities() returns [] post-unload, so a capability check first
+    // would mis-throw PERMISSION_REQUIRED — the liveness check must win.
+    expect(await host.getAgentState()).toBeNull();
+  });
+
+  it("getAgentState stays null when events fire but the plugin never subscribed", async () => {
+    const { host } = await setupAgentHost(["agent:read"]);
+    emitState({ state: "working", previousState: "idle" });
+    // No subscription means no handler caches the snapshot — the host keeps no
+    // pre-subscription history.
+    expect(await host.getAgentState()).toBeNull();
+  });
+
+  it("getAgentState inside the callback observes the just-delivered snapshot", async () => {
+    const { host } = await setupAgentHost(["agent:read"]);
+    let insidePromise: Promise<unknown> | null = null;
+    await host.onDidChangeAgentState(() => {
+      insidePromise = host.getAgentState();
+    });
+
+    emitState({ agentId: "a9", state: "working", previousState: "idle" });
+
+    const inside = (await insidePromise) as Record<string, unknown> | null;
+    expect(inside).not.toBeNull();
+    expect(inside?.agentId).toBe("a9");
+  });
+
+  it("multiple subscriptions from the same plugin dispose independently", async () => {
+    const { host } = await setupAgentHost(["agent:read"]);
+    const a: unknown[] = [];
+    const b: unknown[] = [];
+    const disposeA = await host.onDidChangeAgentState((s) => a.push(s));
+    await host.onDidChangeAgentState((s) => b.push(s));
+
+    emitState({ state: "working" });
+    expect(a).toHaveLength(1);
+    expect(b).toHaveLength(1);
+
+    disposeA();
+    emitState({ state: "idle" });
+    expect(a).toHaveLength(1); // disposed — no more deliveries
+    expect(b).toHaveLength(2); // still active
+  });
+
+  it("onDidChangeAgentState throws once the host is revoked", async () => {
+    const { host, revoke } = await setupAgentHost(["agent:read"]);
+    revoke();
+    expect(() => host.onDidChangeAgentState(() => {})).toThrow(/host revoked/);
   });
 });
 

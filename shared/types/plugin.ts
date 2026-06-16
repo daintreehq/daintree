@@ -13,6 +13,7 @@ import type {
 } from "./forge.js";
 import type { NotificationType } from "./notification.js";
 import type { ActionDispatchResult } from "./actions.js";
+import type { AgentState, WaitingReason } from "./agent.js";
 import type { z } from "zod";
 
 export interface PanelContribution {
@@ -895,6 +896,49 @@ export interface PluginWorktreeSnapshot {
 }
 
 /**
+ * Read-only, frozen projection of an agent session's coarse state, exposed to
+ * plugins behind the `agent:read` capability. This is an explicit allowlist of
+ * fields from the internal `agent:state-changed` event payload; do NOT add
+ * fields by spreading — every field must be intentionally exposed so internal
+ * shape changes (and internal routing identifiers) don't leak to third-party
+ * plugins. Observation only: nothing on this surface can drive, pause, resume,
+ * or inject into an agent session.
+ *
+ * Deliberately omits the internal routing ids (`terminalId`, `worktreeId`,
+ * `cwd`) and the activity-detector internals (`trigger`, `confidence`,
+ * `temperature`, …): a plugin holding only `agent:read` has no declared
+ * capability to access PTY/worktree internals, so exposing them here would let
+ * it cross-reference state it can't otherwise reach.
+ */
+export interface PluginAgentSnapshot {
+  /**
+   * Stable id of the agent session, when the host could attribute the
+   * transition to one. Absent for runtime-detected-only flows that route by
+   * terminal rather than a resolved agent id.
+   */
+  readonly agentId?: string;
+  /** Coarse lifecycle state: idle | working | waiting | directing | completed | exited. */
+  readonly state: AgentState;
+  /** The state the session transitioned away from. */
+  readonly previousState: AgentState;
+  /**
+   * Convenience flag — `true` while the session is doing in-flight work
+   * (`working` | `waiting` | `directing`), `false` otherwise. Derived from the
+   * same `ACTIVE_AGENT_STATES` set the host uses, so a plugin doesn't have to
+   * re-maintain the membership list.
+   */
+  readonly running: boolean;
+  /** Why the session is waiting; present only when `state === "waiting"`. */
+  readonly waitingReason?: WaitingReason;
+  /** Cumulative session cost in USD; present only on `completed`/`exited` transitions. */
+  readonly sessionCost?: number;
+  /** Cumulative session token count; present only on `completed`/`exited` transitions. */
+  readonly sessionTokens?: number;
+  /** Unix timestamp in milliseconds when the transition was committed. */
+  readonly timestamp: number;
+}
+
+/**
  * Options for {@link PluginHostApi.showToast}. Intentionally narrower than the
  * app's internal `notify()` surface: plugins cannot set `priority` (a
  * `priority:"low"` + `type:"error"` toast silently drops — see the lint rule at
@@ -1316,6 +1360,27 @@ export interface PluginActivationApi {
     callback: (snapshots: PluginWorktreeSnapshot[]) => void,
     options?: PluginHostSubscriptionOptions
   ): Promise<() => void>;
+  /**
+   * Subscribe to agent-session state changes, gated on the `agent:read`
+   * capability. The callback fires with a frozen {@link PluginAgentSnapshot}
+   * on every accepted agent state transition across all sessions (unscoped,
+   * like {@link onDidChangeWorktrees} — a plugin filters by `snapshot.agentId`
+   * if it cares about one session). Resolves to a disposer; calling it more
+   * than once is a no-op. All subscriptions are automatically disposed when the
+   * plugin is unloaded.
+   *
+   * Observation only — there is no companion method to drive, pause, resume, or
+   * inject into a session.
+   *
+   * Subscribing is revoke-guarded — call it during `activate()`. The callback
+   * itself fires for the plugin's whole lifetime; only the act of subscribing
+   * is restricted to the activation window.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare the
+   *   `agent:read` capability, or if called after activation resolves or times
+   *   out (the host is revoked).
+   */
+  onDidChangeAgentState(callback: (snapshot: PluginAgentSnapshot) => void): Promise<() => void>;
 }
 
 /**
@@ -1368,6 +1433,21 @@ export interface PluginHostApi extends PluginActivationApi {
     path: string,
     options?: PluginHostCallOptions
   ): Promise<PluginWorktreeStatus | null>;
+  /**
+   * Returns the most recent agent-session state observed since the plugin
+   * subscribed via {@link onDidChangeAgentState}, as a frozen
+   * {@link PluginAgentSnapshot}, or `null` when no transition has been observed
+   * yet (the host keeps no pre-subscription history). Gated on the `agent:read`
+   * capability.
+   *
+   * Like {@link postToPanel} this is NOT revoke-guarded: it stays callable from
+   * the plugin's timers and subscription callbacks and degrades to `null` once
+   * the plugin is unloaded. Observation only.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare the
+   *   `agent:read` capability.
+   */
+  getAgentState(): Promise<PluginAgentSnapshot | null>;
   /**
    * Signal that decorations for `scope` (optionally narrowed to `paths`) have
    * changed and any renderer showing them should re-pull. Unlike the

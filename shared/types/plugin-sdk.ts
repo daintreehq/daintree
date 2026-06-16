@@ -100,6 +100,11 @@ export type {
   PluginWorktreeFileState,
 } from "./plugin.js";
 
+// ── Agent observability ─────────────────────────────────────────────
+
+export type { PluginAgentSnapshot } from "./plugin.js";
+export type { AgentState, WaitingReason } from "./agent.js";
+
 // ── Forge provider contract ─────────────────────────────────────────
 
 export type {

@@ -24,6 +24,7 @@ export type PluginHostCallMethod =
   | "getActiveWorktree"
   | "getWorktrees"
   | "getWorktreeStatus"
+  | "getAgentState"
   | "showToast"
   | "dispatch"
   | "settings.get"
@@ -51,7 +52,11 @@ export type PluginHostNotifyMethod =
   | "logger.error";
 
 /** Event subscriptions the worker proxy can open against the host. */
-export type PluginWorkerSubscriptionKind = "active-worktree" | "worktrees" | "settings";
+export type PluginWorkerSubscriptionKind =
+  | "active-worktree"
+  | "worktrees"
+  | "settings"
+  | "agent-state";
 
 /**
  * Callback kinds main invokes back in the worker. `file-decoration-method`
