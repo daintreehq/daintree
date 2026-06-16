@@ -515,7 +515,9 @@ describe("workflow recipe-spawn plugin guard (issue #10582)", () => {
     expect(runRecipeWithResults).toHaveBeenCalled();
   });
 
-  it("workflow.startWorkOnIssue: plugin + recipeId throws before worktree creation", async () => {
+  it("workflow.startWorkOnIssue: plugin + recipeId throws before any IPC", async () => {
+    // getIssue is mocked but the guard must fire before it — a plugin must not
+    // be able to probe issue existence through the rejected path.
     forgeClientMock.getIssue.mockResolvedValue({
       number: 6609,
       title: "Add workflow macro tools",
@@ -530,6 +532,7 @@ describe("workflow recipe-spawn plugin guard (issue #10582)", () => {
       } as never)
     ).rejects.toThrow(/Plugins cannot spawn recipe terminals/);
 
+    expect(forgeClientMock.getIssue).not.toHaveBeenCalled();
     expect(worktreeClientMock.create).not.toHaveBeenCalled();
     expect(runRecipeWithResults).not.toHaveBeenCalled();
   });
@@ -551,7 +554,7 @@ describe("workflow recipe-spawn plugin guard (issue #10582)", () => {
     expect(result.recipeLaunched).toBe(false);
   });
 
-  it("workflow.startWorkOnIssue: agent + recipeId is not blocked", async () => {
+  it("workflow.startWorkOnIssue: agent + recipeId is not blocked and forwards dispatchSource", async () => {
     forgeClientMock.getIssue.mockResolvedValue({
       number: 6609,
       title: "Add workflow macro tools",
@@ -565,7 +568,13 @@ describe("workflow recipe-spawn plugin guard (issue #10582)", () => {
     } as never);
 
     expect(worktreeClientMock.create).toHaveBeenCalled();
-    expect(runRecipeWithResults).toHaveBeenCalled();
+    expect(runRecipeWithResults).toHaveBeenCalledWith(
+      "recipe-1",
+      expect.any(String),
+      "wt-new",
+      expect.any(Object),
+      expect.objectContaining({ dispatchSource: "agent" })
+    );
   });
 });
 
