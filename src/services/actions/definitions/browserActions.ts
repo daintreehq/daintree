@@ -98,7 +98,12 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       }
       // Omit focusPolicy so the store resolves "auto" vs "preserve" via its MCP
       // focus-suppression guard (#9035) — never steal focus from a typing user.
-      await store.addPanel({ kind: "browser", browserUrl: url });
+      const newId = await store.addPanel({ kind: "browser", browserUrl: url });
+      // addPanel returns null when the hard panel limit is reached (the store
+      // raises its own toast). Throw so callers don't get a false { ok: true }.
+      if (!newId) {
+        throw new Error("Could not open browser panel: panel limit reached");
+      }
     },
   }));
 

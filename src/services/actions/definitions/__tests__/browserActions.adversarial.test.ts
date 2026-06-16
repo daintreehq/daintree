@@ -132,6 +132,40 @@ describe("browserActions adversarial", () => {
     expect(setBrowserUrlSpy).not.toHaveBeenCalled();
   });
 
+  it("browser.openUrl does not reuse a dev-preview panel — it creates a browser panel", async () => {
+    setPanelState({
+      panelIds: ["dp1"],
+      panelsById: { dp1: { id: "dp1", kind: "dev-preview" } },
+    });
+    const run = setupActions();
+    await run("browser.openUrl", { url: "https://fresh.example" });
+
+    expect(addPanelSpy).toHaveBeenCalledTimes(1);
+    expect(setBrowserUrlSpy).not.toHaveBeenCalled();
+  });
+
+  it("browser.openUrl skips stale panelIds with no panelsById entry and reuses the real browser", async () => {
+    setPanelState({
+      panelIds: ["stale", "b1"],
+      panelsById: { b1: { id: "b1", kind: "browser" } },
+    });
+    const run = setupActions();
+    await run("browser.openUrl", { url: "https://new.example" });
+
+    expect(setBrowserUrlSpy).toHaveBeenCalledWith("b1", "https://new.example");
+    expect(addPanelSpy).not.toHaveBeenCalled();
+  });
+
+  it("browser.openUrl throws when addPanel returns null (panel limit reached)", async () => {
+    setPanelState({ panelIds: [], panelsById: {} });
+    addPanelSpy.mockResolvedValue(null);
+    const run = setupActions();
+
+    await expect(run("browser.openUrl", { url: "https://fresh.example" })).rejects.toThrow(
+      /panel limit/
+    );
+  });
+
   it("browser.back with no target is a silent no-op (no event dispatched)", async () => {
     setPanelState({ focusedId: null });
     const run = setupActions();
