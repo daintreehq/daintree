@@ -303,6 +303,8 @@ export class PluginDevWorkerMainBridge {
         return this.host.getWorktrees();
       case "getWorktreeStatus":
         return this.host.getWorktreeStatus(params as string, { signal });
+      case "getAgentState":
+        return this.host.getAgentState();
       case "showToast": {
         const p = params as ShowToastParams;
         // `type` is validated against the NotificationType enum by the host's
@@ -506,6 +508,8 @@ export class PluginDevWorkerMainBridge {
         dispose = await this.host.onDidChangeWorktrees((snapshots) => push(snapshots), {
           debounceMs: msg.debounceMs,
         });
+      } else if (kind === "agent-state") {
+        dispose = await this.host.onDidChangeAgentState((snapshot) => push(snapshot));
       } else {
         // settings
         if (!msg.key) {

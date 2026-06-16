@@ -1981,12 +1981,17 @@ export class PluginService {
         return match ? toPluginWorktreeStatus(match.worktreeChanges) : null;
       },
       getAgentState: async () => {
+        // Liveness first (mirrors getActiveWorktree/getWorktrees): once unloaded
+        // the method degrades to null rather than throwing, so a plugin calling
+        // it from a stray timer after unload doesn't get an unhandled rejection.
+        // declaredCapabilities() also returns [] post-unload, so a capability
+        // check first would mis-report PERMISSION_REQUIRED for a torn-down plugin.
+        if (!isBound()) return null;
         if (!this.declaredCapabilities(pluginId).has("agent:read")) {
           throw new Error(
             `PERMISSION_REQUIRED: plugin "${pluginId}" getAgentState requires "agent:read", which is not declared in manifest.capabilities`
           );
         }
-        if (!isBound()) return null;
         return lastAgentSnapshot;
       },
       onDidChangeActiveWorktree: (callback) => {

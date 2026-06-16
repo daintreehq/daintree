@@ -25,6 +25,7 @@ import type {
   PluginTypedIpcHandler,
   PluginWorktreeSnapshot,
   PluginWorktreeStatus,
+  PluginAgentSnapshot,
   PluginFsDirEntry,
   PluginFsStat,
   PluginGitStatus,
@@ -42,6 +43,7 @@ import type {
   PluginHostCallMethod,
   PluginHostNotifyMethod,
   PluginHostToWorkerMessage,
+  PluginWorkerSubscriptionKind,
   PluginWorkerToHostMessage,
 } from "../../../shared/types/pluginDevWorker.js";
 
@@ -368,6 +370,15 @@ export class PluginDevWorkerHostProxy {
       getWorktrees: () => this.call<PluginWorktreeSnapshot[]>("getWorktrees", undefined),
       getWorktreeStatus: (path, options) =>
         this.call<PluginWorktreeStatus | null>("getWorktreeStatus", path, options?.signal),
+      getAgentState: () => this.call<PluginAgentSnapshot | null>("getAgentState", undefined),
+      onDidChangeAgentState: (callback) => {
+        this.assertActivationOpen("onDidChangeAgentState");
+        // Subscription wired synchronously; only the disposer is async.
+        const dispose = this.subscribe("agent-state", (payload) =>
+          callback(payload as PluginAgentSnapshot)
+        );
+        return Promise.resolve(dispose);
+      },
       onDidChangeActiveWorktree: (callback) => {
         this.assertActivationOpen("onDidChangeActiveWorktree");
         // Subscription wired synchronously; only the disposer is async.
@@ -544,7 +555,7 @@ export class PluginDevWorkerHostProxy {
   }
 
   private subscribe(
-    kind: "active-worktree" | "worktrees" | "settings",
+    kind: PluginWorkerSubscriptionKind,
     callback: (payload: unknown) => void,
     key?: string,
     scope?: PluginSettingsScope,

@@ -6480,12 +6480,62 @@ describe("Plugin agent-state host API (#10521)", () => {
     emitState({ state: "working" });
     expect(received).toHaveLength(1);
 
-    (
-      service as unknown as { unloadPlugin: (id: string) => void }
-    ).unloadPlugin("acme.agent-host");
+    (service as unknown as { unloadPlugin: (id: string) => void }).unloadPlugin("acme.agent-host");
 
     emitState({ state: "idle" });
     expect(received).toHaveLength(1);
+  });
+
+  it("getAgentState returns null (not an error) after the plugin is unloaded", async () => {
+    const { service, host } = await setupAgentHost(["agent:read"]);
+    await host.onDidChangeAgentState(() => {});
+    emitState({ agentId: "a-pre", state: "working", previousState: "idle" });
+    expect(await host.getAgentState()).not.toBeNull();
+
+    (service as unknown as { unloadPlugin: (id: string) => void }).unloadPlugin("acme.agent-host");
+
+    // declaredCapabilities() returns [] post-unload, so a capability check first
+    // would mis-throw PERMISSION_REQUIRED — the liveness check must win.
+    expect(await host.getAgentState()).toBeNull();
+  });
+
+  it("getAgentState stays null when events fire but the plugin never subscribed", async () => {
+    const { host } = await setupAgentHost(["agent:read"]);
+    emitState({ state: "working", previousState: "idle" });
+    // No subscription means no handler caches the snapshot — the host keeps no
+    // pre-subscription history.
+    expect(await host.getAgentState()).toBeNull();
+  });
+
+  it("getAgentState inside the callback observes the just-delivered snapshot", async () => {
+    const { host } = await setupAgentHost(["agent:read"]);
+    let insidePromise: Promise<unknown> | null = null;
+    await host.onDidChangeAgentState(() => {
+      insidePromise = host.getAgentState();
+    });
+
+    emitState({ agentId: "a9", state: "working", previousState: "idle" });
+
+    const inside = (await insidePromise) as Record<string, unknown> | null;
+    expect(inside).not.toBeNull();
+    expect(inside?.agentId).toBe("a9");
+  });
+
+  it("multiple subscriptions from the same plugin dispose independently", async () => {
+    const { host } = await setupAgentHost(["agent:read"]);
+    const a: unknown[] = [];
+    const b: unknown[] = [];
+    const disposeA = await host.onDidChangeAgentState((s) => a.push(s));
+    await host.onDidChangeAgentState((s) => b.push(s));
+
+    emitState({ state: "working" });
+    expect(a).toHaveLength(1);
+    expect(b).toHaveLength(1);
+
+    disposeA();
+    emitState({ state: "idle" });
+    expect(a).toHaveLength(1); // disposed — no more deliveries
+    expect(b).toHaveLength(2); // still active
   });
 
   it("onDidChangeAgentState throws once the host is revoked", async () => {

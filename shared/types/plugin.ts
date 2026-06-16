@@ -1380,9 +1380,7 @@ export interface PluginActivationApi {
    *   `agent:read` capability, or if called after activation resolves or times
    *   out (the host is revoked).
    */
-  onDidChangeAgentState(
-    callback: (snapshot: PluginAgentSnapshot) => void
-  ): Promise<() => void>;
+  onDidChangeAgentState(callback: (snapshot: PluginAgentSnapshot) => void): Promise<() => void>;
 }
 
 /**
