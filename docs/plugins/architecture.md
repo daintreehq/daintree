@@ -51,10 +51,12 @@ A plugin's `activate(host)` function runs when something first needs the plugin'
 - User runs a plugin-registered command
 - User opens a plugin-contributed panel
 
+**User-installed plugins activate out-of-process.** Every sideloaded, `.dntr`/URL-installed, or `dev`-linked plugin runs inside a `utilityProcess.fork` worker (#10526): its `main` executes in a child process with its own module realm, and the host bridges every `host.*` call and registration over a MessagePort. This gives clean teardown (unload kills the worker, reclaiming the whole module realm — no ESM-cache leak, no module-scope state surviving a reload) plus OS-level crash isolation. **Built-in plugins are the exception** — they stay on the in-process `import()` loader because they're trusted, app-bundled, and never unloaded, and because the GitHub built-in's forge provider exposes synchronous host methods (`parseRemote`, URL builders) that can't cross the worker's async port.
+
 When triggered, Daintree:
 
 1. Resolves the plugin's `main` file path relative to the plugin directory
-2. Imports it via `pathToFileURL()` + `import()` with a cache-busting query string (for hot reload)
+2. Loads the module — in the worker for user plugins, or in-process via `pathToFileURL()` + `import()` for built-ins
 3. Calls the exported `activate(host)` function
 4. Stores the cleanup function (if returned)
 5. Enforces a 5-second timeout via `Promise.race` — exceeded activations are marked failed
@@ -84,7 +86,7 @@ On plugin unload, `PluginService.unloadPlugin()` runs these cleanups in order:
 7. Panel kinds contributed via manifest
 8. MCP subprocess lifecycle (sent SIGTERM, then SIGKILL after grace period)
 
-After disposal, the plugin's module is orphaned. Node's module cache still holds it but no live references point to it — garbage collection claims it eventually.
+For a user-installed plugin the disposal cascade is followed by killing its worker, which reclaims the plugin's entire module realm — module-scope state never survives a reload. For a built-in (which runs in-process) the module is merely orphaned: Node's module cache still holds it but no live references point to it, and since built-ins are never uninstalled that residue never accumulates.
 
 ## Renderer host
 
@@ -162,13 +164,13 @@ This matters because tool definitions consume tokens. An MCP server exposing 40 
 
 - Spawn on first use per session.
 - Keep alive for the duration of the agent session.
-- Exponential backoff on crash (1s, 2s, 4s, 8s up to 30s). After 3 failures in 60 seconds, the server is marked degraded; tool calls return a structured error until manual restart.
+- On unexpected exit the supervisor transitions the server to `crashed`, records the error, invalidates the cached tool list, and rejects any pending calls. There is **no** automatic retry, backoff, or "degraded" state — the status enum is `spawning | ready | crashed | stopped`. Recovery is an explicit manual restart (the `pluginMcp.restart` IPC, or re-enabling the server from Preferences → Plugins), which also re-runs the trust-on-first-use tool comparison before any tool is re-injected.
 - SIGTERM on Daintree quit with a 2-second grace period, then SIGKILL.
 - Subprocess `stderr` is captured and logged for debugging but not exposed to agents.
 
 ### Environment variable substitution
 
-Plugin manifest `env` values support `${settings:settingId}` syntax. Substitution happens at spawn time, reading the current setting value from the plugin's settings scope. Changes to secret settings cause the server to restart with the new value on its next spawn.
+Plugin manifest `env` values support `${settings:settingId}` syntax. Substitution happens at spawn time, reading the current setting value from the plugin's **user scope** (never project scope). An unset or `null` setting resolves to an empty string; booleans and numbers are stringified, and objects/arrays are JSON-encoded. Changes to secret settings cause the server to restart with the new value on its next spawn.
 
 ### Security
 

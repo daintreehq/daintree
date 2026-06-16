@@ -36,9 +36,9 @@ Templates:
 - **`mcp`** — skeleton MCP server plus manifest wiring (`src/index.ts` + `src/server.ts`)
 - **`full`** — command + view + MCP example (largest, for experimenting)
 
-### The edit loop (today)
+### The edit loop
 
-There's no hot reload yet. The loop below still depends on the unpublished `daintree-plugin` CLI (see the caveat at the top of this page); until it ships, package and install by hand following [Distribution → Sideload](./distribution.md#sideload). The intended manual loop once the CLI is available:
+For a live hot-reload loop, use [`daintree-plugin dev`](#daintree-plugin-dev) below. The manual package-and-install loop is still available — it's the right choice when you want to exercise the exact production load path, or whenever the CLI isn't on hand (it's unpublished today; see the caveat at the top of this page — package and install by hand following [Distribution → Sideload](./distribution.md#sideload)). The manual loop:
 
 ```bash
 cd my-plugin
@@ -53,20 +53,25 @@ Each `install` replaces the previously installed copy. Daintree unloads the old 
 
 **Error surfacing:** if the plugin throws during activate or render, Daintree shows an inline error boundary with the stack trace. The rest of Daintree continues to work.
 
-### `daintree-plugin dev` (planned, F32b)
+### `daintree-plugin dev`
 
-> Not available yet. Invoking `daintree-plugin dev` currently exits with an error. The hot-reload loop described here is planned for a later release (F32b); until then use the manual edit → package → install loop above.
+Starts a hot-reload dev loop against a running Daintree instance:
 
-Once shipped, `dev` will start a hot-reload loop:
+```bash
+npx daintree-plugin dev [--skip-build]
+```
 
-1. Symlink the plugin directory into `~/.daintree/plugins/{pluginId}` so Daintree can discover it.
-2. Write a marker file so Daintree knows it's a dev plugin (different from a sideloaded prod plugin).
-3. Start Vite in watch mode with the plugin-author Vite config.
-4. Open a local WebSocket server and wait for a running Daintree instance to connect.
+What it does, in order:
 
-On every successful Vite rebuild Daintree will call `unloadPlugin({pluginId})`, re-import the plugin entry with a cache-busting query parameter, and call `activate` again. Dev plugins will carry a "DEV" badge on the plugin entry in Preferences so you can tell at a glance which installed plugins are pinned to a local dev folder.
+1. Validates the manifest (the same check as `daintree-plugin validate`); a manifest error aborts before anything is linked.
+2. Builds the plugin once (`vite build`) so `dist/<main>` exists before Daintree loads it. `--skip-build` skips this initial build — the watcher in step 5 still rebuilds on every save.
+3. Symlinks the plugin directory into `~/.daintree/plugins/{pluginId}` and writes a `.dev-marker` file at the link root. The marker's presence is what routes the plugin through Daintree's hot-reload worker instead of the normal in-process load path. (A real directory already at that path is treated as an installed plugin and left untouched.)
+4. Asks the running Daintree to load and activate the plugin (the `plugin.dev.start` IPC).
+5. Starts `vite build --watch`. Daintree's dev worker watches the plugin's `dist/` directory; on every rebuild it tears the worker down and re-imports the entry, so a save reloads the live plugin. Dev plugins carry a **DEV** badge on their entry in Preferences so you can tell at a glance which installed plugins are pinned to a local dev folder.
 
-A few host APIs whose handles or subscriptions can't survive a whole-worker reload are deliberately unavailable in hot-reload dev mode and reject with a "not supported in dev mode" message: `host.process.spawn` (its `kill()` / `onExit` / `onCrash` callbacks are synchronous and can't cross the async MessagePort) and `host.fs.watch` (the watcher disposer can't survive a worker swap). Their async request/response siblings — `host.fs.readFile`/`writeFile`/`readdir`/`stat`, `host.git.*`, `host.postToPanel`, `host.getWorktreeStatus` — relay over the MessagePort and work in dev. To exercise managed processes or filesystem watching, package and install the plugin (the manual loop above), which runs it in-process. This mirrors the forge-provider precedent.
+Press Ctrl-C (or send SIGTERM) to stop: the watcher is killed, Daintree is asked to unload the plugin (`plugin.dev.stop`), and the `.dev-marker` plus the symlink Daintree-`dev` created are removed. A second Ctrl-C while teardown is in flight exits immediately.
+
+One host method is a no-op for `dev`-loaded plugins: `registerForgeProvider`. Forge providers require synchronous host methods (`parseRemote`, URL builders) that can't cross the worker's async MessagePort boundary, so a `registerForgeProvider` call logs a warning and is skipped. Everything else — including `host.process.spawn` and `host.fs.watch`, whose handles and subscriptions are proxied over the port and survive a reload — works under `dev`. Note this is **not** a dev-only limitation: every user-installed plugin runs in a worker (see [Architecture → Activation](./architecture.md#activation)), so packaging and installing the plugin doesn't restore forge support either. Only Daintree's built-in plugins run in-process and can register forge providers — a known architectural gap, not something a third-party plugin can work around today.
 
 ### `daintree-plugin validate`
 

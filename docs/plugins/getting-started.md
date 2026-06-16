@@ -106,7 +106,7 @@ npx daintree-plugin install ./acme.my-first-plugin-0.1.0.dntr
 
 In Daintree, open the command palette and run **My First Plugin: Say Hello**. A toast appears.
 
-To iterate, edit your source, then re-run `npm run package` and `daintree-plugin install` (which replaces the installed copy). The hot-reload dev loop (`daintree-plugin dev`) is planned for a later release and is not available yet.
+To iterate, edit your source, then re-run `npm run package` and `daintree-plugin install` (which replaces the installed copy). For a faster loop, `daintree-plugin dev` hot-reloads the plugin on every save — see [Development loop](./dev-loop.md#daintree-plugin-dev).
 
 ## Package for distribution
 

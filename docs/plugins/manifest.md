@@ -176,21 +176,22 @@ Daintree is pre-1.0. Pin to a current minor during this phase — a plugin that 
 
 Array of capability tokens the plugin wants. The model is **disclosure-first with host-side policy effects** — there is no Node sandbox, so a plugin is not blocked from doing anything regardless of what it declares, but declared tokens are not purely advisory. Six high-risk tokens (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`, `agent:register`) currently raise every action the plugin registers to a confirm dialog (`effectiveDanger: "confirm"`) via the host's `CONFIRM_TRIGGERING_CAPABILITIES` set. See the [trust model](./trust-model.md) for the full contract.
 
-| Token                | Intent                                                   |
-| -------------------- | -------------------------------------------------------- |
-| `fs:project-read`    | Read files in the current project worktree               |
-| `fs:project-write`   | Modify files in the current project worktree             |
-| `fs:user-data-read`  | Read from `~/.daintree/` or elsewhere in the user's home |
-| `fs:user-data-write` | Write to `~/.daintree/` or elsewhere in the user's home  |
-| `network:fetch`      | Make outbound HTTP requests                              |
-| `agent:invoke`       | Send prompts to AI agents from plugin code               |
-| `agent:read`         | Observe agent state (token usage, transcripts)           |
-| `agent:register`     | Register a launchable agent CLI as a selectable agent    |
-| `git:read`           | Read git state (branches, status, log)                   |
-| `git:write`          | Make git changes (commits, branches)                     |
-| `clipboard:read`     | Read from the system clipboard                           |
-| `clipboard:write`    | Write to the system clipboard                            |
-| `shell:exec`         | Spawn subprocesses (managed via `host.process`)          |
+| Token | Intent |
+| --- | --- |
+| `fs:project-read` | Read files in the current project worktree |
+| `fs:project-write` | Modify files in the current project worktree |
+| `fs:user-data-read` | Read from `~/.daintree/` or elsewhere in the user's home |
+| `fs:user-data-write` | Write to `~/.daintree/` or elsewhere in the user's home |
+| `network:fetch` | Make outbound HTTP requests |
+| `agent:invoke` | Send prompts to AI agents from plugin code |
+| `agent:read` | Observe agent state (lifecycle phase, session cost/tokens on completion) |
+| `agent:register` | Register a launchable agent CLI as a selectable agent |
+| `agent:input` | Send text to the active agent terminal (`host.sendToActiveAgent`; JIT consent on first use) |
+| `git:read` | Read git state (branches, status, log) |
+| `git:write` | Make git changes (commits, branches) |
+| `clipboard:read` | Read from the system clipboard |
+| `clipboard:write` | Write to the system clipboard |
+| `shell:exec` | Spawn subprocesses (managed via `host.process`) |
 
 Declare honestly. The plugin manager's detail pane lists what you've declared (after install, not as a pre-install consent gate) and users judge plugins by what they ask for; the host also derives policy from the high-risk tokens above. A plugin declaring `shell:exec` for no obvious reason looks suspicious. A plugin that silently executes shells without declaring it damages the ecosystem — and for the most part nothing at runtime stops it, which is exactly why honest declaration matters. The one runtime-enforced exception is `host.process.spawn` (see [host API](./host-api.md#process--managed-child-processes)): the managed-process surface rejects unless the plugin declared `shell:exec`. A plugin can still `require("child_process")` directly to bypass that — the gate is on the managed surface, not a Node sandbox — but the managed surface is the supported, supervised path.
 
@@ -199,7 +200,7 @@ Declare honestly. The plugin manager's detail pane lists what you've declared (a
 Per-capability allowlists that declare what a capability intends to reach. Both buckets are schema-validated, but neither is a runtime sandbox — they do not block actual calls or writes. Two buckets, with different runtime weight today:
 
 - `scopes.network.allowedUrls` — outbound request targets the plugin intends to reach under `network:fetch`. Wildcards and private/loopback targets are rejected. **Live but advisory:** a non-empty allowlist suppresses the compound-capability elevation (the host won't force a confirm dialog when `network:fetch` is paired with a sensitive read), proving the fetch is tightly bound rather than a generic exfiltration channel. It does not actually block requests to other URLs.
-- `scopes.fs.allowedPaths` — absolute paths the filesystem capabilities may touch. Wildcards, relative paths, and `..` segments are rejected. **Enforced for the host `fs`/`git` API:** every path argument to `host.fs.*` and `host.git.*` is realpath-resolved and contained to one of these roots (traversal and symlink-escape rejected, mirroring the `plugin://` protocol handler); an out-of-scope path rejects with a `PATH_NOT_ALLOWED:` prefix. It still does not attenuate the compound-capability lattice (fs writes elevate unconditionally). **Honest scope limit:** this enforces the sanctioned, audited `host.fs`/`host.git` path only — a plugin's `main` runs in-process and can still call raw `node:fs` directly, which the host cannot intercept until the sandbox/trust model changes (D3). `allowedPaths` contains the host-mediated surface; it does not seal the in-process one.
+- `scopes.fs.allowedPaths` — absolute paths the filesystem capabilities may touch. Entries may also use the dynamic tokens `${project}` or `${worktree}` (optionally with a `/sub/path` suffix, e.g. `"${project}/src"`), which expand at call time to the active project root and active worktree path. Wildcards, relative paths, `..` segments, and unknown tokens are rejected by the manifest schema. **Enforced for the host `fs`/`git` API:** every path argument to `host.fs.*` and `host.git.*` is realpath-resolved and contained to one of these roots (traversal and symlink-escape rejected, mirroring the `plugin://` protocol handler); an out-of-scope path rejects with a `PATH_NOT_ALLOWED:` prefix. It still does not attenuate the compound-capability lattice (fs writes elevate unconditionally). **Honest scope limit:** this enforces the sanctioned, audited `host.fs`/`host.git` path only — a plugin's `main` is un-sandboxed Node code (it runs in the plugin worker with full filesystem privileges) and can still call raw `node:fs` directly, which the host cannot intercept until the sandbox/trust model changes (D3). `allowedPaths` contains the host-mediated surface; it does not seal the un-mediated one.
 
 A misspelled bucket (e.g. `networking`) is rejected as a manifest error rather than silently dropped. See the [trust model](./trust-model.md) for the full scopes semantics and how they compose with capabilities.
 
@@ -214,7 +215,7 @@ Plugins are lazy by default. Omitting `activationEvents` (or passing an empty ar
 Object containing arrays for each contribution type. All fields are optional; unlisted contribution types default to empty arrays.
 
 - `views` — `location: "panel"` is wired today (the renderer host mounts the contributed component in a grid panel). `location: "sidebar"` is rejected at manifest validation — the sidebar host does not exist yet, so accepting it would validate a view the runtime cannot render.
-- `mcpServers` — the declared `command` is lazily spawned as a real subprocess the first time its tools are enumerated, and is supervised (restart-on-crash, killed on exit). Treat a contributed MCP server as trust-gated, not inert.
+- `mcpServers` — the declared `command` is lazily spawned as a real subprocess the first time its tools are enumerated, and is supervised (killed on Daintree exit; on crash it transitions to `crashed` and tool calls reject until an explicit manual restart — there is no automatic retry or backoff). Treat a contributed MCP server as trust-gated, not inert.
 - `settings` — beyond `string` / `number` / `boolean` / `enum` / `json` / `secret`, the field `type` accepts `path` / `directory` / `file`, which render a read-only path input plus a native folder/file chooser (`file` narrows the chooser by an `extensions` array; `mustExist` advisory-flags a stored path that no longer resolves). A `secret`-typed setting is encrypted at rest through the OS keychain when one is available, transparently to the plugin. Full field reference in the [Contribution points → Settings schema](./contribution-points.md#settings-schema--shipped).
 
 > These two points were named `experimental_views` and `experimental_mcpServers` before the 1.0 freeze. The old keys are still accepted as deprecated aliases — a manifest using them parses and runs identically, but logs a one-time deprecation warning naming the stable replacement. Rename to `views` / `mcpServers`; the aliases may be removed in a future major.

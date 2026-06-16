@@ -165,6 +165,26 @@ The capability sub-interfaces are `ReviewCapability`, `ApprovalCapability`, `Rel
 
 The manifest's `capabilities` array is informational only — it drives the Preferences "supports: …" label. Actual behavior gates on whether the capability field is present at runtime, which keeps the displayed claim honest even if the manifest is stale.
 
+## Local / offline providers
+
+Not every provider talks to a network forge. A provider backed by on-disk files or a local CLI has no token to store and no remote to authenticate against — the auth surface (`getCredentials` / `validateCredentials` / `validateToken`) is dead weight you still have to satisfy. Two pieces make that ergonomic:
+
+- **`kind: "local"` on the manifest contribution.** A display-only signal — the host never gates auth or routing on it. Preferences uses it to label the provider "No configuration needed" rather than showing it as unconfigured. (`kind` defaults to `"network"`; it is frozen at 1.0 and otherwise inert.)
+- **`localAuthStubs` from `@daintreehq/plugin-sdk`.** Spread it into your impl to satisfy the three auth methods with no-ops: `getCredentials → null`, `validateCredentials → { valid: true }`, `validateToken → { valid: true }`.
+
+```ts
+import { localAuthStubs } from "@daintreehq/plugin-sdk";
+
+export const localNotesProvider: ForgeProviderImpl = {
+  ...localAuthStubs, // getCredentials / validateCredentials / validateToken
+  parseRemote,
+  listIssues,
+  // …the rest of the base surface…
+};
+```
+
+A local provider typically reads the project on disk rather than a remote. Use `repo.projectPath` for that: the host injects it as the absolute path to the project root (the main worktree) when it resolves a ref for a concrete project. It is optional — absent on synthetic refs the host builds without a project — so read it defensively (`if (repo.projectPath) …`). A network provider simply ignores the field.
+
 ## Expose the provider's CLI to the assistant
 
 The Daintree Assistant runs forge CLIs inside an allowlist at `help/.claude/settings.json`. The `allow` list already grants `Bash(gh *)`, `Bash(glab *)` (GitLab), and `Bash(tea *)` (Gitea); the `deny` list blocks the destructive create/merge mutations for each (e.g. `Bash(glab mr create*)`, `Bash(glab mr merge*)`, `Bash(tea pulls merge*)`).
