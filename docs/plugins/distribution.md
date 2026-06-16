@@ -194,7 +194,7 @@ The user pastes a URL pointing to a `.dntr` file. Daintree:
 
 - Daintree does not validate signatures on URL-installed plugins. Trust is on the user.
 - No TLS enforcement beyond what the OS does for HTTPS. Installing from non-HTTPS URLs is allowed but warned (the `pendingHttpUrl` plaintext-HTTP confirm in `usePluginManager.ts`).
-- Redirects are followed by Chromium's net stack (capped at its built-in limit). Acceptance is decided from the final response's content-type; the `.dntr`-suffix fallback is checked against the **original** pasted URL's path, since the resolved URL isn't reliable through Electron's fetch.
+- Redirects are followed **manually**, up to 5 hops (`MAX_REDIRECT_HOPS`), and every hop is independently re-validated: each `Location` must stay `https:` (an `https→http` downgrade is rejected) and its host must clear both the literal SSRF guard and a DNS-resolution check (a public URL that 30x-redirects to a private/loopback/link-local address is rejected before the body is fetched). Acceptance is decided from the final response's content-type; the `.dntr`-suffix fallback is checked against the **original** pasted URL's path, since the resolved URL isn't reliable through Electron's fetch.
 - Private, loopback, and link-local hosts are rejected before the fetch runs (SSRF guard).
 - The plaintext-HTTP warning shows the original URL so the user can spot a non-HTTPS host before committing. Declared capabilities are not enumerated at install time — consent is gathered per-tool-call at runtime (TOFU; see `docs/plugins/trust-model.md`).
 
@@ -225,7 +225,7 @@ Daintree:
 4. Deletes `~/.daintree/plugins/{publisher}.{name}/`.
 5. By default, **keeps** the plugin's user-scope settings file (`~/.daintree/plugin-settings/{publisher}.{name}.json`) so an API token survives a reinstall. The CLI's `--delete-settings` flag (or the UI's "also remove stored settings" checkbox) deletes that file instead.
 
-Secrets are **not** stored separately — they live as plaintext JSON in the same user-scope settings file (`type: "secret"` only affects how the UI renders the value; there's no OS keychain). So "keep settings" keeps the secrets too, and `--delete-settings` removes them.
+Secrets are not stored in a separate file — `type: "secret"` values live in the same user-scope settings file, but encrypted at rest through the OS keychain (Electron `safeStorage`: macOS Keychain / Windows DPAPI / Linux libsecret-kwallet) when one is available, persisted as a tagged ciphertext envelope. On a host with no keychain backend (typically headless Linux) they fall back to plaintext JSON under `chmod 0o600`, and the settings UI discloses which tier is in use. Either way they share the settings file's lifecycle: "keep settings" keeps the secrets too, and `--delete-settings` removes them.
 
 Project-scope settings (`<projectRoot>/.daintree/plugin-settings/{publisher}.{name}.json`) are **never** touched by uninstall — they're tracked per-repo and removing them is the project's concern.
 
@@ -237,7 +237,7 @@ For authors who want to share plugins publicly:
 
 - **GitHub Releases** is the default recommendation. `.dntr` files are small; releases are free; versioning maps cleanly to git tags.
 - **README with install instructions.** Include the literal URL to paste into Daintree.
-- **Semver your releases.** Daintree uses semver for version comparison and update detection.
+- **Semver your releases.** Daintree uses `semver` only for the `engines.daintree` host-compatibility gate — not for update detection. "Check for update" re-fetches the original URL and compares the SHA-256 archive hash against the installed one, so a new build is detected by content change regardless of its version string.
 - **Set `engines.daintree` honestly.** Lock to the current minor you've tested against (e.g. `^0.15.0` against the app version you built on). Don't set `*` — you'll get bug reports from users on Daintree versions you haven't supported.
 - **Don't commit `.dntr` files to the source repo.** Build them in CI on release-tag.
 - **Pin `@daintreehq/plugin-sdk` tightly.** Pre-1.0, minor versions can break APIs.

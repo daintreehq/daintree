@@ -65,17 +65,28 @@ interface PluginHostApi {
   ): () => void;
   invalidateFileDecorations(scope: string, paths?: string[]): void;
 
-  // Action dispatch
+  // Action dispatch + catalog
   dispatch(actionId: ActionId, args?: unknown): Promise<ActionDispatchResult>;
+  readonly actions: PluginHostActionsApi;
 
-  // Settings
+  // Agent input — gated on the `agent:input` capability
+  sendToActiveAgent(text: string, options?: { submit?: boolean }): Promise<void>;
+
+  // Settings (user-facing, schema-declared) + private storage (machine-owned)
   readonly settings: SettingsApi;
+  readonly storage: StorageApi;
 
   // Diagnostics
   readonly logger: PluginLogger;
 
   // UI helpers
   showToast(options: PluginToastOptions): Promise<void>;
+  showQuickPick(
+    items: PluginQuickPickItem[],
+    options?: PluginQuickPickOptions
+  ): Promise<PluginQuickPickItem | PluginQuickPickItem[] | undefined>;
+  showInputBox(options?: PluginInputBoxOptions): Promise<string | undefined>;
+  showConfirm(options: PluginConfirmOptions): Promise<boolean>;
 
   // Managed child processes — gated on the `shell:exec` capability
   readonly process: PluginProcessApi;
@@ -83,6 +94,9 @@ interface PluginHostApi {
   // Host-mediated, scope-contained filesystem and git
   readonly fs: PluginFsApi;
   readonly git: PluginGitApi;
+
+  // Host-mediated OS clipboard — gated on `clipboard:read` / `clipboard:write`
+  readonly clipboard: PluginClipboardApi;
 }
 ```
 
@@ -315,8 +329,9 @@ Binds a runtime `FileDecorationProviderImpl` to a descriptor declared in `contri
 ```ts
 const dispose = host.registerFileDecorationProvider({ id: "linear-status" }, impl);
 
-// Later, from a subscription callback or timer:
-host.invalidateFileDecorations("worktree", ["src/foo.ts"]);
+// Later, from a subscription callback or timer. `scope` must match one of the
+// provider's manifest-declared `scopes` (e.g. "worktree-diff:*"):
+host.invalidateFileDecorations("worktree-diff:main", ["src/foo.ts"]);
 ```
 
 **Rules:**
@@ -337,6 +352,36 @@ if (!result.ok) {
 ```
 
 Args are validated against the action's `argsSchema` by `ActionService`; the host does not re-validate. Actions classified `danger: "restricted"` reject with `RESTRICTED`; `danger: "confirm"` actions return `CONFIRMATION_REQUIRED` — plugins cannot bypass confirm-gating (there is no `confirmed` flag). `dispatch` is NOT revoke-guarded; once the plugin is unloaded it returns `{ ok: false, error: { code: "PLUGIN_UNLOADED" } }` without dispatching.
+
+## `actions` — built-in action catalog
+
+Discover what `dispatch` accepts and pre-flight a call, instead of hardcoding action ids and hoping. Projects Daintree's `ActionService` manifest to plugins.
+
+```ts
+const all = await host.actions.list(); // every dispatchable action (slim entries)
+const entry = await host.actions.get("git.commit"); // single lookup, or null
+if ((await host.actions.canDispatch("git.commit")) === "confirm") {
+  // warn the user before dispatch triggers a confirm prompt
+}
+```
+
+`list()` and `get(id)` mirror `ActionService.list()`/`get()`: `danger: "restricted"` actions are filtered out, so a plugin only ever sees `"safe"` or `"confirm"` entries (`get` returns `null` for an unknown or restricted id). `canDispatch(id)` returns `"ok"` for a safe action, `"confirm"` for one `dispatch` would reject with `CONFIRMATION_REQUIRED`, and `"restricted"` for an unknown or restricted id — use it to warn before you trigger a confirm dialog. `actions` is NOT revoke-guarded; after unload `list()` resolves `[]` and `get()` resolves `null`.
+
+## `sendToActiveAgent` — inject text into the active agent
+
+Send text to the currently-active agent terminal. Gated on the `agent:input` capability. This is the **sanctioned injection path** — the raw `terminal.sendCommand` action is closed to plugin dispatch, so plugins stop reinventing brittle `terminal.list` selection heuristics.
+
+```ts
+// Stage text for the user to review (default — no Enter appended):
+await host.sendToActiveAgent("Summarize the failing test and propose a fix.");
+
+// Run it immediately:
+await host.sendToActiveAgent("/compact", { submit: true });
+```
+
+The host resolves the target itself, preferring the focused/visible agent terminal, then a `waiting` agent, then the most recently active agent terminal in the active project. `options.submit` defaults to `false` — the **stage-only**, default-safe mode: the text is pasted into the agent's input for the user to review and submit, with no Enter appended. Pass `{ submit: true }` to append Enter and execute immediately.
+
+First use raises a just-in-time consent prompt (like `shell:exec`); a granted consent covers later calls. `sendToActiveAgent` is NOT revoke-guarded — call it from timers and subscription callbacks — but it becomes a no-op once the plugin is unloaded. It throws `PERMISSION_REQUIRED:` if the plugin did not declare `agent:input` or the user denies consent, and `NO_ACTIVE_AGENT:` if no agent terminal is available to receive the input.
 
 ## `logger`
 
@@ -370,6 +415,21 @@ const dispose = host.settings.onDidChange("linear.apiToken", (newValue) => {
 Scope defaults to `"user"`. `project` scope resolves the active project at call time, so it tracks project switches: `get` returns `undefined` and `set` throws when no project is active. `set` rejects `undefined` and non-JSON-serializable values; when the manifest declares `contributes.settings`, an undeclared key is rejected. `onDidChange` fires only on in-process writes — edits made to the JSON file by other processes don't fire until the plugin reloads.
 
 **Storage:** values are stored as JSON at `~/.daintree/plugin-settings/{pluginId}.json` (user scope) or `<projectRoot>/.daintree/plugin-settings/{pluginId}.json` (project scope), with `chmod 0o600` applied on POSIX. `secret`-typed settings (#9167) are encrypted at rest through the OS keychain (macOS Keychain / Windows DPAPI / Linux libsecret-kwallet via Electron `safeStorage`) by default — the value is persisted as a tagged ciphertext envelope, and the `host.settings.get`/`set` API shape is unchanged (encryption is transparent to your plugin). When no keychain is available (e.g. a headless Linux box without a secret service), `secret` settings fall back to plaintext and the settings UI says so honestly. Non-secret settings are stored as plaintext JSON. Don't rely on the plaintext fallback for secrets that must survive disk compromise on an unconfigured host.
+
+## `storage` — private key/value storage
+
+The machine-owned counterpart to `settings`: persist a plugin's own working state without declaring every key in `contributes.settings` and without it surfacing in the settings UI.
+
+```ts
+await host.storage.set("lastSyncCursor", cursor); // scope defaults to "user"
+const cursor = await host.storage.get<string>("lastSyncCursor");
+await host.storage.delete("lastSyncCursor");
+
+// Per-worktree state that tracks the active worktree:
+await host.storage.set("draft", text, "worktree");
+```
+
+Three scopes — `"user"` (default), `"project"`, `"worktree"` — stored as plaintext JSON at `~/.daintree/plugin-storage/{pluginId}.json`, `<projectRoot>/.daintree/plugin-storage/{pluginId}.json`, or `<worktreePath>/.daintree/plugin-storage/{pluginId}.json` (`chmod 0o600` on POSIX). **No secret encryption — never store credentials here** (use a `type: "secret"` setting for those). The `"project"` / `"worktree"` scopes resolve the active project / worktree at call time: `get` and `delete` are a no-op (returning `undefined` / void) and `set` throws when no project / worktree is active. `set` rejects `undefined` and non-JSON-serializable values. `onDidChange(key, cb, scope?)` fires on in-process writes only and is the one revoke-guarded member — subscribe during `activate()`. The rest of `storage` is NOT revoke-guarded.
 
 ## `showToast`
 
@@ -445,6 +505,17 @@ const { commit, preview } = await host.git.commit("/Users/me/project", {
 
 `host.git` is scoped to a worktree your plugin may access — the `worktreePath` must resolve inside your `scopes.fs.allowedPaths` (same realpath containment as `host.fs`). It is implemented over Daintree's existing hardened git layer, not a reinvented one. Reads (`status`, `diff`) gate on `git:read`; mutations (`add`, `commit`) on `git:write` (and `commit` additionally requires `git:read`, since it returns the staged diff as its preview). Any pathspec you pass to `add` or `diff` must be **worktree-relative** — an absolute path, a `..` segment, or `:`-prefixed git pathspec magic is rejected with a `PATH_NOT_ALLOWED:` error, because git would otherwise resolve those against the whole repository and escape the contained worktree. `commit` enforces the **change-preview safeguard at the host layer** (incident #7880 / destructive-action tier D2): it refuses without an explicit non-empty `message` — there is no silent fallback to a derived commit message — and it computes the real staged diff as a preview before mutating, returned on the result so your UI can surface it. Mutations are recorded in the audit trail. `host.git` is NOT revoke-guarded.
 
+## `clipboard` — host-mediated OS clipboard
+
+Text-only read/write of the OS clipboard, gated on `clipboard:read` / `clipboard:write`. Runs in the main process, so it works from a headless plugin (no renderer or focused document required).
+
+```ts
+await host.clipboard.writeText("acme.linear-planner synced 12 issues"); // clipboard:write
+const text = await host.clipboard.readText(); // clipboard:read
+```
+
+`writeText` rejects with a `PAYLOAD_TOO_LARGE:` prefix when the text exceeds 8 MiB by UTF-8 byte count (mirroring the renderer IPC clipboard guard). `readText` resolves to `""` when the clipboard is empty or holds non-text content (image, file list) — it never rejects on content type. A call without the matching capability rejects with a `PERMISSION_REQUIRED:` error. `host.clipboard` is NOT revoke-guarded.
+
 ## React hooks — `@daintreehq/plugin-sdk/react`
 
 The `@daintreehq/plugin-sdk/react` subpath carries the renderer hooks for plugin view components. It is a separate import path so non-view code (your `main`) doesn't pull React into the main-process bundle. The runtime implementations live in Daintree's `src/hooks/` — the renderer's home, where the `window.electron` ambient global is in scope — and are re-exported verbatim by the SDK so plugin authors and the host share one implementation.
@@ -508,7 +579,7 @@ Deliberately not part of the host API:
 
 - Direct access to other plugins' state or registered handlers.
 - Access to the active user's AI-provider API keys. If a plugin needs AI calls, the user configures keys separately in settings or the plugin ships its own `secret` setting.
-- Control of the active AI agent's runtime — driving, pausing, or reading an agent session, and bridging plugin MCP into a driven agent. These are decision-gated (D1/rule #4100); see [the freeze plan](./freeze-plan.md). The sanctioned path is `dispatch` into existing actions.
+- Full control of the active AI agent's runtime — driving, pausing, or reading back an agent session, and bridging plugin MCP into a driven agent — remains decision-gated (D1/rule #4100); see [the freeze plan](./freeze-plan.md). The one sanctioned exception is text injection: [`host.sendToActiveAgent`](#sendtoactiveagent--inject-text-into-the-active-agent) (gated on `agent:input`, JIT consent, stage-only by default) sends input to the active agent terminal. For everything else, `dispatch` into existing actions is the path.
 - An inbound webhook / host-side HTTP fetch surface for receiving external callbacks. Deferred pending a decision; see [the freeze plan](./freeze-plan.md).
 - Raw Electron main-process APIs are not _passed through_ the host — but the contained, audited equivalents are: `host.process` (managed child processes, gated on `shell:exec`), `host.fs` (scope-contained filesystem), and `host.git` (worktree-scoped git). You can still `import` Node modules directly in plugin code; the host doesn't intercept that until the sandbox decision (D3), so the host-mediated surfaces are the contained, audited path, not a seal on the in-process one.
 - Daintree's internal event bus. Only the specific subscriptions listed above are exposed. Broad event access would tie plugins to internal shape changes we want to be free to make.

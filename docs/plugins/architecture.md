@@ -162,13 +162,13 @@ This matters because tool definitions consume tokens. An MCP server exposing 40 
 
 - Spawn on first use per session.
 - Keep alive for the duration of the agent session.
-- Exponential backoff on crash (1s, 2s, 4s, 8s up to 30s). After 3 failures in 60 seconds, the server is marked degraded; tool calls return a structured error until manual restart.
+- On unexpected exit the supervisor transitions the server to `crashed`, records the error, invalidates the cached tool list, and rejects any pending calls. There is **no** automatic retry, backoff, or "degraded" state — the status enum is `spawning | ready | crashed | stopped`. Recovery is an explicit manual restart (the `pluginMcp.restart` IPC, or re-enabling the server from Preferences → Plugins), which also re-runs the trust-on-first-use tool comparison before any tool is re-injected.
 - SIGTERM on Daintree quit with a 2-second grace period, then SIGKILL.
 - Subprocess `stderr` is captured and logged for debugging but not exposed to agents.
 
 ### Environment variable substitution
 
-Plugin manifest `env` values support `${settings:settingId}` syntax. Substitution happens at spawn time, reading the current setting value from the plugin's settings scope. Changes to secret settings cause the server to restart with the new value on its next spawn.
+Plugin manifest `env` values support `${settings:settingId}` syntax. Substitution happens at spawn time, reading the current setting value from the plugin's **user scope** (never project scope). An unset or `null` setting resolves to an empty string; booleans and numbers are stringified, and objects/arrays are JSON-encoded. Changes to secret settings cause the server to restart with the new value on its next spawn.
 
 ### Security
 
