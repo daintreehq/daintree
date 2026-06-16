@@ -472,6 +472,112 @@ describe("worktree.createWithRecipe", () => {
   });
 });
 
+describe("workflow recipe-spawn plugin guard (issue #10582)", () => {
+  // recipe.run is danger:"confirm" and ActionService hard-blocks plugin sources
+  // from it. These workflow actions are danger:"safe" but spawn the same recipe
+  // terminals when a recipeId is supplied — so a plugin must not be able to
+  // bypass the gate by routing through them.
+  it("worktree.createWithRecipe: plugin + recipeId throws before any side effect", async () => {
+    const runRecipeWithResults = setRecipe("recipe-1");
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    await expect(
+      def.run({ branchName: "feature/foo", recipeId: "recipe-1" }, {
+        dispatchSource: "plugin",
+      } as never)
+    ).rejects.toThrow(/Plugins cannot spawn recipe terminals/);
+
+    expect(worktreeClientMock.create).not.toHaveBeenCalled();
+    expect(runRecipeWithResults).not.toHaveBeenCalled();
+  });
+
+  it("worktree.createWithRecipe: plugin without recipeId is unaffected", async () => {
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    const result = (await def.run({ branchName: "feature/foo" }, {
+      dispatchSource: "plugin",
+    } as never)) as Record<string, unknown>;
+
+    expect(worktreeClientMock.create).toHaveBeenCalled();
+    expect(result.worktreeId).toBe("wt-new");
+    expect(result.recipeLaunched).toBe(false);
+  });
+
+  it("worktree.createWithRecipe: agent + recipeId is not blocked", async () => {
+    const runRecipeWithResults = setRecipe("recipe-1");
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    await def.run({ branchName: "feature/foo", recipeId: "recipe-1" }, {
+      dispatchSource: "agent",
+    } as never);
+
+    expect(worktreeClientMock.create).toHaveBeenCalled();
+    expect(runRecipeWithResults).toHaveBeenCalled();
+  });
+
+  it("workflow.startWorkOnIssue: plugin + recipeId throws before any IPC", async () => {
+    // getIssue is mocked but the guard must fire before it — a plugin must not
+    // be able to probe issue existence through the rejected path.
+    forgeClientMock.getIssue.mockResolvedValue({
+      number: 6609,
+      title: "Add workflow macro tools",
+      url: "https://github.com/x/y/issues/6609",
+    });
+    const runRecipeWithResults = setRecipe("recipe-1");
+    const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
+
+    await expect(
+      def.run({ issueNumber: 6609, agentId: "claude", recipeId: "recipe-1" }, {
+        dispatchSource: "plugin",
+      } as never)
+    ).rejects.toThrow(/Plugins cannot spawn recipe terminals/);
+
+    expect(forgeClientMock.getIssue).not.toHaveBeenCalled();
+    expect(worktreeClientMock.create).not.toHaveBeenCalled();
+    expect(runRecipeWithResults).not.toHaveBeenCalled();
+  });
+
+  it("workflow.startWorkOnIssue: plugin without recipeId is unaffected", async () => {
+    forgeClientMock.getIssue.mockResolvedValue({
+      number: 6609,
+      title: "Add workflow macro tools",
+      url: "https://github.com/x/y/issues/6609",
+    });
+    const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
+
+    const result = (await def.run({ issueNumber: 6609, agentId: "claude" }, {
+      dispatchSource: "plugin",
+    } as never)) as Record<string, unknown>;
+
+    expect(worktreeClientMock.create).toHaveBeenCalled();
+    expect(result.worktreeId).toBe("wt-new");
+    expect(result.recipeLaunched).toBe(false);
+  });
+
+  it("workflow.startWorkOnIssue: agent + recipeId is not blocked and forwards dispatchSource", async () => {
+    forgeClientMock.getIssue.mockResolvedValue({
+      number: 6609,
+      title: "Add workflow macro tools",
+      url: "https://github.com/x/y/issues/6609",
+    });
+    const runRecipeWithResults = setRecipe("recipe-1");
+    const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
+
+    await def.run({ issueNumber: 6609, agentId: "claude", recipeId: "recipe-1" }, {
+      dispatchSource: "agent",
+    } as never);
+
+    expect(worktreeClientMock.create).toHaveBeenCalled();
+    expect(runRecipeWithResults).toHaveBeenCalledWith(
+      "recipe-1",
+      expect.any(String),
+      "wt-new",
+      expect.any(Object),
+      expect.objectContaining({ dispatchSource: "agent" })
+    );
+  });
+});
+
 describe("workflow.startWorkOnIssue", () => {
   it("happy path: fetches issue, creates worktree, launches agent, injects context", async () => {
     forgeClientMock.getIssue.mockResolvedValue({

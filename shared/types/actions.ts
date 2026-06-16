@@ -95,10 +95,16 @@ export interface ActionContext {
   /**
    * The dispatch source for the in-flight `run()` call. Set by
    * `ActionService.dispatch` from the resolved {@link ActionSource} before
-   * invoking the definition. A read-only contextual signal (never a security
-   * gate): plugin synthetic actions read it to skip their own confirm dialog
-   * when `"agent"`, since the MCP bridge has already confirmed and would
-   * otherwise double-prompt.
+   * invoking the definition — it is written from the canonical `source`
+   * (overwriting any `contextOverride.dispatchSource`), so a definition can
+   * trust it within an ActionService dispatch and callers cannot spoof it.
+   * Two read patterns: plugin synthetic actions skip their own confirm dialog
+   * when `"agent"` (the MCP bridge already confirmed, avoiding a double-prompt);
+   * and an action whose danger is conditional on its args (e.g. a safe worktree
+   * action that only spawns recipe terminals when given a `recipeId`) may reject
+   * the `"plugin"` source for that conditional effect, mirroring the static gate
+   * `recipe.run` carries. It is not a general authorization mechanism — don't
+   * use it to grant capabilities one source otherwise lacks.
    */
   dispatchSource?: ActionSource;
 }

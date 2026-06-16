@@ -123,6 +123,17 @@ export function registerWorkflowCreationActions(
 
         const rootPath = currentProject.path;
 
+        // Spawning recipe terminals is gated behind recipe.run (danger:"confirm"),
+        // which ActionService hard-blocks for plugin sources. Reject the same
+        // effect here — before any IPC — so plugins can't bypass that gate by
+        // passing a recipeId to an otherwise-safe worktree action. Agent/user
+        // sources are unaffected.
+        if (recipeId && ctx.dispatchSource === "plugin") {
+          throw new Error(
+            "Plugins cannot spawn recipe terminals through worktree creation. Dispatch recipe.run instead."
+          );
+        }
+
         if (recipeId) {
           const recipe = useRecipeStore.getState().getRecipeById(recipeId);
           if (!recipe) {
@@ -358,6 +369,18 @@ export function registerWorkflowCreationActions(
         if (!currentProject) {
           throw new Error("No active project");
         }
+
+        // Spawning recipe terminals is gated behind recipe.run (danger:"confirm"),
+        // which ActionService hard-blocks for plugin sources. Reject the same
+        // effect here — before any IPC — so plugins can't bypass that gate by
+        // passing a recipeId to an otherwise-safe worktree action. Agent/user
+        // sources are unaffected.
+        if (recipeId && ctx.dispatchSource === "plugin") {
+          throw new Error(
+            "Plugins cannot spawn recipe terminals through worktree creation. Dispatch recipe.run instead."
+          );
+        }
+
         const rootPath = currentProject.path;
         const effectiveAssignToSelf =
           assignToSelf ?? usePreferencesStore.getState().assignWorktreeToSelf;
