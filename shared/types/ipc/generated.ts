@@ -659,6 +659,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: boolean | undefined;
   };
+  "plugin-capability:resolve-consent": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityResolveConsentInput];
+    result: void;
+  };
   "plugin-mcp:call-tool": {
     args: [input: import("./pluginMcp.js").PluginMcpCallToolInput];
     result: import("./pluginMcp.js").PluginMcpCallToolResult;

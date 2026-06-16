@@ -32,6 +32,10 @@ vi.mock("../PluginActionAuditService.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
+import {
+  getPluginCapabilityConsentService,
+  _resetPluginCapabilityServicesForTest,
+} from "../plugin-capability/instances.js";
 import type { SimpleGit } from "simple-git";
 import type { PluginManifest, PluginHostApi } from "../../../shared/types/plugin.js";
 
@@ -98,10 +102,15 @@ beforeEach(async () => {
   await fs.mkdir(homeDir, { recursive: true });
   homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(homeDir);
   svc = new PluginService(pluginsRoot);
+  // JIT capability consent (#10524) gates the first host-mediated write/spawn.
+  // Auto-approve without pinning so the happy-path containment assertions run
+  // without a renderer; the dedicated consent tests cover the prompt branch.
+  getPluginCapabilityConsentService().setConsentBridge(async () => "approved-once");
 });
 
 afterEach(() => {
   homedirSpy.mockRestore();
+  _resetPluginCapabilityServicesForTest();
   rmSync(baseDir, { recursive: true, force: true });
 });
 
@@ -433,5 +442,48 @@ describe("host.git token expansion", () => {
     // containment before any git work runs.
     await fs.mkdir(dataDir(), { recursive: true });
     await expect(host.git.diff(dataDir())).rejects.toThrow(/PATH_NOT_ALLOWED/);
+  });
+});
+
+describe("JIT capability consent gating (#10524)", () => {
+  function registerWith(isBuiltin: boolean): PluginHostApi {
+    const seam = svc as unknown as {
+      _registerFakePluginForTests(p: FakeLoadedPlugin): void;
+      _createHostForTests(id: string): PluginHostApi;
+    };
+    seam._registerFakePluginForTests({
+      manifest: makeManifest(["fs:project-read", "fs:project-write"], [allowed]),
+      dir: baseDir,
+      loadedAt: 0,
+      isBuiltin,
+    });
+    return seam._createHostForTests("acme.fsgit");
+  }
+
+  it("blocks a host write when the user denies consent, even with the capability declared", async () => {
+    getPluginCapabilityConsentService().setConsentBridge(async () => "rejected");
+    const host = registerWith(false);
+    await expect(host.fs.writeFile(join(allowed, "denied.txt"), "x")).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+    // The write never lands.
+    await expect(fs.readFile(join(allowed, "denied.txt"), "utf-8")).rejects.toThrow();
+  });
+
+  it("prompts only once, then runs silently after approve-and-pin", async () => {
+    const bridge = vi.fn(async () => "approved-and-pin" as const);
+    getPluginCapabilityConsentService().setConsentBridge(bridge);
+    const host = registerWith(false);
+    await host.fs.writeFile(join(allowed, "a.txt"), "1");
+    await host.fs.writeFile(join(allowed, "b.txt"), "2");
+    expect(bridge).toHaveBeenCalledTimes(1);
+  });
+
+  it("exempts built-in (first-party) plugins from the consent prompt", async () => {
+    const bridge = vi.fn(async () => "rejected" as const);
+    getPluginCapabilityConsentService().setConsentBridge(bridge);
+    const host = registerWith(true);
+    await expect(host.fs.writeFile(join(allowed, "builtin.txt"), "x")).resolves.toBeUndefined();
+    expect(bridge).not.toHaveBeenCalled();
   });
 });

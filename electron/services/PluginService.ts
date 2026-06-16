@@ -34,6 +34,7 @@ import {
 } from "../schemas/plugin.js";
 import { getPluginMcpSupervisor } from "./PluginMcpSupervisor.js";
 import { PluginProcessManager } from "./plugin/PluginProcessManager.js";
+import { getPluginCapabilityConsentService } from "./plugin-capability/instances.js";
 import { resolveContainedPath, PluginPathNotAllowedError } from "./plugin/pluginFsContainment.js";
 import { PluginHostGit, type HostGitFactory } from "./plugin/pluginHostGit.js";
 import {
@@ -2769,6 +2770,13 @@ export class PluginService {
           `PERMISSION_REQUIRED: plugin "${pluginId}" process.spawn requires the "shell:exec" capability, which is not declared in manifest.capabilities`
         );
       }
+      // JIT consent: first use of shell:exec prompts the user; the grant covers
+      // every later spawn by this plugin (#10524). Throws PERMISSION_REQUIRED on
+      // denial. Re-check membership after the await — the prompt is async.
+      await this.ensureCapabilityConsent(pluginId, "shell:exec");
+      if (!this.plugins.has(pluginId)) {
+        throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
+      }
       if (typeof command !== "string" || command.length === 0) {
         throw new Error(`Plugin "${pluginId}" process.spawn: command must be a non-empty string`);
       }
@@ -2814,6 +2822,36 @@ export class PluginService {
       };
     };
     return { spawn };
+  }
+
+  /**
+   * Just-in-time consent gate for a high-risk host capability (#10524).
+   * Resolves silently for built-in (first-party) plugins and for capabilities
+   * the user has already granted; otherwise raises a first-use prompt and
+   * throws a `PERMISSION_REQUIRED:` error on denial. Callers invoke this AFTER
+   * the static `manifest.capabilities` check passes, at the top of each gated
+   * host API closure — the static check answers "may this plugin ever do X",
+   * this answers "has the user agreed to it doing X now".
+   */
+  private async ensureCapabilityConsent(
+    pluginId: string,
+    capability: BuiltInPluginCapability
+  ): Promise<void> {
+    const plugin = this.plugins.get(pluginId);
+    // Membership is re-checked by the caller after this await; a missing plugin
+    // here means it unloaded mid-call, so skip the prompt and let the caller's
+    // liveness guard reject.
+    if (!plugin) return;
+    // Built-ins are bundled first-party code — they skip the install-time
+    // capability disclosure and likewise skip JIT consent.
+    if (plugin.isBuiltin) return;
+    const displayName = plugin.manifest.displayName ?? plugin.manifest.name;
+    await getPluginCapabilityConsentService().ensureAllowed(
+      pluginId,
+      displayName,
+      capability,
+      plugin.manifest.capabilities ?? []
+    );
   }
 
   /** The capabilities a loaded plugin declared, as a Set. Empty when unloaded. */
@@ -2949,6 +2987,22 @@ export class PluginService {
         );
       }
     };
+    const requireWriteCap = async (op: string): Promise<void> => {
+      const caps = this.declaredCapabilities(pluginId);
+      if (!caps.has("fs:project-write") && !caps.has("fs:user-data-write")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" fs.${op} requires "fs:project-write" or "fs:user-data-write", which is not declared in manifest.capabilities`
+        );
+      }
+      // JIT consent gates the first host-mediated write on the declared write
+      // capability (#10524). A plugin holding both prompts once on the
+      // project-write grant — the path containment already bounds where the
+      // write can land, so a single fs-write grant is the meaningful unit.
+      const writeCap: BuiltInPluginCapability = caps.has("fs:project-write")
+        ? "fs:project-write"
+        : "fs:user-data-write";
+      await this.ensureCapabilityConsent(pluginId, writeCap);
+    };
     // Precise per-root-class gate, applied AFTER containment resolves which root
     // class the path falls under: project/worktree paths need `fs:project-*`,
     // the data dir / home paths need `fs:user-data-*`. A plugin can't reach a
@@ -3006,6 +3060,8 @@ export class PluginService {
       writeFile: async (filePath, contents) => {
         requireLoaded("writeFile");
         requireAnyWriteCap("writeFile");
+        await requireWriteCap("writeFile");
+        requireLoaded("writeFile");
         if (typeof contents !== "string") {
           throw new Error(`Plugin "${pluginId}" fs.writeFile: contents must be a string`);
         }
@@ -3188,12 +3244,15 @@ export class PluginService {
         );
       }
     };
-    const requireWriteCap = (op: string): void => {
+    const requireWriteCap = async (op: string): Promise<void> => {
       if (!this.declaredCapabilities(pluginId).has("git:write")) {
         throw new Error(
           `PERMISSION_REQUIRED: plugin "${pluginId}" git.${op} requires the "git:write" capability, which is not declared in manifest.capabilities`
         );
       }
+      // JIT consent: first git mutation prompts; the grant covers every later
+      // git:write op by this plugin (#10524). Throws PERMISSION_REQUIRED on denial.
+      await this.ensureCapabilityConsent(pluginId, "git:write");
     };
     // A worktree the plugin may access = one contained inside its declared
     // allowedPaths (with `${project}` / `${worktree}` tokens expanded at call
@@ -3237,7 +3296,8 @@ export class PluginService {
       add: async (worktreePath, paths, options): Promise<void> => {
         options?.signal?.throwIfAborted();
         requireLoaded("add");
-        requireWriteCap("add");
+        await requireWriteCap("add");
+        requireLoaded("add");
         const resolved = await containWorktree(worktreePath);
         requireLoaded("add");
         await git.add(resolved, paths, options?.signal);
@@ -3259,7 +3319,8 @@ export class PluginService {
       ): Promise<PluginGitCommitResult> => {
         callOptions?.signal?.throwIfAborted();
         requireLoaded("commit");
-        requireWriteCap("commit");
+        await requireWriteCap("commit");
+        requireLoaded("commit");
         // commit returns the staged diff as its change-preview, so it discloses
         // repo content — require read alongside write.
         requireReadCap("commit");

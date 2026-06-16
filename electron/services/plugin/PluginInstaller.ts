@@ -20,6 +20,7 @@ import {
 import { resilientRename } from "../../utils/fs.js";
 import { getPluginMcpSupervisor } from "../PluginMcpSupervisor.js";
 import { getPluginMcpConsentService, getPluginMcpRateLimiter } from "../plugin-mcp/instances.js";
+import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
 import type {
   PluginManifest,
   PluginInstallError,
@@ -941,6 +942,27 @@ export class PluginInstaller {
       } catch (err) {
         console.error(
           `[PluginService] consent purge during uninstall of "${pluginId}" threw:`,
+          err
+        );
+      }
+
+      // Purge JIT host-capability grants for the same reason — a same-name
+      // reinstall must re-prompt on first use of shell:exec / fs:*-write /
+      // git:write rather than inherit a prior grant (#10524). Same durability
+      // contract as the MCP consent purge above: retry once, log loudly on a
+      // persist failure, never strand the uninstall.
+      try {
+        const capConsent = getPluginCapabilityConsentService();
+        const purged =
+          capConsent.revokeAllForPlugin(pluginId) || capConsent.revokeAllForPlugin(pluginId);
+        if (!purged) {
+          console.error(
+            `[PluginService] capability consent purge for "${pluginId}" failed to persist after a retry; stale grants may rehydrate on restart — revoke them manually from plugin capability settings`
+          );
+        }
+      } catch (err) {
+        console.error(
+          `[PluginService] capability consent purge during uninstall of "${pluginId}" threw:`,
           err
         );
       }

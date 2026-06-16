@@ -1896,6 +1896,17 @@ export interface IpcEventMap {
    */
   "plugin-mcp:consent-request": import("../pluginMcpConsent.js").PluginMcpConsentRequestEvent;
 
+  /**
+   * Targeted push: a plugin is exercising a high-risk host capability
+   * (`shell:exec`, `fs:*-write`, `git:write`) for the first time and needs
+   * just-in-time consent (#10524). Sent to the focused window (falling back to
+   * the primary) — unlike the MCP consent push there is no initiating renderer,
+   * because the call originates in the plugin's own utility process. The
+   * renderer replies via `plugin-capability:resolve-consent`, correlated by
+   * `requestId`.
+   */
+  "plugin-capability:consent-request": import("../pluginCapabilityConsent.js").PluginCapabilityConsentRequestEvent;
+
   // Typed event bus envelope (multiplexed main → renderer for IpcEventBusMap)
   "events:push": EventBusEnvelope;
 }
@@ -1942,6 +1953,8 @@ export type IpcEventBusMap = Pick<
   | "app-agent:confirmation-request"
   // Plugin-MCP tool-call consent prompt (window-scoped — pinned to the caller)
   | "plugin-mcp:consent-request"
+  // Plugin host-capability JIT consent prompt (window-scoped — focused window)
+  | "plugin-capability:consent-request"
   // Plugin action registry (global broadcast)
   | "plugin:actions-changed"
   // Plugin panel kind registry (global broadcast)

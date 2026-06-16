@@ -169,6 +169,10 @@ import { z } from "zod";
 import { PluginService } from "../PluginService.js";
 import { events } from "../events.js";
 import { PluginProcessManager, type ManagedChildProcess } from "../plugin/PluginProcessManager.js";
+import {
+  getPluginCapabilityConsentService,
+  _resetPluginCapabilityServicesForTest,
+} from "../plugin-capability/instances.js";
 import { getPluginActionAuditService } from "../PluginActionAuditService.js";
 import { isAuditedHandlerFailure } from "../../utils/pluginAuditMarker.js";
 import { PluginInvokeOwnershipError } from "../plugin/PluginInvokeErrors.js";
@@ -3996,6 +4000,17 @@ function makeFakeChild() {
 }
 
 describe("createHost — host.process (managed processes, #9234)", () => {
+  // JIT capability consent (#10524) gates the first shell:exec spawn. Auto-approve
+  // without pinning so the spawn-path assertions run without a renderer; the
+  // dedicated consent tests cover the prompt/denial branch. The no-capability
+  // test below rejects before consent is even consulted, so it is unaffected.
+  beforeEach(() => {
+    getPluginCapabilityConsentService().setConsentBridge(async () => "approved-once");
+  });
+  afterEach(() => {
+    _resetPluginCapabilityServicesForTest();
+  });
+
   it("rejects spawn from a plugin without the shell:exec capability", async () => {
     await writePlugin("proc-nocap", { name: "acme.proc-nocap", version: "1.0.0" });
     const service = new PluginService(tmpDir);

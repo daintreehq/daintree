@@ -920,6 +920,12 @@ export const CHANNELS = {
   PLUGIN_MCP_CALL_TOOL: "plugin-mcp:call-tool",
   PLUGIN_MCP_RESOLVE_CONSENT: "plugin-mcp:resolve-consent",
 
+  // Just-in-time plugin host-capability consent (#10524). The renderer's reply
+  // to a `plugin-capability:consent-request` push; the request itself rides the
+  // typed event bus. Distinct from the per-tool plugin-MCP consent above —
+  // this gates first use of a host capability (shell:exec, fs:*-write, git:write).
+  PLUGIN_CAPABILITY_RESOLVE_CONSENT: "plugin-capability:resolve-consent",
+
   // Plugin managed-process channels (#9234) — child processes spawned by a
   // plugin via `host.process.spawn` (gated on `shell:exec`). `list` is the
   // read-only renderer observability surface (e.g. a process dashboard);
