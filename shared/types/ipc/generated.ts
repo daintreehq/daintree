@@ -711,6 +711,10 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId: string, actionId: string];
     result: void;
   };
+  "plugin:activate-for-view": {
+    args: [panelKindId: string];
+    result: void;
+  };
   "plugin:agents-get": {
     args: [];
     result: Record<string, import("../../config/agentRegistry.js").AgentConfig>;

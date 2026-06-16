@@ -89,9 +89,21 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
       // pending promise. Rejecting on timeout routes through Suspense to the
       // boundary's "Try again", and because the race lives inside the factory a
       // retry (a fresh `createLazyView()`) restarts the timer cleanly (#10512).
+      // The activation + import sequence shares one timeout so a stalled
+      // `activate()` surfaces the same recovery path as a stalled import.
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
       const mod: unknown = await Promise.race([
-        import(/* @vite-ignore */ componentPath!).finally(() => {
+        (async () => {
+          // Implicit lazy activation (#10523): force the owning plugin to
+          // `activate()` before importing its module, so handlers it registers
+          // during activate() are live when the view first renders. Optional
+          // chaining keeps the host working in test environments without
+          // `window.electron`. `activateForView` resolves even on activation
+          // failure (loadError surfaces and the import below then rejects),
+          // and is a no-op once the plugin is already activated.
+          await window.electron?.plugin?.activateForView?.(kindId);
+          return import(/* @vite-ignore */ componentPath!);
+        })().finally(() => {
           if (timeoutId !== undefined) clearTimeout(timeoutId);
         }),
         new Promise<never>((_, reject) => {

@@ -139,6 +139,14 @@ function readMarker(key: string): unknown {
 async function initializeAndActivate(service: PluginService): Promise<void> {
   await service.initialize();
   await service.activateStartupFinishedPlugins();
+  // Lazy by default (#10523): plugins without `activationEvents` no longer
+  // activate via the startup fan-out. These integration fixtures exercise
+  // activated-plugin behavior, so explicitly activate every loaded plugin.
+  // `activatePlugin` is a no-op for disabled plugins (rejected at scan, never
+  // in the registry) and idempotent for any already activated above.
+  for (const plugin of service.listPlugins()) {
+    await service.activatePlugin(plugin.manifest.name);
+  }
 }
 
 beforeEach(async () => {
@@ -1056,10 +1064,11 @@ describe("PluginService integration — activate() lifecycle", () => {
 
     const service = new PluginService(tmpDir, "0.0.0");
     await service.initialize();
-    // Activation is deferred: startup plugins activate via this fan-out (the
-    // production trigger is globalServicesInit). registerAction runs inside
-    // activate(), so the action only surfaces once activation has run.
-    await service.activateStartupFinishedPlugins();
+    // Activation is deferred and lazy by default (#10523): registerAction runs
+    // inside activate(), so the action only surfaces once activation has run.
+    // A lazy plugin activates on first use — here, dispatch would trigger it,
+    // but the pre-dispatch list assertion below needs it activated up front.
+    await service.activatePlugin("acme.action-plugin");
 
     // The action surfaces in the renderer-facing list with the namespaced id.
     expect(service.listPluginActions().map((a) => a.id)).toContain("acme.action-plugin.do-thing");
@@ -1486,9 +1495,9 @@ describe("PluginService integration — diagnostic logger", () => {
     );
     const service = new PluginService(tmpDir, "0.0.0");
     await service.initialize();
-    // Activation is deferred — the logger is wired inside activate(), so it
-    // only fires once the startup fan-out runs (mirrors the line-918 pattern).
-    await service.activateStartupFinishedPlugins();
+    // Activation is deferred and lazy by default (#10523) — the logger is wired
+    // inside activate(), so trigger first-use activation explicitly here.
+    await service.activatePlugin(pluginName);
     return service;
   }
 

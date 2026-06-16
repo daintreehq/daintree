@@ -1406,16 +1406,20 @@ export class PluginService {
   }
 
   /**
-   * In v1 only `"onStartupFinished"` is recognised. An empty `activationEvents`
-   * array is treated the same as `["onStartupFinished"]` — every plugin with a
-   * `main` entry activates at startup unless it explicitly lists other events
-   * (none of which exist yet). When `onCommand:*`, `onView:*` etc. land, a
-   * plugin will be able to opt out of startup activation by omitting
-   * `"onStartupFinished"` from a non-empty list.
+   * Plugins are lazy by default (#10523): an absent or empty `activationEvents`
+   * means the plugin's `main` is imported and `activate()` is run only on first
+   * use — a contributed command being dispatched, a forge provider or file
+   * decoration being queried, or a contributed panel view being opened. Their
+   * static contributions (commands, panels, keybindings, …) are still registered
+   * eagerly at load time, so they appear in the palette before any plugin code
+   * runs. `"onStartupFinished"` is the explicit opt-in for plugins that genuinely
+   * need to run at boot. It is still the only recognised literal; lazy triggers
+   * call `activatePlugin` directly rather than matching inferred `onCommand:*` /
+   * `onView:*` event strings.
    */
   private shouldActivateOnStartup(manifest: PluginManifest): boolean {
     const events = manifest.activationEvents;
-    if (!events || events.length === 0) return true;
+    if (!events || events.length === 0) return false;
     return events.includes("onStartupFinished");
   }
 
@@ -1663,12 +1667,13 @@ export class PluginService {
   }
 
   /**
-   * Fan out activation for every plugin whose manifest opts into
-   * `"onStartupFinished"` (or whose `activationEvents` is unset / empty —
-   * see {@link shouldActivateOnStartup}). Activations run in parallel via
-   * `Promise.allSettled`; one slow plugin must not block the rest. Wired
-   * fire-and-forget from the `plugin-service` deferred task so the renderer
-   * keeps progressing while plugins warm up in the background.
+   * Fan out activation for every plugin that opts into `"onStartupFinished"`
+   * (see {@link shouldActivateOnStartup}). Plugins without `activationEvents`
+   * are lazy (#10523) and are deliberately excluded here — they activate on
+   * first use instead. Activations run in parallel via `Promise.allSettled`;
+   * one slow plugin must not block the rest. Wired fire-and-forget from the
+   * `plugin-service` deferred task so the renderer keeps progressing while
+   * plugins warm up in the background.
    */
   async activateStartupFinishedPlugins(): Promise<void> {
     try {
@@ -1704,6 +1709,30 @@ export class PluginService {
     for (const [pluginId, plugin] of this.plugins) {
       for (const contribution of plugin.manifest.contributes.forgeProviders) {
         if (`${pluginId}.${contribution.id}` === namespacedId) {
+          await this.activatePlugin(pluginId);
+          return;
+        }
+      }
+    }
+  }
+
+  /**
+   * Activate the plugin that owns the contributed panel view identified by
+   * `panelKindId` before its `plugin://` module is imported in the renderer.
+   * Without this hook a lazy plugin's view module would load before its
+   * `activate()` ran, so the `host.registerHandler` calls the view depends on
+   * would not yet have fired (#10523). Mirrors {@link activatePluginForForgeProvider}:
+   * the owning plugin is resolved by matching the registered panel-kind id
+   * (`${pluginId}.${panel.id}`, exactly as built in `loadPlugin`) against the
+   * manifest registry rather than splitting `panelKindId` on a dot — plugin ids
+   * are `publisher.name` and already contain dots. A no-op when the kind id is
+   * unknown.
+   */
+  async activatePluginForView(panelKindId: string): Promise<void> {
+    if (typeof panelKindId !== "string" || panelKindId.length === 0) return;
+    for (const [pluginId, plugin] of this.plugins) {
+      for (const panel of plugin.manifest.contributes.panels) {
+        if (`${pluginId}.${panel.id}` === panelKindId) {
           await this.activatePlugin(pluginId);
           return;
         }
