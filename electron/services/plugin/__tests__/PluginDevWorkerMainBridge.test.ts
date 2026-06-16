@@ -394,6 +394,29 @@ describe("PluginDevWorkerMainBridge", () => {
     await expect(pending).rejects.toThrow(/reloaded/);
   });
 
+  it("drops a subscription event queued before a reload (generation guard) (#10526)", async () => {
+    const { host, workerHost, bridge } = makeBridge();
+    bridge.waitForActivation().catch(() => {});
+    let emitActive: ((s: unknown) => void) | undefined;
+    host.onDidChangeActiveWorktree.mockImplementation((cb: any) => {
+      emitActive = cb;
+      return vi.fn();
+    });
+    workerHost.emit("worker-message", {
+      type: "subscribe",
+      subscriptionId: "s1",
+      kind: "active-worktree",
+    });
+    await flush();
+    // A reload bumps the generation and tears the old subscription down.
+    workerHost.emit("reloading");
+    workerHost.sent.length = 0;
+    // A late event from the now-dead subscription must NOT reach the new worker
+    // (its proxy resets subscriptionIds and could collide on "s1").
+    emitActive?.({ id: "stale" });
+    expect(workerHost.sent.find((m) => m.type === "subscription-event")).toBeUndefined();
+  });
+
   it("forwards the activate-error stack through onActivationResult (#10526)", async () => {
     const onActivationResult = vi.fn();
     const { workerHost, bridge } = makeBridge({ onActivationResult });

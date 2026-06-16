@@ -607,11 +607,14 @@ export class PluginDevWorkerMainBridge {
     msg: Extract<PluginWorkerToHostMessage, { type: "subscribe" }>
   ): Promise<void> {
     const { subscriptionId, kind } = msg;
+    const generation = this.reloadGeneration;
     const push = (payload: unknown): void => {
-      if (this.disposed) return;
+      // Drop events queued before a reload tore this subscription down: the new
+      // worker generation resets its requestId/subscriptionId counter, so a
+      // stale event could otherwise misdeliver to a same-id new subscription.
+      if (this.disposed || generation !== this.reloadGeneration) return;
       this.workerHost.send({ type: "subscription-event", subscriptionId, payload });
     };
-    const generation = this.reloadGeneration;
     try {
       let dispose: () => void;
       if (kind === "active-worktree") {

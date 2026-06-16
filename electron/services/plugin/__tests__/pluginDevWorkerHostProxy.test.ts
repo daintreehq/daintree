@@ -265,3 +265,17 @@ describe("PluginDevWorkerHostProxy host.fs.watch (#10526)", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 });
+
+describe("PluginDevWorkerHostProxy host-call post failure (#10526)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("rejects (and drops the pending call) when post throws a DataCloneError", async () => {
+    const post = vi.fn(() => {
+      throw new Error("DataCloneError: value could not be cloned");
+    });
+    const proxy = new PluginDevWorkerHostProxy("acme.demo", post);
+    await expect(proxy.host.getWorktrees()).rejects.toThrow(/could not be cloned/);
+    // The proxy isn't wedged — the failed call posted exactly once and rejected.
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+});

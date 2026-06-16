@@ -8638,13 +8638,40 @@ describe("dev-mode hot reload (#9304)", () => {
     await service.initialize();
     await service.activatePlugin("acme.prod");
 
-    // Every plugin runs out-of-process now: a prod plugin forks the same worker
-    // as a dev plugin, but in "prod" mode (no hot-reload file watcher).
+    // Every user plugin runs out-of-process now: a prod plugin forks the same
+    // worker as a dev plugin, but in "prod" mode (no hot-reload file watcher).
     expect(devWorkerMock.instances).toHaveLength(1);
     expect(devWorkerMock.instances[0].opts.pluginId).toBe("acme.prod");
     expect(devWorkerMock.instances[0].opts.mode).toBe("prod");
     const info = service.listPlugins().find((p) => p.manifest.name === "acme.prod");
     expect(info?.devMode).toBe(false);
+  });
+
+  it("activates a built-in plugin in-process, NOT via a worker (#10526)", async () => {
+    // Built-ins stay on the in-process loader: they're trusted app-bundled code
+    // that may use synchronous host surfaces (registerForgeProvider) which can't
+    // cross the worker's async port — routing them through it would break forge.
+    const builtinRoot = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-builtin-route-"));
+    try {
+      const dir = path.join(builtinRoot, "daintree.builtin");
+      await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+      await fs.writeFile(
+        path.join(dir, "plugin.json"),
+        JSON.stringify({ name: "daintree.builtin", version: "1.0.0", main: "dist/index.js" })
+      );
+      await fs.writeFile(path.join(dir, "dist", "index.js"), "export function activate() {}");
+
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinRoot });
+      await service.initialize();
+      await service.activatePlugin("daintree.builtin");
+
+      // No worker forked for the built-in; it activated via the in-process loader.
+      expect(devWorkerMock.instances).toHaveLength(0);
+      const info = service.listPlugins().find((p) => p.manifest.name === "daintree.builtin");
+      expect(info?.isBuiltin).toBe(true);
+    } finally {
+      await fs.rm(builtinRoot, { recursive: true, force: true });
+    }
   });
 
   it("disposes the worker and bridge when the dev plugin is unloaded", async () => {

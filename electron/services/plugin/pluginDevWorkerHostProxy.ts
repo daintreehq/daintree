@@ -272,7 +272,16 @@ export class PluginDevWorkerHostProxy {
         };
         signal.addEventListener("abort", onAbort, { once: true });
       }
-      this.post({ type: "host-call", requestId, method, params });
+      try {
+        this.post({ type: "host-call", requestId, method, params });
+      } catch (err) {
+        // A non-structured-clone-safe `params` makes `postMessage` throw
+        // (DataCloneError). Drop the pending entry so it doesn't leak until
+        // dispose, then reject the caller.
+        this.pendingCalls.delete(requestId);
+        cleanup();
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
     });
   }
 

@@ -46,6 +46,7 @@ import type {
   PluginIpcHandler,
   PluginIpcContext,
   PluginHostApi,
+  PluginActivate,
   PluginActionContribution,
   PluginActionDescriptor,
   PluginChannelSchema,
@@ -705,10 +706,11 @@ export class PluginService {
    */
   private hostGitFactory: HostGitFactory | undefined = undefined;
   /**
-   * Live plugin workers, keyed by pluginId (#9304, #10526). Every plugin (dev
-   * and prod) runs in a forked `utilityProcess`; each entry holds that lifecycle,
-   * the message bridge to the real host, and the host `revoke` to call on unload.
-   * Disposed via the {@link cleanupMap} disposer registered at activation, so
+   * Live plugin workers, keyed by pluginId (#9304, #10526). Every user-installed
+   * plugin (dev and prod) runs in a forked `utilityProcess`; built-ins activate
+   * in-process and are absent here. Each entry holds that lifecycle, the message
+   * bridge to the real host, and the host `revoke` to call on unload. Disposed
+   * via the {@link cleanupMap} disposer registered at activation, so
    * `unloadPlugin` tears the worker down through its normal cascade.
    */
   private pluginWorkers = new Map<
@@ -1541,15 +1543,51 @@ export class PluginService {
   private async _doActivate(pluginId: string): Promise<void> {
     const plugin = this.plugins.get(pluginId);
     if (!plugin || !plugin.resolvedMain) return;
-    // Every plugin activates inside a `utilityProcess.fork` worker (#10526).
-    // Dev plugins hot-reload on each `dist/index.js` rebuild; prod plugins run
-    // the same worker without the file watcher. Out-of-process gives each
-    // plugin a fresh module realm per lifecycle — so uninstall/disable/reload
-    // truly reclaims its module state by killing the worker (no ESM cache
-    // leak) — plus OS-level crash isolation. The in-process `import()` loader
-    // that prod plugins used is gone; `runImport` survives only for the
-    // separate command-module loader (see {@link loadManifestCommandHandler}).
-    return this.activateViaWorker(pluginId, plugin);
+    // User-installed plugins activate inside a `utilityProcess.fork` worker
+    // (#10526). Dev plugins hot-reload on each `dist/index.js` rebuild; packaged
+    // prod plugins run the same worker without the file watcher. Out-of-process
+    // gives each a fresh module realm per lifecycle — so uninstall/disable/reload
+    // truly reclaims its module state by killing the worker (no ESM cache leak)
+    // — plus OS-level crash isolation.
+    //
+    // Built-in plugins stay on the in-process `import()` loader: they are trusted
+    // app-bundled code, never uninstalled, and never dev-symlinked, so the
+    // unload/divergence problems don't apply. Crucially, the GitHub built-in's
+    // `host.registerForgeProvider` binds a forge impl whose `parseRemote` and URL
+    // builders are SYNCHRONOUS — they can't cross the worker's async MessagePort
+    // (#8879), so routing built-ins through the worker would silently break forge.
+    if (!plugin.isBuiltin) {
+      return this.activateViaWorker(pluginId, plugin);
+    }
+    try {
+      // Bound the dynamic import — a built-in with a hanging top-level await
+      // would otherwise pin this promise forever and stall `Promise.allSettled`
+      // fan-outs (file-decoration scope, startup activation).
+      const mod = (await this.runImport(pluginId, plugin.resolvedMain)) as {
+        activate?: unknown;
+      };
+      if (typeof mod.activate === "function") {
+        const activate = mod.activate as PluginActivate;
+        const { host, revoke } = this.createHost(pluginId);
+        try {
+          const cleanup = await this.runActivate(pluginId, activate, host);
+          // Guard against an unload that ran concurrently with this activation:
+          // by the time `runActivate` resolves, `unloadPlugin` may have already
+          // cleared `cleanupMap` — writing a cleanup back after that fires would
+          // leak. Drop it on the floor instead (#9428).
+          if (typeof cleanup === "function" && this.plugins.has(pluginId)) {
+            this.cleanupMap.set(pluginId, cleanup);
+          }
+        } finally {
+          revoke();
+        }
+      }
+    } catch (err) {
+      // Built-ins don't carry a provenance record (they're not user-installed),
+      // so a failure is logged but not persisted — mirrors the prior loader.
+      console.error(`[PluginService] Failed to load main entry for ${pluginId}:`, err);
+      throw err;
+    }
   }
 
   /**
@@ -3345,6 +3383,33 @@ export class PluginService {
     }
 
     return dispose;
+  }
+
+  /**
+   * Run a built-in plugin's `activate(host)` bounded by a timeout so a hanging
+   * activate can't stall the host. Used only for the in-process built-in path;
+   * user plugins activate in the worker (see {@link activateViaWorker}).
+   */
+  private async runActivate(
+    pluginId: string,
+    activate: PluginActivate,
+    host: PluginHostApi
+  ): Promise<void | (() => void)> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        Promise.resolve().then(() => activate(host)),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            reject(
+              new Error(`Plugin "${pluginId}" activate() timed out after ${ACTIVATE_TIMEOUT_MS}ms`)
+            );
+          }, ACTIVATE_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private resolveEntryPath(pluginDir: string, relativePath: string): string | null {
