@@ -228,11 +228,9 @@ describe("McpServerSettingsTab", () => {
     const confirmButton = screen.getByRole("button", {
       name: /^rotate key$/i,
     }) as HTMLButtonElement;
-    expect(confirmButton.disabled).toBe(true);
-
-    const typedInput = screen.getByLabelText(/^Type .* to confirm$/i) as HTMLInputElement;
-    fireEvent.change(typedInput, { target: { value: "c123" } });
+    // Rotation is recoverable (#10547): no typed-name gate, button is live immediately.
     expect(confirmButton.disabled).toBe(false);
+    expect(screen.queryByLabelText(/^Type .* to confirm$/i)).toBeNull();
 
     fireEvent.click(confirmButton);
 
@@ -287,9 +285,6 @@ describe("McpServerSettingsTab", () => {
       expect(screen.getByRole("heading", { name: /rotate api key\?/i })).toBeTruthy();
     });
 
-    fireEvent.change(screen.getByLabelText(/^Type .* to confirm$/i), {
-      target: { value: "c123" },
-    });
     fireEvent.click(screen.getByRole("button", { name: /^rotate key$/i }));
 
     await waitFor(() => {
@@ -319,9 +314,6 @@ describe("McpServerSettingsTab", () => {
       expect(screen.getByRole("heading", { name: /rotate api key\?/i })).toBeTruthy();
     });
 
-    fireEvent.change(screen.getByLabelText(/^Type .* to confirm$/i), {
-      target: { value: "c123" },
-    });
     fireEvent.click(screen.getByRole("button", { name: /^rotate key$/i }));
 
     await waitForContent(container, "rotate failed");

@@ -259,9 +259,10 @@ export async function preflightSpawnBatchLimit(
   const allowed = Math.min(available, requestedCount);
   const projected = currentCount + allowed;
 
-  // Mirror `addPanel`'s per-call confirm tier: a panel added while the count is
-  // at or above `confirmationLimit` triggers a confirm. The batch crosses that
-  // threshold exactly when `projected > confirmationLimit`.
+  // Batch spawns (recipes, worktree spin-up) add many panels at once and are not
+  // trivially reversible the way a single-panel add is (one-click close), so they
+  // keep the blocking confirm even though `addPanel` dropped it for single adds
+  // (#10547). The batch crosses the confirm threshold when `projected > confirmationLimit`.
   if (!warningsDisabled && projected > confirmationLimit) {
     // Pass `null` for memory rather than firing an extra metrics IPC before the
     // batch — the dialog renders without the memory hint, never blocks on it.
