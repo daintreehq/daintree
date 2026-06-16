@@ -337,14 +337,9 @@ describe("DaintreeAssistantSettingsTab", () => {
     const confirmButton = screen.getByRole("button", {
       name: /^rotate key$/i,
     }) as HTMLButtonElement;
-    expect(confirmButton.disabled).toBe(true);
-
-    const typedInput = screen.getByLabelText(/^Type .* to confirm$/i) as HTMLInputElement;
-    fireEvent.change(typedInput, { target: { value: "y-abc" } });
-    expect(confirmButton.disabled).toBe(true);
-
-    fireEvent.change(typedInput, { target: { value: "-abc" } });
+    // Rotation is recoverable (#10547): no typed-name gate, button is live immediately.
     expect(confirmButton.disabled).toBe(false);
+    expect(screen.queryByLabelText(/^Type .* to confirm$/i)).toBeNull();
 
     fireEvent.click(confirmButton);
 
@@ -395,8 +390,10 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
 
     const dialogText = document.body.textContent ?? "";
+    // The rotate dialog no longer echoes the key suffix (#10547 dropped the typed-name
+    // gate), so neither the full key nor any fragment of it appears in the dialog body.
     expect(dialogText).not.toContain("dnt-key-abc");
-    expect(dialogText).toContain("-abc");
+    expect(dialogText).toContain("The current key will be invalidated immediately");
   });
 
   it("rotate key dialog can be canceled without rotating", async () => {

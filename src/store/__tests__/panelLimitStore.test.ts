@@ -205,6 +205,32 @@ describe("preflightSpawnBatchLimit", () => {
     expect(await preflightSpawnBatchLimit(30, 10)).toEqual({ allowed: 2 });
     expect(confirm).toHaveBeenCalledWith(32, null);
   });
+
+  it("does not confirm when the projected total lands exactly on the confirm limit", async () => {
+    const confirm = vi.fn().mockResolvedValue(true);
+    usePanelLimitStore.setState({
+      confirmationLimit: 20,
+      hardLimit: 32,
+      warningsDisabled: false,
+      requestConfirmation: confirm,
+    });
+    // 18 + 2 = 20 == confirmationLimit; the gate is strictly `> confirmationLimit`.
+    expect(await preflightSpawnBatchLimit(18, 2)).toEqual({ allowed: 2 });
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("allows nothing without confirming once the hard limit is already reached", async () => {
+    const confirm = vi.fn().mockResolvedValue(true);
+    usePanelLimitStore.setState({
+      confirmationLimit: 20,
+      hardLimit: 32,
+      warningsDisabled: false,
+      requestConfirmation: confirm,
+    });
+    // Already at the hard limit: no slots, short-circuits before any confirm.
+    expect(await preflightSpawnBatchLimit(32, 4)).toEqual({ allowed: 0 });
+    expect(confirm).not.toHaveBeenCalled();
+  });
 });
 
 describe("panelLimitStore persist migration", () => {

@@ -453,7 +453,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
           <SettingsSwitchCard
             icon={AlertTriangle}
             title="Panel warnings"
-            subtitle="Show warning banner and confirmation dialog when panel count is high"
+            subtitle="Show warning banners as you open more panels; batch spawns confirm past the limit"
             isEnabled={!panelLimits.warningsDisabled}
             onChange={() => setWarningsDisabled(!panelLimits.warningsDisabled)}
             ariaLabel="Panel Warnings Toggle"
@@ -482,7 +482,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
             <SettingsNumberInput
               label="Confirmation Required"
-              description="Require explicit confirmation before adding panels beyond this count."
+              description="Confirm before a batch spawn (recipe or worktree spin-up) pushes the panel count beyond this number."
               min={4}
               max={100}
               value={panelLimits.confirmationLimit}
