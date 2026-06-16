@@ -32,4 +32,9 @@ export const CONFIRM_TRIGGERING_CAPABILITIES: ReadonlySet<BuiltInPluginCapabilit
   // `agent:invoke` — a plugin holding it elevates its actions to "confirm" and
   // entitles its MCP tool surface to reach D2.
   "agent:register",
+  // Injecting text into a live agent session (`host.sendToActiveAgent`) drives
+  // the agent — even the stage-only default places text in its input — so it
+  // ranks with `agent:invoke`: actions elevate to "confirm" and the MCP tool
+  // surface may reach D2 (#10558).
+  "agent:input",
 ]);

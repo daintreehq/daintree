@@ -405,6 +405,19 @@ export class ActionService {
       return { ok: false, error };
     }
 
+    // Close the plugin `host.dispatch(...)` side door for actions whose effect
+    // belongs behind a plugin capability rather than the ungated `safe` built-in
+    // path (#10558). Agent (MCP) and user dispatch are unaffected — only the
+    // "plugin" source is rejected. `danger` stays "safe" so this carries no
+    // collateral confirm/elicitation cost for legitimate callers.
+    if (definition.denyPluginDispatch && source === "plugin") {
+      const error: ActionError = {
+        code: "RESTRICTED",
+        message: `Action "${actionId}" is not available to plugin dispatch; use the corresponding capability-gated host API instead.`,
+      };
+      return { ok: false, error };
+    }
+
     // Enforce confirmation for destructive actions from agent and plugin
     // sources. Agents may explicitly confirm via { confirmed: true }; plugins
     // have NO confirm bypass — the `confirmed` flag is ignored for plugin

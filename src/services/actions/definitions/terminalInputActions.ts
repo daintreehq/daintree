@@ -61,6 +61,10 @@ export function registerTerminalInputActions(
     category: "terminal",
     kind: "command",
     danger: "safe",
+    // Writes clipboard text (including \r-terminated, auto-executing commands in
+    // non-bracketed mode) into a terminal — closed to plugin dispatch so it
+    // can't be an end-run around the `agent:input` capability (#10558).
+    denyPluginDispatch: true,
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown) => {

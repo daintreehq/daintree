@@ -102,6 +102,7 @@ import {
   type AgentStateChangePayload,
 } from "../../shared/utils/pluginAgentSnapshot.js";
 import { events } from "./events.js";
+import { getPtyClient } from "../window/serviceRefs.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import {
   registerPanelKind,
@@ -2206,6 +2207,48 @@ export class PluginService {
         }
         return lastAgentSnapshot;
       },
+      sendToActiveAgent: async (text, options) => {
+        // Liveness first (mirrors getAgentState): once unloaded the method
+        // degrades to a no-op rather than throwing into a stray post-unload
+        // timer. declaredCapabilities() also returns [] post-unload, so a
+        // capability check first would mis-report PERMISSION_REQUIRED.
+        if (!isBound()) return;
+        if (!this.declaredCapabilities(pluginId).has("agent:input")) {
+          throw new Error(
+            `PERMISSION_REQUIRED: plugin "${pluginId}" sendToActiveAgent requires "agent:input", which is not declared in manifest.capabilities`
+          );
+        }
+        // Validate BEFORE prompting for consent so an invalid call can't bank a
+        // silent grant and then inject real text unprompted (mirrors the
+        // process.spawn ordering for #10524). Reject whitespace-only text too:
+        // it stages to nothing but with submit:true would fire a bare Enter,
+        // submitting whatever is already in the agent's input buffer — an effect
+        // the consent prompt never showed the user.
+        if (typeof text !== "string" || text.trim().length === 0) {
+          throw new Error(
+            `Plugin "${pluginId}" sendToActiveAgent: text must be a non-empty, non-whitespace string`
+          );
+        }
+        // JIT consent fires before any side effect — first use prompts the user;
+        // the grant covers later calls. Throws PERMISSION_REQUIRED on denial.
+        // Re-check binding after the prompt await so a racing unload doesn't
+        // inject into a torn-down session.
+        await this.ensureCapabilityConsent(pluginId, "agent:input");
+        if (!isBound()) return;
+        const terminalId = await this.resolveActiveAgentTerminalId();
+        if (!isBound()) return;
+        const ptyClient = getPtyClient();
+        if (!ptyClient) {
+          throw new Error("NO_ACTIVE_AGENT: terminal host is not available");
+        }
+        // submit defaults to false — stage-only (no Enter) is the default-safe
+        // mode per #10558. submit:true appends Enter and runs the text.
+        if (options?.submit === true) {
+          ptyClient.submit(terminalId, text);
+        } else {
+          ptyClient.stage(terminalId, text);
+        }
+      },
       onDidChangeActiveWorktree: (callback) => {
         if (revoked) {
           throw new Error(
@@ -3046,6 +3089,53 @@ export class PluginService {
       capability,
       plugin.manifest.capabilities ?? []
     );
+  }
+
+  /**
+   * Resolve the terminal id of the "active agent" for `host.sendToActiveAgent`
+   * (#10558). Centralised here so plugins stop reinventing `terminal.list`-based
+   * selection heuristics that drift. Scopes strictly to the active project when
+   * one is set — it never crosses a project boundary, since "the active agent"
+   * the user consented to is the one in front of them; only when no project is
+   * active (e.g. before any project loads) does it consider all terminals. Ranks
+   * focused/visible agent (`activityTier: "active"`) first, then a `waiting`
+   * agent, then the most recently active by output — with a deterministic id
+   * tiebreak. Terminals with no agent or in an ended state (`exited` /
+   * `completed`, or no live PTY) are excluded.
+   *
+   * @throws {Error} `NO_ACTIVE_AGENT:` when no eligible agent terminal exists.
+   */
+  private async resolveActiveAgentTerminalId(): Promise<string> {
+    const ptyClient = getPtyClient();
+    if (!ptyClient) {
+      throw new Error("NO_ACTIVE_AGENT: terminal host is not available");
+    }
+    const all = await ptyClient.getAllTerminalsAsync();
+    const activeProjectId = ptyClient.getActiveProjectId();
+    type Term = (typeof all)[number];
+    const eligible = (t: Term): boolean =>
+      Boolean(t.detectedAgentId ?? t.launchAgentId) &&
+      t.hasPty !== false &&
+      t.agentState !== "exited" &&
+      t.agentState !== "completed";
+    // Scope to the active project; never cross into another project's terminals.
+    const pool = activeProjectId != null ? all.filter((t) => t.projectId === activeProjectId) : all;
+    const candidates = pool.filter(eligible);
+    if (candidates.length === 0) {
+      throw new Error(
+        "NO_ACTIVE_AGENT: no agent terminal is available to receive input in the current project"
+      );
+    }
+    const score = (t: Term): number =>
+      (t.activityTier === "active" ? 2 : 0) + (t.agentState === "waiting" ? 1 : 0);
+    candidates.sort((a, b) => {
+      const byScore = score(b) - score(a);
+      if (byScore !== 0) return byScore;
+      const byOutput = (b.lastOutputTime ?? 0) - (a.lastOutputTime ?? 0);
+      if (byOutput !== 0) return byOutput;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+    return candidates[0].id;
   }
 
   /** The capabilities a loaded plugin declared, as a Set. Empty when unloaded. */

@@ -955,6 +955,38 @@ export class TerminalProcess {
     this.writeQueue.submit(text);
   }
 
+  /**
+   * Stage `text` into the terminal's input WITHOUT submitting it — the no-Enter
+   * counterpart to {@link submit}. Reuses the same bracketed-paste / soft-newline
+   * encoding `performSubmit` uses for the body, then stops: no Enter is written
+   * and no output-settle bookkeeping runs. Multi-line text is always wrapped
+   * (bracketed paste when supported, soft newlines otherwise) so a stray `\n`
+   * can't trigger the shell-submit detection in {@link write} and auto-execute a
+   * line. Trailing newlines in `text` are dropped — staging never submits. Used
+   * by `host.sendToActiveAgent(text, { submit: false })` (#10558).
+   */
+  stage(text: string): void {
+    const terminal = this.terminalInfo;
+    if (terminal.isExited || !terminal.ptyProcess) {
+      return;
+    }
+    const normalized = normalizeSubmitText(text);
+    const { body } = splitTrailingNewlines(normalized);
+    if (body.length === 0) {
+      return;
+    }
+    terminal.lastInputTime = Date.now();
+    const useBracketedPaste = body.includes("\n") || body.length > PASTE_THRESHOLD_CHARS;
+    if (useBracketedPaste && supportsBracketedPaste(terminal)) {
+      const pasteBody = body.replace(/\n/g, "\r");
+      this.write(`${BRACKETED_PASTE_START}${pasteBody}${BRACKETED_PASTE_END}`);
+    } else if (body.includes("\n")) {
+      this.write(body.replace(/\n/g, getSoftNewlineSequence(terminal)));
+    } else {
+      this.write(body);
+    }
+  }
+
   private async performSubmit(text: string): Promise<void> {
     const terminal = this.terminalInfo;
     terminal.lastInputTime = Date.now();

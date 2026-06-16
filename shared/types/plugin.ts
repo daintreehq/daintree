@@ -54,6 +54,7 @@ export const BUILT_IN_PLUGIN_CAPABILITIES = [
   "agent:invoke",
   "agent:read",
   "agent:register",
+  "agent:input",
   "git:read",
   "git:write",
   "clipboard:read",
@@ -1646,6 +1647,31 @@ export interface PluginHostApi extends PluginActivationApi {
    *   `agent:read` capability.
    */
   getAgentState(): Promise<PluginAgentSnapshot | null>;
+  /**
+   * Send `text` to the currently-active agent terminal, gated on the
+   * `agent:input` capability. The host resolves the target itself (focused /
+   * visible agent terminal first, then a `waiting` agent, then the most recently
+   * active agent terminal in the active project) so plugins stop reinventing
+   * `terminal.list`-based selection heuristics that drift (#10558). The raw
+   * `terminal.sendCommand` action is closed to plugin dispatch — this is the
+   * sanctioned injection path.
+   *
+   * `options.submit` controls whether the text is executed. It defaults to
+   * `false` — the **stage-only** default-safe mode: the text is pasted into the
+   * agent's input for the user to review and submit, with no Enter appended.
+   * Pass `{ submit: true }` to append Enter and run it immediately.
+   *
+   * First use raises a just-in-time consent prompt (like `shell:exec`); a
+   * granted consent covers later calls. Like {@link dispatch} this is NOT
+   * revoke-guarded: liveness is plugin membership, so it becomes a no-op once the
+   * plugin is unloaded.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare the
+   *   `agent:input` capability, or if the user denies the consent prompt.
+   * @throws {Error} `NO_ACTIVE_AGENT:` if no agent terminal is available to
+   *   receive the input.
+   */
+  sendToActiveAgent(text: string, options?: { submit?: boolean }): Promise<void>;
   /**
    * Signal that decorations for `scope` (optionally narrowed to `paths`) have
    * changed and any renderer showing them should re-pull. Unlike the

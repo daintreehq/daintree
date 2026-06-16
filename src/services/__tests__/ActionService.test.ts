@@ -364,6 +364,49 @@ describe("ActionService", () => {
       expect(mockRun).not.toHaveBeenCalled();
     });
 
+    it("returns RESTRICTED for a denyPluginDispatch action from a plugin source (#10558)", async () => {
+      const mockRun = vi.fn().mockResolvedValue(undefined);
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description:
+          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        denyPluginDispatch: true,
+        scope: "renderer",
+        run: mockRun,
+      });
+
+      const result = await service.dispatch("actions.list", undefined, { source: "plugin" });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe("RESTRICTED");
+      expect(mockRun).not.toHaveBeenCalled();
+    });
+
+    it("allows a denyPluginDispatch action from agent and user sources (#10558)", async () => {
+      const mockRun = vi.fn().mockResolvedValue(undefined);
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description:
+          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        denyPluginDispatch: true,
+        scope: "renderer",
+        run: mockRun,
+      });
+
+      const agentResult = await service.dispatch("actions.list", undefined, { source: "agent" });
+      expect(agentResult.ok).toBe(true);
+      const userResult = await service.dispatch("actions.list", undefined, { source: "user" });
+      expect(userResult.ok).toBe(true);
+      expect(mockRun).toHaveBeenCalledTimes(2);
+    });
+
     it("should validate arguments with Zod schema", async () => {
       const nameSchema = z.object({ name: z.string() });
       const action: ActionDefinition<typeof nameSchema, void> = {

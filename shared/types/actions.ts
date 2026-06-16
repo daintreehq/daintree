@@ -118,6 +118,18 @@ export interface ActionDefinition<
   kind: ActionKind;
   danger: ActionDanger;
   scope: ActionScope;
+  /**
+   * When true, dispatches with `source: "plugin"` are rejected by
+   * `ActionService` with a `RESTRICTED` error, regardless of `danger`. Use this
+   * to keep an action available to user / agent (MCP) dispatch while closing it
+   * to the plugin `host.dispatch(...)` path — e.g. `terminal.sendCommand`, whose
+   * text-injection effect belongs behind the `agent:input` capability and the
+   * first-class `host.sendToActiveAgent(...)` API rather than the ungated `safe`
+   * built-in side door (#10558). `danger`-based gating is the wrong tool here:
+   * `confirm` would force an elicitation prompt on every agent/MCP call, and
+   * `restricted` would block agents too.
+   */
+  denyPluginDispatch?: boolean;
   argsSchema?: S;
   resultSchema?: z.ZodType<Result>;
   isEnabled?: (ctx: ActionContext) => boolean;

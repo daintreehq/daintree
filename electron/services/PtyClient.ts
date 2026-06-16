@@ -699,6 +699,14 @@ export class PtyClient extends EventEmitter {
     this.send({ type: "submit", id, text });
   }
 
+  /**
+   * Stage text into a terminal's input without submitting it (no Enter). The
+   * no-execute counterpart to {@link submit}; see {@link TerminalProcess.stage}.
+   */
+  stage(id: string, text: string): void {
+    this.send({ type: "stage", id, text });
+  }
+
   sendKey(id: string, key: string): void {
     const sequence = this.resolveKeySequence(key);
     if (!sequence) {
@@ -869,6 +877,15 @@ export class PtyClient extends EventEmitter {
         });
       }
     }
+  }
+
+  /**
+   * The project most recently marked active (across windows). Used by host-side
+   * consumers — e.g. `PluginService.sendToActiveAgent` — to scope active-agent
+   * resolution to the project the user is currently in.
+   */
+  getActiveProjectId(): string | null {
+    return this.activeProjectId;
   }
 
   setActiveProject(

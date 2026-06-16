@@ -220,6 +220,7 @@ import {
   _resetPluginCapabilityServicesForTest,
 } from "../plugin-capability/instances.js";
 import { getPluginActionAuditService } from "../PluginActionAuditService.js";
+import { setPtyClientRef } from "../../window/serviceRefs.js";
 import { isAuditedHandlerFailure } from "../../utils/pluginAuditMarker.js";
 import { PluginInvokeOwnershipError } from "../plugin/PluginInvokeErrors.js";
 import { getPluginManifestSchema, isPrivateOrLoopbackHostname } from "../../schemas/plugin.js";
@@ -502,6 +503,7 @@ describe("PluginManifestSchema capabilities field", () => {
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("agent:invoke");
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("agent:read");
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("agent:register");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("agent:input");
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("git:read");
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("git:write");
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("clipboard:read");
@@ -509,9 +511,9 @@ describe("PluginManifestSchema capabilities field", () => {
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("shell:exec");
   });
 
-  it("BUILT_IN_PLUGIN_CAPABILITIES has exactly 13 unique entries", () => {
-    expect(BUILT_IN_PLUGIN_CAPABILITIES).toHaveLength(13);
-    expect(new Set(BUILT_IN_PLUGIN_CAPABILITIES).size).toBe(13);
+  it("BUILT_IN_PLUGIN_CAPABILITIES has exactly 14 unique entries", () => {
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toHaveLength(14);
+    expect(new Set(BUILT_IN_PLUGIN_CAPABILITIES).size).toBe(14);
   });
 
   it("rejects null capabilities value", () => {
@@ -1278,6 +1280,7 @@ describe("PluginService", () => {
       "fs:user-data-write",
       "agent:invoke",
       "agent:register",
+      "agent:input",
     ])("reports confirm for the flat-elevated capability %s", async (capability) => {
       await writePlugin("flat", {
         name: "acme.flat",
@@ -5358,6 +5361,7 @@ describe("Plugin action registry", () => {
     "fs:user-data-write",
     "agent:invoke",
     "agent:register",
+    "agent:input",
   ])(
     "raises a self-declared 'safe' action to confirm when the manifest grants %s",
     async (capability) => {
@@ -6942,6 +6946,258 @@ describe("Plugin agent-state host API (#10521)", () => {
     const { host, revoke } = await setupAgentHost(["agent:read"]);
     revoke();
     expect(() => host.onDidChangeAgentState(() => {})).toThrow(/host revoked/);
+  });
+});
+
+describe("Plugin agent-input host API (#10558)", () => {
+  type FakeTerminal = {
+    id: string;
+    projectId?: string;
+    agentState?: string;
+    detectedAgentId?: string;
+    launchAgentId?: string;
+    lastOutputTime?: number;
+    activityTier?: "active" | "background";
+    hasPty?: boolean;
+  };
+  type AgentInputHost = {
+    pluginId: string;
+    sendToActiveAgent: (text: string, options?: { submit?: boolean }) => Promise<void>;
+  };
+  type FakePtyClient = {
+    submit: ReturnType<typeof vi.fn>;
+    stage: ReturnType<typeof vi.fn>;
+    getActiveProjectId: () => string | null;
+    getAllTerminalsAsync: () => Promise<FakeTerminal[]>;
+  };
+
+  function installFakePtyClient(
+    terminals: FakeTerminal[],
+    activeProjectId: string | null = null
+  ): FakePtyClient {
+    const fake: FakePtyClient = {
+      submit: vi.fn(),
+      stage: vi.fn(),
+      getActiveProjectId: () => activeProjectId,
+      getAllTerminalsAsync: () => Promise.resolve(terminals),
+    };
+    setPtyClientRef(fake as never);
+    return fake;
+  }
+
+  async function setupInputHost(
+    capabilities: string[]
+  ): Promise<{ service: PluginService; host: AgentInputHost }> {
+    await writePlugin("agent-input", {
+      name: "acme.agent-input",
+      version: "1.0.0",
+      capabilities,
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    const { host } = (
+      service as unknown as { createHost: (id: string) => { host: AgentInputHost } }
+    ).createHost("acme.agent-input");
+    return { service, host };
+  }
+
+  beforeEach(() => {
+    // Auto-approve JIT consent so the write-path assertions run without a
+    // renderer; the denial branch is covered explicitly below.
+    getPluginCapabilityConsentService().setConsentBridge(async () => "approved-once");
+  });
+  afterEach(() => {
+    _resetPluginCapabilityServicesForTest();
+    setPtyClientRef(null);
+  });
+
+  it("rejects with PERMISSION_REQUIRED when agent:input is not declared", async () => {
+    const fake = installFakePtyClient([
+      { id: "t1", detectedAgentId: "claude", agentState: "waiting", hasPty: true },
+    ]);
+    const { host } = await setupInputHost(["agent:read"]);
+    await expect(host.sendToActiveAgent("hello")).rejects.toThrow(
+      /PERMISSION_REQUIRED.*agent:input/
+    );
+    expect(fake.submit).not.toHaveBeenCalled();
+    expect(fake.stage).not.toHaveBeenCalled();
+  });
+
+  it("rejects empty text before consulting consent", async () => {
+    installFakePtyClient([{ id: "t1", detectedAgentId: "claude", hasPty: true }]);
+    const consent = getPluginCapabilityConsentService();
+    const bridge = vi.fn(async () => "approved-once" as const);
+    consent.setConsentBridge(bridge);
+    const { host } = await setupInputHost(["agent:input"]);
+    await expect(host.sendToActiveAgent("")).rejects.toThrow(/non-empty/);
+    expect(bridge).not.toHaveBeenCalled();
+  });
+
+  it("rejects whitespace-only text without banking consent or writing (#10558)", async () => {
+    const fake = installFakePtyClient([
+      { id: "t1", detectedAgentId: "claude", agentState: "waiting", hasPty: true },
+    ]);
+    const bridge = vi.fn(async () => "approved-once" as const);
+    getPluginCapabilityConsentService().setConsentBridge(bridge);
+    const { host } = await setupInputHost(["agent:input"]);
+    await expect(host.sendToActiveAgent("\n")).rejects.toThrow(/non-empty/);
+    await expect(host.sendToActiveAgent("   ", { submit: true })).rejects.toThrow(/non-empty/);
+    expect(bridge).not.toHaveBeenCalled();
+    expect(fake.stage).not.toHaveBeenCalled();
+    expect(fake.submit).not.toHaveBeenCalled();
+  });
+
+  it("stages (no Enter) by default when submit is omitted", async () => {
+    const fake = installFakePtyClient([
+      { id: "t1", detectedAgentId: "claude", agentState: "waiting", hasPty: true },
+    ]);
+    const { host } = await setupInputHost(["agent:input"]);
+    await host.sendToActiveAgent("draft prompt");
+    expect(fake.stage).toHaveBeenCalledWith("t1", "draft prompt");
+    expect(fake.submit).not.toHaveBeenCalled();
+  });
+
+  it("submits (with Enter) when submit:true", async () => {
+    const fake = installFakePtyClient([
+      { id: "t1", detectedAgentId: "claude", agentState: "waiting", hasPty: true },
+    ]);
+    const { host } = await setupInputHost(["agent:input"]);
+    await host.sendToActiveAgent("run it", { submit: true });
+    expect(fake.submit).toHaveBeenCalledWith("t1", "run it");
+    expect(fake.stage).not.toHaveBeenCalled();
+  });
+
+  it("prefers a focused/visible agent over a backgrounded waiting agent", async () => {
+    const fake = installFakePtyClient([
+      {
+        id: "bg",
+        detectedAgentId: "claude",
+        agentState: "waiting",
+        activityTier: "background",
+        lastOutputTime: 100,
+        hasPty: true,
+      },
+      {
+        id: "focused",
+        launchAgentId: "claude",
+        agentState: "working",
+        activityTier: "active",
+        lastOutputTime: 50,
+        hasPty: true,
+      },
+    ]);
+    const { host } = await setupInputHost(["agent:input"]);
+    await host.sendToActiveAgent("x");
+    expect(fake.stage).toHaveBeenCalledWith("focused", "x");
+  });
+
+  it("falls back to most-recently-active agent when none are focused/waiting", async () => {
+    const fake = installFakePtyClient([
+      {
+        id: "old",
+        detectedAgentId: "claude",
+        agentState: "idle",
+        lastOutputTime: 10,
+        hasPty: true,
+      },
+      {
+        id: "new",
+        detectedAgentId: "claude",
+        agentState: "idle",
+        lastOutputTime: 99,
+        hasPty: true,
+      },
+    ]);
+    const { host } = await setupInputHost(["agent:input"]);
+    await host.sendToActiveAgent("x");
+    expect(fake.stage).toHaveBeenCalledWith("new", "x");
+  });
+
+  it("scopes selection to the active project when one is set", async () => {
+    const fake = installFakePtyClient(
+      [
+        {
+          id: "other",
+          detectedAgentId: "claude",
+          projectId: "p2",
+          lastOutputTime: 999,
+          hasPty: true,
+        },
+        { id: "mine", detectedAgentId: "claude", projectId: "p1", lastOutputTime: 1, hasPty: true },
+      ],
+      "p1"
+    );
+    const { host } = await setupInputHost(["agent:input"]);
+    await host.sendToActiveAgent("x");
+    expect(fake.stage).toHaveBeenCalledWith("mine", "x");
+  });
+
+  it("never crosses into another project's terminals (#10558)", async () => {
+    const fake = installFakePtyClient(
+      [
+        {
+          id: "other",
+          detectedAgentId: "claude",
+          projectId: "p2",
+          lastOutputTime: 999,
+          hasPty: true,
+        },
+      ],
+      "p1"
+    );
+    const { host } = await setupInputHost(["agent:input"]);
+    await expect(host.sendToActiveAgent("x")).rejects.toThrow(/NO_ACTIVE_AGENT/);
+    expect(fake.stage).not.toHaveBeenCalled();
+  });
+
+  it("excludes exited, completed, and non-agent terminals", async () => {
+    const fake = installFakePtyClient([
+      { id: "noagent", agentState: "idle", hasPty: true },
+      { id: "exited", detectedAgentId: "claude", agentState: "exited", hasPty: true },
+      { id: "completed", detectedAgentId: "claude", agentState: "completed", hasPty: true },
+      { id: "dead", detectedAgentId: "claude", agentState: "idle", hasPty: false },
+      {
+        id: "live",
+        detectedAgentId: "claude",
+        agentState: "idle",
+        lastOutputTime: 5,
+        hasPty: true,
+      },
+    ]);
+    const { host } = await setupInputHost(["agent:input"]);
+    await host.sendToActiveAgent("x");
+    expect(fake.stage).toHaveBeenCalledWith("live", "x");
+  });
+
+  it("throws NO_ACTIVE_AGENT when no eligible agent terminal exists", async () => {
+    const fake = installFakePtyClient([
+      { id: "noagent", agentState: "idle", hasPty: true },
+      { id: "exited", detectedAgentId: "claude", agentState: "exited", hasPty: true },
+    ]);
+    const { host } = await setupInputHost(["agent:input"]);
+    await expect(host.sendToActiveAgent("x")).rejects.toThrow(/NO_ACTIVE_AGENT/);
+    expect(fake.stage).not.toHaveBeenCalled();
+  });
+
+  it("blocks the write when consent is denied", async () => {
+    const fake = installFakePtyClient([
+      { id: "t1", detectedAgentId: "claude", agentState: "waiting", hasPty: true },
+    ]);
+    getPluginCapabilityConsentService().setConsentBridge(async () => "rejected");
+    const { host } = await setupInputHost(["agent:input"]);
+    await expect(host.sendToActiveAgent("x")).rejects.toThrow(/PERMISSION_REQUIRED/);
+    expect(fake.stage).not.toHaveBeenCalled();
+    expect(fake.submit).not.toHaveBeenCalled();
+  });
+
+  it("becomes a no-op after the plugin is unloaded", async () => {
+    const fake = installFakePtyClient([
+      { id: "t1", detectedAgentId: "claude", agentState: "waiting", hasPty: true },
+    ]);
+    const { service, host } = await setupInputHost(["agent:input"]);
+    (service as unknown as { unloadPlugin: (id: string) => void }).unloadPlugin("acme.agent-input");
+    await expect(host.sendToActiveAgent("x")).resolves.toBeUndefined();
+    expect(fake.stage).not.toHaveBeenCalled();
   });
 });
 
