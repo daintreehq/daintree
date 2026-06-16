@@ -112,9 +112,19 @@ export default defineConfig({
       retries: isCI ? 2 : 0,
     },
     {
+      // Each full-plugins spec cold-launches Electron with a sideloaded
+      // plugin. Parallel workers contend on the crashpad Mach port and exhaust
+      // OS-level resources (FATAL kr == KERN_SUCCESS in
+      // exception_handler_server.cc, network-service/GPU helper crashes),
+      // making specs fail at launch with empty logs — not plugin defects.
+      // workers:1 is baked into the project (not a CLI flag) so the bucket
+      // stays serialized even under CI's e2eWorkers:2 and for a bare local
+      // `npx playwright test --project=full-plugins`. Mirrors the `demo`
+      // bucket's mitigation for the same crashpad exhaustion.
       name: "full-plugins",
       testDir: "./e2e/full/plugins",
       timeout: coreTimeout,
+      workers: 1,
       retries: isCI ? 2 : 0,
     },
     {

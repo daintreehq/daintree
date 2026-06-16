@@ -71,10 +71,42 @@ function cleanupMacElectronE2eProcesses(): void {
   try {
     // Kill only e2e-launched Electron processes (matched on `daintree-e2e`
     // user-data-dir). Production Daintree.app and dev sessions are untouched.
+    // The -f full-command-line match catches every helper type (GPU, Renderer,
+    // network-service utility, crashpad_handler) since they all inherit the
+    // --user-data-dir argument.
     execSync('pkill -f "node_modules/electron.*daintree-e2e"', { stdio: "ignore" });
   } catch {
     // Ignore "no matching process" errors.
   }
+}
+
+let exitCleanupHandlersRegistered = false;
+
+// Reap orphaned e2e Electron helpers when the Playwright worker dies before
+// closeApp runs — CI timeout (SIGTERM), Ctrl+C (SIGINT), or any other process
+// exit. Playwright's globalTeardown and worker-fixture teardowns do NOT run on
+// signal-driven termination, so without this the network-service, GPU,
+// renderer, and crashpad helpers leak as orphans. The cleanup functions
+// self-guard by platform and are synchronous (execSync) — mandatory for the
+// `exit` handler, which cannot await. Registered once per worker process and
+// guarded so repeated launchApp calls don't stack listeners.
+function registerExitCleanupHandlers(): void {
+  if (exitCleanupHandlersRegistered) return;
+  exitCleanupHandlersRegistered = true;
+
+  const reap = (): void => {
+    cleanupMacElectronE2eProcesses();
+    cleanupWindowsElectronProcesses();
+  };
+
+  // `exit` fires on normal exit and on process.exit(), reaping on every path.
+  process.once("exit", reap);
+  // A caught signal does not terminate Node on its own — re-exit with the
+  // conventional 128+signal code so the worker dies with an identifiable
+  // status and the `exit` handler reaps. process.once means a second Ctrl+C
+  // falls through to Node's default handler and force-terminates.
+  process.once("SIGINT", () => process.exit(130));
+  process.once("SIGTERM", () => process.exit(143));
 }
 
 function wait(ms: number): Promise<void> {
@@ -194,6 +226,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
   const attemptTimeout = (_attempt: number) => (isMacOSLocal ? 50_000 : launchTimeout);
   let lastError: unknown = null;
 
+  registerExitCleanupHandlers();
   installTelemetry();
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
