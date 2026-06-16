@@ -179,4 +179,23 @@ describe("fileDecorationRegistry — scope collision diagnostic", () => {
     ]);
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("warns once per colliding existing plugin (attributing each distinct pair)", () => {
+    registerFileDecorationProviders("first.plugin", [
+      { id: "a", scopes: ["worktree-files:/repo"] },
+    ]);
+    registerFileDecorationProviders("second.plugin", [
+      { id: "b", scopes: ["worktree-files:/repo"] },
+    ]);
+    warnSpy.mockClear();
+    // third collides with both already-registered plugins — one warning each so
+    // every colliding pair is named, none silently folded away.
+    registerFileDecorationProviders("third.plugin", [
+      { id: "c", scopes: ["worktree-files:/repo"] },
+    ]);
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+    const named = warnSpy.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
+    expect(named).toContain("first.plugin");
+    expect(named).toContain("second.plugin");
+  });
 });
