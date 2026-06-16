@@ -34,6 +34,11 @@ function makeHost() {
     invalidateFileDecorations: vi.fn(),
     showToast: vi.fn(async () => {}),
     dispatch: vi.fn(async () => ({ ok: true, result: undefined })),
+    actions: {
+      list: vi.fn(async () => [{ id: "terminal.new", danger: "safe", requiresArgs: false }]),
+      get: vi.fn(async (id: string) => ({ id, danger: "safe", requiresArgs: false })),
+      canDispatch: vi.fn(async () => "ok"),
+    },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     settings: {
       get: vi.fn(async () => undefined),
@@ -142,6 +147,37 @@ describe("PluginDevWorkerMainBridge", () => {
     await flush();
     const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c2");
     expect(result).toMatchObject({ ok: false, error: "boom" });
+  });
+
+  it("routes actions.list to the real host (#10561)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "a1",
+      method: "actions.list",
+      params: undefined,
+    });
+    await flush();
+    expect(host.actions.list).toHaveBeenCalledTimes(1);
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "a1");
+    expect(result).toMatchObject({
+      ok: true,
+      result: [{ id: "terminal.new", danger: "safe", requiresArgs: false }],
+    });
+  });
+
+  it("routes actions.get with the action id to the real host (#10561)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "a2",
+      method: "actions.get",
+      params: { actionId: "recipe.run" },
+    });
+    await flush();
+    expect(host.actions.get).toHaveBeenCalledWith("recipe.run");
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "a2");
+    expect(result).toMatchObject({ ok: true, result: { id: "recipe.run" } });
   });
 
   it("registerAction wires a wrapper that round-trips invocation to the worker", async () => {

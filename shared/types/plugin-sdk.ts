@@ -51,6 +51,7 @@ export type { PluginManifest, PluginAuthor } from "./plugin.js";
 export type {
   PluginActivate,
   PluginHostApi,
+  PluginHostActionsApi,
   PluginActivationApi,
   PluginHostCallOptions,
   PluginHostSubscriptionOptions,
@@ -182,4 +183,19 @@ export type {
   ActionDispatchError,
   ActionError,
   ActionErrorCode,
+} from "./actions.js";
+
+// ── Built-in action catalog (host.actions.*) — #10561 ───────────────
+// host.actions.list()/get() project the ActionService manifest to plugins, and
+// the typed BuiltInActionId union turns a wrong action id into a compile error
+// at the dispatch site. ActionKind/ActionDanger/ActionExample appear on the
+// projected entry, so authors must be able to name them too.
+
+export type {
+  PluginActionManifestEntry,
+  PluginCanDispatchResult,
+  BuiltInActionId,
+  ActionKind,
+  ActionDanger,
+  ActionExample,
 } from "./actions.js";

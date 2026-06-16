@@ -2560,6 +2560,26 @@ function buildElectronApi(): ElectronAPI {
         ipcRenderer.send(CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE, payload);
       },
 
+      onActionsListRequest: (callback: (payload: { requestId: string }) => void) =>
+        _typedOn(CHANNELS.PLUGIN_ACTIONS_LIST_REQUEST, callback),
+
+      sendActionsListResponse: (payload: {
+        requestId: string;
+        entries: import("../shared/types/actions.js").PluginActionManifestEntry[];
+      }) => {
+        ipcRenderer.send(CHANNELS.PLUGIN_ACTIONS_LIST_RESPONSE, payload);
+      },
+
+      onActionsGetRequest: (callback: (payload: { requestId: string; actionId: string }) => void) =>
+        _typedOn(CHANNELS.PLUGIN_ACTIONS_GET_REQUEST, callback),
+
+      sendActionsGetResponse: (payload: {
+        requestId: string;
+        entry: import("../shared/types/actions.js").PluginActionManifestEntry | null;
+      }) => {
+        ipcRenderer.send(CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE, payload);
+      },
+
       onUiPromptRequest: (
         callback: (
           payload: import("../shared/types/pluginUiPrompt.js").PluginUiPromptRequest

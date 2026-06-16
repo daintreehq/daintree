@@ -1574,6 +1574,30 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       result: import("../actions.js").ActionDispatchResult;
     }): void;
     /**
+     * Listen for plugin built-in action-catalog requests from the main process (a
+     * plugin calling `host.actions.list()`, #10561). Reply with
+     * {@link sendActionsListResponse}, correlated by `requestId`.
+     */
+    onActionsListRequest(callback: (payload: { requestId: string }) => void): () => void;
+    /** Send the projected built-in action catalog back to the main process. */
+    sendActionsListResponse(payload: {
+      requestId: string;
+      entries: import("../actions.js").PluginActionManifestEntry[];
+    }): void;
+    /**
+     * Listen for plugin single-action lookup requests from the main process (a
+     * plugin calling `host.actions.get(id)` / `host.actions.canDispatch(id)`,
+     * #10561). Reply with {@link sendActionsGetResponse}, correlated by `requestId`.
+     */
+    onActionsGetRequest(
+      callback: (payload: { requestId: string; actionId: string }) => void
+    ): () => void;
+    /** Send the single projected action entry (or null) back to the main process. */
+    sendActionsGetResponse(payload: {
+      requestId: string;
+      entry: import("../actions.js").PluginActionManifestEntry | null;
+    }): void;
+    /**
      * Listen for imperative plugin UI-prompt requests from the main process (a
      * plugin calling `host.showQuickPick`/`showInputBox`/`showConfirm`, #10522).
      * Reply with {@link sendUiPromptResponse}, correlated by `promptId`.

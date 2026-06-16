@@ -4689,6 +4689,294 @@ describe("createHost — dispatch", () => {
   });
 });
 
+type ActionsHostShape = (pluginId: string) => {
+  host: {
+    actions: {
+      list: () => Promise<import("../../../shared/types/actions.js").PluginActionManifestEntry[]>;
+      get: (
+        actionId: string
+      ) => Promise<import("../../../shared/types/actions.js").PluginActionManifestEntry | null>;
+      canDispatch: (
+        actionId: string
+      ) => Promise<import("../../../shared/types/actions.js").PluginCanDispatchResult>;
+    };
+  };
+  revoke: () => void;
+};
+
+/** Read the request payload from the most recent `webContents.send` for `channel`. */
+function lastRequestFor(
+  wc: FakeWebContents,
+  channel: string
+): { requestId: string } & Record<string, unknown> {
+  const call = [...wc.send.mock.calls].reverse().find((c) => c[0] === channel);
+  if (!call) throw new Error(`no ${channel} send recorded`);
+  return call[1] as { requestId: string } & Record<string, unknown>;
+}
+
+describe("createHost — actions catalog (#10561)", () => {
+  beforeEach(() => {
+    ipcMainMock._reset();
+    setActiveWebContents(null);
+  });
+
+  it("list() round-trips through the renderer and resolves with the projected entries", async () => {
+    const wc = makeFakeWebContents(21);
+    setActiveWebContents(wc);
+    await writePlugin("actions-list", { name: "acme.actions-list", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ActionsHostShape }).createHost(
+      "acme.actions-list"
+    );
+
+    const pending = host.actions.list();
+    const req = lastRequestFor(wc, CHANNELS.PLUGIN_ACTIONS_LIST_REQUEST);
+    expect(typeof req.requestId).toBe("string");
+
+    const entries = [
+      { id: "terminal.new", title: "New terminal", danger: "safe", requiresArgs: false },
+    ];
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_ACTIONS_LIST_RESPONSE,
+      { sender: { id: 21 } },
+      { requestId: req.requestId, entries }
+    );
+
+    await expect(pending).resolves.toEqual(entries);
+  });
+
+  it("list() returns [] without a round-trip once the plugin is unloaded", async () => {
+    const wc = makeFakeWebContents(21);
+    setActiveWebContents(wc);
+    await writePlugin("actions-list-unload", {
+      name: "acme.actions-list-unload",
+      version: "1.0.0",
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ActionsHostShape }).createHost(
+      "acme.actions-list-unload"
+    );
+
+    service.unloadPlugin("acme.actions-list-unload");
+    await expect(host.actions.list()).resolves.toEqual([]);
+    expect(wc.send).not.toHaveBeenCalled();
+  });
+
+  it("list() resolves [] when no renderer is available", async () => {
+    setActiveWebContents(null);
+    await writePlugin("actions-list-norender", {
+      name: "acme.actions-list-norender",
+      version: "1.0.0",
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ActionsHostShape }).createHost(
+      "acme.actions-list-norender"
+    );
+
+    await expect(host.actions.list()).resolves.toEqual([]);
+  });
+
+  it("get() resolves the matching entry, and a missing/absent reply resolves null", async () => {
+    const wc = makeFakeWebContents(22);
+    setActiveWebContents(wc);
+    await writePlugin("actions-get", { name: "acme.actions-get", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ActionsHostShape }).createHost(
+      "acme.actions-get"
+    );
+
+    // Known id → entry.
+    const knownPending = host.actions.get("terminal.new");
+    const knownReq = lastRequestFor(wc, CHANNELS.PLUGIN_ACTIONS_GET_REQUEST);
+    expect(knownReq.actionId).toBe("terminal.new");
+    const entry = {
+      id: "terminal.new",
+      title: "New terminal",
+      danger: "safe",
+      requiresArgs: false,
+    };
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE,
+      { sender: { id: 22 } },
+      { requestId: knownReq.requestId, entry }
+    );
+    await expect(knownPending).resolves.toEqual(entry);
+
+    // Unknown id → renderer replies with a null entry.
+    const missingPending = host.actions.get("does.not.exist");
+    const missingReq = lastRequestFor(wc, CHANNELS.PLUGIN_ACTIONS_GET_REQUEST);
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE,
+      { sender: { id: 22 } },
+      { requestId: missingReq.requestId, entry: null }
+    );
+    await expect(missingPending).resolves.toBeNull();
+  });
+
+  it("canDispatch() derives ok/confirm/restricted from the projected danger", async () => {
+    const wc = makeFakeWebContents(23);
+    setActiveWebContents(wc);
+    await writePlugin("actions-can", { name: "acme.actions-can", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ActionsHostShape }).createHost(
+      "acme.actions-can"
+    );
+
+    const replyGet = (entry: unknown): void => {
+      const req = lastRequestFor(wc, CHANNELS.PLUGIN_ACTIONS_GET_REQUEST);
+      ipcMainMock._emit(
+        CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE,
+        { sender: { id: 23 } },
+        { requestId: req.requestId, entry }
+      );
+    };
+
+    // safe → "ok"
+    const okPending = host.actions.canDispatch("worktree.createWithRecipe");
+    replyGet({ id: "worktree.createWithRecipe", danger: "safe", requiresArgs: false });
+    await expect(okPending).resolves.toBe("ok");
+
+    // confirm → "confirm" (the recipe.run vs createWithRecipe asymmetry is now observable)
+    const confirmPending = host.actions.canDispatch("recipe.run");
+    replyGet({ id: "recipe.run", danger: "confirm", requiresArgs: false });
+    await expect(confirmPending).resolves.toBe("confirm");
+
+    // absent entry (unknown or restricted-and-projected-away) → "restricted"
+    const restrictedPending = host.actions.canDispatch("some.restricted.action");
+    replyGet(null);
+    await expect(restrictedPending).resolves.toBe("restricted");
+
+    // fail closed: an unexpected danger value is NOT treated as dispatchable
+    const bogusPending = host.actions.canDispatch("some.bogus.action");
+    replyGet({ id: "some.bogus.action", danger: "bogus", requiresArgs: false });
+    await expect(bogusPending).resolves.toBe("restricted");
+  });
+
+  it("ignores a catalog response from an unexpected sender id (cross-window guard)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const wc = makeFakeWebContents(25);
+    setActiveWebContents(wc);
+    await writePlugin("actions-guard", { name: "acme.actions-guard", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ActionsHostShape }).createHost(
+      "acme.actions-guard"
+    );
+
+    const pending = host.actions.get("terminal.new");
+    const req = lastRequestFor(wc, CHANNELS.PLUGIN_ACTIONS_GET_REQUEST);
+    warnSpy.mockClear();
+
+    // Wrong sender — must be ignored and warned about, leaving the request pending.
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE,
+      { sender: { id: 999 } },
+      { requestId: req.requestId, entry: { id: "terminal.new", danger: "safe" } }
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("unexpected sender"));
+
+    // Correct sender — resolves with the real entry.
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE,
+      { sender: { id: 25 } },
+      { requestId: req.requestId, entry: { id: "terminal.new", danger: "safe" } }
+    );
+    await expect(pending).resolves.toMatchObject({ id: "terminal.new" });
+    warnSpy.mockRestore();
+  });
+
+  it("resolves concurrent list + get independently regardless of response order", async () => {
+    const wc = makeFakeWebContents(26);
+    setActiveWebContents(wc);
+    await writePlugin("actions-concurrent", {
+      name: "acme.actions-concurrent",
+      version: "1.0.0",
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ActionsHostShape }).createHost(
+      "acme.actions-concurrent"
+    );
+
+    const listPending = host.actions.list();
+    const getPending = host.actions.get("terminal.new");
+    const listReq = lastRequestFor(wc, CHANNELS.PLUGIN_ACTIONS_LIST_REQUEST);
+    const getReq = lastRequestFor(wc, CHANNELS.PLUGIN_ACTIONS_GET_REQUEST);
+
+    // Deliver the get response BEFORE the list response — the shared pending map
+    // keyed by requestId must not let one resolve the other.
+    const entry = { id: "terminal.new", danger: "safe", requiresArgs: false };
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE,
+      { sender: { id: 26 } },
+      { requestId: getReq.requestId, entry }
+    );
+    const entries = [{ id: "app.openSettings", danger: "safe", requiresArgs: false }];
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_ACTIONS_LIST_RESPONSE,
+      { sender: { id: 26 } },
+      { requestId: listReq.requestId, entries }
+    );
+
+    await expect(getPending).resolves.toEqual(entry);
+    await expect(listPending).resolves.toEqual(entries);
+  });
+
+  it("canDispatch() returns 'restricted' without a round-trip once the plugin is unloaded", async () => {
+    const wc = makeFakeWebContents(23);
+    setActiveWebContents(wc);
+    await writePlugin("actions-can-unload", {
+      name: "acme.actions-can-unload",
+      version: "1.0.0",
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ActionsHostShape }).createHost(
+      "acme.actions-can-unload"
+    );
+
+    service.unloadPlugin("acme.actions-can-unload");
+    await expect(host.actions.canDispatch("terminal.new")).resolves.toBe("restricted");
+    expect(wc.send).not.toHaveBeenCalled();
+  });
+
+  it("dispose() drains a pending catalog request with its fallback and removes the listener", async () => {
+    const wc = makeFakeWebContents(24);
+    setActiveWebContents(wc);
+    await writePlugin("actions-dispose", { name: "acme.actions-dispose", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ActionsHostShape }).createHost(
+      "acme.actions-dispose"
+    );
+
+    const pendingList = host.actions.list();
+    expect(ipcMainMock._listenerCount(CHANNELS.PLUGIN_ACTIONS_LIST_RESPONSE)).toBe(1);
+
+    service.dispose();
+
+    await expect(pendingList).resolves.toEqual([]);
+    expect(ipcMainMock.removeListener).toHaveBeenCalledWith(
+      CHANNELS.PLUGIN_ACTIONS_LIST_RESPONSE,
+      expect.any(Function)
+    );
+  });
+});
+
 describe("createHost — registerForgeProvider", () => {
   function forgeManifest(
     name: string,

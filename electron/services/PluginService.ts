@@ -2573,6 +2573,37 @@ export class PluginService {
         }
         return this.dispatcher.sendDispatchToRenderer(actionId, args);
       },
+      // Built-in action catalog (#10561). NOT revoke-guarded for the same reason
+      // as dispatch: plugins introspect from post-activation callbacks/timers.
+      // Once the plugin unloads these degrade to empty/absent results ([] / null
+      // / "restricted") without a renderer round-trip. The renderer projects
+      // ActionService.list()/get() — which already filter danger:"restricted" —
+      // to the slim PluginActionManifestEntry, so the catalog never exposes a
+      // restricted action.
+      actions: {
+        list: async () => {
+          if (!this.plugins.has(pluginId)) return [];
+          return this.dispatcher.sendActionsListToRenderer();
+        },
+        get: async (actionId) => {
+          if (!this.plugins.has(pluginId)) return null;
+          return this.dispatcher.sendActionsGetToRenderer(actionId);
+        },
+        // canDispatch derives locally from get() — no extra round-trip. A null
+        // entry (unknown id, or a restricted action the renderer projects away)
+        // maps to "restricted"; "confirm" actions surface as "confirm" so a
+        // plugin can warn before dispatch() returns CONFIRMATION_REQUIRED.
+        canDispatch: async (actionId) => {
+          if (!this.plugins.has(pluginId)) return "restricted";
+          const entry = await this.dispatcher.sendActionsGetToRenderer(actionId);
+          if (!entry) return "restricted";
+          if (entry.danger === "confirm") return "confirm";
+          // Fail closed: only an explicit "safe" entry is dispatchable without a
+          // prompt. Any other danger (including an unexpected value) → restricted.
+          if (entry.danger === "safe") return "ok";
+          return "restricted";
+        },
+      },
       // Imperative UI prompts (#10522). NOT revoke-guarded for the same reason
       // as showToast/dispatch: plugins prompt from command handlers that run
       // long after activate() resolves. Liveness is plugin membership — once the
