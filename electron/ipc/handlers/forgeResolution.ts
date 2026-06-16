@@ -86,15 +86,14 @@ export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> 
     throw new Error("Could not parse repository identity from remote URL");
   }
 
-  // Hand the provider the worktree this call pertains to so a file/CLI-backed
-  // provider doesn't have to reconstruct it from `repo` (#10563). `cwd` may be a
-  // linked-worktree subdirectory, so normalize to that worktree's top level.
-  const projectPath = (await gitService.getRepositoryRoot(cwd).catch(() => null)) ?? cwd;
-
+  // Hand the provider the project's on-disk root so a file/CLI-backed provider
+  // doesn't have to reconstruct it from `repo` (#10563). `mainWorktreePath` is
+  // already the project root (resolved above for the ProjectStore lookup), which
+  // matches the project-root path `PullRequestService` stamps on the RPC path.
   return {
     namespaceId,
     providerId: resolved.entry.contribution.id,
-    repoRef: { ...repoRef, projectPath },
+    repoRef: { ...repoRef, projectPath: mainWorktreePath },
     impl,
   };
 }

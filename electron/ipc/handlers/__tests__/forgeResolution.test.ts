@@ -108,8 +108,11 @@ describe("resolveForCwd", () => {
     expect(parseRemote).toHaveBeenCalledWith("https://gitea.example.com/owner/repo.git");
   });
 
-  it("stamps the worktree root onto repoRef.projectPath (#10563)", async () => {
-    gitServiceMock.getRepositoryRoot.mockResolvedValue("/repo-worktrees/feature");
+  it("stamps the project root (main worktree), not the linked-worktree cwd, onto projectPath (#10563)", async () => {
+    gitServiceMock.listWorktrees.mockResolvedValue([
+      { path: "/repo", branch: "main", bare: false, isMainWorktree: true },
+      { path: "/repo-worktrees/feature", branch: "feature", bare: false, isMainWorktree: false },
+    ]);
     const parseRemote = vi.fn(() => ({ owner: "owner", repo: "repo", rawData: null }));
     registryMock.getForgeProviderImpl.mockReturnValue({ parseRemote });
     resolverMock.resolveForgeProvider.mockReturnValue({
@@ -119,12 +122,16 @@ describe("resolveForCwd", () => {
 
     const result = await resolveForCwd("/repo-worktrees/feature/src");
 
-    expect(result.repoRef.projectPath).toBe("/repo-worktrees/feature");
-    expect(gitServiceMock.getRepositoryRoot).toHaveBeenCalledWith("/repo-worktrees/feature/src");
+    // Project root, not the linked worktree the call came from — matches the
+    // path PullRequestService stamps on the RPC path.
+    expect(result.repoRef.projectPath).toBe("/repo");
   });
 
-  it("falls back to the raw cwd for projectPath when getRepositoryRoot fails (#10563)", async () => {
-    gitServiceMock.getRepositoryRoot.mockRejectedValue(new Error("not a git repo"));
+  it("falls back to getRepositoryRoot for projectPath when no worktree is marked main (#10563)", async () => {
+    gitServiceMock.listWorktrees.mockResolvedValue([
+      { path: "/elsewhere", branch: "x", bare: false, isMainWorktree: false },
+    ]);
+    gitServiceMock.getRepositoryRoot.mockResolvedValue("/repo");
     const parseRemote = vi.fn(() => ({ owner: "owner", repo: "repo", rawData: null }));
     registryMock.getForgeProviderImpl.mockReturnValue({ parseRemote });
     resolverMock.resolveForgeProvider.mockReturnValue({
@@ -134,7 +141,7 @@ describe("resolveForCwd", () => {
 
     const result = await resolveForCwd("/repo/src");
 
-    expect(result.repoRef.projectPath).toBe("/repo/src");
+    expect(result.repoRef.projectPath).toBe("/repo");
   });
 
   it("looks up the project by the main worktree path, not the linked-worktree cwd", async () => {

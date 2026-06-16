@@ -91,6 +91,10 @@ const inFlight = new Map<string, InFlightEntry>();
 // before this; only misbehaving plugins ever reach it.
 const FORGE_INVOKE_TIMEOUT_MS = 35_000;
 
+// The key serializes the full args array, so `resolveProvider` calls that
+// differ only by `opts.projectPath` (and other methods whose `RepoRef` arg
+// carries a distinct `projectPath`) no longer coalesce — intended, since each
+// caller must get its own project root stamped back rather than a peer's (#10563).
 function buildSingleflightKey(req: ForgeRpcRequest): string {
   return `${req.method}\0${req.namespacedId ?? ""}\0${stringifyArgs(req.args) ?? ""}`;
 }

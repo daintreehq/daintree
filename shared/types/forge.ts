@@ -29,13 +29,16 @@ export interface RepoRef {
   repo: string;
   rawData: unknown;
   /**
-   * Absolute on-disk root of the worktree this call pertains to, injected by
-   * the host so a file- or CLI-backed provider doesn't have to reconstruct the
-   * directory from `repo` via `getActiveWorktree()`. Present on refs the host
-   * resolves for a concrete project/worktree; absent for synthetic refs or
-   * legacy callers, so consume it defensively (`if (repo.projectPath)`). A
-   * network provider ignores it. Never embed it in a remote API payload or a
-   * persisted cache key — it's host-local context, not repository identity.
+   * Absolute on-disk root of the project (its main worktree), injected by the
+   * host so a file- or CLI-backed provider doesn't have to reconstruct the
+   * directory from `repo` via `getActiveWorktree()`. It's the project root, not
+   * the active linked worktree — project-scoped forge data lives once at the
+   * root; a provider that genuinely needs the active worktree still reads it
+   * from `getActiveWorktree()`. Present on refs the host resolves for a concrete
+   * project; absent for synthetic refs or legacy callers, so consume it
+   * defensively (`if (repo.projectPath)`). A network provider ignores it. Never
+   * embed it in a remote API payload or a persisted cache key — it's host-local
+   * context, not repository identity.
    */
   projectPath?: string;
 }

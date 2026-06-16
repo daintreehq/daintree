@@ -470,17 +470,17 @@ describe("PullRequestService", () => {
     pullRequestService.destroy();
   });
 
-  it("forwards the worktree cwd as projectPath so main can stamp the RepoRef (#10563)", async () => {
+  it("forwards the initialized project root as projectPath so main can stamp the RepoRef (#10563)", async () => {
     mockForgeProviderUnresolved();
     const bridge = lastMockBridge!;
 
     const { pullRequestService } = await import("../PullRequestService.js");
 
-    pullRequestService.initialize("/repo-worktrees/feature");
+    pullRequestService.initialize("/repo");
     await pullRequestService.refresh();
 
     expect(bridge.resolveProvider).toHaveBeenCalledWith(
-      expect.objectContaining({ projectPath: "/repo-worktrees/feature" })
+      expect.objectContaining({ projectPath: "/repo" })
     );
 
     pullRequestService.destroy();

@@ -427,7 +427,7 @@ describe("resolveProvider miss discrimination (#9997)", () => {
     ]);
     const parseRemote = vi.fn(() => repo);
     registerForgeProviderImpl(PLUGIN_ID, CONTRIBUTION_ID, makeImpl({ parseRemote }));
-    const { send } = captureSender();
+    const { send, sent } = captureSender();
 
     const mk = (projectPath: string, forgeRequestId: string) =>
       dispatchForgeRpc(
@@ -451,5 +451,15 @@ describe("resolveProvider miss discrimination (#9997)", () => {
     // Distinct projectPaths must each produce their own parse rather than sharing
     // one in-flight result, or one worktree would get the other's path.
     expect(parseRemote).toHaveBeenCalledTimes(2);
+
+    // And each request must receive its OWN projectPath back — a fan-out bug that
+    // delivered one waiter's result to both would slip past the call-count check.
+    const pathFor = (id: string) => {
+      const result = sent.find((s) => s.forgeRequestId === id);
+      if (!result?.ok) throw new Error(`no ok result for ${id}`);
+      return (result.value as { repo: RepoRef }).repo.projectPath;
+    };
+    expect(pathFor("ra")).toBe("/repo-a");
+    expect(pathFor("rb")).toBe("/repo-b");
   });
 });
