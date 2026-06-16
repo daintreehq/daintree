@@ -590,16 +590,20 @@ describe("SettingsChoicebox", () => {
     expect(wrapper).toBeTruthy();
   });
 
-  it("renders a check indicator only on the selected option", () => {
+  it("reserves a check-icon slot on every option, visible only on the selected one", () => {
     render(
       <SettingsChoicebox label="Density" value="normal" onChange={vi.fn()} options={MOCK_OPTIONS} />
     );
     const radios = screen.getAllByRole("radio");
-    const hasVisibleCheck = (radio: Element) => {
-      const icon = radio.querySelector("svg[aria-hidden='true']");
-      return !!icon && !icon.classList.contains("invisible");
+    // Every option keeps the slot (prevents reflow); only the selected one is visible.
+    radios.forEach((radio) => {
+      expect(radio.querySelectorAll("svg[aria-hidden='true']")).toHaveLength(1);
+    });
+    const visibleCheck = (radio: Element) => {
+      const icon = radio.querySelector("svg[aria-hidden='true']")!;
+      return !icon.classList.contains("invisible");
     };
-    expect(radios.map(hasVisibleCheck)).toEqual([false, true, false]);
+    expect(radios.map(visibleCheck)).toEqual([false, true, false]);
   });
 
   it("moves the visible check when the selected value changes", () => {
@@ -643,6 +647,19 @@ describe("SettingsChoicebox", () => {
     expect(mutedRadio.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(mutedRadio);
     expect(onChange).toHaveBeenCalledWith("inherit");
+  });
+
+  it("renders the muted option with a lighter label weight than a peer option", () => {
+    const options: readonly ChoiceboxOption<string>[] = [
+      { value: "inherit", label: "Default", muted: true },
+      { value: "on", label: "On" },
+    ];
+    render(<SettingsChoicebox label="Skip" value="on" onChange={vi.fn()} options={options} />);
+    const mutedLabel = screen.getByText("Default");
+    const peerLabel = screen.getByText("On");
+    expect(mutedLabel.classList.contains("font-normal")).toBe(true);
+    expect(mutedLabel.classList.contains("font-medium")).toBe(false);
+    expect(peerLabel.classList.contains("font-medium")).toBe(true);
   });
 });
 
