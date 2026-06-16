@@ -2693,6 +2693,16 @@ describe("McpServerService", () => {
         title: "Open File in Editor",
         description: "Open a file in the system editor",
       }),
+      createManifestEntry({
+        id: "browser.navigate" as ActionId,
+        title: "Navigate Browser",
+        description: "Navigate a browser panel to a URL",
+      }),
+      createManifestEntry({
+        id: "browser.openUrl" as ActionId,
+        title: "Open URL in Browser",
+        description: "Open a URL in a browser panel, reusing an existing one or creating a new one",
+      }),
       // Additional entries needed for full SYSTEM_TIER_ADDONS coverage.
       createManifestEntry({
         id: "git.stageFile" as ActionId,
