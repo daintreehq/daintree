@@ -60,6 +60,7 @@ import type {
   PluginSettingsScope,
   PluginSettingsUiValues,
   PluginWorktreeStatus,
+  PluginAgentSnapshot,
   PluginProcessApi,
   PluginProcessHandle,
   PluginProcessSpawnOptions,
@@ -86,6 +87,11 @@ import {
   toPluginWorktreeSnapshot,
   toPluginWorktreeStatus,
 } from "../../shared/utils/pluginWorktreeSnapshot.js";
+import {
+  toPluginAgentSnapshot,
+  type AgentStateChangePayload,
+} from "../../shared/utils/pluginAgentSnapshot.js";
+import { events } from "./events.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import {
   registerPanelKind,
@@ -1824,6 +1830,10 @@ export class PluginService {
     // into the current same-id instance's panels or read its worktrees.
     const isBound = (): boolean =>
       boundPlugin !== undefined && this.plugins.get(pluginId) === boundPlugin;
+    // Last agent-state snapshot observed for this host since it subscribed via
+    // onDidChangeAgentState. The host keeps no pre-subscription history, so
+    // getAgentState() returns null until the first transition is observed.
+    let lastAgentSnapshot: PluginAgentSnapshot | null = null;
     const host: PluginHostApi = {
       get pluginId() {
         return pluginId;
@@ -1970,6 +1980,15 @@ export class PluginService {
         const match = snapshots.find((s) => s.path === path);
         return match ? toPluginWorktreeStatus(match.worktreeChanges) : null;
       },
+      getAgentState: async () => {
+        if (!this.declaredCapabilities(pluginId).has("agent:read")) {
+          throw new Error(
+            `PERMISSION_REQUIRED: plugin "${pluginId}" getAgentState requires "agent:read", which is not declared in manifest.capabilities`
+          );
+        }
+        if (!isBound()) return null;
+        return lastAgentSnapshot;
+      },
       onDidChangeActiveWorktree: (callback) => {
         if (revoked) {
           throw new Error(
@@ -2053,6 +2072,54 @@ export class PluginService {
           disposeUpdate();
           disposeRemove();
         };
+        return Promise.resolve(dispose);
+      },
+      onDidChangeAgentState: (callback) => {
+        if (revoked) {
+          throw new Error(
+            `Plugin "${pluginId}" host revoked: onDidChangeAgentState called after activate() returned or timed out`
+          );
+        }
+        if (!this.declaredCapabilities(pluginId).has("agent:read")) {
+          throw new Error(
+            `PERMISSION_REQUIRED: plugin "${pluginId}" onDidChangeAgentState requires "agent:read", which is not declared in manifest.capabilities`
+          );
+        }
+        // The agent:state-changed bus is a synchronous module-level singleton
+        // (unlike WorkspaceClient), so we subscribe directly — no deferred
+        // replay queue is needed. The handler caches the latest snapshot so
+        // getAgentState() can serve it without re-deriving state.
+        const handler = (payload: AgentStateChangePayload): void => {
+          if (!this.plugins.has(pluginId)) return;
+          try {
+            const snapshot = toPluginAgentSnapshot(payload);
+            lastAgentSnapshot = snapshot;
+            callback(snapshot);
+          } catch (err) {
+            console.error(
+              `[PluginService] onDidChangeAgentState callback for "${pluginId}" failed:`,
+              err
+            );
+          }
+        };
+        const unsub = events.on("agent:state-changed", handler);
+        let disposed = false;
+        const dispose = (): void => {
+          if (disposed) return;
+          disposed = true;
+          unsub();
+          const list = this.pluginEventCleanups.get(pluginId);
+          if (!list) return;
+          const idx = list.indexOf(dispose);
+          if (idx >= 0) list.splice(idx, 1);
+          if (list.length === 0) this.pluginEventCleanups.delete(pluginId);
+        };
+        let list = this.pluginEventCleanups.get(pluginId);
+        if (!list) {
+          list = [];
+          this.pluginEventCleanups.set(pluginId, list);
+        }
+        list.push(dispose);
         return Promise.resolve(dispose);
       },
       registerForgeProvider: (descriptor, impl) => {

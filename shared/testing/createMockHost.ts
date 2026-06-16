@@ -29,6 +29,7 @@ import type {
   PluginToastOptions,
   PluginTypedIpcHandler,
   PluginWorktreeSnapshot,
+  PluginAgentSnapshot,
   PluginGitCommitResult,
   SettingsApi,
 } from "../types/plugin.js";
@@ -121,6 +122,13 @@ export interface MockHostState {
   simulateWorktreesChange(snapshots: PluginWorktreeSnapshot[]): void;
 
   /**
+   * Push an agent-state snapshot to every `onDidChangeAgentState` subscriber and
+   * update the value `getAgentState()` returns. Mirrors the production host's
+   * cache-then-notify behaviour.
+   */
+  simulateAgentStateChange(snapshot: PluginAgentSnapshot): void;
+
+  /**
    * Pre-seed a deterministic `dispatch()` result for one action id. Overrides
    * the default in-memory routing (which resolves the registered handler).
    */
@@ -176,6 +184,9 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
 
   const activeWorktreeSubs = new Set<(snapshot: PluginWorktreeSnapshot | null) => void>();
   const worktreesSubs = new Set<(snapshots: PluginWorktreeSnapshot[]) => void>();
+
+  let lastAgentSnapshot: PluginAgentSnapshot | null = null;
+  const agentStateSubs = new Set<(snapshot: PluginAgentSnapshot) => void>();
 
   const settingsStore: Record<PluginSettingsScope, Map<string, unknown>> = {
     user: new Map(Object.entries(options.settings?.user ?? {})),
@@ -375,6 +386,19 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         if (disposed) return;
         disposed = true;
         worktreesSubs.delete(callback);
+      };
+      return Promise.resolve(dispose);
+    },
+    async getAgentState() {
+      return lastAgentSnapshot;
+    },
+    onDidChangeAgentState(callback) {
+      agentStateSubs.add(callback);
+      let disposed = false;
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        agentStateSubs.delete(callback);
       };
       return Promise.resolve(dispose);
     },
@@ -613,6 +637,10 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     simulateWorktreesChange(snapshots) {
       worktrees = snapshots;
       for (const cb of worktreesSubs) cb(snapshots);
+    },
+    simulateAgentStateChange(snapshot) {
+      lastAgentSnapshot = snapshot;
+      for (const cb of agentStateSubs) cb(snapshot);
     },
     setDispatchResult(actionId, result) {
       dispatchOverrides.set(actionId, result);

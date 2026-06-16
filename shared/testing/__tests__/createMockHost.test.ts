@@ -287,6 +287,31 @@ describe("createMockHost", () => {
     expect(cb).toHaveBeenCalledWith([sampleSnapshot]);
   });
 
+  it("getAgentState returns null until a state change is simulated", async () => {
+    const host = createMockHost();
+    expect(await host.getAgentState()).toBeNull();
+  });
+
+  it("delivers agent-state updates and reflects the last one in getAgentState", async () => {
+    const host = createMockHost();
+    const cb = vi.fn();
+    const dispose = await host.onDidChangeAgentState(cb);
+    const snapshot = {
+      agentId: "a1",
+      state: "working" as const,
+      previousState: "idle" as const,
+      running: true,
+      timestamp: 7,
+    };
+    host.simulateAgentStateChange(snapshot);
+    expect(cb).toHaveBeenCalledWith(snapshot);
+    expect(await host.getAgentState()).toEqual(snapshot);
+    dispose();
+    dispose(); // no-op
+    host.simulateAgentStateChange({ ...snapshot, state: "idle", running: false });
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
   it("registers forge providers and unregisters via disposer", async () => {
     const host = createMockHost();
     const impl = { parseRemote: vi.fn() } as unknown as Parameters<
