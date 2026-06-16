@@ -86,6 +86,49 @@ describe("copyPluginExtraAssets", () => {
 
     expect(fs.readFileSync(path.join(dest, "bin", "demo-agent.mjs"), "utf8")).toBe("v1\n");
   });
+
+  it("overwrites a changed source file on the next copy", () => {
+    const src = path.join(workDir, "src");
+    const dest = path.join(workDir, "dest");
+    writeFile(path.join(src, "bin", "demo-agent.mjs"), "v1\n");
+    copyPluginExtraAssets(src, dest);
+
+    writeFile(path.join(src, "bin", "demo-agent.mjs"), "v2\n");
+    copyPluginExtraAssets(src, dest);
+
+    expect(fs.readFileSync(path.join(dest, "bin", "demo-agent.mjs"), "utf8")).toBe("v2\n");
+  });
+
+  it("copies a top-level asset file named by a ./relative command", () => {
+    const src = path.join(workDir, "src");
+    const dest = path.join(workDir, "dest");
+    writeFile(
+      path.join(src, "plugin.json"),
+      JSON.stringify({ contributes: { agents: [{ command: "./agent.mjs" }] } })
+    );
+    writeFile(path.join(src, "agent.mjs"), "agent\n");
+
+    const copied = copyPluginExtraAssets(src, dest);
+
+    expect(copied).toContain("./agent.mjs");
+    expect(fs.readFileSync(path.join(dest, "agent.mjs"), "utf8")).toBe("agent\n");
+  });
+
+  it("does not copy a top-level asset file that escapes the plugin dir", () => {
+    const src = path.join(workDir, "src");
+    const dest = path.join(workDir, "dest");
+    writeFile(
+      path.join(src, "plugin.json"),
+      JSON.stringify({ contributes: { mcpServers: [{ command: "./../secret.mjs" }] } })
+    );
+    writeFile(path.join(workDir, "secret.mjs"), "secret\n");
+
+    const copied = copyPluginExtraAssets(src, dest);
+
+    expect(copied).not.toContain("./../secret.mjs");
+    expect(fs.existsSync(path.join(dest, "secret.mjs"))).toBe(false);
+    expect(fs.existsSync(path.join(workDir, "dest", "..", "secret.mjs"))).toBe(true); // untouched original
+  });
 });
 
 describe("findMissingPluginAssets", () => {
@@ -123,6 +166,47 @@ describe("findMissingPluginAssets", () => {
     expect(missing).toHaveLength(1);
     expect(missing[0]).toContain("sample/broken");
     expect(missing[0]).toContain("./bin/demo-agent.mjs");
+  });
+
+  it("reports only the missing path when a plugin mixes present and absent assets", () => {
+    writeManifest(
+      "sample",
+      "mixed",
+      {
+        contributes: {
+          agents: [{ command: "./bin/present.mjs" }],
+          mcpServers: [{ command: "./mcp/absent.mjs" }],
+        },
+      },
+      { "bin/present.mjs": "ok\n" }
+    );
+
+    const missing = findMissingPluginAssets(workDir);
+
+    expect(missing).toHaveLength(1);
+    expect(missing[0]).toContain("./mcp/absent.mjs");
+  });
+
+  it("resolves a ./relative MCP server command path", () => {
+    writeManifest(
+      "builtin",
+      "mcp-command",
+      { contributes: { mcpServers: [{ command: "./mcp/server.mjs" }] } },
+      { "mcp/server.mjs": "server\n" }
+    );
+
+    expect(findMissingPluginAssets(workDir)).toEqual([]);
+  });
+
+  it("flags a ./relative path that escapes the plugin directory", () => {
+    writeManifest("sample", "traversal", {
+      contributes: { mcpServers: [{ command: "./../sibling/server.mjs" }] },
+    });
+
+    const missing = findMissingPluginAssets(workDir);
+
+    expect(missing).toHaveLength(1);
+    expect(missing[0]).toContain("escapes the plugin directory");
   });
 
   it("flags a missing MCP server arg path", () => {

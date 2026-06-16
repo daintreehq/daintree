@@ -163,25 +163,66 @@ function copyBuiltInWorkflows() {
 export const PLUGIN_EXTRA_ASSET_SKIP_DIRS = new Set(["main", "renderer", "__tests__"]);
 
 /**
- * Mirror every non-compiled plugin asset directory next to the compiled main
- * entry. Before #10579 only `plugin.json` (and a hardcoded `view/` for samples)
- * was copied, so a plugin's `bin/` agent scripts or `mcp/` servers were silently
- * dropped from the build and failed at spawn time. This copies all subdirectories
- * except those in `PLUGIN_EXTRA_ASSET_SKIP_DIRS` verbatim — `fs.cpSync` preserves
- * executable bits on macOS/Linux (Node 22). Top-level files other than the
- * manifest are left to their dedicated copy steps.
+ * True when `child` resolves to a path strictly inside `parent` — guards the
+ * asset copy/validation against `./`-relative manifest paths that escape the
+ * plugin directory via `..` segments. `mcpServers[].command` is not refined the
+ * way agent commands are (electron/schemas/plugin.ts), so a manifest can name
+ * `./../sibling` and pass schema validation.
+ */
+function isInsideDir(child, parent) {
+  const rel = path.relative(parent, child);
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+/**
+ * Read a plugin's `plugin.json` and return its `./`-relative `command`/`args`
+ * asset paths. Tolerant of a missing/unparseable manifest (returns `[]`) — the
+ * dedicated manifest validation step is what reports those loudly.
+ */
+function readManifestRelativeAssetPaths(pluginDir) {
+  const manifestPath = path.join(pluginDir, "plugin.json");
+  if (!fs.existsSync(manifestPath)) return [];
+  try {
+    return collectRelativeAssetPaths(JSON.parse(fs.readFileSync(manifestPath, "utf8")));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Mirror every non-compiled plugin asset next to the compiled main entry. Before
+ * #10579 only `plugin.json` (and a hardcoded `view/` for samples) was copied, so
+ * a plugin's `bin/` agent scripts or `mcp/` servers were silently dropped from
+ * the build and failed at spawn time. This copies all subdirectories except
+ * those in `PLUGIN_EXTRA_ASSET_SKIP_DIRS` verbatim, plus any top-level file a
+ * `./`-relative `command`/`args` path names directly (a script can live beside
+ * `plugin.json` rather than in a bundled dir). `fs.cpSync` preserves executable
+ * bits on macOS/Linux (Node 22).
  */
 export function copyPluginExtraAssets(srcPluginDir, destPluginDir) {
   if (!fs.existsSync(srcPluginDir)) return [];
   const copied = [];
+  fs.mkdirSync(destPluginDir, { recursive: true });
   for (const entry of fs.readdirSync(srcPluginDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     if (PLUGIN_EXTRA_ASSET_SKIP_DIRS.has(entry.name)) continue;
     const src = path.join(srcPluginDir, entry.name);
     const dest = path.join(destPluginDir, entry.name);
-    fs.mkdirSync(destPluginDir, { recursive: true });
     fs.cpSync(src, dest, { recursive: true });
     copied.push(entry.name);
+  }
+  // Top-level asset files named by a `./`-relative command/arg that live beside
+  // the manifest rather than inside a bundled dir; files already shipped via
+  // their directory above are skipped (dest exists).
+  for (const relPath of readManifestRelativeAssetPaths(srcPluginDir)) {
+    const src = path.resolve(srcPluginDir, relPath);
+    if (!isInsideDir(src, srcPluginDir)) continue;
+    if (!fs.existsSync(src) || !fs.statSync(src).isFile()) continue;
+    const dest = path.resolve(destPluginDir, relPath);
+    if (fs.existsSync(dest)) continue;
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(src, dest);
+    copied.push(relPath);
   }
   return copied;
 }
@@ -286,7 +327,11 @@ export function findMissingPluginAssets(distPluginsRoot) {
         continue;
       }
       for (const relPath of collectRelativeAssetPaths(manifest)) {
-        const resolved = path.join(pluginDir, relPath);
+        const resolved = path.resolve(pluginDir, relPath);
+        if (!isInsideDir(resolved, pluginDir)) {
+          missing.push(`${tier}/${entry.name}: "${relPath}" escapes the plugin directory`);
+          continue;
+        }
         if (!fs.existsSync(resolved)) {
           missing.push(`${tier}/${entry.name}: "${relPath}" not found in built output`);
         }
