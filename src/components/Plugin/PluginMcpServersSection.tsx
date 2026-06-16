@@ -151,6 +151,23 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
           pluginId: row.pluginId,
           serverId: row.serverId,
         });
+        // The respawn started a fresh stderr ring; drop any cached/expanded
+        // output for this server so a re-expand fetches the new buffer rather
+        // than showing pre-restart lines.
+        if (mountedRef.current) {
+          setExpanded((prev) => {
+            if (!prev.has(key)) return prev;
+            const next = new Set(prev);
+            next.delete(key);
+            return next;
+          });
+          setStderr((prev) => {
+            if (!(key in prev)) return prev;
+            const next = { ...prev };
+            delete next[key];
+            return next;
+          });
+        }
         await refreshNow();
       } catch (err) {
         // A renderer race with plugin unload makes the main handler throw.

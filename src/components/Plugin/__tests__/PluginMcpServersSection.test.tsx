@@ -111,10 +111,13 @@ describe("PluginMcpServersSection (issue #10584)", () => {
     expect(restartMock).toHaveBeenCalledWith({ pluginId: PLUGIN_ID, serverId: "srv" });
     await waitFor(() => expect(button.disabled).toBe(true));
 
-    // Once the respawn settles ready, the next snapshot clears the in-flight state.
+    // Once the respawn settles ready, the post-restart refresh re-polls and the
+    // row flips to Running — proving refreshNow() ran, not just the finally block.
     listMock.mockResolvedValue([info({ serverId: "srv", status: "ready", pid: 99 })]);
     resolveRestart();
     await waitFor(() => expect(button.disabled).toBe(false));
+    expect(await screen.findByText(/Running/)).toBeTruthy();
+    expect(screen.getByText(/pid 99/)).toBeTruthy();
   });
 
   it("shows a row error when restart throws", async () => {
@@ -142,6 +145,15 @@ describe("PluginMcpServersSection (issue #10584)", () => {
     fireEvent.click(toggle);
     expect(await screen.findByText(/line two/)).toBeTruthy();
     expect(getStderrMock).toHaveBeenCalledWith({ pluginId: PLUGIN_ID, serverId: "srv" });
+  });
+
+  it("shows an inline error when stderr fetch fails, not a perpetual loader", async () => {
+    listMock.mockResolvedValue([info({ serverId: "srv", status: "ready", stderrLineCount: 5 })]);
+    getStderrMock.mockRejectedValue(new Error("supervisor unavailable"));
+    renderSection(declared(["srv", "Demo Server"]));
+    fireEvent.click(await screen.findByRole("button", { name: /View output/ }));
+    expect(await screen.findByText("supervisor unavailable")).toBeTruthy();
+    expect(screen.queryByText(/Loading output/)).toBeNull();
   });
 
   it("notes truncation when the ring buffer dropped older lines", async () => {
