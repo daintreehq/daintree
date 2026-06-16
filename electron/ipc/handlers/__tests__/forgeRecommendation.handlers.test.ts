@@ -106,4 +106,16 @@ describe("registerForgeRecommendationHandlers", () => {
     mark(null, "");
     expect(storeMock.set).not.toHaveBeenCalled();
   });
+
+  it("markDismissed recovers from a field-level corrupt value", () => {
+    registerForgeRecommendationHandlers();
+    const mark = getHandler("forge-recommendation:mark-dismissed");
+
+    storeMock._data["forgeEnableDismissedPaths"] = "corrupted";
+    mark(null, "/Users/dev/project-a");
+    // The corrupt scalar is discarded — not spread into character indices.
+    expect(storeMock.set).toHaveBeenCalledWith("forgeEnableDismissedPaths", {
+      "/Users/dev/project-a": true,
+    });
+  });
 });

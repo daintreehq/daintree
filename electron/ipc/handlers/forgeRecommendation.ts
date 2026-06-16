@@ -17,7 +17,11 @@ export const forgeRecommendationNamespace = defineIpcNamespace({
       (projectPath: string): void => {
         if (typeof projectPath !== "string" || projectPath.length === 0) return;
         const current = store.get("forgeEnableDismissedPaths") ?? {};
-        store.set("forgeEnableDismissedPaths", { ...current, [projectPath]: true });
+        // Defend against a field-level corrupt value (e.g. an array or string)
+        // that survived the store's JSON parse — spreading it would otherwise
+        // produce character-indexed garbage.
+        const base = typeof current === "object" && !Array.isArray(current) ? current : {};
+        store.set("forgeEnableDismissedPaths", { ...base, [projectPath]: true });
       }
     ),
   },

@@ -330,6 +330,19 @@ describe("shortcutHintStore", () => {
     ]);
   });
 
+  it("markHoverShown flushes the full gate, preserving keys from a prior session", () => {
+    const s = shortcutHintStore.getState();
+    s.hydrateHintedHover(["nav.commandPalette@0"]);
+    s.hydrateCounts({ "nav.quickSwitcher": 1 });
+    s.markHoverShown("nav.quickSwitcher");
+
+    // The flushed array must include the pre-hydrated key, not just the new one.
+    expect(window.electron?.shortcutHints?.setHintedHover).toHaveBeenCalledWith([
+      "nav.commandPalette@0",
+      "nav.quickSwitcher@1",
+    ]);
+  });
+
   it("incrementCount persists the cleared gate to IPC", () => {
     const s = shortcutHintStore.getState();
     s.hydrateCounts({ "nav.quickSwitcher": 1, "terminal.new": 2 });

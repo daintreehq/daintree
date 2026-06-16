@@ -264,5 +264,8 @@ describe("useForgeEnableRecommendation", () => {
     renderHook(() => useForgeEnableRecommendation(true));
 
     await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
+    // The dismissal must still be persisted on the failure path so the nudge
+    // doesn't re-fire next launch once the store recovers.
+    expect(markDismissedMock).toHaveBeenCalledWith("/Users/test/Projects/sample");
   });
 });

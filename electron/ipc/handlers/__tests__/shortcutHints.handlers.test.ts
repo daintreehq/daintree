@@ -135,6 +135,28 @@ describe("registerShortcutHintsHandlers", () => {
     expect(storeMock.set).not.toHaveBeenCalled();
   });
 
+  it("setHintedHover replaces (not merges) the persisted keys", () => {
+    registerShortcutHintsHandlers();
+    const setHandler = ipcMainMock.handle.mock.calls.find(
+      (c: unknown[]) => c[0] === "shortcut-hints:set-hinted-hover"
+    )![1] as (_e: unknown, keys: unknown) => void;
+
+    storeMock._data["shortcutHintHoveredKeys"] = ["nav.commandPalette@2"];
+    setHandler(null, ["nav.quickSwitcher@1"]);
+    expect(storeMock.set).toHaveBeenCalledWith("shortcutHintHoveredKeys", ["nav.quickSwitcher@1"]);
+  });
+
+  it("setHintedHover with an empty array clears all keys", () => {
+    registerShortcutHintsHandlers();
+    const setHandler = ipcMainMock.handle.mock.calls.find(
+      (c: unknown[]) => c[0] === "shortcut-hints:set-hinted-hover"
+    )![1] as (_e: unknown, keys: unknown) => void;
+
+    storeMock._data["shortcutHintHoveredKeys"] = ["nav.quickSwitcher@1"];
+    setHandler(null, []);
+    expect(storeMock.set).toHaveBeenCalledWith("shortcutHintHoveredKeys", []);
+  });
+
   it("setHintedHover drops non-string entries", () => {
     registerShortcutHintsHandlers();
     const setHandler = ipcMainMock.handle.mock.calls.find(
