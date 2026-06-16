@@ -26,6 +26,7 @@ import { usePluginPanelKinds } from "./hooks/usePluginPanelKinds";
 import { usePluginAgents } from "./hooks/usePluginAgents";
 import { usePluginKeybindings } from "./hooks/usePluginKeybindings";
 import { usePluginMcpConsentBridge } from "./hooks/usePluginMcpConsentBridge";
+import { usePluginCapabilityConsentBridge } from "./hooks/usePluginCapabilityConsentBridge";
 import { useUpdateListener } from "./hooks/useUpdateListener";
 import { useMainProcessToastListener } from "./hooks/useMainProcessToastListener";
 
@@ -334,6 +335,14 @@ const LazyPluginConfirmPromptDialog = lazy(() =>
     default: m.PluginConfirmPromptDialog,
   }))
 );
+function preloadPluginCapabilityConfirmDialog() {
+  return import("./components/Plugin/PluginCapabilityConfirmDialog");
+}
+const LazyPluginCapabilityConfirmDialog = lazy(() =>
+  preloadPluginCapabilityConfirmDialog().then((m) => ({
+    default: m.PluginCapabilityConfirmDialog,
+  }))
+);
 
 function preloadPanelLimitConfirmDialog() {
   return import("./components/Terminal/PanelLimitConfirmDialog");
@@ -404,6 +413,7 @@ import { usePanelLimitStore } from "./store/panelLimitStore";
 import { useMcpConfirmStore } from "./store/mcpConfirmStore";
 import { usePluginConfirmStore } from "./store/pluginConfirmStore";
 import { usePluginMcpConfirmStore } from "./store/pluginMcpConfirmStore";
+import { usePluginCapabilityConfirmStore } from "./store/pluginCapabilityConfirmStore";
 import { useDiagnosticsReviewStore } from "./store/diagnosticsReviewStore";
 import { useAgentSettingsStore } from "./store/agentSettingsStore";
 // Eager side-effect import: auto-discovers every built-in plugin renderer and
@@ -713,6 +723,9 @@ function AppInner() {
   const mcpConfirmResetKey = useMcpConfirmStore((s) => s.current?.requestId ?? "");
   const pluginConfirmResetKey = usePluginConfirmStore((s) => s.current?.requestId ?? "");
   const pluginMcpConfirmResetKey = usePluginMcpConfirmStore((s) => s.current?.requestId ?? "");
+  const pluginCapabilityConfirmResetKey = usePluginCapabilityConfirmStore(
+    (s) => s.current?.requestId ?? ""
+  );
   const diagnosticsReviewResetKey = useDiagnosticsReviewStore((s) => s.requestSeq);
   const [terminalInfoResetKey, setTerminalInfoResetKey] = useState(0);
   const [fileViewerResetKey, setFileViewerResetKey] = useState(0);
@@ -921,6 +934,7 @@ function AppInner() {
   usePluginAgents();
   usePluginKeybindings();
   usePluginMcpConsentBridge();
+  usePluginCapabilityConsentBridge();
 
   useMenuActions();
 
@@ -1552,6 +1566,17 @@ function AppInner() {
               <ErrorBoundary variant="component" componentName="PluginConfirmPromptDialog">
                 <Suspense fallback={null}>
                   <LazyPluginConfirmPromptDialog />
+                </Suspense>
+              </ErrorBoundary>
+            )}
+            {isStateLoaded && (
+              <ErrorBoundary
+                variant="component"
+                componentName="PluginCapabilityConfirmDialog"
+                resetKeys={[pluginCapabilityConfirmResetKey]}
+              >
+                <Suspense fallback={null}>
+                  <LazyPluginCapabilityConfirmDialog />
                 </Suspense>
               </ErrorBoundary>
             )}

@@ -464,6 +464,11 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["plugin:validate-action-ids"]["args"]
     ): Promise<IpcInvokeMap["plugin:validate-action-ids"]["result"]>;
   };
+  pluginCapability: {
+    resolveConsent(
+      ...args: IpcInvokeMap["plugin-capability:resolve-consent"]["args"]
+    ): Promise<IpcInvokeMap["plugin-capability:resolve-consent"]["result"]>;
+  };
   pluginMcp: {
     callTool(
       ...args: IpcInvokeMap["plugin-mcp:call-tool"]["args"]
