@@ -1,6 +1,7 @@
+import { useMemo } from "react";
 import { RotateCcw } from "lucide-react";
 import { SettingsSwitchCard } from "../SettingsSwitchCard";
-import { SettingsChoicebox } from "../SettingsChoicebox";
+import { SettingsChoicebox, type ChoiceboxOption } from "../SettingsChoicebox";
 import type { ScopeKind } from "./scopeUtils";
 import type { DangerousMode } from "@shared/types";
 
@@ -31,12 +32,6 @@ interface BehavioralControlsProps {
   onCustomFlagsOverrideReset: () => void;
 }
 
-const DANGEROUS_MODE_OPTIONS: ReadonlyArray<{ value: DangerousMode; label: string }> = [
-  { value: "inherit", label: "Default" },
-  { value: "on", label: "On" },
-  { value: "off", label: "Off" },
-];
-
 export function BehavioralControls({
   scopeKind,
   scopeLabel,
@@ -59,6 +54,20 @@ export function BehavioralControls({
   onInlineOverrideReset,
   onCustomFlagsOverrideReset,
 }: BehavioralControlsProps) {
+  const dangerousModeOptions = useMemo<ReadonlyArray<ChoiceboxOption<DangerousMode>>>(
+    () => [
+      {
+        value: "inherit",
+        label: "Default",
+        resolvedLabel: `(${inheritResolvesToOn ? "On" : "Off"})`,
+        muted: true,
+      },
+      { value: "on", label: "On" },
+      { value: "off", label: "Off" },
+    ],
+    [inheritResolvesToOn]
+  );
+
   return (
     <>
       <div id="agents-skip-permissions" className="space-y-1.5">
@@ -68,11 +77,11 @@ export function BehavioralControls({
           columns={3}
           value={dangerousMode}
           onChange={onDangerousModeChange}
-          options={DANGEROUS_MODE_OPTIONS}
+          options={dangerousModeOptions}
         />
         {dangerousMode === "inherit" && (
           <p className="text-xs text-daintree-text/40 select-text">
-            Default &rarr; {inheritResolvesToOn ? "On" : "Off"} (from {inheritOriginLabel})
+            Inherited from {inheritOriginLabel}
           </p>
         )}
         {effectiveSkipPerms && defaultDangerousArg && (
