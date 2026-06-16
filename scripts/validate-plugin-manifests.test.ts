@@ -95,5 +95,22 @@ describe("validate-plugin-manifests CLI", () => {
     const { code, stderr } = await run(base);
     expect(code).toBe(1);
     expect(stderr).toContain("2 invalid manifest(s)");
+    expect(stderr).toContain(path.join("sample", "bad-one", "plugin.json"));
+    expect(stderr).toContain(path.join("sample", "bad-two", "plugin.json"));
+  });
+});
+
+describe("validatePluginManifests()", () => {
+  it("rejects a daintree.* name when validated as non-built-in", async () => {
+    const { validatePluginManifests } = await import("./validate-plugin-manifests.js");
+    const dir = path.join(base, "user");
+    fs.mkdirSync(path.join(dir, "evil"), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "evil", "plugin.json"),
+      JSON.stringify({ name: "daintree.evil", version: "1.0.0" })
+    );
+    const errors = validatePluginManifests([{ dir, isBuiltin: false }]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toContain("daintree.*");
   });
 });
