@@ -34,6 +34,7 @@ export type PluginHostCallMethod =
   | "getWorktrees"
   | "getWorktreeStatus"
   | "getAgentState"
+  | "sendToActiveAgent"
   | "showToast"
   | "dispatch"
   | "actions.list"
@@ -321,6 +322,12 @@ export interface DispatchParams {
  */
 export interface ActionsGetParams {
   actionId: string;
+}
+
+/** Params for `sendToActiveAgent` (`host-call`). */
+export interface SendToActiveAgentParams {
+  text: string;
+  options?: { submit?: boolean };
 }
 
 /** Params for `showQuickPick` (`host-call`). */

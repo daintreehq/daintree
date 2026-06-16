@@ -372,6 +372,19 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
+   * Stage text into a terminal's input without submitting it (no Enter). The
+   * no-execute counterpart to {@link submit}; see {@link TerminalProcess.stage}.
+   */
+  stage(id: string, text: string): void {
+    const terminal = this.registry.get(id);
+    if (!terminal) {
+      logWarn(`Terminal ${id} not found, cannot stage`);
+      return;
+    }
+    terminal.stage(text);
+  }
+
+  /**
    * Resize terminal.
    */
   resize(id: string, cols: number, rows: number): void {

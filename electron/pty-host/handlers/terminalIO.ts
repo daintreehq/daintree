@@ -13,6 +13,10 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
       ptyManager.submit(msg.id, msg.text);
     },
 
+    stage: (msg) => {
+      ptyManager.stage(msg.id, msg.text);
+    },
+
     resize: (msg) => {
       ptyManager.resize(msg.id, msg.cols, msg.rows);
     },

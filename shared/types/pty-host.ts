@@ -84,6 +84,7 @@ export type PtyHostRequest =
   | { type: "write"; id: string; data: string; traceId?: string }
   | { type: "broadcast-write"; ids: string[]; data: string }
   | { type: "submit"; id: string; text: string }
+  | { type: "stage"; id: string; text: string }
   | { type: "batch-double-escape"; ids: string[] }
   | { type: "kill"; id: string; reason?: string; escalationDelayMs?: number }
   | { type: "trash"; id: string }

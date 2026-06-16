@@ -101,6 +101,11 @@ const CAPABILITY_META = {
     description: "Add launchable agent commands",
     severity: "warning",
   },
+  "agent:input": {
+    label: "Send input to agents",
+    description: "Type and submit text into running agent sessions",
+    severity: "warning",
+  },
   "git:read": {
     label: "Read git status",
     description: "View branch and change information",

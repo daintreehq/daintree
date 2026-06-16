@@ -27,6 +27,7 @@ import type {
   ActionsGetParams,
   BroadcastToRendererParams,
   DispatchParams,
+  SendToActiveAgentParams,
   InvalidateFileDecorationsParams,
   LoggerParams,
   PluginWorkerToHostMessage,
@@ -372,6 +373,11 @@ export class PluginDevWorkerMainBridge {
       case "actions.get": {
         const p = params as ActionsGetParams;
         return this.host.actions.get(p.actionId);
+      }
+      case "sendToActiveAgent": {
+        const p = params as SendToActiveAgentParams;
+        await this.host.sendToActiveAgent(p.text, p.options);
+        return undefined;
       }
       case "showQuickPick": {
         // Reuse the real host so validation/provenance/cancellation all match

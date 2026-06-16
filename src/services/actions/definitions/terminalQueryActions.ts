@@ -412,6 +412,12 @@ export function registerTerminalQueryActions(
     category: "terminal",
     kind: "command",
     danger: "safe",
+    // Reachable by user and agent (MCP) dispatch, but NOT by plugin
+    // host.dispatch — sending text into an agent terminal is exactly the
+    // injection the capability model gates. Plugins must declare `agent:input`
+    // and use `host.sendToActiveAgent(...)` instead of routing around the
+    // capability through this ungated `safe` action (#10558).
+    denyPluginDispatch: true,
     scope: "renderer",
     argsSchema: z.object({
       terminalId: z.string().min(1).describe("Terminal instance ID from terminal.list"),
