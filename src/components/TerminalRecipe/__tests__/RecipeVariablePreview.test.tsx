@@ -80,11 +80,10 @@ describe("RecipeVariablePreview", () => {
     expect(screen.getByText("Resolving at run time")).toBeTruthy();
   });
 
-  it("shows rose unresolved badges in fallback mode for missing context", () => {
+  it("does not show unresolved badges in fallback mode without worktree context", () => {
     renderPreview("Fix {{issue_number}} on {{branch_name}}", undefined);
 
-    const badges = screen.getAllByText(/unresolved/);
-    expect(badges.length).toBe(2);
+    expect(screen.queryByText(/unresolved/)).toBeNull();
   });
 
   it("treats unknown {{var}} as literal text, not as unresolved", () => {

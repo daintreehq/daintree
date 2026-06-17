@@ -57,7 +57,7 @@ export function RecipeVariablePreview({ initialPrompt, worktreeId }: RecipeVaria
             )}
       </div>
       {!hasContext && <p className="text-[10px] text-text-muted mt-1">Resolving at run time</p>}
-      {unresolvedVars.length > 0 && (
+      {hasContext && unresolvedVars.length > 0 && (
         <div className="mt-1 flex flex-wrap gap-1">
           {unresolvedVars.map((name) => (
             <span
