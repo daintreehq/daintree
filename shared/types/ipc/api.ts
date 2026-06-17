@@ -1280,6 +1280,40 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Unassign a user from an issue via the resolved forge provider. */
     unassignIssue(payload: { cwd: string; issueNumber: number; username: string }): Promise<void>;
     /**
+     * Approve a pull request via the resolved provider's `reviews` capability.
+     * `body` is an optional approval comment. Rejects when the provider lacks
+     * the capability or the forge refuses (e.g. approving your own PR).
+     */
+    approvePR(payload: { cwd: string; prNumber: number; body?: string }): Promise<void>;
+    /**
+     * Submit a request-changes review on a pull request via the resolved
+     * provider's `reviews` capability. `body` is required — it explains what
+     * needs to change.
+     */
+    requestChanges(payload: { cwd: string; prNumber: number; body: string }): Promise<void>;
+    /**
+     * Dismiss a submitted review on a pull request via the resolved provider's
+     * `reviews` capability. `reviewId` identifies the review (obtained from a
+     * prior review-thread lookup); `message` explains the dismissal.
+     */
+    dismissReview(payload: {
+      cwd: string;
+      prNumber: number;
+      reviewId: number;
+      message: string;
+    }): Promise<void>;
+    /**
+     * Request reviewers on a pull request via the resolved provider's `reviews`
+     * capability. `users` are account logins; `teams` are team identifiers
+     * (GitHub team slugs). At least one must be non-empty.
+     */
+    requestReviewers(payload: {
+      cwd: string;
+      prNumber: number;
+      users?: string[];
+      teams?: string[];
+    }): Promise<void>;
+    /**
      * Validate a token against a specific forge provider, identified by its
      * canonical `{pluginId}.{contributionId}` id. The Test button in the
      * Code Forge settings surfaces a single provider at a time and passes

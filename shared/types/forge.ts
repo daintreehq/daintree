@@ -394,8 +394,37 @@ export interface PushErrorClassification {
   code: string;
 }
 
+/**
+ * Reviewers to request on a pull request, modeled generically so any forge
+ * with a review concept can implement it. `users` are individual account
+ * logins; `teams` are team identifiers (GitHub expects lowercase-hyphenated
+ * slugs). At least one of the two should be non-empty — an all-empty request
+ * is rejected before it reaches the provider.
+ */
+export interface ReviewerRequest {
+  users?: string[];
+  teams?: string[];
+}
+
 export interface ReviewCapability {
   getReviewThreads(repo: RepoRef, prNumber: number): Promise<ReviewThread[]>;
+  /**
+   * Optional review-write operations. A provider that models PR reviews as
+   * read-only implements only `getReviewThreads` and omits these; the host
+   * guards on presence (`impl.reviews?.approvePR`) before dispatching, so a
+   * forge without a given operation simply doesn't surface it. Each mutates
+   * remote review state, so the `forge.*` actions that call them carry
+   * `danger: "confirm"`.
+   */
+  approvePR?(repo: RepoRef, prNumber: number, body?: string): Promise<void>;
+  requestChanges?(repo: RepoRef, prNumber: number, body: string): Promise<void>;
+  /**
+   * Dismiss a previously-submitted review. `reviewId` identifies the review to
+   * dismiss — there is no dismiss-by-PR shortcut, so callers obtain it first
+   * from a {@link ReviewThread}'s `rawData` (or the provider's review listing).
+   */
+  dismissReview?(repo: RepoRef, prNumber: number, reviewId: number, message: string): Promise<void>;
+  requestReviewers?(repo: RepoRef, prNumber: number, reviewers: ReviewerRequest): Promise<void>;
 }
 
 export interface ApprovalCapability {

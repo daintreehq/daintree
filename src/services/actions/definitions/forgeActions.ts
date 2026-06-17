@@ -221,6 +221,126 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
     })
   );
 
+  actions.set("forge.approvePR", () =>
+    defineAction({
+      id: "forge.approvePR",
+      title: "Approve Pull Request",
+      description:
+        "Submit an approving review on a pull request via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `prNumber` (required, positive int); `body` (optional) — an approval comment. Errors when `cwd` is omitted and no worktree is active, when the provider can't approve PRs, or when the forge rejects the review (e.g. approving your own PR).",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: z
+          .string()
+          .optional()
+          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        prNumber: z.number().int().positive().describe("Pull request number to approve"),
+        body: z.string().optional().describe("Optional approval comment"),
+      }),
+      run: async ({ cwd, prNumber, body }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        await forgeClient.approvePR(resolvedCwd, prNumber, body);
+      },
+    })
+  );
+
+  actions.set("forge.requestChanges", () =>
+    defineAction({
+      id: "forge.requestChanges",
+      title: "Request Changes on Pull Request",
+      description:
+        "Submit a request-changes review on a pull request via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `prNumber` (required, positive int); `body` (required) — explains what needs to change. Errors when `cwd` is omitted and no worktree is active, when the provider can't review PRs, or when the forge rejects the review.",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: z
+          .string()
+          .optional()
+          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        prNumber: z.number().int().positive().describe("Pull request number to review"),
+        body: z.string().min(1).describe("Explanation of the changes being requested"),
+      }),
+      run: async ({ cwd, prNumber, body }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        await forgeClient.requestChanges(resolvedCwd, prNumber, body);
+      },
+    })
+  );
+
+  actions.set("forge.dismissReview", () =>
+    defineAction({
+      id: "forge.dismissReview",
+      title: "Dismiss Pull Request Review",
+      description:
+        "Dismiss a submitted review on a pull request via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `prNumber` (required, positive int); `reviewId` (required, positive int) — the review to dismiss, obtained from a prior review-thread lookup; `message` (required) — explains the dismissal. Errors when `cwd` is omitted and no worktree is active, or when the provider can't dismiss reviews.",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: z
+          .string()
+          .optional()
+          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        prNumber: z.number().int().positive().describe("Pull request number"),
+        reviewId: z
+          .number()
+          .int()
+          .positive()
+          .describe("Review id to dismiss, from a prior review-thread lookup"),
+        message: z.string().min(1).describe("Reason for dismissing the review"),
+      }),
+      run: async ({ cwd, prNumber, reviewId, message }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        await forgeClient.dismissReview(resolvedCwd, prNumber, reviewId, message);
+      },
+    })
+  );
+
+  actions.set("forge.requestReviewers", () =>
+    defineAction({
+      id: "forge.requestReviewers",
+      title: "Request Pull Request Reviewers",
+      description:
+        "Request reviewers on a pull request via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `prNumber` (required, positive int); `users` (optional) — account logins; `teams` (optional) — team identifiers (GitHub team slugs). Provide at least one user or team. Errors when `cwd` is omitted and no worktree is active, or when the provider can't request reviewers.",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      scope: "renderer",
+      argsSchema: z
+        .object({
+          cwd: z
+            .string()
+            .optional()
+            .describe("Working directory of the git repo. Defaults to the active worktree path."),
+          prNumber: z.number().int().positive().describe("Pull request number"),
+          users: z
+            .array(z.string().min(1))
+            .optional()
+            .describe("Account logins to request a review from"),
+          teams: z
+            .array(z.string().min(1))
+            .optional()
+            .describe("Team identifiers (e.g. GitHub team slugs) to request a review from"),
+        })
+        .refine((args) => (args.users?.length ?? 0) + (args.teams?.length ?? 0) > 0, {
+          message: "Provide at least one user or team to request a review from",
+        }),
+      run: async ({ cwd, prNumber, users, teams }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        await forgeClient.requestReviewers(resolvedCwd, prNumber, { users, teams });
+      },
+    })
+  );
+
   actions.set("forge.validateToken", () =>
     defineAction({
       id: "forge.validateToken",

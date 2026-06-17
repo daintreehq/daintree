@@ -38,6 +38,7 @@ import type {
   RepoStatsCapability,
   RepoStatsSnapshot,
   ReviewCapability,
+  ReviewerRequest,
   ReviewThread,
   StatsPage,
   TooltipCapability,
@@ -1326,8 +1327,112 @@ function classifyPushErrorImpl(stderr: string): PushErrorClassification | null {
   return match ? { code: match[0] } : null;
 }
 
+const REVIEW_WRITE_HEADERS = (token: string): Record<string, string> => ({
+  Authorization: `Bearer ${token}`,
+  Accept: "application/vnd.github+json",
+  "X-GitHub-Api-Version": "2022-11-28",
+  "Content-Type": "application/json",
+});
+
+/**
+ * Submit a review verdict (`APPROVE` / `REQUEST_CHANGES`) on a PR. GitHub
+ * returns 200 on success and 422 for refusals like approving your own PR — the
+ * response body is surfaced so the caller sees the forge's own reason.
+ */
+async function submitReviewImpl(
+  repo: RepoRef,
+  prNumber: number,
+  event: "APPROVE" | "REQUEST_CHANGES",
+  body?: string
+): Promise<void> {
+  const token = GitHubAuth.getToken();
+  if (!token) {
+    throw new Error("GitHub token not configured. Set it in Settings.");
+  }
+  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls/${prNumber}/reviews`;
+  const payload: Record<string, unknown> = { event };
+  if (body !== undefined) payload.body = body;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: REVIEW_WRITE_HEADERS(token),
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    const verb = event === "APPROVE" ? "approve" : "request changes on";
+    throw new Error(
+      `Failed to ${verb} PR #${prNumber}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
+    );
+  }
+  // A submitted verdict changes the PR's `reviewDecision`, which is part of the
+  // cached PR object — invalidate so the next `getPR` reflects it (#9061).
+  clearPRCaches();
+}
+
+async function dismissReviewImpl(
+  repo: RepoRef,
+  prNumber: number,
+  reviewId: number,
+  message: string
+): Promise<void> {
+  const token = GitHubAuth.getToken();
+  if (!token) {
+    throw new Error("GitHub token not configured. Set it in Settings.");
+  }
+  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls/${prNumber}/reviews/${reviewId}/dismissals`;
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: REVIEW_WRITE_HEADERS(token),
+    body: JSON.stringify({ message, event: "DISMISS" }),
+    signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(
+      `Failed to dismiss review ${reviewId} on PR #${prNumber}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
+    );
+  }
+  clearPRCaches();
+}
+
+async function requestReviewersImpl(
+  repo: RepoRef,
+  prNumber: number,
+  reviewers: ReviewerRequest
+): Promise<void> {
+  const token = GitHubAuth.getToken();
+  if (!token) {
+    throw new Error("GitHub token not configured. Set it in Settings.");
+  }
+  const users = reviewers.users ?? [];
+  const teams = reviewers.teams ?? [];
+  if (users.length === 0 && teams.length === 0) {
+    throw new Error("Provide at least one user or team to request a review from");
+  }
+  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls/${prNumber}/requested_reviewers`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: REVIEW_WRITE_HEADERS(token),
+    // GitHub keys teams separately as `team_reviewers` (team slugs).
+    body: JSON.stringify({ reviewers: users, team_reviewers: teams }),
+    signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(
+      `Failed to request reviewers on PR #${prNumber}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
+    );
+  }
+}
+
 const reviewCapability: ReviewCapability = {
   getReviewThreads: getReviewThreadsImpl,
+  approvePR: (repo, prNumber, body) => submitReviewImpl(repo, prNumber, "APPROVE", body),
+  requestChanges: (repo, prNumber, body) =>
+    submitReviewImpl(repo, prNumber, "REQUEST_CHANGES", body),
+  dismissReview: dismissReviewImpl,
+  requestReviewers: requestReviewersImpl,
 };
 
 // Thin pass-through over `GitHubAuth.getConfigAsync()` — reuses the same

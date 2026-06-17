@@ -129,6 +129,10 @@ export const SYSTEM_TIER_ADDONS = [
   "forge.openIssue",
   "forge.openPR",
   "forge.assignIssue",
+  "forge.approvePR",
+  "forge.requestChanges",
+  "forge.dismissReview",
+  "forge.requestReviewers",
   "forge.validateToken",
 ] as const satisfies readonly BuiltInActionId[];
 

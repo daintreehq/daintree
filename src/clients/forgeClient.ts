@@ -56,6 +56,31 @@ export const forgeClient = {
     return window.electron.forge.unassignIssue({ cwd, issueNumber, username });
   },
 
+  approvePR: (cwd: string, prNumber: number, body?: string): Promise<void> => {
+    return window.electron.forge.approvePR({ cwd, prNumber, body });
+  },
+
+  requestChanges: (cwd: string, prNumber: number, body: string): Promise<void> => {
+    return window.electron.forge.requestChanges({ cwd, prNumber, body });
+  },
+
+  dismissReview: (
+    cwd: string,
+    prNumber: number,
+    reviewId: number,
+    message: string
+  ): Promise<void> => {
+    return window.electron.forge.dismissReview({ cwd, prNumber, reviewId, message });
+  },
+
+  requestReviewers: (
+    cwd: string,
+    prNumber: number,
+    reviewers: { users?: string[]; teams?: string[] }
+  ): Promise<void> => {
+    return window.electron.forge.requestReviewers({ cwd, prNumber, ...reviewers });
+  },
+
   validateToken: (providerId: string, token: string): Promise<AuthValidation> => {
     return window.electron.forge.validateToken({ providerId, token });
   },

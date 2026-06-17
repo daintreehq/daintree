@@ -2444,6 +2444,22 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_ASSIGN_ISSUE, payload),
       unassignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_UNASSIGN_ISSUE, payload),
+      approvePR: (payload: { cwd: string; prNumber: number; body?: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_APPROVE_PR, payload),
+      requestChanges: (payload: { cwd: string; prNumber: number; body: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_REQUEST_CHANGES, payload),
+      dismissReview: (payload: {
+        cwd: string;
+        prNumber: number;
+        reviewId: number;
+        message: string;
+      }) => _unwrappingInvoke(CHANNELS.FORGE_DISMISS_REVIEW, payload),
+      requestReviewers: (payload: {
+        cwd: string;
+        prNumber: number;
+        users?: string[];
+        teams?: string[];
+      }) => _unwrappingInvoke(CHANNELS.FORGE_REQUEST_REVIEWERS, payload),
       validateToken: (payload: { providerId: string; token: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_VALIDATE_TOKEN, payload),
       setCredential: (providerId: string, credentials: Record<string, string>) =>

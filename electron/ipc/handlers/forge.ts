@@ -218,6 +218,193 @@ export function registerForgeHandlers(): () => void {
 
   cleanups.push(
     typedHandle(
+      CHANNELS.FORGE_APPROVE_PR,
+      async (payload: { cwd: string; prNumber: number; body?: string }) => {
+        checkRateLimit(CHANNELS.FORGE_APPROVE_PR, 3, 10_000);
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid payload");
+        }
+        if (typeof payload.cwd !== "string" || !payload.cwd.trim()) {
+          throw new Error("Invalid working directory");
+        }
+        if (
+          typeof payload.prNumber !== "number" ||
+          !Number.isInteger(payload.prNumber) ||
+          payload.prNumber <= 0
+        ) {
+          throw new Error("Invalid PR number");
+        }
+        if (payload.body !== undefined && typeof payload.body !== "string") {
+          throw new Error("Invalid review body");
+        }
+        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+        const impl = getImplForNamespace(namespaceId);
+        const approvePR = impl.reviews?.approvePR?.bind(impl.reviews);
+        if (!approvePR) {
+          throw new Error("The active forge provider does not support approving pull requests");
+        }
+        await auditForgeCall(
+          {
+            providerId: namespaceId,
+            methodName: "approvePR",
+            repoOwner: repoRef.owner,
+            repoName: repoRef.repo,
+            argsSummary: summarizeForgeArgs("approvePR", payload.prNumber),
+          },
+          () => approvePR(repoRef, payload.prNumber, payload.body)
+        );
+      }
+    )
+  );
+
+  cleanups.push(
+    typedHandle(
+      CHANNELS.FORGE_REQUEST_CHANGES,
+      async (payload: { cwd: string; prNumber: number; body: string }) => {
+        checkRateLimit(CHANNELS.FORGE_REQUEST_CHANGES, 3, 10_000);
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid payload");
+        }
+        if (typeof payload.cwd !== "string" || !payload.cwd.trim()) {
+          throw new Error("Invalid working directory");
+        }
+        if (
+          typeof payload.prNumber !== "number" ||
+          !Number.isInteger(payload.prNumber) ||
+          payload.prNumber <= 0
+        ) {
+          throw new Error("Invalid PR number");
+        }
+        if (typeof payload.body !== "string" || !payload.body.trim()) {
+          throw new Error("A review body is required when requesting changes");
+        }
+        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+        const impl = getImplForNamespace(namespaceId);
+        const requestChanges = impl.reviews?.requestChanges?.bind(impl.reviews);
+        if (!requestChanges) {
+          throw new Error(
+            "The active forge provider does not support requesting changes on pull requests"
+          );
+        }
+        await auditForgeCall(
+          {
+            providerId: namespaceId,
+            methodName: "requestChanges",
+            repoOwner: repoRef.owner,
+            repoName: repoRef.repo,
+            argsSummary: summarizeForgeArgs("requestChanges", payload.prNumber),
+          },
+          () => requestChanges(repoRef, payload.prNumber, payload.body)
+        );
+      }
+    )
+  );
+
+  cleanups.push(
+    typedHandle(
+      CHANNELS.FORGE_DISMISS_REVIEW,
+      async (payload: { cwd: string; prNumber: number; reviewId: number; message: string }) => {
+        checkRateLimit(CHANNELS.FORGE_DISMISS_REVIEW, 3, 10_000);
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid payload");
+        }
+        if (typeof payload.cwd !== "string" || !payload.cwd.trim()) {
+          throw new Error("Invalid working directory");
+        }
+        if (
+          typeof payload.prNumber !== "number" ||
+          !Number.isInteger(payload.prNumber) ||
+          payload.prNumber <= 0
+        ) {
+          throw new Error("Invalid PR number");
+        }
+        if (
+          typeof payload.reviewId !== "number" ||
+          !Number.isInteger(payload.reviewId) ||
+          payload.reviewId <= 0
+        ) {
+          throw new Error("Invalid review id");
+        }
+        if (typeof payload.message !== "string" || !payload.message.trim()) {
+          throw new Error("A dismissal message is required");
+        }
+        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+        const impl = getImplForNamespace(namespaceId);
+        const dismissReview = impl.reviews?.dismissReview?.bind(impl.reviews);
+        if (!dismissReview) {
+          throw new Error("The active forge provider does not support dismissing reviews");
+        }
+        await auditForgeCall(
+          {
+            providerId: namespaceId,
+            methodName: "dismissReview",
+            repoOwner: repoRef.owner,
+            repoName: repoRef.repo,
+            argsSummary: summarizeForgeArgs("dismissReview", payload.prNumber),
+          },
+          () => dismissReview(repoRef, payload.prNumber, payload.reviewId, payload.message)
+        );
+      }
+    )
+  );
+
+  cleanups.push(
+    typedHandle(
+      CHANNELS.FORGE_REQUEST_REVIEWERS,
+      async (payload: { cwd: string; prNumber: number; users?: string[]; teams?: string[] }) => {
+        checkRateLimit(CHANNELS.FORGE_REQUEST_REVIEWERS, 3, 10_000);
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid payload");
+        }
+        if (typeof payload.cwd !== "string" || !payload.cwd.trim()) {
+          throw new Error("Invalid working directory");
+        }
+        if (
+          typeof payload.prNumber !== "number" ||
+          !Number.isInteger(payload.prNumber) ||
+          payload.prNumber <= 0
+        ) {
+          throw new Error("Invalid PR number");
+        }
+        const sanitize = (value: unknown, label: string): string[] => {
+          if (value === undefined) return [];
+          if (!Array.isArray(value)) {
+            throw new Error(`Invalid ${label}`);
+          }
+          return value.map((entry) => {
+            if (typeof entry !== "string" || !entry.trim()) {
+              throw new Error(`Invalid ${label}`);
+            }
+            return entry.trim();
+          });
+        };
+        const users = sanitize(payload.users, "reviewer");
+        const teams = sanitize(payload.teams, "team reviewer");
+        if (users.length === 0 && teams.length === 0) {
+          throw new Error("Provide at least one user or team to request a review from");
+        }
+        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+        const impl = getImplForNamespace(namespaceId);
+        const requestReviewers = impl.reviews?.requestReviewers?.bind(impl.reviews);
+        if (!requestReviewers) {
+          throw new Error("The active forge provider does not support requesting reviewers");
+        }
+        await auditForgeCall(
+          {
+            providerId: namespaceId,
+            methodName: "requestReviewers",
+            repoOwner: repoRef.owner,
+            repoName: repoRef.repo,
+            argsSummary: summarizeForgeArgs("requestReviewers", payload.prNumber),
+          },
+          () => requestReviewers(repoRef, payload.prNumber, { users, teams })
+        );
+      }
+    )
+  );
+
+  cleanups.push(
+    typedHandle(
       CHANNELS.FORGE_VALIDATE_TOKEN,
       async (payload: { providerId: unknown; token: unknown }) => {
         checkRateLimit(CHANNELS.FORGE_VALIDATE_TOKEN, 5, 10_000);
