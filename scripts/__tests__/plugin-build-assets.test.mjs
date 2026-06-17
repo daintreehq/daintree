@@ -314,6 +314,32 @@ describe("findTypeScriptCommandHandlers", () => {
     expect(offenders).toEqual(["sample/mixed: src/bad.ts"]);
   });
 
+  it("does not flag a .ts handler when a loadable .js sibling exists", () => {
+    // Mid-migration: the runtime resolves greet.js, so greet.ts is not a footgun.
+    writeManifest(
+      "sample",
+      "migrating",
+      { contributes: { commands: [{ id: "greet" }] } },
+      { "src/greet.ts": "x\n", "src/greet.js": "export default () => {}\n" }
+    );
+
+    expect(findTypeScriptCommandHandlers(workDir)).toEqual([]);
+  });
+
+  it("flags .mts and .cts handlers (also unloadable at runtime)", () => {
+    writeManifest(
+      "builtin",
+      "module-ts",
+      { contributes: { commands: [{ id: "a" }, { id: "b" }] } },
+      { "src/a.mts": "x\n", "src/b.cts": "x\n" }
+    );
+
+    expect(findTypeScriptCommandHandlers(workDir).sort()).toEqual([
+      "builtin/module-ts: src/a.mts",
+      "builtin/module-ts: src/b.cts",
+    ]);
+  });
+
   it("returns no findings when the plugins root does not exist", () => {
     expect(findTypeScriptCommandHandlers(path.join(workDir, "never"))).toEqual([]);
   });

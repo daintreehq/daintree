@@ -38,6 +38,14 @@ function mcpServer(overrides: Record<string, unknown>): Record<string, unknown> 
 function forgeProvider(overrides: Record<string, unknown>): Record<string, unknown> {
   return { id: "prov", name: "Prov", matches: ["github.com"], ...overrides };
 }
+function toolbarButton(id: string): Record<string, unknown> {
+  // actionId in the plugin's own namespace with no declared commands → the
+  // imperative escape hatch, so the actionId gate stays out of the way.
+  return { id, label: "Btn", iconId: "sparkles", actionId: "acme.my-plugin.x" };
+}
+function agent(id: string): Record<string, unknown> {
+  return { id, name: "Agent", command: "claude", color: "#abcdef", iconId: "sparkles" };
+}
 
 function errorCodes(result: ReturnType<typeof schema.safeParse>): string[] {
   if (result.success) return [];
@@ -59,6 +67,7 @@ describe("duplicate contribution ids (#10620)", () => {
   const arrays: Array<[string, (id: string) => Record<string, unknown>, Record<string, unknown>]> =
     [
       ["panels", panel, {}],
+      ["toolbarButtons", toolbarButton, {}],
       ["commands", command, {}],
       ["views", view, {}],
       ["settings", setting, {}],
@@ -99,6 +108,30 @@ describe("duplicate contribution ids (#10620)", () => {
     const result = manifestWith({
       panels: [panel("shared")],
       commands: [command("shared")],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  // Agents carry an extra capability gate, so they sit outside the matrix and
+  // declare `agent:register` to isolate the duplicate-id check.
+  it("rejects two agents sharing an id", () => {
+    const result = schema.safeParse({
+      name: "acme.my-plugin",
+      version: "1.0.0",
+      capabilities: ["agent:register"],
+      contributes: { agents: [agent("dup"), agent("dup")] },
+    });
+    expect(result.success).toBe(false);
+    const issue = issueWithCode(result, "duplicate_contribution_id");
+    expect(issue?.path).toEqual(["contributes", "agents", 1, "id"]);
+  });
+
+  it("accepts distinct agent ids", () => {
+    const result = schema.safeParse({
+      name: "acme.my-plugin",
+      version: "1.0.0",
+      capabilities: ["agent:register"],
+      contributes: { agents: [agent("a"), agent("b")] },
     });
     expect(result.success).toBe(true);
   });
@@ -209,5 +242,29 @@ describe("MCP server ${settings:*} token references (#10620)", () => {
     });
     const tokenIssues = errorCodes(result).filter((c) => c === "settings_token_unknown");
     expect(tokenIssues).toHaveLength(2);
+  });
+
+  it("rejects a malformed token whose id breaks the safe-id grammar", () => {
+    // `foo/bar` is unmatchable by the supervisor's stricter regex, so the literal
+    // token would reach exec — flag it at parse time instead.
+    const result = manifestWith({
+      mcpServers: [mcpServer({ command: "${settings:foo/bar}" })],
+    });
+    expect(result.success).toBe(false);
+    const issue = issueWithCode(result, "settings_token_malformed");
+    expect(issue?.path).toEqual(["contributes", "mcpServers", 0, "command"]);
+  });
+
+  it("reports the token issue at the correct server index with multiple servers", () => {
+    const result = manifestWith({
+      settings: [setting("ok")],
+      mcpServers: [
+        mcpServer({ id: "a", args: ["${settings:ok}"] }),
+        mcpServer({ id: "b", args: ["${settings:bad}"] }),
+      ],
+    });
+    expect(result.success).toBe(false);
+    const issue = issueWithCode(result, "settings_token_unknown");
+    expect(issue?.path).toEqual(["contributes", "mcpServers", 1, "args", 0]);
   });
 });

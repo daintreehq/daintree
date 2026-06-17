@@ -1162,11 +1162,24 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
       // name a declared setting — the supervisor substitutes only declared ids
       // (`SETTINGS_TEMPLATE_RE` in PluginMcpSupervisor.ts) and an unknown id
       // resolves to the empty string, silently dropping the value. Agents have
-      // no settings-substitution path, so their args are left untouched.
-      const settingsTokenRe = /\$\{settings:([a-zA-Z0-9._-]+)\}/g;
+      // no settings-substitution path, so their args are left untouched. The
+      // scan matches any `${settings:...}` shape (broad inner pattern), then
+      // classifies: a key outside the `${SAFE_ID_PATTERN}` grammar is malformed
+      // (the supervisor's stricter regex would skip it, passing the literal
+      // token to exec); a well-formed key naming no setting is unknown.
+      const settingsTokenRe = /\$\{settings:([^}]*)\}/g;
       const reportUnknownSettingsTokens = (text: string, path: (string | number)[]) => {
         for (const match of text.matchAll(settingsTokenRe)) {
           const key = match[1]!;
+          if (!SAFE_ID_PATTERN.test(key)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path,
+              message: `Malformed settings token "${match[0]}" — the setting id must match ${SAFE_ID_PATTERN.source}.`,
+              params: { errorCode: "settings_token_malformed" },
+            });
+            continue;
+          }
           if (!settingIds.has(key)) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,

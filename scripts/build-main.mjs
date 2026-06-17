@@ -393,7 +393,15 @@ export function findTypeScriptCommandHandlers(pluginsSrcRoot) {
       for (const command of commands) {
         const id = command?.id;
         if (typeof id !== "string" || id.length === 0) continue;
-        for (const ext of [".ts", ".tsx"]) {
+        // Mirrors COMMAND_HANDLER_EXTENSIONS in PluginService.ts. A loadable
+        // sibling means the runtime resolves the command (e.g. a plugin
+        // mid-migration keeping the .ts source beside the compiled .js), so the
+        // TypeScript source is not a footgun — skip it.
+        const loadableExts = [".js", ".mjs"];
+        if (loadableExts.some((ext) => fs.existsSync(path.join(pluginDir, "src", `${id}${ext}`)))) {
+          continue;
+        }
+        for (const ext of [".ts", ".tsx", ".mts", ".cts"]) {
           if (fs.existsSync(path.join(pluginDir, "src", `${id}${ext}`))) {
             offenders.push(`${tier}/${entry.name}: src/${id}${ext}`);
           }
