@@ -36,7 +36,12 @@
 
 .diff-viewer[data-wrap="true"] .diff-code {
   white-space: pre-wrap;
-  word-break: break-all;
+  /* Break at whitespace first and only split a token when it alone overflows the
+     column. overflow-wrap: anywhere (not break-word) lets the cell shrink to
+     min-content so the fixed-layout table reflows; word-break: break-all would
+     split mid-token even where a whitespace break point exists. */
+  word-break: normal;
+  overflow-wrap: anywhere;
 }
 
 /* Gutter (line numbers) styling.
@@ -90,11 +95,19 @@
   white-space: nowrap;
 }
 
-/* Code content styling */
+/* Code content styling. white-space: pre alone suppresses wrapping (nowrap
+   leaves no soft-wrap opportunities), but react-diff-view's vendor sheet sets
+   word-break: break-all and word-wrap: break-word on .diff-code — reset all
+   three explicitly so the no-wrap intent on the fallback (add/delete) scroll
+   path survives even if white-space changes on a sub-path. The wrap-on rule
+   above re-enables wrapping via [data-wrap="true"]. */
 .diff-viewer .diff-code {
   background: var(--color-daintree-bg);
   padding: 0 12px;
   white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+  word-wrap: normal;
 }
 
 /* Added lines. The :root values below are the ORIGINAL hardcoded status-based

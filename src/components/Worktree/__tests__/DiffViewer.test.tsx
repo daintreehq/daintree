@@ -261,6 +261,15 @@ index 0000000..abcdef1
 +line1
 +line2`;
 
+const DELETED_FILE_DIFF = `diff --git a/gone.ts b/gone.ts
+deleted file mode 100644
+index abcdef1..0000000
+--- a/gone.ts
++++ /dev/null
+@@ -1,2 +0,0 @@
+-line1
+-line2`;
+
 describe("DiffViewer centered split", () => {
   it("uses the centered-split scroll system for two-column split diffs", () => {
     const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="split" />));
@@ -288,7 +297,18 @@ describe("DiffViewer centered split", () => {
   it("keeps the native scroller for single-side added-file diffs", () => {
     const { container } = render(wrap(<DiffViewer diff={ADDED_FILE_DIFF} viewType="split" />));
 
+    // Add files are single-column ("monotonous") in react-diff-view, so they take
+    // the horizontal-scroll fallback path rather than the two-column centered split.
     expect(container.querySelector(".diff-file-centered")).toBeNull();
+    expect(container.querySelector(".diff-file-scroll")).not.toBeNull();
+    expect(screen.queryByTestId("diff-hscrollbar")).toBeNull();
+  });
+
+  it("keeps the native scroller for single-side deleted-file diffs", () => {
+    const { container } = render(wrap(<DiffViewer diff={DELETED_FILE_DIFF} viewType="split" />));
+
+    expect(container.querySelector(".diff-file-centered")).toBeNull();
+    expect(container.querySelector(".diff-file-scroll")).not.toBeNull();
     expect(screen.queryByTestId("diff-hscrollbar")).toBeNull();
   });
 
@@ -318,6 +338,36 @@ describe("DiffViewer centered split", () => {
     // Predominantly vertical gestures stay with the vertical scroller.
     fireEvent.wheel(region!, { deltaX: 5, deltaY: 50 });
     expect(bar.scrollLeft).toBe(50);
+  });
+});
+
+describe("DiffViewer wrap attribute", () => {
+  // data-wrap drives the [data-wrap="true"] CSS rules (soft-wrap on) versus the
+  // base white-space: pre rule (no-wrap + horizontal scroll). The attribute must
+  // track wrapLines for every diff type, including the single-side add/delete
+  // files that take the fallback scroll path.
+  it("omits data-wrap when wrapLines is unset, for added-file diffs", () => {
+    const { container } = render(wrap(<DiffViewer diff={ADDED_FILE_DIFF} viewType="split" />));
+
+    const root = container.querySelector(".diff-viewer");
+    expect(root).not.toBeNull();
+    expect(root?.hasAttribute("data-wrap")).toBe(false);
+  });
+
+  it("sets data-wrap=true when wrapLines is on, for added-file diffs", () => {
+    const { container } = render(
+      wrap(<DiffViewer diff={ADDED_FILE_DIFF} viewType="split" wrapLines />)
+    );
+
+    expect(container.querySelector(".diff-viewer")?.getAttribute("data-wrap")).toBe("true");
+  });
+
+  it("sets data-wrap=true when wrapLines is on, for deleted-file diffs", () => {
+    const { container } = render(
+      wrap(<DiffViewer diff={DELETED_FILE_DIFF} viewType="split" wrapLines />)
+    );
+
+    expect(container.querySelector(".diff-viewer")?.getAttribute("data-wrap")).toBe("true");
   });
 });
 
