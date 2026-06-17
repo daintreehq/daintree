@@ -377,7 +377,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.getState",
     title: "Get Agent State",
     description:
-      "Look up the live state of an agent by its agent id. Args: `agentId` (required) — agent id such as 'claude' or 'codex', as seen in `terminal.list` entries' `agentId` field. Returns { agentId, state, waitingReason ('prompt'|'question', non-null only when state is 'waiting'), lastTransitionAt, terminalId, found }. Never errors — an unknown agent returns found:false with null fields. Do NOT use this to enumerate terminals — use `terminal.list` or `terminal.getStatus`.",
+      "Look up the live state of an agent by its agent id. Args: `agentId` (required) — agent id such as 'claude' or 'codex', as seen in `terminal.list` entries' `agentId` field. Returns { agentId, state, waitingReason ('prompt'|'question', non-null only when state is 'waiting'), lastTransitionAt, exitCode (number|null — set once the PTY has exited, null while running or on a signal kill; read alongside `state` to tell pass from fail), spawnedAt, terminalId, found }. Never errors — an unknown agent returns found:false with null fields. Do NOT use this to enumerate terminals — use `terminal.list` or `terminal.getStatus`.",
     category: "agent",
     kind: "query",
     danger: "safe",
@@ -401,6 +401,11 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       state: z.string().nullable(),
       waitingReason: z.string().nullable(),
       lastTransitionAt: z.number().nullable(),
+      // Process exit code once the agent's PTY has exited; null while running or
+      // when signal-terminated with no numeric code. Disambiguate via `state`.
+      exitCode: z.number().int().nullable(),
+      // Wall-clock spawn timestamp (ms) for duration reasoning; null if unknown.
+      spawnedAt: z.number().nullable(),
       terminalId: z.string().nullable(),
       found: z.boolean(),
     }),
@@ -420,6 +425,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
             state: panel.agentState ?? null,
             waitingReason: panel.agentState === "waiting" ? (panel.waitingReason ?? null) : null,
             lastTransitionAt: panel.lastStateChange ?? null,
+            exitCode: panel.exitCode ?? null,
+            spawnedAt: panel.startedAt ?? null,
             terminalId: panel.id,
             found: true,
           };
@@ -430,6 +437,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         state: null,
         waitingReason: null,
         lastTransitionAt: null,
+        exitCode: null,
+        spawnedAt: null,
         terminalId: null,
         found: false,
       };

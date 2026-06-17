@@ -379,6 +379,8 @@ describe("agentActions adversarial", () => {
       state: "idle",
       waitingReason: null,
       lastTransitionAt: 1717000005000,
+      exitCode: null,
+      spawnedAt: null,
       terminalId: "term-b",
       found: true,
     });
@@ -406,6 +408,8 @@ describe("agentActions adversarial", () => {
       state: "working",
       waitingReason: null,
       lastTransitionAt: 1717000009000,
+      exitCode: null,
+      spawnedAt: null,
       terminalId: "term-runtime",
       found: true,
     });
@@ -428,6 +432,8 @@ describe("agentActions adversarial", () => {
       state: null,
       waitingReason: null,
       lastTransitionAt: null,
+      exitCode: null,
+      spawnedAt: null,
       terminalId: null,
       found: false,
     });
@@ -476,6 +482,8 @@ describe("agentActions adversarial", () => {
       state: null,
       waitingReason: null,
       lastTransitionAt: null,
+      exitCode: null,
+      spawnedAt: null,
       terminalId: "term-a",
       found: true,
     });

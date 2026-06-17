@@ -21,6 +21,8 @@ type StatusEntry = {
   agentState: string | null;
   waitingReason?: string;
   lastTransitionAt?: number;
+  exitCode?: number | null;
+  spawnedAt?: number;
   recentOutput?: string | null;
   error?: string;
 };
@@ -274,6 +276,41 @@ describe("terminal.getStatus", () => {
 
     const { terminals } = await callGetStatus(setupActions(), { terminalIds: ["t1"] });
     expect(terminals[0]?.lastTransitionAt).toBe(1_700_000_000_000);
+  });
+
+  it("surfaces exitCode and spawnedAt from the panel (#10638)", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["t1", "t2"],
+      panelsById: {
+        t1: {
+          id: "t1",
+          kind: "terminal",
+          location: "grid",
+          agentState: "exited",
+          launchAgentId: "claude",
+          exitCode: 1,
+          startedAt: 1_700_000_000_000,
+        },
+        // Still running — no exitCode on the panel yet → reported as null.
+        t2: {
+          id: "t2",
+          kind: "terminal",
+          location: "grid",
+          agentState: "working",
+          launchAgentId: "claude",
+          startedAt: 1_700_000_001_000,
+        },
+      },
+    });
+
+    const { terminals } = await callGetStatus(setupActions(), { terminalIds: ["t1", "t2"] });
+    expect(terminals[0]).toMatchObject({
+      terminalId: "t1",
+      exitCode: 1,
+      spawnedAt: 1_700_000_000_000,
+    });
+    expect(terminals[1]?.exitCode).toBeNull();
+    expect(terminals[1]?.spawnedAt).toBe(1_700_000_001_000);
   });
 
   it("does not call getSerializedStates when includeOutput is omitted", async () => {

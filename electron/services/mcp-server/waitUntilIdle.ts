@@ -111,10 +111,26 @@ export async function handleWaitUntilIdle(
         previousState: AgentState;
         timestamp: number;
         waitingReason?: WaitingReason;
+        exitCode?: number | null;
+        exitSignal?: number;
       }
     | { kind: "already-idle"; state: AgentState; waitingReason?: WaitingReason }
     | { kind: "timeout" }
     | { kind: "abort" };
+
+  // Exit metadata only makes sense once the agent has finished. Build the
+  // partial object lazily so a still-working/waiting result stays clean.
+  const exitFields = (
+    state: AgentState,
+    exitCode: number | null | undefined,
+    exitSignal: number | undefined
+  ): { exitCode?: number | null; exitSignal?: number } => {
+    if (state !== "completed" && state !== "exited") return {};
+    return {
+      ...(exitCode !== undefined ? { exitCode } : {}),
+      ...(exitSignal !== undefined ? { exitSignal } : {}),
+    };
+  };
 
   const previousState = store.getState(agentId);
 
@@ -135,6 +151,10 @@ export async function handleWaitUntilIdle(
           previousState: payload.previousState,
           timestamp: payload.timestamp,
           waitingReason: payload.waitingReason,
+          // Read straight off the settling event so the result never depends on
+          // subscriber ordering relative to AgentAvailabilityStore's cache.
+          exitCode: payload.exitCode,
+          exitSignal: payload.exitSignal,
         });
       });
 
@@ -185,6 +205,7 @@ export async function handleWaitUntilIdle(
           : {}),
         previousBusyState: mapAgentStateToBusyState(settlement.previousState),
         lastTransitionAt: settlement.timestamp,
+        ...exitFields(settlement.state, settlement.exitCode, settlement.exitSignal),
         timedOut: false,
       };
     }
@@ -200,6 +221,9 @@ export async function handleWaitUntilIdle(
         : {}),
       previousBusyState: mapAgentStateToBusyState(previousState),
       lastTransitionAt: store.getLastStateChange(agentId),
+      // already-idle: the completion happened before this call, so the live
+      // payload is gone — fall back to the store's cached exit metadata.
+      ...exitFields(settlement.state, store.getExitCode(agentId), store.getExitSignal(agentId)),
       timedOut: false,
     };
   } finally {

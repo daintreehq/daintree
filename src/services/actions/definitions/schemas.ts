@@ -160,6 +160,12 @@ export const TerminalStatusEntrySchema = z.object({
   agentState: z.string().nullable(),
   waitingReason: z.string().optional(),
   lastTransitionAt: z.number().optional(),
+  // Process exit code from the last exit, present once the PTY has exited;
+  // null when the process was signal-terminated with no numeric code. Lets a
+  // supervisor tell a clean finish from a failure without scraping output.
+  exitCode: z.number().int().nullable().optional(),
+  // Wall-clock spawn timestamp (ms), for run-duration/staleness reasoning.
+  spawnedAt: z.number().optional(),
   recentOutput: z.string().nullable().optional(),
   error: z.string().optional(),
 });

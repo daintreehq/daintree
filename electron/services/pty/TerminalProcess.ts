@@ -755,6 +755,7 @@ export class TerminalProcess {
       agentModelId: t.agentModelId,
       spawnArgs: t.spawnArgs,
       exitCode: t.exitCode,
+      exitSignal: t.exitSignal,
       worktreeId: t.worktreeId,
       lastObservedTitle: t.lastObservedTitle,
       agentPresetId: t.agentPresetId,
@@ -1920,10 +1921,22 @@ export class TerminalProcess {
         recentOutput,
       });
 
+      // Persist exit metadata on every natural exit — not just the preserve
+      // path. The exit code is the authoritative pass/fail signal an MCP
+      // supervisor reads, and gating it on preserve-on-exit left ephemeral
+      // terminals with no recorded outcome (#10638). A user kill is not an
+      // outcome, so it is still excluded — that path emits agent:killed, not a
+      // completion. The write sits inside the ptyProcess identity guard and
+      // hasEmitted dedup above, so a stale exit from a respawned PTY cannot
+      // overwrite the live session (lesson #5948).
+      if (!terminal.wasKilled) {
+        terminal.exitCode = exitCode ?? 0;
+        terminal.exitSignal = signal;
+        terminal.isExited = true;
+      }
+
       const preserve = this.shouldPreserveOnExit(exitCode ?? 0);
       if (preserve) {
-        terminal.exitCode = exitCode ?? 0;
-        terminal.isExited = true;
         this.lifecycle.setExited({ code: exitCode ?? 0, signal, reason: reasonForEvent });
         this.snapshotAndDisposePreserved();
         return;

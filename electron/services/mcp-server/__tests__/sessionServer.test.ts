@@ -32,6 +32,8 @@ import {
   unwrapDispatchResult,
 } from "../shared.js";
 import { SessionBindingError } from "../rendererBridge.js";
+import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
+import { events } from "../../events.js";
 
 function fakeSessionStore(
   tier: "workbench" | "action" | "system" | "external" = "workbench"
@@ -1716,6 +1718,71 @@ describe("Resource error envelope (integration through sessionServer)", () => {
       expect((err as McpError).code).toBe(ErrorCode.InvalidRequest);
       expect((err as McpError).message).toContain("Unknown resource URI");
     }
+  });
+
+  it("surfaces exit metadata in the agentState resource after the agent exits (#10638)", async () => {
+    const store = getAgentAvailabilityStore();
+    store.clear();
+    events.emit("agent:spawned", {
+      agentId: "claude",
+      terminalId: "term-exit",
+      timestamp: 5_000,
+    });
+    events.emit("agent:state-changed", {
+      agentId: "claude",
+      terminalId: "term-exit",
+      state: "exited",
+      previousState: "working",
+      trigger: "exit",
+      confidence: 1,
+      timestamp: 6_000,
+      exitCode: 2,
+    });
+
+    const deps = fakeDeps();
+    const server = createSessionServer("s-res-agentstate", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await readResource(server, "daintree://agent/claude/state")) as {
+      contents: { uri: string; mimeType: string; text: string }[];
+    };
+    const parsed = JSON.parse(result.contents[0].text);
+    expect(parsed.state).toBe("exited");
+    expect(parsed.exitCode).toBe(2);
+    expect(parsed.spawnedAt).toBe(5_000);
+    expect(parsed.lastTransitionAt).toBe(6_000);
+    store.clear();
+  });
+
+  it("omits exitCode in the agentState resource while the agent is still working (#10638)", async () => {
+    const store = getAgentAvailabilityStore();
+    store.clear();
+    events.emit("agent:spawned", {
+      agentId: "codex",
+      terminalId: "term-working",
+      timestamp: 1_000,
+    });
+    events.emit("agent:state-changed", {
+      agentId: "codex",
+      terminalId: "term-working",
+      state: "working",
+      previousState: "idle",
+      trigger: "output",
+      confidence: 1,
+      timestamp: 2_000,
+    });
+
+    const deps = fakeDeps();
+    const server = createSessionServer("s-res-agentstate-working", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await readResource(server, "daintree://agent/codex/state")) as {
+      contents: { uri: string; mimeType: string; text: string }[];
+    };
+    const parsed = JSON.parse(result.contents[0].text);
+    expect(parsed.state).toBe("working");
+    expect(parsed).not.toHaveProperty("exitCode");
+    store.clear();
   });
 });
 

@@ -1059,6 +1059,11 @@ events.on("agent:state-changed", (payload) => {
       waitingReason: payload.waitingReason,
       sessionCost: payload.sessionCost,
       sessionTokens: payload.sessionTokens,
+      // Exit metadata on completed/exited transitions. Omit when absent so the
+      // wire stays minimal; exitCode may legitimately be null (signal kill), so
+      // forward on presence rather than truthiness. #10638
+      ...(payload.exitCode !== undefined ? { exitCode: payload.exitCode } : {}),
+      ...(payload.exitSignal !== undefined ? { exitSignal: payload.exitSignal } : {}),
       // Live temperature fields (only populated when the activity detector
       // drove the transition). Omit when absent so the wire stays minimal.
       ...(payload.temperature !== undefined ? { temperature: payload.temperature } : {}),

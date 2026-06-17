@@ -61,6 +61,14 @@ export const AgentStateChangedSchema = z.extend(EventContextSchema, {
   waitingReason: z.optional(z.enum(["prompt", "question"])),
   sessionCost: z.optional(z.number().check(z.nonnegative())),
   sessionTokens: z.optional(nonNegativeInt),
+  // Process exit metadata — present only on "completed"/"exited" transitions
+  // driven by the PTY exit event. `exitCode` is the numeric process exit code
+  // (null when the process was terminated by a signal with no numeric code);
+  // `exitSignal` is the raw OS signal number from node-pty (no 128+signum
+  // POSIX heuristic — that emits garbage on Windows, lesson #7028). Both let an
+  // MCP supervisor tell a clean finish from a failure without scraping output.
+  exitCode: z.optional(z.nullable(z.int())),
+  exitSignal: z.optional(nonNegativeInt),
   // Live temperature snapshot from AgentActivityTemperature — present only on
   // accepted transitions that flow through the activity detector. The resize
   // `suppressed` flag is intentionally NOT carried; it is a separate signal

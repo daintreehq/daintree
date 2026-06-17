@@ -30,6 +30,18 @@ export type WaitUntilIdleResult = {
   waitingReason?: WaitingReason;
   previousBusyState?: "working" | "idle";
   lastTransitionAt?: number;
+  /**
+   * Numeric process exit code, present only when `idleReason` is `"completed"`
+   * or `"exited"`. `null` when the process was terminated by a signal without a
+   * numeric code. Lets a conductor verify a real success before gating an
+   * irreversible follow-up action.
+   */
+  exitCode?: number | null;
+  /**
+   * Raw OS signal number that terminated the process, when applicable (present
+   * only on completed/exited). No POSIX 128+signum decoding (wrong on Windows).
+   */
+  exitSignal?: number;
   timedOut: boolean;
 };
 
@@ -69,10 +81,20 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
     },
     previousBusyState: { type: "string", enum: ["working", "idle"] },
     lastTransitionAt: { type: "number" },
+    exitCode: {
+      type: ["number", "null"],
+      description:
+        "Process exit code, present only when idleReason is 'completed' or 'exited'. null = signal-terminated with no numeric code.",
+    },
+    exitSignal: {
+      type: "number",
+      description:
+        "OS signal number that terminated the process, when applicable (completed/exited only).",
+    },
     timedOut: { type: "boolean" },
   },
   required: ["terminalId", "busyState", "timedOut"],
 };
 
 export const WAIT_UNTIL_IDLE_DESCRIPTION =
-  "Check whether the agent in one terminal has left the working state, with an optional bounded wait. Args: `terminalId` is a panel UUID from `terminal.list` (the `id` field); `timeoutMs` is optional (0 = immediate non-blocking snapshot — the recommended mode; otherwise max ms to long-poll, default 60s). Returns { terminalId, busyState ('working'|'idle'), idleReason, waitingReason ('prompt'|'question', present only while waiting_for_user), timedOut }. `timedOut: true` means the agent is still working — re-call to keep waiting, or pace with a scheduled wakeup. While this call is in flight the conversation is blocked, so interactive sessions are capped at 60s server-side regardless of `timeoutMs`; only headless/scripted sessions may block longer (clamped to 2 hours). An untracked `terminalId` is not an error — it returns immediately as { busyState: 'idle', idleReason: 'unknown', timedOut: false }. Do NOT use this to poll many terminals — call `terminal.getStatus` for fleet-wide state.";
+  "Check whether the agent in one terminal has left the working state, with an optional bounded wait. Args: `terminalId` is a panel UUID from `terminal.list` (the `id` field); `timeoutMs` is optional (0 = immediate non-blocking snapshot — the recommended mode; otherwise max ms to long-poll, default 60s). Returns { terminalId, busyState ('working'|'idle'), idleReason, waitingReason ('prompt'|'question', only while waiting_for_user), exitCode (number|null, only on 'completed'|'exited' — verify a real success before an irreversible follow-up), exitSignal (where available), timedOut }. `timedOut: true` means still working — re-call to keep waiting. Interactive sessions are capped at 60s server-side regardless of `timeoutMs`; headless sessions may block up to 2 hours. An untracked `terminalId` returns immediately as { busyState: 'idle', idleReason: 'unknown', timedOut: false }. Do NOT poll many terminals — use `terminal.getStatus` for fleet-wide state.";
