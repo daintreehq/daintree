@@ -12,6 +12,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { AGENT_REGISTRY } from "@/config/agents";
+import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import type { ActionId } from "@shared/types/actions";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
@@ -153,6 +154,11 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     .nullable();
 
   for (const [id, config] of Object.entries(AGENT_REGISTRY)) {
+    // Assistant-only agents (e.g. daintree-assistant) have no direct-launch
+    // action — they're never spawned as a standalone agent, only used by the
+    // Daintree Assistant overlay. Skipping registration keeps them out of the
+    // action palette and the MCP action manifest.
+    if (isAssistantOnlyAgentId(id)) continue;
     const actionId = `agent.${id}` as ActionId;
     actions.set(actionId, () => ({
       id: actionId,

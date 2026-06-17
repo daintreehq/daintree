@@ -34,13 +34,17 @@ export type UsePanelPaletteReturn = UseSearchablePaletteReturn<PanelKindOption> 
   confirmSelection: () => PanelKindOption | null;
 };
 
-import { BUILT_IN_AGENT_IDS, isBuiltInAgentId, isAssistantOnlyAgentId } from "@shared/config/agentIds";
+import {
+  LAUNCHABLE_AGENT_IDS,
+  isBuiltInAgentId,
+  isAssistantOnlyAgentId,
+} from "@shared/config/agentIds";
 import { isAgentInstalled } from "../../shared/utils/agentAvailability";
 
 const STALE_THRESHOLD_MS = 5 * 60 * 1000;
 
 const AGENT_LAUNCH_ACTIONS: Record<string, KeyAction> = Object.fromEntries(
-  BUILT_IN_AGENT_IDS.map((id) => [id, `agent.${id}` as KeyAction])
+  LAUNCHABLE_AGENT_IDS.map((id) => [id, `agent.${id}` as KeyAction])
 );
 
 const PANEL_FUSE_OPTIONS: IFuseOptions<PanelKindOption> = {

@@ -28,7 +28,7 @@ import { CHECKLIST_ITEMS } from "@/components/Onboarding/checklistItems";
 import { useAgentDiscoveryOnboarding } from "@/hooks/app/useAgentDiscoveryOnboarding";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { getAgentConfig } from "@/config/agents";
-import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
+import { LAUNCHABLE_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import type { AgentAvailabilityState } from "../../../shared/types/ipc/system";
@@ -275,9 +275,9 @@ export function isAgentWelcomeCardEligible({
 }): boolean {
   if (!agentSettings) return false;
   if (!hasRealData || welcomeCardDismissed) return false;
-  const hasReady = BUILT_IN_AGENT_IDS.some((id) => isAgentLaunchable(availability?.[id]));
+  const hasReady = LAUNCHABLE_AGENT_IDS.some((id) => isAgentLaunchable(availability?.[id]));
   if (!hasReady) return false;
-  const hasPinned = BUILT_IN_AGENT_IDS.some((id) => isAgentPinned(agentSettings.agents?.[id]));
+  const hasPinned = LAUNCHABLE_AGENT_IDS.some((id) => isAgentPinned(agentSettings.agents?.[id]));
   return !hasPinned;
 }
 
@@ -462,7 +462,7 @@ function AgentWelcomeCard() {
   const [pinError, setPinError] = useState(false);
 
   const readyAgentIds = useMemo<BuiltInAgentId[]>(() => {
-    return BUILT_IN_AGENT_IDS.filter((id) => isAgentLaunchable(availability?.[id]));
+    return LAUNCHABLE_AGENT_IDS.filter((id) => isAgentLaunchable(availability?.[id]));
   }, [availability]);
 
   if (!loaded) return null;
