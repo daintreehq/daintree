@@ -101,6 +101,9 @@ describe("postinstall", () => {
       stdio: "inherit",
       cwd: path.resolve(__dirname, ".."),
     });
+    // node-pty post-install is the only execSync call — guards against a
+    // patch-package (or other) step being reintroduced ahead of it.
+    expect(mockExecSync).toHaveBeenCalledTimes(1);
     expect(process.exitCode).toBeUndefined();
   });
 
