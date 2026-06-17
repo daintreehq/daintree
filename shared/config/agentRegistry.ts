@@ -558,6 +558,7 @@ import { config as kimiConfig } from "./agents/kimi.js";
 import { config as interpreterConfig } from "./agents/interpreter.js";
 import { config as mistralConfig } from "./agents/mistral.js";
 import { config as kiroConfig } from "./agents/kiro.js";
+import { config as daintreeAssistantConfig } from "./agents/daintree-assistant.js";
 
 // Built-in agent registry. Per-agent configs live in `./agents/<id>.ts`
 // (mirroring `src/services/actions/definitions/`). When adding a new agent,
@@ -605,6 +606,7 @@ export const AGENT_REGISTRY: Record<BuiltInAgentId, AgentConfig> = {
   interpreter: interpreterConfig,
   mistral: mistralConfig,
   kiro: kiroConfig,
+  "daintree-assistant": daintreeAssistantConfig,
 };
 
 export function getAgentIds(): string[] {

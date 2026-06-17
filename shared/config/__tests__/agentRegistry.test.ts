@@ -262,6 +262,19 @@ describe("agentRegistry", () => {
       expect(wired).not.toContain("cursor");
     });
 
+    it("daintree-assistant is wired at experimental tier and hidden from the stable picker (#10634)", () => {
+      expect(getAssistantWiredAgentIds()).toContain("daintree-assistant");
+      expect(getAssistantSupportedAgentIds()).not.toContain("daintree-assistant");
+      expect(getAgentConfig("daintree-assistant")?.supports).toMatchObject({
+        mcpInjection: "project-config",
+        settingsOverlay: false,
+        permissionBypass: false,
+        trustDialog: false,
+        versionProbe: true,
+        tier: "experimental",
+      });
+    });
+
     it("excludes agents whose supports object is at experimental tier", () => {
       // Temporarily downgrade codex to experimental and verify the real
       // filter function (not a local copy of the predicate) excludes it.
