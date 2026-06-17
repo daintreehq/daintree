@@ -38,6 +38,7 @@ import {
   readStringField,
   RESOURCE_BACKING_ACTIONS,
   TIER_NOT_PERMITTED_CODE,
+  CONFIRMATION_REQUIRED_CODE,
   CONFIRMATION_TIMEOUT_CODE,
   USER_REJECTED_CODE,
   ELICITATION_FAILED_CODE,
@@ -57,7 +58,7 @@ import {
   INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS,
   MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS,
 } from "../../../shared/types/terminalWaitUntilIdle.js";
-import { SessionBindingError } from "./rendererBridge.js";
+import { SessionBindingError, RendererBridgeUnavailableError } from "./rendererBridge.js";
 import {
   buildDedupKey,
   canonicalArgsHash,
@@ -776,6 +777,42 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({
               code: SESSION_BINDING_GONE,
               message: err.message,
+            });
+          }
+          // No reachable confirmation channel for a confirm-gated tool (#10640).
+          // When a headless client lacks `elicitation.form`, the unconfirmed
+          // dispatch is forwarded to the renderer bridge so the human can
+          // approve it in a native ConfirmDialog. If no Daintree window is open,
+          // `getActiveProjectWebContents` throws `RendererBridgeUnavailableError`
+          // — meaning the action could not be confirmed, not that it failed
+          // mid-execution. Reclassify to CONFIRMATION_REQUIRED (audited as
+          // `confirmation-pending`, never retriable) with a machine-readable
+          // `confirmationChannel: "unavailable"` so an autonomous conductor can
+          // tell "needs a human I can't reach" apart from a transient error.
+          // Scoped to unconfirmed confirm-gated tools so an already-approved
+          // dispatch that fails for any other reason still surfaces as
+          // EXECUTION_ERROR.
+          if (
+            err instanceof RendererBridgeUnavailableError &&
+            entry?.danger === "confirm" &&
+            !dispatchConfirmed
+          ) {
+            const message =
+              `Action '${actionId}' requires confirmation, but no Daintree window is open to surface the ` +
+              `approval dialog. The action was not run — a human must approve it in Daintree.`;
+            const value: import("../../../shared/types/actions.js").ActionDispatchResult = {
+              ok: false,
+              error: {
+                code: CONFIRMATION_REQUIRED_CODE,
+                message,
+                details: { confirmationChannel: "unavailable" },
+              },
+            };
+            outcome = { kind: "result", value };
+            return buildToolError({
+              code: CONFIRMATION_REQUIRED_CODE,
+              message,
+              details: { confirmationChannel: "unavailable" },
             });
           }
           return buildToolError({

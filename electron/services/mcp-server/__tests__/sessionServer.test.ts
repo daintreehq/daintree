@@ -31,7 +31,7 @@ import {
   RATE_LIMIT_TOOL_MAP,
   unwrapDispatchResult,
 } from "../shared.js";
-import { SessionBindingError } from "../rendererBridge.js";
+import { SessionBindingError, RendererBridgeUnavailableError } from "../rendererBridge.js";
 import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
 import { events } from "../../events.js";
 
@@ -1597,6 +1597,79 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
     expect(parsed.retriable).toBe(false);
     expect(parsed.message).toContain("Do not retry");
     expect(parsed.message).toContain("42");
+  });
+
+  it("reclassifies a no-channel confirm dispatch to CONFIRMATION_REQUIRED, not EXECUTION_ERROR (#10640)", async () => {
+    // A confirm-gated tool the session's tier permits, dispatched by a client
+    // without elicitation.form. The unconfirmed dispatch is forwarded to the
+    // renderer bridge, which throws RendererBridgeUnavailableError because no
+    // Daintree window is open. That must surface as a non-retriable
+    // CONFIRMATION_REQUIRED (the human couldn't be asked) rather than a
+    // retriable EXECUTION_ERROR (which would read as a transient failure).
+    const manifest = [
+      {
+        id: "worktree.list",
+        title: "Worktree: list",
+        description: "List worktrees",
+        category: "worktree",
+        danger: "confirm" as const,
+        source: ["agent"] as const,
+      },
+    ] as unknown as import("../../../../shared/types/actions.js").ActionManifestEntry[];
+    const dispatchAction = vi.fn().mockRejectedValue(new RendererBridgeUnavailableError());
+    const deps = fakeDeps({
+      requestManifest: vi.fn().mockResolvedValue(manifest),
+      getCachedManifest: vi.fn(() => manifest),
+      dispatchAction,
+    });
+    const server = createSessionServer("s-no-channel", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "worktree.list",
+      arguments: {},
+    })) as { isError: boolean; content: { type: string; text: string }[] };
+
+    // Dispatch was attempted unconfirmed (the renderer is the confirm gate).
+    expect(dispatchAction).toHaveBeenCalledWith("worktree.list", {}, false);
+    expect(result.isError).toBe(true);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.code).toBe("CONFIRMATION_REQUIRED");
+    expect(parsed.retriable).toBe(false);
+    expect(parsed.details).toEqual({ confirmationChannel: "unavailable" });
+  });
+
+  it("keeps EXECUTION_ERROR for a bridge-unavailable failure on a non-confirm tool (#10640)", async () => {
+    // The reclassification is scoped to confirm-gated tools. A safe tool that
+    // hits the same RendererBridgeUnavailableError is a genuine execution
+    // failure (nothing needed confirming) and stays a retriable EXECUTION_ERROR.
+    const manifest = [
+      {
+        id: "files.search",
+        title: "Files: search",
+        description: "Search files",
+        category: "files",
+        danger: "safe" as const,
+        source: ["agent"] as const,
+      },
+    ] as unknown as import("../../../../shared/types/actions.js").ActionManifestEntry[];
+    const deps = fakeDeps({
+      requestManifest: vi.fn().mockResolvedValue(manifest),
+      getCachedManifest: vi.fn(() => manifest),
+      dispatchAction: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
+    });
+    const server = createSessionServer("s-safe-no-channel", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "files.search",
+      arguments: {},
+    })) as { isError: boolean; content: { type: string; text: string }[] };
+
+    expect(result.isError).toBe(true);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.code).toBe(EXECUTION_ERROR_CODE);
+    expect(parsed.retriable).toBe(true);
   });
 });
 
