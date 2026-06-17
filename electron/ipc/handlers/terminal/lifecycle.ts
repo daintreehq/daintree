@@ -20,6 +20,12 @@ import {
   getAssistantWiredAgentIds,
   getEffectiveAgentConfig,
 } from "../../../../shared/config/agentRegistry.js";
+import { getPluginIdForAgent } from "../../../../shared/config/pluginAgentRegistry.js";
+import {
+  SettingTemplateError,
+  substituteSettingsTemplates,
+} from "../../../services/settingsTemplateResolver.js";
+import type * as PluginServiceModule from "../../../services/PluginService.js";
 
 type ValidatedTerminalSpawnOptions = z.output<typeof TerminalSpawnOptionsSchema>;
 
@@ -36,6 +42,20 @@ async function getMcpServerService(): Promise<McpServerSingleton> {
     cachedMcpServerService = mod.mcpServerService;
   }
   return cachedMcpServerService;
+}
+
+// Same lazy-import discipline as the MCP service above: PluginService pulls in
+// the whole plugin host (~thousands of lines), and only plugin-agent launches
+// that actually embed a `${settings:*}` template need it — so keep it off the
+// eager spawn path and load on first such launch.
+type PluginServiceSingleton = typeof PluginServiceModule.pluginService;
+let cachedPluginService: PluginServiceSingleton | null = null;
+async function getPluginService(): Promise<PluginServiceSingleton> {
+  if (!cachedPluginService) {
+    const mod = await import("../../../services/PluginService.js");
+    cachedPluginService = mod.pluginService;
+  }
+  return cachedPluginService;
 }
 import {
   listAgentSessions,
@@ -388,6 +408,32 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           "[TerminalSpawn] Failed to prepare Daintree MCP config; continuing without MCP injection:",
           mcpErr
         );
+      }
+    }
+
+    // Expand `${settings:*}` templates a plugin agent embedded in its command
+    // or args (e.g. `--token=${settings:apiToken}`). The agent's args were
+    // concatenated into `safeCommand` upstream by `generateAgentCommand`, so the
+    // literal template is sitting in this string. MCP servers already resolve
+    // these at spawn (PluginMcpSupervisor.resolveContribution); the agent path
+    // had no equivalent, so the unexpanded token reached the PTY and the agent
+    // failed to authenticate (#10619). The cheap `includes` pre-check keeps a
+    // plain-shell or built-in-agent spawn off the lazy PluginService load
+    // entirely; only a plugin-contributed agent with a template pays for it.
+    // An unconfigured setting throws `SettingTemplateError` (surfaced as the
+    // spawn IPC's rejection) rather than leaking a literal `${...}` to the wire.
+    if (launchAgentId && safeCommand.includes("${settings:")) {
+      const pluginId = getPluginIdForAgent(launchAgentId);
+      if (pluginId) {
+        const pluginService = await getPluginService();
+        safeCommand = await substituteSettingsTemplates(safeCommand, async (settingId) => {
+          const value = await pluginService.resolveSettingTemplate(pluginId, settingId);
+          // `resolveSettingTemplate` returns "" for an unset/missing setting;
+          // treat that as unresolved so the command never spawns with a blank
+          // secret silently swapped in.
+          if (!value) throw new SettingTemplateError(pluginId, settingId);
+          return value;
+        });
       }
     }
 

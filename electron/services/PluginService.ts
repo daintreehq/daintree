@@ -4884,7 +4884,11 @@ export class PluginService {
     scope: PluginSettingsScope,
     projectId: string | null
   ): Promise<void> {
-    return this.settings.setSettingValueFromUi(pluginId, key, value, scope, projectId);
+    await this.settings.setSettingValueFromUi(pluginId, key, value, scope, projectId);
+    // Only user-scope values feed `${settings:*}` resolution (resolveSettingTemplate
+    // reads user scope), so a project-scope write never affects a supervised
+    // MCP server — skip the restart sweep for it.
+    if (scope === "user") this.restartMcpServersForSettingChange(pluginId, key);
   }
 
   async deleteSettingValueFromUi(
@@ -4893,7 +4897,32 @@ export class PluginService {
     scope: PluginSettingsScope,
     projectId: string | null
   ): Promise<void> {
-    return this.settings.deleteSettingValueFromUi(pluginId, key, scope, projectId);
+    await this.settings.deleteSettingValueFromUi(pluginId, key, scope, projectId);
+    if (scope === "user") this.restartMcpServersForSettingChange(pluginId, key);
+  }
+
+  /**
+   * Restart any running MCP server that references the just-changed setting so a
+   * rotated secret takes effect (#10619). The supervisor owns the
+   * detection + debounce and which servers are eligible (ready/crashed only);
+   * this supplies the actual restart — re-resolving the contribution and minting
+   * a fresh `resolveSettings` closure, mirroring the `plugin-mcp:restart` IPC
+   * path so the supervisor never holds a stale closure.
+   */
+  private restartMcpServersForSettingChange(pluginId: string, settingId: string): void {
+    getPluginMcpSupervisor().notifySettingChanged(pluginId, settingId, async (serverId) => {
+      const lookup = this.findMcpServerContribution(pluginId, serverId);
+      // The plugin may have unloaded between the debounce scheduling and now —
+      // a missing contribution means there's nothing left to restart.
+      if (!lookup) return;
+      await getPluginMcpSupervisor().restart({
+        pluginId,
+        pluginDir: lookup.pluginDir,
+        serverId,
+        contribution: lookup.contribution,
+        resolveSettings: (id) => this.resolveSettingTemplate(pluginId, id),
+      });
+    });
   }
 
   async revealSecretSettingForUi(

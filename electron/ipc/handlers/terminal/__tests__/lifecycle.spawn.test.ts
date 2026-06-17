@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -205,7 +205,24 @@ vi.mock("../../../../services/McpPaneConfigService.js", () => ({
   },
 }));
 
+// Plugin-agent `${settings:*}` resolution (#10619). The real pluginAgentRegistry
+// is used (a plugin agent is registered per-test); only the heavy PluginService
+// dynamic import is stubbed to a controllable resolveSettingTemplate.
+const { mockResolveSettingTemplate } = vi.hoisted(() => ({
+  mockResolveSettingTemplate: vi.fn<(pluginId: string, settingId: string) => Promise<string>>(),
+}));
+vi.mock("../../../../services/PluginService.js", () => ({
+  pluginService: {
+    resolveSettingTemplate: (pluginId: string, settingId: string) =>
+      mockResolveSettingTemplate(pluginId, settingId),
+  },
+}));
+
 import { ipcMain } from "electron";
+import {
+  registerPluginAgents,
+  clearPluginAgentRegistryForTests,
+} from "../../../../../shared/config/pluginAgentRegistry.js";
 import { CHANNELS } from "../../../channels.js";
 import { registerTerminalLifecycleHandlers } from "../lifecycle.js";
 import type { HandlerDependencies } from "../../../types.js";
@@ -1639,5 +1656,142 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.env?.DAINTREE_ASSISTANT_SCRATCH_DIR).toBeUndefined();
     expect(mockGetAssistantScratchEnv).not.toHaveBeenCalled();
+  });
+});
+
+describe("terminal spawn handler - plugin agent ${settings:*} resolution (#10619)", () => {
+  let ptyClient: {
+    spawn: ReturnType<typeof vi.fn>;
+    hasTerminal: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const os = await import("os");
+    tmpDir = os.tmpdir();
+    ptyClient = {
+      spawn: vi.fn(),
+      hasTerminal: vi.fn(() => false),
+      write: vi.fn(),
+    };
+    mockGetCurrentProject.mockReturnValue({ id: "p1", path: tmpDir, name: "p" });
+    mockGetProjectById.mockReturnValue(null);
+    mockGetProjectSettings.mockResolvedValue({});
+    mockValidateToken.mockReturnValue(false);
+    mockResolveSettingTemplate.mockReset();
+    clearPluginAgentRegistryForTests();
+    // "acme.myagent" is contributed by plugin "acme.plugin"; "vanilla-agent" is
+    // intentionally never registered (stands in for a built-in/unknown agent).
+    registerPluginAgents("acme.plugin", [
+      {
+        id: "acme.myagent",
+        name: "My Agent",
+        command: "acme-cli",
+        color: "#3366ff",
+        iconId: "terminal",
+      },
+    ]);
+  });
+
+  afterEach(() => {
+    clearPluginAgentRegistryForTests();
+  });
+
+  it("resolves a ${settings:*} template in a plugin agent's command before spawning", async () => {
+    mockResolveSettingTemplate.mockResolvedValue("sk-live-123");
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "acme-cli --token=${settings:apiToken}",
+        launchAgentId: "acme.myagent",
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(mockResolveSettingTemplate).toHaveBeenCalledWith("acme.plugin", "apiToken");
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.command).toBe("acme-cli --token=sk-live-123");
+    expect(spawnArgs.command).not.toContain("${settings:");
+  });
+
+  it("refuses to spawn (and never reaches the PTY) when a referenced setting is unset", async () => {
+    // resolveSettingTemplate returns "" for an unset/missing setting.
+    mockResolveSettingTemplate.mockResolvedValue("");
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await expect(
+      handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          cols: 80,
+          rows: 24,
+          cwd: tmpDir,
+          command: "acme-cli --token=${settings:apiToken}",
+          launchAgentId: "acme.myagent",
+        } as unknown as Parameters<typeof handler>[1]
+      )
+    ).rejects.toThrow(/Unmatched setting template "apiToken"/);
+
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("does not touch PluginService for a non-plugin agent, leaving the literal untouched", async () => {
+    // "vanilla-agent" is never registered, so getPluginIdForAgent returns
+    // undefined and the resolution block is skipped — no lazy PluginService load.
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "vanilla-cli --token=${settings:apiToken}",
+        launchAgentId: "vanilla-agent",
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(mockResolveSettingTemplate).not.toHaveBeenCalled();
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.command).toBe("vanilla-cli --token=${settings:apiToken}");
+  });
+
+  it("skips resolution entirely when the command embeds no template", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "acme-cli --interactive",
+        launchAgentId: "acme.myagent",
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    // The cheap `includes("${settings:")` pre-check short-circuits before any
+    // plugin work, so no PluginService resolution happens for the common case —
+    // even though "acme.myagent" *is* a registered plugin agent.
+    expect(mockResolveSettingTemplate).not.toHaveBeenCalled();
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.command).toBe("acme-cli --interactive");
   });
 });

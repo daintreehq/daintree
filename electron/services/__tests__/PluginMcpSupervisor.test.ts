@@ -1071,3 +1071,116 @@ describe("PluginMcpSupervisor lazy tool discovery (issue #9235)", () => {
     expect(second.truncated).toBe(true);
   });
 });
+
+describe("PluginMcpSupervisor.notifySettingChanged (issue #10619)", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Start one server referencing `${settings:apiToken}` in env and drive it to `ready`. */
+  async function startReadyServer() {
+    const fake = makeFakeSubprocess();
+    const supervisor = new PluginMcpSupervisor({
+      spawner: () => fake.handle,
+      killTree: () => {},
+    });
+    const contribution = {
+      id: "linear",
+      name: "Linear",
+      command: "node",
+      env: { TOKEN: "${settings:apiToken}" },
+    };
+    const start = supervisor.start({
+      pluginId: "acme.demo",
+      contributions: [contribution],
+      resolveSettings: async () => "old-secret",
+    });
+    await fake.waitForStdinCount(1);
+    fake.answerInitialize();
+    await start;
+    expect(supervisor.list()[0]?.status).toBe("ready");
+    return { supervisor, fake };
+  }
+
+  it("restarts a ready server referencing the changed setting after the debounce window", async () => {
+    const { supervisor } = await startReadyServer();
+    const restart = vi.fn();
+
+    vi.useFakeTimers();
+    supervisor.notifySettingChanged("acme.demo", "apiToken", restart);
+    // Debounced — nothing fires synchronously.
+    expect(restart).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1000);
+    expect(restart).toHaveBeenCalledTimes(1);
+    expect(restart).toHaveBeenCalledWith("linear");
+  });
+
+  it("does not restart when the changed setting is not referenced", async () => {
+    const { supervisor } = await startReadyServer();
+    const restart = vi.fn();
+
+    vi.useFakeTimers();
+    supervisor.notifySettingChanged("acme.demo", "unrelatedKey", restart);
+    vi.advanceTimersByTime(5000);
+    expect(restart).not.toHaveBeenCalled();
+  });
+
+  it("does not restart a server for a different plugin", async () => {
+    const { supervisor } = await startReadyServer();
+    const restart = vi.fn();
+
+    vi.useFakeTimers();
+    supervisor.notifySettingChanged("other.plugin", "apiToken", restart);
+    vi.advanceTimersByTime(5000);
+    expect(restart).not.toHaveBeenCalled();
+  });
+
+  it("coalesces a burst of changes into a single restart", async () => {
+    const { supervisor } = await startReadyServer();
+    const restart = vi.fn();
+
+    vi.useFakeTimers();
+    supervisor.notifySettingChanged("acme.demo", "apiToken", restart);
+    vi.advanceTimersByTime(500);
+    supervisor.notifySettingChanged("acme.demo", "apiToken", restart);
+    vi.advanceTimersByTime(500);
+    // The second change reset the debounce, so 1000ms total hasn't elapsed
+    // since it — no restart yet.
+    expect(restart).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(500);
+    expect(restart).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not restart a stopped (lazy-unstarted / torn-down) server", async () => {
+    const { supervisor } = await startReadyServer();
+    await supervisor.shutdown({ pluginId: "acme.demo" });
+    expect(supervisor.list()[0]?.status).toBe("stopped");
+    const restart = vi.fn();
+
+    vi.useFakeTimers();
+    supervisor.notifySettingChanged("acme.demo", "apiToken", restart);
+    vi.advanceTimersByTime(5000);
+    expect(restart).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending restart when the server is shut down before the debounce fires", async () => {
+    const { supervisor } = await startReadyServer();
+    const restart = vi.fn();
+
+    vi.useFakeTimers();
+    supervisor.notifySettingChanged("acme.demo", "apiToken", restart);
+    vi.advanceTimersByTime(500);
+    // Shutdown clears the pending debounce timer; switch back to real timers so
+    // shutdown's own async teardown can settle.
+    vi.useRealTimers();
+    await supervisor.shutdown({ pluginId: "acme.demo" });
+
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(5000);
+    expect(restart).not.toHaveBeenCalled();
+  });
+});
