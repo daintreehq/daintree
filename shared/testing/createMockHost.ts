@@ -970,7 +970,9 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         try {
           validatePanelBadge(badge);
         } catch (err) {
-          return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+          // validatePanelBadge only throws Error; re-reject it so the validation
+          // error stays inside the Promise contract (not a sync throw).
+          return Promise.reject(err);
         }
       }
       setPanelBadgeCalls.push({ panelId, badge: badge ?? null });
