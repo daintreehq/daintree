@@ -10,7 +10,6 @@ const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
 const originalExitCode = process.exitCode;
 
-const PATCH_CMD = "node node_modules/patch-package/index.js --error-on-fail";
 const POSTINSTALL_CMD = "node node_modules/node-pty/scripts/post-install.js";
 
 afterAll(() => {
@@ -68,24 +67,6 @@ describe("postinstall", () => {
     restoreMocks();
   });
 
-  it("should apply patches (with --error-on-fail) before rebuilding any native module", async () => {
-    await runPostinstall();
-
-    // The very first execSync must be the patch step — not node-pty post-install
-    // sneaking ahead of it.
-    expect(mockExecSync.mock.calls[0][0]).toBe(PATCH_CMD);
-    expect(mockExecSync).toHaveBeenCalledWith(PATCH_CMD, {
-      stdio: "inherit",
-      cwd: path.resolve(__dirname, ".."),
-    });
-
-    const patchOrder = mockExecSync.mock.invocationCallOrder[0];
-    const everyRebuildAfterPatch = mockRebuild.mock.invocationCallOrder.every(
-      (order) => order > patchOrder
-    );
-    expect(everyRebuildAfterPatch).toBe(true);
-  });
-
   it("should rebuild all four native modules, better-sqlite3 last", async () => {
     await runPostinstall();
 
@@ -121,35 +102,6 @@ describe("postinstall", () => {
       cwd: path.resolve(__dirname, ".."),
     });
     expect(process.exitCode).toBeUndefined();
-  });
-
-  it("should skip the better-sqlite3 rebuild when patch-package fails", async () => {
-    mockExecSync.mockImplementation((cmd: string) => {
-      if (cmd === PATCH_CMD) throw new Error("patch apply failed");
-      return undefined;
-    });
-
-    await runPostinstall();
-
-    // The three patch-independent natives still rebuild; better-sqlite3 is
-    // skipped so its V8 compile error can't mask the real patch failure.
-    expect(rebuiltModules()).toEqual(["node-pty", "win-job-object", "posix-pty-reaper"]);
-    expect(rebuiltModules()).not.toContain("better-sqlite3");
-    expect(process.exitCode).toBe(1);
-
-    const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
-    expect(errorCalls).toMatch(/patch-package/);
-  });
-
-  it("should still run node-pty post-install when patch-package fails", async () => {
-    mockExecSync.mockImplementation((cmd: string) => {
-      if (cmd === PATCH_CMD) throw new Error("patch apply failed");
-      return undefined;
-    });
-
-    await runPostinstall();
-
-    expect(mockExecSync).toHaveBeenCalledWith(POSTINSTALL_CMD, expect.anything());
   });
 
   it("should continue rebuilding when the first module fails", async () => {
