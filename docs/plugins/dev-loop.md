@@ -168,10 +168,10 @@ Default timeout is 5 seconds. Causes:
 
 **Changes don't show up after editing**
 
-There's no hot reload yet (see [The edit loop](#the-edit-loop-today)). Re-run `package` then `install` to load the new build.
+There's no hot reload yet (see [The edit loop](#the-edit-loop)). Re-run `package` then `install` to load the new build.
 
 - A stale `.dntr` got installed — confirm you packaged after your edit, and that the path you installed matches the freshly built file
-- A previous `activate()` threw and left the plugin in a broken state. Restart Daintree.
+- A previous `activate()` threw partway through. The host rolls back every registration the plugin made before the throw — channels, imperative actions, and event/forge/worktree subscriptions are all undone automatically, so you don't strand stale registrations. Fix the error and re-run `package` then `install`; no Daintree restart is needed.
 
 **MCP server doesn't spawn**
 

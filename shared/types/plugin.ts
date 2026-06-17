@@ -434,9 +434,11 @@ export interface SettingDefinition {
    */
   extensions?: string[];
   /**
-   * Legacy plaintext-secret hint (F19). The manifest schema normalizes
-   * `secret: true` to `type: "secret"`; new manifests should use the type.
-   * Storage is always plaintext JSON regardless of this flag (#9167).
+   * Legacy secret hint (F19). The manifest schema normalizes `secret: true` to
+   * `type: "secret"`; new manifests should use the type. Once normalized, the
+   * value follows the same at-rest tier as any `type: "secret"` setting —
+   * keychain-backed via Electron `safeStorage` when available, plaintext JSON
+   * only as a fallback (see {@link PluginSecretStorageTier}, #9167).
    */
   secret?: boolean;
 }

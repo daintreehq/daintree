@@ -27,6 +27,8 @@ The returned cleanup function (if any) runs when the plugin is unloaded — duri
 
 **Error handling:** if `activate` throws, the plugin fails to load and the error is logged to the main process console plus surfaced as a toast. Other plugins continue loading.
 
+**Partial-activation rollback:** if `activate` throws after it has already registered some handlers, actions, or subscriptions, the host rolls all of them back automatically — the rollback is synchronous and host-owned, so you have no cleanup responsibility for a failed activation. A user-installed plugin gets the same guarantee from its worker being torn down on the failure. Don't try to undo your own registrations in a `catch` inside `activate`; just let the error propagate.
+
 ## `PluginHostApi`
 
 ```ts
@@ -34,19 +36,19 @@ interface PluginHostApi {
   readonly pluginId: string;
 
   // Action / command registration
-  registerAction(descriptor: PluginActionContribution, handler: ActionHandler): void;
+  registerAction(descriptor: PluginActionContribution, handler: ActionHandler): Promise<void>;
 
   // IPC
   registerHandler<TArgs, TResult>(
     channel: string,
     schema: PluginChannelSchema<TArgs, TResult>,
     handler: PluginTypedIpcHandler<TArgs, TResult>
-  ): void;
-  registerHandler(channel: string, handler: PluginIpcHandler): void;
-  broadcastToRenderer(channel: string, payload: unknown): void;
+  ): Promise<void>;
+  registerHandler(channel: string, handler: PluginIpcHandler): Promise<void>;
+  broadcastToRenderer(channel: string, payload: unknown): Promise<void>;
 
   // Post-activation push into your panels
-  postToPanel(channel: string, payload: unknown): void;
+  postToPanel(channel: string, payload: unknown, panelId?: string | null): Promise<void>;
 
   // Worktree observation
   getActiveWorktree(): Promise<PluginWorktreeSnapshot | null>;
@@ -54,16 +56,28 @@ interface PluginHostApi {
   getWorktreeStatus(path: string): Promise<PluginWorktreeStatus | null>;
   onDidChangeActiveWorktree(
     callback: (snapshot: PluginWorktreeSnapshot | null) => void
-  ): () => void;
-  onDidChangeWorktrees(callback: (snapshots: PluginWorktreeSnapshot[]) => void): () => void;
+  ): Promise<() => void>;
+  onDidChangeWorktrees(
+    callback: (snapshots: PluginWorktreeSnapshot[]) => void
+  ): Promise<() => void>;
+
+  // Agent observation — gated on the `agent:read` capability
+  getAgentState(): Promise<PluginAgentSnapshot | null>;
+  onDidChangeAgentState(callback: (snapshot: PluginAgentSnapshot) => void): Promise<() => void>;
 
   // Forge / file-decoration providers
-  registerForgeProvider(descriptor: ForgeProviderDescriptor, impl: ForgeProviderImpl): () => void;
+  registerForgeProvider(
+    descriptor: ForgeProviderDescriptor,
+    impl: ForgeProviderImpl
+  ): Promise<() => void>;
   registerFileDecorationProvider(
     descriptor: FileDecorationProviderDescriptor,
     impl: FileDecorationProviderImpl
-  ): () => void;
-  invalidateFileDecorations(scope: string, paths?: string[]): void;
+  ): Promise<() => void>;
+  invalidateFileDecorations(scope: string, paths?: string[]): Promise<void>;
+
+  // Panel title-chrome badge
+  setPanelBadge(panelId: string, badge: PluginPanelBadge | null): Promise<void>;
 
   // Action dispatch + catalog
   dispatch(actionId: ActionId, args?: unknown): Promise<ActionDispatchResult>;
@@ -102,7 +116,17 @@ interface PluginHostApi {
 
 The authoritative definition is in `shared/types/plugin.ts` in the Daintree repo.
 
-The revoke-guarded methods — `registerAction`, `registerHandler`, `broadcastToRenderer`, `registerForgeProvider`, `registerFileDecorationProvider`, `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, and `settings.onDidChange` — must be called during `activate()` and throw once the host is revoked. Subscribing counts as an activation-window operation even though the callback fires later: register all your subscriptions during `activate()`, then react to them for the plugin's lifetime. `postToPanel`, `getActiveWorktree`, `getWorktrees`, `getWorktreeStatus`, `invalidateFileDecorations`, `showToast`, `dispatch`, `process.spawn`, `fs.*`, `git.*`, `settings.get`/`settings.set`, and `logger` are deliberately NOT revoke-guarded: plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op (or, for `process.spawn`/`fs.*`/`git.*`, a rejection) after unload. This split is the load-bearing distinction between the activation-window registration surface and the live runtime surface — `postToPanel` is the canonical post-activation push: a plugin's `activate()` subscribes once (revoke-guarded `registerHandler`/worktree subscriptions), then streams live data into its panels with `postToPanel` for the rest of its lifetime.
+Nearly every host method now returns a Promise — the API became fully async in the move to the out-of-process worker model, so `registerAction`, `postToPanel`, `setPanelBadge`, and the rest resolve `Promise<void>`, and the subscription methods resolve `Promise<() => void>`. Always `await` a registration before assuming it took effect, and `await` the subscription methods to get the disposer. The synchronous `logger` accessor is the lone exception — its `info`/`warn`/`error` calls return `void`.
+
+The revoke-guarded methods — `registerAction`, `registerHandler`, `broadcastToRenderer`, `registerForgeProvider`, `registerFileDecorationProvider`, `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, and `settings.onDidChange` — must be called during `activate()` and throw once the host is revoked. Subscribing counts as an activation-window operation even though the callback fires later: register all your subscriptions during `activate()`, then react to them for the plugin's lifetime. `postToPanel`, `setPanelBadge`, `getActiveWorktree`, `getWorktrees`, `getWorktreeStatus`, `getAgentState`, `invalidateFileDecorations`, `showToast`, `dispatch`, `sendToActiveAgent`, `process.spawn`, `fs.*`, `git.*`, `settings.get`/`settings.set`, and `logger` are deliberately NOT revoke-guarded: plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op (or, for `process.spawn`/`fs.*`/`git.*`, a rejection) after unload. This split is the load-bearing distinction between the activation-window registration surface and the live runtime surface — `postToPanel` is the canonical post-activation push: a plugin's `activate()` subscribes once (revoke-guarded `registerHandler`/worktree subscriptions), then streams live data into its panels with `postToPanel` for the rest of its lifetime.
+
+**Where validation errors surface.** The two groups report errors differently. A revoke-guarded activation-window method (`registerAction`, `registerHandler`, the subscriptions) throws synchronously at the call site on a bad descriptor or a revoked host — wrap the `activate()` body in `try`/`catch` if you want to handle it. The post-activation runtime-surface methods (`postToPanel`, `setPanelBadge`, `invalidateFileDecorations`, `broadcastToRenderer` on an invalid channel) instead reject the returned Promise rather than throwing synchronously, so handle their validation errors with `await` + `.catch()`:
+
+```ts
+await host.postToPanel("build-status", status).catch((err) => host.logger.error(String(err)));
+```
+
+A liveness no-op (the plugin already unloaded) still resolves cleanly — only a genuine validation error (empty channel, malformed badge shape) rejects.
 
 This split is encoded in the type surface, not just in prose: the revoke-guarded host methods are factored into a `PluginActivationApi` sub-interface that `PluginHostApi extends` (`settings.onDidChange` stays on `SettingsApi`, since the `settings` accessor itself is post-activation-safe). Each revoke-guarded method also carries a `@throws` JSDoc tag describing the revoke condition, so it shows up on hover in your editor. The `host` passed to `activate()` stays typed as the full `PluginHostApi` (every method is callable during activation); `PluginActivationApi` is exported from `@daintreehq/plugin-sdk` for the narrower case where you want a helper to accept only the registration window and have the post-activation methods be statically absent.
 
@@ -134,14 +158,13 @@ host.registerAction(
 registerAction(
   descriptor: PluginActionContribution,
   handler: ActionHandler
-): void;
+): Promise<void>;
 ```
 
 **Rules:**
 
 - `descriptor.id` must NOT include the plugin prefix — Daintree adds it. The above registers as `acme.linear-planner.plan-from-issue` at runtime (assuming your plugin is `acme.linear-planner`).
 - `descriptor.danger` accepts `"safe"` or `"confirm"`. `"restricted"` is reserved for Daintree's internal use and rejected.
-- Agents invoking a `"confirm"` action must include `{ confirmed: true }` in the dispatch options, per the [action system](../architecture/action-system.md).
 - Calling `registerAction` with a previously-registered ID replaces the existing registration.
 
 Unregistered automatically on plugin unload.
@@ -204,7 +227,9 @@ usePluginEvent<BuildStatus>(pluginId, "build-status", (status) => {
 });
 ```
 
-`postToPanel` is the post-activation sibling of `broadcastToRenderer`: it fans out over the exact same `plugin:{pluginId}:{channel}` transport, but unlike the revoke-guarded activation broadcast it stays callable for the plugin's whole lifetime. Use `broadcastToRenderer` for a one-shot push during `activate()`; use `postToPanel` for everything pushed afterward (the common case). `channel` must be a non-empty string without colons — an invalid channel throws so authoring mistakes surface loudly. It is membership-gated, not revoke-guarded: once the plugin is unloaded it becomes a silent no-op. There is no delivery acknowledgement — it is fire-and-forget; a panel that isn't mounted simply doesn't receive the payload. This is the push half of the renderer SDK; the pull half is `useHostChannel` (request/response over `registerHandler`).
+`postToPanel` is the post-activation sibling of `broadcastToRenderer`: it fans out over the exact same `plugin:{pluginId}:{channel}` transport, but unlike the revoke-guarded activation broadcast it stays callable for the plugin's whole lifetime. Use `broadcastToRenderer` for a one-shot push during `activate()`; use `postToPanel` for everything pushed afterward (the common case). `channel` must be a non-empty string without colons — an invalid channel rejects the returned Promise so authoring mistakes surface loudly (catch it with `await … .catch()`). It is membership-gated, not revoke-guarded: once the plugin is unloaded it becomes a silent no-op. There is no delivery acknowledgement — it is fire-and-forget; a panel that isn't mounted simply doesn't receive the payload. This is the push half of the renderer SDK; the pull half is `useHostChannel` (request/response over `registerHandler`).
+
+**Targeting a single panel instance.** `postToPanel(channel, payload, panelId?)` takes an optional third argument. Omit it (or pass `null`) to broadcast to every open instance of the panel kind — every renderer subscribed via `window.electron.plugin.on(pluginId, channel, …)` / `usePluginEvent` receives the payload. Pass a non-empty `panelId` string to target one instance: only the renderer subscribed via `window.electron.plugin.onPanel(pluginId, channel, panelId, …)` (or the SDK's `usePluginPanelEvent`) receives it, so two open instances of the same panel kind no longer both get every push. An empty-string `panelId` is rejected. Inside a bundled view, `usePluginEvent` already filters to its own `panelId` automatically; the raw `plugin.onPanel(pluginId, channel, panelId, callback)` bridge requires you to pass the `panelId` explicitly.
 
 ## Worktree observation
 
@@ -220,8 +245,8 @@ if (active) {
 // All worktrees across all projects
 const all = await host.getWorktrees();
 
-// Subscribe to changes
-const dispose = host.onDidChangeActiveWorktree((snapshot) => {
+// Subscribe to changes (await the disposer — the subscription methods are async)
+const dispose = await host.onDidChangeActiveWorktree((snapshot) => {
   if (snapshot) console.log(`Active worktree changed: ${snapshot.name}`);
 });
 
@@ -310,7 +335,7 @@ Returns the same `PluginWorktreeStatus` carried on `PluginWorktreeSnapshot.statu
 Binds a runtime `ForgeProviderImpl` to a descriptor declared in `contributes.forgeProviders`.
 
 ```ts
-const dispose = host.registerForgeProvider({ id: "linear", name: "Linear" }, impl);
+const dispose = await host.registerForgeProvider({ id: "linear", name: "Linear" }, impl);
 ```
 
 **Rules:**
@@ -327,11 +352,11 @@ For the end-to-end walkthrough — manifest entry, implementing `ForgeProviderIm
 Binds a runtime `FileDecorationProviderImpl` to a descriptor declared in `contributes.fileDecorationProviders`.
 
 ```ts
-const dispose = host.registerFileDecorationProvider({ id: "linear-status" }, impl);
+const dispose = await host.registerFileDecorationProvider({ id: "linear-status" }, impl);
 
 // Later, from a subscription callback or timer. `scope` must match one of the
 // provider's manifest-declared `scopes` (e.g. "worktree-diff:*"):
-host.invalidateFileDecorations("worktree-diff:main", ["src/foo.ts"]);
+await host.invalidateFileDecorations("worktree-diff:main", ["src/foo.ts"]);
 ```
 
 **Rules:**
@@ -406,8 +431,8 @@ const token = await host.settings.get<string>("linear.apiToken");
 // Update
 await host.settings.set("linear.defaultTeam", "engineering");
 
-// Subscribe to changes
-const dispose = host.settings.onDidChange("linear.apiToken", (newValue) => {
+// Subscribe to changes (await the disposer)
+const dispose = await host.settings.onDidChange("linear.apiToken", (newValue) => {
   reconnect(newValue);
 });
 ```
@@ -430,6 +455,8 @@ await host.storage.set("draft", text, "worktree");
 ```
 
 Three scopes — `"user"` (default), `"project"`, `"worktree"` — stored as plaintext JSON at `~/.daintree/plugin-storage/{pluginId}.json`, `<projectRoot>/.daintree/plugin-storage/{pluginId}.json`, or `<worktreePath>/.daintree/plugin-storage/{pluginId}.json` (`chmod 0o600` on POSIX). **No secret encryption — never store credentials here** (use a `type: "secret"` setting for those). The `"project"` / `"worktree"` scopes resolve the active project / worktree at call time: `get` and `delete` are a no-op (returning `undefined` / void) and `set` throws when no project / worktree is active. `set` rejects `undefined` and non-JSON-serializable values. `onDidChange(key, cb, scope?)` fires on in-process writes only and is the one revoke-guarded member — subscribe during `activate()`. The rest of `storage` is NOT revoke-guarded.
+
+**Reads stay fresh across a scope switch.** Storage is read through a per-path cache, but the host keeps it coherent for you. When the active worktree changes, the host invalidates the cache for `"worktree"`-scoped entries, so the next `get` reads the new worktree's file rather than a stale value. `"project"` scope is implicitly fresh — a different project resolves to a different file path, hence a different cache entry — and `"user"` scope is process-global and never evicted. You never have to manage cache invalidation yourself.
 
 ## `showToast`
 
@@ -571,7 +598,30 @@ const result = await window.electron.plugin.invoke(pluginId, "sync-now", { team:
 
 Anything that takes a callback and returns a cleanup function follows the VS Code-style Disposable pattern. You can safely ignore the return value — the plugin's disposal cascade cleans everything up on unload. If you need explicit control (e.g., unsubscribe from a worktree change listener after a one-shot reaction), keep the reference and call it.
 
+**Throwing listeners are quarantined.** A listener callback you pass to `onDidChangeAgentState`, `storage.onDidChange`, or `settings.onDidChange` runs inside the host's event dispatch. If it throws (synchronously or by rejecting), the host logs the failure with a running counter (`1/3`, `2/3`, …) and keeps the subscription alive. After three _consecutive_ failures it auto-unsubscribes the listener so a broken or adversarial callback can't spam the log forever. A single successful invocation resets the counter to zero, so a listener that fails only intermittently is never removed. Dispatch is fire-and-forget — a throw never propagates back into the host's own work or another plugin's listeners.
+
 See [Architecture → Lifecycle](./architecture.md#lifecycle) for how disposal works internally.
+
+## Testing against a mock host
+
+`createMockHost` (in-repo at `shared/testing/createMockHost.ts`) returns a `PluginHostApi` that mirrors production validation and capability gating, so a unit test can run your `activate()` (and your handlers) against a faithful host and assert what it called. It validates the same things the real host does — `showToast` message/type/`durationMs` bounds, `setPanelBadge` shape, `postToPanel`/`broadcastToRenderer` channel format, and `showQuickPick` item arrays — so a malformed call fails the test the way it would fail in the app.
+
+```ts
+import { createMockHost } from "../../shared/testing/createMockHost";
+
+const host = createMockHost({ capabilities: ["agent:read"], hasActiveAgent: false });
+await activate(host);
+
+// Recorded calls are exposed for assertions:
+expect(host.registeredActions).toHaveLength(1);
+expect(host.postToPanelCalls[0]).toMatchObject({ channel: "build-status" });
+
+// Capability gating matches production: getAgentState needs `agent:read`,
+// sendToActiveAgent needs `agent:input`.
+await expect(host.sendToActiveAgent("hi")).rejects.toThrow(/PERMISSION_REQUIRED/);
+```
+
+Pass `capabilities` to restrict the declared capability set (the default is permissive — `agent:read` + `agent:input`) and assert the `PERMISSION_REQUIRED` rejection a plugin missing one would hit; pass `hasActiveAgent: false` to assert the `NO_ACTIVE_AGENT` rejection from `sendToActiveAgent`. The recording arrays (`registeredActions`, `registeredHandlers`, `postToPanelCalls`, `shownToasts`, `setPanelBadgeCalls`, `showQuickPickCalls`, and the rest) capture every host call in order.
 
 ## What's not exposed
 

@@ -86,6 +86,8 @@ If a manifest-declared command has no matching `src/{id}.{ext}` file and no impe
 
 **Collision rule:** a command whose resolved `{pluginId}.{id}` matches a built-in Daintree action id is rejected at load with a provenance `loadError` — the command does not register. Pick a different id.
 
+**Duplicate ids within an array** are rejected at manifest validation (`duplicate_contribution_id`). The bare `id` is the registry key for every contribution array — `panels`, `toolbarButtons`, `commands`, `views`, `mcpServers`, `forgeProviders`, `fileDecorationProviders`, `agents`, and `settings` — so two entries with the same id in the same array would silently first-win at load. The check is per-array: ids in different arrays are namespaced independently and never collide.
+
 ## Panels — _Shipped_
 
 Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, browser panels, etc.). A plugin panel is a React component the user can open, tile, and close like any other panel.
@@ -147,7 +149,7 @@ Views are the React components that render inside a panel. A view binds to a pan
 }
 ```
 
-**Pairing with `contributes.panels`** — a view binds to a panel by matching its bare `id` (pre-namespace) to a panel `id`. A view with no matching panel logs a warning and is skipped. A view targeting a panel with `hasPty: true` is also skipped — PTY panels render through `TerminalPane` and cannot host a plugin module.
+**Pairing with `contributes.panels`** — a view binds to a panel by matching its bare `id` (pre-namespace) to a panel `id`. A view whose `id` matches no panel is rejected at manifest validation (`view_panel_ref_unknown`) — it would otherwise never render, so it's a hard load error rather than a silent runtime skip. A view targeting a panel with `hasPty: true` is skipped — PTY panels render through `TerminalPane` and cannot host a plugin module.
 
 **Fields:**
 
@@ -164,7 +166,7 @@ Views are the React components that render inside a panel. A view binds to a pan
 
 **Component contract:**
 
-> **Mixed availability.** `useHostChannel` and `usePluginEvent` (see [Host API → React hooks](./host-api.md#react-hooks)) resolve **only when your view is bundled with `@daintreehq/plugin-vite`** — the preset bundles the SDK into your plugin output, so the hooks ship inside your bundle rather than resolving through the host import map. The import map serves only React specifiers; a **raw, un-bundled `plugin://` view** that bare-imports `@daintreehq/plugin-sdk/react` fails at runtime with an unresolved specifier. For a hand-authored view without the build preset, subscribe through the `window.electron.plugin.on(pluginId, channel, cb)` / `.invoke(pluginId, channel, …args)` bridge directly — the same bridge the hooks wrap (the raw-ESM example follows the bundled one below). `useWorktree` / `useWorktrees` / `useSetting` / `useCommand` are still **Planned (F15/F36)** and resolve to nothing in v1; until they ship, read worktree context and settings through the `host` API passed to `activate()` and push it into the panel via `postToPanel`.
+> **Mixed availability.** `useHostChannel`, `usePluginEvent`, and `usePluginPanelEvent` (see [Host API → React hooks](./host-api.md#react-hooks)) resolve **only when your view is bundled with `@daintreehq/plugin-vite`** — the preset bundles the SDK into your plugin output, so the hooks ship inside your bundle rather than resolving through the host import map. The import map serves only React specifiers; a **raw, un-bundled `plugin://` view** that bare-imports `@daintreehq/plugin-sdk/react` fails at runtime with an unresolved specifier. For a hand-authored view without the build preset, subscribe through the `window.electron.plugin.on(pluginId, channel, cb)` / `.invoke(pluginId, channel, …args)` bridge directly — the same bridge the hooks wrap (the raw-ESM example follows the bundled one below). `useWorktree` / `useWorktrees` / `useSetting` / `useCommand` are still **Planned (F15/F36)** and resolve to nothing in v1; until they ship, read worktree context and settings through the `host` API passed to `activate()` and push it into the panel via `postToPanel`.
 
 ```tsx
 // src/dashboard.tsx
@@ -219,7 +221,7 @@ export default function Dashboard(props) {
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `panelId` | `string` | Opaque runtime id of the panel instance. Useful as a key for plugin-local panel-scoped state. |
+| `panelId` | `string` | Runtime id of this panel instance. Useful as a key for plugin-local panel-scoped state, and the routing key for per-instance pushes: the plugin's main side targets one instance with `host.postToPanel(channel, payload, panelId)` (omit or pass `null` to broadcast to every instance of the kind). To receive only the targeted pushes, subscribe with `usePluginPanelEvent(pluginId, channel, panelId, cb)` (or raw `plugin.onPanel(pluginId, channel, panelId, cb)`) and pass this prop. `usePluginEvent` / `plugin.on` receive broadcast pushes, not per-instance ones. |
 | `pluginId` | `string` | The plugin's manifest `name`. Stable for the lifetime of the host — useful for namespacing storage keys and log lines. |
 | `disposeSignal` | `AbortSignal` | Aborts on unmount and when the host receives a `plugin:panel-kinds-changed` push that omits this kind. The broadcast fires before main tears down plugin IPC handlers, so signal-driven cleanup runs while host APIs are still live. |
 | `initialArgs` | `Record<string, unknown>` \| `undefined` | The argument bag the panel was spawned with — set when the panel is opened via the `panel.openPluginPanel` action's `initialArgs` (e.g. dispatched from a context menu with a file path). It rides the panel's save/restore-surviving extension state, so a restored panel sees the same args it was spawned with. `undefined` when the panel was opened without args. |
@@ -422,9 +424,11 @@ Declares Model Context Protocol servers the plugin ships. The manifest key is `m
 | `name` | yes | Display name. |
 | `command` | yes | Executable — `node`, `python`, `npx`, or an absolute path. |
 | `args` | no | Argv after the command. |
-| `env` | no | Environment variables. Values can reference settings with `${settings:settingId}` syntax. |
+| `env` | no | Environment variables. Values can reference settings with `${settings:settingId}` syntax — the id must name a declared `contributes.settings[].id`, else the manifest is rejected at parse time (`settings_token_unknown`; a malformed token shape is `settings_token_malformed`). The same validation applies to `${settings:*}` tokens in `command` and `args`. |
 
 Daintree supervises the process: lazy spawn on first tool use, hard kill on Daintree exit, and on an unexpected crash it transitions the server to `crashed` and rejects pending and subsequent tool calls until an explicit manual restart — there is no automatic retry or backoff. The plugin's tools are exposed to any agent running in Daintree through the same MCP surface user-configured MCP servers use.
+
+**Secret rotation auto-restart:** when a **user-scope** setting changes, every currently running server (status `ready` or `crashed`) that references it via `${settings:settingId}` in its `command`, `args`, or `env` is automatically restarted so the new value is folded in at the next spawn. The restart is debounced ~1s, so a burst of edits coalesces into one respawn. Servers that were never lazily started stay stopped — a settings change never eagerly boots a server.
 
 Tool use is gated by a consent/permission/audit subsystem (`electron/services/plugin-mcp/` — `PluginMcpConsentService`, `PluginMcpTierAuth`, `PluginMcpAuditService`, `PluginMcpConsentStore`): inbound tool calls are checked against per-server permission tiers, prompt for consent when required, and are recorded to an audit log. Discovery is lazy and two-tier — a cheap tool list first, full schemas fetched on demand.
 
@@ -511,8 +515,8 @@ Registers a forge backend — issues, pull/merge requests, reviews, CI roll-up, 
 | `matches` | yes | List of exact hostnames. The host extracts the hostname from the project's git remote (HTTPS/SSH/SCP-form URLs handled), lowercases and trims it, then matches for **exact string equality** — no glob, wildcard, or suffix matching. List every distinct hostname your forge serves as a separate entry. First matching provider wins. |
 | `capabilities` | no | Informational hints driving the Preferences "supports: …" display only; the host does not interpret them. Behavior gates on whether the runtime capability field is present. |
 | `credentialFields` | no | Array of `{ id, label, type, placeholder?, helpText? }` declaring the auth fields this provider needs. Drives the generated credential form in Preferences → Forge Integrations. |
-| `settingsScopeRef` | no | ID prefix in this plugin's `settings` contributions, used to group provider settings. |
-| `viewRefs` | no | IDs of `views` contributions shown under this provider's panel section. |
+| `settingsScopeRef` | no | A declared `contributes.settings[].id`, used to group provider settings. Validated at manifest parse time — a dangling ref is rejected (`forge_settings_scope_ref_unknown`). |
+| `viewRefs` | no | IDs of `views` contributions shown under this provider's panel section. Each must resolve to a declared `contributes.views[].id`, else the manifest is rejected (`forge_view_ref_unknown`). |
 
 The manifest entry is read eagerly so the provider populates Preferences and the remote-routing table before any plugin code runs; the implementation binds lazily in `activate()` via [`registerForgeProvider`](./host-api.md#registerforgeprovider). For the end-to-end walkthrough — implementing `ForgeProviderImpl`, state normalization, capabilities, and tests — see [Implementing a forge provider](./forge-provider.md).
 
@@ -590,11 +594,20 @@ Teaches Daintree about a launchable agent CLI it doesn't ship in-tree, so the CL
 | `iconId` | yes | Icon id used for the agent. |
 | `supportsContextInjection` | no | Whether copy-tree context injection targets this agent. Defaults to `false`. |
 
-A plugin agent is launchable and selectable as a named entry in the effective registry. It launches as a named terminal; Daintree does not track its working/waiting state.
+A plugin agent is launchable and selectable as a named entry in the effective registry. It launches as a named terminal. Without a `detection` block it runs as a plain named terminal whose working/waiting state Daintree doesn't track; declare `detection` (below) to wire it into the agent-state UI like a built-in agent.
 
-`command` and `args` support the same `${settings:settingId}` syntax as MCP servers — e.g. `"args": ["--token", "${settings:apiToken}"]`. Templates resolve at spawn time against the plugin's **user-scope** setting with that ID (project scope is never read). If a referenced setting is unset, the launch fails with a clear error rather than spawning the agent with a literal `${settings:…}` (or a silently blanked value) on its command line — so a missing credential surfaces as a spawn error instead of an opaque auth failure inside the agent.
+`command` and `args` support the same `${settings:settingId}` syntax as MCP servers — e.g. `"args": ["--token", "${settings:apiToken}"]`. Templates resolve at spawn time against the plugin's **user-scope** setting with that ID (project scope is never read). If a referenced setting is unset, the launch fails with a clear error rather than spawning the agent with a literal `${settings:…}` (or a silently blanked value) on its command line — so a missing credential surfaces as a spawn error instead of an opaque auth failure inside the agent. Unlike MCP server tokens, `${settings:*}` tokens in agent `command`/`args` are **not** validated at manifest parse time — an undeclared setting id only surfaces as a spawn-time error, not a load error.
 
-Output-pattern detection is **not part of the 1.0 plugin schema** — the live PTY matcher is owned by built-in agents only. A manifest that declares a `detection` block on an agent contribution is rejected at validation (unknown key), so the plugin fails to load loudly rather than carrying a field that never runs.
+**Output-pattern detection** is supported (#10587). An optional `detection` block on an agent contribution lets the plugin describe its working/waiting/completed states with regex patterns and confidence weights, so the agent joins the same agent-state UI as built-in agents instead of running as an untracked named terminal. The block is `strict` — a typo'd field is a loud manifest error.
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `primaryPatterns` | yes | Non-empty array of regex strings (each must compile) that mark the agent as working. A `detection` block with no `primaryPatterns` is rejected. |
+| `fallbackPatterns` / `bootCompletePatterns` / `promptPatterns` / `promptHintPatterns` / `completionPatterns` | no | Additional regex arrays for the corresponding detection tiers. |
+| `scanLineCount` / `promptScanLineCount` | no | Integer line-window bounds (1–1000) for the matcher. |
+| `debounceMs` / `promptFastPathMinQuietMs` | no | Integer millisecond timings (0–600000). |
+| `primaryConfidence` / `fallbackConfidence` / `promptConfidence` / `completionConfidence` | no | Confidence weights in `[0, 1]` for a matched tier. |
+| `titleStatePatterns` | no | `{ working, waiting }` string arrays (≤50 entries, each ≤256 chars) matched against the terminal title. |
 
 ## What's missing and why
 
