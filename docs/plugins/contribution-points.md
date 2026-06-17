@@ -46,11 +46,11 @@ Commands are callable actions that appear in the command palette and can be boun
 
 **Handler binding — two ways:**
 
-_Filesystem convention (manifest-declared, lazy import):_ a command with id `plan-from-issue` looks for `src/plan-from-issue.{ts,tsx,js,mjs}` (probed in that order) under your plugin directory. Its default export is the handler. The module is **not** imported until the command is first dispatched — twenty manifest commands cost zero activation time.
+_Filesystem convention (manifest-declared, lazy import):_ a command with id `plan-from-issue` looks for `src/plan-from-issue.{js,mjs}` (probed in that order) under your plugin directory. Its default export is the handler. The module is **not** imported until the command is first dispatched — twenty manifest commands cost zero activation time. The handler must be shipped as JavaScript: `.ts`/`.tsx` files are not probed (a `.ts` handler appears to work under Node's type-stripping but throws at first dispatch on any non-erasable syntax, and `.tsx` never runs) — author in TypeScript and compile to `src/{id}.js`, or register the command imperatively.
 
-```ts
-// src/plan-from-issue.ts
-export default async function planFromIssue(args: { issue: number }) {
+```js
+// src/plan-from-issue.js
+export default async function planFromIssue(args) {
   // handler body
 }
 ```
