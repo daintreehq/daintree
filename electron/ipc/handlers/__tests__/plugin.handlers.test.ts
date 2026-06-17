@@ -13,6 +13,7 @@ const mockCheckForUpdate = vi.fn();
 const mockListPluginActions = vi.fn();
 const mockRegisterPluginAction = vi.fn();
 const mockUnregisterPluginAction = vi.fn();
+const mockActivatePluginForView = vi.fn();
 
 vi.mock("../../../services/PluginService.js", () => ({
   pluginService: {
@@ -25,6 +26,7 @@ vi.mock("../../../services/PluginService.js", () => ({
     listPluginActions: (...args: unknown[]) => mockListPluginActions(...args),
     registerPluginAction: (...args: unknown[]) => mockRegisterPluginAction(...args),
     unregisterPluginAction: (...args: unknown[]) => mockUnregisterPluginAction(...args),
+    activatePluginForView: (...args: unknown[]) => mockActivatePluginForView(...args),
     // No-op for tests that don't care about implicit activation; the IPC
     // handler awaits it before resolving the impl set.
     activatePluginsForFileDecorationScope: vi.fn().mockResolvedValue(undefined),
@@ -297,6 +299,22 @@ describe("registerPluginHandlers", () => {
       ...args: unknown[]
     ) => unknown;
   }
+
+  it("PLUGIN_ACTIVATE_FOR_VIEW forwards the activation result to the renderer (#10618)", async () => {
+    // Success: the plain { ok: true } result flows straight back so the renderer
+    // proceeds to import the view module.
+    mockActivatePluginForView.mockResolvedValueOnce({ ok: true });
+    const handler = getHandler("plugin:activate-for-view");
+    const ok = await handler({}, "acme.demo.viewer");
+    expect(mockActivatePluginForView).toHaveBeenCalledWith("acme.demo.viewer");
+    expect(ok).toEqual({ ok: true });
+
+    // Failure: the { ok: false, error } result is propagated verbatim (a plain
+    // object, never a thrown Error) so PluginViewHost can surface the real cause.
+    mockActivatePluginForView.mockResolvedValueOnce({ ok: false, error: "activate-boom" });
+    const failed = await handler({}, "acme.demo.viewer");
+    expect(failed).toEqual({ ok: false, error: "activate-boom" });
+  });
 
   it("PLUGIN_INSTALL_FROM_FILE returns cancelled when the picker is dismissed", async () => {
     mockShowOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });

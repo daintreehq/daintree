@@ -694,6 +694,29 @@ export interface PluginLoadError {
   at: number;
 }
 
+/**
+ * Outcome of an implicit panel-view activation (`plugin:activate-for-view`).
+ * Returned as a plain discriminated object — never a thrown `Error` — so the
+ * discriminant and message survive the contextBridge crossing intact (#6116:
+ * custom `Error` properties are stripped a second time on deserialize). The
+ * renderer throws renderer-side from `{ ok: false }` so the real activation
+ * cause reaches the view's ErrorBoundary instead of a generic import timeout.
+ */
+export type PluginActivationResult = { ok: true } | { ok: false; error: string; stack?: string };
+
+/**
+ * Wire envelope for every push over the `plugin:{pluginId}:{channel}` transport
+ * (`host.broadcastToRenderer`, `host.postToPanel`, and the managed-process
+ * stream). `panelId` carries the per-instance target: `null` is a broadcast to
+ * every subscriber of `(pluginId, channel)`, a non-empty string targets only
+ * the panel instance with that id. The preload `plugin.on` / `plugin.onPanel`
+ * dispatcher unwraps `payload` before handing it to the subscriber.
+ */
+export interface PluginPanelEventEnvelope {
+  panelId: string | null;
+  payload: unknown;
+}
+
 export interface PluginUpdateAvailable {
   version: string;
   channel: "manual";
@@ -1647,8 +1670,15 @@ export interface PluginHostApi extends PluginActivationApi {
    * so it becomes a silent no-op once the plugin is unloaded. `channel` must be
    * a non-empty string without colons (the namespace separator); an invalid
    * channel throws so authoring mistakes surface loudly.
+   *
+   * Pass `panelId` to target a single panel instance — only the renderer
+   * subscribed via `window.electron.plugin.onPanel(pluginId, channel, panelId,
+   * …)` (or the SDK's `usePluginPanelEvent`) receives it, so multiple open
+   * instances of the same panel kind no longer all receive every push. Omit it
+   * (or pass `null`) to broadcast to every `plugin.on` / `usePluginEvent`
+   * subscriber as before. An empty-string `panelId` throws.
    */
-  postToPanel(channel: string, payload: unknown): Promise<void>;
+  postToPanel(channel: string, payload: unknown, panelId?: string | null): Promise<void>;
   /**
    * Returns the currently-active worktree (`isCurrent === true`) across all
    * projects as a frozen snapshot, or `null` if none is active. In multi-project

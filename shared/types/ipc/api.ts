@@ -1630,7 +1630,26 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     getDroppedFilePath(file: File): string;
     invoke(pluginId: string, channel: string, ...args: unknown[]): Promise<unknown>;
+    /**
+     * Subscribe to broadcast pushes for `(pluginId, channel)` — every
+     * `host.postToPanel(channel, payload)` (no panelId) and
+     * `host.broadcastToRenderer` push. Returns a cleanup. Per-instance pushes
+     * (`postToPanel(channel, payload, panelId)`) are delivered via {@link onPanel}.
+     */
     on(pluginId: string, channel: string, callback: (payload: unknown) => void): () => void;
+    /**
+     * Subscribe to per-instance pushes for `(pluginId, channel)` targeted at a
+     * single `panelId` via `host.postToPanel(channel, payload, panelId)` (#10618),
+     * so sibling instances of the same panel kind don't receive each other's
+     * pushes. Broadcast pushes (no panelId) are NOT delivered here — use
+     * {@link on} for those. Returns a cleanup.
+     */
+    onPanel(
+      pluginId: string,
+      channel: string,
+      panelId: string,
+      callback: (payload: unknown) => void
+    ): () => void;
     /** Subscribe to plugin-action registry changes. Returns a cleanup. */
     onActionsChanged(
       callback: (payload: { actions: import("../plugin.js").PluginActionDescriptor[] }) => void

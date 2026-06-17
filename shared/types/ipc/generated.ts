@@ -725,7 +725,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "plugin:activate-for-view": {
     args: [panelKindId: string];
-    result: void;
+    result: import("../plugin.js").PluginActivationResult;
   };
   "plugin:agents-get": {
     args: [];

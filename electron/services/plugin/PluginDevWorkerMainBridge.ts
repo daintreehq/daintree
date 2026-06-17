@@ -570,7 +570,7 @@ export class PluginDevWorkerMainBridge {
       }
       case "postToPanel": {
         const p = params as PostToPanelParams;
-        await this.host.postToPanel(p.channel, p.payload);
+        await this.host.postToPanel(p.channel, p.payload, p.panelId);
         return;
       }
       case "invalidateFileDecorations": {

@@ -3843,7 +3843,7 @@ type CreateHostShape = (pluginId: string) => {
       typedHandler?: (...args: unknown[]) => unknown
     ) => void;
     broadcastToRenderer: (channel: string, payload: unknown) => void;
-    postToPanel: (channel: string, payload: unknown) => Promise<void>;
+    postToPanel: (channel: string, payload: unknown, panelId?: string | null) => Promise<void>;
     setPanelBadge: (panelId: string, badge: unknown) => Promise<void>;
     invalidateFileDecorations: (scope: string, paths?: string[]) => Promise<void>;
     registerForgeProvider: (descriptor: { id: string }, impl: unknown) => () => void;
@@ -3883,8 +3883,11 @@ describe("createHost (plugin activation API)", () => {
 
     broadcastToRendererMock.mockClear();
     host.broadcastToRenderer("status", { ok: true });
+    // Wrapped in the per-instance envelope (panelId: null = broadcast) so the
+    // preload dispatcher sees the same shape for every push over this transport.
     expect(broadcastToRendererMock).toHaveBeenCalledWith("plugin:acme.bcast-test:status", {
-      ok: true,
+      panelId: null,
+      payload: { ok: true },
     });
   });
 
@@ -3956,8 +3959,51 @@ describe("createHost (plugin activation API)", () => {
     host.postToPanel("tick", { count: 3 });
     // Same transport as the renderer-side window.electron.plugin.on subscription
     // (`plugin:${pluginId}:${channel}`), so a subscribed panel receives the push.
+    // No panelId → broadcast envelope (panelId: null).
     expect(broadcastToRendererMock).toHaveBeenCalledWith("plugin:acme.post-test:tick", {
-      count: 3,
+      panelId: null,
+      payload: { count: 3 },
+    });
+  });
+
+  it("host.postToPanel targets a single instance when given a panelId", async () => {
+    await writePlugin("post-target", { name: "acme.post-target", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.post-target"
+    );
+
+    broadcastToRendererMock.mockClear();
+    host.postToPanel("tick", { count: 7 }, "panel-a");
+    // The panelId rides in the envelope so the preload dispatcher fans out only
+    // to the onPanel("panel-a") subscriber, not to sibling instances (#10618).
+    expect(broadcastToRendererMock).toHaveBeenCalledWith("plugin:acme.post-target:tick", {
+      panelId: "panel-a",
+      payload: { count: 7 },
+    });
+  });
+
+  it("host.postToPanel rejects an empty-string panelId", async () => {
+    await writePlugin("post-bad-panel", { name: "acme.post-bad-panel", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.post-bad-panel"
+    );
+
+    broadcastToRendererMock.mockClear();
+    // An empty string would silently match no subscriber — surface it loudly
+    // rather than coercing to a broadcast.
+    expect(() => host.postToPanel("tick", { n: 1 }, "")).toThrow(/postToPanel: panelId/);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    // null is an explicit broadcast and must NOT throw.
+    expect(() => host.postToPanel("tick", { n: 2 }, null)).not.toThrow();
+    expect(broadcastToRendererMock).toHaveBeenCalledWith("plugin:acme.post-bad-panel:tick", {
+      panelId: null,
+      payload: { n: 2 },
     });
   });
 
@@ -3979,7 +4025,8 @@ describe("createHost (plugin activation API)", () => {
     broadcastToRendererMock.mockClear();
     expect(() => host.postToPanel("tick", { n: 1 })).not.toThrow();
     expect(broadcastToRendererMock).toHaveBeenCalledWith("plugin:acme.post-postact:tick", {
-      n: 1,
+      panelId: null,
+      payload: { n: 1 },
     });
   });
 
@@ -8764,8 +8811,10 @@ describe("Deferred activation — activatePlugin", () => {
       expect((globalThis as Record<string, unknown>).__viewOwnerActivated).toBeUndefined();
 
       // Opening the contributed panel view (kind id `${pluginId}.${panel.id}`)
-      // triggers first-use activation.
-      await service.activatePluginForView("acme.view-owner.viewer");
+      // triggers first-use activation and reports success (#10618).
+      await expect(service.activatePluginForView("acme.view-owner.viewer")).resolves.toEqual({
+        ok: true,
+      });
       expect((globalThis as Record<string, unknown>).__viewOwnerActivated).toBe(true);
     } finally {
       delete (globalThis as Record<string, unknown>).__viewOwnerActivated;
@@ -8807,10 +8856,13 @@ describe("Deferred activation — activatePlugin", () => {
       const service = new PluginService(tmpDir);
       await service.initialize();
 
-      // Unknown kind id — and a non-matching bare id — must not activate anything.
-      await service.activatePluginForView("acme.view-noop.nope");
-      await service.activatePluginForView("viewer");
-      await service.activatePluginForView("");
+      // Unknown kind id — and a non-matching bare id — must not activate
+      // anything, and report ok (nothing to activate; #10618).
+      await expect(service.activatePluginForView("acme.view-noop.nope")).resolves.toEqual({
+        ok: true,
+      });
+      await expect(service.activatePluginForView("viewer")).resolves.toEqual({ ok: true });
+      await expect(service.activatePluginForView("")).resolves.toEqual({ ok: true });
       expect((globalThis as Record<string, unknown>).__viewNoopActivated).toBeUndefined();
     } finally {
       delete (globalThis as Record<string, unknown>).__viewNoopActivated;
@@ -8854,7 +8906,13 @@ describe("Deferred activation — activatePlugin", () => {
       await service.initialize();
 
       // First open: activation fails but never rejects; contributions survive.
-      await expect(service.activatePluginForView("acme.view-fail.viewer")).resolves.toBeUndefined();
+      // The failure is surfaced as a plain { ok: false } result (#10618) carrying
+      // the real activate() error so PluginViewHost can throw it before import.
+      // (toMatchObject because the result also carries the diagnostic `stack`.)
+      await expect(service.activatePluginForView("acme.view-fail.viewer")).resolves.toMatchObject({
+        ok: false,
+        error: "view-activate-boom",
+      });
       expect(service.getPluginLoadError("acme.view-fail")?.message).toBe("view-activate-boom");
       expect(service.hasPlugin("acme.view-fail")).toBe(true);
       expect((globalThis as Record<string, unknown>).__viewFailActivateCount).toBe(1);
@@ -8862,7 +8920,10 @@ describe("Deferred activation — activatePlugin", () => {
       // Second open: the failed in-flight entry was cleared, so activation runs
       // again (Settings → Retry / re-open semantics) rather than returning a
       // cached settled promise — proven by the activate() invocation count.
-      await expect(service.activatePluginForView("acme.view-fail.viewer")).resolves.toBeUndefined();
+      await expect(service.activatePluginForView("acme.view-fail.viewer")).resolves.toMatchObject({
+        ok: false,
+        error: "view-activate-boom",
+      });
       expect(service.getPluginLoadError("acme.view-fail")?.message).toBe("view-activate-boom");
       expect((globalThis as Record<string, unknown>).__viewFailActivateCount).toBe(2);
     } finally {

@@ -68,6 +68,7 @@ import type {
   PluginSettingsUiValues,
   PluginPickPathRequest,
   PluginWorktreeStatus,
+  PluginActivationResult,
 } from "../../../shared/types/plugin.js";
 import type { IpcContext } from "../types.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
@@ -503,12 +504,14 @@ async function handlePanelKindsGet(): Promise<PanelKindConfig[]> {
  * owning `panelKindId` to `activate()` before the renderer imports its
  * `plugin://` module, so handlers bound during `activate()` are live when the
  * view first renders. `activatePlugin` never rejects, so this resolves even
- * when activation fails — the failure surfaces as a `loadError` and the view's
- * module import then fails through the host's ErrorBoundary retry path. A no-op
- * once the owning plugin is already activated, or when the kind id is unknown.
+ * when activation fails — the failure is surfaced as a plain
+ * {@link PluginActivationResult} (#10618) so `PluginViewHost` can throw the real
+ * activation cause before importing the module, instead of leaving the renderer
+ * to fail later with a generic import timeout. A no-op (`{ ok: true }`) once the
+ * owning plugin is already activated, or when the kind id is unknown.
  */
-async function handleActivateForView(panelKindId: string): Promise<void> {
-  await (await getPluginService()).activatePluginForView(panelKindId);
+async function handleActivateForView(panelKindId: string): Promise<PluginActivationResult> {
+  return (await getPluginService()).activatePluginForView(panelKindId);
 }
 
 async function handleForgeProvidersGet(): Promise<RegisteredForgeProvider[]> {

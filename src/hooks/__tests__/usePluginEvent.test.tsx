@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { usePluginEvent } from "../usePluginEvent";
+import { usePluginEvent, usePluginPanelEvent } from "../usePluginEvent";
 import { useHostChannel } from "../useHostChannel";
 
 type Subscriber = (payload: unknown) => void;
@@ -14,23 +14,31 @@ function channelKey(pluginId: string, channel: string): string {
   return `${pluginId}:${channel}`;
 }
 
+function panelKey(pluginId: string, channel: string, panelId: string): string {
+  return `${pluginId}:${channel}:${panelId}`;
+}
+
 beforeEach(() => {
   subscribers = new Map();
   removeCalls = 0;
   invokeMock = vi.fn();
 
+  const subscribe = (key: string, cb: Subscriber): (() => void) => {
+    const set = subscribers.get(key) ?? new Set<Subscriber>();
+    set.add(cb);
+    subscribers.set(key, set);
+    return () => {
+      removeCalls += 1;
+      set.delete(cb);
+    };
+  };
+
   const plugin = {
     invoke: invokeMock,
-    on: (pluginId: string, channel: string, cb: Subscriber) => {
-      const key = channelKey(pluginId, channel);
-      const set = subscribers.get(key) ?? new Set<Subscriber>();
-      set.add(cb);
-      subscribers.set(key, set);
-      return () => {
-        removeCalls += 1;
-        set.delete(cb);
-      };
-    },
+    on: (pluginId: string, channel: string, cb: Subscriber) =>
+      subscribe(channelKey(pluginId, channel), cb),
+    onPanel: (pluginId: string, channel: string, panelId: string, cb: Subscriber) =>
+      subscribe(panelKey(pluginId, channel, panelId), cb),
   };
   // The SDK hooks resolve the bridge from `globalThis.electron.plugin`
   // (see hostBridge.ts). Stub only `electron` so jsdom's `window`/`document`
@@ -46,6 +54,10 @@ function emit(pluginId: string, channel: string, payload: unknown): void {
   for (const cb of subscribers.get(channelKey(pluginId, channel)) ?? []) cb(payload);
 }
 
+function emitPanel(pluginId: string, channel: string, panelId: string, payload: unknown): void {
+  for (const cb of subscribers.get(panelKey(pluginId, channel, panelId)) ?? []) cb(payload);
+}
+
 describe("@daintreehq/plugin-sdk/react entry", () => {
   it("resolves the runtime hooks as callables", async () => {
     // The package /react entry re-exports the same canonical implementation the
@@ -53,6 +65,7 @@ describe("@daintreehq/plugin-sdk/react entry", () => {
     const mod = await import("../../../packages/plugin-sdk/src/react");
     expect(typeof mod.useHostChannel).toBe("function");
     expect(typeof mod.usePluginEvent).toBe("function");
+    expect(typeof mod.usePluginPanelEvent).toBe("function");
   });
 });
 
@@ -114,6 +127,57 @@ describe("usePluginEvent", () => {
     expect(removeCalls).toBe(1);
     expect(subscribers.get(channelKey("acme.p", "tick"))?.size).toBe(0);
     expect(subscribers.get(channelKey("acme.p", "tock"))?.size).toBe(1);
+  });
+});
+
+describe("usePluginPanelEvent", () => {
+  it("delivers only the pushes targeted at its panelId", () => {
+    const handler = vi.fn();
+    renderHook(() => usePluginPanelEvent("acme.p", "tick", "panel-a", handler));
+
+    // A push to this instance's panelId is delivered...
+    act(() => emitPanel("acme.p", "tick", "panel-a", { count: 1 }));
+    // ...while a push to a sibling instance and a broadcast (via `on`) are not —
+    // the whole point of #10618: instances stop receiving each other's pushes.
+    act(() => emitPanel("acme.p", "tick", "panel-b", { count: 99 }));
+    act(() => emit("acme.p", "tick", { count: 7 }));
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith({ count: 1 });
+  });
+
+  it("unsubscribes on unmount", () => {
+    const { unmount } = renderHook(() => usePluginPanelEvent("acme.p", "tick", "panel-a", vi.fn()));
+    expect(subscribers.get(panelKey("acme.p", "tick", "panel-a"))?.size).toBe(1);
+
+    unmount();
+
+    expect(removeCalls).toBe(1);
+    expect(subscribers.get(panelKey("acme.p", "tick", "panel-a"))?.size).toBe(0);
+  });
+
+  it("re-subscribes when the panelId changes", () => {
+    const { rerender } = renderHook(
+      ({ id }) => usePluginPanelEvent("acme.p", "tick", id, vi.fn()),
+      { initialProps: { id: "panel-a" } }
+    );
+    rerender({ id: "panel-b" });
+
+    expect(removeCalls).toBe(1);
+    expect(subscribers.get(panelKey("acme.p", "tick", "panel-a"))?.size).toBe(0);
+    expect(subscribers.get(panelKey("acme.p", "tick", "panel-b"))?.size).toBe(1);
+  });
+
+  it("does NOT re-subscribe when only the handler identity changes", () => {
+    const { rerender } = renderHook(
+      ({ h }) => usePluginPanelEvent("acme.p", "tick", "panel-a", h),
+      { initialProps: { h: vi.fn() } }
+    );
+    rerender({ h: vi.fn() });
+    rerender({ h: vi.fn() });
+
+    expect(removeCalls).toBe(0);
+    expect(subscribers.get(panelKey("acme.p", "tick", "panel-a"))?.size).toBe(1);
   });
 });
 

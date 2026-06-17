@@ -62,10 +62,12 @@ export interface BroadcastRecord {
   payload: unknown;
 }
 
-/** Captured `host.postToPanel(channel, payload)` calls — the post-activation push path. */
+/** Captured `host.postToPanel(channel, payload, panelId?)` calls — the post-activation push path. */
 export interface PostToPanelRecord {
   channel: string;
   payload: unknown;
+  /** Per-instance target (#10618): a panel id, or `null` for a broadcast. */
+  panelId: string | null;
 }
 
 export interface ShownToastRecord {
@@ -776,7 +778,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       broadcastCalls.push({ channel, payload });
       return Promise.resolve();
     },
-    postToPanel(channel, payload) {
+    postToPanel(channel, payload, panelId) {
       if (isInvalidChannel(channel, false)) {
         return Promise.reject(
           new Error(
@@ -784,7 +786,14 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
           )
         );
       }
-      postToPanelCalls.push({ channel, payload });
+      if (panelId !== undefined && panelId !== null) {
+        if (typeof panelId !== "string" || panelId.length === 0) {
+          throw new Error(
+            `postToPanel: panelId must be a non-empty string, null, or undefined: ${String(panelId)}`
+          );
+        }
+      }
+      postToPanelCalls.push({ channel, payload, panelId: panelId ?? null });
       return Promise.resolve();
     },
     async getActiveWorktree() {
