@@ -502,20 +502,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       });
     };
 
-    // On first mount (e.g. after the React.lazy chunk resolves), the one-shot
-    // focus RAF in TerminalPane may have already fired against a null ref and
-    // no-opped — leaving DOM focus stranded on whatever launched us (the toolbar
-    // AgentButton). Claim focus here so Enter at a CLI prompt can't re-trigger
-    // that button and spawn a duplicate agent. The editor view is created in a
-    // useLayoutEffect (useEditorFactory), which flushes before this useEffect,
-    // so focusEditor() finds a live view. See issue #10541.
+    // Claim focus on mount: TerminalPane's one-shot focus RAF may have no-opped
+    // against a null ref if this lazy chunk wasn't loaded yet, leaving focus on
+    // the launching AgentButton where Enter spawns a duplicate agent. See #10541.
     useEffect(() => {
       if (!isFocusedTerminal) return;
       if (usePanelStore.getState().preferredTerminalFocusTarget !== "hybridInput") return;
       focusEditor();
-      // Mount-only: read focus intent once. Later focus changes go through
-      // TerminalPane's RAF path, which by then has a live ref to drive.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only focus claim
     }, []);
 
     const handleHistoryNavigation = (direction: "up" | "down"): boolean => {

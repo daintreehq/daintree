@@ -350,10 +350,8 @@ export function AgentButton({
   const handleClick = (e?: ReactMouseEvent<HTMLElement>) => {
     if (isLoading) return;
     if (isLaunchable) {
-      // Drop DOM focus on launch so a CLI prompt's Enter can't bounce back to
-      // this still-focused button and spawn a duplicate agent before the input
-      // bar claims focus. Native buttons synthesize a click on Enter, so a
-      // launch that doesn't hand off focus is a footgun. See issue #10541.
+      // Drop focus on launch so Enter at a CLI prompt can't re-fire this button
+      // and spawn a duplicate agent before the input bar claims focus. See #10541.
       e?.currentTarget?.blur();
       // Defer all preset resolution to useAgentLauncher. Forwarding the
       // resolved savedPresetId explicitly would block the launcher's
