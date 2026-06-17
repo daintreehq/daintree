@@ -747,6 +747,18 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
     const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
+        // settingsScopeRef / viewRefs are cross-validated against the manifest's
+        // own settings/views (#10620), and each referenced view needs a matching
+        // panel id — declare them so this stays a positive case.
+        panels: [
+          { id: "github-issues", name: "Issues", iconId: "eye", color: "#abc" },
+          { id: "github-prs", name: "PRs", iconId: "eye", color: "#abc" },
+        ],
+        settings: [{ id: "github", type: "string", label: "GitHub" }],
+        views: [
+          { id: "github-issues", name: "Issues", componentPath: "./issues.js", location: "panel" },
+          { id: "github-prs", name: "PRs", componentPath: "./prs.js", location: "panel" },
+        ],
         forgeProviders: [
           {
             id: "github",
@@ -902,7 +914,11 @@ describe("PluginManifestSchema contributes strict validation", () => {
   it("accepts the stable views key inside contributes (#10466)", () => {
     const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
-      contributes: { views: [{ id: "v", name: "V", componentPath: "./v.js", location: "panel" }] },
+      contributes: {
+        // A view needs a matching panel id (view_panel_ref_unknown, #10620).
+        panels: [{ id: "v", name: "V", iconId: "eye", color: "#abc" }],
+        views: [{ id: "v", name: "V", componentPath: "./v.js", location: "panel" }],
+      },
     });
     expect(result.success).toBe(true);
     if (result.success) {
@@ -925,6 +941,8 @@ describe("PluginManifestSchema contributes strict validation", () => {
     const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
+        // A view needs a matching panel id (view_panel_ref_unknown, #10620).
+        panels: [{ id: "v", name: "V", iconId: "eye", color: "#abc" }],
         experimental_views: [{ id: "v", name: "V", componentPath: "./v.js", location: "panel" }],
       },
     });
@@ -955,6 +973,8 @@ describe("PluginManifestSchema contributes strict validation", () => {
     const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
+        // The surviving canonical view needs a matching panel id (#10620).
+        panels: [{ id: "canonical", name: "Canonical", iconId: "eye", color: "#abc" }],
         views: [{ id: "canonical", name: "Canonical", componentPath: "./c.js", location: "panel" }],
         experimental_views: [
           { id: "legacy", name: "Legacy", componentPath: "./l.js", location: "panel" },
@@ -1589,7 +1609,7 @@ describe("PluginService manifest command contributions (#9281)", () => {
         },
       },
       {
-        "plan.ts": `export default async (args) => ({ ok: true, args })`,
+        "plan.js": `export default async (args) => ({ ok: true, args })`,
       }
     );
 
@@ -1659,7 +1679,7 @@ describe("PluginService manifest command contributions (#9281)", () => {
         },
       },
       {
-        "broken.ts": `export const named = 1`,
+        "broken.js": `export const named = 1`,
       }
     );
 
@@ -1671,8 +1691,9 @@ describe("PluginService manifest command contributions (#9281)", () => {
     ).rejects.toThrow(/no callable default export/);
   });
 
-  it("probes extensions in order .ts → .tsx → .js → .mjs", async () => {
-    // When both .ts and .js exist, .ts wins.
+  it("probes extensions in order .js → .mjs and ignores a .ts sibling", async () => {
+    // The resolver now only probes built handler modules (.js, .mjs); a .ts or
+    // .tsx sibling is never picked. When both .js and .mjs exist, .js wins.
     await writePluginWithSrc(
       "cmd-order",
       {
@@ -1692,8 +1713,10 @@ describe("PluginService manifest command contributions (#9281)", () => {
         },
       },
       {
-        "pick.ts": `export default () => "ts-wins"`,
-        "pick.js": `export default () => "js-loses"`,
+        // A .ts sibling must NOT be probed — if it were, it would shadow .js.
+        "pick.ts": `export default () => "ts-not-probed"`,
+        "pick.js": `export default () => "js-wins"`,
+        "pick.mjs": `export default () => "mjs-loses"`,
       }
     );
 
@@ -1706,7 +1729,7 @@ describe("PluginService manifest command contributions (#9281)", () => {
       ctx("acme.cmd-order"),
       []
     );
-    expect(result).toBe("ts-wins");
+    expect(result).toBe("js-wins");
   });
 
   it("surfaces a loadError when a manifest command collides with a built-in id", async () => {
@@ -7397,7 +7420,7 @@ describe("reserved contribution point warnings", () => {
     expect(viewWarnings).toHaveLength(0);
   });
 
-  it("warns and skips an views entry with no matching panel id", async () => {
+  it("rejects the whole manifest when a views entry has no matching panel id (#10620)", async () => {
     await writePlugin("orphan", {
       name: "acme.orphan",
       version: "1.0.0",
@@ -7418,18 +7441,14 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
-    expect(registerPanelKind).toHaveBeenCalledTimes(1);
-    expect(registerPanelKind).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "acme.orphan.main" })
-    );
-    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      componentPath?: string;
-    };
-    expect(panelCall.componentPath).toBeUndefined();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Plugin "acme.orphan": views entry "ghost" has no matching contributes.panels entry'
-      )
+    // An orphan view (id matches no panel) is now a hard manifest error
+    // (view_panel_ref_unknown superRefine), so the plugin never loads — no
+    // panel kind is registered and the failure surfaces as an invalid manifest.
+    expect(service.listPlugins()).toHaveLength(0);
+    expect(registerPanelKind).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid manifest in orphan"),
+      expect.anything()
     );
   });
 
@@ -7557,7 +7576,7 @@ describe("reserved contribution point warnings", () => {
     );
   });
 
-  it("warns and keeps the first occurrence on duplicate views ids", async () => {
+  it("rejects the whole manifest on duplicate views ids (#10620)", async () => {
     await writePlugin("dup", {
       name: "acme.dup",
       version: "1.0.0",
@@ -7574,13 +7593,14 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
-    expect(registerPanelKind).toHaveBeenCalledTimes(1);
-    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      componentPath?: string;
-    };
-    expect(panelCall.componentPath).toBe("plugin://acme.dup/first.js");
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('views has duplicate entries for id "main"')
+    // A duplicate view id is now a hard manifest error
+    // (duplicate_contribution_id superRefine), so the plugin never loads —
+    // no first-wins, no panel kind registered.
+    expect(service.listPlugins()).toHaveLength(0);
+    expect(registerPanelKind).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid manifest in dup"),
+      expect.anything()
     );
   });
 
@@ -7628,6 +7648,19 @@ describe("reserved contribution point warnings", () => {
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
+        // `settingsScopeRef` / `viewRefs` are cross-validated against the
+        // manifest's own settings/views (#10620), so the referenced ids must
+        // exist; the referenced view in turn needs a matching panel id.
+        panels: [{ id: "github-issues", name: "Issues", iconId: "eye", color: "#abc" }],
+        settings: [{ id: "github", type: "string", label: "GitHub" }],
+        views: [
+          {
+            id: "github-issues",
+            name: "Issues",
+            componentPath: "./issues.js",
+            location: "panel",
+          },
+        ],
         forgeProviders: [
           {
             id: "github",
@@ -7656,8 +7689,6 @@ describe("reserved contribution point warnings", () => {
       },
     ]);
     expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("contributes.forgeProviders"));
-    // A forge-only manifest does not touch the other registries.
-    expect(registerPanelKind).not.toHaveBeenCalled();
     expect(registerToolbarButton).not.toHaveBeenCalled();
     expect(registerPluginMenuItem).not.toHaveBeenCalled();
   });
@@ -7792,14 +7823,15 @@ describe("reserved contribution point warnings", () => {
     expect(service.findMcpServerContribution("acme.mixed", "svc")).toBeDefined();
   });
 
-  it("logs one warning per orphan view entry", async () => {
+  it("rejects the whole manifest when any view entry is an orphan (#10620)", async () => {
     await writePlugin("many", {
       name: "acme.many",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
-        // `a` matches a panel and binds; `c` is an orphan with no matching
-        // panel id. The orphan should log exactly one warning naming its id.
+        // `a` matches a panel and would bind; `c` is an orphan with no matching
+        // panel id. A single orphan view now fails the whole manifest
+        // (view_panel_ref_unknown superRefine) rather than logging a warning.
         panels: [{ id: "a", name: "A", iconId: "eye", color: "#000" }],
         views: [
           { id: "a", name: "A", componentPath: "./a.js", location: "panel" },
@@ -7811,10 +7843,16 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
+    expect(service.listPlugins()).toHaveLength(0);
+    expect(registerPanelKind).not.toHaveBeenCalled();
     const orphanWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
       String(call[0]).includes('"c" has no matching contributes.panels')
     );
-    expect(orphanWarnings).toHaveLength(1);
+    expect(orphanWarnings).toHaveLength(0);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid manifest in many"),
+      expect.anything()
+    );
   });
 
   it("rejects a views entry with an invalid location at schema level", () => {

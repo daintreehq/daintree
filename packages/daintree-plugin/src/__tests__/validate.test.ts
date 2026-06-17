@@ -131,6 +131,9 @@ describe("runValidate", () => {
       version: "1.0.0",
       engines: { daintree: "^0.11.0" },
       contributes: {
+        // The token must reference a declared setting now (#10620), else the
+        // schema rejects the manifest before --env resolution runs.
+        settings: [{ id: "apiToken", type: "secret" }],
         mcpServers: [
           {
             id: "main",
@@ -201,9 +204,12 @@ describe("runValidate", () => {
     expect(result.errors.join("\n")).toMatch(/settings\.0\.id/);
   });
 
-  it("ignores a ${settings:…} token whose key breaks the safe-id grammar (#10513)", async () => {
-    // The host's substitution gate would never resolve `bad key`, so --env must
-    // not flag it as a missing value — it sees no resolvable tokens at all.
+  it("rejects a ${settings:…} token whose key breaks the safe-id grammar (#10620)", async () => {
+    // #10513 chose to silently ignore a malformed token here; #10620 tightens
+    // the manifest schema so a token the host could never resolve (`bad key`
+    // with a space) is a hard error (settings_token_malformed). The validator
+    // imports the same schema, so it now reports the malformed token rather
+    // than passing the literal through to exec at runtime.
     await writeManifest({
       name: "acme.demo",
       version: "1.0.0",
@@ -213,8 +219,8 @@ describe("runValidate", () => {
       },
     });
     const result = await runValidate({ dir: tmpDir, env: true });
-    expect(result.warnings.join("\n")).toMatch(/no \$\{settings:…\} tokens/);
-    expect(result.errors.join("\n")).not.toMatch(/bad key/);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join("\n")).toMatch(/Malformed settings token/);
   });
 
   it("warns when main points at a missing file whose dir exists (#10513)", async () => {
