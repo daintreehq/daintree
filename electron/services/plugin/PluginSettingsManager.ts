@@ -8,6 +8,11 @@ import type {
   PluginSettingsUiValues,
   SettingDefinition,
 } from "../../../shared/types/plugin.js";
+import {
+  createListenerFailureState,
+  invokeTrackedListener,
+  type ListenerFailureState,
+} from "./pluginCallbackUtils.js";
 
 export function assertSettingsKey(
   pluginId: string,
@@ -23,6 +28,8 @@ interface SettingsSubscriber {
   key: string;
   scope: PluginSettingsScope;
   cb: (value: unknown) => void;
+  /** Consecutive-failure counter, lazily initialized on first dispatch (#10621). */
+  failures?: ListenerFailureState;
 }
 
 interface PluginSettingsManagerDeps {
@@ -201,14 +208,14 @@ export class PluginSettingsManager {
     // mid-iteration.
     for (const sub of [...subs]) {
       if (sub.key !== key || sub.scope !== scope) continue;
-      try {
-        sub.cb(value);
-      } catch (err) {
-        console.error(
-          `[PluginService] settings.onDidChange callback for "${pluginId}" key "${key}" failed:`,
-          err
-        );
-      }
+      if (!sub.failures) sub.failures = createListenerFailureState();
+      invokeTrackedListener(
+        sub.failures,
+        pluginId,
+        `settings.onDidChange (key "${key}")`,
+        () => sub.cb(value),
+        () => this.removeSubscriber(pluginId, sub)
+      );
     }
   }
 

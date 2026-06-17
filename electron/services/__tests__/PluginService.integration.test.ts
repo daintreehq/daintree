@@ -1575,6 +1575,59 @@ describe("PluginService integration — built-in plugin loading", () => {
     expect(service.listPlugins()[0].isBuiltin).toBe(true);
   });
 
+  it("rolls back imperative registrations when a built-in activate() throws (#10621)", async () => {
+    const pluginDir = await writeBuiltinPlugin("daintree.rollback-test", {
+      name: "daintree.rollback-test",
+      version: "1.0.0",
+    });
+    const mainFile = `rollback-${randomUUID()}.mjs`;
+    // activate() registers an imperative action, then throws. Without the
+    // rollback the ghost action would leak into the registry forever, since a
+    // failed built-in never runs the full unloadPlugin cascade.
+    await fs.writeFile(
+      path.join(pluginDir, mainFile),
+      `export function activate(host) {
+  host.registerAction(
+    {
+      id: "ghost",
+      title: "Ghost",
+      description: "Should be rolled back",
+      category: "Actions",
+      kind: "command",
+      danger: "safe",
+    },
+    async () => "x"
+  );
+  throw new Error("activate boom after registration");
+}
+`
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "daintree.rollback-test",
+        version: "1.0.0",
+        main: mainFile,
+      })
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await initializeAndActivate(service);
+
+      // The plugin's manifest stays loaded, but the action registered before the
+      // throw is rolled back — no ghost contribution survives the failure.
+      expect(service.hasPlugin("daintree.rollback-test")).toBe(true);
+      expect(service.listPluginActions().map((a) => a.id)).not.toContain(
+        "daintree.rollback-test.ghost"
+      );
+      expect(service.listPluginActions()).toEqual([]);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it("does not register contributions or run main for a disabled user plugin", async () => {
     const markerKey = makeMarkerKey();
     const pluginDir = await writePlugin("acme.disabled-user", {

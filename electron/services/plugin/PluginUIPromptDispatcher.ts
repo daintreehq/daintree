@@ -18,6 +18,15 @@ function cancelValueFor(kind: PluginUiPromptParams["kind"]): PluginUiPromptResul
 }
 
 /**
+ * One in-flight prompt per plugin (#10621). A plugin host prompt is a modal
+ * round-trip with no deadline; without a cap a buggy or adversarial plugin can
+ * fire prompts faster than the user dismisses them, stacking unbounded dialogs
+ * and leaking a `pending` entry each time. A second request while one is open
+ * resolves immediately to the kind's cancel value instead of being sent.
+ */
+const MAX_PENDING_PROMPTS_PER_PLUGIN = 1;
+
+/**
  * An imperative UI prompt awaiting its renderer response. Unlike the dispatch
  * bridge there is NO per-request timeout: a user-facing prompt has no deadline
  * racing the dialog (mirrors `pluginConfirmStore`'s no-timeout stance). It
@@ -140,6 +149,18 @@ export class PluginUIPromptDispatcher {
       }
       const webContents = this.resolveActiveWebContents();
       if (!webContents) {
+        resolve(cancelValue);
+        return;
+      }
+
+      // Enforce the per-plugin cap before sending so a runaway plugin can't stack
+      // dialogs or leak `pending` entries. Checked here (not renderer-side) so the
+      // guard holds regardless of renderer queue behavior.
+      let activeForPlugin = 0;
+      for (const pending of this.pending.values()) {
+        if (pending.pluginId === pluginId) activeForPlugin += 1;
+      }
+      if (activeForPlugin >= MAX_PENDING_PROMPTS_PER_PLUGIN) {
         resolve(cancelValue);
         return;
       }

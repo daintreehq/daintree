@@ -259,4 +259,58 @@ describe("PluginUIPromptDispatcher", () => {
     const d = new PluginUIPromptDispatcher({ isDisposed: () => true });
     await expect(d.requestPrompt("p1", CONFIRM)).resolves.toBe(false);
   });
+
+  it("caps a plugin to one in-flight prompt: a second request cancels immediately without a send", async () => {
+    const wc = makeWebContents(7);
+    setActiveWebContents(wc);
+    const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+
+    const first = d.requestPrompt("p1", QUICK_PICK);
+    const sendsAfterFirst = wc.send.mock.calls.filter(
+      (c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_REQUEST
+    ).length;
+    expect(sendsAfterFirst).toBe(1);
+
+    // Second prompt for the same plugin while the first is pending: cancelled
+    // immediately (false for confirm) and never sent to the renderer.
+    await expect(d.requestPrompt("p1", CONFIRM)).resolves.toBe(false);
+    const sendsAfterSecond = wc.send.mock.calls.filter(
+      (c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_REQUEST
+    ).length;
+    expect(sendsAfterSecond).toBe(1);
+
+    // The first prompt is unaffected and still resolves with the real answer.
+    const promptId = lastPromptId(wc);
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
+      { sender: { id: 7 } },
+      { promptId, result: { id: "a", label: "Alpha" } }
+    );
+    await expect(first).resolves.toEqual({ id: "a", label: "Alpha" });
+
+    // After the first settles, the plugin can open another prompt.
+    const third = d.requestPrompt("p1", QUICK_PICK);
+    expect(
+      wc.send.mock.calls.filter((c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_REQUEST).length
+    ).toBe(2);
+    d.dispose();
+    await expect(third).resolves.toBeUndefined();
+  });
+
+  it("the per-plugin cap is independent across plugins", async () => {
+    const wc = makeWebContents(7);
+    setActiveWebContents(wc);
+    const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+
+    const a = d.requestPrompt("p1", QUICK_PICK);
+    // A different plugin is not blocked by p1's in-flight prompt.
+    const b = d.requestPrompt("p2", QUICK_PICK);
+    expect(
+      wc.send.mock.calls.filter((c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_REQUEST).length
+    ).toBe(2);
+
+    d.dispose();
+    await expect(a).resolves.toBeUndefined();
+    await expect(b).resolves.toBeUndefined();
+  });
 });

@@ -2186,6 +2186,10 @@ describe("PluginService built-in plugin loading", () => {
       const notifyForgeProviderRegistryUpdated = vi.fn();
       service.setWorkspaceClient({
         notifyForgeProviderRegistryUpdated,
+        // The real WorkspaceClient is an EventEmitter; the service-level
+        // worktree-scope cache eviction listener (#10621) wires through on/off.
+        on: vi.fn(),
+        off: vi.fn(),
       } as never);
 
       await service.setEnabled("daintree.forgey", false);
@@ -6609,12 +6613,17 @@ describe("Plugin worktree host API", () => {
     await host.onDidChangeWorktrees(cb2);
     revoke();
 
-    expect(client.listenerCount("worktree-activated")).toBe(1);
+    // worktree-activated carries an extra service-level listener: the #10621
+    // cache-eviction subscription wired in setWorkspaceClient (independent of any
+    // plugin). worktree-update has only the plugin's listener.
+    expect(client.listenerCount("worktree-activated")).toBe(2);
     expect(client.listenerCount("worktree-update")).toBe(1);
 
     service.unloadPlugin("acme.wt-host");
 
-    expect(client.listenerCount("worktree-activated")).toBe(0);
+    // The plugin's listeners are flushed; the service-level eviction listener on
+    // worktree-activated survives the unload (it's torn down only on dispose).
+    expect(client.listenerCount("worktree-activated")).toBe(1);
     expect(client.listenerCount("worktree-update")).toBe(0);
 
     client.emit("worktree-activated", { worktreeId: "x", projectPath: "/p" });
@@ -6673,7 +6682,9 @@ describe("Plugin worktree host API", () => {
     const client = createMockClient([mkSnap({ id: "b", isCurrent: true, branch: "dev" })]);
     (service as unknown as { setWorkspaceClient: (c: unknown) => void }).setWorkspaceClient(client);
 
-    expect(client.listenerCount("worktree-activated")).toBe(1);
+    // One replayed plugin subscription plus the service-level cache-eviction
+    // listener that setWorkspaceClient always attaches (#10621).
+    expect(client.listenerCount("worktree-activated")).toBe(2);
 
     client.emit("worktree-activated", { worktreeId: "b", projectPath: "/p" });
     await vi.waitFor(() => expect(cb).toHaveBeenCalledTimes(1));
@@ -6699,7 +6710,9 @@ describe("Plugin worktree host API", () => {
     const client = createMockClient([mkSnap({ id: "a", isCurrent: true })]);
     (service as unknown as { setWorkspaceClient: (c: unknown) => void }).setWorkspaceClient(client);
 
-    expect(client.listenerCount("worktree-activated")).toBe(0);
+    // The disposed plugin subscription does not replay; only the service-level
+    // cache-eviction listener that setWorkspaceClient attaches remains (#10621).
+    expect(client.listenerCount("worktree-activated")).toBe(1);
     client.emit("worktree-activated", { worktreeId: "a", projectPath: "/p" });
     await new Promise((r) => setTimeout(r, 10));
     expect(cb).not.toHaveBeenCalled();

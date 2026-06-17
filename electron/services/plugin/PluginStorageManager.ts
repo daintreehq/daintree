@@ -2,6 +2,11 @@ import path from "path";
 import { PluginSettingsStore } from "../PluginSettingsStore.js";
 import { projectStore } from "../ProjectStore.js";
 import type { PluginStorageScope } from "../../../shared/types/plugin.js";
+import {
+  createListenerFailureState,
+  invokeTrackedListener,
+  type ListenerFailureState,
+} from "./pluginCallbackUtils.js";
 
 export function assertStorageKey(
   pluginId: string,
@@ -17,6 +22,8 @@ interface StorageSubscriber {
   key: string;
   scope: PluginStorageScope;
   cb: (value: unknown) => void;
+  /** Consecutive-failure counter, lazily initialized on first dispatch (#10621). */
+  failures?: ListenerFailureState;
 }
 
 interface PluginStorageManagerDeps {
@@ -165,14 +172,30 @@ export class PluginStorageManager {
     // mid-iteration.
     for (const sub of [...subs]) {
       if (sub.key !== key || sub.scope !== scope) continue;
-      try {
-        sub.cb(value);
-      } catch (err) {
-        console.error(
-          `[PluginService] storage.onDidChange callback for "${pluginId}" key "${key}" failed:`,
-          err
-        );
-      }
+      if (!sub.failures) sub.failures = createListenerFailureState();
+      invokeTrackedListener(
+        sub.failures,
+        pluginId,
+        `storage.onDidChange (key "${key}")`,
+        () => sub.cb(value),
+        () => this.removeSubscriber(pluginId, sub)
+      );
+    }
+  }
+
+  /**
+   * Drop cached storage stores for the `"worktree"` scope across every plugin
+   * (#10621). The cache is keyed on the resolved file path, so re-activating the
+   * same worktree reuses the same store and its in-memory snapshot — which may be
+   * stale if the backing file changed while the worktree was inactive. Evicting on
+   * each `worktree-activated` forces a fresh read on the next access. `"user"` and
+   * `"project"` scoped stores are untouched: user state is process-global and
+   * project switches already change the resolved path (a fresh store).
+   */
+  evictWorktreeScopedStores(): void {
+    const marker = "\x00worktree\x00";
+    for (const cacheKey of [...this.storageStores.keys()]) {
+      if (cacheKey.includes(marker)) this.storageStores.delete(cacheKey);
     }
   }
 
