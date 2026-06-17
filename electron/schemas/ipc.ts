@@ -279,6 +279,35 @@ export function filterValidTerminalEntries<T>(
   return validEntries;
 }
 
+/**
+ * Renderer `ActionContext` snapshot, captured synchronously at launch and
+ * threaded through `terminal.spawn` so a `daintree-assistant` CLI session can
+ * be pinned to the worktree/terminal focused when it was launched (#10647).
+ * All fields are optional and validated structurally — `dispatchSource` is
+ * accepted but always overwritten from the canonical source at dispatch time,
+ * so a renderer cannot spoof it into a capability grant. Mirrors the
+ * `ActionContext` interface in `shared/types/actions.ts`.
+ */
+export const ActionContextSchema = z.object({
+  projectId: z.string().optional(),
+  projectName: z.string().optional(),
+  projectPath: z.string().optional(),
+  activeWorktreeId: z.string().optional(),
+  activeWorktreeName: z.string().optional(),
+  activeWorktreePath: z.string().optional(),
+  activeWorktreeBranch: z.string().optional(),
+  activeWorktreeIsMain: z.boolean().optional(),
+  focusedWorktreeId: z.string().optional(),
+  focusedTerminalId: z.string().optional(),
+  focusedTerminalKind: z.string().optional(),
+  focusedTerminalType: z.string().optional(),
+  focusedTerminalTitle: z.string().optional(),
+  isSettingsOpen: z.boolean().optional(),
+  dispatchSource: z
+    .enum(["user", "keybinding", "menu", "agent", "context-menu", "plugin"])
+    .optional(),
+});
+
 export const TerminalSpawnOptionsSchema = z.object({
   id: z.string().optional(),
   kind: PanelKindSchema.optional(),
@@ -314,6 +343,10 @@ export const TerminalSpawnOptionsSchema = z.object({
   agentPresetId: z.string().optional(),
   agentPresetColor: z.string().optional(),
   originalAgentPresetId: z.string().optional(),
+  // Launch-time ActionContext snapshot, consumed only for the
+  // `daintree-assistant` pinned-session path (#10647). Ignored for every other
+  // agent. Optional so existing spawn callers are unaffected.
+  actionContext: ActionContextSchema.optional(),
 });
 
 export const TerminalResizePayloadSchema = z.object({

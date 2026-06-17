@@ -76,6 +76,22 @@ export type HelpSessionActionContextResolver = (token: string) => ActionContext 
  * non-help bearers (api-key / pane tokens).
  */
 export type HelpSessionIdResolver = (token: string) => string | null;
+/**
+ * Resolver consulted at MCP handshake to pin a `daintree-assistant` pane
+ * bearer to the WebContents that launched it (#10647). Same routing effect as
+ * {@link HelpSessionWebContentsResolver} but sourced from
+ * `McpPaneConfigService` rather than `HelpSessionService`, so the assistant
+ * CLI's env-only pane token gets help-session-grade pinning without being
+ * promoted to a full help session. Returns null for generic pane tokens.
+ */
+export type AssistantPaneWebContentsResolver = (token: string) => number | null;
+/**
+ * Resolver consulted at MCP handshake to replay the launch-time
+ * `ActionContext` bound to a `daintree-assistant` pane bearer (#10647).
+ * Returns null for generic pane tokens, which keep the live focused-window
+ * context.
+ */
+export type AssistantPaneActionContextResolver = (token: string) => ActionContext | null;
 export type { HelpAssistantTier };
 
 export const MCP_SERVER_KEY = "daintree";

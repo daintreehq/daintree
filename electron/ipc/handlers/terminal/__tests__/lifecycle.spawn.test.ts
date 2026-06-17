@@ -164,6 +164,9 @@ const {
   mockCurrentPort,
   mockPreparePaneConfig,
   mockRevokePaneConfig,
+  mockRegisterAssistantPaneBearer,
+  mockSetAssistantPaneWebContentsResolver,
+  mockSetAssistantPaneActionContextResolver,
   mockEnsureReady,
 } = vi.hoisted(() => ({
   mockValidateToken: vi.fn<(token: string) => "action" | "system" | false>(),
@@ -171,6 +174,10 @@ const {
   mockCurrentPort: vi.fn<() => number | null>(),
   mockPreparePaneConfig: vi.fn(),
   mockRevokePaneConfig: vi.fn<(paneId: string) => Promise<void>>(),
+  mockRegisterAssistantPaneBearer:
+    vi.fn<(token: string, webContentsId: number, actionContext?: unknown) => void>(),
+  mockSetAssistantPaneWebContentsResolver: vi.fn(),
+  mockSetAssistantPaneActionContextResolver: vi.fn(),
   mockEnsureReady: vi.fn<() => Promise<boolean>>(),
 }));
 
@@ -226,6 +233,10 @@ vi.mock("../../../../services/McpServerService.js", () => ({
       return mockCurrentPort();
     },
     ensureReady: () => mockEnsureReady(),
+    setAssistantPaneWebContentsResolver: (...args: unknown[]) =>
+      mockSetAssistantPaneWebContentsResolver(...args),
+    setAssistantPaneActionContextResolver: (...args: unknown[]) =>
+      mockSetAssistantPaneActionContextResolver(...args),
   },
 }));
 
@@ -233,6 +244,8 @@ vi.mock("../../../../services/McpPaneConfigService.js", () => ({
   mcpPaneConfigService: {
     preparePaneConfig: (...args: unknown[]) => mockPreparePaneConfig(...args),
     revokePaneConfig: (paneId: string) => mockRevokePaneConfig(paneId),
+    registerAssistantPaneBearer: (token: string, webContentsId: number, actionContext?: unknown) =>
+      mockRegisterAssistantPaneBearer(token, webContentsId, actionContext),
   },
 }));
 
@@ -1776,6 +1789,70 @@ describe("terminal spawn handler - daintree-assistant MCP env injection (#10639)
     expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBe("assistant-token");
     expect(spawnArgs.env?.DAINTREE_MCP_URL).toBe("http://127.0.0.1:45454/mcp");
     expect("DAINTREE_WINDOW_ID" in (spawnArgs.env ?? {})).toBe(false);
+  });
+
+  it("pins the assistant bearer to the sender WebContents and replays the launch ActionContext (#10647)", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const launchContext = {
+      projectId: "p1",
+      activeWorktreeId: "wt-7",
+      focusedTerminalId: "term-3",
+    };
+
+    const handler = getSpawnHandler();
+    await handler(
+      { sender: { id: 42 }, senderWindow: { id: 7 } } as unknown as Electron.IpcMainInvokeEvent,
+      {
+        id: "assistant-pane",
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "daintree-assistant",
+        launchAgentId: "daintree-assistant",
+        actionContext: launchContext,
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    // The minted pane token is promoted to a pinned bearer bound to the sender
+    // WebContents id (42), carrying the launch-time ActionContext snapshot.
+    expect(mockRegisterAssistantPaneBearer).toHaveBeenCalledWith(
+      "assistant-token",
+      42,
+      launchContext
+    );
+    // Resolvers are wired so the handshake can consult the pane config service.
+    expect(mockSetAssistantPaneWebContentsResolver).toHaveBeenCalled();
+    expect(mockSetAssistantPaneActionContextResolver).toHaveBeenCalled();
+    // Env contract is unchanged.
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBe("assistant-token");
+  });
+
+  it("skips assistant pinning when the sender WebContents is unknown (#10647)", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    // No `sender` on the event → webContentsId resolves to the 0 sentinel.
+    await handler(
+      { senderWindow: { id: 7 } } as unknown as Electron.IpcMainInvokeEvent,
+      {
+        id: "assistant-pane",
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "daintree-assistant",
+        launchAgentId: "daintree-assistant",
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    // Degrade to generic pane-token behaviour rather than pinning to nothing.
+    expect(mockRegisterAssistantPaneBearer).not.toHaveBeenCalled();
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBe("assistant-token");
+    expect(spawnArgs.env?.DAINTREE_MCP_URL).toBe("http://127.0.0.1:45454/mcp");
   });
 
   it("starts the MCP server on demand when it is not already running", async () => {

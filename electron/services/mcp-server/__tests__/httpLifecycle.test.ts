@@ -1067,6 +1067,59 @@ describe("HttpLifecycle", () => {
     });
   });
 
+  describe("assistant-pane pinning resolvers (#10647)", () => {
+    function pinnedResolver(lc: HttpLifecycle) {
+      return (
+        lc as unknown as { resolvePinnedWebContentsId: (h: string) => number | null }
+      ).resolvePinnedWebContentsId.bind(lc);
+    }
+    function ctxResolver(lc: HttpLifecycle) {
+      return (
+        lc as unknown as { resolveActionContext: (h: string) => unknown }
+      ).resolveActionContext.bind(lc);
+    }
+
+    it("falls through to the assistant resolver for a pinned pane bearer", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      // A help resolver is wired but returns null for this (non-help) token.
+      lc.setHelpSessionWebContentsResolver(() => null);
+      lc.setAssistantPaneWebContentsResolver((token) => (token === "assistant-tok" ? 77 : null));
+
+      const resolve = pinnedResolver(lc);
+      expect(resolve("Bearer assistant-tok")).toBe(77);
+      expect(resolve("Bearer unknown-tok")).toBeNull();
+    });
+
+    it("prefers the help resolver over the assistant resolver", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      lc.setHelpSessionWebContentsResolver((token) => (token === "help-tok" ? 11 : null));
+      const assistant = vi.fn(() => 99);
+      lc.setAssistantPaneWebContentsResolver(assistant);
+
+      expect(pinnedResolver(lc)("Bearer help-tok")).toBe(11);
+      // Help match short-circuits — the assistant resolver is never consulted.
+      expect(assistant).not.toHaveBeenCalled();
+    });
+
+    it("replays the assistant ActionContext for a pinned pane bearer", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const ctx = { projectId: "p1", activeWorktreeId: "wt-3" };
+      lc.setHelpSessionActionContextResolver(() => null);
+      lc.setAssistantPaneActionContextResolver((token) => (token === "assistant-tok" ? ctx : null));
+
+      const resolve = ctxResolver(lc);
+      expect(resolve("Bearer assistant-tok")).toEqual(ctx);
+      expect(resolve("Bearer unknown-tok")).toBeNull();
+    });
+
+    it("returns null for external/api-key bearers so they keep the focused-window fallback", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      // No resolvers wired at all (e.g. server up before any assistant spawn).
+      expect(pinnedResolver(lc)("Bearer anything")).toBeNull();
+      expect(ctxResolver(lc)("Bearer anything")).toBeNull();
+    });
+  });
+
   describe("auth gate", () => {
     it("returns 401 with WWW-Authenticate: Bearer realm header", async () => {
       const deps = fakeDeps();

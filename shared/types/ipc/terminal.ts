@@ -2,6 +2,7 @@ import type { PanelKind, PanelLocation, PanelTitleMode } from "../panel.js";
 import type { AgentId } from "../agent.js";
 import type { AgentState } from "../agent.js";
 import type { BuiltInAgentId } from "../../config/agentIds.js";
+import type { ActionContext } from "../actions.js";
 
 /** Terminal spawn options */
 export interface TerminalSpawnOptions {
@@ -51,6 +52,14 @@ export interface TerminalSpawnOptions {
   agentPresetColor?: string;
   /** Original user-selected preset ID; unchanged across fallback hops. */
   originalAgentPresetId?: string;
+  /**
+   * Launch-time `ActionContext` snapshot, captured synchronously in the
+   * renderer when the user launched the agent. Consumed only by the
+   * `daintree-assistant` pinned-session path (#10647) to replay tool dispatch
+   * against the worktree/terminal focused at launch even if focus later
+   * changes. Ignored for every other agent.
+   */
+  actionContext?: ActionContext;
 }
 
 /** Terminal state for app state persistence */

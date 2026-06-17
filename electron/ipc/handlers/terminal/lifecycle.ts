@@ -44,6 +44,23 @@ async function getMcpServerService(): Promise<McpServerSingleton> {
   return cachedMcpServerService;
 }
 
+// One-time wiring of the assistant-pane pinning resolvers (#10647). Help-session
+// resolvers are wired in globalServicesInit / HelpSessionService; the assistant
+// pane path has no such owner, so we lazily wire it on first assistant spawn —
+// before `registerAssistantPaneBearer` and the CLI's first `/mcp` handshake.
+// Idempotent re-set is harmless, but the guard avoids re-binding on every spawn.
+let assistantPaneResolversWired = false;
+function wireAssistantPaneResolvers(mcpServerService: McpServerSingleton): void {
+  if (assistantPaneResolversWired) return;
+  mcpServerService.setAssistantPaneWebContentsResolver((token) =>
+    mcpPaneConfigService.getWebContentsIdForToken(token)
+  );
+  mcpServerService.setAssistantPaneActionContextResolver((token) =>
+    mcpPaneConfigService.getActionContextForToken(token)
+  );
+  assistantPaneResolversWired = true;
+}
+
 // Same lazy-import discipline as the MCP service above: PluginService pulls in
 // the whole plugin host (~thousands of lines), and only plugin-agent launches
 // that actually embed a `${settings:*}` template need it — so keep it off the
@@ -444,6 +461,29 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
               port,
               tier,
             });
+            // Promote the assistant's pane token to a pinned bearer so its MCP
+            // session binds to the launching renderer's WebContents and replays
+            // the launch-time ActionContext, instead of falling back to
+            // active-window dispatch (#10647). The resolvers must be wired and
+            // the bearer registered before this IPC resolves — the PTY starts
+            // immediately and the CLI's first /mcp POST can race ahead. When the
+            // sender WebContents is unknown we skip registration and degrade to
+            // the generic pane-token behaviour rather than pinning to nothing.
+            //
+            // Cleanup is free: the pinning metadata lives on the token record,
+            // so the existing `revokePaneConfig(id)` on PTY exit (events.ts) and
+            // spawn failure tears it down. A destroyed renderer is handled by
+            // the fail-closed `getPinnedWebContents` → `SessionBindingError`
+            // primitive, which is exactly the structured tool error we want —
+            // revoking the token here would degrade that into a 401 instead.
+            if (Number.isInteger(ctx.webContentsId) && ctx.webContentsId > 0) {
+              wireAssistantPaneResolvers(mcpServerService);
+              mcpPaneConfigService.registerAssistantPaneBearer(
+                token,
+                ctx.webContentsId,
+                validatedOptions.actionContext
+              );
+            }
             spawnEnv = {
               ...(spawnEnv ?? {}),
               DAINTREE_MCP_URL: `http://127.0.0.1:${port}/mcp`,
