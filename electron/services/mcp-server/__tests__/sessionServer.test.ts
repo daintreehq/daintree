@@ -1600,24 +1600,26 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
   });
 
   it("reclassifies a no-channel confirm dispatch to CONFIRMATION_REQUIRED, not EXECUTION_ERROR (#10640)", async () => {
-    // A confirm-gated tool the session's tier permits, dispatched by a client
-    // without elicitation.form. The unconfirmed dispatch is forwarded to the
-    // renderer bridge, which throws RendererBridgeUnavailableError because no
-    // Daintree window is open. That must surface as a non-retriable
-    // CONFIRMATION_REQUIRED (the human couldn't be asked) rather than a
-    // retriable EXECUTION_ERROR (which would read as a transient failure).
+    // recipe.run is a real danger:"confirm" action in the action tier. With a
+    // client that lacks elicitation.form, the unconfirmed dispatch is forwarded
+    // to the renderer bridge, which throws RendererBridgeUnavailableError when
+    // no Daintree window is open. Because the manifest entry IS known to be
+    // confirm-gated, that must surface as a non-retriable CONFIRMATION_REQUIRED
+    // (the human couldn't be asked) rather than a retriable EXECUTION_ERROR.
     const manifest = [
       {
-        id: "worktree.list",
-        title: "Worktree: list",
-        description: "List worktrees",
-        category: "worktree",
+        id: "recipe.run",
+        title: "Recipe: run",
+        description: "Run a recipe",
+        category: "recipe",
         danger: "confirm" as const,
         source: ["agent"] as const,
       },
     ] as unknown as import("../../../../shared/types/actions.js").ActionManifestEntry[];
     const dispatchAction = vi.fn().mockRejectedValue(new RendererBridgeUnavailableError());
     const deps = fakeDeps({
+      // action tier so recipe.run clears the tier floor and reaches dispatch.
+      sessionStore: fakeSessionStore("action"),
       requestManifest: vi.fn().mockResolvedValue(manifest),
       getCachedManifest: vi.fn(() => manifest),
       dispatchAction,
@@ -1626,12 +1628,12 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
     await server.connect(makeMockTransport());
 
     const result = (await callTool(server, {
-      name: "worktree.list",
+      name: "recipe.run",
       arguments: {},
     })) as { isError: boolean; content: { type: string; text: string }[] };
 
     // Dispatch was attempted unconfirmed (the renderer is the confirm gate).
-    expect(dispatchAction).toHaveBeenCalledWith("worktree.list", {}, false);
+    expect(dispatchAction).toHaveBeenCalledWith("recipe.run", {}, false);
     expect(result.isError).toBe(true);
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.code).toBe("CONFIRMATION_REQUIRED");
@@ -1639,10 +1641,11 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
     expect(parsed.details).toEqual({ confirmationChannel: "unavailable" });
   });
 
-  it("keeps EXECUTION_ERROR for a bridge-unavailable failure on a non-confirm tool (#10640)", async () => {
+  it("keeps a retriable EXECUTION_ERROR for a non-confirm tool when the bridge is unavailable (#10640)", async () => {
     // The reclassification is scoped to confirm-gated tools. A safe tool that
-    // hits the same RendererBridgeUnavailableError is a genuine execution
-    // failure (nothing needed confirming) and stays a retriable EXECUTION_ERROR.
+    // hits the same RendererBridgeUnavailableError is a genuine "no renderer"
+    // failure (nothing needed confirming) and stays a retriable EXECUTION_ERROR
+    // — but with an explicit cause rather than an opaque dispatch failure.
     const manifest = [
       {
         id: "files.search",
@@ -1670,6 +1673,37 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.code).toBe(EXECUTION_ERROR_CODE);
     expect(parsed.retriable).toBe(true);
+    expect(parsed.message).toContain("No Daintree window is open");
+  });
+
+  it("cold-cache confirm tool with no renderer stays a retriable EXECUTION_ERROR — danger is unknowable without a manifest (#10640)", async () => {
+    // Deliberate boundary: when no window is open AND the manifest cache is cold,
+    // the manifest fetch itself goes through the renderer and throws, so
+    // `lookupManifestEntry` returns undefined and the tool's danger is unknown.
+    // We must NOT claim CONFIRMATION_REQUIRED for an unverified confirm tool, so
+    // this stays a retriable EXECUTION_ERROR (the renderer may return when a
+    // window opens) rather than the non-retriable confirmation signal the
+    // warm-cache path produces.
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("action"),
+      // Cold cache + no renderer: both the manifest fetch and the dispatch fail.
+      getCachedManifest: vi.fn(() => null),
+      requestManifest: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
+      dispatchAction: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
+    });
+    const server = createSessionServer("s-cold-cache", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "recipe.run",
+      arguments: {},
+    })) as { isError: boolean; content: { type: string; text: string }[] };
+
+    expect(result.isError).toBe(true);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.code).toBe(EXECUTION_ERROR_CODE);
+    expect(parsed.retriable).toBe(true);
+    expect(parsed.message).toContain("No Daintree window is open");
   });
 });
 

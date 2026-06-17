@@ -43,8 +43,10 @@ const TEMPLATE_HASH_FILE = ".template-hash";
 // headless Daintree Assistant CLI (#10640): it covers orchestration, terminal
 // driving, branch setup, recipes, and reads, while leaving irreversible
 // mutations (git.push, worktree.delete) above the floor so they require a
-// human-approved scoped grant rather than running unattended. The tier boundary
-// is locked by the policy guard in `mcp-server/__tests__/tierAuth.test.ts`.
+// human-approved scoped grant rather than running unattended. What that tier
+// permits vs. withholds is locked by the policy guard in
+// `mcp-server/__tests__/tierAuth.test.ts`; this constant selects it as the
+// provisioning default.
 const DEFAULT_TIER: HelpAssistantTier = "action";
 const DEFAULT_DAINTREE_CONTROL = true;
 const DEFAULT_DOC_SEARCH = true;
