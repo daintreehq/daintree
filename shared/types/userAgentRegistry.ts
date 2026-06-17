@@ -5,7 +5,7 @@ const RESERVED_KEYS = ["__proto__", "constructor", "prototype"];
 export const SAFE_AGENT_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
 export const AssistantSupportsSchema = z.object({
-  mcpInjection: z.enum(["project-config", "cli-flags"]),
+  mcpInjection: z.enum(["project-config", "cli-flags", "env-only"]),
   settingsOverlay: z.boolean(),
   permissionBypass: z.boolean(),
   trustDialog: z.boolean(),

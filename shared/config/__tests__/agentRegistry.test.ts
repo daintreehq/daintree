@@ -272,7 +272,7 @@ describe("agentRegistry", () => {
       expect(getAssistantWiredAgentIds()).toContain("daintree-assistant");
       expect(getAssistantSupportedAgentIds()).not.toContain("daintree-assistant");
       expect(getAgentConfig("daintree-assistant")?.supports).toMatchObject({
-        mcpInjection: "project-config",
+        mcpInjection: "env-only",
         settingsOverlay: false,
         permissionBypass: false,
         trustDialog: false,
