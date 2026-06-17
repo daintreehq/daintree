@@ -20,7 +20,7 @@ import { SettingsSubtabBar } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { getAgentIds, getAgentConfig } from "@/config/agents";
 import { DEFAULT_AGENT_SETTINGS } from "@shared/types";
-import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import type {
   HibernationConfig,
   IdleTerminalNotifyConfig,
@@ -62,7 +62,7 @@ const CURATED_SHORTCUTS = [
     category: "Agents",
     actionIds: [
       "panel.palette",
-      ...BUILT_IN_AGENT_IDS.map((id) => `agent.${id}`),
+      ...LAUNCHABLE_AGENT_IDS.map((id) => `agent.${id}`),
       "agent.terminal",
       "terminal.inject",
     ],

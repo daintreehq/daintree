@@ -162,8 +162,11 @@ vi.mock("@shared/config/agentIds", () => {
   const ids = ["claude"];
   return {
     BUILT_IN_AGENT_IDS: ids,
+    ASSISTANT_ONLY_AGENT_IDS: [],
+    LAUNCHABLE_AGENT_IDS: ids,
     isBuiltInAgentId: (value: unknown): value is "claude" =>
       typeof value === "string" && ids.includes(value),
+    isAssistantOnlyAgentId: () => false,
   };
 });
 

@@ -94,11 +94,11 @@ import { ToolbarPortalButton } from "./ToolbarPortalButton";
 import { ToolbarAssistantButton } from "./ToolbarAssistantButton";
 import { useOverflowBadgeSeverity, type OverflowBadgeSeverity } from "./useOverflowBadgeSeverity";
 
-import { BUILT_IN_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
+import { LAUNCHABLE_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
 
 const AGENT_TOOLBAR_IDS = new Set<ToolbarButtonId>([
   "agent-tray",
-  ...(BUILT_IN_AGENT_IDS as unknown as ToolbarButtonId[]),
+  ...(LAUNCHABLE_AGENT_IDS as unknown as ToolbarButtonId[]),
 ]);
 
 type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?: string }> };
@@ -852,7 +852,7 @@ export function Toolbar({
         isAvailable: true,
       },
       ...Object.fromEntries(
-        BUILT_IN_AGENT_IDS.map((id) => [
+        LAUNCHABLE_AGENT_IDS.map((id) => [
           id,
           {
             render: () => (
@@ -1277,7 +1277,7 @@ export function Toolbar({
 
   const overflowActions = useMemo<Partial<Record<AnyToolbarButtonId, () => void>>>(
     () => ({
-      ...Object.fromEntries(BUILT_IN_AGENT_IDS.map((id) => [id, () => onLaunchAgent(id)])),
+      ...Object.fromEntries(LAUNCHABLE_AGENT_IDS.map((id) => [id, () => onLaunchAgent(id)])),
       terminal: () => onLaunchAgent("terminal"),
       browser: () => onLaunchAgent("browser"),
       "dev-server": () => {

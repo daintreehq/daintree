@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { homedir } from "os";
 import { join } from "path";
 import { CliAvailabilityService } from "../CliAvailabilityService.js";
+import { getAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { execFile, execFileSync } from "child_process";
 import { refreshPath } from "../../setup/environment.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
@@ -198,23 +199,28 @@ describe("CliAvailabilityService", () => {
       // The CLI is still launchable — auth discovery populates
       // `detail.authConfirmed` but the state signalled is distinct so
       // the UI can show a "Login required" nudge.
-      for (const state of Object.values(result)) {
+      // Agents Daintree probes auth for surface `unauthenticated` when no
+      // credentials are found. Agents that own their auth (no `authCheck`,
+      // e.g. daintree-assistant) stay `ready` — the CLI handles login itself.
+      for (const [id, state] of Object.entries(result)) {
+        if (!getAgentConfig(id)?.authCheck) continue;
         expect(state).toBe("unauthenticated");
       }
 
       const details = service.getDetails();
       expect(details).not.toBeNull();
-      for (const detail of Object.values(details!)) {
+      for (const [id, detail] of Object.entries(details!)) {
+        if (!getAgentConfig(id)?.authCheck) continue;
         expect(detail?.state).toBe("unauthenticated");
         expect(detail?.authConfirmed).toBe(false);
       }
 
-      // Should have called execFileSync 16 times (once for each CLI).
+      // Should have called execFileSync 17 times (once for each CLI).
       // Fallback probes (native paths, npm-global, WSL) run via async execFile and
       // only fire when the which/where probe returns missing — in this test
       // every agent succeeds on the first probe, so execFileSync count
       // matches the registry size exactly.
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(16);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(17);
 
       // The shell probe runs through async execFile — assert the option
       // shape (timeout + windowsHide) on the mock that observes it directly.
@@ -242,7 +248,10 @@ describe("CliAvailabilityService", () => {
       }
 
       const details = service.getDetails();
-      for (const detail of Object.values(details!)) {
+      // `authConfirmed` is only populated for agents with an `authCheck`;
+      // agents that own their auth (daintree-assistant) leave it undefined.
+      for (const [id, detail] of Object.entries(details!)) {
+        if (!getAgentConfig(id)?.authCheck) continue;
         expect(detail?.authConfirmed).toBe(true);
       }
     });
@@ -272,6 +281,7 @@ describe("CliAvailabilityService", () => {
         mistral: "missing",
         kimi: "missing",
         amp: "missing",
+        "daintree-assistant": "missing",
       });
     });
 
@@ -698,11 +708,11 @@ describe("CliAvailabilityService", () => {
       expect(refreshed.codex).toBe("missing");
 
       expect(service.getAvailability()).toEqual(refreshed);
-      // 16 primary calls (one per registry entry) + 15 BusyBox-style bare-`which`
-      // retries (the 15 agents whose mock throws a generic `Error` with no errno
+      // 17 primary calls (one per registry entry) + 16 BusyBox-style bare-`which`
+      // retries (the 16 agents whose mock throws a generic `Error` with no errno
       // code — which `probeViaShell` retries without `-a` to recover
       // BusyBox/minimal `which` builds that reject the flag).
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(31);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(33);
     });
 
     it("works on cold start before initial check", async () => {
@@ -730,7 +740,7 @@ describe("CliAvailabilityService", () => {
 
       await service.checkAvailability();
 
-      expect(executionOrder).toHaveLength(16);
+      expect(executionOrder).toHaveLength(17);
       expect(executionOrder).toContain("claude");
       expect(executionOrder).toContain("gemini");
       expect(executionOrder).toContain("agy");
@@ -747,6 +757,7 @@ describe("CliAvailabilityService", () => {
       expect(executionOrder).toContain("kimi");
       expect(executionOrder).toContain("amp");
       expect(executionOrder).toContain("aider");
+      expect(executionOrder).toContain("daintree-assistant");
     });
 
     it("deduplicates concurrent checkAvailability calls", async () => {
@@ -760,7 +771,7 @@ describe("CliAvailabilityService", () => {
 
       expect(result1).toEqual(result2);
       expect(result2).toEqual(result3);
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(16);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(17);
     });
 
     it("concurrent refresh calls each trigger a new check", async () => {
@@ -769,19 +780,19 @@ describe("CliAvailabilityService", () => {
       const [result1, result2] = await Promise.all([service.refresh(), service.refresh()]);
 
       expect(result1).toEqual(result2);
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(32);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(34);
     });
 
     it("allows sequential checks after first completes", async () => {
       mockedExecFileSync.mockImplementation(() => Buffer.from(""));
 
       await service.checkAvailability();
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(16);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(17);
 
       vi.clearAllMocks();
 
       await service.refresh();
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(16);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(17);
     });
   });
 

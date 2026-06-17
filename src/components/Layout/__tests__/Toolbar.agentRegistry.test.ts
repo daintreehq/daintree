@@ -91,13 +91,13 @@ describe("Toolbar — agent registry zero-touch guarantee (issue #5070)", () => 
 
     it("maps BUILT_IN_AGENT_IDS when building buttonRegistry", () => {
       expect(source).toMatch(
-        /BUILT_IN_AGENT_IDS\.map\(\(id\)\s*=>\s*\[\s*\n?\s*id,\s*\n?\s*\{\s*\n?\s*render:/
+        /(BUILT_IN_AGENT_IDS|LAUNCHABLE_AGENT_IDS)\.map\(\(id\)\s*=>\s*\[\s*\n?\s*id,\s*\n?\s*\{\s*\n?\s*render:/
       );
     });
 
     it("maps BUILT_IN_AGENT_IDS when building overflow actions", () => {
       expect(source).toMatch(
-        /BUILT_IN_AGENT_IDS\.map\(\(id\)\s*=>\s*\[id,\s*\(\)\s*=>\s*onLaunchAgent\(id\)\]\)/
+        /(BUILT_IN_AGENT_IDS|LAUNCHABLE_AGENT_IDS)\.map\(\(id\)\s*=>\s*\[id,\s*\(\)\s*=>\s*onLaunchAgent\(id\)\]\)/
       );
     });
   });

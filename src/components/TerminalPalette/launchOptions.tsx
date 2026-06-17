@@ -3,6 +3,7 @@ import { getBrandColorHex } from "@/lib/colorUtils";
 import type { PanelKind } from "@/types";
 import { AGENT_REGISTRY } from "@/config/agents";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import { resolveAgentIcon } from "@/config/agentIcons";
 
 export interface LaunchOption {
@@ -20,21 +21,24 @@ export function getLaunchOptions(): LaunchOption[] {
   // built-ins by `getEffectiveRegistry`) are launchable here too, not just the
   // built-in set. Built-in metadata (presets, tooltip) lives in the richer
   // renderer `AGENT_REGISTRY`; plugin agents fall back to the effective config.
-  const agentOptions: LaunchOption[] = getEffectiveAgentIds().map((id) => {
-    const builtIn = AGENT_REGISTRY[id];
-    const config = builtIn ?? getEffectiveAgentConfig(id);
-    const Icon = resolveAgentIcon(config?.iconId ?? id);
-    const presetCount = builtIn?.presets?.length ?? 0;
-    const description = builtIn?.tooltip ?? "";
-    const presetSuffix = presetCount > 0 ? ` (${presetCount} presets)` : "";
-    return {
-      id,
-      launchAgentId: id,
-      label: config?.name ?? id,
-      description: `${description}${presetSuffix}`.trim(),
-      icon: <Icon className="w-4 h-4" brandColor={getBrandColorHex(id)} />,
-    };
-  });
+  const agentOptions: LaunchOption[] = getEffectiveAgentIds()
+    // Assistant-only agents are never launchable from the New Terminal palette.
+    .filter((id) => !isAssistantOnlyAgentId(id))
+    .map((id) => {
+      const builtIn = AGENT_REGISTRY[id];
+      const config = builtIn ?? getEffectiveAgentConfig(id);
+      const Icon = resolveAgentIcon(config?.iconId ?? id);
+      const presetCount = builtIn?.presets?.length ?? 0;
+      const description = builtIn?.tooltip ?? "";
+      const presetSuffix = presetCount > 0 ? ` (${presetCount} presets)` : "";
+      return {
+        id,
+        launchAgentId: id,
+        label: config?.name ?? id,
+        description: `${description}${presetSuffix}`.trim(),
+        icon: <Icon className="w-4 h-4" brandColor={getBrandColorHex(id)} />,
+      };
+    });
 
   return [
     ...agentOptions,

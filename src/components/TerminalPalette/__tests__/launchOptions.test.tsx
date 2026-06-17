@@ -40,6 +40,12 @@ describe("getLaunchOptions (issue #10560)", () => {
     expect(option?.label).toBe("Acme Agent");
   });
 
+  it("never offers the assistant-only daintree-assistant as a launch option (#10634)", () => {
+    const ids = getLaunchOptions().map((o) => o.id);
+    expect(ids).not.toContain("daintree-assistant");
+    expect(getLaunchOptions().some((o) => o.launchAgentId === "daintree-assistant")).toBe(false);
+  });
+
   it("drops a plugin agent from the options once its registry entry is removed", () => {
     setPluginAgentRegistry({
       "acme-agent": {

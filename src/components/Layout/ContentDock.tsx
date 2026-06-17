@@ -52,6 +52,7 @@ import {
 } from "@/components/ui/context-menu";
 
 import { getAgentConfig, getAgentIds } from "@/config/agents";
+import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import { isAgentInstalled } from "@shared/utils/agentAvailability";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { buildDockRenderItems, type DockRenderItem } from "./dockRenderItems";
@@ -143,6 +144,8 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     const settingsIds = agentSettings?.agents ? Object.keys(agentSettings.agents) : [];
     const extraIds = settingsIds.filter((id) => !baseIds.includes(id)).sort();
     const agents: DockLaunchAgent[] = [...baseIds, ...extraIds]
+      // Assistant-only agents are never offered in the dock launch menu.
+      .filter((id) => !isAssistantOnlyAgentId(id))
       .filter((id) => isAgentInstalled(agentAvailability?.[id]))
       .map((id) => {
         const config = getAgentConfig(id);

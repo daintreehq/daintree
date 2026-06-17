@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import {
   buildInitialState,
   FEATURED_AGENT_IDS,
@@ -76,7 +76,7 @@ describe("sortTierByInstalled", () => {
 describe("tier partition completeness", () => {
   it("FEATURED + MORE covers all BUILT_IN_AGENT_IDS with no overlap", () => {
     const combined = [...FEATURED_AGENT_IDS, ...MORE_AGENT_IDS].sort();
-    const expected = [...BUILT_IN_AGENT_IDS].sort();
+    const expected = [...LAUNCHABLE_AGENT_IDS].sort();
     expect(combined).toEqual(expected);
 
     const overlap = FEATURED_AGENT_IDS.filter((id) => MORE_AGENT_IDS.includes(id));

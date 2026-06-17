@@ -19,6 +19,12 @@ import {
   type AssistantSupports,
 } from "../agentRegistry.js";
 import { UserAgentConfigSchema } from "../../types/userAgentRegistry.js";
+import {
+  BUILT_IN_AGENT_IDS,
+  LAUNCHABLE_AGENT_IDS,
+  BUILT_IN_AGENT_KEY_ACTIONS,
+  isAssistantOnlyAgentId,
+} from "../agentIds.js";
 
 describe("agentRegistry", () => {
   beforeEach(() => {
@@ -260,6 +266,41 @@ describe("agentRegistry", () => {
       expect(wired).not.toContain("interpreter");
       expect(wired).not.toContain("goose");
       expect(wired).not.toContain("cursor");
+    });
+
+    it("daintree-assistant is wired at experimental tier and hidden from the stable picker (#10634)", () => {
+      expect(getAssistantWiredAgentIds()).toContain("daintree-assistant");
+      expect(getAssistantSupportedAgentIds()).not.toContain("daintree-assistant");
+      expect(getAgentConfig("daintree-assistant")?.supports).toMatchObject({
+        mcpInjection: "project-config",
+        settingsOverlay: false,
+        permissionBypass: false,
+        trustDialog: false,
+        versionProbe: true,
+        tier: "experimental",
+      });
+    });
+
+    it("daintree-assistant is registered and detectable but not launchable (#10634)", () => {
+      // Registered (so CliAvailabilityService detects it and the assistant
+      // overlay can use it)...
+      expect(BUILT_IN_AGENT_IDS).toContain("daintree-assistant");
+      expect(getAgentConfig("daintree-assistant")).toBeDefined();
+      expect(isAssistantOnlyAgentId("daintree-assistant")).toBe(true);
+      // ...but excluded from every launchable surface and given no
+      // direct-launch keybinding action.
+      expect(LAUNCHABLE_AGENT_IDS).not.toContain("daintree-assistant");
+      expect(BUILT_IN_AGENT_KEY_ACTIONS).not.toContain("agent.daintree-assistant");
+    });
+
+    it("LAUNCHABLE_AGENT_IDS is exactly BUILT_IN_AGENT_IDS minus assistant-only agents", () => {
+      expect(LAUNCHABLE_AGENT_IDS).toEqual(
+        BUILT_IN_AGENT_IDS.filter((id) => !isAssistantOnlyAgentId(id))
+      );
+      // No assistant-only agent leaks into the launchable set.
+      for (const id of LAUNCHABLE_AGENT_IDS) {
+        expect(isAssistantOnlyAgentId(id)).toBe(false);
+      }
     });
 
     it("excludes agents whose supports object is at experimental tier", () => {

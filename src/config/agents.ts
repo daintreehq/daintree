@@ -62,6 +62,8 @@ export const AGENT_DESCRIPTIONS: Record<string, string> = {
   interpreter: "Local code execution — Python, shell, and JavaScript on your machine",
   mistral: "Mistral's terminal coding agent with local model support",
   kimi: "Moonshot AI's fast coding assistant",
+  "daintree-assistant":
+    "Daintree's own orchestration assistant — drives agents and the workspace over MCP",
 };
 
 /**
