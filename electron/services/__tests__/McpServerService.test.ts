@@ -4641,7 +4641,7 @@ describe("McpServerService", () => {
         previousState: "idle",
         trigger: "output",
         confidence: 1,
-        timestamp: Date.now(),
+        timestamp: 1_700_000_000_000,
       });
 
       const { window } = createMockWindow({ getManifest: manifestForResources });
@@ -4652,7 +4652,13 @@ describe("McpServerService", () => {
       const result = await client.readResource({ uri: "daintree://agent/agent-xyz/state" });
       const content = result.contents[0] as { uri: string; mimeType: string; text: string };
       expect(content.mimeType).toBe("application/json");
-      expect(JSON.parse(content.text)).toEqual({ agentId: "agent-xyz", state: "working" });
+      // A working agent has no exit metadata; lastTransitionAt tracks the last
+      // state change.
+      expect(JSON.parse(content.text)).toEqual({
+        agentId: "agent-xyz",
+        state: "working",
+        lastTransitionAt: 1_700_000_000_000,
+      });
 
       const missing = await client.readResource({ uri: "daintree://agent/agent-missing/state" });
       const missingContent = missing.contents[0] as {
@@ -4674,7 +4680,7 @@ describe("McpServerService", () => {
         trigger: "output",
         confidence: 1,
         waitingReason: "question",
-        timestamp: Date.now(),
+        timestamp: 1_700_000_000_000,
       });
 
       const { window } = createMockWindow({ getManifest: manifestForResources });
@@ -4688,6 +4694,7 @@ describe("McpServerService", () => {
         agentId: "agent-waiting",
         state: "waiting",
         waitingReason: "question",
+        lastTransitionAt: 1_700_000_000_000,
       });
     });
 
