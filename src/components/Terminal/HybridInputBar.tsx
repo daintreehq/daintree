@@ -502,6 +502,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       });
     };
 
+    // Claim focus on mount: TerminalPane's one-shot focus RAF may have no-opped
+    // against a null ref if this lazy chunk wasn't loaded yet, leaving focus on
+    // the launching AgentButton where Enter spawns a duplicate agent. See #10541.
+    useEffect(() => {
+      if (!isFocusedTerminal) return;
+      if (usePanelStore.getState().preferredTerminalFocusTarget !== "hybridInput") return;
+      focusEditor();
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only focus claim
+    }, []);
+
     const handleHistoryNavigation = (direction: "up" | "down"): boolean => {
       const latest = latestRef.current;
       if (!latest) return false;
