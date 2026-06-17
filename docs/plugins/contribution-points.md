@@ -55,7 +55,9 @@ export default async function planFromIssue(args: { issue: number }) {
 }
 ```
 
-_Imperative registration (escape hatch for dynamic commands):_
+> **Lazy handlers receive `args` only — no `host`.** A filesystem-convention handler's single parameter is the dispatched `args` payload. There is no second `host` argument, so a lazy handler **cannot** call `host.showQuickPick`, `host.sendToActiveAgent`, `host.settings.get`, or any other host API. This is structural, not an oversight: the host is scoped to `activate()` and is revoked once activation returns, long before a command is first dispatched, so there is no live host to hand a lazily-imported handler. **If your command needs host APIs, register it imperatively in `activate()`** (next section) — that handler closes over the live `host`. An imperative `registerAction` for the same id supersedes the lazy file, so you can start with a manifest-declared stub and graduate to `registerAction` the moment you need host access.
+
+_Imperative registration (escape hatch for dynamic commands — and the only way to reach host APIs from a command handler):_
 
 > `@daintreehq/plugin-sdk` is the forward-looking published name for the SDK types/runtime (reserved in `shared/types/plugin-sdk.ts`, scaffolded as a dependency by the `daintree-plugin` CLI). It's distinct from the in-repo `daintree-plugin` CLI package — don't conflate the two.
 

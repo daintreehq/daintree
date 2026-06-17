@@ -408,8 +408,14 @@ export class PluginDevWorkerHostProxy {
       // to their panels from timers and subscription callbacks.
       postToPanel: (channel, payload) => {
         if (typeof channel !== "string" || channel.length === 0 || channel.includes(":")) {
-          throw new Error(
-            `Plugin "${this.pluginId}" postToPanel: channel must be a non-empty string without colons: ${String(channel)}`
+          // Reject (not sync throw): runtime-surface Promise method must keep
+          // validation errors inside the Promise contract, mirroring the
+          // main-side host (#10617). notify() is fire-and-forget/sync, so this
+          // method can't simply be `async`.
+          return Promise.reject(
+            new Error(
+              `Plugin "${this.pluginId}" postToPanel: channel must be a non-empty string without colons: ${String(channel)}`
+            )
           );
         }
         this.notify("postToPanel", { channel, payload });
@@ -511,8 +517,11 @@ export class PluginDevWorkerHostProxy {
       },
       invalidateFileDecorations: (scope, paths) => {
         if (typeof scope !== "string" || scope.length === 0) {
-          throw new Error(
-            `Plugin "${this.pluginId}" invalidateFileDecorations: scope must be a non-empty string`
+          // Reject (not sync throw): runtime-surface Promise method (#10617).
+          return Promise.reject(
+            new Error(
+              `Plugin "${this.pluginId}" invalidateFileDecorations: scope must be a non-empty string`
+            )
           );
         }
         this.notify("invalidateFileDecorations", { scope, paths });
@@ -522,8 +531,9 @@ export class PluginDevWorkerHostProxy {
       // badge fire-and-forget; the real host re-validates the badge shape.
       setPanelBadge: (panelId, badge) => {
         if (typeof panelId !== "string" || panelId.length === 0) {
-          throw new Error(
-            `Plugin "${this.pluginId}" setPanelBadge: panelId must be a non-empty string`
+          // Reject (not sync throw): runtime-surface Promise method (#10617).
+          return Promise.reject(
+            new Error(`Plugin "${this.pluginId}" setPanelBadge: panelId must be a non-empty string`)
           );
         }
         this.notify("setPanelBadge", { panelId, badge: badge ?? null });

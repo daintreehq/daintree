@@ -356,3 +356,45 @@ describe("PluginDevWorkerHostProxy host-call post failure (#10526)", () => {
     expect(post).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("PluginDevWorkerHostProxy runtime-surface validation rejects, never throws (#10617)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("postToPanel rejects an empty or colon-bearing channel without notifying main", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(proxy.host.postToPanel("bad:channel", null)).rejects.toThrow(
+      /postToPanel: channel/
+    );
+    await expect(proxy.host.postToPanel("", null)).rejects.toThrow(/postToPanel: channel/);
+    // No host-notify for postToPanel was sent — the call rejected before forwarding.
+    expect(sent.some((m) => m.type === "host-notify" && m.method === "postToPanel")).toBe(false);
+  });
+
+  it("postToPanel rejection is catchable on a non-awaited call (no sync throw)", async () => {
+    const { proxy } = makeProxy();
+    let caught: unknown;
+    const pending = proxy.host.postToPanel("also:bad", null).catch((err) => {
+      caught = err;
+    });
+    await pending;
+    expect(caught).toBeInstanceOf(Error);
+  });
+
+  it("setPanelBadge rejects a non-string panelId without notifying main", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(proxy.host.setPanelBadge("", { kind: "dot" })).rejects.toThrow(
+      /setPanelBadge: panelId/
+    );
+    expect(sent.some((m) => m.type === "host-notify" && m.method === "setPanelBadge")).toBe(false);
+  });
+
+  it("invalidateFileDecorations rejects an empty scope without notifying main", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(proxy.host.invalidateFileDecorations("", undefined)).rejects.toThrow(
+      /invalidateFileDecorations: scope/
+    );
+    expect(
+      sent.some((m) => m.type === "host-notify" && m.method === "invalidateFileDecorations")
+    ).toBe(false);
+  });
+});

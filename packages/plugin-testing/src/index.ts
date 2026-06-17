@@ -11,6 +11,9 @@ export type {
   RegisteredForgeProviderRecord,
   RegisteredFileDecorationProviderRecord,
   InvalidationRecord,
+  ShowQuickPickRecord,
+  ShowInputBoxRecord,
+  ShowConfirmRecord,
 } from "../../../shared/testing/createMockHost.js";
 
 // Re-exported so plugin authors can type `seedActionCatalog` entries without a
