@@ -164,6 +164,53 @@ export const forgeClient = {
     return window.electron.forge.openPR({ cwd, prNumber });
   },
 
+  createPR: (
+    cwd: string,
+    input: { head: string; base: string; title: string; body?: string; draft?: boolean }
+  ): Promise<PR> => {
+    return window.electron.forge.createPR({ cwd, ...input });
+  },
+
+  closePR: (cwd: string, prNumber: number): Promise<void> => {
+    return window.electron.forge.closePR({ cwd, prNumber });
+  },
+
+  reopenPR: (cwd: string, prNumber: number): Promise<void> => {
+    return window.electron.forge.reopenPR({ cwd, prNumber });
+  },
+
+  mergePR: (
+    cwd: string,
+    prNumber: number,
+    input?: {
+      mergeMethod?: "merge" | "squash" | "rebase";
+      commitTitle?: string;
+      commitMessage?: string;
+    }
+  ): Promise<void> => {
+    return window.electron.forge.mergePR({ cwd, prNumber, ...input });
+  },
+
+  convertPRToDraft: (cwd: string, prNumber: number): Promise<void> => {
+    return window.electron.forge.convertPRToDraft({ cwd, prNumber });
+  },
+
+  markPRReadyForReview: (cwd: string, prNumber: number): Promise<void> => {
+    return window.electron.forge.markPRReadyForReview({ cwd, prNumber });
+  },
+
+  commentOnPR: (cwd: string, prNumber: number, body: string): Promise<void> => {
+    return window.electron.forge.commentOnPR({ cwd, prNumber, body });
+  },
+
+  editPR: (
+    cwd: string,
+    prNumber: number,
+    input: { title?: string; body?: string }
+  ): Promise<PR> => {
+    return window.electron.forge.editPR({ cwd, prNumber, ...input });
+  },
+
   onRepoStatsAndPageUpdated: (
     callback: (data: ForgeRepoStatsAndPagePayload) => void
   ): (() => void) => {

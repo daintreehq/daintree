@@ -333,6 +333,14 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "devPreview.reinstallAndRestart",
   "artifact.applyPatch",
   "agentSettings.reset",
+  "forge.createPR",
+  "forge.closePR",
+  "forge.reopenPR",
+  "forge.mergePR",
+  "forge.convertPRToDraft",
+  "forge.markPRReadyForReview",
+  "forge.commentOnPR",
+  "forge.editPR",
 ];
 
 /**
@@ -399,6 +407,18 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // ConfirmDialog with diff preview in ArtifactOverlay.tsx; the dispatch lives in
   // useArtifacts.ts (action ID not co-located with the dialog component).
   "artifact.applyPatch",
+  // Forge PR write actions are agent/MCP-only — exposed over MCP, not bound to a
+  // user-side ConfirmDialog. danger:"confirm" gates agent dispatch (requiring
+  // confirmed:true) and excludes them from repeatLast/MRU; there is no UI
+  // dispatch path to wire a dialog to (issue #10654).
+  "forge.createPR",
+  "forge.closePR",
+  "forge.reopenPR",
+  "forge.mergePR",
+  "forge.convertPRToDraft",
+  "forge.markPRReadyForReview",
+  "forge.commentOnPR",
+  "forge.editPR",
 ];
 
 describe("destructive-action confirm wiring", () => {
@@ -467,6 +487,12 @@ describe("destructive-action danger metadata", () => {
       recipeId: "recipe-placeholder",
       patchContent: "--- a\n+++ b",
       cwd: "/placeholder",
+      // forge.* PR write actions require these before the confirm gate runs.
+      prNumber: 1,
+      head: "feature-branch",
+      base: "main",
+      title: "placeholder",
+      body: "placeholder",
     };
 
     // Some listed actions (e.g. worktree.resource.teardown) gate availability

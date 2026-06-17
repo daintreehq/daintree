@@ -231,6 +231,14 @@ export type ForgeProviderMethodName =
   | "requestChanges"
   | "dismissReview"
   | "requestReviewers"
+  | "createPR"
+  | "closePR"
+  | "reopenPR"
+  | "mergePR"
+  | "convertPRToDraft"
+  | "markPRReadyForReview"
+  | "commentOnPR"
+  | "editPR"
   | "validateToken"
   | "getCurrentUser";
 

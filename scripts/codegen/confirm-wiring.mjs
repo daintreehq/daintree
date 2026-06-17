@@ -52,6 +52,14 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "devPreview.reinstallAndRestart",
   "artifact.applyPatch",
   "agentSettings.reset",
+  "forge.createPR",
+  "forge.closePR",
+  "forge.reopenPR",
+  "forge.mergePR",
+  "forge.convertPRToDraft",
+  "forge.markPRReadyForReview",
+  "forge.commentOnPR",
+  "forge.editPR",
 ]);
 
 // Actions with a ConfirmDialog-family component co-located in the same source file
@@ -91,6 +99,16 @@ const BYPASS_WIRED = new Set([
   "recipe.run", // agent-dispatch only; no user-side ConfirmDialog (danger:"confirm" gates MCP only)
   "artifact.applyPatch", // ConfirmDialog in ArtifactOverlay.tsx; dispatch in useArtifacts.ts (ID not co-located)
   "agentSettings.reset", // agent/MCP-only; palette-hidden, configured from Settings via client (danger:"confirm" gates agent dispatch only)
+  // Forge PR write actions are agent/MCP-only (issue #10654); danger:"confirm"
+  // gates agent dispatch — no user-side ConfirmDialog to co-locate.
+  "forge.createPR",
+  "forge.closePR",
+  "forge.reopenPR",
+  "forge.mergePR",
+  "forge.convertPRToDraft",
+  "forge.markPRReadyForReview",
+  "forge.commentOnPR",
+  "forge.editPR",
 ]);
 
 // Text tokens identifying a ConfirmDialog-family component in a source file.

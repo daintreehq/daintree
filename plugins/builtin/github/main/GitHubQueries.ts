@@ -993,3 +993,35 @@ export function buildBatchRequiredChecksQuery(
 
   return `query { ${parts.join("\n")} rateLimit { cost remaining resetAt limit } }`;
 }
+
+// Narrow lookup of a PR's GraphQL node id. Draft-toggle mutations
+// (convertPullRequestToDraft / markPullRequestReadyForReview) require the node
+// id, which the normalized PR type intentionally omits — fetch it on demand
+// rather than bleed a GitHub-specific id into the provider-neutral contract.
+export const GET_PR_NODE_ID_QUERY = `
+  query GetPRNodeId($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        id
+      }
+    }
+  }
+`;
+
+// REST PATCH can't toggle a PR's draft state; these GraphQL mutations are the
+// only path. Both take the PR node id resolved via GET_PR_NODE_ID_QUERY.
+export const CONVERT_PR_TO_DRAFT_MUTATION = `
+  mutation ConvertPRToDraft($id: ID!) {
+    convertPullRequestToDraft(input: { pullRequestId: $id }) {
+      pullRequest { id isDraft }
+    }
+  }
+`;
+
+export const MARK_PR_READY_FOR_REVIEW_MUTATION = `
+  mutation MarkPRReady($id: ID!) {
+    markPullRequestReadyForReview(input: { pullRequestId: $id }) {
+      pullRequest { id isDraft }
+    }
+  }
+`;
