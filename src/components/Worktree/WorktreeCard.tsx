@@ -27,6 +27,7 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { cn } from "../../lib/utils";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
+import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import { getAgentSettingsEntry } from "@/types";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
@@ -576,7 +577,8 @@ export function WorktreeCard({
     const baseIds = getAgentIds();
     const settingsIds = agentSettings?.agents ? Object.keys(agentSettings.agents) : [];
     const extraIds = settingsIds.filter((id) => !baseIds.includes(id)).sort();
-    return [...baseIds, ...extraIds];
+    // Assistant-only agents are never launchable from the worktree card.
+    return [...baseIds, ...extraIds].filter((id) => !isAssistantOnlyAgentId(id));
   })();
 
   const launchAgents = (() => {
