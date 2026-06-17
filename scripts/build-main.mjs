@@ -362,6 +362,101 @@ function validateCopiedPluginAssets() {
   process.exit(1);
 }
 
+/**
+ * Scan each source plugin's declared `contributes.commands` and report any whose
+ * handler module is authored as TypeScript (`src/{id}.ts` / `src/{id}.tsx`).
+ * `COMMAND_HANDLER_EXTENSIONS` in PluginService.ts probes only `.js`/`.mjs` at
+ * runtime (#10620): a `.ts` handler is either never found or throws a
+ * `SyntaxError` at first dispatch under Node's type-stripping (non-erasable
+ * syntax), and `.tsx` never runs. Catching it at build time turns a runtime
+ * footgun into a loud failure. Pure (no exit/logging) and parameterized on the
+ * source plugins root so it is unit testable; a missing root yields `[]`.
+ */
+export function findTypeScriptCommandHandlers(pluginsSrcRoot) {
+  const offenders = [];
+  for (const tier of ["builtin", "sample"]) {
+    const tierRoot = path.join(pluginsSrcRoot, tier);
+    if (!fs.existsSync(tierRoot)) continue;
+    for (const entry of fs.readdirSync(tierRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const pluginDir = path.join(tierRoot, entry.name);
+      const manifestPath = path.join(pluginDir, "plugin.json");
+      if (!fs.existsSync(manifestPath)) continue;
+      let manifest;
+      try {
+        manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      } catch {
+        // The dedicated manifest validation step reports unreadable manifests.
+        continue;
+      }
+      const commands = manifest?.contributes?.commands ?? [];
+      for (const command of commands) {
+        const id = command?.id;
+        if (typeof id !== "string" || id.length === 0) continue;
+        // Mirrors COMMAND_HANDLER_EXTENSIONS in PluginService.ts. A loadable
+        // sibling means the runtime resolves the command (e.g. a plugin
+        // mid-migration keeping the .ts source beside the compiled .js), so the
+        // TypeScript source is not a footgun — skip it.
+        const loadableExts = [".js", ".mjs"];
+        if (loadableExts.some((ext) => fs.existsSync(path.join(pluginDir, "src", `${id}${ext}`)))) {
+          continue;
+        }
+        for (const ext of [".ts", ".tsx", ".mts", ".cts"]) {
+          if (fs.existsSync(path.join(pluginDir, "src", `${id}${ext}`))) {
+            offenders.push(`${tier}/${entry.name}: src/${id}${ext}`);
+          }
+        }
+      }
+    }
+  }
+  return offenders;
+}
+
+/**
+ * Fail the build (warn in watch mode) when a plugin ships a TypeScript command
+ * handler the runtime can never load (#10620). Same severity model as
+ * `validateCopiedPluginAssets`: loud-and-fatal for single/production builds, a
+ * warning under watch where the source may still be mid-edit.
+ */
+function validateCommandHandlerExtensions() {
+  const offenders = findTypeScriptCommandHandlers(path.join(root, "plugins"));
+  if (offenders.length === 0) return;
+
+  const detail = offenders.map((o) => `  - ${o}`).join("\n");
+  const message = `[Build] TypeScript command handlers will not load at runtime — the host probes only .js/.mjs (#10620). Compile or rewrite these as .js/.mjs:\n${detail}`;
+  if (isWatch) {
+    console.warn(message);
+    return;
+  }
+  console.error(message);
+  process.exit(1);
+}
+
+/**
+ * Typecheck plugin code (`tsconfig.plugins.json`) before emitting output so a
+ * type error in a built-in/sample plugin's main code fails the build instead of
+ * surfacing at runtime (#10620). Uses `tsc --noEmit` — never `tsc -b`, which
+ * emits `.js` into the source tree and would clobber the esbuild output. Skipped
+ * in watch mode (a full typecheck would stall the watcher); a banner points devs
+ * at `npm run check`.
+ */
+function runPluginTypecheck() {
+  if (isWatch) {
+    console.log("[Build] Plugin types skipped in watch mode — run npm run check to typecheck.");
+    return;
+  }
+  const tscBin = process.platform === "win32" ? "tsc.cmd" : "tsc";
+  const tscPath = path.join(root, "node_modules", ".bin", tscBin);
+  const result = spawnSync(tscPath, ["--noEmit", "-p", "tsconfig.plugins.json"], {
+    stdio: "inherit",
+    cwd: root,
+  });
+  if (result.status !== 0) {
+    console.error("[Build] Plugin typecheck failed.");
+    process.exit(result.status ?? 1);
+  }
+}
+
 function createReadyMarkerPlugin() {
   return {
     name: "build-ready-marker",
@@ -383,6 +478,12 @@ async function run() {
   // output, so an invalid `plugin.json` neither wipes the prior build nor ships
   // a broken plugin (#10564).
   validatePluginManifests();
+
+  // Reject TypeScript command handlers the runtime can never load, and
+  // typecheck plugin code, before any output is emitted (#10620). Both run
+  // ahead of the clean/emit so a failure leaves the prior build intact.
+  validateCommandHandlerExtensions();
+  runPluginTypecheck();
 
   if (isProd && !isWatch) {
     // Clean both the electron host bundles and the built-in plugin outputs

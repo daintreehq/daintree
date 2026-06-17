@@ -31,7 +31,7 @@ Creates `./my-plugin/` with:
 
 Templates:
 
-- **`command`** — single command plugin. `src/index.ts` exports `activate(host)` and registers the command imperatively via `host.registerAction(...)`. (The filesystem-convention handler — `src/{id}.ts` auto-bound on first dispatch — is also supported by the host; the scaffold just shows the imperative path.)
+- **`command`** — single command plugin. `src/index.ts` exports `activate(host)` and registers the command imperatively via `host.registerAction(...)`. (The filesystem-convention handler — compiled `src/{id}.js` auto-bound on first dispatch — is also supported by the host; the scaffold just shows the imperative path.)
 - **`view`** — panel view + React component (`src/index.ts` + `src/panel.tsx`)
 - **`mcp`** — skeleton MCP server plus manifest wiring (`src/index.ts` + `src/server.ts`)
 - **`full`** — command + view + MCP example (largest, for experimenting)
@@ -154,7 +154,7 @@ Check:
 
 Check:
 
-- Handler file exists at `src/{id}.{ts,tsx,js,mjs}` (filesystem convention) OR
+- Compiled handler file exists at `src/{id}.{js,mjs}` (filesystem convention — `.ts`/`.tsx` are not probed; compile to `.js` first) OR
 - `activate()` called `host.registerAction({id: "{id}"}, handler)` (imperative)
 - No import errors in the handler file (these show up as toasts on command invocation)
 

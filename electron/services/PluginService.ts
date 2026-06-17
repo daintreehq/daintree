@@ -187,13 +187,17 @@ const BUILT_IN_ACTION_ID_SET: ReadonlySet<string> = new Set<string>(BUILT_IN_ACT
 
 /**
  * Filesystem-convention extensions probed for a manifest-declared command's
- * handler module, in precedence order. `.ts`/`.tsx` resolve in Electron 41
- * (Node 24's type-stripping covers `.ts`; `.tsx` needs the plugin author to
- * pre-compile or it'll fail at first dispatch) so a dev-mode plugin can ship
- * source directly. The probe is async file-access only — no module evaluation
- * happens until dispatch time.
+ * handler module, in precedence order. Only shippable JavaScript is probed:
+ * `.ts`/`.tsx` are deliberately excluded (#10620). Node 24's type-stripping
+ * makes a `.ts` handler *appear* to work for erasable syntax but throws a
+ * `SyntaxError` at first dispatch on any non-erasable construct (enum,
+ * parameter properties, decorators), and `.tsx` never runs — a high-confusion
+ * footgun that surfaces only at runtime. A `.ts`/`.tsx` handler in a built-in
+ * or sample plugin's `src/` is caught at build time by
+ * `validateCommandHandlerExtensions` in `scripts/build-main.mjs`. The probe is
+ * async file-access only — no module evaluation happens until dispatch time.
  */
-const COMMAND_HANDLER_EXTENSIONS = [".ts", ".tsx", ".js", ".mjs"] as const;
+const COMMAND_HANDLER_EXTENSIONS = [".js", ".mjs"] as const;
 
 /**
  * Compound-capability lattice (#9247). The flat
@@ -1520,7 +1524,7 @@ export class PluginService {
   }
 
   /**
-   * Probe `{pluginDir}/src/{cmdId}.{ts,tsx,js,mjs}` in precedence order,
+   * Probe `{pluginDir}/src/{cmdId}.{js,mjs}` in precedence order,
    * returning the first existing path or `null` when none match. The result
    * is cached in {@link commandModulePaths} so the probe runs once per
    * command per load — dispatch reads the cached path directly. Path
