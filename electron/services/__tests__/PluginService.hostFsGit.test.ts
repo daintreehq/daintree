@@ -54,6 +54,10 @@ function dataDir(): string {
 function setWorktrees(snapshots: Array<Partial<WorktreeSnapshot> & { path: string }>): void {
   (svc as unknown as { setWorkspaceClient(c: unknown): void }).setWorkspaceClient({
     getAllStatesAsync: async () => snapshots,
+    // The real WorkspaceClient is an EventEmitter; setWorkspaceClient wires the
+    // #10621 worktree-scope cache-eviction listener through on/off.
+    on: vi.fn(),
+    off: vi.fn(),
   });
 }
 
@@ -344,6 +348,8 @@ describe("host.fs ${worktree}/${project} token expansion", () => {
       getAllStatesAsync: async () => {
         throw new Error("client unavailable");
       },
+      on: vi.fn(),
+      off: vi.fn(),
     });
     const host = registerPlugin(["fs:project-read"], ["${worktree}"]);
     await expect(host.fs.readFile(join(baseDir, "x.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
