@@ -61,6 +61,7 @@ import type {
   PluginConfirmOptions,
   BuiltInPluginCapability,
   PluginLoadError,
+  PluginActivationResult,
   PluginInstallResult,
   PluginInstallOptions,
   PluginCheckUpdateResult,
@@ -1970,19 +1971,38 @@ export class PluginService {
    * the owning plugin is resolved by matching the registered panel-kind id
    * (`${pluginId}.${panel.id}`, exactly as built in `loadPlugin`) against the
    * manifest registry rather than splitting `panelKindId` on a dot — plugin ids
-   * are `publisher.name` and already contain dots. A no-op when the kind id is
-   * unknown.
+   * are `publisher.name` and already contain dots.
+   *
+   * Returns a plain {@link PluginActivationResult} so the renderer's
+   * `PluginViewHost` can surface the real activation cause (#10618). Because
+   * {@link activatePlugin} never rejects (the contribution-point trigger
+   * contract), failures are read back from the persisted provenance `loadError`
+   * after the await — covering all three failure modes (worker fork failure,
+   * activate() timeout, activate() throw). An unknown kind id resolves to
+   * `{ ok: true }`: there is nothing to activate, and the renderer's module
+   * import then fails on its own with a more specific error.
+   *
+   * Limitation: built-in plugins have no installed provenance record, so a
+   * built-in activation failure (logged, not persisted) reads back as
+   * `{ ok: true }` here and falls through to the renderer's generic import
+   * error. Built-ins are app-bundled trusted code where this is rare; surfacing
+   * it would need a separate in-memory built-in load-error map.
    */
-  async activatePluginForView(panelKindId: string): Promise<void> {
-    if (typeof panelKindId !== "string" || panelKindId.length === 0) return;
+  async activatePluginForView(panelKindId: string): Promise<PluginActivationResult> {
+    if (typeof panelKindId !== "string" || panelKindId.length === 0) return { ok: true };
     for (const [pluginId, plugin] of this.plugins) {
       for (const panel of plugin.manifest.contributes.panels) {
         if (`${pluginId}.${panel.id}` === panelKindId) {
           await this.activatePlugin(pluginId);
-          return;
+          const loadError = this.getPluginLoadError(pluginId);
+          if (loadError) {
+            return { ok: false, error: loadError.message, stack: loadError.stack };
+          }
+          return { ok: true };
         }
       }
     }
+    return { ok: true };
   }
 
   /**
@@ -2224,7 +2244,12 @@ export class PluginService {
             `Plugin broadcast channel must be a string without colons: ${String(channel)}`
           );
         }
-        broadcastToRenderer(`plugin:${pluginId}:${channel}`, payload);
+        // Wrap in the per-instance envelope (panelId: null = broadcast) so the
+        // preload dispatcher sees the same shape for every push over this
+        // transport — broadcastToRenderer, postToPanel, and the process stream
+        // share the `plugin:{pluginId}:{channel}` channel and one `plugin.on`
+        // subscriber receives all three.
+        broadcastToRenderer(`plugin:${pluginId}:${channel}`, { panelId: null, payload });
         return Promise.resolve();
       },
       // The post-activation-safe sibling of broadcastToRenderer: same
@@ -2234,7 +2259,7 @@ export class PluginService {
       // its panels without the renderer degrading to invoke() polling. Liveness
       // is plugin membership (mirrors invalidateFileDecorations/showToast): once
       // the plugin unloads this silently no-ops.
-      postToPanel: (channel, payload) => {
+      postToPanel: (channel, payload, panelId) => {
         if (!isBound()) return Promise.resolve();
         if (typeof channel !== "string" || channel.length === 0 || channel.includes(":")) {
           // Reject (not sync throw): this is a post-activation runtime-surface
@@ -2247,7 +2272,19 @@ export class PluginService {
             )
           );
         }
-        broadcastToRenderer(`plugin:${pluginId}:${channel}`, payload);
+        // `undefined` (arg omitted) and `null` both mean broadcast; only a
+        // non-empty string targets a single panel instance. An empty string is
+        // an authoring mistake (it would silently match no subscriber), so
+        // reject it loudly rather than coercing to broadcast.
+        if (panelId !== undefined && panelId !== null) {
+          if (typeof panelId !== "string" || panelId.length === 0) {
+            throw new Error(
+              `Plugin "${pluginId}" postToPanel: panelId must be a non-empty string, null, or undefined: ${String(panelId)}`
+            );
+          }
+        }
+        const targetPanelId = panelId ?? null;
+        broadcastToRenderer(`plugin:${pluginId}:${channel}`, { panelId: targetPanelId, payload });
         return Promise.resolve();
       },
       getActiveWorktree: async () => {
@@ -3065,7 +3102,13 @@ export class PluginService {
           // Membership-gated like postToPanel: a late stream emit after the
           // plugin unloads is dropped rather than broadcast.
           if (!this.plugins.has(pluginId)) return;
-          broadcastToRenderer(`plugin:${pluginId}:${PLUGIN_PROCESS_STREAM_CHANNEL}`, event);
+          // Same per-instance envelope as host.postToPanel — the process stream
+          // rides the same transport and is consumed by the same `plugin.on`
+          // dispatcher. Process events are not panel-scoped, so broadcast (null).
+          broadcastToRenderer(`plugin:${pluginId}:${PLUGIN_PROCESS_STREAM_CHANNEL}`, {
+            panelId: null,
+            payload: event,
+          });
         },
         auditor: ({ pluginId, command, args, processId }) => {
           // Surface the spawn in the audit trail so process execution is

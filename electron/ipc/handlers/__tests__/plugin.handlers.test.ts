@@ -13,6 +13,7 @@ const mockCheckForUpdate = vi.fn();
 const mockListPluginActions = vi.fn();
 const mockRegisterPluginAction = vi.fn();
 const mockUnregisterPluginAction = vi.fn();
+const mockActivatePluginForView = vi.fn();
 
 vi.mock("../../../services/PluginService.js", () => ({
   pluginService: {
@@ -25,6 +26,7 @@ vi.mock("../../../services/PluginService.js", () => ({
     listPluginActions: (...args: unknown[]) => mockListPluginActions(...args),
     registerPluginAction: (...args: unknown[]) => mockRegisterPluginAction(...args),
     unregisterPluginAction: (...args: unknown[]) => mockUnregisterPluginAction(...args),
+    activatePluginForView: (...args: unknown[]) => mockActivatePluginForView(...args),
     // No-op for tests that don't care about implicit activation; the IPC
     // handler awaits it before resolving the impl set.
     activatePluginsForFileDecorationScope: vi.fn().mockResolvedValue(undefined),
@@ -297,6 +299,22 @@ describe("registerPluginHandlers", () => {
       ...args: unknown[]
     ) => unknown;
   }
+
+  it("PLUGIN_ACTIVATE_FOR_VIEW resolves on success and throws the cause on failure (#10618)", async () => {
+    const handler = getHandler("plugin:activate-for-view");
+
+    // Success: the handler resolves void (#6020 — IPC handlers return void on
+    // success rather than an { ok } envelope) so the renderer proceeds to import.
+    mockActivatePluginForView.mockResolvedValueOnce({ ok: true });
+    await expect(handler({}, "acme.demo.viewer")).resolves.toBeUndefined();
+    expect(mockActivatePluginForView).toHaveBeenCalledWith("acme.demo.viewer");
+
+    // Failure: the handler throws so the IPC call rejects and the renderer's
+    // PluginViewHost surfaces the real activation cause. The thrown message
+    // carries the underlying error text.
+    mockActivatePluginForView.mockResolvedValueOnce({ ok: false, error: "activate-boom" });
+    await expect(handler({}, "acme.demo.viewer")).rejects.toThrow(/activate-boom/);
+  });
 
   it("PLUGIN_INSTALL_FROM_FILE returns cancelled when the picker is dismissed", async () => {
     mockShowOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });

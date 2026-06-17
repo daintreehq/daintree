@@ -277,6 +277,57 @@ describe("makePluginViewHost", () => {
     vi.doUnmock("react");
   });
 
+  it("surfaces the real activation cause when activateForView rejects, before import (#10618)", async () => {
+    // The #10618 contract: on activation failure the activate-for-view IPC call
+    // REJECTS with the real cause (the handler throws an AppError), carrying the
+    // plugin's own message. The host's `await` rethrows it before `import()`, so
+    // the ErrorBoundary surfaces why activation failed instead of a generic
+    // import timeout. (Distinct from the #10523 gating test below, which only
+    // proves the await ordering with a sentinel.)
+    const activateForView = vi
+      .fn()
+      .mockRejectedValue(new Error('Plugin failed to activate for view "acme.dashboard": boom'));
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { plugin: { onPanelKindsChanged: onPanelKindsChangedMock, activateForView } },
+    });
+
+    let capturedFactory: (() => Promise<unknown>) | undefined;
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: (factory: () => Promise<unknown>) => {
+          capturedFactory = factory;
+          return function StubView() {
+            return <div data-testid="plugin-view" />;
+          };
+        },
+      };
+    });
+
+    const { makePluginViewHost } = await import("../PluginViewHost");
+    const Host = makePluginViewHost(makeConfig());
+
+    render(
+      <Host
+        id="panel-act-fail"
+        title="Dashboard"
+        isFocused={false}
+        onFocus={(): void => {}}
+        onClose={(): void => {}}
+      />
+    );
+
+    await waitFor(() => expect(capturedFactory).toBeDefined());
+    // The factory rejects with the real activation error and never reaches the
+    // `plugin://` import.
+    await expect(capturedFactory!()).rejects.toThrow(/boom/);
+    expect(activateForView).toHaveBeenCalledWith("acme.dashboard");
+    vi.doUnmock("react");
+  });
+
   it("tolerates a missing activateForView binding without throwing (#10523)", async () => {
     // beforeEach installs window.electron.plugin without activateForView, so the
     // optional-chained call must no-op and the import must still proceed.

@@ -406,7 +406,7 @@ export class PluginDevWorkerHostProxy {
       // Post-activation-safe sibling of broadcastToRenderer: no
       // assertActivationOpen guard, so dev-worker plugins can stream live data
       // to their panels from timers and subscription callbacks.
-      postToPanel: (channel, payload) => {
+      postToPanel: (channel, payload, panelId) => {
         if (typeof channel !== "string" || channel.length === 0 || channel.includes(":")) {
           // Reject (not sync throw): runtime-surface Promise method must keep
           // validation errors inside the Promise contract, mirroring the
@@ -418,7 +418,17 @@ export class PluginDevWorkerHostProxy {
             )
           );
         }
-        this.notify("postToPanel", { channel, payload });
+        if (panelId !== undefined && panelId !== null) {
+          if (typeof panelId !== "string" || panelId.length === 0) {
+            throw new Error(
+              `Plugin "${this.pluginId}" postToPanel: panelId must be a non-empty string, null, or undefined: ${String(panelId)}`
+            );
+          }
+        }
+        // Forward panelId verbatim (including `undefined`/`null`) — the real
+        // main-side host wraps the envelope and resolves the broadcast-vs-target
+        // routing. Structured clone over the parent-port preserves `undefined`.
+        this.notify("postToPanel", { channel, payload, panelId });
         return Promise.resolve();
       },
       getActiveWorktree: () =>

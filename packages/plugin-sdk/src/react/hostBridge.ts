@@ -1,8 +1,9 @@
 /**
  * Narrow runtime view of the host bridge the renderer SDK hooks call. The full
  * surface lives on `window.electron.plugin` (typed in the host app via
- * `ElectronAPI`); the SDK only needs `invoke` (request/response) and `on`
- * (subscribe, returns a disposer), so it declares just those here and resolves
+ * `ElectronAPI`); the SDK only needs `invoke` (request/response), `on`
+ * (broadcast subscribe), and `onPanel` (per-instance subscribe) — each returns a
+ * disposer — so it declares just those here and resolves
  * the bridge from the global at call time. This keeps the package self-contained
  * — it does not depend on the host app's ambient `Window.electron` declaration —
  * while remaining the single canonical implementation the host bundle re-exports.
@@ -10,6 +11,12 @@
 export interface PluginHostBridge {
   invoke(pluginId: string, channel: string, ...args: unknown[]): Promise<unknown>;
   on(pluginId: string, channel: string, callback: (payload: unknown) => void): () => void;
+  onPanel(
+    pluginId: string,
+    channel: string,
+    panelId: string,
+    callback: (payload: unknown) => void
+  ): () => void;
 }
 
 interface PluginBridgeGlobal {

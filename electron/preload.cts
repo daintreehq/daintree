@@ -857,6 +857,89 @@ function _terminalDataOn(id: string, callback: TerminalDataSubscriber): () => vo
   };
 }
 
+// Multiplexer for the plugin push transport `plugin:{pluginId}:{channel}`,
+// mirroring _terminalDataOn. host.broadcastToRenderer, host.postToPanel, and the
+// managed-process stream all push a PluginPanelEventEnvelope `{ panelId, payload }`
+// over this channel, and multiple panel instances of one kind each subscribe to
+// the same channel. Before #10618 every `plugin.on` call added its own raw
+// ipcRenderer.on with no per-instance filter, so every push reached every
+// instance. Now one physical listener per full channel fans out by panelId: a
+// broadcast envelope (`panelId: null`) reaches only broadcast subscribers (those
+// registered via `plugin.on`), and a targeted envelope reaches only the
+// subscribers registered for that exact panelId via `plugin.onPanel` — so
+// `postToPanel(channel, payload, "panel-a")` no longer leaks to sibling
+// instances.
+type PluginPushSubscriber = (payload: unknown) => void;
+interface PluginPushChannelEntry {
+  handler: (event: Electron.IpcRendererEvent, raw: unknown) => void;
+  // Keyed by panelId; the `null` key holds broadcast subscribers.
+  subscribers: Map<string | null, Set<PluginPushSubscriber>>;
+}
+const _pluginPushChannels = new Map<string, PluginPushChannelEntry>();
+
+function _pluginPushOn(
+  pluginId: string,
+  channel: string,
+  panelId: string | null,
+  callback: PluginPushSubscriber
+): () => void {
+  const fullChannel = `plugin:${pluginId}:${channel}`;
+  let entry = _pluginPushChannels.get(fullChannel);
+  if (!entry) {
+    const subscribers = new Map<string | null, Set<PluginPushSubscriber>>();
+    const handler = (_event: Electron.IpcRendererEvent, raw: unknown): void => {
+      // Unwrap the envelope. Every push site enveloples, but normalize
+      // defensively: an unexpected shape degrades to a broadcast of the raw
+      // value rather than crashing the dispatcher or dropping the push.
+      let targetPanelId: string | null = null;
+      let payload: unknown = raw;
+      if (raw !== null && typeof raw === "object" && "panelId" in raw && "payload" in raw) {
+        const env = raw as { panelId: unknown; payload: unknown };
+        targetPanelId = typeof env.panelId === "string" ? env.panelId : null;
+        payload = env.payload;
+      }
+      const set = subscribers.get(targetPanelId);
+      if (!set || set.size === 0) return;
+      // Snapshot before dispatch: a subscriber may unsubscribe (or its panel may
+      // unmount) inside its own callback, mutating the Set mid-iteration.
+      for (const cb of [...set]) {
+        try {
+          cb(payload);
+        } catch (err) {
+          console.error("[Preload] plugin push subscriber threw for", fullChannel, err);
+        }
+      }
+    };
+    ipcRenderer.on(fullChannel, handler);
+    entry = { handler, subscribers };
+    _pluginPushChannels.set(fullChannel, entry);
+  }
+  let set = entry.subscribers.get(panelId);
+  if (!set) {
+    set = new Set();
+    entry.subscribers.set(panelId, set);
+  }
+  // Fresh wrapper per subscription so the same callback can subscribe twice and
+  // each cleanup removes only its own registration.
+  const wrapped: PluginPushSubscriber = (payload) => callback(payload);
+  set.add(wrapped);
+  return () => {
+    const current = _pluginPushChannels.get(fullChannel);
+    if (!current) return;
+    const currentSet = current.subscribers.get(panelId);
+    if (currentSet) {
+      currentSet.delete(wrapped);
+      if (currentSet.size === 0) current.subscribers.delete(panelId);
+    }
+    // Tear down the physical listener once every panelId bucket is empty, so an
+    // unmounted view doesn't leak its channel listener.
+    if (current.subscribers.size === 0) {
+      ipcRenderer.removeListener(fullChannel, current.handler);
+      _pluginPushChannels.delete(fullChannel);
+    }
+  };
+}
+
 // Recovery API (used by recovery.html). Hoisted out of buildElectronApi so the
 // recovery page exposes these four methods without constructing the full
 // ~490-closure surface.
@@ -2616,13 +2699,30 @@ function buildElectronApi(): ElectronAPI {
       invoke: (pluginId: string, channel: string, ...args: unknown[]) =>
         _unwrappingInvoke(CHANNELS.PLUGIN_INVOKE, pluginId, channel, ...args),
 
-      on: (pluginId: string, channel: string, callback: (payload: unknown) => void) => {
-        const fullChannel = `plugin:${pluginId}:${channel}`;
-        const handler = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
-        ipcRenderer.on(fullChannel, handler);
-        return () => {
-          ipcRenderer.removeListener(fullChannel, handler);
-        };
+      // Broadcast subscription: receives `host.postToPanel(channel, payload)`
+      // and `host.broadcastToRenderer` pushes (envelope `panelId: null`) for
+      // every instance of the kind. Per-instance targeting is `onPanel` below.
+      on: (pluginId: string, channel: string, callback: (payload: unknown) => void) =>
+        _pluginPushOn(pluginId, channel, null, callback),
+
+      // Per-instance subscription: receives only the pushes targeted at this
+      // exact `panelId` via `host.postToPanel(channel, payload, panelId)`, so
+      // multiple open instances of the same panel kind no longer all receive
+      // every push (#10618). Broadcast pushes (`panelId: null`) do NOT reach an
+      // onPanel subscriber — use `on` for those.
+      onPanel: (
+        pluginId: string,
+        channel: string,
+        panelId: string,
+        callback: (payload: unknown) => void
+      ) => {
+        // Reject an empty panelId loudly: the host side rejects an empty target
+        // in postToPanel, so an empty subscription here could never be reached —
+        // it would be a silently-dead listener. Surface the authoring mistake.
+        if (typeof panelId !== "string" || panelId.length === 0) {
+          throw new Error(`plugin.onPanel: panelId must be a non-empty string: ${String(panelId)}`);
+        }
+        return _pluginPushOn(pluginId, channel, panelId, callback);
       },
 
       onActionsChanged: (callback: (payload: { actions: PluginActionDescriptor[] }) => void) =>

@@ -234,12 +234,16 @@ export interface BroadcastToRendererParams {
 
 /**
  * Params for `postToPanel` (`host-notify`) — the post-activation-safe sibling
- * of `broadcastToRenderer`. Same shape; relayed off the activation-window
- * guard so it stays callable from worker timers and subscription callbacks.
+ * of `broadcastToRenderer`. Relayed off the activation-window guard so it stays
+ * callable from worker timers and subscription callbacks. `panelId` carries the
+ * per-instance target (#10618): a non-empty string targets one panel instance,
+ * `null`/absent broadcasts. Forwarded verbatim — the main-side host resolves the
+ * routing and wraps the renderer envelope.
  */
 export interface PostToPanelParams {
   channel: string;
   payload: unknown;
+  panelId?: string | null;
 }
 
 /** Params for `invalidateFileDecorations` (`host-notify`). */

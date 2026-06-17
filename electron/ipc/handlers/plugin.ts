@@ -8,6 +8,7 @@ import path, { extname, isAbsolute } from "node:path";
 import crypto from "node:crypto";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
+import { AppError } from "../../utils/errorTypes.js";
 import {
   getPluginActionAuditService,
   type PluginActionAuditService,
@@ -68,6 +69,7 @@ import type {
   PluginSettingsUiValues,
   PluginPickPathRequest,
   PluginWorktreeStatus,
+  PluginActivationResult,
 } from "../../../shared/types/plugin.js";
 import type { IpcContext } from "../types.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
@@ -502,13 +504,25 @@ async function handlePanelKindsGet(): Promise<PanelKindConfig[]> {
  * Implicit activation for contributed panel views (#10523): force the plugin
  * owning `panelKindId` to `activate()` before the renderer imports its
  * `plugin://` module, so handlers bound during `activate()` are live when the
- * view first renders. `activatePlugin` never rejects, so this resolves even
- * when activation fails — the failure surfaces as a `loadError` and the view's
- * module import then fails through the host's ErrorBoundary retry path. A no-op
- * once the owning plugin is already activated, or when the kind id is unknown.
+ * view first renders. `activatePlugin` never rejects, but the service reports the
+ * outcome via {@link PluginActivationResult}; on failure this handler throws an
+ * {@link AppError} (#6020 — IPC handlers throw instead of returning an `{ ok }`
+ * envelope) so the IPC call rejects and `PluginViewHost` surfaces the real
+ * activation cause through its ErrorBoundary BEFORE importing the module (#10618),
+ * instead of failing later with a generic import timeout. Resolves (void) once
+ * the owning plugin is already activated, or when the kind id is unknown.
  */
 async function handleActivateForView(panelKindId: string): Promise<void> {
-  await (await getPluginService()).activatePluginForView(panelKindId);
+  const result: PluginActivationResult = await (
+    await getPluginService()
+  ).activatePluginForView(panelKindId);
+  if (!result.ok) {
+    throw new AppError({
+      code: "PLUGIN_ACTIVATION_FAILED",
+      message: `Plugin failed to activate for view "${panelKindId}": ${result.error}`,
+      userMessage: result.error,
+    });
+  }
 }
 
 async function handleForgeProvidersGet(): Promise<RegisteredForgeProvider[]> {

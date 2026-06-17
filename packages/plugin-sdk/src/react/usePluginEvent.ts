@@ -39,3 +39,36 @@ export function usePluginEvent<TPayload = unknown>(
     return dispose;
   }, [pluginId, channel]);
 }
+
+/**
+ * Per-instance sibling of {@link usePluginEvent} — subscribes only to the pushes
+ * the plugin's main side targeted at this exact `panelId` via
+ * `host.postToPanel(channel, payload, panelId)` (#10618). Two open instances of
+ * the same panel kind, each calling this with their own `panelId`, no longer
+ * receive each other's pushes. Broadcast pushes (`postToPanel` with no panelId)
+ * are NOT delivered here — use {@link usePluginEvent} for those. A panel view
+ * gets its instance id from the `panelId` prop the host passes it.
+ *
+ * Same teardown contract as {@link usePluginEvent}: the latest `handler` is held
+ * in a ref behind a stable wrapper, so a fresh inline closure each render does
+ * NOT re-subscribe; only a change to `pluginId`, `channel`, or `panelId` tears
+ * down and re-opens the subscription.
+ */
+export function usePluginPanelEvent<TPayload = unknown>(
+  pluginId: string,
+  channel: string,
+  panelId: string,
+  handler: PluginEventHandler<TPayload>
+): void {
+  const handlerRef = useRef(handler);
+  useEffect(() => {
+    handlerRef.current = handler;
+  });
+
+  useEffect(() => {
+    const dispose = getPluginHostBridge().onPanel(pluginId, channel, panelId, (payload) => {
+      handlerRef.current(payload as TPayload);
+    });
+    return dispose;
+  }, [pluginId, channel, panelId]);
+}
