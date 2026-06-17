@@ -40,10 +40,10 @@ runs:
         npm_config_msvs_version: ${{ inputs.msvs_version }}
       run: |
         # Build native modules against Node (prebuilt binaries exist) during
-        # `npm ci`; `postinstall` (scripts/postinstall.cjs) then applies the
-        # better-sqlite3 patch and rebuilds native modules for the Electron ABI.
-        # Forcing npm_config_runtime=electron here makes better-sqlite3's own
-        # install script try to fetch a non-existent Electron-42 prebuilt and
-        # then node-gyp-build from unpatched source against missing headers,
-        # which 404s. Mirrors the working ci.yml install path.
+        # `npm ci`; `postinstall` (scripts/postinstall.cjs) then rebuilds the
+        # native modules from source for the Electron ABI. Forcing
+        # npm_config_runtime=electron here makes better-sqlite3's own install
+        # script try to fetch a non-existent Electron-42 prebuilt and then
+        # node-gyp-build against missing headers, which 404s. Mirrors the
+        # working ci.yml install path.
         node scripts/ci/npm-ci-retry.mjs ${{ inputs.install_args }}
