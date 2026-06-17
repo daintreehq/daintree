@@ -79,6 +79,10 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         waitingReason: event.waitingReason,
         sessionCost: event.sessionCost,
         sessionTokens: event.sessionTokens,
+        // Exit metadata on completed/exited transitions. exitCode may be null
+        // (signal kill), so forward on presence rather than truthiness. #10638
+        ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
+        ...(event.exitSignal !== undefined ? { exitSignal: event.exitSignal } : {}),
         // Live temperature fields, only present when the activity detector
         // drove the transition. Spread conditionally to keep the bus payload
         // minimal when the activity path didn't fire.

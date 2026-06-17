@@ -56,6 +56,77 @@ describe("bridgePtyEvent", () => {
     expect(payloads[0]?.waitingReason).toBe("prompt");
   });
 
+  it("forwards exitCode and exitSignal across the pty-host wire (#10638)", () => {
+    const payloads: Array<{ exitCode?: number | null; exitSignal?: number }> = [];
+    events.on("agent:state-changed", (payload) => {
+      payloads.push({ exitCode: payload.exitCode, exitSignal: payload.exitSignal });
+    });
+
+    bridgePtyEvent({
+      type: "agent-state",
+      id: "term-exit",
+      agentId: "claude",
+      state: "exited",
+      previousState: "working",
+      timestamp: Date.now(),
+      trigger: "exit",
+      confidence: 1.0,
+      exitCode: 137,
+      exitSignal: 9,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.exitCode).toBe(137);
+    expect(payloads[0]?.exitSignal).toBe(9);
+  });
+
+  it("forwards a null exitCode (signal kill) across the wire without dropping it (#10638)", () => {
+    const payloads: Array<{ exitCode?: number | null }> = [];
+    events.on("agent:state-changed", (payload) => {
+      payloads.push({ exitCode: payload.exitCode });
+    });
+
+    bridgePtyEvent({
+      type: "agent-state",
+      id: "term-null",
+      agentId: "claude",
+      state: "exited",
+      previousState: "working",
+      timestamp: Date.now(),
+      trigger: "exit",
+      confidence: 1.0,
+      exitCode: null,
+      exitSignal: 15,
+    });
+
+    expect(payloads).toHaveLength(1);
+    // null is a meaningful value (signal kill, no numeric code) — it must
+    // survive the wire, not be coerced away by a truthiness check.
+    expect(payloads[0]?.exitCode).toBeNull();
+  });
+
+  it("omits exit metadata for non-exit transitions (#10638)", () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    events.on("agent:state-changed", (payload) => {
+      payloads.push(payload as unknown as Record<string, unknown>);
+    });
+
+    bridgePtyEvent({
+      type: "agent-state",
+      id: "term-working",
+      agentId: "claude",
+      state: "working",
+      previousState: "idle",
+      timestamp: Date.now(),
+      trigger: "output",
+      confidence: 1.0,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).not.toHaveProperty("exitCode");
+    expect(payloads[0]).not.toHaveProperty("exitSignal");
+  });
+
   it("routes terminal-status events to bus and callback", () => {
     const terminalStatusPayloads: Array<{ id: string; status: string }> = [];
     events.on("terminal:status", (payload) => {
