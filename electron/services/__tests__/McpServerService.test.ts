@@ -2793,6 +2793,60 @@ describe("McpServerService", () => {
         description: "Request reviewers via the forge provider",
         danger: "confirm",
       }),
+      createManifestEntry({
+        id: "forge.getPR" as ActionId,
+        title: "Get PR",
+        description: "Fetch a pull request via the forge provider",
+        kind: "query",
+      }),
+      createManifestEntry({
+        id: "forge.createPR" as ActionId,
+        title: "Create PR",
+        description: "Open a pull request via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.closePR" as ActionId,
+        title: "Close PR",
+        description: "Close a pull request via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.reopenPR" as ActionId,
+        title: "Reopen PR",
+        description: "Reopen a pull request via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.mergePR" as ActionId,
+        title: "Merge PR",
+        description: "Merge a pull request via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.convertPRToDraft" as ActionId,
+        title: "Convert PR to draft",
+        description: "Convert a pull request to draft via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.markPRReadyForReview" as ActionId,
+        title: "Mark PR ready",
+        description: "Mark a pull request ready for review via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.commentOnPR" as ActionId,
+        title: "Comment on PR",
+        description: "Comment on a pull request via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.editPR" as ActionId,
+        title: "Edit PR",
+        description: "Edit a pull request via the forge provider",
+        danger: "confirm",
+      }),
     ];
 
     // Tier action/addon sets are sourced from the production allowlists so a
