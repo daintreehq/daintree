@@ -92,6 +92,16 @@ export interface ManagedTerminal {
   resizeSuppressionTimer?: number;
   isResizeSuppressed?: boolean;
   resizeSuppressionEndTime?: number;
+  // Reveal-pending guaranteed redraw (#10632). Set true when the project-switch
+  // resize-suppression window clears while the host is NOT foreground-renderable
+  // (still detached/occluded behind the warm anti-flash bridge on a long dwell):
+  // the one-shot `resetRenderer` recovery can't run on a zero-box host without
+  // self-skipping, so the obligation is handed to the reconciliation watchdog,
+  // which runs the alt-buffer-safe atomic repair once DOM geometry proves the
+  // pane on-screen. Owned by `revealPendingGeneration` (the attachGeneration at
+  // arm time); cleared only by a successful reconcile or terminal destruction.
+  revealPendingRepair?: boolean;
+  revealPendingGeneration?: number;
   targetCols?: number;
   targetRows?: number;
   isAttaching?: boolean;

@@ -340,6 +340,7 @@ class TerminalInstanceService {
       ensureWebGL: (id, managed) => this.webGLManager.ensureContext(id, managed),
       unhibernate: (id) => this.unhibernate(id),
       forceReflow: (element) => forceXtermReflow(element),
+      reconcileRevealGeometry: (id) => this.reconcileRevealGeometry(id),
       isStoreBackgrounded: (id) => usePanelStore.getState().backgroundedTerminals.has(id),
       isStoreHidden: (id) => usePanelStore.getState().panelsById[id]?.isVisible === false,
       repairStoreVisibility: (id) => usePanelStore.getState().updateVisibility(id, true),
@@ -751,8 +752,21 @@ class TerminalInstanceService {
         this.rendererPolicy.applyRendererPolicy(id, tier);
 
         const termEl = managed.terminal.element;
-        if (termEl) {
+        if (termEl && managed.terminal.modes?.synchronizedOutputMode !== true) {
           forceXtermReflow(termEl);
+        } else if (termEl) {
+          // Defer the unpause reflow while a DEC 2026 synchronized-output block is
+          // open (#10632). forceXtermReflow bypasses xterm's atomic-at-ESU
+          // buffering and would interleave a torn frame — the invariant
+          // TerminalReflowController.maybeReflow enforces at :139. This path IS
+          // reachable on switch-back: the grid IntersectionObserver
+          // (TerminalPane) fires setVisible(id, true) as the pane re-enters the
+          // viewport while an agent is mid-stream. applyDeferredResize above
+          // already synced geometry and applyRendererPolicy still ran; hand the
+          // unpause/repaint to the watchdog's reveal-pending backstop, which
+          // re-runs it once the block closes and the pane is on-screen.
+          managed.revealPendingRepair = true;
+          managed.revealPendingGeneration = managed.attachGeneration;
         }
 
         // Debounced WebGL restore for same-tier transitions. If
@@ -845,22 +859,41 @@ class TerminalInstanceService {
       this.resizeController.lockResize(id, true);
 
       instance.resizeSuppressionTimer = window.setTimeout(() => {
-        instance.isResizeSuppressed = false;
-        instance.resizeSuppressionEndTime = undefined;
-        instance.resizeSuppressionTimer = undefined;
+        // Re-fetch: the instance can be disposed/replaced between arming and
+        // firing. Working off the live map (not the closed-over ref) also lets
+        // the closure drop its `instance` capture for GC.
+        const current = this.instances.get(id);
+        if (!current) return;
+        current.isResizeSuppressed = false;
+        current.resizeSuppressionEndTime = undefined;
+        current.resizeSuppressionTimer = undefined;
         this.resizeController.lockResize(id, false);
         // Guaranteed post-switch redraw. The reveal repaint and its rAF
         // backstops all fire INSIDE this suppression window, where the renderer
         // can still be mid-settle and a stale `isVisible` can no-op the
         // visibility-guarded reveal path. Now that suppression and the resize
-        // lock are gone, the DOM has long settled, and the reconciliation
-        // watchdog (which skips suppressed terminals) re-engages, run the exact
-        // recovery a user gets by clicking "Redraw": resetRenderer has no
-        // isVisible guard and its fit() is no longer lock-gated, so it corrects
-        // both a stale grid (garbled wrapping) and a paused/garbled renderer.
-        // Cheap and idempotent — a no-op when the pane is already correct, and
-        // self-skips a backgrounded/zero-box terminal via its own guards.
-        this.resetRenderer(id);
+        // lock are gone and the reconciliation watchdog (which skips suppressed
+        // terminals) re-engages, run the exact recovery a user gets by clicking
+        // "Redraw": resetRenderer has no isVisible guard and its fit() is no
+        // longer lock-gated, so it corrects both a stale grid (garbled wrapping)
+        // and a paused/garbled renderer.
+        //
+        // Rule #1 (#10632): the obligation must be PRESERVED whenever the redraw
+        // did NOT actually run — not just when the host is detached. On a dwell
+        // longer than the suppression window this timer fires while the outgoing
+        // view is still non-renderable (detached, occluded zero box,
+        // content-visibility:hidden, or a transitional sub-50px box), where
+        // resetRenderer self-skips and the one-shot recovery would be SILENTLY
+        // SPENT. resetRenderer now reports whether it ran; if it didn't (host
+        // not foreground-renderable, OR renderable but below its >=50px floor),
+        // hand the obligation to the reconciliation watchdog, which runs the
+        // closed-loop repair once DOM geometry proves the pane on-screen. Owned
+        // by the current attachGeneration so a later re-attach can supersede it.
+        const ran = this.hostHasRenderableDims(current) ? this.resetRenderer(id) : false;
+        if (!ran) {
+          current.revealPendingRepair = true;
+          current.revealPendingGeneration = current.attachGeneration;
+        }
       }, durationMs);
     });
   }
@@ -1004,8 +1037,24 @@ class TerminalInstanceService {
     // flag (e.g. a prior skip whose deferred re-run we are now satisfying).
     current.pendingVisibilityWake = false;
 
+    // Never interleave the RENDER ops (forceXtermReflow, repairAtlasForReactivation,
+    // the post-wake refresh) into an OPEN DEC 2026 synchronized-output block
+    // (#10632). forceXtermReflow bypasses xterm's atomic-at-ESU buffering and
+    // would paint a partial frame — the exact invariant TerminalReflowController
+    // enforces at maybeReflow. The DATA path stays unconditional: applyDeferredResize
+    // (above), wakeAndRestore (byte-pull/buffer restore), handlePostWake (its only
+    // reflow routes through the guarded maybeReflowTerminal), and the held-byte
+    // flush all still run. Re-checked on BOTH sides of the await — the block can
+    // open or close across the async wakeAndRestore.
+    //
+    // This method has no retry-return like repaintForReveal, so when paint is
+    // deferred hand the obligation to the reconciliation watchdog via
+    // revealPendingRepair: its reveal-pending branch re-runs the atomic repair
+    // (geometry + atlas + unpause) once the block closes and the pane is on-screen.
+    let deferPaintForSync = current.terminal.modes?.synchronizedOutputMode === true;
+
     const termEl = current.terminal.element;
-    if (termEl) {
+    if (termEl && !deferPaintForSync) {
       try {
         forceXtermReflow(termEl);
       } catch (error) {
@@ -1017,8 +1066,10 @@ class TerminalInstanceService {
     // wakeAndRestore IPC and before the view's first composited frame. On warm
     // project-view reactivation the compositor can flash the pre-freeze atlas
     // state; resetting the local model here (no breaker, no shared-atlas churn)
-    // clears it in place. No-op for DOM-renderer terminals.
-    this.webGLManager.repairAtlasForReactivation(id);
+    // clears it in place. No-op for DOM-renderer terminals. Deferred mid-block.
+    if (!deferPaintForSync) {
+      this.webGLManager.repairAtlasForReactivation(id);
+    }
 
     const { ok, replayedMainBuffer } = await this.wakeManager.wakeAndRestore(id);
 
@@ -1028,7 +1079,12 @@ class TerminalInstanceService {
     if (!after || after !== current) return;
     if (after.isHibernated) return;
 
-    after.terminal.refresh(0, after.terminal.rows - 1);
+    // Re-read across the await — a synchronized block may have opened (or closed)
+    // during the buffer restore.
+    if (after.terminal.modes?.synchronizedOutputMode === true) deferPaintForSync = true;
+    if (!deferPaintForSync) {
+      after.terminal.refresh(0, after.terminal.rows - 1);
+    }
 
     if (ok) {
       this.handlePostWake(id);
@@ -1039,6 +1095,15 @@ class TerminalInstanceService {
       this.discardHeldOutput(id);
     } else {
       this.dataBuffer.resumeFlush(id);
+    }
+
+    // Paint was deferred to avoid interleaving an open synchronized-output block.
+    // The watchdog's reveal-pending branch re-runs the full atomic repair once
+    // the block closes and the pane is on-screen — the durable backstop this
+    // retry-less method otherwise lacks.
+    if (deferPaintForSync) {
+      after.revealPendingRepair = true;
+      after.revealPendingGeneration = after.attachGeneration;
     }
   }
 
@@ -1067,19 +1132,43 @@ class TerminalInstanceService {
   repaintForReveal(id: string): boolean {
     const managed = this.instances.get(id);
     if (!managed || managed.isHibernated) return false;
-    if (!managed.isOpened || !managed.isVisible) return false;
+    // Health-check on DOM ground truth (isConnected + checkVisibility + size),
+    // NOT the reactive `managed.isVisible` flag (#10632 item 4). On a warm
+    // WebContentsView resume the attach effect — the one place that force-sets
+    // isVisible=true (XtermAdapter) — does not re-run, and the
+    // IntersectionObserver that would flip it can lag a frame or be culled while
+    // the view un-occludes, so a stale isVisible=false would no-op the exact
+    // repaint the reveal needs. resetRenderer (manual Redraw) already keys off
+    // connected+size for this reason; unify on the same DOM-truth signal here.
+    // The element.isConnected + checkVisibility + >=50px box guards below are the
+    // real preconditions.
+    if (!managed.isOpened) return false;
 
     const element = managed.terminal.element;
     if (!element || !element.isConnected) return false;
 
-    // A not-yet-laid-out grid has no model worth repainting — its first real
-    // resize builds it fresh. Mirrors resetRenderer's size guard. Report "not
-    // paintable yet" (false) so the reveal sweep retries on a later frame once
-    // the foreground view has settled its layout, rather than burning its one
-    // shot against a zero box.
+    // A not-yet-laid-out, content-visibility:hidden, or zero/occluded host has no
+    // model worth repainting — its first real resize builds it fresh. Use the
+    // same hostHasRenderableDims gate (isConnected + checkVisibility + box) that
+    // ensureOpened/fit rely on, then refine with resetRenderer's >=50px floor.
+    // Report "not paintable yet" (false) so the reveal sweep retries on a later
+    // frame once the foreground view has settled its layout, rather than burning
+    // its one shot against a zero box.
+    if (!this.hostHasRenderableDims(managed)) return false;
     if (managed.hostElement.clientWidth < 50 || managed.hostElement.clientHeight < 50) {
       return false;
     }
+
+    // Never repaint into an OPEN DEC 2026 synchronized-output block (#10632). The
+    // atlas repair, forceXtermReflow, and reconcileGeometryFresh below would each
+    // interleave a paint with the buffered range and corrupt a live agent frame.
+    // The watchdog repair path already defers on this; the reveal path must too —
+    // dropping the !isVisible guard above made repaintForReveal more reachable, so
+    // the never-interleave-mid-block guarantee has to hold here as well. Report
+    // "not paintable yet" so the reveal sweep retries on a later frame once the
+    // block closes; the reconciliation watchdog is the backstop if it outlasts
+    // the sweep.
+    if (managed.terminal.modes?.synchronizedOutputMode === true) return false;
 
     // Re-attach a WebGL context the freeze/thaw cycle may have dropped before
     // repairing the local model. Same idiom as the post-reparent restore.
@@ -1139,6 +1228,45 @@ class TerminalInstanceService {
     // immediately rather than being debounced away (mirrors resetRenderer).
     managed.lastReflowAt = 0;
 
+    return true;
+  }
+
+  /**
+   * Watchdog-driven, alt-buffer-safe reveal repair (#10632) — the closed-loop
+   * "is it correct now" correction that the open-loop reveal backstops never
+   * reliably delivered. This is the ATOMIC half of a manual Redraw: re-fit
+   * geometry from a FRESH DOM measurement (xterm + PTY resized together via
+   * {@link TerminalResizeController.reconcileGeometryFresh}) and repair the local
+   * WebGL glyph model (or plain-refresh a DOM-renderer pane).
+   *
+   * Deliberately omits `forceXtermReflow`: a layout reflow mid DEC 2026
+   * synchronized-output block would interleave a paint with the buffered range,
+   * so the watchdog gates the unpause reflow on `synchronizedOutputMode`
+   * separately and only calls this once a block has closed. The atomic resize is
+   * safe for settled-strategy agents (no 500ms xterm/PTY split).
+   *
+   * Returns reconcileGeometryFresh's verdict: false on an unmeasurable /
+   * transitional box (zero/occluded/content-visibility:hidden) so the watchdog
+   * keeps the reveal-pending obligation and retries on a later tick once the
+   * foreground view has settled — the present-ordering guarantee that a repaint
+   * is never issued into an occluded surface.
+   */
+  reconcileRevealGeometry(id: string): boolean {
+    const managed = this.instances.get(id);
+    if (!managed || managed.isHibernated) return false;
+    if (!this.resizeController.reconcileGeometryFresh(id)) return false;
+
+    try {
+      if (!this.webGLManager.repairAtlasForReactivation(id)) {
+        managed.terminal.refresh(0, managed.terminal.rows - 1);
+      }
+    } catch (error) {
+      logWarn(`reconcileRevealGeometry repair failed for ${id}`, { error });
+    }
+
+    // Clear the reflow throttle so a follow-up unpause reflow (the watchdog's
+    // render-pause branch, or the next write/heartbeat) fires immediately.
+    managed.lastReflowAt = 0;
     return true;
   }
 
@@ -2822,20 +2950,27 @@ class TerminalInstanceService {
     }
   }
 
-  resetRenderer(id: string): void {
+  /**
+   * Recover a terminal's renderer the way the manual "Redraw" action does.
+   * Returns whether the repair ACTUALLY ran: false when it self-skipped on its
+   * own guards (gone/hibernated/disconnected/sub-50px box). Callers that must
+   * guarantee a redraw (the project-switch suppression-clear, #10632) use the
+   * return value to know whether the obligation still needs to be carried.
+   */
+  resetRenderer(id: string): boolean {
     const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return;
+    if (!managed || managed.isHibernated) return false;
 
     try {
       if (!managed.hostElement.isConnected) {
         logDebug(`resetRenderer skipped for ${id}: not connected`);
-        return;
+        return false;
       }
       if (managed.hostElement.clientWidth < 50 || managed.hostElement.clientHeight < 50) {
         logDebug(
           `resetRenderer skipped for ${id}: too small (${managed.hostElement.clientWidth}x${managed.hostElement.clientHeight})`
         );
-        return;
+        return false;
       }
 
       logDebug(`resetRenderer running for ${id}`);
@@ -2874,6 +3009,7 @@ class TerminalInstanceService {
       }
       managed.lastReflowAt = 0;
     }
+    return true;
   }
 
   handleBackendRecovery(): void {
