@@ -101,17 +101,13 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
           // `window.electron`. `activateForView` is a no-op once the plugin is
           // already activated.
           //
-          // It returns a plain { ok } result (#10618): on activation failure,
-          // throw the real cause HERE — before the `import()` — so the
-          // ErrorBoundary shows why activation failed (e.g. a manifest-collision
-          // or activate() throw) instead of the generic import timeout the
-          // module load would otherwise produce once its handlers never bound.
-          const activation = await window.electron?.plugin?.activateForView?.(kindId);
-          if (activation && activation.ok === false) {
-            throw new Error(
-              `Plugin "${pluginId}" failed to activate for view ${kindId}: ${activation.error}`
-            );
-          }
+          // On activation failure the IPC call now REJECTS with the real cause
+          // (#10618: the handler throws an AppError) — the `await` rethrows it
+          // here, before `import()`, so the ErrorBoundary shows why activation
+          // failed (e.g. a manifest collision or an activate() throw) instead of
+          // the generic import timeout the module load would otherwise produce
+          // once its handlers never bound.
+          await window.electron?.plugin?.activateForView?.(kindId);
           return import(/* @vite-ignore */ componentPath!);
         })().finally(() => {
           if (timeoutId !== undefined) clearTimeout(timeoutId);

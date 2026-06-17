@@ -277,12 +277,16 @@ describe("makePluginViewHost", () => {
     vi.doUnmock("react");
   });
 
-  it("throws the real activation cause when activateForView resolves { ok: false } (#10618)", async () => {
-    // The #10618 contract: activateForView RESOLVES a { ok: false, error }
-    // result (not a rejection) when the plugin's activate() failed. The host
-    // must throw that cause before `import()` so the ErrorBoundary surfaces it,
-    // instead of letting the module load fail later with a generic timeout.
-    const activateForView = vi.fn().mockResolvedValue({ ok: false, error: "activate-boom" });
+  it("surfaces the real activation cause when activateForView rejects, before import (#10618)", async () => {
+    // The #10618 contract: on activation failure the activate-for-view IPC call
+    // REJECTS with the real cause (the handler throws an AppError), carrying the
+    // plugin's own message. The host's `await` rethrows it before `import()`, so
+    // the ErrorBoundary surfaces why activation failed instead of a generic
+    // import timeout. (Distinct from the #10523 gating test below, which only
+    // proves the await ordering with a sentinel.)
+    const activateForView = vi
+      .fn()
+      .mockRejectedValue(new Error('Plugin failed to activate for view "acme.dashboard": boom'));
     Object.defineProperty(window, "electron", {
       configurable: true,
       writable: true,
@@ -317,9 +321,9 @@ describe("makePluginViewHost", () => {
     );
 
     await waitFor(() => expect(capturedFactory).toBeDefined());
-    // The factory rejects with the real activation error — carrying the plugin's
-    // own message — and never reaches the `plugin://` import.
-    await expect(capturedFactory!()).rejects.toThrow(/activate-boom/);
+    // The factory rejects with the real activation error and never reaches the
+    // `plugin://` import.
+    await expect(capturedFactory!()).rejects.toThrow(/boom/);
     expect(activateForView).toHaveBeenCalledWith("acme.dashboard");
     vi.doUnmock("react");
   });

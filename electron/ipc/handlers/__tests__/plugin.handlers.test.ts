@@ -300,20 +300,20 @@ describe("registerPluginHandlers", () => {
     ) => unknown;
   }
 
-  it("PLUGIN_ACTIVATE_FOR_VIEW forwards the activation result to the renderer (#10618)", async () => {
-    // Success: the plain { ok: true } result flows straight back so the renderer
-    // proceeds to import the view module.
-    mockActivatePluginForView.mockResolvedValueOnce({ ok: true });
+  it("PLUGIN_ACTIVATE_FOR_VIEW resolves on success and throws the cause on failure (#10618)", async () => {
     const handler = getHandler("plugin:activate-for-view");
-    const ok = await handler({}, "acme.demo.viewer");
-    expect(mockActivatePluginForView).toHaveBeenCalledWith("acme.demo.viewer");
-    expect(ok).toEqual({ ok: true });
 
-    // Failure: the { ok: false, error } result is propagated verbatim (a plain
-    // object, never a thrown Error) so PluginViewHost can surface the real cause.
+    // Success: the handler resolves void (#6020 — IPC handlers return void on
+    // success rather than an { ok } envelope) so the renderer proceeds to import.
+    mockActivatePluginForView.mockResolvedValueOnce({ ok: true });
+    await expect(handler({}, "acme.demo.viewer")).resolves.toBeUndefined();
+    expect(mockActivatePluginForView).toHaveBeenCalledWith("acme.demo.viewer");
+
+    // Failure: the handler throws so the IPC call rejects and the renderer's
+    // PluginViewHost surfaces the real activation cause. The thrown message
+    // carries the underlying error text.
     mockActivatePluginForView.mockResolvedValueOnce({ ok: false, error: "activate-boom" });
-    const failed = await handler({}, "acme.demo.viewer");
-    expect(failed).toEqual({ ok: false, error: "activate-boom" });
+    await expect(handler({}, "acme.demo.viewer")).rejects.toThrow(/activate-boom/);
   });
 
   it("PLUGIN_INSTALL_FROM_FILE returns cancelled when the picker is dismissed", async () => {
