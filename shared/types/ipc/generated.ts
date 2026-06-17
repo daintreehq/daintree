@@ -327,9 +327,27 @@ export interface GeneratedIpcInvokeMap {
     args: [projectPath: string];
     result: void;
   };
+  "forge:add-issue-comment": {
+    args: [payload: { cwd: string; issueNumber: number; body: string }];
+    result: import("../forge.js").IssueComment;
+  };
+  "forge:add-issue-label": {
+    args: [payload: { cwd: string; issueNumber: number; label: string }];
+    result: import("../forge.js").ForgeLabel[];
+  };
   "forge:approve-pr": {
     args: [payload: { cwd: string; prNumber: number; body?: string | undefined }];
     result: void;
+  };
+  "forge:close-issue": {
+    args: [
+      payload: {
+        cwd: string;
+        issueNumber: number;
+        stateReason?: import("../forge.js").IssueCloseReason | undefined;
+      },
+    ];
+    result: import("../forge.js").Issue;
   };
   "forge:close-pr": {
     args: [payload: { cwd: string; prNumber: number }];
@@ -342,6 +360,10 @@ export interface GeneratedIpcInvokeMap {
   "forge:convert-pr-to-draft": {
     args: [payload: { cwd: string; prNumber: number }];
     result: void;
+  };
+  "forge:create-issue": {
+    args: [payload: { cwd: string; input: import("../forge.js").CreateIssueInput }];
+    result: import("../forge.js").Issue;
   };
   "forge:create-pr": {
     args: [
@@ -359,6 +381,12 @@ export interface GeneratedIpcInvokeMap {
   "forge:dismiss-review": {
     args: [payload: { cwd: string; prNumber: number; reviewId: number; message: string }];
     result: void;
+  };
+  "forge:edit-issue": {
+    args: [
+      payload: { cwd: string; issueNumber: number; input: import("../forge.js").EditIssueInput },
+    ];
+    result: import("../forge.js").Issue;
   };
   "forge:edit-pr": {
     args: [
@@ -430,6 +458,14 @@ export interface GeneratedIpcInvokeMap {
   "forge:open-pr": {
     args: [payload: { cwd: string; prNumber: number }];
     result: void;
+  };
+  "forge:remove-issue-label": {
+    args: [payload: { cwd: string; issueNumber: number; label: string }];
+    result: import("../forge.js").ForgeLabel[];
+  };
+  "forge:reopen-issue": {
+    args: [payload: { cwd: string; issueNumber: number }];
+    result: import("../forge.js").Issue;
   };
   "forge:reopen-pr": {
     args: [payload: { cwd: string; prNumber: number }];

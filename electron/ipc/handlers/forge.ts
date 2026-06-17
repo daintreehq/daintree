@@ -12,7 +12,10 @@ import { auditForgeCall, summarizeForgeArgs } from "../../services/forge/forgeAu
 import type {
   CreateIssueInput,
   EditIssueInput,
+  ForgeLabel,
+  Issue,
   IssueCloseReason,
+  IssueComment,
   PR,
   PushErrorClassification,
 } from "../../../shared/types/forge.js";
@@ -289,6 +292,232 @@ async function handleForgeOpenPR(payload: { cwd: string; prNumber: number }): Pr
   const url = impl.buildPRUrl(repoRef, payload.prNumber);
   await openExternalUrl(url);
 }
+
+// Issue write operations (#10653). Defined as a defineIpcNamespace block so the
+// IPC map is codegen-derived (the hand-written-entry ratchet forbids new manual
+// maps.ts entries). Each handler validates at the boundary, throws plain Error
+// (forge IPC convention), and routes through auditForgeCall with a redacted
+// argument summary.
+async function handleForgeCreateIssue(payload: {
+  cwd: string;
+  input: CreateIssueInput;
+}): Promise<Issue> {
+  checkRateLimit(CHANNELS.FORGE_CREATE_ISSUE, 5, 10_000);
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid payload");
+  }
+  if (typeof payload.cwd !== "string" || !payload.cwd.trim()) {
+    throw new Error("Invalid working directory");
+  }
+  const input = payload.input;
+  if (!input || typeof input !== "object") {
+    throw new Error("Invalid issue input");
+  }
+  if (typeof input.title !== "string" || !input.title.trim()) {
+    throw new Error("Issue title is required");
+  }
+  if (input.body !== undefined && typeof input.body !== "string") {
+    throw new Error("Invalid issue body");
+  }
+  if (
+    input.labels !== undefined &&
+    (!Array.isArray(input.labels) || input.labels.some((l) => typeof l !== "string"))
+  ) {
+    throw new Error("Invalid labels");
+  }
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  return auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "createIssue",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("createIssue", input),
+    },
+    () => impl.createIssue(repoRef, input)
+  );
+}
+
+async function handleForgeCloseIssue(payload: {
+  cwd: string;
+  issueNumber: number;
+  stateReason?: IssueCloseReason;
+}): Promise<Issue> {
+  checkRateLimit(CHANNELS.FORGE_CLOSE_ISSUE, 5, 10_000);
+  const { issueNumber } = validateIssueWritePayload(payload);
+  if (
+    payload.stateReason !== undefined &&
+    payload.stateReason !== "completed" &&
+    payload.stateReason !== "not_planned" &&
+    payload.stateReason !== "duplicate"
+  ) {
+    throw new Error("Invalid state reason");
+  }
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  return auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "closeIssue",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("closeIssue", issueNumber),
+    },
+    () => impl.closeIssue(repoRef, issueNumber, payload.stateReason)
+  );
+}
+
+async function handleForgeReopenIssue(payload: {
+  cwd: string;
+  issueNumber: number;
+}): Promise<Issue> {
+  checkRateLimit(CHANNELS.FORGE_REOPEN_ISSUE, 5, 10_000);
+  const { issueNumber } = validateIssueWritePayload(payload);
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  return auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "reopenIssue",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("reopenIssue", issueNumber),
+    },
+    () => impl.reopenIssue(repoRef, issueNumber)
+  );
+}
+
+async function handleForgeEditIssue(payload: {
+  cwd: string;
+  issueNumber: number;
+  input: EditIssueInput;
+}): Promise<Issue> {
+  checkRateLimit(CHANNELS.FORGE_EDIT_ISSUE, 5, 10_000);
+  const { issueNumber } = validateIssueWritePayload(payload);
+  const input = payload.input;
+  if (!input || typeof input !== "object") {
+    throw new Error("Invalid issue input");
+  }
+  if (input.title !== undefined && typeof input.title !== "string") {
+    throw new Error("Invalid issue title");
+  }
+  if (input.title !== undefined && !input.title.trim()) {
+    throw new Error("Issue title cannot be blank");
+  }
+  if (input.body !== undefined && typeof input.body !== "string") {
+    throw new Error("Invalid issue body");
+  }
+  if (input.title === undefined && input.body === undefined) {
+    throw new Error("Provide a title or body to edit");
+  }
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  return auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "editIssue",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("editIssue", {
+        number: issueNumber,
+        hasTitle: input.title !== undefined,
+        hasBody: input.body !== undefined,
+      }),
+    },
+    () => impl.editIssue(repoRef, issueNumber, input)
+  );
+}
+
+async function handleForgeAddIssueComment(payload: {
+  cwd: string;
+  issueNumber: number;
+  body: string;
+}): Promise<IssueComment> {
+  checkRateLimit(CHANNELS.FORGE_ADD_ISSUE_COMMENT, 5, 10_000);
+  const { issueNumber } = validateIssueWritePayload(payload);
+  if (typeof payload.body !== "string" || !payload.body.trim()) {
+    throw new Error("Comment body is required");
+  }
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  return auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "addIssueComment",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("addIssueComment", {
+        number: issueNumber,
+        bodyLength: payload.body.length,
+      }),
+    },
+    () => impl.addIssueComment(repoRef, issueNumber, payload.body)
+  );
+}
+
+async function handleForgeAddIssueLabel(payload: {
+  cwd: string;
+  issueNumber: number;
+  label: string;
+}): Promise<ForgeLabel[]> {
+  checkRateLimit(CHANNELS.FORGE_ADD_ISSUE_LABEL, 5, 10_000);
+  const { issueNumber } = validateIssueWritePayload(payload);
+  const label = payload.label?.trim();
+  if (typeof payload.label !== "string" || !label) {
+    throw new Error("Label name is required");
+  }
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  return auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "addIssueLabel",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("addIssueLabel", { number: issueNumber, label }),
+    },
+    () => impl.addIssueLabel(repoRef, issueNumber, label)
+  );
+}
+
+async function handleForgeRemoveIssueLabel(payload: {
+  cwd: string;
+  issueNumber: number;
+  label: string;
+}): Promise<ForgeLabel[]> {
+  checkRateLimit(CHANNELS.FORGE_REMOVE_ISSUE_LABEL, 5, 10_000);
+  const { issueNumber } = validateIssueWritePayload(payload);
+  const label = payload.label?.trim();
+  if (typeof payload.label !== "string" || !label) {
+    throw new Error("Label name is required");
+  }
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  return auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "removeIssueLabel",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("removeIssueLabel", { number: issueNumber, label }),
+    },
+    () => impl.removeIssueLabel(repoRef, issueNumber, label)
+  );
+}
+
+export const forgeIssueWriteNamespace = defineIpcNamespace({
+  name: "forgeIssueWrite",
+  ops: {
+    createIssue: op(CHANNELS.FORGE_CREATE_ISSUE, handleForgeCreateIssue),
+    closeIssue: op(CHANNELS.FORGE_CLOSE_ISSUE, handleForgeCloseIssue),
+    reopenIssue: op(CHANNELS.FORGE_REOPEN_ISSUE, handleForgeReopenIssue),
+    editIssue: op(CHANNELS.FORGE_EDIT_ISSUE, handleForgeEditIssue),
+    addIssueComment: op(CHANNELS.FORGE_ADD_ISSUE_COMMENT, handleForgeAddIssueComment),
+    addIssueLabel: op(CHANNELS.FORGE_ADD_ISSUE_LABEL, handleForgeAddIssueLabel),
+    removeIssueLabel: op(CHANNELS.FORGE_REMOVE_ISSUE_LABEL, handleForgeRemoveIssueLabel),
+  },
+});
 
 export const forgeOpenPRNamespace = defineIpcNamespace({
   name: "forgeOpenPR",
@@ -678,223 +907,7 @@ export function registerForgeHandlers(): () => void {
 
   cleanups.push(forgeUnassignIssueNamespace.register());
   cleanups.push(forgeReviewNamespace.register());
-
-  cleanups.push(
-    typedHandle(
-      CHANNELS.FORGE_CREATE_ISSUE,
-      async (payload: { cwd: string; input: CreateIssueInput }) => {
-        checkRateLimit(CHANNELS.FORGE_CREATE_ISSUE, 5, 10_000);
-        if (!payload || typeof payload !== "object") {
-          throw new Error("Invalid payload");
-        }
-        if (typeof payload.cwd !== "string" || !payload.cwd.trim()) {
-          throw new Error("Invalid working directory");
-        }
-        const input = payload.input;
-        if (!input || typeof input !== "object") {
-          throw new Error("Invalid issue input");
-        }
-        if (typeof input.title !== "string" || !input.title.trim()) {
-          throw new Error("Issue title is required");
-        }
-        if (input.body !== undefined && typeof input.body !== "string") {
-          throw new Error("Invalid issue body");
-        }
-        if (
-          input.labels !== undefined &&
-          (!Array.isArray(input.labels) || input.labels.some((l) => typeof l !== "string"))
-        ) {
-          throw new Error("Invalid labels");
-        }
-        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
-        const impl = getImplForNamespace(namespaceId);
-        return auditForgeCall(
-          {
-            providerId: namespaceId,
-            methodName: "createIssue",
-            repoOwner: repoRef.owner,
-            repoName: repoRef.repo,
-            argsSummary: summarizeForgeArgs("createIssue", input),
-          },
-          () => impl.createIssue(repoRef, input)
-        );
-      }
-    )
-  );
-
-  cleanups.push(
-    typedHandle(
-      CHANNELS.FORGE_CLOSE_ISSUE,
-      async (payload: { cwd: string; issueNumber: number; stateReason?: IssueCloseReason }) => {
-        checkRateLimit(CHANNELS.FORGE_CLOSE_ISSUE, 5, 10_000);
-        const { issueNumber } = validateIssueWritePayload(payload);
-        if (
-          payload.stateReason !== undefined &&
-          payload.stateReason !== "completed" &&
-          payload.stateReason !== "not_planned" &&
-          payload.stateReason !== "duplicate"
-        ) {
-          throw new Error("Invalid state reason");
-        }
-        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
-        const impl = getImplForNamespace(namespaceId);
-        return auditForgeCall(
-          {
-            providerId: namespaceId,
-            methodName: "closeIssue",
-            repoOwner: repoRef.owner,
-            repoName: repoRef.repo,
-            argsSummary: summarizeForgeArgs("closeIssue", issueNumber),
-          },
-          () => impl.closeIssue(repoRef, issueNumber, payload.stateReason)
-        );
-      }
-    )
-  );
-
-  cleanups.push(
-    typedHandle(
-      CHANNELS.FORGE_REOPEN_ISSUE,
-      async (payload: { cwd: string; issueNumber: number }) => {
-        checkRateLimit(CHANNELS.FORGE_REOPEN_ISSUE, 5, 10_000);
-        const { issueNumber } = validateIssueWritePayload(payload);
-        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
-        const impl = getImplForNamespace(namespaceId);
-        return auditForgeCall(
-          {
-            providerId: namespaceId,
-            methodName: "reopenIssue",
-            repoOwner: repoRef.owner,
-            repoName: repoRef.repo,
-            argsSummary: summarizeForgeArgs("reopenIssue", issueNumber),
-          },
-          () => impl.reopenIssue(repoRef, issueNumber)
-        );
-      }
-    )
-  );
-
-  cleanups.push(
-    typedHandle(
-      CHANNELS.FORGE_EDIT_ISSUE,
-      async (payload: { cwd: string; issueNumber: number; input: EditIssueInput }) => {
-        checkRateLimit(CHANNELS.FORGE_EDIT_ISSUE, 5, 10_000);
-        const { issueNumber } = validateIssueWritePayload(payload);
-        const input = payload.input;
-        if (!input || typeof input !== "object") {
-          throw new Error("Invalid issue input");
-        }
-        if (input.title !== undefined && typeof input.title !== "string") {
-          throw new Error("Invalid issue title");
-        }
-        if (input.title !== undefined && !input.title.trim()) {
-          throw new Error("Issue title cannot be blank");
-        }
-        if (input.body !== undefined && typeof input.body !== "string") {
-          throw new Error("Invalid issue body");
-        }
-        if (input.title === undefined && input.body === undefined) {
-          throw new Error("Provide a title or body to edit");
-        }
-        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
-        const impl = getImplForNamespace(namespaceId);
-        return auditForgeCall(
-          {
-            providerId: namespaceId,
-            methodName: "editIssue",
-            repoOwner: repoRef.owner,
-            repoName: repoRef.repo,
-            argsSummary: summarizeForgeArgs("editIssue", {
-              number: issueNumber,
-              hasTitle: input.title !== undefined,
-              hasBody: input.body !== undefined,
-            }),
-          },
-          () => impl.editIssue(repoRef, issueNumber, input)
-        );
-      }
-    )
-  );
-
-  cleanups.push(
-    typedHandle(
-      CHANNELS.FORGE_ADD_ISSUE_COMMENT,
-      async (payload: { cwd: string; issueNumber: number; body: string }) => {
-        checkRateLimit(CHANNELS.FORGE_ADD_ISSUE_COMMENT, 5, 10_000);
-        const { issueNumber } = validateIssueWritePayload(payload);
-        if (typeof payload.body !== "string" || !payload.body.trim()) {
-          throw new Error("Comment body is required");
-        }
-        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
-        const impl = getImplForNamespace(namespaceId);
-        return auditForgeCall(
-          {
-            providerId: namespaceId,
-            methodName: "addIssueComment",
-            repoOwner: repoRef.owner,
-            repoName: repoRef.repo,
-            argsSummary: summarizeForgeArgs("addIssueComment", {
-              number: issueNumber,
-              bodyLength: payload.body.length,
-            }),
-          },
-          () => impl.addIssueComment(repoRef, issueNumber, payload.body)
-        );
-      }
-    )
-  );
-
-  cleanups.push(
-    typedHandle(
-      CHANNELS.FORGE_ADD_ISSUE_LABEL,
-      async (payload: { cwd: string; issueNumber: number; label: string }) => {
-        checkRateLimit(CHANNELS.FORGE_ADD_ISSUE_LABEL, 5, 10_000);
-        const { issueNumber } = validateIssueWritePayload(payload);
-        const label = payload.label?.trim();
-        if (typeof payload.label !== "string" || !label) {
-          throw new Error("Label name is required");
-        }
-        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
-        const impl = getImplForNamespace(namespaceId);
-        return auditForgeCall(
-          {
-            providerId: namespaceId,
-            methodName: "addIssueLabel",
-            repoOwner: repoRef.owner,
-            repoName: repoRef.repo,
-            argsSummary: summarizeForgeArgs("addIssueLabel", { number: issueNumber, label }),
-          },
-          () => impl.addIssueLabel(repoRef, issueNumber, label)
-        );
-      }
-    )
-  );
-
-  cleanups.push(
-    typedHandle(
-      CHANNELS.FORGE_REMOVE_ISSUE_LABEL,
-      async (payload: { cwd: string; issueNumber: number; label: string }) => {
-        checkRateLimit(CHANNELS.FORGE_REMOVE_ISSUE_LABEL, 5, 10_000);
-        const { issueNumber } = validateIssueWritePayload(payload);
-        const label = payload.label?.trim();
-        if (typeof payload.label !== "string" || !label) {
-          throw new Error("Label name is required");
-        }
-        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
-        const impl = getImplForNamespace(namespaceId);
-        return auditForgeCall(
-          {
-            providerId: namespaceId,
-            methodName: "removeIssueLabel",
-            repoOwner: repoRef.owner,
-            repoName: repoRef.repo,
-            argsSummary: summarizeForgeArgs("removeIssueLabel", { number: issueNumber, label }),
-          },
-          () => impl.removeIssueLabel(repoRef, issueNumber, label)
-        );
-      }
-    )
-  );
+  cleanups.push(forgeIssueWriteNamespace.register());
 
   cleanups.push(
     typedHandle(
