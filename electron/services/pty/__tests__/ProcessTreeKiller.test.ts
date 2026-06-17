@@ -299,10 +299,16 @@ describe("ProcessTreeKiller — Windows taskkill", () => {
     killer.execute(true);
 
     expect(pty.kill).toHaveBeenCalledTimes(1);
+    // Ordering matters: taskkill (tree teardown) must run before pty.kill()
+    // closes the session leader, else the descendant tree can be orphaned.
+    const killMock = pty.kill as ReturnType<typeof vi.fn>;
+    expect(spawnSyncMock.mock.invocationCallOrder[0]).toBeLessThan(
+      killMock.mock.invocationCallOrder[0]
+    );
   });
 
   it("never sends POSIX signals on Windows", () => {
-    killSpy = vi.spyOn(process, "kill");
+    killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     const pty = makePty(4321);
     const killer = new ProcessTreeKiller(pty, makeTreeCache([4322, 4323]));
 
