@@ -261,6 +261,15 @@ index 0000000..abcdef1
 +line1
 +line2`;
 
+const DELETED_FILE_DIFF = `diff --git a/gone.ts b/gone.ts
+deleted file mode 100644
+index abcdef1..0000000
+--- a/gone.ts
++++ /dev/null
+@@ -1,2 +0,0 @@
+-line1
+-line2`;
+
 describe("DiffViewer centered split", () => {
   it("uses the centered-split scroll system for two-column split diffs", () => {
     const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="split" />));
@@ -288,7 +297,18 @@ describe("DiffViewer centered split", () => {
   it("keeps the native scroller for single-side added-file diffs", () => {
     const { container } = render(wrap(<DiffViewer diff={ADDED_FILE_DIFF} viewType="split" />));
 
+    // Add files are single-column ("monotonous") in react-diff-view, so they take
+    // the horizontal-scroll fallback path rather than the two-column centered split.
     expect(container.querySelector(".diff-file-centered")).toBeNull();
+    expect(container.querySelector(".diff-file-scroll")).not.toBeNull();
+    expect(screen.queryByTestId("diff-hscrollbar")).toBeNull();
+  });
+
+  it("keeps the native scroller for single-side deleted-file diffs", () => {
+    const { container } = render(wrap(<DiffViewer diff={DELETED_FILE_DIFF} viewType="split" />));
+
+    expect(container.querySelector(".diff-file-centered")).toBeNull();
+    expect(container.querySelector(".diff-file-scroll")).not.toBeNull();
     expect(screen.queryByTestId("diff-hscrollbar")).toBeNull();
   });
 
@@ -318,6 +338,36 @@ describe("DiffViewer centered split", () => {
     // Predominantly vertical gestures stay with the vertical scroller.
     fireEvent.wheel(region!, { deltaX: 5, deltaY: 50 });
     expect(bar.scrollLeft).toBe(50);
+  });
+});
+
+describe("DiffViewer wrap attribute", () => {
+  // data-wrap drives the [data-wrap="true"] CSS rules (soft-wrap on) versus the
+  // base white-space: pre rule (no-wrap + horizontal scroll). The attribute must
+  // track wrapLines for every diff type, including the single-side add/delete
+  // files that take the fallback scroll path.
+  it("omits data-wrap when wrapLines is unset, for added-file diffs", () => {
+    const { container } = render(wrap(<DiffViewer diff={ADDED_FILE_DIFF} viewType="split" />));
+
+    const root = container.querySelector(".diff-viewer");
+    expect(root).not.toBeNull();
+    expect(root?.hasAttribute("data-wrap")).toBe(false);
+  });
+
+  it("sets data-wrap=true when wrapLines is on, for added-file diffs", () => {
+    const { container } = render(
+      wrap(<DiffViewer diff={ADDED_FILE_DIFF} viewType="split" wrapLines />)
+    );
+
+    expect(container.querySelector(".diff-viewer")?.getAttribute("data-wrap")).toBe("true");
+  });
+
+  it("sets data-wrap=true when wrapLines is on, for deleted-file diffs", () => {
+    const { container } = render(
+      wrap(<DiffViewer diff={DELETED_FILE_DIFF} viewType="split" wrapLines />)
+    );
+
+    expect(container.querySelector(".diff-viewer")?.getAttribute("data-wrap")).toBe("true");
   });
 });
 
@@ -613,5 +663,32 @@ describe("DiffViewer gutter CSS contract (#10422)", () => {
     const cssText = readFileSync(join(__dirname, "..", "DiffViewer.css"), "utf8");
     expect(cssText).toMatch(/\.diff-viewer\s+\.diff-gutter\s*\{[^}]*white-space:\s*nowrap/);
     expect(cssText).toMatch(/\.diff-viewer\s+\.diff-line-number\s*\{[^}]*white-space:\s*nowrap/);
+  });
+});
+
+// The no-wrap behavior on the fallback (add/delete) scroll path and the
+// word-boundary behavior in wrap-on mode are CSS-only and can't be exercised by
+// jsdom (no layout engine), so guard the load-bearing declarations against an
+// accidental revert to react-diff-view's vendor break-all/break-word defaults
+// (the original #10623 bug). Same readFileSync pattern as the #10422 guard.
+describe("DiffViewer wrap CSS contract (#10623)", () => {
+  it("resets the vendor wrap defaults on the base .diff-code rule", () => {
+    const cssText = readFileSync(join(__dirname, "..", "DiffViewer.css"), "utf8");
+    expect(cssText).toMatch(/\.diff-viewer\s+\.diff-code\s*\{[^}]*white-space:\s*pre[;\s}]/);
+    expect(cssText).toMatch(/\.diff-viewer\s+\.diff-code\s*\{[^}]*word-break:\s*normal/);
+    expect(cssText).toMatch(/\.diff-viewer\s+\.diff-code\s*\{[^}]*overflow-wrap:\s*normal/);
+  });
+
+  it("breaks at word boundaries (not mid-token) in wrap-on mode", () => {
+    const cssText = readFileSync(join(__dirname, "..", "DiffViewer.css"), "utf8");
+    // Strip comments so the negative break-all assertion checks declarations
+    // only — the rule's own comment explains why break-all was dropped.
+    const declarations = cssText
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .match(/\.diff-viewer\[data-wrap="true"\]\s+\.diff-code\s*\{[^}]*\}/)?.[0];
+    expect(declarations).toBeTruthy();
+    expect(declarations).toMatch(/word-break:\s*normal/);
+    expect(declarations).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(declarations).not.toMatch(/word-break:\s*break-all/);
   });
 });
