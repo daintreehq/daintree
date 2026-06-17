@@ -163,12 +163,14 @@ const {
   mockIsRunning,
   mockCurrentPort,
   mockPreparePaneConfig,
+  mockRevokePaneConfig,
   mockEnsureReady,
 } = vi.hoisted(() => ({
   mockValidateToken: vi.fn<(token: string) => "action" | "system" | false>(),
   mockIsRunning: vi.fn<() => boolean>(),
   mockCurrentPort: vi.fn<() => number | null>(),
   mockPreparePaneConfig: vi.fn(),
+  mockRevokePaneConfig: vi.fn<(paneId: string) => Promise<void>>(),
   mockEnsureReady: vi.fn<() => Promise<boolean>>(),
 }));
 
@@ -230,7 +232,7 @@ vi.mock("../../../../services/McpServerService.js", () => ({
 vi.mock("../../../../services/McpPaneConfigService.js", () => ({
   mcpPaneConfigService: {
     preparePaneConfig: (...args: unknown[]) => mockPreparePaneConfig(...args),
-    revokePaneConfig: vi.fn().mockResolvedValue(undefined),
+    revokePaneConfig: (paneId: string) => mockRevokePaneConfig(paneId),
   },
 }));
 
@@ -1716,6 +1718,8 @@ describe("terminal spawn handler - daintree-assistant MCP env injection (#10639)
       configPath: "/tmp/pane-config.json",
       token: "assistant-token",
     });
+    mockRevokePaneConfig.mockReset();
+    mockRevokePaneConfig.mockResolvedValue(undefined);
   });
 
   it("injects MCP url, token, and window id into the env, without --mcp-config", async () => {
@@ -1874,6 +1878,80 @@ describe("terminal spawn handler - daintree-assistant MCP env injection (#10639)
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.command).toBe("daintree-assistant");
+    expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBeUndefined();
+  });
+
+  it('sets DAINTREE_WINDOW_ID to "0" when the window id is 0 (not omitted)', async () => {
+    // The injection guard is `windowId !== null`, so a legitimate window id of
+    // 0 must still be forwarded. A regression to a falsy check (`!windowId`)
+    // would silently drop it.
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      { senderWindow: { id: 0 } } as unknown as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "daintree-assistant",
+        launchAgentId: "daintree-assistant",
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.env?.DAINTREE_WINDOW_ID).toBe("0");
+  });
+
+  it("revokes the minted pane config when the PTY spawn throws", async () => {
+    ptyClient.spawn.mockImplementation(() => {
+      throw new Error("spawn boom");
+    });
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await expect(
+      handler(
+        { senderWindow: { id: 7 } } as unknown as Electron.IpcMainInvokeEvent,
+        {
+          id: "assistant-pane",
+          cols: 80,
+          rows: 24,
+          cwd: tmpDir,
+          command: "daintree-assistant",
+          launchAgentId: "daintree-assistant",
+        } as unknown as Parameters<typeof handler>[1]
+      )
+    ).rejects.toThrow(/Failed to spawn terminal/);
+
+    expect(mockPreparePaneConfig).toHaveBeenCalled();
+    expect(mockRevokePaneConfig).toHaveBeenCalledWith("assistant-pane");
+  });
+
+  it("skips MCP injection when no project can be resolved", async () => {
+    mockGetCurrentProject.mockReturnValue(null);
+    mockGetProjectById.mockReturnValue(null);
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      { senderWindow: { id: 7 } } as unknown as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        command: "daintree-assistant",
+        launchAgentId: "daintree-assistant",
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    expect(mockPreparePaneConfig).not.toHaveBeenCalled();
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBeUndefined();
   });
 });
