@@ -198,3 +198,53 @@ describe("PluginSettingsManager subscriber cleanup on unload (#10477)", () => {
     expect(cb).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("PluginSettingsManager onDidChange failure isolation (#10621)", () => {
+  it("quarantines a subscriber that throws on 3 consecutive notifications", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mgr = managerFor([{ id: "token", type: "string", scope: "user" }]);
+    const bad = vi.fn(() => {
+      throw new Error("boom");
+    });
+    mgr.addSubscriber("acme.scope-test", { key: "token", scope: "user", cb: bad });
+
+    for (let i = 0; i < 3; i++) {
+      mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", `v${i}`);
+    }
+    expect(bad).toHaveBeenCalledTimes(3);
+
+    // A 4th notify no longer reaches the auto-unsubscribed callback.
+    mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", "v3");
+    expect(bad).toHaveBeenCalledTimes(3);
+
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it("does not quarantine a subscriber that recovers between throws", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const mgr = managerFor([{ id: "token", type: "string", scope: "user" }]);
+    let shouldThrow = true;
+    const cb = vi.fn(() => {
+      if (shouldThrow) throw new Error("intermittent");
+    });
+    mgr.addSubscriber("acme.scope-test", { key: "token", scope: "user", cb });
+
+    mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", "a");
+    mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", "b");
+    shouldThrow = false;
+    mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", "c");
+    shouldThrow = true;
+    mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", "d");
+    mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", "e");
+
+    // Still subscribed: a final delivery fires.
+    shouldThrow = false;
+    mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", "f");
+    expect(cb).toHaveBeenCalledTimes(6);
+    expect(cb).toHaveBeenLastCalledWith("f");
+
+    errorSpy.mockRestore();
+  });
+});

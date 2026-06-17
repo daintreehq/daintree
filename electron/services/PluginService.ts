@@ -89,6 +89,7 @@ import { PluginRendererDispatcher } from "./plugin/PluginRendererDispatcher.js";
 import { PluginUIPromptDispatcher } from "./plugin/PluginUIPromptDispatcher.js";
 import { PluginSettingsManager, assertSettingsKey } from "./plugin/PluginSettingsManager.js";
 import { PluginStorageManager, assertStorageKey } from "./plugin/PluginStorageManager.js";
+import { createListenerFailureState, invokeTrackedListener } from "./plugin/pluginCallbackUtils.js";
 import { PluginChannelRegistry, isChannelSchema } from "./plugin/PluginChannelRegistry.js";
 import { PluginInstaller } from "./plugin/PluginInstaller.js";
 import { PluginDevWorkerHost } from "./plugin/PluginDevWorkerHost.js";
@@ -661,6 +662,15 @@ export class PluginService {
   private pluginEventCleanups = new Map<string, Array<() => void>>();
   private workspaceClient: WorkspaceClient | null = null;
   /**
+   * Service-level `worktree-activated` listener that evicts stale worktree-scoped
+   * storage stores (#10621). Independent of any plugin's
+   * `onDidChangeActiveWorktree` so a worktree switch always drops the prior
+   * worktree's cached in-memory snapshot even when no plugin subscribed.
+   */
+  private readonly onWorktreeActivatedForCache = (): void => {
+    this.storage.evictWorktreeScopedStores();
+  };
+  /**
    * Event subscriptions registered during plugin `activate()` when the
    * WorkspaceClient did not yet exist. Replayed in `setWorkspaceClient()`
    * so early-boot subscriptions attach to the real client instead of being
@@ -935,6 +945,7 @@ export class PluginService {
         console.error(`[PluginService] unloadPlugin("${id}") threw during dispose:`, err);
       }
     }
+    this.workspaceClient?.off("worktree-activated", this.onWorktreeActivatedForCache);
     this.disposeRegistrySubscriptions();
     // Settle the init gate so unit tests that tear down the service without
     // running activateStartupFinishedPlugins() don't hang IPC callers awaiting
@@ -953,7 +964,17 @@ export class PluginService {
    * subscriptions that were registered during early plugin activate().
    */
   setWorkspaceClient(client: WorkspaceClient | null): void {
+    // Re-point the service-level worktree-scope cache eviction listener off the
+    // previous client onto the new one (#10621). `off` before `on` keeps the
+    // subscription single even when called repeatedly with the same client.
+    if (this.workspaceClient && this.workspaceClient !== client) {
+      this.workspaceClient.off("worktree-activated", this.onWorktreeActivatedForCache);
+    }
     this.workspaceClient = client;
+    if (client) {
+      client.off("worktree-activated", this.onWorktreeActivatedForCache);
+      client.on("worktree-activated", this.onWorktreeActivatedForCache);
+    }
     if (client && this.pendingWorktreeSubs.length > 0) {
       const pending = this.pendingWorktreeSubs;
       this.pendingWorktreeSubs = [];
@@ -1614,15 +1635,51 @@ export class PluginService {
       if (typeof mod.activate === "function") {
         const activate = mod.activate as PluginActivate;
         const { host, revoke } = this.createHost(pluginId);
+
+        // Pre-register a rollback that undoes activate-time imperative
+        // registrations — channels, imperative actions, and every disposer
+        // tracked in `pluginEventCleanups` (event/forge/worktree subscriptions).
+        // A built-in whose `activate()` registers then throws — or is unloaded
+        // mid-activation — would otherwise strand those registrations forever:
+        // unlike a user plugin's worker, a failed built-in never runs the full
+        // `unloadPlugin` cascade on its own. Mirrors the worker path, which
+        // registers its teardown disposer before `start()` (#10621).
+        const rollback = (): void => {
+          this.removeHandlers(pluginId);
+          this.unregisterImperativePluginActions(pluginId);
+          this.flushPluginEventCleanups(pluginId);
+        };
+        this.cleanupMap.set(pluginId, rollback);
+
         try {
           const cleanup = await this.runActivate(pluginId, activate, host);
           // Guard against an unload that ran concurrently with this activation:
           // by the time `runActivate` resolves, `unloadPlugin` may have already
-          // cleared `cleanupMap` — writing a cleanup back after that fires would
-          // leak. Drop it on the floor instead (#9428).
-          if (typeof cleanup === "function" && this.plugins.has(pluginId)) {
-            this.cleanupMap.set(pluginId, cleanup);
+          // fired (and cleared) the pre-registered rollback. Only rebind when
+          // the plugin is still loaded; otherwise drop it on the floor (#9428).
+          if (this.plugins.has(pluginId)) {
+            // Activation succeeded — the host-side teardown is owned by
+            // `unloadPlugin`'s cascade, so replace the rollback with the
+            // plugin's own cleanup (or clear it when none was returned),
+            // matching the pre-#10621 contract.
+            if (typeof cleanup === "function") {
+              this.cleanupMap.set(pluginId, cleanup);
+            } else if (this.cleanupMap.get(pluginId) === rollback) {
+              this.cleanupMap.delete(pluginId);
+            }
+          } else if (this.cleanupMap.get(pluginId) === rollback) {
+            this.cleanupMap.delete(pluginId);
           }
+        } catch (activateErr) {
+          // `activate()` threw after partially registering. No `unloadPlugin`
+          // cascade runs for a failed built-in activation, so undo the partial
+          // registrations now. The identity check skips a double-fire if a
+          // concurrent unload already ran (and cleared) the rollback.
+          if (this.cleanupMap.get(pluginId) === rollback) {
+            this.cleanupMap.delete(pluginId);
+            rollback();
+          }
+          throw activateErr;
         } finally {
           revoke();
         }
@@ -2372,18 +2429,20 @@ export class PluginService {
         // (unlike WorkspaceClient), so we subscribe directly — no deferred
         // replay queue is needed. The handler caches the latest snapshot so
         // getAgentState() can serve it without re-deriving state.
+        const failures = createListenerFailureState();
         const handler = (payload: AgentStateChangePayload): void => {
           if (!this.plugins.has(pluginId)) return;
-          try {
-            const snapshot = toPluginAgentSnapshot(payload);
-            lastAgentSnapshot = snapshot;
-            callback(snapshot);
-          } catch (err) {
-            console.error(
-              `[PluginService] onDidChangeAgentState callback for "${pluginId}" failed:`,
-              err
-            );
-          }
+          invokeTrackedListener(
+            failures,
+            pluginId,
+            "onDidChangeAgentState",
+            () => {
+              const snapshot = toPluginAgentSnapshot(payload);
+              lastAgentSnapshot = snapshot;
+              return callback(snapshot);
+            },
+            () => dispose()
+          );
         };
         const unsub = events.on("agent:state-changed", handler);
         let disposed = false;

@@ -181,6 +181,108 @@ describe("PluginStorageManager subscribers", () => {
     expect(good).toHaveBeenCalledWith("v");
     errorSpy.mockRestore();
   });
+
+  it("quarantines a subscriber that throws on 3 consecutive notifications", () => {
+    const mgr = managerFor();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const bad = vi.fn(() => {
+      throw new Error("boom");
+    });
+    mgr.addSubscriber(PLUGIN_ID, { key: "k", scope: "user", cb: bad });
+
+    // Three consecutive throws trip the quarantine on the third.
+    for (let i = 0; i < 3; i++) {
+      mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", `v${i}`);
+    }
+    expect(bad).toHaveBeenCalledTimes(3);
+
+    // A 4th notify no longer reaches the auto-unsubscribed callback.
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "v3");
+    expect(bad).toHaveBeenCalledTimes(3);
+
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it("resets the failure counter on a successful notification (no quarantine on intermittent errors)", () => {
+    const mgr = managerFor();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    let shouldThrow = true;
+    const cb = vi.fn(() => {
+      if (shouldThrow) throw new Error("intermittent");
+    });
+    mgr.addSubscriber(PLUGIN_ID, { key: "k", scope: "user", cb });
+
+    // Two throws, then a success resets the counter.
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "a");
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "b");
+    shouldThrow = false;
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "c");
+    // Two more throws — still under the consecutive threshold, so not removed.
+    shouldThrow = true;
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "d");
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "e");
+
+    // The subscriber is still live: a final success fires.
+    shouldThrow = false;
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "f");
+    expect(cb).toHaveBeenCalledTimes(6);
+    expect(cb).toHaveBeenLastCalledWith("f");
+
+    errorSpy.mockRestore();
+  });
+});
+
+describe("PluginStorageManager evictWorktreeScopedStores", () => {
+  it("evicts only worktree-scoped stores, leaving user and project caches intact", () => {
+    const mgr = managerFor();
+    mgr.getOrCreateStorageStore(PLUGIN_ID, "user", path.join(tmpDir, "user.json"));
+    mgr.getOrCreateStorageStore(PLUGIN_ID, "project", path.join(tmpDir, "project.json"));
+    mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", path.join(tmpDir, "wt-a.json"));
+    mgr.getOrCreateStorageStore("acme.other", "worktree", path.join(tmpDir, "wt-b.json"));
+
+    mgr.evictWorktreeScopedStores();
+
+    const keys = [
+      ...(mgr as unknown as { storageStores: Map<string, unknown> }).storageStores.keys(),
+    ];
+    expect(keys.some((k) => k.includes("\u0000worktree\u0000"))).toBe(false);
+    expect(keys.some((k) => k.includes("\u0000user\u0000"))).toBe(true);
+    expect(keys.some((k) => k.includes("\u0000project\u0000"))).toBe(true);
+  });
+
+  it("forces a fresh store instance for a worktree scope after eviction", () => {
+    const mgr = managerFor();
+    const filePath = path.join(tmpDir, "wt.json");
+    const first = mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", filePath);
+    expect(mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", filePath)).toBe(first);
+
+    mgr.evictWorktreeScopedStores();
+
+    const second = mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", filePath);
+    expect(second).not.toBe(first);
+  });
+
+  it("re-reads the backing file after eviction, dropping a stale in-memory snapshot", async () => {
+    const mgr = managerFor();
+    const filePath = path.join(tmpDir, "wt-stale.json");
+    const first = mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", filePath);
+    expect(await first.set("k", "old")).toBe(true);
+    expect(await first.get("k")).toBe("old");
+
+    // Simulate the file changing out from under the cached store while the
+    // worktree was inactive (e.g. another window wrote it).
+    await fs.writeFile(filePath, JSON.stringify({ k: "new" }), "utf-8");
+    // The cached store still serves its stale in-memory snapshot.
+    expect(await first.get("k")).toBe("old");
+
+    mgr.evictWorktreeScopedStores();
+
+    // A post-eviction store reads the updated value straight from disk.
+    const second = mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", filePath);
+    expect(await second.get("k")).toBe("new");
+  });
 });
 
 describe("PluginStorageManager clearPluginStorageState", () => {
