@@ -42,6 +42,7 @@ import {
   forgeIssueListCache,
   forgePRListCache,
   forgeQueryCache,
+  issueTooltipCache,
   prRequiredStatusCache,
   prTooltipCache,
 } from "../GitHubCaches.js";
@@ -1772,6 +1773,247 @@ describe("review write operations", () => {
       await githubForgeProvider.reviews!.requestReviewers!(repo, 6, { users: ["octocat"] });
 
       expect(prTooltipCache.get("owner/repo:6")).toBeDefined();
+    });
+  });
+});
+
+describe("issue write mutations (close/reopen/edit/comment/labels)", () => {
+  const restIssueResponse = {
+    number: 7,
+    title: "Add dark mode",
+    body: "Body text",
+    state: "closed",
+    html_url: "https://github.com/owner/repo/issues/7",
+    user: { login: "octocat", avatar_url: "https://avatars/u" },
+    assignees: [],
+    labels: [{ name: "enhancement", color: "a2eeef" }],
+    created_at: "2025-01-02T03:04:05Z",
+    updated_at: "2025-01-02T03:04:05Z",
+    closed_at: "2025-01-03T00:00:00Z",
+  };
+
+  function mockJsonOk(body: unknown, status = 200) {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status,
+      json: vi.fn().mockResolvedValue(body),
+    });
+    (globalThis as unknown as { fetch: typeof fetchMock }).fetch = fetchMock;
+    return fetchMock;
+  }
+
+  function mockHttpError(status: number, text = "") {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status,
+      text: vi.fn().mockResolvedValue(text),
+    });
+    (globalThis as unknown as { fetch: typeof fetchMock }).fetch = fetchMock;
+    return fetchMock;
+  }
+
+  beforeEach(() => {
+    vi.mocked(GitHubAuth.getToken).mockReturnValue("test-token");
+  });
+
+  describe("closeIssue", () => {
+    it("PATCHes state:closed with the API version headers and returns the normalized issue", async () => {
+      const fetchMock = mockJsonOk(restIssueResponse);
+
+      const issue = await githubForgeProvider.closeIssue(repo, 7);
+
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("https://api.github.com/repos/owner/repo/issues/7");
+      expect(init.method).toBe("PATCH");
+      const headers = init.headers as Record<string, string>;
+      expect(headers.Authorization).toBe("Bearer test-token");
+      expect(headers["X-GitHub-Api-Version"]).toBe("2022-11-28");
+      expect(JSON.parse(init.body as string)).toEqual({ state: "closed" });
+      expect(issue).toMatchObject({ number: 7, state: "closed" });
+      expect(issue.closedAt).toBe(Date.parse("2025-01-03T00:00:00Z"));
+    });
+
+    it("forwards an optional state reason", async () => {
+      const fetchMock = mockJsonOk(restIssueResponse);
+
+      await githubForgeProvider.closeIssue(repo, 7, "not_planned");
+
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      expect(JSON.parse(init.body as string)).toEqual({
+        state: "closed",
+        state_reason: "not_planned",
+      });
+    });
+
+    it("drops the forge caches after a successful close", async () => {
+      mockJsonOk(restIssueResponse);
+      forgeIssueListCache.set("owner/repo:open", { items: [], nextCursor: null, hasMore: false });
+      expect(forgeIssueListCache.size()).toBe(1);
+
+      await githubForgeProvider.closeIssue(repo, 7);
+
+      expect(forgeIssueListCache.size()).toBe(0);
+    });
+
+    it("throws without a token", async () => {
+      vi.mocked(GitHubAuth.getToken).mockReturnValue("");
+      await expect(githubForgeProvider.closeIssue(repo, 7)).rejects.toThrow(
+        /token not configured/i
+      );
+    });
+
+    it("includes the HTTP status on failure", async () => {
+      mockHttpError(403, "forbidden");
+      await expect(githubForgeProvider.closeIssue(repo, 7)).rejects.toThrow(/HTTP 403/);
+    });
+  });
+
+  describe("reopenIssue", () => {
+    it("PATCHes state:open and clears the prior close reason", async () => {
+      const fetchMock = mockJsonOk({ ...restIssueResponse, state: "open", closed_at: null });
+
+      const issue = await githubForgeProvider.reopenIssue(repo, 7);
+
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      expect(init.method).toBe("PATCH");
+      expect(JSON.parse(init.body as string)).toEqual({ state: "open", state_reason: null });
+      expect(issue.state).toBe("open");
+    });
+  });
+
+  describe("editIssue", () => {
+    it("sends only the provided fields", async () => {
+      const fetchMock = mockJsonOk(restIssueResponse);
+
+      await githubForgeProvider.editIssue(repo, 7, { title: "New title" });
+
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      expect(JSON.parse(init.body as string)).toEqual({ title: "New title" });
+    });
+
+    it("allows clearing the body with an empty string", async () => {
+      const fetchMock = mockJsonOk(restIssueResponse);
+
+      await githubForgeProvider.editIssue(repo, 7, { body: "" });
+
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      expect(JSON.parse(init.body as string)).toEqual({ body: "" });
+    });
+
+    it("rejects an empty input before issuing a request", async () => {
+      const fetchMock = mockJsonOk(restIssueResponse);
+
+      await expect(githubForgeProvider.editIssue(repo, 7, {})).rejects.toThrow(
+        /at least one of title or body/i
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("addIssueComment", () => {
+    const commentResponse = {
+      id: 12345,
+      body: "Looks good",
+      html_url: "https://github.com/owner/repo/issues/7#issuecomment-12345",
+      user: { login: "octocat", avatar_url: "https://avatars/u" },
+      created_at: "2025-02-01T00:00:00Z",
+    };
+
+    it("POSTs the comment body and normalizes the response", async () => {
+      const fetchMock = mockJsonOk(commentResponse, 201);
+
+      const comment = await githubForgeProvider.addIssueComment(repo, 7, "Looks good");
+
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("https://api.github.com/repos/owner/repo/issues/7/comments");
+      expect(init.method).toBe("POST");
+      expect(JSON.parse(init.body as string)).toEqual({ body: "Looks good" });
+      expect(comment).toMatchObject({
+        id: "12345",
+        body: "Looks good",
+        url: "https://github.com/owner/repo/issues/7#issuecomment-12345",
+        author: { login: "octocat" },
+      });
+      expect(comment.createdAt).toBe(Date.parse("2025-02-01T00:00:00Z"));
+    });
+
+    it("invalidates only the tooltip cache, not the issue list cache", async () => {
+      mockJsonOk(commentResponse, 201);
+      const invalidateSpy = vi.spyOn(issueTooltipCache, "invalidate");
+      forgeIssueListCache.set("owner/repo:open", { items: [], nextCursor: null, hasMore: false });
+
+      await githubForgeProvider.addIssueComment(repo, 7, "Looks good");
+
+      expect(invalidateSpy).toHaveBeenCalledWith("owner/repo:7");
+      expect(forgeIssueListCache.size()).toBe(1);
+      invalidateSpy.mockRestore();
+    });
+
+    it("rejects a blank comment body before issuing a request", async () => {
+      const fetchMock = mockJsonOk(commentResponse, 201);
+      await expect(githubForgeProvider.addIssueComment(repo, 7, "   ")).rejects.toThrow(
+        /comment body is required/i
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("addIssueLabel", () => {
+    const labelsResponse = [
+      { name: "bug", color: "ee0701" },
+      { name: "enhancement", color: "a2eeef" },
+    ];
+
+    it("POSTs the label name and returns the full label set", async () => {
+      const fetchMock = mockJsonOk(labelsResponse);
+
+      const labels = await githubForgeProvider.addIssueLabel(repo, 7, "bug");
+
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("https://api.github.com/repos/owner/repo/issues/7/labels");
+      expect(init.method).toBe("POST");
+      expect(JSON.parse(init.body as string)).toEqual({ labels: ["bug"] });
+      expect(labels).toEqual([
+        { name: "bug", color: "ee0701" },
+        { name: "enhancement", color: "a2eeef" },
+      ]);
+    });
+
+    it("rejects a blank label name", async () => {
+      const fetchMock = mockJsonOk(labelsResponse);
+      await expect(githubForgeProvider.addIssueLabel(repo, 7, "  ")).rejects.toThrow(
+        /label name is required/i
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("removeIssueLabel", () => {
+    const remainingLabels = [{ name: "enhancement", color: "a2eeef" }];
+
+    it("DELETEs the URL-encoded label name and returns the remaining labels", async () => {
+      const fetchMock = mockJsonOk(remainingLabels);
+
+      const labels = await githubForgeProvider.removeIssueLabel(repo, 7, "needs review");
+
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("https://api.github.com/repos/owner/repo/issues/7/labels/needs%20review");
+      expect(init.method).toBe("DELETE");
+      expect(labels).toEqual([{ name: "enhancement", color: "a2eeef" }]);
+    });
+
+    it("throws a specific message when the label is not on the issue (404)", async () => {
+      mockHttpError(404, "Label does not exist");
+      await expect(githubForgeProvider.removeIssueLabel(repo, 7, "ghost")).rejects.toThrow(
+        /'ghost' is not on issue #7/i
+      );
+    });
+
+    it("includes the HTTP status for other failures", async () => {
+      mockHttpError(500, "server error");
+      await expect(githubForgeProvider.removeIssueLabel(repo, 7, "bug")).rejects.toThrow(
+        /HTTP 500/
+      );
     });
   });
 });

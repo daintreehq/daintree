@@ -136,6 +136,11 @@ import type {
   RepoMetadata,
   ListOptions,
   ForgeUser,
+  ForgeLabel,
+  IssueComment,
+  CreateIssueInput,
+  EditIssueInput,
+  IssueCloseReason,
 } from "../forge.js";
 import type {
   ForgeRateLimitChangedPayload,
@@ -1078,6 +1083,34 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "forge:assign-issue": {
     args: [payload: { cwd: string; issueNumber: number; username: string }];
     result: void;
+  };
+  "forge:create-issue": {
+    args: [payload: { cwd: string; input: CreateIssueInput }];
+    result: Issue;
+  };
+  "forge:close-issue": {
+    args: [payload: { cwd: string; issueNumber: number; stateReason?: IssueCloseReason }];
+    result: Issue;
+  };
+  "forge:reopen-issue": {
+    args: [payload: { cwd: string; issueNumber: number }];
+    result: Issue;
+  };
+  "forge:edit-issue": {
+    args: [payload: { cwd: string; issueNumber: number; input: EditIssueInput }];
+    result: Issue;
+  };
+  "forge:add-issue-comment": {
+    args: [payload: { cwd: string; issueNumber: number; body: string }];
+    result: IssueComment;
+  };
+  "forge:add-issue-label": {
+    args: [payload: { cwd: string; issueNumber: number; label: string }];
+    result: ForgeLabel[];
+  };
+  "forge:remove-issue-label": {
+    args: [payload: { cwd: string; issueNumber: number; label: string }];
+    result: ForgeLabel[];
   };
   "forge:validate-token": {
     args: [payload: { providerId: string; token: string }];

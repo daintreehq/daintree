@@ -262,6 +262,39 @@ describe("summarizeForgeArgs redaction", () => {
     expect(summarizeForgeArgs("createIssue", { title: "No labels" })).toBe("{}");
   });
 
+  it("includes only the number for close/reopen", () => {
+    expect(summarizeForgeArgs("closeIssue", 12)).toBe('{"number":12}');
+    expect(summarizeForgeArgs("reopenIssue", 12)).toBe('{"number":12}');
+  });
+
+  it("redacts editIssue title/body, keeping only which fields were touched", () => {
+    expect(
+      summarizeForgeArgs("editIssue", {
+        number: 5,
+        hasTitle: true,
+        hasBody: true,
+      })
+    ).toBe('{"number":5,"hasTitle":true,"hasBody":true}');
+    expect(summarizeForgeArgs("editIssue", { number: 5, hasTitle: false, hasBody: true })).toBe(
+      '{"number":5,"hasBody":true}'
+    );
+  });
+
+  it("redacts addIssueComment body content, keeping only its length", () => {
+    expect(summarizeForgeArgs("addIssueComment", { number: 8, bodyLength: 42 })).toBe(
+      '{"number":8,"bodyLength":42}'
+    );
+  });
+
+  it("keeps the label name for add/remove label (repo metadata, not PII)", () => {
+    expect(summarizeForgeArgs("addIssueLabel", { number: 8, label: "bug" })).toBe(
+      '{"number":8,"label":"bug"}'
+    );
+    expect(summarizeForgeArgs("removeIssueLabel", { number: 8, label: "bug" })).toBe(
+      '{"number":8,"label":"bug"}'
+    );
+  });
+
   it("returns empty string for getCurrentUser — read probe, no args to summarize", () => {
     expect(summarizeForgeArgs("getCurrentUser", { cwd: "/repo" })).toBe("");
   });

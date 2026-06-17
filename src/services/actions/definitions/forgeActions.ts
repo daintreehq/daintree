@@ -52,10 +52,36 @@ const ForgePRResultSchema = z.object({
   updatedAt: z.number().optional(),
 });
 
+// Normalized issue returned by the create/close/reopen/edit write actions.
+const ForgeIssueResultSchema = z.object({
+  number: z.number(),
+  title: z.string(),
+  body: z.string(),
+  state: z.string(),
+  url: z.string(),
+  labels: z.array(z.unknown()).optional(),
+  assignees: z.array(z.unknown()).optional(),
+  createdAt: z.number().optional(),
+  updatedAt: z.number().optional(),
+});
+
 const cwdArg = z
   .string()
   .optional()
   .describe("Working directory of the git repo. Defaults to the active worktree path.");
+
+// Label set returned by the add/remove-label write actions.
+const ForgeLabelArrayResultSchema = z.array(
+  z.object({ name: z.string(), color: z.string().optional() })
+);
+
+// Comment returned by the add-comment write action.
+const ForgeCommentResultSchema = z.object({
+  id: z.string(),
+  body: z.string(),
+  url: z.string(),
+  createdAt: z.number(),
+});
 
 // Provider-agnostic forge action surface. Each action calls forgeClient (the
 // provider-agnostic IPC wrapper); provider routing is resolved at the IPC
@@ -659,6 +685,40 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
     })
   );
 
+  actions.set("forge.createIssue", () =>
+    defineAction({
+      id: "forge.createIssue",
+      title: "Create Issue",
+      description:
+        "Create a new issue via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `title` (required); `body` (optional markdown); `labels` (optional array of label names). Returns the created issue { number, title, body, state, url, ... }. Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: z
+          .string()
+          .optional()
+          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        title: z.string().min(1).describe("Issue title"),
+        body: z.string().optional().describe("Issue body (markdown)"),
+        labels: z.array(z.string()).optional().describe("Label names to apply on creation"),
+      }),
+      examples: [
+        {
+          args: { title: "Crash on startup", body: "Steps to reproduce: ..." },
+          description: "Create an issue in the active worktree's repo",
+        },
+      ],
+      resultSchema: ForgeIssueResultSchema,
+      run: async ({ cwd, title, body, labels }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        return await forgeClient.createIssue(resolvedCwd, { title, body, labels });
+      },
+    })
+  );
+
   actions.set("forge.convertPRToDraft", () =>
     defineAction({
       id: "forge.convertPRToDraft",
@@ -683,6 +743,36 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
     })
   );
 
+  actions.set("forge.closeIssue", () =>
+    defineAction({
+      id: "forge.closeIssue",
+      title: "Close Issue",
+      description:
+        "Close an open issue via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int); `stateReason` (optional, 'completed' or 'not_planned'). Returns the updated issue. Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: z
+          .string()
+          .optional()
+          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        issueNumber: z.number().int().positive().describe("Issue number to close"),
+        stateReason: z
+          .enum(["completed", "not_planned"])
+          .optional()
+          .describe("Why the issue is being closed (default: completed)"),
+      }),
+      resultSchema: ForgeIssueResultSchema,
+      run: async ({ cwd, issueNumber, stateReason }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        return await forgeClient.closeIssue(resolvedCwd, issueNumber, stateReason);
+      },
+    })
+  );
+
   actions.set("forge.markPRReadyForReview", () =>
     defineAction({
       id: "forge.markPRReadyForReview",
@@ -703,6 +793,32 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         const resolvedCwd = cwd ?? ctx.activeWorktreePath;
         if (!resolvedCwd) throw new Error("No active worktree");
         await forgeClient.markPRReadyForReview(resolvedCwd, prNumber);
+      },
+    })
+  );
+
+  actions.set("forge.reopenIssue", () =>
+    defineAction({
+      id: "forge.reopenIssue",
+      title: "Reopen Issue",
+      description:
+        "Reopen a closed issue via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int). Returns the updated issue. Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: z
+          .string()
+          .optional()
+          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        issueNumber: z.number().int().positive().describe("Issue number to reopen"),
+      }),
+      resultSchema: ForgeIssueResultSchema,
+      run: async ({ cwd, issueNumber }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        return await forgeClient.reopenIssue(resolvedCwd, issueNumber);
       },
     })
   );
@@ -759,6 +875,119 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         const resolvedCwd = cwd ?? ctx.activeWorktreePath;
         if (!resolvedCwd) throw new Error("No active worktree");
         return await forgeClient.editPR(resolvedCwd, prNumber, { title, body });
+      },
+    })
+  );
+
+  actions.set("forge.editIssue", () =>
+    defineAction({
+      id: "forge.editIssue",
+      title: "Edit Issue",
+      description:
+        "Edit an issue's title and/or body via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int); `title` (optional); `body` (optional). Provide at least one of title or body. Only the supplied fields change. Returns the updated issue. Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z
+        .object({
+          cwd: z
+            .string()
+            .optional()
+            .describe("Working directory of the git repo. Defaults to the active worktree path."),
+          issueNumber: z.number().int().positive().describe("Issue number to edit"),
+          title: z.string().optional().describe("New issue title"),
+          body: z.string().optional().describe("New issue body (markdown)"),
+        })
+        .refine((v) => v.title !== undefined || v.body !== undefined, {
+          message: "Provide at least one of title or body to edit",
+        }),
+      resultSchema: ForgeIssueResultSchema,
+      run: async ({ cwd, issueNumber, title, body }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        return await forgeClient.editIssue(resolvedCwd, issueNumber, { title, body });
+      },
+    })
+  );
+
+  actions.set("forge.addIssueComment", () =>
+    defineAction({
+      id: "forge.addIssueComment",
+      title: "Add Issue Comment",
+      description:
+        "Add a comment to an issue via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int); `body` (required markdown). Returns the created comment { id, body, url, createdAt }. Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: z
+          .string()
+          .optional()
+          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        issueNumber: z.number().int().positive().describe("Issue number to comment on"),
+        body: z.string().min(1).describe("Comment body (markdown)"),
+      }),
+      resultSchema: ForgeCommentResultSchema,
+      run: async ({ cwd, issueNumber, body }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        return await forgeClient.addIssueComment(resolvedCwd, issueNumber, body);
+      },
+    })
+  );
+
+  actions.set("forge.addIssueLabel", () =>
+    defineAction({
+      id: "forge.addIssueLabel",
+      title: "Add Issue Label",
+      description:
+        "Add a label (by name) to an issue via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int); `label` (required label name). Additive — existing labels are kept. Returns the issue's full label set. Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: z
+          .string()
+          .optional()
+          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        issueNumber: z.number().int().positive().describe("Issue number to label"),
+        label: z.string().min(1).describe("Label name to add"),
+      }),
+      resultSchema: ForgeLabelArrayResultSchema,
+      run: async ({ cwd, issueNumber, label }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        return await forgeClient.addIssueLabel(resolvedCwd, issueNumber, label);
+      },
+    })
+  );
+
+  actions.set("forge.removeIssueLabel", () =>
+    defineAction({
+      id: "forge.removeIssueLabel",
+      title: "Remove Issue Label",
+      description:
+        "Remove a label (by name) from an issue via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int); `label` (required label name). Errors if the label isn't on the issue. Returns the issue's remaining label set. Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: z
+          .string()
+          .optional()
+          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        issueNumber: z.number().int().positive().describe("Issue number to unlabel"),
+        label: z.string().min(1).describe("Label name to remove"),
+      }),
+      resultSchema: ForgeLabelArrayResultSchema,
+      run: async ({ cwd, issueNumber, label }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        return await forgeClient.removeIssueLabel(resolvedCwd, issueNumber, label);
       },
     })
   );

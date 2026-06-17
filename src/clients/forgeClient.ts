@@ -1,8 +1,13 @@
 import type {
   AuthValidation,
   ForgeUser,
+  ForgeLabel,
   PushErrorClassification,
   Issue,
+  IssueComment,
+  CreateIssueInput,
+  EditIssueInput,
+  IssueCloseReason,
   PR,
   Page,
   RepoMetadata,
@@ -79,6 +84,38 @@ export const forgeClient = {
     reviewers: { users?: string[]; teams?: string[] }
   ): Promise<void> => {
     return window.electron.forge.requestReviewers({ cwd, prNumber, ...reviewers });
+  },
+
+  createIssue: (cwd: string, input: CreateIssueInput): Promise<Issue> => {
+    return window.electron.forge.createIssue({ cwd, input });
+  },
+
+  closeIssue: (
+    cwd: string,
+    issueNumber: number,
+    stateReason?: IssueCloseReason
+  ): Promise<Issue> => {
+    return window.electron.forge.closeIssue({ cwd, issueNumber, stateReason });
+  },
+
+  reopenIssue: (cwd: string, issueNumber: number): Promise<Issue> => {
+    return window.electron.forge.reopenIssue({ cwd, issueNumber });
+  },
+
+  editIssue: (cwd: string, issueNumber: number, input: EditIssueInput): Promise<Issue> => {
+    return window.electron.forge.editIssue({ cwd, issueNumber, input });
+  },
+
+  addIssueComment: (cwd: string, issueNumber: number, body: string): Promise<IssueComment> => {
+    return window.electron.forge.addIssueComment({ cwd, issueNumber, body });
+  },
+
+  addIssueLabel: (cwd: string, issueNumber: number, label: string): Promise<ForgeLabel[]> => {
+    return window.electron.forge.addIssueLabel({ cwd, issueNumber, label });
+  },
+
+  removeIssueLabel: (cwd: string, issueNumber: number, label: string): Promise<ForgeLabel[]> => {
+    return window.electron.forge.removeIssueLabel({ cwd, issueNumber, label });
   },
 
   validateToken: (providerId: string, token: string): Promise<AuthValidation> => {

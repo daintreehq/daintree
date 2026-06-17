@@ -130,6 +130,7 @@ export const SYSTEM_TIER_ADDONS = [
   "forge.openIssue",
   "forge.openPR",
   "forge.assignIssue",
+  "forge.unassignIssue",
   "forge.approvePR",
   "forge.requestChanges",
   "forge.dismissReview",
@@ -142,6 +143,13 @@ export const SYSTEM_TIER_ADDONS = [
   "forge.markPRReadyForReview",
   "forge.commentOnPR",
   "forge.editPR",
+  "forge.createIssue",
+  "forge.closeIssue",
+  "forge.reopenIssue",
+  "forge.editIssue",
+  "forge.addIssueComment",
+  "forge.addIssueLabel",
+  "forge.removeIssueLabel",
   "forge.validateToken",
 ] as const satisfies readonly BuiltInActionId[];
 

@@ -9,11 +9,42 @@ import {
 } from "../../services/forgeProviderRegistry.js";
 import { resolveForCwd, getImplForNamespace } from "./forgeResolution.js";
 import { auditForgeCall, summarizeForgeArgs } from "../../services/forge/forgeAuditService.js";
-import type { PR, PushErrorClassification } from "../../../shared/types/forge.js";
+import type {
+  CreateIssueInput,
+  EditIssueInput,
+  IssueCloseReason,
+  PR,
+  PushErrorClassification,
+} from "../../../shared/types/forge.js";
 import {
   makeForgeProviderId,
   normalizeProviderId,
 } from "../../../shared/utils/forgeProviderIds.js";
+
+/**
+ * Validate the `{ cwd, issueNumber }` shape shared by every issue-write handler
+ * and return the trimmed pieces. Throws a plain `Error` (the forge IPC error
+ * convention) on any invalid field.
+ */
+function validateIssueWritePayload(payload: { cwd: unknown; issueNumber: unknown }): {
+  cwd: string;
+  issueNumber: number;
+} {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid payload");
+  }
+  if (typeof payload.cwd !== "string" || !payload.cwd.trim()) {
+    throw new Error("Invalid working directory");
+  }
+  if (
+    typeof payload.issueNumber !== "number" ||
+    !Number.isInteger(payload.issueNumber) ||
+    payload.issueNumber <= 0
+  ) {
+    throw new Error("Invalid issue number");
+  }
+  return { cwd: payload.cwd, issueNumber: payload.issueNumber };
+}
 
 async function handleForgeUnassignIssue(payload: {
   cwd: string;
@@ -647,6 +678,219 @@ export function registerForgeHandlers(): () => void {
 
   cleanups.push(forgeUnassignIssueNamespace.register());
   cleanups.push(forgeReviewNamespace.register());
+
+  cleanups.push(
+    typedHandle(
+      CHANNELS.FORGE_CREATE_ISSUE,
+      async (payload: { cwd: string; input: CreateIssueInput }) => {
+        checkRateLimit(CHANNELS.FORGE_CREATE_ISSUE, 5, 10_000);
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid payload");
+        }
+        if (typeof payload.cwd !== "string" || !payload.cwd.trim()) {
+          throw new Error("Invalid working directory");
+        }
+        const input = payload.input;
+        if (!input || typeof input !== "object") {
+          throw new Error("Invalid issue input");
+        }
+        if (typeof input.title !== "string" || !input.title.trim()) {
+          throw new Error("Issue title is required");
+        }
+        if (input.body !== undefined && typeof input.body !== "string") {
+          throw new Error("Invalid issue body");
+        }
+        if (
+          input.labels !== undefined &&
+          (!Array.isArray(input.labels) || input.labels.some((l) => typeof l !== "string"))
+        ) {
+          throw new Error("Invalid labels");
+        }
+        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+        const impl = getImplForNamespace(namespaceId);
+        return auditForgeCall(
+          {
+            providerId: namespaceId,
+            methodName: "createIssue",
+            repoOwner: repoRef.owner,
+            repoName: repoRef.repo,
+            argsSummary: summarizeForgeArgs("createIssue", input),
+          },
+          () => impl.createIssue(repoRef, input)
+        );
+      }
+    )
+  );
+
+  cleanups.push(
+    typedHandle(
+      CHANNELS.FORGE_CLOSE_ISSUE,
+      async (payload: { cwd: string; issueNumber: number; stateReason?: IssueCloseReason }) => {
+        checkRateLimit(CHANNELS.FORGE_CLOSE_ISSUE, 5, 10_000);
+        const { issueNumber } = validateIssueWritePayload(payload);
+        if (
+          payload.stateReason !== undefined &&
+          payload.stateReason !== "completed" &&
+          payload.stateReason !== "not_planned"
+        ) {
+          throw new Error("Invalid state reason");
+        }
+        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+        const impl = getImplForNamespace(namespaceId);
+        return auditForgeCall(
+          {
+            providerId: namespaceId,
+            methodName: "closeIssue",
+            repoOwner: repoRef.owner,
+            repoName: repoRef.repo,
+            argsSummary: summarizeForgeArgs("closeIssue", issueNumber),
+          },
+          () => impl.closeIssue(repoRef, issueNumber, payload.stateReason)
+        );
+      }
+    )
+  );
+
+  cleanups.push(
+    typedHandle(
+      CHANNELS.FORGE_REOPEN_ISSUE,
+      async (payload: { cwd: string; issueNumber: number }) => {
+        checkRateLimit(CHANNELS.FORGE_REOPEN_ISSUE, 5, 10_000);
+        const { issueNumber } = validateIssueWritePayload(payload);
+        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+        const impl = getImplForNamespace(namespaceId);
+        return auditForgeCall(
+          {
+            providerId: namespaceId,
+            methodName: "reopenIssue",
+            repoOwner: repoRef.owner,
+            repoName: repoRef.repo,
+            argsSummary: summarizeForgeArgs("reopenIssue", issueNumber),
+          },
+          () => impl.reopenIssue(repoRef, issueNumber)
+        );
+      }
+    )
+  );
+
+  cleanups.push(
+    typedHandle(
+      CHANNELS.FORGE_EDIT_ISSUE,
+      async (payload: { cwd: string; issueNumber: number; input: EditIssueInput }) => {
+        checkRateLimit(CHANNELS.FORGE_EDIT_ISSUE, 5, 10_000);
+        const { issueNumber } = validateIssueWritePayload(payload);
+        const input = payload.input;
+        if (!input || typeof input !== "object") {
+          throw new Error("Invalid issue input");
+        }
+        if (input.title !== undefined && typeof input.title !== "string") {
+          throw new Error("Invalid issue title");
+        }
+        if (input.body !== undefined && typeof input.body !== "string") {
+          throw new Error("Invalid issue body");
+        }
+        if (input.title === undefined && input.body === undefined) {
+          throw new Error("Provide a title or body to edit");
+        }
+        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+        const impl = getImplForNamespace(namespaceId);
+        return auditForgeCall(
+          {
+            providerId: namespaceId,
+            methodName: "editIssue",
+            repoOwner: repoRef.owner,
+            repoName: repoRef.repo,
+            argsSummary: summarizeForgeArgs("editIssue", {
+              number: issueNumber,
+              hasTitle: input.title !== undefined,
+              hasBody: input.body !== undefined,
+            }),
+          },
+          () => impl.editIssue(repoRef, issueNumber, input)
+        );
+      }
+    )
+  );
+
+  cleanups.push(
+    typedHandle(
+      CHANNELS.FORGE_ADD_ISSUE_COMMENT,
+      async (payload: { cwd: string; issueNumber: number; body: string }) => {
+        checkRateLimit(CHANNELS.FORGE_ADD_ISSUE_COMMENT, 5, 10_000);
+        const { issueNumber } = validateIssueWritePayload(payload);
+        if (typeof payload.body !== "string" || !payload.body.trim()) {
+          throw new Error("Comment body is required");
+        }
+        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+        const impl = getImplForNamespace(namespaceId);
+        return auditForgeCall(
+          {
+            providerId: namespaceId,
+            methodName: "addIssueComment",
+            repoOwner: repoRef.owner,
+            repoName: repoRef.repo,
+            argsSummary: summarizeForgeArgs("addIssueComment", {
+              number: issueNumber,
+              bodyLength: payload.body.length,
+            }),
+          },
+          () => impl.addIssueComment(repoRef, issueNumber, payload.body)
+        );
+      }
+    )
+  );
+
+  cleanups.push(
+    typedHandle(
+      CHANNELS.FORGE_ADD_ISSUE_LABEL,
+      async (payload: { cwd: string; issueNumber: number; label: string }) => {
+        checkRateLimit(CHANNELS.FORGE_ADD_ISSUE_LABEL, 5, 10_000);
+        const { issueNumber } = validateIssueWritePayload(payload);
+        const label = payload.label?.trim();
+        if (typeof payload.label !== "string" || !label) {
+          throw new Error("Label name is required");
+        }
+        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+        const impl = getImplForNamespace(namespaceId);
+        return auditForgeCall(
+          {
+            providerId: namespaceId,
+            methodName: "addIssueLabel",
+            repoOwner: repoRef.owner,
+            repoName: repoRef.repo,
+            argsSummary: summarizeForgeArgs("addIssueLabel", { number: issueNumber, label }),
+          },
+          () => impl.addIssueLabel(repoRef, issueNumber, label)
+        );
+      }
+    )
+  );
+
+  cleanups.push(
+    typedHandle(
+      CHANNELS.FORGE_REMOVE_ISSUE_LABEL,
+      async (payload: { cwd: string; issueNumber: number; label: string }) => {
+        checkRateLimit(CHANNELS.FORGE_REMOVE_ISSUE_LABEL, 5, 10_000);
+        const { issueNumber } = validateIssueWritePayload(payload);
+        const label = payload.label?.trim();
+        if (typeof payload.label !== "string" || !label) {
+          throw new Error("Label name is required");
+        }
+        const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+        const impl = getImplForNamespace(namespaceId);
+        return auditForgeCall(
+          {
+            providerId: namespaceId,
+            methodName: "removeIssueLabel",
+            repoOwner: repoRef.owner,
+            repoName: repoRef.repo,
+            argsSummary: summarizeForgeArgs("removeIssueLabel", { number: issueNumber, label }),
+          },
+          () => impl.removeIssueLabel(repoRef, issueNumber, label)
+        );
+      }
+    )
+  );
 
   cleanups.push(
     typedHandle(
