@@ -59,7 +59,7 @@ import {
 } from "@/hooks/app/useAgentDiscoveryOnboarding";
 import { AgentShortcutCapture } from "@/components/KeyboardShortcuts";
 import { notify } from "@/lib/notify";
-import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
+import { LAUNCHABLE_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
 import type { CliAvailability, AgentState } from "@shared/types";
 import { resolveEffectivePresetId } from "@shared/types";
 import { isAgentLaunchable, isAgentInstalled } from "../../../shared/utils/agentAvailability";
@@ -441,12 +441,12 @@ export function AgentTrayButton({
   };
 
   const readyAgentIds = useMemo(() => {
-    return BUILT_IN_AGENT_IDS.filter((id) => isAgentLaunchable(agentAvailability?.[id]));
+    return LAUNCHABLE_AGENT_IDS.filter((id) => isAgentLaunchable(agentAvailability?.[id]));
   }, [agentAvailability]);
 
   const hasNoPinnedAgents = useMemo(() => {
     if (!agentSettings?.agents) return true;
-    return !BUILT_IN_AGENT_IDS.some((id) => isAgentPinned(agentSettings.agents?.[id]));
+    return !LAUNCHABLE_AGENT_IDS.some((id) => isAgentPinned(agentSettings.agents?.[id]));
   }, [agentSettings]);
 
   // While the first-run welcome card is actually being rendered, suppress
@@ -485,7 +485,7 @@ export function AgentTrayButton({
     const needsSetup: AgentRow[] = [];
     const fallbackSetup: AgentRow[] = [];
 
-    for (const id of BUILT_IN_AGENT_IDS) {
+    for (const id of LAUNCHABLE_AGENT_IDS) {
       const pinned = isAgentPinned(agentSettings?.agents?.[id]);
       const dominant = agentDominantStates.get(id) ?? null;
       const entry = agentSettings?.agents?.[id];

@@ -21,6 +21,11 @@ export const config: AgentConfig = {
     npmPackage: "@daintreehq/daintree-assistant",
   },
   supports: {
+    // Placeholder until the assistant launch path is wired end to end. The
+    // assistant connects over MCP via env vars it reads itself, not a written
+    // config file — `mcpInjection` is a required two-value enum with no
+    // env-only option, so this records the nearest intended mechanism. It is
+    // inert at `experimental` tier (no project-config is written today).
     mcpInjection: "project-config",
     settingsOverlay: false,
     permissionBypass: false,

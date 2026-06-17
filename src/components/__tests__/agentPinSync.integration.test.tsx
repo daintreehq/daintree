@@ -93,11 +93,16 @@ vi.mock("@/hooks", () => ({ useKeybindingDisplay: () => null }));
 
 vi.mock("@shared/config/agentIds", () => {
   const BUILT_IN_AGENT_IDS = ["claude", "gemini", "codex"] as const;
+  const ASSISTANT_ONLY_AGENT_IDS = [] as const;
+  const LAUNCHABLE_AGENT_IDS = BUILT_IN_AGENT_IDS;
   const set: ReadonlySet<string> = new Set<string>(BUILT_IN_AGENT_IDS);
   return {
     BUILT_IN_AGENT_IDS,
+    ASSISTANT_ONLY_AGENT_IDS,
+    LAUNCHABLE_AGENT_IDS,
     BUILT_IN_AGENT_KEY_ACTIONS: BUILT_IN_AGENT_IDS.map((id) => `agent.${id}`),
     isBuiltInAgentId: (value: unknown): boolean => typeof value === "string" && set.has(value),
+    isAssistantOnlyAgentId: () => false,
   };
 });
 

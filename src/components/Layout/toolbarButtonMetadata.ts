@@ -12,7 +12,7 @@ import {
   SquareTerminal,
 } from "lucide-react";
 import { Folders } from "@/components/icons";
-import { BUILT_IN_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS, isBuiltInAgentId, isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import type { AnyToolbarButtonId, ToolbarPinnedState } from "@/../../shared/types/toolbar";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
@@ -124,6 +124,10 @@ export function isToolbarButtonVisible(
   agentAvailability: CliAvailability | null | undefined
 ): boolean {
   if (isBuiltInAgentId(buttonId)) {
+    // Assistant-only agents are never offered as launchable toolbar buttons,
+    // even when installed or somehow pinned — they exist only for the
+    // Daintree Assistant overlay.
+    if (isAssistantOnlyAgentId(buttonId)) return false;
     return isAgentToolbarVisible(agentSettings?.agents?.[buttonId], agentAvailability?.[buttonId]);
   }
   return pinnedButtons[buttonId] !== false;
