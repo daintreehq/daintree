@@ -333,8 +333,10 @@ test.describe.serial("Core: HybridInputBar trust-prompt focus (#10541)", () => {
     // only after it receives a carriage return.
     await waitForTerminalText(regPanel, "FAKE_CLAUDE_READY", T_LONG);
 
-    // Invariant 3: exactly one agent panel exists — no duplicate spawn.
-    const idsAfter = (await getGridPanelIds(window)).filter((id) => !beforeIds.has(id));
-    expect(idsAfter).toEqual([panelId]);
+    // Invariant 3: exactly one agent panel exists — no duplicate spawn. Re-check
+    // after a settle window since the buggy second spawn was an async addPanel.
+    expect((await getGridPanelIds(window)).filter((id) => !beforeIds.has(id))).toEqual([panelId]);
+    await window.waitForTimeout(T_SETTLE);
+    expect((await getGridPanelIds(window)).filter((id) => !beforeIds.has(id))).toEqual([panelId]);
   });
 });
