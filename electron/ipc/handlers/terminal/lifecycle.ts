@@ -12,7 +12,7 @@ import { projectStore } from "../../../services/ProjectStore.js";
 import type * as McpServerServiceModule from "../../../services/McpServerService.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
 import { helpSessionService } from "../../../services/HelpSessionService.js";
-import type { HandlerDependencies } from "../../types.js";
+import type { HandlerDependencies, IpcContext } from "../../types.js";
 import { TerminalSpawnOptionsSchema } from "../../../schemas/ipc.js";
 import { resolveDaintreeMcpTier } from "../../../../shared/types/project.js";
 import { DEFAULT_DANGEROUS_ARGS } from "../../../../shared/types/agentSettings.js";
@@ -73,8 +73,15 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
   }
 
   const handleTerminalSpawn = async (
+    ctx: IpcContext,
     validatedOptions: ValidatedTerminalSpawnOptions
   ): Promise<string> => {
+    // Capture the sender window id synchronously before any `await` — the
+    // window can be destroyed mid-spawn, after which `ctx.senderWindow` would
+    // be a stale reference. Only the daintree-assistant env-only path consumes
+    // this (as `DAINTREE_WINDOW_ID`); `null` means no window was in scope.
+    const windowId = ctx.senderWindow?.id ?? null;
+
     const bypassedRateLimit = validatedOptions.restore === true && consumeRestoreQuota();
     if (!bypassedRateLimit) {
       await waitForRateLimitSlot("terminalSpawn", 1_000);
@@ -409,6 +416,48 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           mcpErr
         );
       }
+    } else if (launchAgentId === "daintree-assistant" && safeCommand.length > 0 && projectId) {
+      // Daintree Assistant reads its MCP connection details straight from PTY
+      // env (`mcpInjection: "env-only"`) — no .mcp.json, no CLI flags. Mint a
+      // per-pane bearer via the same `preparePaneConfig` path Claude uses so
+      // the token is registered with the MCP server's bearer validator (an
+      // unregistered raw UUID would be rejected on connect) and revoked on PTY
+      // exit; we discard the written config file and use only the token.
+      // The assistant speaks Streamable HTTP at /mcp (not Claude's /sse).
+      // DAINTREE_PROJECT_ID is injected downstream by `injectDaintreeMetadata`
+      // in the pty-host, so it is intentionally not set here.
+      try {
+        const projSettings = await projectStore.getProjectSettings(projectId);
+        const tier = resolveDaintreeMcpTier(projSettings);
+        if (tier !== "off") {
+          const mcpServerService = await getMcpServerService();
+          const ready = mcpServerService.isRunning || (await mcpServerService.ensureReady());
+          if (!ready) {
+            console.warn(
+              "[TerminalSpawn] Daintree MCP requested for assistant launch, but the MCP server is not ready; continuing without MCP injection"
+            );
+          }
+          const port = mcpServerService.currentPort;
+          if (ready && port) {
+            const { token } = await mcpPaneConfigService.preparePaneConfig({
+              paneId: id,
+              port,
+              tier,
+            });
+            spawnEnv = {
+              ...(spawnEnv ?? {}),
+              DAINTREE_MCP_URL: `http://127.0.0.1:${port}/mcp`,
+              DAINTREE_MCP_TOKEN: token,
+              ...(windowId !== null ? { DAINTREE_WINDOW_ID: String(windowId) } : {}),
+            };
+          }
+        }
+      } catch (mcpErr) {
+        console.error(
+          "[TerminalSpawn] Failed to prepare Daintree Assistant MCP env; continuing without MCP injection:",
+          mcpErr
+        );
+      }
     }
 
     // Expand `${settings:*}` templates a plugin agent embedded in its command
@@ -566,7 +615,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
   const namespace = defineIpcNamespace({
     name: "terminalLifecycle",
     ops: {
-      spawn: opValidated(CHANNELS.TERMINAL_SPAWN, TerminalSpawnOptionsSchema, handleTerminalSpawn),
+      spawn: opValidated(CHANNELS.TERMINAL_SPAWN, TerminalSpawnOptionsSchema, handleTerminalSpawn, {
+        withContext: true,
+      }),
       kill: op(CHANNELS.TERMINAL_KILL, handleTerminalKill),
       gracefulKill: op(CHANNELS.TERMINAL_GRACEFUL_KILL, handleTerminalGracefulKill),
       trash: op(CHANNELS.TERMINAL_TRASH, handleTerminalTrash),

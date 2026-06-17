@@ -70,6 +70,29 @@ vi.mock("../../../utils.js", () => ({
     });
     return () => ipcMainMock.removeHandler(channel);
   },
+  typedHandleWithContextValidated: (channel: string, schema: SafeParseable, handler: unknown) => {
+    ipcMainMock.handle(
+      channel,
+      async (
+        event: { sender?: { id?: number }; senderWindow?: { id: number } } | null | undefined,
+        ...args: unknown[]
+      ) => {
+        const parsed = schema.safeParse(args[0]);
+        if (!parsed.success) {
+          console.error(`[IPC] Validation failed for ${channel}:`, parsed.error);
+          throw new Error(`IPC validation failed: ${channel}`);
+        }
+        const ctx = {
+          event: event as unknown,
+          webContentsId: event?.sender?.id ?? 0,
+          senderWindow: event?.senderWindow ?? null,
+          projectId: null,
+        };
+        return (handler as (ctx: unknown, payload: unknown) => unknown)(ctx, parsed.data);
+      }
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
 }));
 
 vi.mock("../../../../shared/config/agentRegistry.js", () => ({

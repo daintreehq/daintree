@@ -298,8 +298,11 @@ export interface AssistantSupports {
    * - `"project-config"`: written to per-session config files (e.g. Claude's
    *   `.mcp.json` plus `.claude/settings.json` overlay).
    * - `"cli-flags"`: passed as `-c key=value` flags at spawn time (e.g. Codex).
+   * - `"env-only"`: connection details are passed purely through PTY env vars
+   *   the agent reads itself (`DAINTREE_MCP_URL`, `DAINTREE_MCP_TOKEN`, …) —
+   *   no config file written, no CLI flags (e.g. Daintree Assistant).
    */
-  mcpInjection: "project-config" | "cli-flags";
+  mcpInjection: "project-config" | "cli-flags" | "env-only";
   /**
    * Whether the agent reads a session-dir settings overlay that bakes in
    * permissions / project-MCP trust (e.g. Claude's `.claude/settings.json`
