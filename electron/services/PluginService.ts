@@ -1981,6 +1981,12 @@ export class PluginService {
    * activate() timeout, activate() throw). An unknown kind id resolves to
    * `{ ok: true }`: there is nothing to activate, and the renderer's module
    * import then fails on its own with a more specific error.
+   *
+   * Limitation: built-in plugins have no installed provenance record, so a
+   * built-in activation failure (logged, not persisted) reads back as
+   * `{ ok: true }` here and falls through to the renderer's generic import
+   * error. Built-ins are app-bundled trusted code where this is rare; surfacing
+   * it would need a separate in-memory built-in load-error map.
    */
   async activatePluginForView(panelKindId: string): Promise<PluginActivationResult> {
     if (typeof panelKindId !== "string" || panelKindId.length === 0) return { ok: true };

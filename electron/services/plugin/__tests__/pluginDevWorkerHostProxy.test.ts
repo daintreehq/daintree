@@ -398,3 +398,34 @@ describe("PluginDevWorkerHostProxy runtime-surface validation rejects, never thr
     ).toBe(false);
   });
 });
+
+describe("PluginDevWorkerHostProxy host.postToPanel (#10618)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("forwards panelId in the host-notify so main can route per-instance", async () => {
+    const { proxy, sent } = makeProxy();
+
+    await proxy.host.postToPanel("tick", { count: 3 }, "panel-a");
+    expect(sent.find((m) => m.type === "host-notify" && m.method === "postToPanel")).toMatchObject({
+      method: "postToPanel",
+      params: { channel: "tick", payload: { count: 3 }, panelId: "panel-a" },
+    });
+  });
+
+  it("forwards an undefined panelId (broadcast) — the real host coerces it", async () => {
+    const { proxy, sent } = makeProxy();
+
+    await proxy.host.postToPanel("tick", { count: 1 });
+    const notify = sent.find((m) => m.type === "host-notify" && m.method === "postToPanel");
+    expect(notify.params.channel).toBe("tick");
+    expect(notify.params.panelId).toBeUndefined();
+  });
+
+  it("rejects an empty-string panelId before posting", async () => {
+    const { proxy, post } = makeProxy();
+
+    expect(() => proxy.host.postToPanel("tick", { n: 1 }, "")).toThrow(/postToPanel: panelId/);
+    expect(post).not.toHaveBeenCalled();
+  });
+});

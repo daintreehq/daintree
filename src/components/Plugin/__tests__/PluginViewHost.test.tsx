@@ -277,6 +277,53 @@ describe("makePluginViewHost", () => {
     vi.doUnmock("react");
   });
 
+  it("throws the real activation cause when activateForView resolves { ok: false } (#10618)", async () => {
+    // The #10618 contract: activateForView RESOLVES a { ok: false, error }
+    // result (not a rejection) when the plugin's activate() failed. The host
+    // must throw that cause before `import()` so the ErrorBoundary surfaces it,
+    // instead of letting the module load fail later with a generic timeout.
+    const activateForView = vi.fn().mockResolvedValue({ ok: false, error: "activate-boom" });
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { plugin: { onPanelKindsChanged: onPanelKindsChangedMock, activateForView } },
+    });
+
+    let capturedFactory: (() => Promise<unknown>) | undefined;
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: (factory: () => Promise<unknown>) => {
+          capturedFactory = factory;
+          return function StubView() {
+            return <div data-testid="plugin-view" />;
+          };
+        },
+      };
+    });
+
+    const { makePluginViewHost } = await import("../PluginViewHost");
+    const Host = makePluginViewHost(makeConfig());
+
+    render(
+      <Host
+        id="panel-act-fail"
+        title="Dashboard"
+        isFocused={false}
+        onFocus={(): void => {}}
+        onClose={(): void => {}}
+      />
+    );
+
+    await waitFor(() => expect(capturedFactory).toBeDefined());
+    // The factory rejects with the real activation error — carrying the plugin's
+    // own message — and never reaches the `plugin://` import.
+    await expect(capturedFactory!()).rejects.toThrow(/activate-boom/);
+    expect(activateForView).toHaveBeenCalledWith("acme.dashboard");
+    vi.doUnmock("react");
+  });
+
   it("tolerates a missing activateForView binding without throwing (#10523)", async () => {
     // beforeEach installs window.electron.plugin without activateForView, so the
     // optional-chained call must no-op and the import must still proceed.

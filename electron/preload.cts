@@ -2715,7 +2715,15 @@ function buildElectronApi(): ElectronAPI {
         channel: string,
         panelId: string,
         callback: (payload: unknown) => void
-      ) => _pluginPushOn(pluginId, channel, panelId, callback),
+      ) => {
+        // Reject an empty panelId loudly: the host side rejects an empty target
+        // in postToPanel, so an empty subscription here could never be reached —
+        // it would be a silently-dead listener. Surface the authoring mistake.
+        if (typeof panelId !== "string" || panelId.length === 0) {
+          throw new Error(`plugin.onPanel: panelId must be a non-empty string: ${String(panelId)}`);
+        }
+        return _pluginPushOn(pluginId, channel, panelId, callback);
+      },
 
       onActionsChanged: (callback: (payload: { actions: PluginActionDescriptor[] }) => void) =>
         _eventBusOn("plugin:actions-changed", callback),
