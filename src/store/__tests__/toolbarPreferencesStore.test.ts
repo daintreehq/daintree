@@ -27,7 +27,7 @@ vi.mock("@shared/config/agentIds", () => {
   ] as const;
   const ASSISTANT_ONLY_AGENT_IDS = ["daintree-assistant"] as const;
   const LAUNCHABLE_AGENT_IDS = BUILT_IN_AGENT_IDS.filter(
-    (id) => !ASSISTANT_ONLY_AGENT_IDS.includes(id)
+    (id) => !(ASSISTANT_ONLY_AGENT_IDS as readonly string[]).includes(id)
   );
   return {
     BUILT_IN_AGENT_IDS,
