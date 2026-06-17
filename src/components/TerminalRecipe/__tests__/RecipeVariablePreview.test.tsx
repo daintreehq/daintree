@@ -86,6 +86,15 @@ describe("RecipeVariablePreview", () => {
     expect(screen.queryByText(/unresolved/)).toBeNull();
   });
 
+  it("does not flag {{number}} as unresolved during authoring without worktree", () => {
+    const { container } = renderPreview("See {{number}}", undefined);
+
+    expect(screen.queryByText(/unresolved/)).toBeNull();
+    expect(container.querySelector(".bg-category-rose-subtle")).toBeNull();
+    expect(container.querySelector(".bg-category-amber-subtle")).toBeTruthy();
+    expect(screen.getByText("Resolving at run time")).toBeTruthy();
+  });
+
   it("treats unknown {{var}} as literal text, not as unresolved", () => {
     mockSnapshot = { path: "/tmp/test", branch: "main" };
 
@@ -101,6 +110,7 @@ describe("RecipeVariablePreview", () => {
     const { container } = renderPreview("See {{number}}", "wt-1");
 
     expect(container.textContent).toContain("#7");
+    expect(screen.queryByText(/unresolved/)).toBeNull();
   });
 
   it("resolves {{number}} to prNumber when issueNumber is absent", () => {
