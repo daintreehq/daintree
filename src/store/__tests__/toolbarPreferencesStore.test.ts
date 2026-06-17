@@ -33,7 +33,9 @@ vi.mock("@shared/config/agentIds", () => {
     BUILT_IN_AGENT_IDS,
     ASSISTANT_ONLY_AGENT_IDS,
     LAUNCHABLE_AGENT_IDS,
-    isAssistantOnlyAgentId: (value: unknown): value is typeof ASSISTANT_ONLY_AGENT_IDS[number] => {
+    isAssistantOnlyAgentId: (
+      value: unknown
+    ): value is (typeof ASSISTANT_ONLY_AGENT_IDS)[number] => {
       return (
         typeof value === "string" && (ASSISTANT_ONLY_AGENT_IDS as readonly string[]).includes(value)
       );

@@ -25,20 +25,20 @@ export function getLaunchOptions(): LaunchOption[] {
     // Assistant-only agents are never launchable from the New Terminal palette.
     .filter((id) => !isAssistantOnlyAgentId(id))
     .map((id) => {
-    const builtIn = AGENT_REGISTRY[id];
-    const config = builtIn ?? getEffectiveAgentConfig(id);
-    const Icon = resolveAgentIcon(config?.iconId ?? id);
-    const presetCount = builtIn?.presets?.length ?? 0;
-    const description = builtIn?.tooltip ?? "";
-    const presetSuffix = presetCount > 0 ? ` (${presetCount} presets)` : "";
-    return {
-      id,
-      launchAgentId: id,
-      label: config?.name ?? id,
-      description: `${description}${presetSuffix}`.trim(),
-      icon: <Icon className="w-4 h-4" brandColor={getBrandColorHex(id)} />,
-    };
-  });
+      const builtIn = AGENT_REGISTRY[id];
+      const config = builtIn ?? getEffectiveAgentConfig(id);
+      const Icon = resolveAgentIcon(config?.iconId ?? id);
+      const presetCount = builtIn?.presets?.length ?? 0;
+      const description = builtIn?.tooltip ?? "";
+      const presetSuffix = presetCount > 0 ? ` (${presetCount} presets)` : "";
+      return {
+        id,
+        launchAgentId: id,
+        label: config?.name ?? id,
+        description: `${description}${presetSuffix}`.trim(),
+        icon: <Icon className="w-4 h-4" brandColor={getBrandColorHex(id)} />,
+      };
+    });
 
   return [
     ...agentOptions,

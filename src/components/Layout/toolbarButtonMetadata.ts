@@ -12,7 +12,11 @@ import {
   SquareTerminal,
 } from "lucide-react";
 import { Folders } from "@/components/icons";
-import { BUILT_IN_AGENT_IDS, isBuiltInAgentId, isAssistantOnlyAgentId } from "@shared/config/agentIds";
+import {
+  BUILT_IN_AGENT_IDS,
+  isBuiltInAgentId,
+  isAssistantOnlyAgentId,
+} from "@shared/config/agentIds";
 import type { AnyToolbarButtonId, ToolbarPinnedState } from "@/../../shared/types/toolbar";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
