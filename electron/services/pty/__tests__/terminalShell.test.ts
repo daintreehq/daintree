@@ -1,5 +1,10 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { getDefaultShellArgs } from "../terminalShell.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { execFileSync } from "child_process";
+import { findWindowsShell, getDefaultShell, getDefaultShellArgs } from "../terminalShell.js";
+
+vi.mock("child_process", () => ({ execFileSync: vi.fn() }));
+
+const execFileSyncMock = vi.mocked(execFileSync);
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -94,5 +99,98 @@ describe("getDefaultShellArgs", () => {
       expect(getDefaultShellArgs("C:\\tools\\nushell\\nu.exe")).toEqual([]);
       expect(getDefaultShellArgs("C:\\Program Files\\Git\\bin\\bash.exe")).toEqual([]);
     });
+  });
+});
+
+function throwOnce(): never {
+  throw new Error("where: not found");
+}
+
+// Shell DISCOVERY (which shell to spawn) was untested — only getDefaultShellArgs
+// (args for an already-resolved shell) had coverage. These tests drive the
+// Windows fallback chain `where pwsh.exe` → `where powershell.exe` → COMSPEC →
+// cmd.exe under a mocked execFileSync, so no real `where.exe` runs.
+describe("findWindowsShell (Windows shell discovery)", () => {
+  const originalComspec = process.env.COMSPEC;
+
+  beforeEach(() => {
+    execFileSyncMock.mockReset();
+  });
+
+  afterEach(() => {
+    if (originalComspec === undefined) {
+      delete process.env.COMSPEC;
+    } else {
+      process.env.COMSPEC = originalComspec;
+    }
+  });
+
+  it("returns pwsh.exe when 'where pwsh.exe' succeeds", () => {
+    execFileSyncMock.mockReturnValue(Buffer.from("") as never);
+
+    expect(findWindowsShell()).toBe("pwsh.exe");
+    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
+    expect(execFileSyncMock).toHaveBeenCalledWith("where", ["pwsh.exe"], {
+      stdio: "ignore",
+      timeout: 3000,
+    });
+  });
+
+  it("falls back to powershell.exe when pwsh.exe is not on PATH", () => {
+    execFileSyncMock.mockImplementationOnce(throwOnce).mockReturnValue(Buffer.from("") as never);
+
+    expect(findWindowsShell()).toBe("powershell.exe");
+    expect(execFileSyncMock).toHaveBeenCalledTimes(2);
+    expect(execFileSyncMock.mock.calls[1]?.[1]).toEqual(["powershell.exe"]);
+  });
+
+  it("falls back to COMSPEC when neither PowerShell is on PATH", () => {
+    execFileSyncMock.mockImplementation(throwOnce);
+    process.env.COMSPEC = "C:\\custom\\cmd.exe";
+
+    expect(findWindowsShell()).toBe("C:\\custom\\cmd.exe");
+  });
+
+  it("falls back to cmd.exe when both PowerShell probes fail and COMSPEC is unset", () => {
+    execFileSyncMock.mockImplementation(throwOnce);
+    delete process.env.COMSPEC;
+
+    expect(findWindowsShell()).toBe("cmd.exe");
+  });
+});
+
+describe("getDefaultShell", () => {
+  const originalShell = process.env.SHELL;
+
+  beforeEach(() => {
+    execFileSyncMock.mockReset();
+  });
+
+  afterEach(() => {
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, "platform", originalPlatformDescriptor);
+    }
+    if (originalShell === undefined) {
+      delete process.env.SHELL;
+    } else {
+      process.env.SHELL = originalShell;
+    }
+  });
+
+  it("delegates to findWindowsShell on win32 (no POSIX shell resolution)", () => {
+    setPlatform("win32");
+    process.env.SHELL = "/bin/zsh"; // must be ignored on Windows
+    execFileSyncMock.mockReturnValue(Buffer.from("") as never);
+
+    expect(getDefaultShell()).toBe("pwsh.exe");
+    // Proves the win32 short-circuit: the POSIX $SHELL branch never runs.
+    expect(execFileSyncMock).toHaveBeenCalledWith("where", ["pwsh.exe"], expect.anything());
+  });
+
+  it("returns process.env.SHELL when set on POSIX", () => {
+    setPlatform("linux");
+    process.env.SHELL = "/usr/bin/fish";
+
+    expect(getDefaultShell()).toBe("/usr/bin/fish");
   });
 });
