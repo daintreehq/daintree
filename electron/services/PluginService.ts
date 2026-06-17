@@ -2439,7 +2439,7 @@ export class PluginService {
             () => {
               const snapshot = toPluginAgentSnapshot(payload);
               lastAgentSnapshot = snapshot;
-              callback(snapshot);
+              return callback(snapshot);
             },
             () => dispose()
           );

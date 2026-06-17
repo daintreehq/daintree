@@ -74,6 +74,53 @@ describe("invokeTrackedListener", () => {
     expect(remove).not.toHaveBeenCalled();
   });
 
+  it("tracks an async callback's rejection like a synchronous throw", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const state = createListenerFailureState();
+    const remove = vi.fn();
+    const cb = () => Promise.reject(new Error("async boom"));
+
+    invokeTrackedListener(state, "p", "label", cb, remove);
+    // The rejection settles on a microtask, so the counter updates after a tick.
+    expect(state.consecutiveFailures).toBe(0);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(state.consecutiveFailures).toBe(1);
+  });
+
+  it("quarantines after consecutive async rejections", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const state = createListenerFailureState();
+    const remove = vi.fn();
+    const cb = () => Promise.reject(new Error("async boom"));
+
+    for (let i = 0; i < DEFAULT_MAX_CONSECUTIVE_FAILURES; i++) {
+      invokeTrackedListener(state, "p", "label", cb, remove);
+      // Let each rejection settle before the next dispatch so the counter is
+      // consecutive rather than racing.
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+
+  it("resets the counter after an async success", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const state = createListenerFailureState();
+    const remove = vi.fn();
+
+    invokeTrackedListener(state, "p", "label", () => Promise.reject(new Error("x")), remove);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(state.consecutiveFailures).toBe(1);
+
+    invokeTrackedListener(state, "p", "label", () => Promise.resolve(), remove);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(state.consecutiveFailures).toBe(0);
+  });
+
   it("swallows an error thrown by remove() so quarantine can't destabilize the loop", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});

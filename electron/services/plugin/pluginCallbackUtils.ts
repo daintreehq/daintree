@@ -22,6 +22,14 @@ export function createListenerFailureState(): ListenerFailureState {
   return { consecutiveFailures: 0 };
 }
 
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === "function"
+  );
+}
+
 /**
  * Invoke a plugin-supplied listener with consecutive-failure tracking. A throw is
  * caught and logged; after `maxConsecutive` consecutive throws the `remove`
@@ -30,19 +38,24 @@ export function createListenerFailureState(): ListenerFailureState {
  * never quarantined. `remove` must be idempotent — it may already have run from an
  * unrelated unsubscribe — and any error it throws is swallowed so quarantine never
  * destabilizes the dispatch loop.
+ *
+ * `invoke` may return a Promise: plugins commonly pass `async () => {...}` as a
+ * listener, and an async rejection is tracked exactly like a synchronous throw so
+ * the quarantine works for both. The dispatch is fire-and-forget either way —
+ * `invokeTrackedListener` never blocks the caller on the async result.
  */
 export function invokeTrackedListener(
   state: ListenerFailureState,
   pluginId: string,
   label: string,
-  invoke: () => void,
+  invoke: () => unknown,
   remove: () => void,
   maxConsecutive: number = DEFAULT_MAX_CONSECUTIVE_FAILURES
 ): void {
-  try {
-    invoke();
+  const onSuccess = (): void => {
     state.consecutiveFailures = 0;
-  } catch (err) {
+  };
+  const onFailure = (err: unknown): void => {
     state.consecutiveFailures += 1;
     console.error(
       `[PluginService] ${label} callback for "${pluginId}" failed (${state.consecutiveFailures}/${maxConsecutive}):`,
@@ -61,5 +74,16 @@ export function invokeTrackedListener(
         );
       }
     }
+  };
+
+  try {
+    const result = invoke();
+    if (isThenable(result)) {
+      Promise.resolve(result).then(onSuccess, onFailure);
+    } else {
+      onSuccess();
+    }
+  } catch (err) {
+    onFailure(err);
   }
 }

@@ -1581,9 +1581,9 @@ describe("PluginService integration — built-in plugin loading", () => {
       version: "1.0.0",
     });
     const mainFile = `rollback-${randomUUID()}.mjs`;
-    // activate() registers an imperative action, then throws. Without the
-    // rollback the ghost action would leak into the registry forever, since a
-    // failed built-in never runs the full unloadPlugin cascade.
+    // activate() registers an imperative action AND a channel handler, then
+    // throws. Without the rollback both would leak into the registries forever,
+    // since a failed built-in never runs the full unloadPlugin cascade.
     await fs.writeFile(
       path.join(pluginDir, mainFile),
       `export function activate(host) {
@@ -1598,6 +1598,7 @@ describe("PluginService integration — built-in plugin loading", () => {
     },
     async () => "x"
   );
+  host.registerHandler("ghostChannel", async () => "y");
   throw new Error("activate boom after registration");
 }
 `
@@ -1616,13 +1617,23 @@ describe("PluginService integration — built-in plugin loading", () => {
       const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
       await initializeAndActivate(service);
 
-      // The plugin's manifest stays loaded, but the action registered before the
-      // throw is rolled back — no ghost contribution survives the failure.
+      // The plugin's manifest stays loaded, but the action and handler registered
+      // before the throw are rolled back — no ghost contribution survives.
       expect(service.hasPlugin("daintree.rollback-test")).toBe(true);
       expect(service.listPluginActions().map((a) => a.id)).not.toContain(
         "daintree.rollback-test.ghost"
       );
       expect(service.listPluginActions()).toEqual([]);
+      // The channel handler registered before the throw was removed too, so a
+      // dispatch finds nothing to run.
+      await expect(
+        service.dispatchHandler(
+          "daintree.rollback-test",
+          "ghostChannel",
+          makeCtx("daintree.rollback-test"),
+          []
+        )
+      ).rejects.toThrow();
     } finally {
       errorSpy.mockRestore();
     }

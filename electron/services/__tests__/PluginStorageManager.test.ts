@@ -263,6 +263,26 @@ describe("PluginStorageManager evictWorktreeScopedStores", () => {
     const second = mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", filePath);
     expect(second).not.toBe(first);
   });
+
+  it("re-reads the backing file after eviction, dropping a stale in-memory snapshot", async () => {
+    const mgr = managerFor();
+    const filePath = path.join(tmpDir, "wt-stale.json");
+    const first = mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", filePath);
+    expect(await first.set("k", "old")).toBe(true);
+    expect(await first.get("k")).toBe("old");
+
+    // Simulate the file changing out from under the cached store while the
+    // worktree was inactive (e.g. another window wrote it).
+    await fs.writeFile(filePath, JSON.stringify({ k: "new" }), "utf-8");
+    // The cached store still serves its stale in-memory snapshot.
+    expect(await first.get("k")).toBe("old");
+
+    mgr.evictWorktreeScopedStores();
+
+    // A post-eviction store reads the updated value straight from disk.
+    const second = mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", filePath);
+    expect(await second.get("k")).toBe("new");
+  });
 });
 
 describe("PluginStorageManager clearPluginStorageState", () => {
