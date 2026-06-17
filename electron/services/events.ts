@@ -533,6 +533,10 @@ export type DaintreeEventMap = {
     waitingReason?: import("../../shared/types/agent.js").WaitingReason;
     sessionCost?: number;
     sessionTokens?: number;
+    /** Process exit code on completed/exited transitions; null on a signal kill with no numeric code. */
+    exitCode?: number | null;
+    /** Raw OS signal number on completed/exited transitions, when applicable. */
+    exitSignal?: number;
     /** Live activity-temperature reading at the moment the transition was committed. */
     temperature?: number;
     /** Heat impulse that drove the live temperature sample. */

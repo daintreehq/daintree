@@ -88,6 +88,61 @@ describe("AgentStateService", () => {
     expect(terminal.agentState).toBe("exited");
   });
 
+  it("threads exitCode and exitSignal onto the exited state-changed payload (#10638)", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "working" });
+    const stateChanges: Array<{ state: string; exitCode?: number | null; exitSignal?: number }> =
+      [];
+
+    events.on("agent:state-changed", (payload) => {
+      stateChanges.push({
+        state: payload.state,
+        exitCode: payload.exitCode,
+        exitSignal: payload.exitSignal,
+      });
+    });
+
+    service.updateAgentState(terminal, { type: "exit", code: 137, signal: 9 });
+
+    expect(stateChanges).toHaveLength(1);
+    expect(stateChanges[0]?.state).toBe("exited");
+    expect(stateChanges[0]?.exitCode).toBe(137);
+    expect(stateChanges[0]?.exitSignal).toBe(9);
+  });
+
+  it("carries exitCode 0 without an exitSignal on a clean exit (#10638)", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "working" });
+    const stateChanges: Array<{ exitCode?: number | null; exitSignal?: number }> = [];
+
+    events.on("agent:state-changed", (payload) => {
+      stateChanges.push({ exitCode: payload.exitCode, exitSignal: payload.exitSignal });
+    });
+
+    service.updateAgentState(terminal, { type: "exit", code: 0 });
+
+    expect(stateChanges).toHaveLength(1);
+    expect(stateChanges[0]?.exitCode).toBe(0);
+    expect(stateChanges[0]?.exitSignal).toBeUndefined();
+  });
+
+  it("does not attach exit metadata to non-exit completion transitions (#10638)", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "working" });
+    const stateChanges: Array<{ state: string; exitCode?: number | null }> = [];
+
+    events.on("agent:state-changed", (payload) => {
+      stateChanges.push({ state: payload.state, exitCode: payload.exitCode });
+    });
+
+    // A pattern-driven completion (not a PTY exit) has no exit code to report.
+    service.updateAgentState(terminal, { type: "completion" }, "activity", 1.0);
+
+    expect(stateChanges).toHaveLength(1);
+    expect(stateChanges[0]?.state).toBe("completed");
+    expect(stateChanges[0]?.exitCode).toBeUndefined();
+  });
+
   it("transitions idle → exited on graceful agent exit detected from idle (Issue #5767)", () => {
     const service = new AgentStateService();
     const terminal = createTerminal({ agentState: "idle" });

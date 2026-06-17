@@ -139,6 +139,125 @@ describe("AgentAvailabilityStore", () => {
     });
   });
 
+  describe("exit metadata tracking", () => {
+    it("caches exitCode from a completed transition", () => {
+      store.registerAgent("agent-1", "working");
+
+      events.emit("agent:state-changed", {
+        agentId: "agent-1",
+        state: "completed",
+        previousState: "working",
+        timestamp: Date.now(),
+        trigger: "exit",
+        confidence: 1.0,
+        exitCode: 0,
+      });
+
+      expect(store.getExitCode("agent-1")).toBe(0);
+    });
+
+    it("caches a non-zero exitCode from an exited transition", () => {
+      store.registerAgent("agent-1", "working");
+
+      events.emit("agent:state-changed", {
+        agentId: "agent-1",
+        state: "exited",
+        previousState: "working",
+        timestamp: Date.now(),
+        trigger: "exit",
+        confidence: 1.0,
+        exitCode: 1,
+      });
+
+      expect(store.getExitCode("agent-1")).toBe(1);
+    });
+
+    it("caches a null exitCode plus exitSignal for a signal-terminated exit", () => {
+      store.registerAgent("agent-1", "working");
+
+      events.emit("agent:state-changed", {
+        agentId: "agent-1",
+        state: "exited",
+        previousState: "working",
+        timestamp: Date.now(),
+        trigger: "exit",
+        confidence: 1.0,
+        exitCode: null,
+        exitSignal: 9,
+      });
+
+      expect(store.getExitCode("agent-1")).toBeNull();
+      expect(store.getExitSignal("agent-1")).toBe(9);
+    });
+
+    it("does not record exit metadata for non-terminal transitions", () => {
+      store.registerAgent("agent-1", "idle");
+
+      events.emit("agent:state-changed", {
+        agentId: "agent-1",
+        state: "working",
+        previousState: "idle",
+        timestamp: Date.now(),
+        trigger: "input",
+        confidence: 1.0,
+      });
+
+      expect(store.getExitCode("agent-1")).toBeUndefined();
+      expect(store.getExitSignal("agent-1")).toBeUndefined();
+    });
+
+    it("captures spawnedAt from agent:spawned", () => {
+      events.emit("agent:spawned", {
+        agentId: "agent-1",
+        terminalId: "term-1",
+        timestamp: 1234,
+      });
+
+      expect(store.getSpawnedAt("agent-1")).toBe(1234);
+    });
+
+    it("clears stale exit metadata when the agent respawns under the same id", () => {
+      store.registerAgent("agent-1", "working");
+      events.emit("agent:state-changed", {
+        agentId: "agent-1",
+        state: "exited",
+        previousState: "working",
+        timestamp: Date.now(),
+        trigger: "exit",
+        confidence: 1.0,
+        exitCode: 1,
+      });
+      expect(store.getExitCode("agent-1")).toBe(1);
+
+      // A new session under the same agentId must not inherit the old exit code.
+      events.emit("agent:spawned", {
+        agentId: "agent-1",
+        terminalId: "term-1",
+        timestamp: Date.now(),
+      });
+
+      expect(store.getExitCode("agent-1")).toBeUndefined();
+    });
+
+    it("clears exit metadata on unregisterAgent", () => {
+      store.registerAgent("agent-1", "working");
+      events.emit("agent:state-changed", {
+        agentId: "agent-1",
+        state: "exited",
+        previousState: "working",
+        timestamp: Date.now(),
+        trigger: "exit",
+        confidence: 1.0,
+        exitCode: 7,
+      });
+
+      store.unregisterAgent("agent-1");
+
+      expect(store.getExitCode("agent-1")).toBeUndefined();
+      expect(store.getSpawnedAt("agent-1")).toBeUndefined();
+    });
+  });
+
   describe("getAgentsByAvailability", () => {
     it("returns all agents with availability info", () => {
       store.registerAgent("agent-1", "idle");

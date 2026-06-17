@@ -99,27 +99,42 @@ describe("TerminalProcess exit code persistence", () => {
     expect(state.exitCode).toBe(0);
   });
 
-  it("stores non-zero exitCode when agent terminal shouldPreserveOnExit returns false", () => {
+  it("stores non-zero exitCode unconditionally, even when the terminal is not preserved (#10638)", () => {
     const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
 
     expect(exitHandler).not.toBeNull();
     exitHandler!({ exitCode: 1 });
 
-    // Non-zero exit for agent terminal: shouldPreserveOnExit returns false,
-    // so the terminal is disposed (not preserved) and exitCode is NOT stored
+    // Non-zero exit for an agent terminal: shouldPreserveOnExit returns false so
+    // the terminal is disposed (not preserved), but the exit code must still be
+    // recorded — MCP supervisors read it to tell a failure from a clean finish.
     const state = terminal.getPublicState();
-    expect(state.exitCode).toBeUndefined();
+    expect(state.isExited).toBe(true);
+    expect(state.exitCode).toBe(1);
   });
 
-  it("does not store exitCode for non-agent terminals", () => {
+  it("stores exitCode for non-agent terminals on exit (unconditional capture #10638)", () => {
     const terminal = createTerminal({ kind: "terminal" });
 
     expect(exitHandler).not.toBeNull();
     exitHandler!({ exitCode: 0 });
 
-    // Non-agent terminals are never preserved on exit
+    // Non-agent terminals are never preserved, but their exit code is captured
+    // all the same so any read path can report the outcome.
     const state = terminal.getPublicState();
-    expect(state.exitCode).toBeUndefined();
+    expect(state.isExited).toBe(true);
+    expect(state.exitCode).toBe(0);
+  });
+
+  it("records the OS signal number on a signal-terminated exit (#10638)", () => {
+    const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
+
+    expect(exitHandler).not.toBeNull();
+    exitHandler!({ exitCode: 0, signal: 9 });
+
+    const state = terminal.getPublicState();
+    expect(state.isExited).toBe(true);
+    expect(state.exitSignal).toBe(9);
   });
 
   it("does not store exitCode for killed terminals", () => {

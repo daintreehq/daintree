@@ -47,6 +47,19 @@ export interface AgentStateChangePayload {
   /** Extracted session token count (only present when state is "completed" or "exited" and legacy format is used) */
   sessionTokens?: number;
   /**
+   * Numeric process exit code, present only on "completed"/"exited" transitions
+   * driven by the PTY exit event. `null` when the process was terminated by a
+   * signal without a numeric code. Lets MCP subscribers learn pass/fail on the
+   * event rather than scraping output.
+   */
+  exitCode?: number | null;
+  /**
+   * Raw OS signal number that terminated the process, when applicable (present
+   * only on "completed"/"exited"). Taken directly from node-pty — no POSIX
+   * 128+signum decoding (that is wrong on Windows, lesson #7028).
+   */
+  exitSignal?: number;
+  /**
    * Live activity-temperature reading at the moment the transition was
    * committed. Present only on transitions that flow through the activity
    * detector (i.e. `handleActivityState`). Higher temperature = more visible

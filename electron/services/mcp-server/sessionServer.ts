@@ -1154,10 +1154,22 @@ async function readResourceContents(
     const store = getAgentAvailabilityStore();
     const state = store.getState(parsed.id);
     const waitingReason = state === "waiting" ? store.getWaitingReason(parsed.id) : undefined;
+    // Exit metadata only after the agent has finished. exitCode may be null
+    // (signal kill), so gate on the agent being in a terminal state rather than
+    // on the value being truthy.
+    const hasExited = state === "completed" || state === "exited";
+    const exitCode = hasExited ? store.getExitCode(parsed.id) : undefined;
+    const exitSignal = hasExited ? store.getExitSignal(parsed.id) : undefined;
+    const spawnedAt = store.getSpawnedAt(parsed.id);
+    const lastTransitionAt = store.getLastStateChange(parsed.id);
     const text = JSON.stringify({
       agentId: parsed.id,
       state: state ?? null,
       ...(waitingReason ? { waitingReason } : {}),
+      ...(exitCode !== undefined ? { exitCode } : {}),
+      ...(exitSignal !== undefined ? { exitSignal } : {}),
+      ...(spawnedAt !== undefined ? { spawnedAt } : {}),
+      ...(lastTransitionAt !== undefined ? { lastTransitionAt } : {}),
     });
     return { uri, mimeType: "application/json", text };
   }

@@ -295,6 +295,17 @@ export class AgentStateService {
       ...((newState === "completed" || newState === "exited") && sessionTokens != null
         ? { sessionTokens }
         : {}),
+      // Carry exit metadata on the settling event itself so subscribers learn
+      // pass/fail synchronously with the state transition. The exit event is
+      // the only AgentEvent that holds an exit code; pattern/timeout-driven
+      // completions have none. Signal is the raw node-pty value (no 128+signum
+      // POSIX decode — wrong on Windows, lesson #7028).
+      ...((newState === "completed" || newState === "exited") && event.type === "exit"
+        ? {
+            exitCode: event.code,
+            ...(event.signal !== undefined ? { exitSignal: event.signal } : {}),
+          }
+        : {}),
       ...(temperature
         ? {
             temperature: temperature.temperature,

@@ -82,8 +82,10 @@ export interface TerminalPublicState {
   agentModelId?: string;
   /** Resolved argv passed to pty.spawn() at launch time (for diagnostics) */
   spawnArgs?: string[];
-  /** Exit code from the PTY process (set on clean exit) */
+  /** Exit code from the PTY process (set on any exit, preserved or not) */
   exitCode?: number;
+  /** Raw OS signal number that terminated the PTY process, when applicable. */
+  exitSignal?: number;
   /** Worktree the terminal was spawned in; used when persisting agent session history */
   worktreeId?: string;
   /** Last non-useless title observed from xterm OSC updates (renderer-synced) */
