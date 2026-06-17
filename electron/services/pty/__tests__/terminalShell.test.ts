@@ -149,6 +149,8 @@ describe("findWindowsShell (Windows shell discovery)", () => {
     process.env.COMSPEC = "C:\\custom\\cmd.exe";
 
     expect(findWindowsShell()).toBe("C:\\custom\\cmd.exe");
+    // Both `where pwsh.exe` and `where powershell.exe` must be probed first.
+    expect(execFileSyncMock).toHaveBeenCalledTimes(2);
   });
 
   it("falls back to cmd.exe when both PowerShell probes fail and COMSPEC is unset", () => {
@@ -156,6 +158,8 @@ describe("findWindowsShell (Windows shell discovery)", () => {
     delete process.env.COMSPEC;
 
     expect(findWindowsShell()).toBe("cmd.exe");
+    // Both `where pwsh.exe` and `where powershell.exe` must be probed first.
+    expect(execFileSyncMock).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -334,13 +334,27 @@ describe("ProcessTreeKiller — Windows taskkill", () => {
     expect(spawnSyncMock).toHaveBeenCalledTimes(1);
   });
 
-  it("short-circuits to ptyProcess.kill() without taskkill when shellPid is invalid", () => {
-    const pty = makePty(0);
+  it.each([0, -1])(
+    "short-circuits to ptyProcess.kill() without taskkill when shellPid is %i",
+    (pid) => {
+      const pty = makePty(pid);
+      const killer = new ProcessTreeKiller(pty, makeTreeCache([]));
+
+      killer.execute(true);
+
+      // shellPid <= 0 returns before the platform branch — no taskkill.
+      expect(spawnSyncMock).not.toHaveBeenCalled();
+      expect(pty.kill).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("short-circuits to ptyProcess.kill() without taskkill when shellPid is undefined", () => {
+    const pty = makePty(undefined as unknown as number);
     const killer = new ProcessTreeKiller(pty, makeTreeCache([]));
 
     killer.execute(true);
 
-    // shellPid <= 0 returns before the platform branch — no taskkill.
+    // The `shellPid === undefined` guard returns before the platform branch.
     expect(spawnSyncMock).not.toHaveBeenCalled();
     expect(pty.kill).toHaveBeenCalledTimes(1);
   });
