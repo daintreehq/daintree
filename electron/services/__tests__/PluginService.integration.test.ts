@@ -820,9 +820,11 @@ describe("PluginService integration — file decoration provider contributions",
     const mainFile = `decor-${randomUUID()}.mjs`;
     await fs.writeFile(
       path.join(pluginDir, mainFile),
-      `export function activate(host) {
+      `export async function activate(host) {
   try {
-    host.invalidateFileDecorations("other:/x");
+    // invalidateFileDecorations now REJECTS (not sync-throws) a disallowed
+    // scope, so the handler must await it to observe the error (#10617).
+    await host.invalidateFileDecorations("other:/x");
   } catch (err) {
     globalThis[${JSON.stringify(markerKey)}] = String(err && err.message);
   }
@@ -925,7 +927,7 @@ describe("PluginService integration — panel badges (#10585)", () => {
     setPanelBadge: (
       panelId: string,
       badge: { kind: string; text?: string; color?: string } | null
-    ) => void;
+    ) => Promise<void>;
   }
 
   async function loadBadgeHost(name: string): Promise<{ service: PluginService; host: BadgeHost }> {
@@ -987,10 +989,12 @@ describe("PluginService integration — panel badges (#10585)", () => {
 
   it("rejects an invalid badge shape (label over the length cap) and a bad panelId", async () => {
     const { host } = await loadBadgeHost("acme.badge3");
-    expect(() => host.setPanelBadge("p1", { kind: "label", text: "TOOLONG" })).toThrow(
+    // Validation errors now REJECT (not sync-throw) — the runtime-surface
+    // Promise contract a plugin can `.catch()` (#10617).
+    await expect(host.setPanelBadge("p1", { kind: "label", text: "TOOLONG" })).rejects.toThrow(
       /invalid badge/
     );
-    expect(() => host.setPanelBadge("", { kind: "dot" })).toThrow(/non-empty string/);
+    await expect(host.setPanelBadge("", { kind: "dot" })).rejects.toThrow(/non-empty string/);
   });
 
   it("broadcasts panel-badges-cleared on unload only when the plugin had badges", async () => {

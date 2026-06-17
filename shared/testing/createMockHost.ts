@@ -26,10 +26,14 @@ import type {
   ActionHandler,
   PluginActionContribution,
   PluginChannelSchema,
+  PluginConfirmOptions,
   PluginHostApi,
+  PluginInputBoxOptions,
   PluginIpcHandler,
   PluginProcessHandle,
   PluginProcessSpawnOptions,
+  PluginQuickPickItem,
+  PluginQuickPickOptions,
   PluginSettingsScope,
   PluginStorageScope,
   PluginToastOptions,
@@ -108,6 +112,22 @@ export interface SetPanelBadgeRecord {
   badge: PluginPanelBadge | null;
 }
 
+/** Captured `host.showQuickPick(items, options)` calls. */
+export interface ShowQuickPickRecord {
+  items: PluginQuickPickItem[];
+  options: PluginQuickPickOptions | undefined;
+}
+
+/** Captured `host.showInputBox(options)` calls. */
+export interface ShowInputBoxRecord {
+  options: PluginInputBoxOptions | undefined;
+}
+
+/** Captured `host.showConfirm(options)` calls. */
+export interface ShowConfirmRecord {
+  options: PluginConfirmOptions;
+}
+
 /** Captured `host.fs.writeFile(path, contents)` calls. */
 export interface FsWriteRecord {
   path: string;
@@ -132,6 +152,9 @@ export interface MockHostState {
   readonly registeredFileDecorationProviders: ReadonlyArray<RegisteredFileDecorationProviderRecord>;
   readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
   readonly setPanelBadgeCalls: ReadonlyArray<SetPanelBadgeRecord>;
+  readonly showQuickPickCalls: ReadonlyArray<ShowQuickPickRecord>;
+  readonly showInputBoxCalls: ReadonlyArray<ShowInputBoxRecord>;
+  readonly showConfirmCalls: ReadonlyArray<ShowConfirmRecord>;
   readonly spawnCalls: ReadonlyArray<SpawnRecord>;
   readonly fsWriteCalls: ReadonlyArray<FsWriteRecord>;
   readonly gitCommitCalls: ReadonlyArray<GitCommitRecord>;
@@ -178,6 +201,18 @@ export interface MockHostState {
    * errors propagate so a test sees them.
    */
   simulateFsWatch(changedPath: string): void;
+
+  /**
+   * Configure what `showQuickPick` resolves to. Default is `undefined` (the
+   * dismiss value a user-cancel produces). Pass a single item or an array for a
+   * `canSelectMany` pick. Lets a test drive a plugin's handling of a real
+   * selection without wrapping the host.
+   */
+  simulateQuickPickResponse(result: PluginQuickPickItem | PluginQuickPickItem[] | undefined): void;
+  /** Configure what `showInputBox` resolves to (default `undefined` = dismissed). */
+  simulateInputBoxResponse(result: string | undefined): void;
+  /** Configure what `showConfirm` resolves to (default `false` = cancelled). */
+  simulateConfirmResponse(result: boolean): void;
 }
 
 export interface CreateMockHostOptions {
@@ -209,6 +244,22 @@ export interface CreateMockHostOptions {
    * mirrors `ActionService.dispatch` closely enough for activation-time tests.
    */
   dispatch?: (actionId: ActionId, args?: unknown) => Promise<ActionDispatchResult>;
+  /**
+   * Declared plugin capabilities (`manifest.capabilities`), gating the agent
+   * APIs the way production does (#10617). `getAgentState` requires `agent:read`
+   * and `sendToActiveAgent` requires `agent:input`; without the capability the
+   * call rejects with `PERMISSION_REQUIRED`, exactly as the real host. Defaults
+   * to a permissive set (`agent:read` + `agent:input`) so existing manifest-free
+   * tests keep working — pass a restricted list (or `[]`) to assert the
+   * rejection a plugin missing the capability would hit.
+   */
+  capabilities?: readonly string[];
+  /**
+   * Whether an agent terminal is currently active. When `false`,
+   * `sendToActiveAgent` rejects `NO_ACTIVE_AGENT`, mirroring production's "no
+   * resolvable active agent" path. Defaults to `true`.
+   */
+  hasActiveAgent?: boolean;
 }
 
 /**
@@ -222,6 +273,149 @@ export interface CreateMockHostOptions {
 const PLUGIN_ACTION_ID_RE = /^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
 const PLUGIN_ACTION_KINDS = new Set(["command", "query"]);
 const PLUGIN_ACTION_DANGERS = new Set(["safe", "confirm"]);
+
+/**
+ * Mirrors `PLUGIN_PANEL_BADGE_LABEL_MAX` in `shared/types/plugin.ts` and the
+ * toast/badge enums in `electron/schemas/plugin.ts`. Duplicated (not imported)
+ * for the same reason as the action constants above — the mock validates with
+ * plain JS rather than pulling the cross-process Zod schemas — and the
+ * production definitions remain the source of truth. Mirror any change here.
+ */
+const MOCK_PANEL_BADGE_LABEL_MAX = 6;
+const MOCK_TOAST_TYPES = new Set(["info", "success", "warning", "error"]);
+const MOCK_BADGE_COLORS = new Set(["default", "success", "warning", "error"]);
+// Allowed-key sets mirroring the production `.strict()` schemas — unknown keys
+// are rejected, not silently dropped.
+const TOAST_OPTION_KEYS = new Set(["message", "type", "durationMs"]);
+const BADGE_DOT_KEYS = new Set(["kind", "color", "tooltip"]);
+const BADGE_LABEL_KEYS = new Set(["kind", "text", "color", "tooltip"]);
+
+/**
+ * Validate `showToast` options against the same constraints as production's
+ * `PluginToastOptionsSchema` (message length, type enum, durationMs bounds,
+ * strict unknown-key rejection). Throws a parity-style aggregated error so a
+ * plugin tested against the mock fails on a shape the real host would reject
+ * (#10617).
+ */
+function validateToastOptions(opts: PluginToastOptions): void {
+  const issues: string[] = [];
+  // Production's schema is `.strict()` — unknown keys are rejected, not dropped.
+  if (opts && typeof opts === "object") {
+    for (const key of Object.keys(opts)) {
+      if (!TOAST_OPTION_KEYS.has(key)) issues.push(`${key}: unrecognized option`);
+    }
+  }
+  const message = opts?.message;
+  if (typeof message !== "string" || message.trim().length < 1) {
+    issues.push("message: must be a non-empty string");
+  } else if (message.trim().length > 2000) {
+    issues.push("message: must be at most 2000 characters");
+  }
+  if (opts?.type !== undefined && !MOCK_TOAST_TYPES.has(opts.type)) {
+    issues.push("type: must be one of info, success, warning, error");
+  }
+  if (opts?.durationMs !== undefined) {
+    const d = opts.durationMs;
+    if (typeof d !== "number" || !Number.isInteger(d) || d <= 0 || d > 60_000) {
+      issues.push("durationMs: must be a positive integer at most 60000");
+    }
+  }
+  if (issues.length > 0) {
+    throw new Error(`showToast: invalid options — ${issues.join("; ")}`);
+  }
+}
+
+/**
+ * Validate a `setPanelBadge` badge against the same constraints as production's
+ * `PluginPanelBadgeSchema` (discriminated on `kind`; label `text` rejected past
+ * the length cap rather than truncated). `null` (clear) is handled at the call
+ * site. Throws on an invalid shape (#10617).
+ */
+function validatePanelBadge(badge: PluginPanelBadge): void {
+  if (!badge || typeof badge !== "object") {
+    throw new Error("setPanelBadge: invalid badge — badge must be an object");
+  }
+  const color = (badge as { color?: unknown }).color;
+  if (color !== undefined && !MOCK_BADGE_COLORS.has(color as string)) {
+    throw new Error("setPanelBadge: invalid badge — color: must be a known badge color");
+  }
+  const tooltip = (badge as { tooltip?: unknown }).tooltip;
+  if (
+    tooltip !== undefined &&
+    (typeof tooltip !== "string" || tooltip.trim().length < 1 || tooltip.trim().length > 200)
+  ) {
+    throw new Error(
+      "setPanelBadge: invalid badge — tooltip: must be a non-empty string at most 200 characters"
+    );
+  }
+  if (badge.kind === "dot") {
+    rejectUnknownBadgeKeys(badge, BADGE_DOT_KEYS);
+    return;
+  }
+  if (badge.kind === "label") {
+    const text = (badge as { text?: unknown }).text;
+    if (typeof text !== "string" || text.trim().length < 1) {
+      throw new Error("setPanelBadge: invalid badge — text: must be a non-empty string");
+    }
+    if (text.trim().length > MOCK_PANEL_BADGE_LABEL_MAX) {
+      throw new Error(
+        `setPanelBadge: invalid badge — text: must be at most ${MOCK_PANEL_BADGE_LABEL_MAX} characters`
+      );
+    }
+    rejectUnknownBadgeKeys(badge, BADGE_LABEL_KEYS);
+    return;
+  }
+  throw new Error('setPanelBadge: invalid badge — kind: must be "dot" or "label"');
+}
+
+/** Production badge schemas are `.strict()`: reject any key outside the variant's set. */
+function rejectUnknownBadgeKeys(badge: object, allowed: ReadonlySet<string>): void {
+  for (const key of Object.keys(badge)) {
+    if (!allowed.has(key)) {
+      throw new Error(`setPanelBadge: invalid badge — ${key}: unrecognized key`);
+    }
+  }
+}
+
+/**
+ * Mirror production's `validateQuickPickItems`: items must be an array of objects
+ * with a non-empty string `id` (unique) and a string `label`. Returns the
+ * normalized items. Throws on a violation (#10617).
+ */
+function validateQuickPickItems(items: PluginQuickPickItem[]): PluginQuickPickItem[] {
+  if (!Array.isArray(items)) {
+    throw new Error("showQuickPick: items must be an array");
+  }
+  const seen = new Set<string>();
+  return items.map((item, index) => {
+    if (!item || typeof item !== "object") {
+      throw new Error(`showQuickPick: items[${index}] must be an object`);
+    }
+    if (typeof item.id !== "string" || item.id.length === 0) {
+      throw new Error(`showQuickPick: items[${index}].id must be a non-empty string`);
+    }
+    if (typeof item.label !== "string") {
+      throw new Error(`showQuickPick: items[${index}].label must be a string`);
+    }
+    if (seen.has(item.id)) {
+      throw new Error(`showQuickPick: duplicate item id "${item.id}" (ids must be unique)`);
+    }
+    seen.add(item.id);
+    return {
+      id: item.id,
+      label: item.label,
+      ...(item.description !== undefined ? { description: String(item.description) } : {}),
+      ...(item.detail !== undefined ? { detail: String(item.detail) } : {}),
+    };
+  });
+}
+
+/** Reject a postToPanel/broadcastToRenderer channel the way production does. */
+function isInvalidChannel(channel: unknown, allowEmpty: boolean): boolean {
+  if (typeof channel !== "string") return true;
+  if (!allowEmpty && channel.length === 0) return true;
+  return channel.includes(":");
+}
 
 export function createMockHost(options: CreateMockHostOptions = {}): PluginHostApi & MockHostState {
   const pluginId = options.pluginId ?? "test.mock";
@@ -239,6 +433,9 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const registeredFileDecorationProviders: RegisteredFileDecorationProviderRecord[] = [];
   const invalidationCalls: InvalidationRecord[] = [];
   const setPanelBadgeCalls: SetPanelBadgeRecord[] = [];
+  const showQuickPickCalls: ShowQuickPickRecord[] = [];
+  const showInputBoxCalls: ShowInputBoxRecord[] = [];
+  const showConfirmCalls: ShowConfirmRecord[] = [];
   const spawnCalls: SpawnRecord[] = [];
   const fsFiles = new Map<string, string>();
   const fsWriteCalls: FsWriteRecord[] = [];
@@ -251,6 +448,18 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
 
   let lastAgentSnapshot: PluginAgentSnapshot | null = null;
   const agentStateSubs = new Set<(snapshot: PluginAgentSnapshot) => void>();
+
+  // Capability gating + active-agent presence for the agent APIs (#10617).
+  // Default permissive so manifest-free tests are unaffected; restrict to assert
+  // the PERMISSION_REQUIRED / NO_ACTIVE_AGENT rejections production enforces.
+  const capabilities = new Set<string>(options.capabilities ?? ["agent:read", "agent:input"]);
+  const hasActiveAgent = options.hasActiveAgent ?? true;
+
+  // Configurable answers for the imperative UI prompts. Default to the dismiss
+  // value (cancel) a user produces; `simulate*Response` overrides per test.
+  let quickPickResponse: PluginQuickPickItem | PluginQuickPickItem[] | undefined;
+  let inputBoxResponse: string | undefined;
+  let confirmResponse = false;
 
   const settingsStore: Record<PluginSettingsScope, Map<string, unknown>> = {
     user: new Map(Object.entries(options.settings?.user ?? {})),
@@ -553,10 +762,28 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       return Promise.resolve();
     },
     broadcastToRenderer(channel, payload) {
+      // Mirror production's channel-format guard (#10617): a colon would collide
+      // with the `plugin:{id}:{channel}` transport. Reject (not throw) so the
+      // mock matches the host's Promise contract. Production allows an empty
+      // broadcast channel, so only the colon/non-string checks apply here.
+      if (isInvalidChannel(channel, true)) {
+        return Promise.reject(
+          new Error(
+            `broadcastToRenderer: channel must be a string without colons: ${String(channel)}`
+          )
+        );
+      }
       broadcastCalls.push({ channel, payload });
       return Promise.resolve();
     },
     postToPanel(channel, payload) {
+      if (isInvalidChannel(channel, false)) {
+        return Promise.reject(
+          new Error(
+            `postToPanel: channel must be a non-empty string without colons: ${String(channel)}`
+          )
+        );
+      }
       postToPanelCalls.push({ channel, payload });
       return Promise.resolve();
     },
@@ -597,15 +824,31 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       return Promise.resolve(dispose);
     },
     async getAgentState() {
+      // Capability gating mirrors production (#10617): without "agent:read" the
+      // call rejects PERMISSION_REQUIRED, so a plugin that forgot to declare the
+      // capability fails the mock the same way the real host fails it.
+      if (!capabilities.has("agent:read")) {
+        throw new Error(
+          'PERMISSION_REQUIRED: getAgentState requires "agent:read", which is not declared in manifest.capabilities'
+        );
+      }
       return lastAgentSnapshot;
     },
     async sendToActiveAgent(text, options) {
-      // Mirrors PluginService.createHost: reject whitespace-only text (the
-      // production host rejects it so a no-op stage can't bank consent and
-      // submit:true can't fire a bare Enter). The mock has no PTY, so a valid
-      // call just records its intent for assertions.
+      // Capability first, then text validation, then active-agent resolution —
+      // the same order production enforces (#10617). Whitespace-only text is
+      // rejected (a no-op stage can't bank consent, and submit:true can't fire a
+      // bare Enter). The mock has no PTY, so a valid call just records its intent.
+      if (!capabilities.has("agent:input")) {
+        throw new Error(
+          'PERMISSION_REQUIRED: sendToActiveAgent requires "agent:input", which is not declared in manifest.capabilities'
+        );
+      }
       if (typeof text !== "string" || text.trim().length === 0) {
         throw new Error("sendToActiveAgent: text must be a non-empty, non-whitespace string");
+      }
+      if (!hasActiveAgent) {
+        throw new Error("NO_ACTIVE_AGENT: no active agent terminal to receive input");
       }
       sentToActiveAgentCalls.push({ text, submit: options?.submit === true });
     },
@@ -704,17 +947,42 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       return Promise.resolve(dispose);
     },
     invalidateFileDecorations(scope, paths) {
+      // Mirror production's non-empty-scope guard (#10617): reject (not throw),
+      // matching the host's Promise contract. The declared-scope gate production
+      // also applies is intentionally skipped — the mock has no manifest model
+      // (#9878), so it can't know which scopes a plugin declared.
+      if (typeof scope !== "string" || scope.length === 0) {
+        return Promise.reject(
+          new Error("invalidateFileDecorations: scope must be a non-empty string")
+        );
+      }
       invalidationCalls.push({ scope, paths });
       return Promise.resolve();
     },
     setPanelBadge(panelId, badge) {
+      // Validate to production parity (#10617): non-empty panelId, and a badge
+      // shape the real host's Zod schema would accept. Reject (not throw) so the
+      // mock matches the host's Promise contract. `null`/`undefined` clears.
+      if (typeof panelId !== "string" || panelId.length === 0) {
+        return Promise.reject(new Error("setPanelBadge: panelId must be a non-empty string"));
+      }
+      if (badge !== null && badge !== undefined) {
+        try {
+          validatePanelBadge(badge);
+        } catch (err) {
+          // validatePanelBadge only throws Error; re-reject it so the validation
+          // error stays inside the Promise contract (not a sync throw).
+          return Promise.reject(err);
+        }
+      }
       setPanelBadgeCalls.push({ panelId, badge: badge ?? null });
       return Promise.resolve();
     },
     async showToast(opts: PluginToastOptions) {
-      if (!opts.message) {
-        throw new Error("showToast: message must be a non-empty string");
-      }
+      // Full production parity (#10617): message length, type enum, durationMs
+      // bounds — not just a truthy-message check. A shape the real host rejects
+      // now fails the mock too.
+      validateToastOptions(opts);
       shownToasts.push({
         message: opts.message,
         type: opts.type,
@@ -752,16 +1020,26 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         };
       }
     },
-    // Imperative UI prompts (#10522). The mock has no renderer to drive a
-    // dialog, so it resolves the dismiss value (undefined / false) — the same
-    // outcome a plugin sees when the user cancels. Tests that need a concrete
-    // answer can wrap the host and override these.
-    showQuickPick: (async () => undefined) as PluginHostApi["showQuickPick"],
-    async showInputBox() {
-      return undefined;
+    // Imperative UI prompts (#10522, hardened in #10617). The mock has no
+    // renderer to drive a dialog, so each prompt validates its arguments to
+    // production parity, records the call for assertions, then resolves the
+    // configured `simulate*Response` value (default = the user-cancel dismiss
+    // value). A shape the real host rejects now fails the mock too.
+    showQuickPick: (async (items: PluginQuickPickItem[], options?: PluginQuickPickOptions) => {
+      const validItems = validateQuickPickItems(items);
+      showQuickPickCalls.push({ items: validItems, options });
+      return quickPickResponse;
+    }) as PluginHostApi["showQuickPick"],
+    async showInputBox(options) {
+      showInputBoxCalls.push({ options });
+      return inputBoxResponse;
     },
-    async showConfirm() {
-      return false;
+    async showConfirm(options) {
+      if (!options || typeof options !== "object" || typeof options.title !== "string") {
+        throw new Error("showConfirm: options.title must be a string");
+      }
+      showConfirmCalls.push({ options });
+      return confirmResponse;
     },
     actions: {
       // Backed by the catalog seeded via `seedActionCatalog`. With no seed the
@@ -817,9 +1095,32 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         fsFiles.set(filePath, contents);
         fsWriteCalls.push({ path: filePath, contents });
       },
-      async readdir(_dirPath, options) {
+      async readdir(dirPath, options) {
         options?.signal?.throwIfAborted();
-        return [];
+        // Derive entries from files written via writeFile whose parent directory
+        // is `dirPath` (#10617). Previously always returned [], so a plugin that
+        // wrote files then listed the dir saw nothing — a false-green gap. Each
+        // immediate child name is reported once: a name with a deeper path
+        // segment is a directory, a name that is itself a written file is a file
+        // (basename only, like a real readdir).
+        const prefix = dirPath.endsWith("/") ? dirPath : `${dirPath}/`;
+        const isDir = new Map<string, boolean>();
+        for (const filePath of fsFiles.keys()) {
+          if (!filePath.startsWith(prefix)) continue;
+          const rest = filePath.slice(prefix.length);
+          const slash = rest.indexOf("/");
+          if (slash === -1) {
+            if (rest.length > 0 && !isDir.has(rest)) isDir.set(rest, false);
+          } else {
+            isDir.set(rest.slice(0, slash), true);
+          }
+        }
+        return [...isDir.entries()].map(([name, directory]) => ({
+          name,
+          isDirectory: directory,
+          isFile: !directory,
+          isSymbolicLink: false,
+        }));
       },
       async stat(targetPath, options) {
         options?.signal?.throwIfAborted();
@@ -914,6 +1215,9 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     registeredFileDecorationProviders,
     invalidationCalls,
     setPanelBadgeCalls,
+    showQuickPickCalls,
+    showInputBoxCalls,
+    showConfirmCalls,
     spawnCalls,
     fsWriteCalls,
     gitCommitCalls,
@@ -942,6 +1246,15 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       // Snapshot before firing so a callback that registers/disposes a watcher
       // doesn't mutate the set mid-iteration.
       for (const { callback } of [...fsWatchers]) callback(changedPath);
+    },
+    simulateQuickPickResponse(result) {
+      quickPickResponse = result;
+    },
+    simulateInputBoxResponse(result) {
+      inputBoxResponse = result;
+    },
+    simulateConfirmResponse(result) {
+      confirmResponse = result;
     },
   };
 

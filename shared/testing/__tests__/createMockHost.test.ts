@@ -278,6 +278,26 @@ describe("createMockHost", () => {
     await expect(host.showToast({ message: "" })).rejects.toThrow(/non-empty/);
   });
 
+  it("rejects toast options the production schema would reject (#10617)", async () => {
+    const host = createMockHost();
+    // Message past the 2000-char cap.
+    await expect(host.showToast({ message: "x".repeat(2001) })).rejects.toThrow(
+      /showToast: invalid options/
+    );
+    // Unknown toast type.
+    await expect(host.showToast({ message: "hi", type: "fatal" as never })).rejects.toThrow(
+      /type:/
+    );
+    // durationMs out of bounds / non-integer.
+    await expect(host.showToast({ message: "hi", durationMs: 0 })).rejects.toThrow(/durationMs:/);
+    await expect(host.showToast({ message: "hi", durationMs: 60_001 })).rejects.toThrow(
+      /durationMs:/
+    );
+    await expect(host.showToast({ message: "hi", durationMs: 1.5 })).rejects.toThrow(/durationMs:/);
+    // Nothing recorded for any rejected call.
+    expect(host.shownToasts).toEqual([]);
+  });
+
   it("records invalidateFileDecorations calls", async () => {
     const host = createMockHost();
     await host.invalidateFileDecorations("hello:*");
@@ -890,6 +910,152 @@ describe("createMockHost", () => {
         throw new Error("watcher boom");
       });
       expect(() => host.simulateFsWatch("/tmp/file.ts")).toThrow(/watcher boom/);
+    });
+  });
+});
+
+describe("createMockHost production-parity validation (#10617)", () => {
+  it("setPanelBadge rejects an invalid panelId or badge shape", async () => {
+    const host = createMockHost();
+    await expect(host.setPanelBadge("", { kind: "dot" })).rejects.toThrow(/setPanelBadge: panelId/);
+    await expect(host.setPanelBadge("p1", { kind: "bogus" } as never)).rejects.toThrow(
+      /invalid badge/
+    );
+    // Label text past the 6-char cap is rejected (not truncated), matching prod.
+    await expect(host.setPanelBadge("p1", { kind: "label", text: "TOOLONG" })).rejects.toThrow(
+      /text:/
+    );
+    // A valid badge still records.
+    await host.setPanelBadge("p1", { kind: "label", text: "CI" });
+    expect(host.setPanelBadgeCalls).toEqual([
+      { panelId: "p1", badge: { kind: "label", text: "CI" } },
+    ]);
+  });
+
+  it("invalidateFileDecorations rejects an empty scope", async () => {
+    const host = createMockHost();
+    await expect(host.invalidateFileDecorations("")).rejects.toThrow(
+      /invalidateFileDecorations: scope/
+    );
+    // A non-empty scope still records (the mock has no manifest model to gate on).
+    await host.invalidateFileDecorations("hello:*");
+    expect(host.invalidationCalls).toEqual([{ scope: "hello:*", paths: undefined }]);
+  });
+
+  it("rejects unknown keys on toast and badge options (production schemas are strict)", async () => {
+    const host = createMockHost();
+    await expect(host.showToast({ message: "hi", priority: "low" } as never)).rejects.toThrow(
+      /unrecognized option/
+    );
+    await expect(host.setPanelBadge("p1", { kind: "dot", extra: true } as never)).rejects.toThrow(
+      /unrecognized key/
+    );
+    expect(host.shownToasts).toEqual([]);
+    expect(host.setPanelBadgeCalls).toEqual([]);
+  });
+
+  it("postToPanel and broadcastToRenderer reject colon-bearing channels", async () => {
+    const host = createMockHost();
+    await expect(host.postToPanel("bad:channel", null)).rejects.toThrow(/postToPanel: channel/);
+    await expect(host.postToPanel("", null)).rejects.toThrow(/postToPanel: channel/);
+    await expect(host.broadcastToRenderer("bad:channel", null)).rejects.toThrow(
+      /broadcastToRenderer: channel/
+    );
+    // No invalid call was recorded.
+    expect(host.postToPanelCalls).toEqual([]);
+    expect(host.broadcastCalls).toEqual([]);
+  });
+
+  it("getAgentState rejects PERMISSION_REQUIRED without the agent:read capability", async () => {
+    const host = createMockHost({ capabilities: [] });
+    await expect(host.getAgentState()).rejects.toThrow(/PERMISSION_REQUIRED/);
+  });
+
+  it("getAgentState resolves when agent:read is declared", async () => {
+    const host = createMockHost({ capabilities: ["agent:read"] });
+    expect(await host.getAgentState()).toBeNull();
+  });
+
+  it("sendToActiveAgent rejects PERMISSION_REQUIRED without the agent:input capability", async () => {
+    const host = createMockHost({ capabilities: ["agent:read"] });
+    await expect(host.sendToActiveAgent("hello")).rejects.toThrow(/PERMISSION_REQUIRED/);
+  });
+
+  it("sendToActiveAgent rejects NO_ACTIVE_AGENT when no agent is active", async () => {
+    const host = createMockHost({ hasActiveAgent: false });
+    await expect(host.sendToActiveAgent("hello")).rejects.toThrow(/NO_ACTIVE_AGENT/);
+  });
+
+  it("sendToActiveAgent records a valid call with the default permissive capabilities", async () => {
+    const host = createMockHost();
+    await host.sendToActiveAgent("run it", { submit: true });
+    expect(host.sentToActiveAgentCalls).toEqual([{ text: "run it", submit: true }]);
+  });
+
+  describe("imperative UI prompts", () => {
+    it("showQuickPick validates items, records the call, and returns the configured response", async () => {
+      const host = createMockHost();
+      // Duplicate ids are rejected like production.
+      await expect(
+        host.showQuickPick([
+          { id: "a", label: "A" },
+          { id: "a", label: "A2" },
+        ])
+      ).rejects.toThrow(/duplicate item id/);
+
+      host.simulateQuickPickResponse({ id: "a", label: "A" });
+      const picked = await host.showQuickPick([{ id: "a", label: "A" }], { title: "Pick" });
+      expect(picked).toEqual({ id: "a", label: "A" });
+      expect(host.showQuickPickCalls).toEqual([
+        { items: [{ id: "a", label: "A" }], options: { title: "Pick" } },
+      ]);
+    });
+
+    it("showQuickPick defaults to undefined (the dismiss value)", async () => {
+      const host = createMockHost();
+      expect(await host.showQuickPick([{ id: "a", label: "A" }])).toBeUndefined();
+    });
+
+    it("showInputBox records the call and returns the configured response", async () => {
+      const host = createMockHost();
+      expect(await host.showInputBox({ title: "Name" })).toBeUndefined();
+      host.simulateInputBoxResponse("typed value");
+      expect(await host.showInputBox({ title: "Name" })).toBe("typed value");
+      expect(host.showInputBoxCalls).toEqual([
+        { options: { title: "Name" } },
+        { options: { title: "Name" } },
+      ]);
+    });
+
+    it("showConfirm validates options, records the call, and returns the configured response", async () => {
+      const host = createMockHost();
+      await expect(host.showConfirm({} as never)).rejects.toThrow(/options.title/);
+      expect(await host.showConfirm({ title: "Sure?" })).toBe(false);
+      host.simulateConfirmResponse(true);
+      expect(await host.showConfirm({ title: "Sure?" })).toBe(true);
+      expect(host.showConfirmCalls).toEqual([
+        { options: { title: "Sure?" } },
+        { options: { title: "Sure?" } },
+      ]);
+    });
+  });
+
+  describe("fs.readdir", () => {
+    it("lists files and subdirectories previously written under the directory", async () => {
+      const host = createMockHost();
+      await host.fs.writeFile("/repo/a.ts", "1");
+      await host.fs.writeFile("/repo/b.ts", "2");
+      await host.fs.writeFile("/repo/sub/c.ts", "3");
+      const entries = await host.fs.readdir("/repo");
+      const byName = Object.fromEntries(entries.map((e) => [e.name, e]));
+      expect(Object.keys(byName).sort()).toEqual(["a.ts", "b.ts", "sub"]);
+      expect(byName["a.ts"]).toMatchObject({ isFile: true, isDirectory: false });
+      expect(byName.sub).toMatchObject({ isFile: false, isDirectory: true });
+    });
+
+    it("returns an empty list for a directory with no written files", async () => {
+      const host = createMockHost();
+      expect(await host.fs.readdir("/empty")).toEqual([]);
     });
   });
 });

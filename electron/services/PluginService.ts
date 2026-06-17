@@ -2180,8 +2180,14 @@ export class PluginService {
       postToPanel: (channel, payload) => {
         if (!isBound()) return Promise.resolve();
         if (typeof channel !== "string" || channel.length === 0 || channel.includes(":")) {
-          throw new Error(
-            `Plugin "${pluginId}" postToPanel: channel must be a non-empty string without colons: ${String(channel)}`
+          // Reject (not sync throw): this is a post-activation runtime-surface
+          // method returning a Promise, so a validation error must stay inside
+          // the Promise contract a plugin can `.catch()` (#10617). The liveness
+          // no-op above stays a silent resolve.
+          return Promise.reject(
+            new Error(
+              `Plugin "${pluginId}" postToPanel: channel must be a non-empty string without colons: ${String(channel)}`
+            )
           );
         }
         broadcastToRenderer(`plugin:${pluginId}:${channel}`, payload);
@@ -2546,8 +2552,11 @@ export class PluginService {
       invalidateFileDecorations: (scope, paths) => {
         if (!this.plugins.has(pluginId)) return Promise.resolve();
         if (typeof scope !== "string" || scope.length === 0) {
-          throw new Error(
-            `Plugin "${pluginId}" invalidateFileDecorations: scope must be a non-empty string`
+          // Reject (not sync throw): runtime-surface Promise method (#10617).
+          return Promise.reject(
+            new Error(
+              `Plugin "${pluginId}" invalidateFileDecorations: scope must be a non-empty string`
+            )
           );
         }
         // A plugin may only invalidate scopes it actually declared in
@@ -2562,8 +2571,11 @@ export class PluginService {
           !declaredScopes ||
           !declaredScopes.some((pattern) => scopeMatchesPattern(scope, pattern))
         ) {
-          throw new Error(
-            `Plugin "${pluginId}" invalidateFileDecorations: scope "${scope}" is not covered by any declared contributes.fileDecorationProviders[].scopes`
+          // Reject (not sync throw): runtime-surface Promise method (#10617).
+          return Promise.reject(
+            new Error(
+              `Plugin "${pluginId}" invalidateFileDecorations: scope "${scope}" is not covered by any declared contributes.fileDecorationProviders[].scopes`
+            )
           );
         }
         let narrowed =
@@ -2595,16 +2607,22 @@ export class PluginService {
       setPanelBadge: (panelId, badge) => {
         if (!this.plugins.has(pluginId)) return Promise.resolve();
         if (typeof panelId !== "string" || panelId.length === 0) {
-          throw new Error(`Plugin "${pluginId}" setPanelBadge: panelId must be a non-empty string`);
+          // Reject (not sync throw): runtime-surface Promise method (#10617).
+          return Promise.reject(
+            new Error(`Plugin "${pluginId}" setPanelBadge: panelId must be a non-empty string`)
+          );
         }
         let validated: PluginPanelBadge | null = null;
         if (badge !== null && badge !== undefined) {
           const parsed = PluginPanelBadgeSchema.safeParse(badge);
           if (!parsed.success) {
-            throw new Error(
-              `Plugin "${pluginId}" setPanelBadge: invalid badge — ${parsed.error.issues
-                .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
-                .join("; ")}`
+            // Reject (not sync throw): runtime-surface Promise method (#10617).
+            return Promise.reject(
+              new Error(
+                `Plugin "${pluginId}" setPanelBadge: invalid badge — ${parsed.error.issues
+                  .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+                  .join("; ")}`
+              )
             );
           }
           validated = parsed.data;

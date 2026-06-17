@@ -3839,7 +3839,9 @@ type CreateHostShape = (pluginId: string) => {
       typedHandler?: (...args: unknown[]) => unknown
     ) => void;
     broadcastToRenderer: (channel: string, payload: unknown) => void;
-    postToPanel: (channel: string, payload: unknown) => void;
+    postToPanel: (channel: string, payload: unknown) => Promise<void>;
+    setPanelBadge: (panelId: string, badge: unknown) => Promise<void>;
+    invalidateFileDecorations: (scope: string, paths?: string[]) => Promise<void>;
     registerForgeProvider: (descriptor: { id: string }, impl: unknown) => () => void;
   };
   revoke: () => void;
@@ -3987,8 +3989,19 @@ describe("createHost (plugin activation API)", () => {
     );
 
     broadcastToRendererMock.mockClear();
-    expect(() => host.postToPanel("bad:channel", null)).toThrow(/postToPanel: channel/);
-    expect(() => host.postToPanel("", null)).toThrow(/postToPanel: channel/);
+    // Validation errors must REJECT (not throw synchronously) so a plugin can
+    // `.catch()` a non-awaited call — the promise-based error contract (#10617).
+    // A sync throw would escape the Promise and force a try/catch wrapper.
+    await expect(host.postToPanel("bad:channel", null)).rejects.toThrow(/postToPanel: channel/);
+    await expect(host.postToPanel("", null)).rejects.toThrow(/postToPanel: channel/);
+    // Calling without awaiting must not throw synchronously — the rejection is
+    // delivered through the returned promise, catchable via `.catch()`.
+    let caught: unknown;
+    const pending = host.postToPanel("also:bad", null).catch((err) => {
+      caught = err;
+    });
+    await pending;
+    expect(caught).toBeInstanceOf(Error);
     expect(broadcastToRendererMock).not.toHaveBeenCalled();
   });
 
@@ -4006,6 +4019,80 @@ describe("createHost (plugin activation API)", () => {
     broadcastToRendererMock.mockClear();
     expect(() => host.postToPanel("tick", { n: 1 })).not.toThrow();
     expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("host.setPanelBadge rejects an invalid panelId or badge shape (#10617)", async () => {
+    await writePlugin("badge-reject", { name: "acme.badge-reject", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.badge-reject"
+    );
+
+    broadcastToRendererMock.mockClear();
+    // Empty panelId and a malformed badge must reject through the Promise, not
+    // throw synchronously — the runtime-surface error contract (#10617).
+    await expect(host.setPanelBadge("", { kind: "dot" })).rejects.toThrow(/setPanelBadge: panelId/);
+    await expect(host.setPanelBadge("panel-1", { kind: "bogus" })).rejects.toThrow(
+      /setPanelBadge: invalid badge/
+    );
+    // Non-awaited call is catchable, never a sync throw.
+    let caught: unknown;
+    await host.setPanelBadge("", null).catch((err) => {
+      caught = err;
+    });
+    expect(caught).toBeInstanceOf(Error);
+    // A rejected setPanelBadge has no side effect: no badge-changed broadcast.
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("host.setPanelBadge silently no-ops once the plugin is unloaded (#10617)", async () => {
+    await writePlugin("badge-unloaded", { name: "acme.badge-unloaded", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.badge-unloaded"
+    );
+    service.unloadPlugin("acme.badge-unloaded");
+
+    // Liveness no-op stays a silent resolve even with an otherwise-invalid badge.
+    await expect(host.setPanelBadge("", { kind: "bogus" })).resolves.toBeUndefined();
+  });
+
+  it("host.invalidateFileDecorations rejects an empty scope (#10617)", async () => {
+    await writePlugin("deco-reject", { name: "acme.deco-reject", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.deco-reject"
+    );
+
+    // Empty scope rejects at the first guard, before the declared-scope check —
+    // through the Promise, not a sync throw (#10617).
+    await expect(host.invalidateFileDecorations("")).rejects.toThrow(
+      /invalidateFileDecorations: scope/
+    );
+    // A non-empty but undeclared scope rejects at the second guard, also through
+    // the Promise (this plugin declares no fileDecorationProviders).
+    await expect(host.invalidateFileDecorations("acme.deco-reject:*")).rejects.toThrow(
+      /is not covered by any declared/
+    );
+  });
+
+  it("host.invalidateFileDecorations silently no-ops once the plugin is unloaded (#10617)", async () => {
+    await writePlugin("deco-unloaded", { name: "acme.deco-unloaded", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.deco-unloaded"
+    );
+    service.unloadPlugin("acme.deco-unloaded");
+
+    await expect(host.invalidateFileDecorations("")).resolves.toBeUndefined();
   });
 });
 
