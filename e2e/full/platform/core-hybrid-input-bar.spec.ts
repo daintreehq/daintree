@@ -270,3 +270,71 @@ test.describe.serial("Core: HybridInputBar", () => {
     await expect(restoredEditor).toHaveText(new RegExp(draftText), { timeout: T_MEDIUM });
   });
 });
+
+// Regression for issue #10541: launching Claude from the primary toolbar button
+// left DOM focus stranded on that button (the lazy HybridInputBar chunk hadn't
+// resolved when TerminalPane's focus RAF fired, so the RAF no-opped). Pressing
+// Enter at the trust prompt then re-fired the focused button's click handler,
+// spawning a SECOND agent panel instead of confirming the prompt. The fix has
+// HybridInputBar self-claim focus on mount and AgentButton blur on launch.
+test.describe.serial("Core: HybridInputBar trust-prompt focus (#10541)", () => {
+  let regCtx: AppContext;
+  let regPanel: Locator;
+
+  test.beforeAll(async () => {
+    // Fresh app instance so the HybridInputBar chunk is cold on first launch —
+    // that cold load is the exact window the focus race lived in.
+    prepareFixture();
+    regCtx = await launchApp({
+      env: {
+        PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        DAINTREE_CLI_PATH_PREPEND: fakeBinDir,
+        ANTHROPIC_API_KEY: "e2e-fake-key",
+      },
+    });
+    regCtx.window = await openAndOnboardProject(
+      regCtx.app,
+      regCtx.window,
+      fixtureDir,
+      "HybridInputBar #10541"
+    );
+  });
+
+  test.afterAll(async () => {
+    if (regCtx?.app) await closeApp(regCtx.app);
+    fixtureCleanup?.();
+  });
+
+  test("Enter at trust prompt confirms it without spawning a second panel", async () => {
+    const window = regCtx.window;
+    await dismissBlockingPalette(window);
+
+    // Launch via the PRIMARY Start button (not the tray) — this is the surface
+    // that used to retain DOM focus after a fire-and-forget launch.
+    const beforeIds = new Set(await getGridPanelIds(window));
+    await window.locator(SEL.agent.startButton).click();
+
+    const panelId = await newestPanelId(window, beforeIds);
+    regPanel = window.locator(`[data-panel-id="${panelId}"]`);
+    await expect(regPanel).toHaveAttribute("data-launch-agent-id", "claude", { timeout: T_LONG });
+
+    // Wait for the trust prompt to render in the PTY.
+    await waitForTerminalText(regPanel, "Enter to confirm", T_LONG);
+
+    // Invariant 1: focus landed in the input bar on mount — no click needed.
+    // This is what proves the AgentButton no longer holds focus.
+    await expectInputBarFocused(regPanel);
+
+    // Press Enter WITHOUT clicking into the editor first. Pre-fix this either
+    // re-fired the focused button (second panel) or did nothing.
+    await window.keyboard.press("Enter");
+
+    // Invariant 2: the keystroke reached the PTY — the fake CLI flips to READY
+    // only after it receives a carriage return.
+    await waitForTerminalText(regPanel, "FAKE_CLAUDE_READY", T_LONG);
+
+    // Invariant 3: exactly one agent panel exists — no duplicate spawn.
+    const idsAfter = (await getGridPanelIds(window)).filter((id) => !beforeIds.has(id));
+    expect(idsAfter).toEqual([panelId]);
+  });
+});

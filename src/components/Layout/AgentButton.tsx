@@ -1,4 +1,9 @@
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -342,9 +347,14 @@ export function AgentButton({
         ? `Configure ${config.name}`
         : `Install ${config.name} CLI`;
 
-  const handleClick = () => {
+  const handleClick = (e?: ReactMouseEvent<HTMLElement>) => {
     if (isLoading) return;
     if (isLaunchable) {
+      // Drop DOM focus on launch so a CLI prompt's Enter can't bounce back to
+      // this still-focused button and spawn a duplicate agent before the input
+      // bar claims focus. Native buttons synthesize a click on Enter, so a
+      // launch that doesn't hand off focus is a footgun. See issue #10541.
+      e?.currentTarget?.blur();
       // Defer all preset resolution to useAgentLauncher. Forwarding the
       // resolved savedPresetId explicitly would block the launcher's
       // stale-fallback path: when a worktree-scoped pick references a
