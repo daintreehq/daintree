@@ -7,6 +7,7 @@ import {
   PLUGIN_EXTRA_ASSET_SKIP_DIRS,
   copyPluginExtraAssets,
   findMissingPluginAssets,
+  findTypeScriptCommandHandlers,
 } from "../build-main.mjs";
 
 let workDir;
@@ -244,5 +245,84 @@ describe("findMissingPluginAssets", () => {
 
     expect(missing).toHaveLength(1);
     expect(missing[0]).toContain("sample/bad-json");
+  });
+});
+
+describe("findTypeScriptCommandHandlers", () => {
+  function writeManifest(tier, name, manifest, handlers = {}) {
+    const pluginDir = path.join(workDir, tier, name);
+    writeFile(path.join(pluginDir, "plugin.json"), JSON.stringify(manifest));
+    for (const [relPath, contents] of Object.entries(handlers)) {
+      writeFile(path.join(pluginDir, relPath), contents);
+    }
+  }
+
+  it("flags a command whose handler is authored as src/{id}.ts", () => {
+    writeManifest(
+      "sample",
+      "ts-handler",
+      { contributes: { commands: [{ id: "greet" }] } },
+      { "src/greet.ts": "export default () => {}\n" }
+    );
+
+    const offenders = findTypeScriptCommandHandlers(workDir);
+
+    expect(offenders).toHaveLength(1);
+    expect(offenders[0]).toBe("sample/ts-handler: src/greet.ts");
+  });
+
+  it("flags a .tsx handler", () => {
+    writeManifest(
+      "builtin",
+      "tsx-handler",
+      { contributes: { commands: [{ id: "panel" }] } },
+      { "src/panel.tsx": "export default () => {}\n" }
+    );
+
+    const offenders = findTypeScriptCommandHandlers(workDir);
+
+    expect(offenders).toEqual(["builtin/tsx-handler: src/panel.tsx"]);
+  });
+
+  it("accepts a .js handler", () => {
+    writeManifest(
+      "sample",
+      "js-handler",
+      { contributes: { commands: [{ id: "greet" }] } },
+      { "src/greet.js": "export default () => {}\n" }
+    );
+
+    expect(findTypeScriptCommandHandlers(workDir)).toEqual([]);
+  });
+
+  it("ignores a command with no on-disk handler (imperative registration)", () => {
+    writeManifest("sample", "imperative", { contributes: { commands: [{ id: "greet" }] } });
+
+    expect(findTypeScriptCommandHandlers(workDir)).toEqual([]);
+  });
+
+  it("reports only the offending command when a plugin mixes .ts and .js handlers", () => {
+    writeManifest(
+      "sample",
+      "mixed",
+      { contributes: { commands: [{ id: "ok" }, { id: "bad" }] } },
+      { "src/ok.js": "export default () => {}\n", "src/bad.ts": "export default () => {}\n" }
+    );
+
+    const offenders = findTypeScriptCommandHandlers(workDir);
+
+    expect(offenders).toEqual(["sample/mixed: src/bad.ts"]);
+  });
+
+  it("returns no findings when the plugins root does not exist", () => {
+    expect(findTypeScriptCommandHandlers(path.join(workDir, "never"))).toEqual([]);
+  });
+
+  it("skips an unreadable manifest instead of throwing", () => {
+    const pluginDir = path.join(workDir, "sample", "bad-json");
+    writeFile(path.join(pluginDir, "plugin.json"), "{ not json");
+    writeFile(path.join(pluginDir, "src", "greet.ts"), "x\n");
+
+    expect(findTypeScriptCommandHandlers(workDir)).toEqual([]);
   });
 });

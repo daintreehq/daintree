@@ -171,8 +171,9 @@ function isSafePluginViewComponentPath(componentPath: string): boolean {
 /**
  * View contribution. A view renders into a `contributes.panels` entry with a
  * matching `id`; at plugin load (`PluginService.loadPlugin`) the panels loop
- * attaches the view's `componentPath` to that panel kind. A view with no
- * matching panel entry is ignored. Only `location: "panel"` is supported — it
+ * attaches the view's `componentPath` to that panel kind. A view whose `id`
+ * matches no panel is rejected by the manifest-level `superRefine` (#10620) —
+ * it would otherwise silently never render. Only `location: "panel"` is supported — it
  * sets `showInPalette: true` so the view is spawnable from the panel palette.
  * `"sidebar"` is rejected at the schema boundary: the sidebar host does not
  * exist yet, so accepting it would validate a manifest the runtime cannot
@@ -246,8 +247,11 @@ const CredentialFieldSchema = z
 /**
  * `forgeProviders` manifest entry — wired: the registry populates Preferences
  * and remote-routing before any plugin code runs. See
- * `docs/architecture/forge-provider-abstraction.md`. Two fields are validated
- * for SHAPE only and carry no runtime authority (frozen at 1.0):
+ * `docs/architecture/forge-provider-abstraction.md`. `settingsScopeRef` and
+ * `viewRefs` are cross-validated against `contributes.settings`/`contributes.views`
+ * by the manifest-level `superRefine` (#10620) — a dangling ref is a parse
+ * error. Two fields are validated for SHAPE only and carry no runtime authority
+ * (frozen at 1.0):
  *   - `capabilities` is informational; the host gates behavior on the runtime
  *     `ForgeProviderImpl` field presence, never on these strings.
  *   - `slots` values are opaque renderer view-ids checked for non-emptiness
@@ -1077,6 +1081,122 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
           });
         });
       }
+
+      // Duplicate contribution ids — within each contribution array, the bare
+      // `id` is the lookup key the runtime keys its registries on (panel kind,
+      // command descriptor, MCP server, agent, view, setting, forge provider,
+      // file-decoration provider). A duplicate silently first-wins at load, so
+      // the second contribution vanishes with no diagnostic. Reject it at the
+      // manifest gate instead. The check is per-array (ids in different arrays
+      // are namespaced independently and never collide).
+      const reportDuplicateIds = (arrayName: string, entries: ReadonlyArray<{ id: string }>) => {
+        const seen = new Set<string>();
+        entries.forEach((entry, index) => {
+          if (seen.has(entry.id)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contributes", arrayName, index, "id"],
+              message: `Duplicate id "${entry.id}" in contributes.${arrayName} — each contribution id must be unique within its array.`,
+              params: { errorCode: "duplicate_contribution_id" },
+            });
+          } else {
+            seen.add(entry.id);
+          }
+        });
+      };
+      reportDuplicateIds("panels", manifest.contributes.panels);
+      reportDuplicateIds("toolbarButtons", manifest.contributes.toolbarButtons);
+      reportDuplicateIds("commands", manifest.contributes.commands);
+      reportDuplicateIds("views", manifest.contributes.views);
+      reportDuplicateIds("mcpServers", manifest.contributes.mcpServers);
+      reportDuplicateIds("forgeProviders", manifest.contributes.forgeProviders);
+      reportDuplicateIds("fileDecorationProviders", manifest.contributes.fileDecorationProviders);
+      reportDuplicateIds("agents", manifest.contributes.agents);
+      reportDuplicateIds("settings", manifest.contributes.settings);
+
+      // Cross-reference integrity — a contribution that names another by id must
+      // point at one that exists in the same manifest, else the reference dangles
+      // and the wiring silently no-ops at runtime.
+      const settingIds = new Set(manifest.contributes.settings.map((setting) => setting.id));
+      const viewIds = new Set(manifest.contributes.views.map((view) => view.id));
+      const panelIds = new Set(manifest.contributes.panels.map((panel) => panel.id));
+
+      // `forgeProvider.settingsScopeRef` → a declared setting; `viewRefs[]` →
+      // declared views. Both were validated for shape only before (#10620).
+      manifest.contributes.forgeProviders.forEach((provider, index) => {
+        if (provider.settingsScopeRef !== undefined && !settingIds.has(provider.settingsScopeRef)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "forgeProviders", index, "settingsScopeRef"],
+            message: `forgeProvider settingsScopeRef "${provider.settingsScopeRef}" matches no contributes.settings[].id.`,
+            params: { errorCode: "forge_settings_scope_ref_unknown" },
+          });
+        }
+        provider.viewRefs?.forEach((ref, refIndex) => {
+          if (!viewIds.has(ref)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contributes", "forgeProviders", index, "viewRefs", refIndex],
+              message: `forgeProvider viewRef "${ref}" matches no contributes.views[].id.`,
+              params: { errorCode: "forge_view_ref_unknown" },
+            });
+          }
+        });
+      });
+
+      // A view renders into a `contributes.panels` entry with a matching id; a
+      // view whose id matches no panel can never be shown (#10620). This is a
+      // hard error now — it previously silently no-op'd at load.
+      manifest.contributes.views.forEach((view, index) => {
+        if (!panelIds.has(view.id)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "views", index, "id"],
+            message: `View "${view.id}" has no matching contributes.panels[].id — a view renders into a panel of the same id, so it would never be shown.`,
+            params: { errorCode: "view_panel_ref_unknown" },
+          });
+        }
+      });
+
+      // Every `${settings:<id>}` token in an MCP server's command/args/env must
+      // name a declared setting — the supervisor substitutes only declared ids
+      // (`SETTINGS_TEMPLATE_RE` in PluginMcpSupervisor.ts) and an unknown id
+      // resolves to the empty string, silently dropping the value. Agents have
+      // no settings-substitution path, so their args are left untouched.
+      const settingsTokenRe = /\$\{settings:([a-zA-Z0-9._-]+)\}/g;
+      const reportUnknownSettingsTokens = (text: string, path: (string | number)[]) => {
+        for (const match of text.matchAll(settingsTokenRe)) {
+          const key = match[1]!;
+          if (!settingIds.has(key)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path,
+              message: `Reference to undeclared setting "\${settings:${key}}" — no contributes.settings[].id matches "${key}".`,
+              params: { errorCode: "settings_token_unknown" },
+            });
+          }
+        }
+      };
+      manifest.contributes.mcpServers.forEach((server, index) => {
+        reportUnknownSettingsTokens(server.command, [
+          "contributes",
+          "mcpServers",
+          index,
+          "command",
+        ]);
+        server.args?.forEach((arg, argIndex) =>
+          reportUnknownSettingsTokens(arg, ["contributes", "mcpServers", index, "args", argIndex])
+        );
+        for (const [envKey, envValue] of Object.entries(server.env ?? {})) {
+          reportUnknownSettingsTokens(envValue, [
+            "contributes",
+            "mcpServers",
+            index,
+            "env",
+            envKey,
+          ]);
+        }
+      });
     });
 }
 
