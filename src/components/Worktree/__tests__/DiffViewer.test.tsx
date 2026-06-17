@@ -665,3 +665,30 @@ describe("DiffViewer gutter CSS contract (#10422)", () => {
     expect(cssText).toMatch(/\.diff-viewer\s+\.diff-line-number\s*\{[^}]*white-space:\s*nowrap/);
   });
 });
+
+// The no-wrap behavior on the fallback (add/delete) scroll path and the
+// word-boundary behavior in wrap-on mode are CSS-only and can't be exercised by
+// jsdom (no layout engine), so guard the load-bearing declarations against an
+// accidental revert to react-diff-view's vendor break-all/break-word defaults
+// (the original #10623 bug). Same readFileSync pattern as the #10422 guard.
+describe("DiffViewer wrap CSS contract (#10623)", () => {
+  it("resets the vendor wrap defaults on the base .diff-code rule", () => {
+    const cssText = readFileSync(join(__dirname, "..", "DiffViewer.css"), "utf8");
+    expect(cssText).toMatch(/\.diff-viewer\s+\.diff-code\s*\{[^}]*white-space:\s*pre[;\s}]/);
+    expect(cssText).toMatch(/\.diff-viewer\s+\.diff-code\s*\{[^}]*word-break:\s*normal/);
+    expect(cssText).toMatch(/\.diff-viewer\s+\.diff-code\s*\{[^}]*overflow-wrap:\s*normal/);
+  });
+
+  it("breaks at word boundaries (not mid-token) in wrap-on mode", () => {
+    const cssText = readFileSync(join(__dirname, "..", "DiffViewer.css"), "utf8");
+    // Strip comments so the negative break-all assertion checks declarations
+    // only — the rule's own comment explains why break-all was dropped.
+    const declarations = cssText
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .match(/\.diff-viewer\[data-wrap="true"\]\s+\.diff-code\s*\{[^}]*\}/)?.[0];
+    expect(declarations).toBeTruthy();
+    expect(declarations).toMatch(/word-break:\s*normal/);
+    expect(declarations).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(declarations).not.toMatch(/word-break:\s*break-all/);
+  });
+});
