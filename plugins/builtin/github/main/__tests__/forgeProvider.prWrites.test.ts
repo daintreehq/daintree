@@ -221,6 +221,20 @@ describe("mergePR", () => {
     expect(JSON.parse(init.body as string)).toEqual({ merge_method: "squash" });
   });
 
+  it("forwards commit title/message as snake_case fields", async () => {
+    const fetchMock = mockFetch({ ok: true, status: 200, body: { merged: true } });
+    await githubForgeProvider.mergePR(repo, 42, {
+      mergeMethod: "merge",
+      commitTitle: "Custom title",
+      commitMessage: "Custom message",
+    });
+    expect(JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string)).toEqual({
+      merge_method: "merge",
+      commit_title: "Custom title",
+      commit_message: "Custom message",
+    });
+  });
+
   it("classifies HTTP 405 as not-mergeable", async () => {
     mockFetch({ ok: false, status: 405, text: "Pull Request is not mergeable" });
     await expect(githubForgeProvider.mergePR(repo, 42)).rejects.toThrow(/not mergeable/i);
@@ -268,6 +282,15 @@ describe("convertPRToDraft / markPRReadyForReview (GraphQL)", () => {
     mockGraphQLClient.mockResolvedValueOnce({ repository: { pullRequest: null } });
     await expect(githubForgeProvider.convertPRToDraft(repo, 999)).rejects.toThrow(/not found/i);
   });
+
+  it("propagates a mutation failure after the node id resolves", async () => {
+    mockGraphQLClient
+      .mockResolvedValueOnce({ repository: { pullRequest: { id: "PR_node_42" } } })
+      .mockRejectedValueOnce(new Error("GraphQL: draft not allowed on this plan"));
+    await expect(githubForgeProvider.convertPRToDraft(repo, 42)).rejects.toThrow(
+      /draft not allowed/i
+    );
+  });
 });
 
 describe("commentOnPR", () => {
@@ -285,6 +308,29 @@ describe("commentOnPR", () => {
     await expect(githubForgeProvider.commentOnPR(repo, 42, "   ")).rejects.toThrow(
       /body is required/i
     );
+  });
+
+  it("posts the body verbatim (does not trim user Markdown)", async () => {
+    const fetchMock = mockFetch({ ok: true, status: 201, body: { id: 1 } });
+    // Leading indentation matters inside fenced code blocks — must survive.
+    await githubForgeProvider.commentOnPR(repo, 42, "    npm test\n");
+    expect(JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string)).toEqual({
+      body: "    npm test\n",
+    });
+  });
+
+  it("invalidates the PR list cache after a successful comment", async () => {
+    mockFetch({ ok: true, status: 201, body: { id: 1 } });
+    forgePRListCache.set("owner/repo:open", {
+      items: [],
+      nextCursor: null,
+      hasMore: false,
+    } as unknown as import("../../../../../shared/types/forge.js").Page<PR>);
+    expect(forgePRListCache.size()).toBeGreaterThan(0);
+
+    await githubForgeProvider.commentOnPR(repo, 42, "Looks good");
+
+    expect(forgePRListCache.size()).toBe(0);
   });
 });
 

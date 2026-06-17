@@ -2032,14 +2032,15 @@ export const githubForgeProvider: ForgeProviderImpl = {
 
   async commentOnPR(repo: RepoRef, prNumber: number, body: string): Promise<void> {
     const token = requireGitHubToken();
-    const trimmed = body?.trim();
-    if (!trimmed) throw new Error("Comment body is required.");
+    // Reject an empty/whitespace body, but post the original text verbatim —
+    // trimming would mangle leading indentation in fenced code blocks.
+    if (!body?.trim()) throw new Error("Comment body is required.");
     // PR comments use the issues endpoint — PR number === issue number on GitHub.
     const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/issues/${prNumber}/comments`;
     const response = await fetch(url, {
       method: "POST",
       headers: githubMutationHeaders(token),
-      body: JSON.stringify({ body: trimmed }),
+      body: JSON.stringify({ body }),
       signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
     });
     if (!response.ok) {
@@ -2048,6 +2049,9 @@ export const githubForgeProvider: ForgeProviderImpl = {
         `Failed to comment on pull request #${prNumber}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
       );
     }
+    // A comment changes the PR's comment count and timeline — drop PR caches so
+    // the next read reflects it (matches every other PR mutation).
+    clearPRCaches();
   },
 
   async editPR(repo: RepoRef, prNumber: number, input: EditPRInput): Promise<PR> {
