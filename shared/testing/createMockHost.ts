@@ -284,15 +284,27 @@ const PLUGIN_ACTION_DANGERS = new Set(["safe", "confirm"]);
 const MOCK_PANEL_BADGE_LABEL_MAX = 6;
 const MOCK_TOAST_TYPES = new Set(["info", "success", "warning", "error"]);
 const MOCK_BADGE_COLORS = new Set(["default", "success", "warning", "error"]);
+// Allowed-key sets mirroring the production `.strict()` schemas — unknown keys
+// are rejected, not silently dropped.
+const TOAST_OPTION_KEYS = new Set(["message", "type", "durationMs"]);
+const BADGE_DOT_KEYS = new Set(["kind", "color", "tooltip"]);
+const BADGE_LABEL_KEYS = new Set(["kind", "text", "color", "tooltip"]);
 
 /**
  * Validate `showToast` options against the same constraints as production's
- * `PluginToastOptionsSchema` (message length, type enum, durationMs bounds).
- * Throws a parity-style aggregated error so a plugin tested against the mock
- * fails on a shape the real host would reject (#10617).
+ * `PluginToastOptionsSchema` (message length, type enum, durationMs bounds,
+ * strict unknown-key rejection). Throws a parity-style aggregated error so a
+ * plugin tested against the mock fails on a shape the real host would reject
+ * (#10617).
  */
 function validateToastOptions(opts: PluginToastOptions): void {
   const issues: string[] = [];
+  // Production's schema is `.strict()` — unknown keys are rejected, not dropped.
+  if (opts && typeof opts === "object") {
+    for (const key of Object.keys(opts)) {
+      if (!TOAST_OPTION_KEYS.has(key)) issues.push(`${key}: unrecognized option`);
+    }
+  }
   const message = opts?.message;
   if (typeof message !== "string" || message.trim().length < 1) {
     issues.push("message: must be a non-empty string");
@@ -337,6 +349,7 @@ function validatePanelBadge(badge: PluginPanelBadge): void {
     );
   }
   if (badge.kind === "dot") {
+    rejectUnknownBadgeKeys(badge, BADGE_DOT_KEYS);
     return;
   }
   if (badge.kind === "label") {
@@ -349,9 +362,19 @@ function validatePanelBadge(badge: PluginPanelBadge): void {
         `setPanelBadge: invalid badge — text: must be at most ${MOCK_PANEL_BADGE_LABEL_MAX} characters`
       );
     }
+    rejectUnknownBadgeKeys(badge, BADGE_LABEL_KEYS);
     return;
   }
   throw new Error('setPanelBadge: invalid badge — kind: must be "dot" or "label"');
+}
+
+/** Production badge schemas are `.strict()`: reject any key outside the variant's set. */
+function rejectUnknownBadgeKeys(badge: object, allowed: ReadonlySet<string>): void {
+  for (const key of Object.keys(badge)) {
+    if (!allowed.has(key)) {
+      throw new Error(`setPanelBadge: invalid badge — ${key}: unrecognized key`);
+    }
+  }
 }
 
 /**
@@ -924,6 +947,15 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       return Promise.resolve(dispose);
     },
     invalidateFileDecorations(scope, paths) {
+      // Mirror production's non-empty-scope guard (#10617): reject (not throw),
+      // matching the host's Promise contract. The declared-scope gate production
+      // also applies is intentionally skipped — the mock has no manifest model
+      // (#9878), so it can't know which scopes a plugin declared.
+      if (typeof scope !== "string" || scope.length === 0) {
+        return Promise.reject(
+          new Error("invalidateFileDecorations: scope must be a non-empty string")
+        );
+      }
       invalidationCalls.push({ scope, paths });
       return Promise.resolve();
     },

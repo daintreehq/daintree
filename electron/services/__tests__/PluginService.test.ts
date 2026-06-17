@@ -4043,6 +4043,8 @@ describe("createHost (plugin activation API)", () => {
       caught = err;
     });
     expect(caught).toBeInstanceOf(Error);
+    // A rejected setPanelBadge has no side effect: no badge-changed broadcast.
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
   });
 
   it("host.setPanelBadge silently no-ops once the plugin is unloaded (#10617)", async () => {
@@ -4072,6 +4074,11 @@ describe("createHost (plugin activation API)", () => {
     // through the Promise, not a sync throw (#10617).
     await expect(host.invalidateFileDecorations("")).rejects.toThrow(
       /invalidateFileDecorations: scope/
+    );
+    // A non-empty but undeclared scope rejects at the second guard, also through
+    // the Promise (this plugin declares no fileDecorationProviders).
+    await expect(host.invalidateFileDecorations("acme.deco-reject:*")).rejects.toThrow(
+      /is not covered by any declared/
     );
   });
 

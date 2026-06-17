@@ -932,6 +932,28 @@ describe("createMockHost production-parity validation (#10617)", () => {
     ]);
   });
 
+  it("invalidateFileDecorations rejects an empty scope", async () => {
+    const host = createMockHost();
+    await expect(host.invalidateFileDecorations("")).rejects.toThrow(
+      /invalidateFileDecorations: scope/
+    );
+    // A non-empty scope still records (the mock has no manifest model to gate on).
+    await host.invalidateFileDecorations("hello:*");
+    expect(host.invalidationCalls).toEqual([{ scope: "hello:*", paths: undefined }]);
+  });
+
+  it("rejects unknown keys on toast and badge options (production schemas are strict)", async () => {
+    const host = createMockHost();
+    await expect(host.showToast({ message: "hi", priority: "low" } as never)).rejects.toThrow(
+      /unrecognized option/
+    );
+    await expect(host.setPanelBadge("p1", { kind: "dot", extra: true } as never)).rejects.toThrow(
+      /unrecognized key/
+    );
+    expect(host.shownToasts).toEqual([]);
+    expect(host.setPanelBadgeCalls).toEqual([]);
+  });
+
   it("postToPanel and broadcastToRenderer reject colon-bearing channels", async () => {
     const host = createMockHost();
     await expect(host.postToPanel("bad:channel", null)).rejects.toThrow(/postToPanel: channel/);
