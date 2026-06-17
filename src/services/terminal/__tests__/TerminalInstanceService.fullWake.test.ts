@@ -80,11 +80,15 @@ type ManagedTerminalMock = {
     refresh: ReturnType<typeof vi.fn>;
     open?: ReturnType<typeof vi.fn>;
     resize?: ReturnType<typeof vi.fn>;
+    modes?: { synchronizedOutputMode?: boolean };
   };
   hostElement: HTMLElement;
   targetCols?: number;
   targetRows?: number;
   lastAppliedTier?: number;
+  attachGeneration?: number;
+  revealPendingRepair?: boolean;
+  revealPendingGeneration?: number;
 };
 
 type FullWakeTestService = {
@@ -103,6 +107,8 @@ type FullWakeTestService = {
     isActive: (id: string) => boolean;
   };
   handlePostWake: (id: string) => void;
+  setVisible: (id: string, isVisible: boolean, expectedGeneration?: number) => void;
+  rendererPolicy: { applyRendererPolicy: (id: string, tier: number) => void };
   unhibernate: (id: string) => void;
   ensureOpened: (id: string, managed: ManagedTerminalMock) => void;
   ensureDeferredAddons: (id: string, managed: ManagedTerminalMock) => void;
@@ -222,6 +228,53 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     expect(resetForTerminal).toHaveBeenCalledWith(id);
     expect(resumeFlush).not.toHaveBeenCalled();
     expect(terminalClient.discardPortAcks).toHaveBeenCalledWith(id);
+  });
+
+  it("defers paint-interleave ops while a DEC 2026 synchronized-output block is open, but still runs the data restore (#10632)", async () => {
+    // Third unguarded interleave path: the switch-back WAKE path. The paint ops
+    // (forceXtermReflow / repairAtlasForReactivation / refresh) must not fire
+    // mid-block; the data path (applyDeferredResize + wakeAndRestore) must. The
+    // obligation is handed to the watchdog (revealPendingRepair) since this
+    // method has no retry-return. Fails on the pre-fix code, where all three
+    // paint ops ran unconditionally.
+    const id = "fw-sync";
+    const instance = makeInstance({
+      hostElement: renderableHost(),
+      attachGeneration: 3,
+      terminal: {
+        cols: 80,
+        rows: 24,
+        element: document.createElement("div"),
+        refresh: vi.fn(),
+        modes: { synchronizedOutputMode: true },
+      },
+    });
+    service.instances.set(id, instance);
+
+    const applyDeferredResize = vi
+      .spyOn(service.resizeController, "applyDeferredResize")
+      .mockImplementation(() => {});
+    const repairAtlas = vi
+      .spyOn(service.webGLManager, "repairAtlasForReactivation")
+      .mockReturnValue(true);
+    const wakeAndRestore = vi
+      .spyOn(service.wakeManager, "wakeAndRestore")
+      .mockResolvedValue({ ok: true, replayedMainBuffer: false });
+    vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
+    vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    // Data path still runs.
+    expect(applyDeferredResize).toHaveBeenCalledWith(id);
+    expect(wakeAndRestore).toHaveBeenCalledWith(id);
+    // Paint-interleave ops are deferred.
+    expect(forceXtermReflowMock).not.toHaveBeenCalled();
+    expect(repairAtlas).not.toHaveBeenCalled();
+    expect(instance.terminal.refresh).not.toHaveBeenCalled();
+    // Paint obligation handed to the watchdog, owned by the attach generation.
+    expect(instance.revealPendingRepair).toBe(true);
+    expect(instance.revealPendingGeneration).toBe(3);
   });
 
   it("flushes (no discard) when the wake succeeds without a main-buffer replay (alt-buffer)", async () => {
@@ -869,5 +922,84 @@ describe("TerminalInstanceService.repaintForReveal grid reconcile", () => {
     // A false reconcile must propagate so revealUntilStable retries on a later
     // frame rather than spending a confirm paint against an unmeasurable pane.
     expect(service.repaintForReveal(id)).toBe(false);
+  });
+
+  it("setVisible(true) defers its unpause reflow while a synchronized block is open, hands obligation to watchdog (#10632)", () => {
+    // The visibility path (grid IntersectionObserver → setVisible(id, true) on
+    // switch-back) reflows unconditionally; that forceXtermReflow bypasses
+    // xterm's atomic-at-ESU buffering. It must defer mid-block. Geometry sync
+    // (applyDeferredResize) must still run.
+    const id = "sv-sync";
+    const instance = makeInstance({
+      isVisible: false,
+      attachGeneration: 5,
+      hostElement: renderableHost(),
+      terminal: {
+        cols: 80,
+        rows: 24,
+        element: document.createElement("div"),
+        refresh: vi.fn(),
+        modes: { synchronizedOutputMode: true },
+      },
+    });
+    service.instances.set(id, instance);
+    const applyDeferredResize = vi
+      .spyOn(service.resizeController, "applyDeferredResize")
+      .mockImplementation(() => {});
+    vi.spyOn(service.rendererPolicy, "applyRendererPolicy").mockImplementation(() => {});
+
+    service.setVisible(id, true);
+
+    expect(applyDeferredResize).toHaveBeenCalledWith(id); // geometry still synced
+    expect(forceXtermReflowMock).not.toHaveBeenCalled(); // reflow deferred mid-block
+    expect(instance.revealPendingRepair).toBe(true);
+    expect(instance.revealPendingGeneration).toBe(5);
+  });
+
+  it("setVisible(true) reflows immediately on reveal when no synchronized block is open", () => {
+    const id = "sv-nosync";
+    const instance = makeInstance({
+      isVisible: false,
+      attachGeneration: 5,
+      hostElement: renderableHost(),
+      terminal: {
+        cols: 80,
+        rows: 24,
+        element: document.createElement("div"),
+        refresh: vi.fn(),
+        modes: { synchronizedOutputMode: false },
+      },
+    });
+    service.instances.set(id, instance);
+    vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
+    vi.spyOn(service.rendererPolicy, "applyRendererPolicy").mockImplementation(() => {});
+
+    service.setVisible(id, true);
+
+    expect(forceXtermReflowMock).toHaveBeenCalledWith(instance.terminal.element);
+    expect(instance.revealPendingRepair).toBeUndefined();
+  });
+
+  it("defers (returns false) while a DEC 2026 synchronized-output block is open (#10632)", () => {
+    const id = "repaint-sync";
+    const instance = openedLiveInstance();
+    // Live agent mid-frame: repainting now would interleave a paint with the
+    // buffered range. The reveal path must defer just like the watchdog does.
+    instance.terminal.modes = { synchronizedOutputMode: true };
+    service.instances.set(id, instance);
+
+    vi.spyOn(service.webGLManager, "isActive").mockReturnValue(true);
+    const repairAtlas = vi
+      .spyOn(service.webGLManager, "repairAtlasForReactivation")
+      .mockReturnValue(true);
+    const reconcile = vi
+      .spyOn(service.resizeController, "reconcileGeometryFresh")
+      .mockReturnValue(true);
+
+    expect(service.repaintForReveal(id)).toBe(false);
+    // None of the interleaving operations may run mid-block.
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(repairAtlas).not.toHaveBeenCalled();
+    expect(forceXtermReflowMock).not.toHaveBeenCalled();
   });
 });
