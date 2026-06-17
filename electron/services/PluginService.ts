@@ -4884,11 +4884,18 @@ export class PluginService {
     scope: PluginSettingsScope,
     projectId: string | null
   ): Promise<void> {
-    await this.settings.setSettingValueFromUi(pluginId, key, value, scope, projectId);
+    const changed = await this.settings.setSettingValueFromUi(
+      pluginId,
+      key,
+      value,
+      scope,
+      projectId
+    );
     // Only user-scope values feed `${settings:*}` resolution (resolveSettingTemplate
     // reads user scope), so a project-scope write never affects a supervised
-    // MCP server — skip the restart sweep for it.
-    if (scope === "user") this.restartMcpServersForSettingChange(pluginId, key);
+    // MCP server. And a redundant re-save of the same value shouldn't churn a
+    // running server through a restart — gate on the store actually changing.
+    if (scope === "user" && changed) this.restartMcpServersForSettingChange(pluginId, key);
   }
 
   async deleteSettingValueFromUi(
@@ -4897,8 +4904,8 @@ export class PluginService {
     scope: PluginSettingsScope,
     projectId: string | null
   ): Promise<void> {
-    await this.settings.deleteSettingValueFromUi(pluginId, key, scope, projectId);
-    if (scope === "user") this.restartMcpServersForSettingChange(pluginId, key);
+    const changed = await this.settings.deleteSettingValueFromUi(pluginId, key, scope, projectId);
+    if (scope === "user" && changed) this.restartMcpServersForSettingChange(pluginId, key);
   }
 
   /**

@@ -1129,6 +1129,36 @@ describe("PluginMcpSupervisor.notifySettingChanged (issue #10619)", () => {
     expect(restart).not.toHaveBeenCalled();
   });
 
+  it("restarts a server exactly once when one of its several referenced settings changes", async () => {
+    const fake = makeFakeSubprocess();
+    const supervisor = new PluginMcpSupervisor({
+      spawner: () => fake.handle,
+      killTree: () => {},
+    });
+    const start = supervisor.start({
+      pluginId: "acme.demo",
+      contributions: [
+        {
+          id: "linear",
+          name: "Linear",
+          command: "node",
+          env: { A: "${settings:keyA}", B: "${settings:keyB}" },
+        },
+      ],
+      resolveSettings: async () => "v",
+    });
+    await fake.waitForStdinCount(1);
+    fake.answerInitialize();
+    await start;
+    const restart = vi.fn();
+
+    vi.useFakeTimers();
+    supervisor.notifySettingChanged("acme.demo", "keyA", restart);
+    vi.advanceTimersByTime(1000);
+    expect(restart).toHaveBeenCalledTimes(1);
+    expect(restart).toHaveBeenCalledWith("linear");
+  });
+
   it("does not restart a server for a different plugin", async () => {
     const { supervisor } = await startReadyServer();
     const restart = vi.fn();

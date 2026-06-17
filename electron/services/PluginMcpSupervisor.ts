@@ -949,6 +949,13 @@ export class PluginMcpSupervisor {
   ): void {
     for (const [key, state] of this.states) {
       if (state.pluginId !== pluginId) continue;
+      // Only act on servers with a settled process. A `spawning` server is
+      // mid-handshake; its `resolveSettings` closure reads the store lazily, so
+      // a change committed before `resolveContribution` runs is already picked
+      // up by the in-flight start, and one committed slightly after is a narrow,
+      // recoverable miss (the user re-saves or restarts manually). We don't
+      // chase that window with a follow-up timer — it'd add real complexity for
+      // a rare race. `stopped` servers stay stopped (lazy-spawn contract).
       if (state.status !== "ready" && state.status !== "crashed") continue;
       if (!contributionReferencesSetting(state.contribution, settingId)) continue;
 
