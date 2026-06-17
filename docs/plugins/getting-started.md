@@ -64,7 +64,7 @@ The `commands[].id` maps to `src/say-hello.{ts,tsx,js,mjs}` by filesystem conven
 
 The filesystem-convention handler is a default export that receives the action args only — it has no `host`. To call host APIs like `showToast`, register the command imperatively from `activate` instead:
 
-> `@daintreehq/plugin-sdk` is not yet published on npm, so this import won't resolve from the registry today. The types it will ship currently live in-repo at `shared/types/plugin-sdk.ts`; import them via a relative path until the package lands on npm.
+> `@daintreehq/plugin-sdk` now exists in-repo at `packages/plugin-sdk` and is workspace-linked, so this import resolves and builds when you develop inside the Daintree repo. It is not yet published to public npm, so the bare `@daintreehq/plugin-sdk` specifier won't install from the registry outside the workspace — until it ships, point your `tsconfig.json` `paths` at the in-repo package (it re-exports the types from `shared/types/plugin-sdk.ts`).
 
 ```ts
 // src/index.ts

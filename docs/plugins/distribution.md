@@ -43,7 +43,7 @@ Produces `{pluginId}-{version}.dntr` in the project root. Runs through:
 1. Validates the manifest via the same Zod schema Daintree uses at load.
 2. Builds the plugin with Vite (unless `--skip-build` is passed).
 3. Copies the build output + referenced assets + manifest into a zip.
-4. Excludes `node_modules/`, source files, source maps (unless `--sourcemaps`), and anything in `.gitignore`.
+4. Excludes `node_modules/`, `.git/`, source files (`*.ts`/`*.tsx`), source maps (unless `--sourcemaps`), root-level dev metadata (`package.json`, lockfiles, `tsconfig*.json`, `*.config.*`), and anything in `.gitignore`.
 
 The output is deterministic — the same source tree + `daintree-plugin` version produces a byte-identical `.dntr` file on the same OS. This matters if you're signing releases or publishing reproducible artifacts.
 
@@ -103,8 +103,9 @@ The following are never included in a `.dntr` archive:
 - `.gitignore`'d entries — matched at pack time by the CLI packager
 - Source files (`*.ts`, `*.tsx`) — the archive ships compiled output
 - Source maps (`*.js.map`, `*.mjs.map`) — excluded by default, included only when `--sourcemaps` is passed to the packager
+- Root-level dev metadata — `package.json`, lockfiles (`package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock`, `bun.lockb`), `tsconfig*.json`, and any root `*.config.*` (e.g. `vite.config.ts`, `tsup.config.mjs`). Scoped to the archive root only — a runtime asset like `dist/app.config.json` is kept. `package.json` is excluded because it carries the author's full dependency layout and, in a monorepo/`file:` setup, leaks the author's absolute home path into every distributed copy.
 
-The reference implementation in `PluginArchive.ts` applies the explicit exclusion list. Full `.gitignore` matching is the CLI packager's responsibility (F32) since it requires a git working tree.
+The reference implementation in `PluginArchive.ts` applies the explicit exclusion list (`REQUIRED_EXCLUSIONS`, `SOURCE_EXTS`, `ROOT_DEV_FILE_NAMES`, `ROOT_CONFIG_FILE`) at both pack and verify time. Full `.gitignore` matching is the CLI packager's responsibility (F32) since it requires a git working tree.
 
 ### SHA-256 archive hash
 

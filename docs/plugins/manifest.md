@@ -21,6 +21,16 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
   // One-sentence description, shown in UI listings.
   "description": "Plan Linear issues as multi-step agent workflows.",
 
+  // One-line value proposition for the plugin catalog. Optional, max 120
+  // characters.
+  "tagline": "Turn Linear issues into agent workflows.",
+
+  // Catalog category. Optional enum: "forge" | "ai" | "workspace" | "other".
+  // Omit it and Daintree derives one from `contributes` (forge providers ⇒
+  // "forge", agents/MCP servers ⇒ "ai", panels/views ⇒ "workspace",
+  // else "other").
+  "category": "ai",
+
   // Attribution credits, shown in the plugin detail pane's "Contributors"
   // block. Optional. Up to 10 entries; each needs a `name`, plus optional
   // `url` (https-only, same private-host/credential discipline as
@@ -132,6 +142,10 @@ The human-readable name shown in UI listings (plugin palette, installed-plugins 
 
 One-sentence description shown in plugin listings. Keep it short; UI truncates long descriptions.
 
+### `tagline`
+
+A one-line value proposition for the plugin catalog. Optional, trimmed, and capped at 120 characters. Distinct from `description`: the tagline is the catalog card's hook, the description is the longer blurb.
+
 ### `authors`
 
 Optional attribution credits, surfaced as a "Contributors" block in the plugin detail pane. An array of up to 10 entries; each entry is an object where `name` is required and `url`, `email`, and `role` are optional. Unknown keys on an entry are rejected. `url` must be `https://` and follows the same discipline as `scopes.network.allowedUrls` — no wildcards, embedded credentials, or private/loopback hosts — because it surfaces as a user-clickable link; `email` must be a valid address; `role` is a free-form label (e.g. `"Maintainer"`, `"Contributor"`). The SDK exports the `PluginAuthor` type for authoring against this shape.
@@ -142,6 +156,10 @@ Optional attribution credits, surfaced as a "Contributors" block in the plugin d
   { "name": "Grace Hopper", "email": "grace@example.com" },
 ]
 ```
+
+### `category`
+
+Catalog category for grouping in the plugin manager. Optional enum: `"forge"`, `"ai"`, `"workspace"`, or `"other"`. When omitted, Daintree derives one from what the plugin contributes — forge providers map to `"forge"`, agents or MCP servers to `"ai"`, panels or views to `"workspace"`, and anything else to `"other"`. Declare it explicitly when a multi-contribution plugin would otherwise be misclassified by derivation.
 
 ### `main`
 
@@ -174,7 +192,7 @@ Daintree is pre-1.0. Pin to a current minor during this phase — a plugin that 
 
 ### `capabilities`
 
-Array of capability tokens the plugin wants. The model is **disclosure-first with host-side policy effects** — there is no Node sandbox, so a plugin is not blocked from doing anything regardless of what it declares, but declared tokens are not purely advisory. Six high-risk tokens (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`, `agent:register`) currently raise every action the plugin registers to a confirm dialog (`effectiveDanger: "confirm"`) via the host's `CONFIRM_TRIGGERING_CAPABILITIES` set. See the [trust model](./trust-model.md) for the full contract.
+Array of capability tokens the plugin wants. The model is **disclosure-first with host-side policy effects** — there is no Node sandbox, so a plugin is not blocked from doing anything regardless of what it declares, but declared tokens are not purely advisory. Seven high-risk tokens (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`, `agent:register`, `agent:input`) currently raise every action the plugin registers to a confirm dialog (`effectiveDanger: "confirm"`) via the host's `CONFIRM_TRIGGERING_CAPABILITIES` set. See the [trust model](./trust-model.md) for the full contract.
 
 | Token | Intent |
 | --- | --- |
