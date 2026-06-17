@@ -340,7 +340,7 @@ export interface EditPRInput {
  * Provider-neutral reason an issue was closed. GitHub maps `completed` /
  * `not_planned` onto its `state_reason`; forges without the concept ignore it.
  */
-export type IssueCloseReason = "completed" | "not_planned";
+export type IssueCloseReason = "completed" | "not_planned" | "duplicate";
 
 /**
  * Normalized input for {@link ForgeProviderImpl.editIssue}. Both fields are

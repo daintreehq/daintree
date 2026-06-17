@@ -731,7 +731,8 @@ export function registerForgeHandlers(): () => void {
         if (
           payload.stateReason !== undefined &&
           payload.stateReason !== "completed" &&
-          payload.stateReason !== "not_planned"
+          payload.stateReason !== "not_planned" &&
+          payload.stateReason !== "duplicate"
         ) {
           throw new Error("Invalid state reason");
         }
@@ -785,6 +786,9 @@ export function registerForgeHandlers(): () => void {
         }
         if (input.title !== undefined && typeof input.title !== "string") {
           throw new Error("Invalid issue title");
+        }
+        if (input.title !== undefined && !input.title.trim()) {
+          throw new Error("Issue title cannot be blank");
         }
         if (input.body !== undefined && typeof input.body !== "string") {
           throw new Error("Invalid issue body");

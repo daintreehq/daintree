@@ -748,10 +748,12 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.closeIssue",
       title: "Close Issue",
       description:
-        "Close an open issue via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int); `stateReason` (optional, 'completed' or 'not_planned'). Returns the updated issue. Errors when `cwd` is omitted and no worktree is active.",
+        "Close an open issue via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int); `stateReason` (optional, 'completed', 'not_planned', or 'duplicate'). Returns the updated issue. Errors when `cwd` is omitted and no worktree is active.",
       category: "forge",
       kind: "command",
-      danger: "safe",
+      danger: "confirm",
+      dangerRationale:
+        "Closes an issue on the shared forge — a state change other collaborators see; undoing it requires a deliberate reopen.",
       scope: "renderer",
       argsSchema: z.object({
         cwd: z
@@ -760,7 +762,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
           .describe("Working directory of the git repo. Defaults to the active worktree path."),
         issueNumber: z.number().int().positive().describe("Issue number to close"),
         stateReason: z
-          .enum(["completed", "not_planned"])
+          .enum(["completed", "not_planned", "duplicate"])
           .optional()
           .describe("Why the issue is being closed (default: completed)"),
       }),
@@ -887,7 +889,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         "Edit an issue's title and/or body via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int); `title` (optional); `body` (optional). Provide at least one of title or body. Only the supplied fields change. Returns the updated issue. Errors when `cwd` is omitted and no worktree is active.",
       category: "forge",
       kind: "command",
-      danger: "safe",
+      danger: "confirm",
+      dangerRationale:
+        "Overwrites an issue's title/body on the shared forge — the previous text is not recoverable from git or reflog, so it needs a deliberate confirm.",
       scope: "renderer",
       argsSchema: z
         .object({

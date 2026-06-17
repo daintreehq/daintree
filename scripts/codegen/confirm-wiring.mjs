@@ -60,6 +60,8 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "forge.markPRReadyForReview",
   "forge.commentOnPR",
   "forge.editPR",
+  "forge.closeIssue",
+  "forge.editIssue",
 ]);
 
 // Actions with a ConfirmDialog-family component co-located in the same source file
@@ -109,6 +111,8 @@ const BYPASS_WIRED = new Set([
   "forge.markPRReadyForReview",
   "forge.commentOnPR",
   "forge.editPR",
+  "forge.closeIssue", // agent/MCP-only forge write (#10653); danger:"confirm" gates agent dispatch only, no user-side ConfirmDialog
+  "forge.editIssue", // agent/MCP-only forge write (#10653); danger:"confirm" gates agent dispatch only, no user-side ConfirmDialog
 ]);
 
 // Text tokens identifying a ConfirmDialog-family component in a source file.

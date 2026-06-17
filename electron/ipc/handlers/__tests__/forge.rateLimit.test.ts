@@ -331,6 +331,60 @@ describe("forge handlers — rate limiting", () => {
     });
   });
 
+  describe("write-op input validation", () => {
+    it("rejects a blank editIssue title before touching the provider", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_EDIT_ISSUE);
+
+      await expect(
+        handler({}, { cwd: "/tmp/project", issueNumber: 1, input: { title: "   " } })
+      ).rejects.toThrow(/title cannot be blank/i);
+      expect(fakeImpl.editIssue).not.toHaveBeenCalled();
+    });
+
+    it("rejects an editIssue with neither title nor body", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_EDIT_ISSUE);
+
+      await expect(handler({}, { cwd: "/tmp/project", issueNumber: 1, input: {} })).rejects.toThrow(
+        /title or body/i
+      );
+      expect(fakeImpl.editIssue).not.toHaveBeenCalled();
+    });
+
+    it("rejects an invalid closeIssue state reason", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_CLOSE_ISSUE);
+
+      await expect(
+        handler({}, { cwd: "/tmp/project", issueNumber: 1, stateReason: "bogus" })
+      ).rejects.toThrow(/state reason/i);
+      expect(fakeImpl.closeIssue).not.toHaveBeenCalled();
+    });
+
+    it("accepts 'duplicate' as a closeIssue state reason", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_CLOSE_ISSUE);
+
+      await handler({}, { cwd: "/tmp/project", issueNumber: 1, stateReason: "duplicate" });
+      expect(fakeImpl.closeIssue).toHaveBeenCalledWith(expect.anything(), 1, "duplicate");
+    });
+
+    it("rejects a blank addIssueComment body", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_ADD_ISSUE_COMMENT);
+
+      await expect(
+        handler({}, { cwd: "/tmp/project", issueNumber: 1, body: "  " })
+      ).rejects.toThrow(/comment body is required/i);
+      expect(fakeImpl.addIssueComment).not.toHaveBeenCalled();
+    });
+
+    it("rejects a blank addIssueLabel name", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_ADD_ISSUE_LABEL);
+
+      await expect(
+        handler({}, { cwd: "/tmp/project", issueNumber: 1, label: "  " })
+      ).rejects.toThrow(/label name is required/i);
+      expect(fakeImpl.addIssueLabel).not.toHaveBeenCalled();
+    });
+  });
+
   describe("token family (forge:validate-token)", () => {
     const validatePayload = { providerId: "fake-plugin.fake", token: "fake_token" };
 

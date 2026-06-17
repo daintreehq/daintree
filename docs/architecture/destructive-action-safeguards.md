@@ -141,13 +141,15 @@ Columns:
 
 ### GitHub-side
 
-The current forge action set is read-only (`forge.openIssues`, `forge.listPRs`, etc.) plus token validation. Credential save/clear now goes through the `forge:set-credential` / `forge:clear-credential` IPC surface (or the GitHub plugin's direct client calls), not `ActionService`. No PR merge, no issue close, no comment-post is wired through `ActionService` yet.
+The forge action set now exposes issue write operations to MCP agents (#10653) alongside the read-only queries and token validation. Credential save/clear still goes through the `forge:set-credential` / `forge:clear-credential` IPC surface (or the GitHub plugin's direct client calls), not `ActionService`. PR merge and dismiss-review remain unwired.
 
 | Action / call site | Current | UI confirm | Consent in breadcrumb | Reversibility | Blast | Tier | Recommendation | Follow-up |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `forge.validateToken` / credential save & clear (direct IPC, see above) | safe | n/a | n/a | reversible (re-enter) | local credential | D0 | Leave | — |
 | `forge.openPR` / `forge.openIssue` / `forge.openCommits` / list / get queries | safe | n/a | n/a | reversible (navigation only) | navigation | D0 | Leave | — |
-| Merge PR / close issue / dismiss review (future) | n/a — not yet exposed via UI | n/a | n/a | shared-state | one PR or issue on origin | D2 | When wired, must be `danger:"confirm"` from day one and ship with target-naming preview | open as needed |
+| `forge.createIssue` / `forge.reopenIssue` / `forge.addIssueComment` / `forge.addIssueLabel` / `forge.removeIssueLabel` | safe | n/a | n/a | additive or reversible (re-add label, re-close, delete comment) | one issue on origin | D0–D1 | Leave | — |
+| `forge.closeIssue` / `forge.editIssue` (#10653) | `danger:"confirm"` | n/a — agent/MCP-only, no user-side dispatch | gated on `confirmed:true` for agent dispatch | shared-state (close hides work; edit overwrites body with no git/reflog copy) | one issue on origin | D2 | Leave — BYPASS_WIRED (agent-dispatch gate, no UI dialog) | — |
+| Merge PR / dismiss review (future) | n/a — not yet exposed | n/a | n/a | shared-state | one PR on origin | D2 | When wired, must be `danger:"confirm"` from day one and ship with target-naming preview | open as needed |
 
 ### Recipes / plugins
 
