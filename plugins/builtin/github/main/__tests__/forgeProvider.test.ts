@@ -1656,6 +1656,20 @@ describe("review write operations", () => {
 
       expect(prTooltipCache.get("owner/repo:4")).toBeUndefined();
     });
+
+    it("surfaces the HTTP status on failure", async () => {
+      (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
+        .fn()
+        .mockResolvedValue({
+          ok: false,
+          status: 422,
+          text: vi.fn().mockResolvedValue("Validation failed"),
+        });
+
+      await expect(githubForgeProvider.reviews!.requestChanges!(repo, 4, "fix")).rejects.toThrow(
+        /HTTP 422/
+      );
+    });
   });
 
   describe("dismissReview", () => {
@@ -1685,6 +1699,14 @@ describe("review write operations", () => {
 
       await expect(githubForgeProvider.reviews!.dismissReview!(repo, 5, 99, "x")).rejects.toThrow(
         /HTTP 404/
+      );
+    });
+
+    it("throws when no token is configured", async () => {
+      vi.mocked(GitHubAuth.getToken).mockReturnValue("");
+
+      await expect(githubForgeProvider.reviews!.dismissReview!(repo, 5, 99, "x")).rejects.toThrow(
+        /token not configured/i
       );
     });
   });
@@ -1727,6 +1749,29 @@ describe("review write operations", () => {
         /at least one user or team/i
       );
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("surfaces the HTTP status on failure", async () => {
+      (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
+        .fn()
+        .mockResolvedValue({
+          ok: false,
+          status: 422,
+          text: vi.fn().mockResolvedValue("Reviewer is not a collaborator"),
+        });
+
+      await expect(
+        githubForgeProvider.reviews!.requestReviewers!(repo, 6, { users: ["octocat"] })
+      ).rejects.toThrow(/HTTP 422/);
+    });
+
+    it("does NOT invalidate the PR caches (requested reviewers are not part of the cached PR)", async () => {
+      mockReviewFetchOk(201);
+      prTooltipCache.set("owner/repo:6", {} as never);
+
+      await githubForgeProvider.reviews!.requestReviewers!(repo, 6, { users: ["octocat"] });
+
+      expect(prTooltipCache.get("owner/repo:6")).toBeDefined();
     });
   });
 });

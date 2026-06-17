@@ -230,6 +230,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       category: "forge",
       kind: "command",
       danger: "confirm",
+      dangerRationale:
+        "Submits an approving review to the remote forge. Retracting it requires dismissing the review.",
       scope: "renderer",
       argsSchema: z.object({
         cwd: z
@@ -256,6 +258,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       category: "forge",
       kind: "command",
       danger: "confirm",
+      dangerRationale:
+        "Submits a request-changes review to the remote forge. Blocks the PR until addressed or dismissed.",
       scope: "renderer",
       argsSchema: z.object({
         cwd: z
@@ -263,7 +267,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
           .optional()
           .describe("Working directory of the git repo. Defaults to the active worktree path."),
         prNumber: z.number().int().positive().describe("Pull request number to review"),
-        body: z.string().min(1).describe("Explanation of the changes being requested"),
+        body: z.string().trim().min(1).describe("Explanation of the changes being requested"),
       }),
       run: async ({ cwd, prNumber, body }, ctx: ActionContext) => {
         const resolvedCwd = cwd ?? ctx.activeWorktreePath;
@@ -282,6 +286,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       category: "forge",
       kind: "command",
       danger: "confirm",
+      dangerRationale: "Dismisses a submitted review on the remote forge. Cannot be undone.",
       scope: "renderer",
       argsSchema: z.object({
         cwd: z
@@ -294,7 +299,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
           .int()
           .positive()
           .describe("Review id to dismiss, from a prior review-thread lookup"),
-        message: z.string().min(1).describe("Reason for dismissing the review"),
+        message: z.string().trim().min(1).describe("Reason for dismissing the review"),
       }),
       run: async ({ cwd, prNumber, reviewId, message }, ctx: ActionContext) => {
         const resolvedCwd = cwd ?? ctx.activeWorktreePath;
@@ -313,6 +318,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       category: "forge",
       kind: "command",
       danger: "confirm",
+      dangerRationale:
+        "Requests reviewers on the remote forge and notifies them. Undone by removing the request.",
       scope: "renderer",
       argsSchema: z
         .object({

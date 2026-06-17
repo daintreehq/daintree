@@ -240,6 +240,14 @@ describe("summarizeForgeArgs redaction", () => {
     expect(summarizeForgeArgs("requestReviewers", 6)).toBe('{"number":6}');
   });
 
+  it("never leaks review content even if a non-number arg is passed", () => {
+    // The number group only records a scalar number; an object arg (body,
+    // message, reviewer logins) is fully redacted to an empty object.
+    expect(summarizeForgeArgs("requestChanges", { body: "secret rationale" })).toBe("{}");
+    expect(summarizeForgeArgs("dismissReview", { message: "secret", reviewId: 7 })).toBe("{}");
+    expect(summarizeForgeArgs("requestReviewers", { users: ["alice"] })).toBe("{}");
+  });
+
   it("redacts createIssue title/body, keeping only the label count", () => {
     expect(
       summarizeForgeArgs("createIssue", {

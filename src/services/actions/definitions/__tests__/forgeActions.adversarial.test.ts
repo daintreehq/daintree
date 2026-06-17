@@ -183,6 +183,26 @@ describe("forge.* navigation adversarial", () => {
     expect(forgeClientMock.requestChanges).toHaveBeenCalledWith("/repo", 4, "fix types");
   });
 
+  it("requestChanges schema rejects a whitespace-only body (matches the IPC guard)", () => {
+    const def = setupActions()("forge.requestChanges");
+    expect(def.argsSchema?.safeParse({ prNumber: 4, body: "   " }).success).toBe(false);
+    expect(def.argsSchema?.safeParse({ prNumber: 4, body: "real" }).success).toBe(true);
+  });
+
+  it("dismissReview schema rejects a whitespace-only message", () => {
+    const def = setupActions()("forge.dismissReview");
+    expect(def.argsSchema?.safeParse({ prNumber: 5, reviewId: 9, message: "  " }).success).toBe(
+      false
+    );
+  });
+
+  it("requestReviewers schema rejects when neither users nor teams is supplied", () => {
+    const def = setupActions()("forge.requestReviewers");
+    expect(def.argsSchema?.safeParse({ prNumber: 6 }).success).toBe(false);
+    expect(def.argsSchema?.safeParse({ prNumber: 6, users: [], teams: [] }).success).toBe(false);
+    expect(def.argsSchema?.safeParse({ prNumber: 6, users: ["a"] }).success).toBe(true);
+  });
+
   it("dismissReview forwards cwd, prNumber, reviewId, and message positionally", async () => {
     const def = setupActions()("forge.dismissReview");
     await def.run({ cwd: "/repo", prNumber: 5, reviewId: 99, message: "stale" }, {} as never);
