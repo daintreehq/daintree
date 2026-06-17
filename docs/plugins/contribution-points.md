@@ -582,13 +582,15 @@ Teaches Daintree about a launchable agent CLI it doesn't ship in-tree, so the CL
 | --- | --- | --- |
 | `id` | yes | Bare agent id (alphanumerics, `.`, `-`, `_`; ≤64 chars). Additive for **new** IDs only — a collision with a built-in agent id is rejected at the manifest gate, and built-in entries always shadow plugin entries. Cross-plugin id conflicts resolve first-registered-wins. |
 | `name` | yes | Display label for the agent. |
-| `command` | yes | CLI binary to launch. Same safe-id pattern as `id` (no shell metacharacters). |
-| `args` | no | Default launch arguments (≤20 entries; no control characters). |
+| `command` | yes | CLI binary to launch. Same safe-id pattern as `id` (no shell metacharacters). Supports `${settings:settingId}` — see below. |
+| `args` | no | Default launch arguments (≤20 entries; no control characters). Supports `${settings:settingId}` — see below. |
 | `color` | yes | Brand color as a 6-digit hex (`#rrggbb`). |
 | `iconId` | yes | Icon id used for the agent. |
 | `supportsContextInjection` | no | Whether copy-tree context injection targets this agent. Defaults to `false`. |
 
 A plugin agent is launchable and selectable as a named entry in the effective registry. It launches as a named terminal; Daintree does not track its working/waiting state.
+
+`command` and `args` support the same `${settings:settingId}` syntax as MCP servers — e.g. `"args": ["--token", "${settings:apiToken}"]`. Templates resolve at spawn time against the plugin's **user-scope** setting with that ID (project scope is never read). If a referenced setting is unset, the launch fails with a clear error rather than spawning the agent with a literal `${settings:…}` (or a silently blanked value) on its command line — so a missing credential surfaces as a spawn error instead of an opaque auth failure inside the agent.
 
 Output-pattern detection is **not part of the 1.0 plugin schema** — the live PTY matcher is owned by built-in agents only. A manifest that declares a `detection` block on an agent contribution is rejected at validation (unknown key), so the plugin fails to load loudly rather than carrying a field that never runs.
 

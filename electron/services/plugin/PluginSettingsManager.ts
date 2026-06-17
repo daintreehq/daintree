@@ -359,14 +359,19 @@ export class PluginSettingsManager {
     return { values, secretsSet, secretsPlaintext, secretTier: store.secretTier() };
   }
 
-  /** Persist a value from the settings form, firing the plugin's `onDidChange`. */
+  /**
+   * Persist a value from the settings form, firing the plugin's `onDidChange`.
+   * Returns whether the stored value actually changed, so callers can skip
+   * change-driven side effects (e.g. an MCP server restart on secret rotation,
+   * #10619) on a redundant re-save of the same value.
+   */
   async setSettingValueFromUi(
     pluginId: string,
     key: string,
     value: unknown,
     scope: PluginSettingsScope,
     projectId: string | null
-  ): Promise<void> {
+  ): Promise<boolean> {
     assertSettingsKey(pluginId, "set", key);
     if (value === undefined) {
       throw new Error(
@@ -384,26 +389,30 @@ export class PluginSettingsManager {
     const store = this.getOrCreateSettingsStore(pluginId, scope, filePath);
     const changed = await store.set(key, value, { secret: this.isSecretKey(pluginId, key) });
     if (changed) this.notifySettingsSubscribers(pluginId, scope, key, value);
+    return changed;
   }
 
   /**
    * Clear a stored value (the form's "reset to default" — resetting removes the
    * stored override rather than writing the declared default). Fires
    * `onDidChange` with `undefined` so the plugin falls back to its default.
+   * Returns whether anything was actually removed (see
+   * {@link setSettingValueFromUi} for why the changed signal matters).
    */
   async deleteSettingValueFromUi(
     pluginId: string,
     key: string,
     scope: PluginSettingsScope,
     projectId: string | null
-  ): Promise<void> {
+  ): Promise<boolean> {
     assertSettingsKey(pluginId, "delete", key);
     this.assertSettingDeclared(pluginId, key, scope);
     const filePath = this.resolveUiSettingsFilePath(pluginId, scope, projectId);
-    if (!filePath) return;
+    if (!filePath) return false;
     const store = this.getOrCreateSettingsStore(pluginId, scope, filePath);
     const changed = await store.delete(key);
     if (changed) this.notifySettingsSubscribers(pluginId, scope, key, undefined);
+    return changed;
   }
 
   /**

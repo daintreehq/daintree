@@ -184,6 +184,22 @@ export function setPluginAgentRegistry(record: Record<string, AgentConfig>): voi
   notifyRegistryListeners();
 }
 
+/**
+ * Reverse lookup: which plugin contributed `agentId`? Iterates {@link byPlugin},
+ * so it is **main-process only** — the renderer mirrors a flat {@link snapshot}
+ * with no per-plugin tracking and must never call this. Returns the first plugin
+ * declaring the id (matching the first-registered-wins resolution in
+ * {@link rebuildSnapshot}), or `undefined` for a built-in / unknown agent. Used
+ * by the terminal spawn handler to gate `${settings:*}` resolution on
+ * plugin-contributed agents only (#10619).
+ */
+export function getPluginIdForAgent(agentId: string): string | undefined {
+  for (const [pluginId, agents] of byPlugin) {
+    if (agents.has(agentId)) return pluginId;
+  }
+  return undefined;
+}
+
 /** Test-isolation helper: clear the per-plugin map, snapshot, and subscribers. */
 export function clearPluginAgentRegistryForTests(): void {
   byPlugin.clear();
