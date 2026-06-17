@@ -518,7 +518,7 @@ async function handleActivateForView(panelKindId: string): Promise<void> {
   ).activatePluginForView(panelKindId);
   if (!result.ok) {
     throw new AppError({
-      code: "PLUGIN_VIEW_ACTIVATION_FAILED",
+      code: "PLUGIN_ACTIVATION_FAILED",
       message: `Plugin failed to activate for view "${panelKindId}": ${result.error}`,
       userMessage: result.error,
     });
