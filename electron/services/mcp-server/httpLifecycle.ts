@@ -27,6 +27,8 @@ import type {
   McpActiveClientInfo,
   McpBearerIdentity,
   McpIssueGrantResult,
+  McpIssueNativeGrantResult,
+  McpRevokeNativeGrantResult,
   McpRevokeSessionGrantsResult,
   McpTurnOutcomeAlertPayload,
 } from "../../../shared/types/ipc/mcpServer.js";
@@ -54,6 +56,13 @@ import {
   MCP_STOP_DRAIN_TIMEOUT_MS,
   MCP_SERVER_KEY,
   MCP_TIER_ELEVATION_TTL_MS,
+  MCP_GRANT_MAX_LIFETIME_MS,
+  MCP_NATIVE_GRANT_DEFAULT_MAX_USES,
+  MCP_NATIVE_GRANT_MIN_MAX_USES,
+  MCP_NATIVE_GRANT_MAX_MAX_USES,
+  MCP_NATIVE_GRANT_MAX_ALLOWED_TOOLS,
+  MCP_NATIVE_GRANT_MIN_TTL_MS,
+  minimumPermittingTier,
 } from "./shared.js";
 
 export interface HttpLifecycleDeps {
@@ -1631,6 +1640,124 @@ export class HttpLifecycle {
     }
     const revokedCount = this.deps.sessionStore.grantCache.revokeSession(sessionId, "user");
     return { sessionId, revokedCount };
+  }
+
+  /**
+   * Approve a native session-scoped automation grant (#10648), addressed by
+   * the *public* help-session id the renderer holds. Resolves the live
+   * transport session behind it (caller-pinned, so only the renderer that
+   * minted the session can approve grants for it), validates the scope and
+   * limits, then mints the grant. Unlike {@link issueGrant} a native grant
+   * authorizes a *set* of tools for a bounded number of uses without a
+   * per-call modal — so the allowlist, use ceiling, and TTL are all validated
+   * here before the cache mints anything.
+   */
+  issueNativeGrant(
+    helpSessionId: string,
+    params: { allowedTools: string[]; maxUses?: number; ttlMs?: number },
+    callerWcId?: number
+  ): McpIssueNativeGrantResult {
+    if (!helpSessionId || typeof helpSessionId !== "string") {
+      throw new Error("Invalid helpSessionId");
+    }
+    if (callerWcId === undefined) {
+      throw new Error("Caller WebContents id is required to issue a native grant");
+    }
+    const transportSessionId = this.deps.sessionStore.resolveLiveTransportForHelpSession(
+      helpSessionId,
+      callerWcId
+    );
+    if (transportSessionId === null) {
+      throw new Error("No live pinned session for this help session");
+    }
+
+    const requested = Array.isArray(params?.allowedTools) ? params.allowedTools : [];
+    const allowedTools = [
+      ...new Set(requested.filter((t): t is string => typeof t === "string" && t.length > 0)),
+    ];
+    if (allowedTools.length === 0) {
+      throw new Error("A native grant must authorize at least one tool");
+    }
+    if (allowedTools.length > MCP_NATIVE_GRANT_MAX_ALLOWED_TOOLS) {
+      throw new Error(
+        `A native grant may authorize at most ${MCP_NATIVE_GRANT_MAX_ALLOWED_TOOLS} tools`
+      );
+    }
+    // Reject tools no non-external help tier permits — a grant must name a real,
+    // scope-bounded tool. This is also what keeps grants additive: they can
+    // only ever authorize tools that exist in the help-tier universe, never
+    // elevate the session to the api-key-only `external` surface.
+    const ungrantable = allowedTools.filter((t) => minimumPermittingTier(t) === null);
+    if (ungrantable.length > 0) {
+      throw new Error(`Unknown or non-grantable tool(s): ${ungrantable.join(", ")}`);
+    }
+
+    const maxUses = params.maxUses ?? MCP_NATIVE_GRANT_DEFAULT_MAX_USES;
+    if (
+      !Number.isInteger(maxUses) ||
+      maxUses < MCP_NATIVE_GRANT_MIN_MAX_USES ||
+      maxUses > MCP_NATIVE_GRANT_MAX_MAX_USES
+    ) {
+      throw new Error(
+        `maxUses must be an integer in [${MCP_NATIVE_GRANT_MIN_MAX_USES}, ${MCP_NATIVE_GRANT_MAX_MAX_USES}]`
+      );
+    }
+
+    const ttlMs = params.ttlMs;
+    if (
+      ttlMs !== undefined &&
+      (!Number.isFinite(ttlMs) ||
+        ttlMs < MCP_NATIVE_GRANT_MIN_TTL_MS ||
+        ttlMs > MCP_GRANT_MAX_LIFETIME_MS)
+    ) {
+      throw new Error(
+        `ttlMs must be in [${MCP_NATIVE_GRANT_MIN_TTL_MS}, ${MCP_GRANT_MAX_LIFETIME_MS}]`
+      );
+    }
+
+    const entry = this.deps.sessionStore.grantCache.issueNativeGrant({
+      sessionId: transportSessionId,
+      actorId: helpSessionId,
+      actorType: "help-session",
+      allowedTools,
+      maxUses,
+      ttlMs,
+    });
+    return {
+      grantId: entry.id,
+      sessionId: entry.sessionId,
+      actorId: entry.actorId,
+      actorType: entry.actorType,
+      allowedTools: [...entry.allowedTools],
+      maxUses: entry.maxUses,
+      remainingUses: entry.remainingUses,
+      ttlMs: entry.ttlMs,
+      expiresAt: entry.expiresAt,
+    };
+  }
+
+  /**
+   * Revoke a single native grant by id. Caller-pinned against the session the
+   * grant belongs to so a renderer can only revoke its own session's grants.
+   * Idempotent: a grant already gone (exhausted, expired, or torn down with
+   * its session) reports `revoked: false` so a dismissal cleanup never throws.
+   */
+  revokeNativeGrant(grantId: string, callerWcId?: number): McpRevokeNativeGrantResult {
+    if (!grantId || typeof grantId !== "string") {
+      throw new Error("Invalid grantId");
+    }
+    const entry = this.deps.sessionStore.grantCache.getNativeGrant(grantId);
+    if (!entry) {
+      // Already gone — idempotent no-op. No pin to check (the session may have
+      // drained), so this is safe to report as a non-revoke.
+      return { grantId, revoked: false };
+    }
+    const pinnedWcId = this.deps.sessionStore.sessionWebContentsMap.get(entry.sessionId);
+    if (pinnedWcId !== undefined && callerWcId !== undefined && callerWcId !== pinnedWcId) {
+      throw new Error("Caller is not the pinned renderer for this grant's session");
+    }
+    const revoked = this.deps.sessionStore.grantCache.revokeNativeGrant(grantId, "user");
+    return { grantId, revoked };
   }
 
   /**

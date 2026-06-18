@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import type {
+  McpGrantActorType,
   McpGrantLifecyclePayload,
   McpGrantRecordType,
   McpGrantRevokedReason,
@@ -8,6 +10,7 @@ import {
   MCP_GRANT_MAX_LIFETIME_MS,
   MCP_GRANT_SWEEP_INTERVAL_MS,
   MCP_GRANT_TTL_MS,
+  MCP_NATIVE_GRANT_DEFAULT_MAX_USES,
 } from "./shared.js";
 
 /**
@@ -27,6 +30,47 @@ export interface GrantEntry {
 export type GrantCheckResult =
   | { granted: true; issuedAt: number; expiresAt: number }
   | { granted: false };
+
+/**
+ * A native session-scoped automation grant (#10648). Unlike a {@link GrantEntry}
+ * — which authorizes a single `(sessionId, toolId)` pair with no use ceiling —
+ * a native grant is approved once for a bounded *set* of tools and a bounded
+ * number of uses, then exhausts. It is keyed by its own stable `id` (a UUID)
+ * rather than `${sessionId}:${toolId}` because it spans multiple tools.
+ *
+ * `remainingUses` is the only mutable field after issuance and is decremented
+ * atomically inside {@link GrantCache.checkNativeGrant} — the synchronous
+ * decrement-before-return is what makes the use ceiling race-free against two
+ * concurrent in-flight tool calls (JS is single-threaded; no `await` sits
+ * between the read and the write). `issuedAt` doubles as the hard wall-clock
+ * ceiling anchor, exactly like {@link GrantEntry}.
+ */
+export interface NativeGrantEntry {
+  id: string;
+  sessionId: string;
+  actorId: string;
+  actorType: McpGrantActorType;
+  allowedTools: ReadonlySet<string>;
+  maxUses: number;
+  remainingUses: number;
+  issuedAt: number;
+  expiresAt: number;
+  ttlMs: number;
+}
+
+export type NativeGrantCheckResult = { granted: true; grantId: string } | { granted: false };
+
+/** Parameters for minting a native grant via {@link GrantCache.issueNativeGrant}. */
+export interface IssueNativeGrantParams {
+  sessionId: string;
+  actorId: string;
+  actorType: McpGrantActorType;
+  allowedTools: readonly string[];
+  /** Use ceiling. Defaults to {@link MCP_NATIVE_GRANT_DEFAULT_MAX_USES}. */
+  maxUses?: number;
+  /** Sliding-TTL window. Defaults to the cache's per-tool grant TTL. */
+  ttlMs?: number;
+}
 
 export interface GrantLifecycleEmitter {
   (sessionId: string, payload: McpGrantLifecyclePayload): void;
@@ -81,6 +125,11 @@ function key(sessionId: string, toolId: string): string {
 export class GrantCache {
   private readonly grants = new Map<string, GrantEntry>();
   private readonly denialCounts = new Map<string, number>();
+  // Native session-scoped automation grants (#10648), keyed by their own UUID
+  // (not `${sessionId}:${toolId}`) because each spans a set of tools. Held in
+  // the same cache as the per-tool grants so sweep/revokeSession/clearAll/
+  // dispose cover both stores from one place and can never drift.
+  private readonly nativeGrants = new Map<string, NativeGrantEntry>();
   private readonly ttlMs: number;
   private readonly maxLifetimeMs: number;
   private readonly sweepIntervalMs: number;
@@ -233,6 +282,17 @@ export class GrantCache {
         revokedReason: reason,
       });
     }
+    // Native grants are UUID-keyed, so they can't be prefix-matched — scan by
+    // the `sessionId` field instead. This is the fail-closed teardown path:
+    // when the pinned session ends, every native automation grant it held is
+    // dropped (the `revokeSession(sessionId, "session-ended")` calls in
+    // httpLifecycle on SSE/HTTP close cover native grants through here).
+    for (const entry of [...this.nativeGrants.values()]) {
+      if (entry.sessionId !== sessionId) continue;
+      this.nativeGrants.delete(entry.id);
+      revoked += 1;
+      this.emitSafely(sessionId, this.nativeRevokedPayload(entry, reason));
+    }
     return revoked;
   }
 
@@ -258,6 +318,9 @@ export class GrantCache {
     }
     for (const k of [...this.denialCounts.keys()]) {
       if (k.startsWith(prefix)) this.denialCounts.delete(k);
+    }
+    for (const entry of [...this.nativeGrants.values()]) {
+      if (entry.sessionId === sessionId) this.nativeGrants.delete(entry.id);
     }
   }
 
@@ -324,6 +387,215 @@ export class GrantCache {
   }
 
   /**
+   * Mint a native session-scoped automation grant (#10648). Authorizes the
+   * given `allowedTools` for the session for up to `maxUses` dispatches within
+   * the sliding TTL (capped by the hard `maxLifetimeMs` ceiling). Returns the
+   * minted entry whose `id` is the revoke/refresh handle.
+   *
+   * Validation of the actor, the tool allowlist, and the bounds is the
+   * caller's responsibility (`httpLifecycle.issueNativeGrant`) — the cache
+   * clamps `maxUses` to at least 1 so an exhausted-on-issue grant can never
+   * exist, and trusts the rest.
+   */
+  issueNativeGrant(params: IssueNativeGrantParams): NativeGrantEntry {
+    if (this.disposed) {
+      throw new Error("GrantCache has been disposed");
+    }
+    const issuedAt = this.now();
+    const ttlMs = params.ttlMs ?? this.ttlMs;
+    const maxUses = Math.max(1, Math.floor(params.maxUses ?? MCP_NATIVE_GRANT_DEFAULT_MAX_USES));
+    const entry: NativeGrantEntry = {
+      id: randomUUID(),
+      sessionId: params.sessionId,
+      actorId: params.actorId,
+      actorType: params.actorType,
+      allowedTools: new Set(params.allowedTools),
+      maxUses,
+      remainingUses: maxUses,
+      issuedAt,
+      expiresAt: issuedAt + ttlMs,
+      ttlMs,
+    };
+    this.nativeGrants.set(entry.id, entry);
+    this.emitSafely(entry.sessionId, this.nativeIssuedPayload(entry));
+    return entry;
+  }
+
+  /**
+   * Authorize `toolId` for the session under a live native grant, consuming
+   * one use. Returns the authorizing grant's id on success. The use decrement
+   * is synchronous and happens before the return, so two concurrent in-flight
+   * calls against a `maxUses: 1` grant can never both succeed — the second
+   * sees `remainingUses: 0` and falls through.
+   *
+   * Picks the first (insertion-order) live grant whose allowlist covers the
+   * tool. Expired / ceiling-past grants are lazily evicted (emitting the same
+   * `grant.expired`/`grant.revoked` signals as the per-tool path) before being
+   * skipped. When the consumed use is the last one the grant is deleted and a
+   * `grant.exhausted` record is emitted — a natural terminal state, distinct
+   * from a forced revoke.
+   */
+  checkNativeGrant(sessionId: string, toolId: string): NativeGrantCheckResult {
+    const now = this.now();
+    for (const entry of this.nativeGrants.values()) {
+      if (entry.sessionId !== sessionId) continue;
+      if (!entry.allowedTools.has(toolId)) continue;
+      const pastCeiling = now > entry.issuedAt + this.maxLifetimeMs;
+      const pastTtl = now > entry.expiresAt;
+      if (pastCeiling || pastTtl) {
+        this.nativeGrants.delete(entry.id);
+        this.emitSafely(
+          entry.sessionId,
+          pastCeiling && !pastTtl
+            ? this.nativeRevokedPayload(entry, "grant-ceiling")
+            : this.nativeExpiredPayload(entry, toolId)
+        );
+        continue;
+      }
+      if (entry.remainingUses <= 0) {
+        // Defensive: an exhausted grant should already have been deleted.
+        this.nativeGrants.delete(entry.id);
+        continue;
+      }
+      entry.remainingUses -= 1;
+      if (entry.remainingUses <= 0) {
+        this.nativeGrants.delete(entry.id);
+        this.emitSafely(entry.sessionId, this.nativeUsedPayload(entry, toolId, "grant.exhausted"));
+      } else {
+        this.emitSafely(entry.sessionId, this.nativeUsedPayload(entry, toolId, "grant.used"));
+      }
+      return { granted: true, grantId: entry.id };
+    }
+    return { granted: false };
+  }
+
+  /**
+   * Extend a native grant's sliding TTL after a successful dispatch. Keyed by
+   * the grant id captured at {@link checkNativeGrant} time, so a grant revoked
+   * or exhausted mid-dispatch (its id already gone) makes this a silent no-op —
+   * the same resurrection-race guard as the per-tool {@link refresh}. Does NOT
+   * refund a use; uses are consumed at authorization and never returned.
+   */
+  refreshNativeGrant(grantId: string): boolean {
+    const entry = this.nativeGrants.get(grantId);
+    if (!entry) return false;
+    const now = this.now();
+    if (now > entry.issuedAt + this.maxLifetimeMs) {
+      this.nativeGrants.delete(grantId);
+      this.emitSafely(entry.sessionId, this.nativeRevokedPayload(entry, "grant-ceiling"));
+      return false;
+    }
+    entry.expiresAt = now + entry.ttlMs;
+    return true;
+  }
+
+  /**
+   * Explicitly revoke a single native grant by id. Emits `grant.revoked` with
+   * the given reason. Returns false when the id was already gone (exhausted,
+   * expired, or torn down with its session) so a renderer dismissal cleanup is
+   * an idempotent no-op.
+   */
+  revokeNativeGrant(grantId: string, reason: McpGrantRevokedReason = "user"): boolean {
+    const entry = this.nativeGrants.get(grantId);
+    if (!entry) return false;
+    this.nativeGrants.delete(grantId);
+    this.emitSafely(entry.sessionId, this.nativeRevokedPayload(entry, reason));
+    return true;
+  }
+
+  /**
+   * Snapshot of live native grants, optionally filtered to one session.
+   * Iteration order is insertion order for deterministic assertions. Does not
+   * evict — callers filter expired entries by `expiresAt` like the per-tool
+   * {@link getActiveGrants} consumers do.
+   */
+  getActiveNativeGrants(sessionId?: string): NativeGrantEntry[] {
+    const out: NativeGrantEntry[] = [];
+    for (const entry of this.nativeGrants.values()) {
+      if (sessionId !== undefined && entry.sessionId !== sessionId) continue;
+      out.push(entry);
+    }
+    return out;
+  }
+
+  /**
+   * Look up a single native grant by id. Returns the live entry (or undefined
+   * when already gone) — used by the revoke path's caller-pin check, which
+   * reads `sessionId` to verify the requester owns the grant's session.
+   */
+  getNativeGrant(grantId: string): NativeGrantEntry | undefined {
+    return this.nativeGrants.get(grantId);
+  }
+
+  private nativeIssuedPayload(entry: NativeGrantEntry): McpGrantLifecyclePayload {
+    return {
+      type: "grant.issued",
+      sessionId: entry.sessionId,
+      toolId: "*",
+      ttlMs: entry.ttlMs,
+      expiresAt: entry.expiresAt,
+      grantId: entry.id,
+      actorId: entry.actorId,
+      actorType: entry.actorType,
+      maxUses: entry.maxUses,
+      remainingUses: entry.remainingUses,
+      allowedTools: [...entry.allowedTools],
+    };
+  }
+
+  private nativeUsedPayload(
+    entry: NativeGrantEntry,
+    toolId: string,
+    type: "grant.used" | "grant.exhausted"
+  ): McpGrantLifecyclePayload {
+    return {
+      type,
+      sessionId: entry.sessionId,
+      toolId,
+      ttlMs: entry.ttlMs,
+      expiresAt: type === "grant.used" ? entry.expiresAt : undefined,
+      grantId: entry.id,
+      actorId: entry.actorId,
+      actorType: entry.actorType,
+      maxUses: entry.maxUses,
+      remainingUses: entry.remainingUses,
+    };
+  }
+
+  private nativeRevokedPayload(
+    entry: NativeGrantEntry,
+    reason: McpGrantRevokedReason
+  ): McpGrantLifecyclePayload {
+    return {
+      type: "grant.revoked",
+      sessionId: entry.sessionId,
+      toolId: "*",
+      ttlMs: entry.ttlMs,
+      revokedReason: reason,
+      grantId: entry.id,
+      actorId: entry.actorId,
+      actorType: entry.actorType,
+      maxUses: entry.maxUses,
+      remainingUses: entry.remainingUses,
+      allowedTools: [...entry.allowedTools],
+    };
+  }
+
+  private nativeExpiredPayload(entry: NativeGrantEntry, toolId: string): McpGrantLifecyclePayload {
+    return {
+      type: "grant.expired",
+      sessionId: entry.sessionId,
+      toolId,
+      ttlMs: entry.ttlMs,
+      grantId: entry.id,
+      actorId: entry.actorId,
+      actorType: entry.actorType,
+      maxUses: entry.maxUses,
+      remainingUses: entry.remainingUses,
+    };
+  }
+
+  /**
    * Periodic sweep — removes expired grants without anyone having to read
    * them. Emits `grant.expired` for each so audit and broadcast match the
    * lazy-eviction path.
@@ -332,6 +604,19 @@ export class GrantCache {
     if (this.disposed) return 0;
     let evicted = 0;
     const now = this.now();
+    for (const [id, entry] of [...this.nativeGrants]) {
+      const pastCeiling = now > entry.issuedAt + this.maxLifetimeMs;
+      const pastTtl = now > entry.expiresAt;
+      if (!pastCeiling && !pastTtl) continue;
+      this.nativeGrants.delete(id);
+      evicted += 1;
+      this.emitSafely(
+        entry.sessionId,
+        pastCeiling && !pastTtl
+          ? this.nativeRevokedPayload(entry, "grant-ceiling")
+          : this.nativeExpiredPayload(entry, "*")
+      );
+    }
     for (const [k, entry] of [...this.grants]) {
       // Ceiling-expired entries can still have a future `expiresAt` (they were
       // refreshed recently), so they survive the TTL skip — evict on either
@@ -379,6 +664,7 @@ export class GrantCache {
     if (this.disposed) return;
     this.grants.clear();
     this.denialCounts.clear();
+    this.nativeGrants.clear();
   }
 
   /**
@@ -396,6 +682,7 @@ export class GrantCache {
     }
     this.grants.clear();
     this.denialCounts.clear();
+    this.nativeGrants.clear();
   }
 
   private emitSafely(sessionId: string, payload: McpGrantLifecyclePayload): void {
@@ -412,6 +699,11 @@ export class GrantCache {
   _peek(sessionId: string, toolId: string): GrantEntry | undefined {
     return this.grants.get(key(sessionId, toolId));
   }
+
+  /** @internal */
+  _peekNative(grantId: string): NativeGrantEntry | undefined {
+    return this.nativeGrants.get(grantId);
+  }
 }
 
-export type { McpGrantRecordType, McpGrantRevokedReason };
+export type { McpGrantActorType, McpGrantRecordType, McpGrantRevokedReason };

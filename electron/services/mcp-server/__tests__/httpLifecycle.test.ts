@@ -94,10 +94,14 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       revokeSession: vi.fn(() => false),
       registerClientMetadata: vi.fn(),
       listExternalActiveClients: vi.fn(() => []),
+      resolveLiveTransportForHelpSession: vi.fn(() => null),
       grantCache: {
         clearDenialCounts: vi.fn(),
         revokeSession: vi.fn(() => 0),
         issueGrant: vi.fn(),
+        issueNativeGrant: vi.fn(),
+        getNativeGrant: vi.fn(() => undefined),
+        revokeNativeGrant: vi.fn(() => false),
       },
     },
     auditService: {
@@ -514,6 +518,140 @@ describe("HttpLifecycle", () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);
       expect(() => lc.resetDenialCounts("")).toThrow(/Invalid sessionId/);
+    });
+  });
+
+  describe("issueNativeGrant / revokeNativeGrant (#10648)", () => {
+    type NativeGrantCache = {
+      issueNativeGrant: ReturnType<typeof vi.fn>;
+      getNativeGrant: ReturnType<typeof vi.fn>;
+      revokeNativeGrant: ReturnType<typeof vi.fn>;
+    };
+    function grantCacheOf(deps: HttpLifecycleDeps) {
+      return (deps.sessionStore as unknown as { grantCache: NativeGrantCache }).grantCache;
+    }
+    function resolverOf(deps: HttpLifecycleDeps) {
+      return deps.sessionStore.resolveLiveTransportForHelpSession as ReturnType<typeof vi.fn>;
+    }
+    function mintEntry(allowedTools: string[], maxUses: number) {
+      return {
+        id: "grant-uuid",
+        sessionId: "transport-1",
+        actorId: "help-1",
+        actorType: "help-session" as const,
+        allowedTools: new Set(allowedTools),
+        maxUses,
+        remainingUses: maxUses,
+        ttlMs: 900_000,
+        expiresAt: 1_000_000,
+      };
+    }
+
+    it("resolves the transport session and mints a grant for valid input", () => {
+      const deps = fakeDeps();
+      resolverOf(deps).mockReturnValue("transport-1");
+      grantCacheOf(deps).issueNativeGrant.mockReturnValue(mintEntry(["git.commit"], 5));
+      const lc = new HttpLifecycle(deps);
+
+      const result = lc.issueNativeGrant(
+        "help-1",
+        { allowedTools: ["git.commit"], maxUses: 5 },
+        42
+      );
+
+      expect(resolverOf(deps)).toHaveBeenCalledWith("help-1", 42);
+      expect(grantCacheOf(deps).issueNativeGrant).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "transport-1",
+          actorId: "help-1",
+          actorType: "help-session",
+          allowedTools: ["git.commit"],
+          maxUses: 5,
+        })
+      );
+      expect(result.grantId).toBe("grant-uuid");
+    });
+
+    it("requires a caller WebContents id (fails closed)", () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      expect(() => lc.issueNativeGrant("help-1", { allowedTools: ["git.commit"] })).toThrow(
+        /Caller WebContents id is required/
+      );
+    });
+
+    it("throws when no live pinned session backs the help id", () => {
+      const deps = fakeDeps();
+      resolverOf(deps).mockReturnValue(null);
+      const lc = new HttpLifecycle(deps);
+      expect(() => lc.issueNativeGrant("help-gone", { allowedTools: ["git.commit"] }, 42)).toThrow(
+        /No live pinned session/
+      );
+    });
+
+    it("rejects an empty tool allowlist", () => {
+      const deps = fakeDeps();
+      resolverOf(deps).mockReturnValue("transport-1");
+      const lc = new HttpLifecycle(deps);
+      expect(() => lc.issueNativeGrant("help-1", { allowedTools: [] }, 42)).toThrow(
+        /at least one tool/
+      );
+      expect(grantCacheOf(deps).issueNativeGrant).not.toHaveBeenCalled();
+    });
+
+    it("rejects an unknown / non-grantable tool", () => {
+      const deps = fakeDeps();
+      resolverOf(deps).mockReturnValue("transport-1");
+      const lc = new HttpLifecycle(deps);
+      expect(() =>
+        lc.issueNativeGrant("help-1", { allowedTools: ["totally.notatool"] }, 42)
+      ).toThrow(/non-grantable/);
+      expect(grantCacheOf(deps).issueNativeGrant).not.toHaveBeenCalled();
+    });
+
+    it("rejects an out-of-range maxUses", () => {
+      const deps = fakeDeps();
+      resolverOf(deps).mockReturnValue("transport-1");
+      const lc = new HttpLifecycle(deps);
+      expect(() =>
+        lc.issueNativeGrant("help-1", { allowedTools: ["git.commit"], maxUses: 0 }, 42)
+      ).toThrow(/maxUses/);
+      expect(() =>
+        lc.issueNativeGrant("help-1", { allowedTools: ["git.commit"], maxUses: 9999 }, 42)
+      ).toThrow(/maxUses/);
+    });
+
+    it("revokeNativeGrant enforces caller-pin against the grant's session", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionWebContentsMap.set("transport-1", 42);
+      grantCacheOf(deps).getNativeGrant.mockReturnValue(mintEntry(["git.commit"], 5));
+      const lc = new HttpLifecycle(deps);
+      expect(() => lc.revokeNativeGrant("grant-uuid", 99)).toThrow(/not the pinned renderer/);
+      expect(grantCacheOf(deps).revokeNativeGrant).not.toHaveBeenCalled();
+    });
+
+    it("revokeNativeGrant is an idempotent no-op for an already-gone grant", () => {
+      const deps = fakeDeps();
+      grantCacheOf(deps).getNativeGrant.mockReturnValue(undefined);
+      const lc = new HttpLifecycle(deps);
+      expect(lc.revokeNativeGrant("grant-gone", 99)).toEqual({
+        grantId: "grant-gone",
+        revoked: false,
+      });
+      expect(grantCacheOf(deps).revokeNativeGrant).not.toHaveBeenCalled();
+    });
+
+    it("revokeNativeGrant drops the grant when the caller is the pinned renderer", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionWebContentsMap.set("transport-1", 42);
+      grantCacheOf(deps).getNativeGrant.mockReturnValue(mintEntry(["git.commit"], 5));
+      grantCacheOf(deps).revokeNativeGrant.mockReturnValue(true);
+      const lc = new HttpLifecycle(deps);
+      expect(lc.revokeNativeGrant("grant-uuid", 42)).toEqual({
+        grantId: "grant-uuid",
+        revoked: true,
+      });
+      expect(grantCacheOf(deps).revokeNativeGrant).toHaveBeenCalledWith("grant-uuid", "user");
     });
   });
 

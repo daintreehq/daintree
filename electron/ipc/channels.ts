@@ -625,6 +625,17 @@ export const CHANNELS = {
    */
   MCP_SERVER_REVOKE_SESSION_GRANTS: "mcp-server:revoke-session-grants",
   /**
+   * Approve a native session-scoped automation grant (#10648), addressed by
+   * the public help-session id. Authorizes a bounded set of tools for a
+   * bounded number of uses without a per-call modal. Caller-pin checked.
+   */
+  MCP_SERVER_ISSUE_NATIVE_GRANT: "mcp-server:issue-native-grant",
+  /**
+   * Revoke a single native automation grant by id. Idempotent. Caller-pin
+   * checked against the session the grant belongs to.
+   */
+  MCP_SERVER_REVOKE_NATIVE_GRANT: "mcp-server:revoke-native-grant",
+  /**
    * Reset the per-`(sessionId, toolId)` denial counters for a session without
    * touching its grants. Fired when the user dismisses the tier-mismatch
    * banner so the next out-of-tier call re-arms the banner instead of being

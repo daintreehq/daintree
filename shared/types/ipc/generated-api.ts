@@ -264,6 +264,9 @@ export interface GeneratedElectronAPI {
     issueGrant(
       ...args: IpcInvokeMap["mcp-server:issue-grant"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:issue-grant"]["result"]>;
+    issueNativeGrant(
+      ...args: IpcInvokeMap["mcp-server:issue-native-grant"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:issue-native-grant"]["result"]>;
     listActiveBearers(
       ...args: IpcInvokeMap["mcp-server:list-active-bearers"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:list-active-bearers"]["result"]>;
@@ -276,6 +279,9 @@ export interface GeneratedElectronAPI {
     resetDenialCounts(
       ...args: IpcInvokeMap["mcp-server:reset-denial-counts"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:reset-denial-counts"]["result"]>;
+    revokeNativeGrant(
+      ...args: IpcInvokeMap["mcp-server:revoke-native-grant"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:revoke-native-grant"]["result"]>;
     revokeSessionGrants(
       ...args: IpcInvokeMap["mcp-server:revoke-session-grants"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:revoke-session-grants"]["result"]>;

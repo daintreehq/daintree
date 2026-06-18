@@ -194,13 +194,34 @@ export interface McpAuditRecord {
  * - `tier.decayed`: a bounded elevation aged out (`SessionStore.decayTier`)
  *   and the session silently fell back to its baseline. `tier` is the
  *   baseline it decayed to, `previousTier` the elevated tier it left.
+ * - `grant.used`: a native session-scoped automation grant (#10648)
+ *   authorized one tool dispatch and one use was consumed. `toolId` is the
+ *   specific tool that consumed the use; `remainingUses` is the count left
+ *   *after* the decrement. Distinct from a per-tool TTL grant, which has no
+ *   use ceiling and emits no per-use record.
+ * - `grant.exhausted`: a native grant's last use was consumed — a natural
+ *   terminal lifecycle state, NOT a forced revocation (so it is deliberately
+ *   a distinct record type rather than a {@link McpGrantRevokedReason}). The
+ *   grant is deleted by record-write time; `toolId` is the tool whose call
+ *   exhausted it.
  */
 export type McpGrantRecordType =
   | "grant.issued"
   | "grant.expired"
   | "grant.revoked"
+  | "grant.used"
+  | "grant.exhausted"
   | "tier.elevated"
   | "tier.decayed";
+
+/**
+ * Identity class of the actor a native automation grant (#10648) was issued
+ * to. Both are renderer-pinned internal bearers:
+ * - `help-session`: the help-chat assistant panel (a full help session).
+ * - `assistant-pane`: a `daintree-assistant` CLI pane bearer (#10647) pinned
+ *   to its launching WebContents without being promoted to a help session.
+ */
+export type McpGrantActorType = "help-session" | "assistant-pane";
 
 /**
  * Source of a `grant.revoked` transition.
@@ -240,6 +261,31 @@ export interface McpGrantRecord {
    */
   tier?: string;
   previousTier?: string;
+  /**
+   * Stable UUID of the native automation grant (#10648) this record belongs
+   * to. Set on `grant.issued`/`grant.used`/`grant.exhausted`/`grant.revoked`
+   * for native grants; absent on per-tool "Approve once" grants and tier
+   * records, so existing on-disk rows deserialize unchanged.
+   */
+  grantId?: string;
+  /** Use ceiling a native grant was minted with. Native grants only. */
+  maxUses?: number;
+  /**
+   * Uses left after this record's transition. On `grant.issued` it equals
+   * `maxUses`; on `grant.used` it is the post-decrement count; on
+   * `grant.exhausted` it is `0`. Native grants only.
+   */
+  remainingUses?: number;
+  /** Public id of the actor the native grant was issued to. Native grants only. */
+  actorId?: string;
+  /** Actor identity class for a native grant. Native grants only. */
+  actorType?: McpGrantActorType;
+  /**
+   * Dotted `BuiltInActionId`s a native grant authorizes. Carried on
+   * `grant.issued`/`grant.revoked` (where `toolId` is `"*"`) so the audit
+   * trail records the full approved scope. Native grants only.
+   */
+  allowedTools?: string[];
 }
 
 /**
@@ -267,6 +313,8 @@ const GRANT_RECORD_TYPES: ReadonlySet<McpGrantRecordType> = new Set([
   "grant.issued",
   "grant.expired",
   "grant.revoked",
+  "grant.used",
+  "grant.exhausted",
   "tier.elevated",
   "tier.decayed",
 ]);
@@ -304,6 +352,13 @@ export interface McpGrantLifecyclePayload {
   ttlMs: number;
   expiresAt?: number;
   revokedReason?: McpGrantRevokedReason;
+  /** Native automation grant fields (#10648); absent for per-tool grants. */
+  grantId?: string;
+  maxUses?: number;
+  remainingUses?: number;
+  actorId?: string;
+  actorType?: McpGrantActorType;
+  allowedTools?: string[];
 }
 
 /**
@@ -407,6 +462,37 @@ export interface McpIssueGrantResult {
   toolId: string;
   ttlMs: number;
   expiresAt: number;
+}
+
+/**
+ * Result of a renderer-driven `issueNativeGrant` IPC (#10648). A native
+ * session-scoped automation grant authorizes a bounded set of tools for the
+ * pinned assistant session for a limited number of uses, without a per-call
+ * modal. Returns the minted grant id and its scope/limit fields so the
+ * renderer can render the grant card (allowed tools, remaining uses,
+ * countdown) without polling.
+ */
+export interface McpIssueNativeGrantResult {
+  grantId: string;
+  sessionId: string;
+  actorId: string;
+  actorType: McpGrantActorType;
+  allowedTools: string[];
+  maxUses: number;
+  remainingUses: number;
+  ttlMs: number;
+  expiresAt: number;
+}
+
+/**
+ * Result of a renderer-driven `revokeNativeGrant` IPC (#10648). `revoked` is
+ * true when a matching native grant existed for the caller's session and was
+ * dropped; false when the grant id was already gone (exhausted, expired, or
+ * torn down with the session) so a dismissal cleanup is an idempotent no-op.
+ */
+export interface McpRevokeNativeGrantResult {
+  grantId: string;
+  revoked: boolean;
 }
 
 /** Minimum and maximum values accepted for the configurable ring-buffer cap. */

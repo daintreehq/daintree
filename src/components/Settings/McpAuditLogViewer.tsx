@@ -47,6 +47,8 @@ const GRANT_TYPE_LABEL: Record<McpGrantRecordType, string> = {
   "grant.issued": "Grant issued",
   "grant.expired": "Grant expired",
   "grant.revoked": "Grant revoked",
+  "grant.used": "Grant used",
+  "grant.exhausted": "Grant exhausted",
   "tier.elevated": "Tier elevated",
   "tier.decayed": "Tier decayed",
 };
@@ -55,6 +57,8 @@ const GRANT_TYPE_DOT_CLASS: Record<McpGrantRecordType, string> = {
   "grant.issued": "bg-status-info",
   "grant.expired": "bg-status-warning",
   "grant.revoked": "bg-status-danger",
+  "grant.used": "bg-status-info",
+  "grant.exhausted": "bg-status-warning",
   "tier.elevated": "bg-status-warning",
   "tier.decayed": "bg-status-info",
 };
@@ -262,6 +266,12 @@ function GrantRow({
             Reason: {record.revokedReason}
           </div>
         )}
+        {record.maxUses !== undefined &&
+          (record.type === "grant.used" || record.type === "grant.exhausted") && (
+            <div className="mt-0.5 text-[10px] text-daintree-text/50">
+              {record.remainingUses ?? 0} of {record.maxUses} uses left
+            </div>
+          )}
         {record.expiresAt !== undefined && record.type === "grant.issued" && (
           <div className="mt-0.5 text-[10px] text-daintree-text/50">
             Expires{" "}

@@ -15,7 +15,9 @@ import type {
   McpAuditStats,
   McpGrantLifecyclePayload,
   McpIssueGrantResult,
+  McpIssueNativeGrantResult,
   McpLogRecord,
+  McpRevokeNativeGrantResult,
   McpRevokeSessionGrantsResult,
   McpRuntimeSnapshot,
   McpRuntimeState,
@@ -541,11 +543,33 @@ export class McpServerService {
   getHelpSessionLiveStatus(
     helpSessionId: string,
     callerWcId: number
-  ): {
-    tier: McpTier;
-    activeGrants: Array<{ toolId: string; expiresAt: number; ttlMs: number }>;
-  } | null {
+  ): ReturnType<SessionStore["getLiveStatusForHelpSession"]> {
     return this.sessionStore.getLiveStatusForHelpSession(helpSessionId, callerWcId);
+  }
+
+  /**
+   * Approve a native session-scoped automation grant (#10648) for the help
+   * session a renderer owns, addressed by its public help-session id. The
+   * grant authorizes the named tools for a bounded number of uses without a
+   * per-call modal. Caller-pinned against the WebContents the session was
+   * pinned to at handshake. Returns the minted grant's id and scope so the
+   * renderer can render its card without polling.
+   */
+  issueNativeGrant(
+    helpSessionId: string,
+    params: { allowedTools: string[]; maxUses?: number; ttlMs?: number },
+    callerWcId?: number
+  ): McpIssueNativeGrantResult {
+    return this.httpLifecycle.issueNativeGrant(helpSessionId, params, callerWcId);
+  }
+
+  /**
+   * Revoke a single native automation grant by id. Caller-pinned against the
+   * session the grant belongs to. Idempotent — a grant already gone (exhausted,
+   * expired, or torn down with its session) reports `revoked: false`.
+   */
+  revokeNativeGrant(grantId: string, callerWcId?: number): McpRevokeNativeGrantResult {
+    return this.httpLifecycle.revokeNativeGrant(grantId, callerWcId);
   }
 
   /**
@@ -620,6 +644,12 @@ export class McpServerService {
         ttlMs: payload.ttlMs,
         expiresAt: payload.expiresAt,
         revokedReason: payload.revokedReason,
+        grantId: payload.grantId,
+        maxUses: payload.maxUses,
+        remainingUses: payload.remainingUses,
+        actorId: payload.actorId,
+        actorType: payload.actorType,
+        allowedTools: payload.allowedTools,
       });
     } catch (err) {
       console.error("[MCP] Failed to append grant audit record:", err);

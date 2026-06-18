@@ -146,6 +146,37 @@ export const MCP_GRANT_MAX_LIFETIME_MS = 30 * 60 * 1000;
 export const MCP_GRANT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
 /**
+ * Default use ceiling for a native session-scoped automation grant (#10648)
+ * when the renderer issues one without specifying `maxUses`. A native grant
+ * authorizes its allowed tools for at most this many dispatches before it
+ * exhausts and the user must re-approve.
+ */
+export const MCP_NATIVE_GRANT_DEFAULT_MAX_USES = 10;
+
+/**
+ * Hard bounds on the use ceiling a renderer may request when issuing a native
+ * grant. Keeps a single approval from authorizing an unbounded run of
+ * automated tool calls — past the ceiling the grant must be re-approved.
+ */
+export const MCP_NATIVE_GRANT_MIN_MAX_USES = 1;
+export const MCP_NATIVE_GRANT_MAX_MAX_USES = 100;
+
+/**
+ * Maximum number of tools a single native grant may authorize. A grant is a
+ * deliberate, inspectable scope — an unbounded allowlist would defeat the
+ * point. Issuance rejects an allowlist larger than this.
+ */
+export const MCP_NATIVE_GRANT_MAX_ALLOWED_TOOLS = 20;
+
+/**
+ * Lower bound on a native grant's requested TTL. Below a minute a grant would
+ * expire before the assistant could meaningfully use it; the upper bound is
+ * {@link MCP_GRANT_MAX_LIFETIME_MS} so a native grant can never outlive its
+ * SSE session, matching the per-tool grant ceiling.
+ */
+export const MCP_NATIVE_GRANT_MIN_TTL_MS = 60 * 1000;
+
+/**
  * Number of consecutive `(sessionId, toolId)` denials before the renderer
  * banner is silenced. The audit record is always written. The counter
  * resets when a grant is issued for the pair or when the session ends.

@@ -21,6 +21,8 @@ export const MCP_SERVER_METHOD_CHANNELS = {
   setSessionTier: "mcp-server:set-session-tier",
   issueGrant: "mcp-server:issue-grant",
   revokeSessionGrants: "mcp-server:revoke-session-grants",
+  issueNativeGrant: "mcp-server:issue-native-grant",
+  revokeNativeGrant: "mcp-server:revoke-native-grant",
   resetDenialCounts: "mcp-server:reset-denial-counts",
   listActiveBearers: "mcp-server:list-active-bearers",
   listHelpSessionBearers: "mcp-server:list-help-session-bearers",

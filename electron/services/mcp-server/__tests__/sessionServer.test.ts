@@ -1967,6 +1967,103 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     sessionStore.grantCache.dispose();
   });
 
+  it("native grant authorizes a denied tool without a modal and refreshes on success (#10648)", async () => {
+    const sessionStore = fakeSessionStore("workbench");
+    sessionStore.sessions.set("s", {
+      transport: {} as never,
+      server: {} as never,
+      idleTimer: setTimeout(() => {}, 1_000_000),
+    });
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 2,
+    });
+    const refreshSpy = vi.spyOn(sessionStore.grantCache, "refreshNativeGrant");
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: {},
+    })) as { isError?: boolean };
+
+    expect(result.isError).not.toBe(true);
+    // dispatchConfirmed=true → the native grant bypasses the confirm modal,
+    // unlike a per-tool grant which dispatches with `false`.
+    expect(dispatchAction).toHaveBeenCalledWith("worktree.delete", expect.any(Object), true);
+    expect(refreshSpy).toHaveBeenCalledWith(grant.id);
+    // One use consumed at authorization.
+    expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(1);
+    sessionStore.grantCache.dispose();
+  });
+
+  it("native grant for tool A does not authorize tool B (fails closed on scope) (#10648)", async () => {
+    const sessionStore = fakeSessionStore("workbench");
+    sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 5,
+    });
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    // git.push is denied at the workbench floor AND is not in the grant's
+    // allowlist → fail closed with TIER_NOT_PERMITTED, never dispatched.
+    const result = (await callTool(server, {
+      name: "git.push",
+      arguments: {},
+    })) as { isError?: boolean; content?: Array<{ text?: string }> };
+
+    expect(result.isError).toBe(true);
+    expect(result.content?.[0]?.text ?? "").toContain("TIER_NOT_PERMITTED");
+    expect(dispatchAction).not.toHaveBeenCalled();
+    sessionStore.grantCache.dispose();
+  });
+
+  it("an exhausted native grant fails closed on the next call (#10648)", async () => {
+    const sessionStore = fakeSessionStore("workbench");
+    sessionStore.sessions.set("s", {
+      transport: {} as never,
+      server: {} as never,
+      idleTimer: setTimeout(() => {}, 1_000_000),
+    });
+    sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 1,
+    });
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    const first = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: {},
+    })) as { isError?: boolean };
+    expect(first.isError).not.toBe(true);
+
+    const second = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: {},
+    })) as { isError?: boolean; content?: Array<{ text?: string }> };
+    expect(second.isError).toBe(true);
+    expect(second.content?.[0]?.text ?? "").toContain("TIER_NOT_PERMITTED");
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+    sessionStore.grantCache.dispose();
+  });
+
   it("grant for tool A does not authorize tool B in the same session", async () => {
     const sessionStore = fakeSessionStore("workbench");
     sessionStore.grantCache.issueGrant("s", "worktree.delete");

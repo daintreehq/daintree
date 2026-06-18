@@ -558,3 +558,169 @@ describe("session-level integration assumptions", () => {
 beforeEach(() => {
   // no-op; per-test caches are constructed inside each `it`.
 });
+
+describe("GrantCache native grants (#10648)", () => {
+  function issue(
+    cache: GrantCache,
+    overrides?: { allowedTools?: string[]; maxUses?: number; ttlMs?: number }
+  ) {
+    return cache.issueNativeGrant({
+      sessionId: "s1",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: overrides?.allowedTools ?? ["git.commit", "git.push"],
+      maxUses: overrides?.maxUses ?? 3,
+      ttlMs: overrides?.ttlMs,
+    });
+  }
+
+  it("issueNativeGrant mints an entry and emits grant.issued with native fields", () => {
+    const { cache, emitted } = newCache({ ttlMs: 1000 });
+    const entry = issue(cache);
+    expect(entry.id).toBeTruthy();
+    expect(entry.remainingUses).toBe(3);
+    expect(entry.maxUses).toBe(3);
+    expect([...entry.allowedTools].sort()).toEqual(["git.commit", "git.push"]);
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0].payload).toMatchObject({
+      type: "grant.issued",
+      toolId: "*",
+      grantId: entry.id,
+      actorId: "help-1",
+      actorType: "help-session",
+      maxUses: 3,
+      remainingUses: 3,
+    });
+    cache.dispose();
+  });
+
+  it("checkNativeGrant authorizes an allowed tool, consumes one use, emits grant.used", () => {
+    const { cache, emitted } = newCache();
+    const entry = issue(cache);
+    emitted.length = 0;
+    const result = cache.checkNativeGrant("s1", "git.commit");
+    expect(result.granted).toBe(true);
+    if (result.granted) expect(result.grantId).toBe(entry.id);
+    expect(cache._peekNative(entry.id)?.remainingUses).toBe(2);
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0].payload).toMatchObject({
+      type: "grant.used",
+      toolId: "git.commit",
+      grantId: entry.id,
+      remainingUses: 2,
+    });
+    cache.dispose();
+  });
+
+  it("denies a tool outside the allowlist without consuming a use", () => {
+    const { cache, emitted } = newCache();
+    const entry = issue(cache, { allowedTools: ["git.commit"] });
+    emitted.length = 0;
+    expect(cache.checkNativeGrant("s1", "git.push").granted).toBe(false);
+    expect(cache._peekNative(entry.id)?.remainingUses).toBe(3);
+    expect(emitted).toHaveLength(0);
+    cache.dispose();
+  });
+
+  it("a maxUses:1 grant exhausts after one use and fails closed on the second", () => {
+    const { cache, emitted } = newCache();
+    const entry = issue(cache, { maxUses: 1 });
+    emitted.length = 0;
+    const first = cache.checkNativeGrant("s1", "git.commit");
+    expect(first.granted).toBe(true);
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0].payload).toMatchObject({
+      type: "grant.exhausted",
+      toolId: "git.commit",
+      remainingUses: 0,
+    });
+    expect(cache._peekNative(entry.id)).toBeUndefined();
+    // Second concurrent-style call sees the grant gone.
+    expect(cache.checkNativeGrant("s1", "git.commit").granted).toBe(false);
+    cache.dispose();
+  });
+
+  it("a grant past its TTL fails closed and emits grant.expired", () => {
+    let clock = 0;
+    const { cache, emitted } = newCache({ ttlMs: 1000, maxLifetimeMs: 100000, now: () => clock });
+    issue(cache, { ttlMs: 1000 });
+    emitted.length = 0;
+    clock = 2000;
+    expect(cache.checkNativeGrant("s1", "git.commit").granted).toBe(false);
+    expect(emitted.some((e) => e.payload.type === "grant.expired")).toBe(true);
+    cache.dispose();
+  });
+
+  it("a grant past the hard ceiling fails closed and emits grant-ceiling revoke", () => {
+    let clock = 0;
+    const { cache, emitted } = newCache({ ttlMs: 100000, maxLifetimeMs: 1000, now: () => clock });
+    issue(cache, { ttlMs: 100000 });
+    emitted.length = 0;
+    clock = 2000;
+    expect(cache.checkNativeGrant("s1", "git.commit").granted).toBe(false);
+    expect(
+      emitted.some(
+        (e) => e.payload.type === "grant.revoked" && e.payload.revokedReason === "grant-ceiling"
+      )
+    ).toBe(true);
+    cache.dispose();
+  });
+
+  it("revokeSession drops native grants for the session and emits grant.revoked", () => {
+    const { cache, emitted } = newCache();
+    const entry = issue(cache);
+    emitted.length = 0;
+    const count = cache.revokeSession("s1", "session-ended");
+    expect(count).toBeGreaterThanOrEqual(1);
+    expect(cache._peekNative(entry.id)).toBeUndefined();
+    expect(
+      emitted.some(
+        (e) =>
+          e.payload.type === "grant.revoked" &&
+          e.payload.grantId === entry.id &&
+          e.payload.revokedReason === "session-ended"
+      )
+    ).toBe(true);
+    cache.dispose();
+  });
+
+  it("revokeNativeGrant by id is idempotent", () => {
+    const { cache } = newCache();
+    const entry = issue(cache);
+    expect(cache.revokeNativeGrant(entry.id)).toBe(true);
+    expect(cache.revokeNativeGrant(entry.id)).toBe(false);
+    cache.dispose();
+  });
+
+  it("refreshNativeGrant extends the TTL window; a gone grant is a no-op", () => {
+    let clock = 0;
+    const { cache } = newCache({ ttlMs: 1000, maxLifetimeMs: 100000, now: () => clock });
+    const entry = issue(cache, { ttlMs: 1000 });
+    clock = 500;
+    expect(cache.refreshNativeGrant(entry.id)).toBe(true);
+    expect(cache._peekNative(entry.id)?.expiresAt).toBe(1500);
+    cache.revokeNativeGrant(entry.id);
+    expect(cache.refreshNativeGrant(entry.id)).toBe(false);
+    cache.dispose();
+  });
+
+  it("clearSessionState drops native grants without emitting", () => {
+    const { cache, emitted } = newCache();
+    const entry = issue(cache);
+    emitted.length = 0;
+    cache.clearSessionState("s1");
+    expect(cache._peekNative(entry.id)).toBeUndefined();
+    expect(emitted).toHaveLength(0);
+    cache.dispose();
+  });
+
+  it("getActiveNativeGrants snapshots live grants for the session", () => {
+    const { cache } = newCache();
+    const entry = issue(cache);
+    const snap = cache.getActiveNativeGrants("s1");
+    expect(snap).toHaveLength(1);
+    expect(snap[0].id).toBe(entry.id);
+    expect(cache.getActiveNativeGrants("other")).toHaveLength(0);
+    cache.dispose();
+  });
+});
