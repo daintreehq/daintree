@@ -5,6 +5,7 @@ import type {
   McpAuditResult,
   McpAuditStats,
   McpConfirmationDecision,
+  McpGrantActorType,
   McpGrantRecord,
   McpGrantRecordType,
   McpGrantRevokedReason,
@@ -231,6 +232,12 @@ export class AuditService {
     revokedReason?: McpGrantRevokedReason;
     tier?: McpTier;
     previousTier?: McpTier;
+    grantId?: string;
+    maxUses?: number;
+    remainingUses?: number;
+    actorId?: string;
+    actorType?: McpGrantActorType;
+    allowedTools?: string[];
   }): void {
     if (this.readConfig().auditEnabled === false) return;
     this.hydrate();
@@ -247,6 +254,12 @@ export class AuditService {
     if (input.revokedReason !== undefined) record.revokedReason = input.revokedReason;
     if (input.tier !== undefined) record.tier = input.tier;
     if (input.previousTier !== undefined) record.previousTier = input.previousTier;
+    if (input.grantId !== undefined) record.grantId = input.grantId;
+    if (input.maxUses !== undefined) record.maxUses = input.maxUses;
+    if (input.remainingUses !== undefined) record.remainingUses = input.remainingUses;
+    if (input.actorId !== undefined) record.actorId = input.actorId;
+    if (input.actorType !== undefined) record.actorType = input.actorType;
+    if (input.allowedTools !== undefined) record.allowedTools = input.allowedTools;
 
     this.enqueueAndTrim(record);
   }

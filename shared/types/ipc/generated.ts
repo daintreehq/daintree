@@ -666,6 +666,17 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { sessionId: string; toolId: string }];
     result: import("./mcpServer.js").McpIssueGrantResult;
   };
+  "mcp-server:issue-native-grant": {
+    args: [
+      payload: {
+        helpSessionId: string;
+        allowedTools: string[];
+        maxUses?: number | undefined;
+        ttlMs?: number | undefined;
+      },
+    ];
+    result: import("./mcpServer.js").McpIssueNativeGrantResult;
+  };
   "mcp-server:list-active-bearers": {
     args: [];
     result: import("./mcpServer.js").ActiveBearerRecord[];
@@ -681,6 +692,10 @@ export interface GeneratedIpcInvokeMap {
   "mcp-server:reset-denial-counts": {
     args: [payload: { sessionId: string }];
     result: void;
+  };
+  "mcp-server:revoke-native-grant": {
+    args: [payload: { grantId: string }];
+    result: import("./mcpServer.js").McpRevokeNativeGrantResult;
   };
   "mcp-server:revoke-session-grants": {
     args: [payload: { sessionId: string }];

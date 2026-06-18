@@ -624,7 +624,16 @@ export class SessionStore {
     callerWebContentsId: number
   ): {
     tier: McpTier;
-    activeGrants: Array<{ toolId: string; expiresAt: number; ttlMs: number }>;
+    activeGrants: Array<{
+      toolId: string;
+      expiresAt: number;
+      ttlMs: number;
+      kind?: "per-tool" | "native";
+      grantId?: string;
+      allowedTools?: string[];
+      maxUses?: number;
+      remainingUses?: number;
+    }>;
   } | null {
     if (!helpSessionId) return null;
     for (const [transportSessionId, mappedHelpId] of this.sessionHelpIdMap) {
@@ -650,7 +659,48 @@ export class SessionStore {
         .getActiveGrants(transportSessionId)
         .filter((g) => g.expiresAt > now)
         .map((g) => ({ toolId: g.toolId, expiresAt: g.expiresAt, ttlMs: g.ttlMs }));
-      return { tier: this.getTier(transportSessionId), activeGrants };
+      // Native session-scoped automation grants (#10648) are addressed by the
+      // transport sessionId in the cache; merge them into the same snapshot so
+      // the settings surface shows the full grant lifecycle. Lazy-eviction
+      // semantics match the per-tool grants — drop logically-expired entries.
+      const nativeGrants = this.grantCache.getLiveNativeGrants(transportSessionId).map((g) => ({
+        toolId: "*",
+        expiresAt: g.expiresAt,
+        ttlMs: g.ttlMs,
+        kind: "native" as const,
+        grantId: g.id,
+        allowedTools: [...g.allowedTools],
+        maxUses: g.maxUses,
+        remainingUses: g.remainingUses,
+      }));
+      return {
+        tier: this.getTier(transportSessionId),
+        activeGrants: [...activeGrants, ...nativeGrants],
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Resolve the live transport sessionId backing a public help-session id,
+   * caller-pinned. Mirrors {@link getLiveStatusForHelpSession}'s scan: returns
+   * the transport sessionId only when a live transport exists for the help id
+   * AND it is pinned to `callerWebContentsId`, else null. Used by the native
+   * grant issuance path (#10648) so the renderer can approve a grant addressed
+   * by the public help id it already holds, never a transport id it can't see.
+   */
+  resolveLiveTransportForHelpSession(
+    helpSessionId: string,
+    callerWebContentsId: number
+  ): string | null {
+    if (!helpSessionId) return null;
+    for (const [transportSessionId, mappedHelpId] of this.sessionHelpIdMap) {
+      if (mappedHelpId !== helpSessionId) continue;
+      if (this.sessionWebContentsMap.get(transportSessionId) !== callerWebContentsId) continue;
+      if (!this.sessions.has(transportSessionId) && !this.httpSessions.has(transportSessionId)) {
+        continue;
+      }
+      return transportSessionId;
     }
     return null;
   }

@@ -372,9 +372,30 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // action never consults the grant cache — grants are an additive layer,
     // never required when the floor already grants access.
     let grantIssuedAt: number | undefined;
+    // Set when a native session-scoped automation grant (#10648) authorized
+    // this call. Captured here so the post-dispatch path can refresh the
+    // grant's TTL window, and so the `danger: "confirm"` modal is bypassed —
+    // a native grant is an explicit user approval of the tool's scope.
+    let nativeGrantId: string | undefined;
     if (!isTierPermitted(tier, actionId, fullToolSurface)) {
       const grant = sessionStore.grantCache.check(sessionId, actionId);
-      if (!grant.granted) {
+      const native = grant.granted
+        ? null
+        : sessionStore.grantCache.peekNativeGrant(sessionId, actionId);
+      if (grant.granted) {
+        // Grant authorised the call. Capture the `issuedAt` token so the
+        // post-dispatch refresh can verify the entry wasn't revoked and
+        // re-issued under us (race guard, lesson #2243).
+        grantIssuedAt = grant.issuedAt;
+      } else if (native?.granted) {
+        // A native automation grant covers this tool and has a use left. It
+        // overrides the static tier floor only because the user explicitly
+        // approved this tool's scope — the grant's allowlist gates which tools
+        // `peekNativeGrant` authorizes. The use is NOT charged here: it is
+        // consumed only after the rate-limit gate below, so a rate-limited
+        // call (which never dispatches) can't burn a use.
+        nativeGrantId = native.grantId;
+      } else {
         // Increment first, then ask the cache whether to suppress. The
         // post-increment count reflects "this denial counted"; the cache's
         // threshold compares against that. With threshold=2 the 1st and
@@ -431,10 +452,6 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           message: `action '${actionId}' is not permitted for the '${tier}' tier.`,
         });
       }
-      // Grant authorised the call. Capture the `issuedAt` token so the
-      // post-dispatch refresh can verify the entry wasn't revoked and
-      // re-issued under us (race guard, lesson #2243).
-      grantIssuedAt = grant.issuedAt;
     }
 
     // Runaway-loop guard (#8468): charge one token against the
@@ -464,6 +481,22 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         message: `Rate limit exceeded for '${actionId}'. Retry after ${rateLimit.retryAfter}s.`,
         details: { retryAfter: rateLimit.retryAfter },
       });
+    }
+
+    // Charge the native automation grant's use now that the call has cleared
+    // the rate limiter and is committed to proceeding (#10648). Doing it here —
+    // not at the peek above — means a rate-limited call never burns a use. The
+    // peek→rate-limit→consume path is synchronous (no `await`), so the grant
+    // can't be revoked between peek and consume; a `false` return is purely
+    // defensive and fails closed.
+    if (nativeGrantId !== undefined) {
+      const consumed = sessionStore.grantCache.consumeNativeGrantUse(nativeGrantId, actionId);
+      if (!consumed) {
+        return buildToolError({
+          code: TIER_NOT_PERMITTED_CODE,
+          message: `action '${actionId}' is not permitted for the '${tier}' tier.`,
+        });
+      }
     }
 
     // Idempotency dedup for the creation-tool allowlist. Same-moment duplicates
@@ -567,7 +600,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     let confirmationDecision:
       | import("../../../shared/types/ipc/mcpServer.js").McpConfirmationDecision
       | undefined;
-    let dispatchConfirmed = false;
+    // A native automation grant is an explicit user approval of the tool's
+    // scope, so it authorizes a `danger: "confirm"` dispatch without surfacing
+    // a per-call modal — exactly as if the user had just approved it.
+    let dispatchConfirmed = nativeGrantId !== undefined;
     // Tracks whether a live "tool-call-started" push fired for this dispatch so
     // the shared `finally` only emits the matching "settled" push for calls the
     // activity strip is actually showing (#9759). Pre-dispatch rejections never
@@ -623,8 +659,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             // can run up to 2 hours on external sessions (longer than the
             // 15-min grant window), so this is the only block that prevents
             // the grant from silently aging out during a long wait (#8442).
-            if (grantIssuedAt !== undefined) {
-              sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
+            if (grantIssuedAt !== undefined || nativeGrantId !== undefined) {
+              if (grantIssuedAt !== undefined) {
+                sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
+              }
+              if (nativeGrantId !== undefined) {
+                sessionStore.grantCache.refreshNativeGrant(nativeGrantId);
+              }
               if (sessionStore.sessions.has(sessionId)) {
                 sessionStore.resetIdleTimer(sessionId);
               } else if (sessionStore.httpSessions.has(sessionId)) {
@@ -840,8 +881,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // grant was issued (#8442). The `grantIssuedAt` token guards
           // against a revoke-and-reissue race (#2243): if the entry was
           // replaced mid-dispatch, `refresh` is a silent no-op.
-          if (grantIssuedAt !== undefined) {
-            sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
+          if (grantIssuedAt !== undefined || nativeGrantId !== undefined) {
+            if (grantIssuedAt !== undefined) {
+              sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
+            }
+            if (nativeGrantId !== undefined) {
+              sessionStore.grantCache.refreshNativeGrant(nativeGrantId);
+            }
             if (sessionStore.sessions.has(sessionId)) {
               sessionStore.resetIdleTimer(sessionId);
             } else if (sessionStore.httpSessions.has(sessionId)) {

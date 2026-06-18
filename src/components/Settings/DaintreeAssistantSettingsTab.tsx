@@ -39,6 +39,7 @@ import { useHelpPanelStore } from "@/store/helpPanelStore";
 import type {
   HelpAssistantSettings,
   HelpAssistantTier,
+  HelpSessionActiveGrant,
   McpAuditStats,
   McpLogRecord,
   AssistantTurnRecord,
@@ -939,6 +940,135 @@ function GrantCountdown({ expiresAt }: { expiresAt: number }) {
   );
 }
 
+// Native session-scoped automation grants (#10648): approve a bounded set of
+// tools for a limited number of uses, then inspect and revoke them. Distinct
+// from the per-tool "Approve once" grants above — these authorize follow-up
+// automation across the session without a per-call modal. The grant lifecycle
+// (issue/use/exhaust/expire/revoke) is mirrored in the audit log below.
+function NativeGrantsSection({
+  helpSessionId,
+  grants,
+}: {
+  helpSessionId: string;
+  grants: HelpSessionActiveGrant[];
+}) {
+  const [toolsInput, setToolsInput] = useState("");
+  const [usesInput, setUsesInput] = useState("5");
+  const [issuing, setIssuing] = useState(false);
+  const [issueError, setIssueError] = useState<string | null>(null);
+
+  const approve = useCallback(() => {
+    const allowedTools = toolsInput
+      .split(/[\s,]+/)
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0);
+    if (allowedTools.length === 0) {
+      setIssueError("Enter at least one tool id");
+      return;
+    }
+    const maxUses = Number.parseInt(usesInput, 10);
+    setIssuing(true);
+    setIssueError(null);
+    safeFireAndForget(
+      window.electron.mcpServer
+        .issueNativeGrant({
+          helpSessionId,
+          allowedTools,
+          maxUses: Number.isFinite(maxUses) ? maxUses : undefined,
+        })
+        .then(() => {
+          setToolsInput("");
+        })
+        .catch((err: unknown) => {
+          setIssueError(formatErrorMessage(err, "Couldn't approve grant"));
+        })
+        .finally(() => {
+          setIssuing(false);
+        }),
+      { context: "DaintreeAssistant:issueNativeGrant" }
+    );
+  }, [helpSessionId, toolsInput, usesInput]);
+
+  const revoke = useCallback((grantId: string) => {
+    safeFireAndForget(
+      window.electron.mcpServer
+        .revokeNativeGrant({ grantId })
+        .then(() => undefined)
+        .catch((err: unknown) => {
+          logError("DaintreeAssistant: revokeNativeGrant failed", err);
+        }),
+      { context: "DaintreeAssistant:revokeNativeGrant" }
+    );
+  }, []);
+
+  return (
+    <div className="space-y-2 pt-1">
+      <div className="text-[10px] uppercase tracking-wide text-daintree-text/50 font-mono">
+        Automation grants{grants.length > 0 ? ` (${grants.length})` : ""}
+      </div>
+      {grants.length > 0 ? (
+        <div className="space-y-1.5">
+          {grants.map((grant) => (
+            <div
+              key={grant.grantId}
+              className="rounded-[var(--radius-sm)] border border-daintree-border bg-daintree-bg/40 px-2 py-1.5 space-y-1"
+            >
+              <div className="flex items-center justify-between gap-2 text-[11px]">
+                <span className="font-mono text-daintree-text/70 truncate">
+                  {(grant.allowedTools ?? []).join(", ") || "no tools"}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => grant.grantId && revoke(grant.grantId)}
+                  className="shrink-0 text-[10px] text-daintree-text/60 hover:text-status-danger transition-colors"
+                >
+                  Revoke
+                </button>
+              </div>
+              <div className="flex items-center justify-between gap-2 text-[10px] text-daintree-text/50">
+                <span className="tabular-nums">
+                  {grant.remainingUses ?? 0} of {grant.maxUses ?? 0} uses left
+                </span>
+                <GrantCountdown expiresAt={grant.expiresAt} />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="text-[11px] text-daintree-text/50">No automation grants active</div>
+      )}
+
+      <div className="flex items-end gap-1.5 pt-0.5">
+        <input
+          type="text"
+          value={toolsInput}
+          onChange={(e) => setToolsInput(e.target.value)}
+          placeholder="git.commit terminal.new"
+          className="flex-1 min-w-0 rounded-[var(--radius-sm)] border border-daintree-border bg-daintree-bg px-2 py-1 text-[11px] font-mono text-daintree-text placeholder:text-daintree-text/30 focus-visible:outline-2 focus-visible:outline-daintree-accent"
+        />
+        <input
+          type="number"
+          min={1}
+          max={100}
+          value={usesInput}
+          onChange={(e) => setUsesInput(e.target.value)}
+          aria-label="Maximum uses"
+          className="w-12 rounded-[var(--radius-sm)] border border-daintree-border bg-daintree-bg px-1.5 py-1 text-[11px] tabular-nums text-daintree-text focus-visible:outline-2 focus-visible:outline-daintree-accent"
+        />
+        <button
+          type="button"
+          onClick={approve}
+          disabled={issuing}
+          className="shrink-0 rounded-[var(--radius-sm)] border border-daintree-border bg-overlay-subtle px-2 py-1 text-[11px] text-daintree-text/80 hover:text-daintree-text disabled:opacity-50 transition-colors"
+        >
+          Approve grant
+        </button>
+      </div>
+      {issueError && <div className="text-[10px] text-status-danger">{issueError}</div>}
+    </div>
+  );
+}
+
 interface SessionLiveStatusCardProps {
   configuredTier: HelpAssistantTier;
 }
@@ -953,6 +1083,8 @@ interface SessionLiveStatusCardProps {
 function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardProps) {
   const sessionId = useHelpPanelStore((s) => s.sessionId);
   const { connected, tier, activeGrants } = useHelpSessionLiveStatus(sessionId);
+  const perToolGrants = activeGrants.filter((g) => g.kind !== "native");
+  const nativeGrants = activeGrants.filter((g) => g.kind === "native");
   // Three-way relation to the configured default: a renderer-approved elevation
   // raises the live tier above it, but a session can also sit *below* it (e.g.
   // a per-session choice or a decayed elevation) — both must read truthfully,
@@ -994,13 +1126,13 @@ function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardProps) {
             <span className="text-daintree-text">{TIER_SHORT_LABEL[tier].toLowerCase()}</span>
             {tierComparisonCopy}
           </div>
-          {activeGrants.length > 0 ? (
+          {perToolGrants.length > 0 ? (
             <div className="space-y-1">
               <div className="text-[10px] uppercase tracking-wide text-daintree-text/50 font-mono">
-                Active grants ({activeGrants.length})
+                Active grants ({perToolGrants.length})
               </div>
               <div className="space-y-1">
-                {activeGrants.map((grant) => (
+                {perToolGrants.map((grant) => (
                   <div
                     key={grant.toolId}
                     className="flex items-center justify-between gap-2 text-[11px]"
@@ -1014,6 +1146,7 @@ function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardProps) {
           ) : (
             <div className="text-[11px] text-daintree-text/50">No per-tool grants active</div>
           )}
+          {sessionId && <NativeGrantsSection helpSessionId={sessionId} grants={nativeGrants} />}
         </>
       ) : (
         <div className="text-xs text-daintree-text/60 leading-relaxed">

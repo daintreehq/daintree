@@ -2021,14 +2021,34 @@ export interface HelpAssistantSettings {
   idleHibernateMinutes: HelpAssistantIdleHibernateMinutes;
 }
 
-/** One per-tool grant currently active for the pinned help session. */
+/**
+ * One grant currently active for the pinned help session. Covers both the
+ * per-tool "Approve once" grants (`kind: "per-tool"`) and the native
+ * session-scoped automation grants (`kind: "native"`, #10648). Native grants
+ * carry a multi-tool allowlist and a use ceiling; the native-only fields are
+ * absent on per-tool grants.
+ */
 export interface HelpSessionActiveGrant {
-  /** Dotted `BuiltInActionId` the grant authorizes (e.g. `terminal.kill`). */
+  /**
+   * For per-tool grants, the dotted `BuiltInActionId` authorized (e.g.
+   * `terminal.kill`). For native grants, `"*"` — the authorized tools are
+   * listed in {@link allowedTools}.
+   */
   toolId: string;
   /** Absolute epoch millis when the grant expires without refresh. */
   expiresAt: number;
   /** TTL the grant was minted with, in milliseconds. */
   ttlMs: number;
+  /** Discriminates the grant kind. Defaults to `"per-tool"` when absent. */
+  kind?: "per-tool" | "native";
+  /** Stable UUID of a native grant — the revoke target. Native grants only. */
+  grantId?: string;
+  /** Dotted `BuiltInActionId`s a native grant authorizes. Native grants only. */
+  allowedTools?: string[];
+  /** Use ceiling a native grant was minted with. Native grants only. */
+  maxUses?: number;
+  /** Uses left on a native grant. Native grants only. */
+  remainingUses?: number;
 }
 
 /**
