@@ -1375,6 +1375,32 @@ export interface GeneratedIpcInvokeMap {
         agentPresetId?: string | undefined;
         agentPresetColor?: string | undefined;
         originalAgentPresetId?: string | undefined;
+        actionContext?:
+          | {
+              projectId?: string | undefined;
+              projectName?: string | undefined;
+              projectPath?: string | undefined;
+              activeWorktreeId?: string | undefined;
+              activeWorktreeName?: string | undefined;
+              activeWorktreePath?: string | undefined;
+              activeWorktreeBranch?: string | undefined;
+              activeWorktreeIsMain?: boolean | undefined;
+              focusedWorktreeId?: string | undefined;
+              focusedTerminalId?: string | undefined;
+              focusedTerminalKind?: string | undefined;
+              focusedTerminalType?: string | undefined;
+              focusedTerminalTitle?: string | undefined;
+              isSettingsOpen?: boolean | undefined;
+              dispatchSource?:
+                | "user"
+                | "menu"
+                | "keybinding"
+                | "agent"
+                | "context-menu"
+                | "plugin"
+                | undefined;
+            }
+          | undefined;
       },
     ];
     result: string;

@@ -128,3 +128,61 @@ describe("addPanel titleMode propagation (#10439)", () => {
     expect(panel?.titleMode).toBeUndefined();
   });
 });
+
+describe("addPanel actionContext propagation (#10647)", () => {
+  beforeEach(async () => {
+    const { reset } = usePanelStore.getState();
+    await reset();
+
+    const { terminalClient } = (await import("@/clients")) as unknown as {
+      terminalClient: { spawn: ReturnType<typeof vi.fn> };
+    };
+    terminalClient.spawn.mockReset();
+    terminalClient.spawn.mockImplementation(async ({ id }: { id?: string }) => id ?? "spawn-id");
+  });
+
+  it("threads a caller-supplied launch ActionContext through to terminal.spawn", async () => {
+    const { addPanel } = usePanelStore.getState();
+    const launchContext = {
+      projectId: "p1",
+      activeWorktreeId: "wt-7",
+      focusedTerminalId: "term-3",
+    };
+
+    await addPanel({
+      kind: "terminal",
+      launchAgentId: "daintree-assistant",
+      command: "daintree-assistant",
+      requestedId: "assistant-1",
+      cwd: "/",
+      bypassLimits: true,
+      actionContext: launchContext,
+    });
+
+    const { terminalClient } = (await import("@/clients")) as unknown as {
+      terminalClient: { spawn: ReturnType<typeof vi.fn> };
+    };
+    expect(terminalClient.spawn).toHaveBeenCalledWith(
+      expect.objectContaining({ actionContext: launchContext })
+    );
+  });
+
+  it("passes actionContext undefined when the caller supplies none", async () => {
+    const { addPanel } = usePanelStore.getState();
+
+    await addPanel({
+      kind: "terminal",
+      launchAgentId: "daintree-assistant",
+      command: "daintree-assistant",
+      requestedId: "assistant-2",
+      cwd: "/",
+      bypassLimits: true,
+    });
+
+    const { terminalClient } = (await import("@/clients")) as unknown as {
+      terminalClient: { spawn: ReturnType<typeof vi.fn> };
+    };
+    const spawnArg = terminalClient.spawn.mock.calls[0]![0] as { actionContext?: unknown };
+    expect(spawnArg.actionContext).toBeUndefined();
+  });
+});

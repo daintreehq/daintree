@@ -36,6 +36,8 @@ import type {
   HelpSessionWebContentsResolver,
   HelpSessionActionContextResolver,
   HelpSessionIdResolver,
+  AssistantPaneWebContentsResolver,
+  AssistantPaneActionContextResolver,
 } from "./mcp-server/shared.js";
 import type { ActionManifestEntry } from "../../shared/types/actions.js";
 import { events } from "./events.js";
@@ -263,6 +265,14 @@ export class McpServerService {
 
   setHelpSessionIdResolver(resolver: HelpSessionIdResolver | null): void {
     this.httpLifecycle.setHelpSessionIdResolver(resolver);
+  }
+
+  setAssistantPaneWebContentsResolver(resolver: AssistantPaneWebContentsResolver | null): void {
+    this.httpLifecycle.setAssistantPaneWebContentsResolver(resolver);
+  }
+
+  setAssistantPaneActionContextResolver(resolver: AssistantPaneActionContextResolver | null): void {
+    this.httpLifecycle.setAssistantPaneActionContextResolver(resolver);
   }
 
   private emitStatusChange(): void {

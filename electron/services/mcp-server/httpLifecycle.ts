@@ -17,6 +17,8 @@ import type {
   HelpSessionWebContentsResolver,
   HelpSessionActionContextResolver,
   HelpSessionIdResolver,
+  AssistantPaneWebContentsResolver,
+  AssistantPaneActionContextResolver,
   McpTier,
 } from "./shared.js";
 import type {
@@ -189,6 +191,8 @@ export class HttpLifecycle {
   private helpSessionWebContentsResolver: HelpSessionWebContentsResolver | null = null;
   private helpSessionActionContextResolver: HelpSessionActionContextResolver | null = null;
   private helpSessionIdResolver: HelpSessionIdResolver | null = null;
+  private assistantPaneWebContentsResolver: AssistantPaneWebContentsResolver | null = null;
+  private assistantPaneActionContextResolver: AssistantPaneActionContextResolver | null = null;
   private lastError: string | null = null;
   private intentionalStop = false;
   private restartAttempts = 0;
@@ -270,32 +274,44 @@ export class HttpLifecycle {
     this.helpSessionIdResolver = resolver;
   }
 
-  /**
-   * Parses a Bearer header and asks the help-session resolver for the
-   * pinned WebContents id. Returns null for non-help bearers (api-key /
-   * pane tokens) so external sessions keep the existing focused-window
-   * fallback in `buildSessionServerDeps`.
-   */
-  private resolvePinnedWebContentsId(authHeader: string): number | null {
-    if (!this.helpSessionWebContentsResolver) return null;
-    const token = extractBearerToken(authHeader);
-    if (!token) return null;
-    return this.helpSessionWebContentsResolver(token);
+  setAssistantPaneWebContentsResolver(resolver: AssistantPaneWebContentsResolver | null): void {
+    this.assistantPaneWebContentsResolver = resolver;
+  }
+
+  setAssistantPaneActionContextResolver(resolver: AssistantPaneActionContextResolver | null): void {
+    this.assistantPaneActionContextResolver = resolver;
   }
 
   /**
-   * Parses a Bearer header and asks the help-session resolver for the
-   * `ActionContext` snapshot bound to it at provision time (#8317). Returns
-   * null for non-help bearers so external/api-key sessions keep their live
-   * focused-window context in `buildSessionServerDeps`.
+   * Parses a Bearer header and asks the help-session resolver — then the
+   * assistant-pane resolver (#10647) — for the pinned WebContents id. Returns
+   * null for non-pinned bearers (api-key / generic pane tokens) so external
+   * sessions keep the existing focused-window fallback in
+   * `buildSessionServerDeps`.
+   */
+  private resolvePinnedWebContentsId(authHeader: string): number | null {
+    const token = extractBearerToken(authHeader);
+    if (!token) return null;
+    const fromHelp = this.helpSessionWebContentsResolver?.(token) ?? null;
+    if (fromHelp !== null) return fromHelp;
+    return this.assistantPaneWebContentsResolver?.(token) ?? null;
+  }
+
+  /**
+   * Parses a Bearer header and asks the help-session resolver — then the
+   * assistant-pane resolver (#10647) — for the `ActionContext` snapshot bound
+   * to it at launch time (#8317). Returns null for non-pinned bearers so
+   * external/api-key/generic-pane sessions keep their live focused-window
+   * context in `buildSessionServerDeps`.
    */
   private resolveActionContext(
     authHeader: string
   ): import("../../../shared/types/actions.js").ActionContext | null {
-    if (!this.helpSessionActionContextResolver) return null;
     const token = extractBearerToken(authHeader);
     if (!token) return null;
-    return this.helpSessionActionContextResolver(token);
+    const fromHelp = this.helpSessionActionContextResolver?.(token) ?? null;
+    if (fromHelp !== null) return fromHelp;
+    return this.assistantPaneActionContextResolver?.(token) ?? null;
   }
 
   /**

@@ -688,6 +688,10 @@ export const createAddPanelActions = (
           agentPresetId: options.agentPresetId,
           agentPresetColor: options.agentPresetColor,
           originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
+          // Launch-time context for the daintree-assistant pinned session
+          // (#10647). Threaded straight through; the main-process handler only
+          // consumes it for that agent and ignores it otherwise.
+          actionContext: options.actionContext,
         });
 
         // Promote spawnStatus to "ready" once the PTY is live. If the panel was
