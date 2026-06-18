@@ -766,18 +766,17 @@ const AssistantHostShutdownReasonSchema = z.enum(["hibernate", "revoke", "error"
 type ExactlyEqual<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 type AssertTrue<T extends true> = T;
-type _AuditResultParity = AssertTrue<
-  ExactlyEqual<z.infer<typeof McpAuditResultSchema>, McpAuditResult>
->;
-type _AuditSeverityParity = AssertTrue<
-  ExactlyEqual<z.infer<typeof McpAuditSeveritySchema>, McpAuditSeverity>
->;
-type _ConfirmationDecisionParity = AssertTrue<
-  ExactlyEqual<z.infer<typeof McpConfirmationDecisionSchema>, McpConfirmationDecision>
->;
-type _TurnOutcomeParity = AssertTrue<
-  ExactlyEqual<z.infer<typeof TurnOutcomeClassSchema>, TurnOutcomeClass>
->;
+/**
+ * Exported (so it counts as used under `noUnusedLocals`) purely to host the
+ * parity assertions — each tuple member fails to compile if the matching Zod
+ * enum drifts from its `mcpServer.ts` union. Never imported at runtime.
+ */
+export type AssistantHostVocabularyParity = [
+  AssertTrue<ExactlyEqual<z.infer<typeof McpAuditResultSchema>, McpAuditResult>>,
+  AssertTrue<ExactlyEqual<z.infer<typeof McpAuditSeveritySchema>, McpAuditSeverity>>,
+  AssertTrue<ExactlyEqual<z.infer<typeof McpConfirmationDecisionSchema>, McpConfirmationDecision>>,
+  AssertTrue<ExactlyEqual<z.infer<typeof TurnOutcomeClassSchema>, TurnOutcomeClass>>,
+];
 
 /**
  * Identifier string carrying at least one non-whitespace character. A blank or
