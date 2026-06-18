@@ -17,6 +17,7 @@ import {
   buildAnnotations,
   extractBearerToken,
   isAuthorized,
+  isTierPermitted,
   parseToolArguments,
   precomputeApiKeyBearerHash,
   resolveTokenTier,
@@ -383,5 +384,75 @@ describe("buildAnnotations", () => {
   it("restricted entry bypassing upstream gate → destructiveHint: false (not confirm)", () => {
     const entry = makeEntry({ kind: "command", danger: "restricted" });
     expect(buildAnnotations(entry).destructiveHint).toBe(false);
+  });
+});
+
+// Policy guard for the Daintree Assistant CLI's MCP tier (#10640). The
+// assistant is a headless conductor and runs at the `action` tier (the
+// help-session `DEFAULT_TIER`), NOT the `external` tier an api-key bearer
+// falls into by default. The distinction is load-bearing: `external` auto-
+// permits irreversible mutations (git.push, worktree.delete) subject only to
+// the confirm gate, whereas `action` leaves them TIER_NOT_PERMITTED so they
+// require a human-approved scoped grant to run at all. These assertions lock
+// that invariant against allowlist drift (e.g. someone promoting git.push into
+// the action tier). They test the runtime gate `isTierPermitted`, not the raw
+// allowlist arrays, so they fail closed if the tier wiring itself regresses.
+describe("Daintree Assistant tier policy (#10640)", () => {
+  // The conductor's working tool set — orchestration, terminal driving, branch
+  // setup, recipes, and reads — all resolve under `action`.
+  const ASSISTANT_REQUIRED_TOOLS = [
+    "agent.launch",
+    "agent.terminal",
+    "agent.getState",
+    "workflow.startWorkOnIssue",
+    "terminal.new",
+    "terminal.sendCommand",
+    "terminal.getOutput",
+    "terminal.getStatus",
+    "terminal.waitUntilIdle",
+    "recipe.run",
+    "worktree.createWithRecipe",
+    "worktree.setActive",
+    "worktree.list",
+    "git.getProjectPulse",
+    "files.search",
+    "copyTree.generate",
+  ];
+
+  // Irreversible / shared-state mutations the conductor must NOT be able to
+  // fire unattended at its default tier — they require explicit elevation.
+  const HIGH_BLAST_RADIUS_TOOLS = [
+    "git.commit",
+    "git.push",
+    "git.snapshotRevert",
+    "git.snapshotDelete",
+    "worktree.delete",
+    "forge.assignIssue",
+  ];
+
+  it.each(ASSISTANT_REQUIRED_TOOLS)(
+    "permits the assistant's required tool %s at the action tier",
+    (toolId) => {
+      expect(isTierPermitted("action", toolId, false)).toBe(true);
+    }
+  );
+
+  it.each(HIGH_BLAST_RADIUS_TOOLS)(
+    "withholds high-blast-radius tool %s at the action tier (requires a grant)",
+    (toolId) => {
+      expect(isTierPermitted("action", toolId, false)).toBe(false);
+      // Sanity check: the tool exists in the model and IS reachable one tier up,
+      // so the `false` above is a real tier boundary, not a typo'd action id.
+      expect(isTierPermitted("system", toolId, false)).toBe(true);
+    }
+  );
+
+  it("auto-permits those same mutations under the external tier — the default we are moving the assistant off of", () => {
+    // Documents the security contrast that motivates pinning the assistant to
+    // `action`: on `external` (the api-key fallback) these run subject only to
+    // the confirm gate, with no tier floor in front of them.
+    for (const toolId of ["git.push", "git.commit", "worktree.delete"]) {
+      expect(isTierPermitted("external", toolId, false)).toBe(true);
+    }
   });
 });

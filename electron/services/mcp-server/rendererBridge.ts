@@ -21,6 +21,20 @@ export class SessionBindingError extends Error {
   }
 }
 
+// Thrown when an unpinned dispatch can't reach any live renderer to route a
+// tool call through. For confirm-gated tools this is the "no confirmation
+// channel reachable" case: a headless conductor with no Daintree window open
+// has nowhere to surface the native ConfirmDialog. The caller reclassifies it
+// to CONFIRMATION_REQUIRED for confirm-gated tools (#10640) so the assistant
+// learns it needs human approval it can't currently obtain, rather than seeing
+// an opaque, retriable EXECUTION_ERROR.
+export class RendererBridgeUnavailableError extends Error {
+  constructor() {
+    super("MCP renderer bridge unavailable");
+    this.name = "RendererBridgeUnavailableError";
+  }
+}
+
 export function createRendererBridge(
   pendingManifests: Map<string, PendingRequest<ActionManifestEntry[]>>,
   pendingDispatches: Map<string, PendingRequest<DispatchEnvelope>>,
@@ -75,7 +89,7 @@ export function createRendererBridge(
       return fallback;
     }
 
-    throw new Error("MCP renderer bridge unavailable");
+    throw new RendererBridgeUnavailableError();
   }
 
   /**
