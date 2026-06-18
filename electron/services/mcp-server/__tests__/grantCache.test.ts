@@ -594,13 +594,24 @@ describe("GrantCache native grants (#10648)", () => {
     cache.dispose();
   });
 
-  it("checkNativeGrant authorizes an allowed tool, consumes one use, emits grant.used", () => {
+  it("peekNativeGrant authorizes an allowed tool WITHOUT consuming a use", () => {
     const { cache, emitted } = newCache();
     const entry = issue(cache);
     emitted.length = 0;
-    const result = cache.checkNativeGrant("s1", "git.commit");
+    const result = cache.peekNativeGrant("s1", "git.commit");
     expect(result.granted).toBe(true);
     if (result.granted) expect(result.grantId).toBe(entry.id);
+    // Peek must not decrement or emit — the use is charged by consume.
+    expect(cache._peekNative(entry.id)?.remainingUses).toBe(3);
+    expect(emitted).toHaveLength(0);
+    cache.dispose();
+  });
+
+  it("consumeNativeGrantUse charges one use and emits grant.used", () => {
+    const { cache, emitted } = newCache();
+    const entry = issue(cache);
+    emitted.length = 0;
+    expect(cache.consumeNativeGrantUse(entry.id, "git.commit")).toBe(true);
     expect(cache._peekNative(entry.id)?.remainingUses).toBe(2);
     expect(emitted).toHaveLength(1);
     expect(emitted[0].payload).toMatchObject({
@@ -612,22 +623,21 @@ describe("GrantCache native grants (#10648)", () => {
     cache.dispose();
   });
 
-  it("denies a tool outside the allowlist without consuming a use", () => {
+  it("peekNativeGrant denies a tool outside the allowlist", () => {
     const { cache, emitted } = newCache();
     const entry = issue(cache, { allowedTools: ["git.commit"] });
     emitted.length = 0;
-    expect(cache.checkNativeGrant("s1", "git.push").granted).toBe(false);
+    expect(cache.peekNativeGrant("s1", "git.push").granted).toBe(false);
     expect(cache._peekNative(entry.id)?.remainingUses).toBe(3);
     expect(emitted).toHaveLength(0);
     cache.dispose();
   });
 
-  it("a maxUses:1 grant exhausts after one use and fails closed on the second", () => {
+  it("a maxUses:1 grant exhausts after one consumed use and fails closed on the second", () => {
     const { cache, emitted } = newCache();
     const entry = issue(cache, { maxUses: 1 });
     emitted.length = 0;
-    const first = cache.checkNativeGrant("s1", "git.commit");
-    expect(first.granted).toBe(true);
+    expect(cache.consumeNativeGrantUse(entry.id, "git.commit")).toBe(true);
     expect(emitted).toHaveLength(1);
     expect(emitted[0].payload).toMatchObject({
       type: "grant.exhausted",
@@ -635,34 +645,58 @@ describe("GrantCache native grants (#10648)", () => {
       remainingUses: 0,
     });
     expect(cache._peekNative(entry.id)).toBeUndefined();
-    // Second concurrent-style call sees the grant gone.
-    expect(cache.checkNativeGrant("s1", "git.commit").granted).toBe(false);
+    // Grant is gone — a subsequent peek or consume fails closed.
+    expect(cache.peekNativeGrant("s1", "git.commit").granted).toBe(false);
+    expect(cache.consumeNativeGrantUse(entry.id, "git.commit")).toBe(false);
     cache.dispose();
   });
 
-  it("a grant past its TTL fails closed and emits grant.expired", () => {
+  it("a grant past its TTL fails closed (peek) and emits grant.expired", () => {
     let clock = 0;
     const { cache, emitted } = newCache({ ttlMs: 1000, maxLifetimeMs: 100000, now: () => clock });
     issue(cache, { ttlMs: 1000 });
     emitted.length = 0;
     clock = 2000;
-    expect(cache.checkNativeGrant("s1", "git.commit").granted).toBe(false);
+    expect(cache.peekNativeGrant("s1", "git.commit").granted).toBe(false);
     expect(emitted.some((e) => e.payload.type === "grant.expired")).toBe(true);
     cache.dispose();
   });
 
-  it("a grant past the hard ceiling fails closed and emits grant-ceiling revoke", () => {
+  it("consumeNativeGrantUse fails closed when the grant aged past TTL since the peek", () => {
+    let clock = 0;
+    const { cache } = newCache({ ttlMs: 1000, maxLifetimeMs: 100000, now: () => clock });
+    const entry = issue(cache, { ttlMs: 1000 });
+    clock = 2000;
+    expect(cache.consumeNativeGrantUse(entry.id, "git.commit")).toBe(false);
+    expect(cache._peekNative(entry.id)).toBeUndefined();
+    cache.dispose();
+  });
+
+  it("a grant past the hard ceiling fails closed (peek) and emits grant-ceiling revoke", () => {
     let clock = 0;
     const { cache, emitted } = newCache({ ttlMs: 100000, maxLifetimeMs: 1000, now: () => clock });
     issue(cache, { ttlMs: 100000 });
     emitted.length = 0;
     clock = 2000;
-    expect(cache.checkNativeGrant("s1", "git.commit").granted).toBe(false);
+    expect(cache.peekNativeGrant("s1", "git.commit").granted).toBe(false);
     expect(
       emitted.some(
         (e) => e.payload.type === "grant.revoked" && e.payload.revokedReason === "grant-ceiling"
       )
     ).toBe(true);
+    cache.dispose();
+  });
+
+  it("getLiveNativeGrants excludes a grant refreshed past the hard ceiling", () => {
+    let clock = 0;
+    const { cache } = newCache({ ttlMs: 1000, maxLifetimeMs: 5000, now: () => clock });
+    const entry = issue(cache, { ttlMs: 1000 });
+    // Keep refreshing the TTL so `expiresAt` stays in the future, but advance
+    // past the hard ceiling — the live snapshot must drop it.
+    clock = 4000;
+    cache.refreshNativeGrant(entry.id); // expiresAt -> 5000
+    clock = 6000; // past issuedAt + maxLifetimeMs (5000), expiresAt (5000) also passed
+    expect(cache.getLiveNativeGrants("s1")).toHaveLength(0);
     cache.dispose();
   });
 

@@ -663,19 +663,16 @@ export class SessionStore {
       // transport sessionId in the cache; merge them into the same snapshot so
       // the settings surface shows the full grant lifecycle. Lazy-eviction
       // semantics match the per-tool grants — drop logically-expired entries.
-      const nativeGrants = this.grantCache
-        .getActiveNativeGrants(transportSessionId)
-        .filter((g) => g.expiresAt > now && g.remainingUses > 0)
-        .map((g) => ({
-          toolId: "*",
-          expiresAt: g.expiresAt,
-          ttlMs: g.ttlMs,
-          kind: "native" as const,
-          grantId: g.id,
-          allowedTools: [...g.allowedTools],
-          maxUses: g.maxUses,
-          remainingUses: g.remainingUses,
-        }));
+      const nativeGrants = this.grantCache.getLiveNativeGrants(transportSessionId).map((g) => ({
+        toolId: "*",
+        expiresAt: g.expiresAt,
+        ttlMs: g.ttlMs,
+        kind: "native" as const,
+        grantId: g.id,
+        allowedTools: [...g.allowedTools],
+        maxUses: g.maxUses,
+        remainingUses: g.remainingUses,
+      }));
       return {
         tier: this.getTier(transportSessionId),
         activeGrants: [...activeGrants, ...nativeGrants],

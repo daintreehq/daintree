@@ -2509,6 +2509,38 @@ describe("CallTool rate limiting (handler integration)", () => {
     expect(dispatchAction).not.toHaveBeenCalled();
     sessionStore.grantCache.dispose();
   });
+
+  it("a rate-limited native-grant call does NOT consume a use (#10648)", async () => {
+    // The native grant authorizes worktree.delete, but the rate limiter
+    // rejects. The use must survive — a call that never dispatched can't burn
+    // a grant use (regression guard for the peek/consume split).
+    const sessionStore = fakeSessionStore("workbench");
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "rl-native",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 1,
+    });
+    (sessionStore.consumeRateLimitToken as ReturnType<typeof vi.fn>).mockReturnValue({
+      allowed: false,
+      retryAfter: 4,
+    });
+    const dispatchAction = vi.fn();
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("rl-native", deps);
+
+    const result = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: { worktreeId: "w1" },
+    })) as { content: unknown; isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(parseToolErrorPayload(result).code).toBe(MCP_RATE_LIMITED_CODE);
+    expect(dispatchAction).not.toHaveBeenCalled();
+    expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(1);
+    sessionStore.grantCache.dispose();
+  });
 });
 
 describe("MCP_DEDUP_ALLOWLIST widening (#8468)", () => {

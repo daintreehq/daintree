@@ -422,20 +422,18 @@ export class GrantCache {
   }
 
   /**
-   * Authorize `toolId` for the session under a live native grant, consuming
-   * one use. Returns the authorizing grant's id on success. The use decrement
-   * is synchronous and happens before the return, so two concurrent in-flight
-   * calls against a `maxUses: 1` grant can never both succeed — the second
-   * sees `remainingUses: 0` and falls through.
+   * Authorize `toolId` for the session under a live native grant WITHOUT
+   * consuming a use — the use is charged separately by {@link consumeNativeGrantUse}
+   * once the call clears the rate limiter and is committed to dispatch, so a
+   * call that authorizes but is then rate-limited can't burn a use it never
+   * spent (#10648 review). Returns the authorizing grant's id on success.
    *
    * Picks the first (insertion-order) live grant whose allowlist covers the
    * tool. Expired / ceiling-past grants are lazily evicted (emitting the same
    * `grant.expired`/`grant.revoked` signals as the per-tool path) before being
-   * skipped. When the consumed use is the last one the grant is deleted and a
-   * `grant.exhausted` record is emitted — a natural terminal state, distinct
-   * from a forced revoke.
+   * skipped — eviction is hygiene, not use-consumption, so it is safe here.
    */
-  checkNativeGrant(sessionId: string, toolId: string): NativeGrantCheckResult {
+  peekNativeGrant(sessionId: string, toolId: string): NativeGrantCheckResult {
     const now = this.now();
     for (const entry of this.nativeGrants.values()) {
       if (entry.sessionId !== sessionId) continue;
@@ -457,16 +455,49 @@ export class GrantCache {
         this.nativeGrants.delete(entry.id);
         continue;
       }
-      entry.remainingUses -= 1;
-      if (entry.remainingUses <= 0) {
-        this.nativeGrants.delete(entry.id);
-        this.emitSafely(entry.sessionId, this.nativeUsedPayload(entry, toolId, "grant.exhausted"));
-      } else {
-        this.emitSafely(entry.sessionId, this.nativeUsedPayload(entry, toolId, "grant.used"));
-      }
       return { granted: true, grantId: entry.id };
     }
     return { granted: false };
+  }
+
+  /**
+   * Charge one use against a native grant previously authorized by
+   * {@link peekNativeGrant}. Synchronous decrement — paired with a peek that
+   * ran with no intervening `await`, two concurrent in-flight calls against a
+   * `maxUses: 1` grant can never both consume it. When the consumed use is the
+   * last one the grant is deleted and a `grant.exhausted` record is emitted (a
+   * natural terminal state, distinct from a forced revoke). Returns false and
+   * fails closed when the grant is gone or has aged past its TTL/ceiling since
+   * the peek — the caller must reject the dispatch in that case.
+   */
+  consumeNativeGrantUse(grantId: string, toolId: string): boolean {
+    const entry = this.nativeGrants.get(grantId);
+    if (!entry) return false;
+    const now = this.now();
+    const pastCeiling = now > entry.issuedAt + this.maxLifetimeMs;
+    const pastTtl = now > entry.expiresAt;
+    if (pastCeiling || pastTtl) {
+      this.nativeGrants.delete(grantId);
+      this.emitSafely(
+        entry.sessionId,
+        pastCeiling && !pastTtl
+          ? this.nativeRevokedPayload(entry, "grant-ceiling")
+          : this.nativeExpiredPayload(entry, toolId)
+      );
+      return false;
+    }
+    if (entry.remainingUses <= 0) {
+      this.nativeGrants.delete(grantId);
+      return false;
+    }
+    entry.remainingUses -= 1;
+    if (entry.remainingUses <= 0) {
+      this.nativeGrants.delete(grantId);
+      this.emitSafely(entry.sessionId, this.nativeUsedPayload(entry, toolId, "grant.exhausted"));
+    } else {
+      this.emitSafely(entry.sessionId, this.nativeUsedPayload(entry, toolId, "grant.used"));
+    }
+    return true;
   }
 
   /**
@@ -513,6 +544,26 @@ export class GrantCache {
     const out: NativeGrantEntry[] = [];
     for (const entry of this.nativeGrants.values()) {
       if (sessionId !== undefined && entry.sessionId !== sessionId) continue;
+      out.push(entry);
+    }
+    return out;
+  }
+
+  /**
+   * Like {@link getActiveNativeGrants} but returns only grants that are live by
+   * every condition — uses remaining, not past TTL, and not past the hard
+   * wall-clock ceiling. Used for the settings live-status snapshot so a grant
+   * that is logically dead (but not yet swept) never shows as active with a
+   * misleading countdown. Read-only: does not evict.
+   */
+  getLiveNativeGrants(sessionId?: string): NativeGrantEntry[] {
+    const now = this.now();
+    const out: NativeGrantEntry[] = [];
+    for (const entry of this.nativeGrants.values()) {
+      if (sessionId !== undefined && entry.sessionId !== sessionId) continue;
+      if (entry.remainingUses <= 0) continue;
+      if (now > entry.expiresAt) continue;
+      if (now > entry.issuedAt + this.maxLifetimeMs) continue;
       out.push(entry);
     }
     return out;

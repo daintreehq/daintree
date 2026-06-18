@@ -381,17 +381,19 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       const grant = sessionStore.grantCache.check(sessionId, actionId);
       const native = grant.granted
         ? null
-        : sessionStore.grantCache.checkNativeGrant(sessionId, actionId);
+        : sessionStore.grantCache.peekNativeGrant(sessionId, actionId);
       if (grant.granted) {
         // Grant authorised the call. Capture the `issuedAt` token so the
         // post-dispatch refresh can verify the entry wasn't revoked and
         // re-issued under us (race guard, lesson #2243).
         grantIssuedAt = grant.issuedAt;
       } else if (native?.granted) {
-        // A native automation grant covers this tool and had a use left (one
-        // was just consumed atomically). It overrides the static tier floor
-        // only because the user explicitly approved this tool's scope — the
-        // grant's allowlist gates which tools `checkNativeGrant` will authorize.
+        // A native automation grant covers this tool and has a use left. It
+        // overrides the static tier floor only because the user explicitly
+        // approved this tool's scope — the grant's allowlist gates which tools
+        // `peekNativeGrant` authorizes. The use is NOT charged here: it is
+        // consumed only after the rate-limit gate below, so a rate-limited
+        // call (which never dispatches) can't burn a use.
         nativeGrantId = native.grantId;
       } else {
         // Increment first, then ask the cache whether to suppress. The
@@ -479,6 +481,22 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         message: `Rate limit exceeded for '${actionId}'. Retry after ${rateLimit.retryAfter}s.`,
         details: { retryAfter: rateLimit.retryAfter },
       });
+    }
+
+    // Charge the native automation grant's use now that the call has cleared
+    // the rate limiter and is committed to proceeding (#10648). Doing it here —
+    // not at the peek above — means a rate-limited call never burns a use. The
+    // peek→rate-limit→consume path is synchronous (no `await`), so the grant
+    // can't be revoked between peek and consume; a `false` return is purely
+    // defensive and fails closed.
+    if (nativeGrantId !== undefined) {
+      const consumed = sessionStore.grantCache.consumeNativeGrantUse(nativeGrantId, actionId);
+      if (!consumed) {
+        return buildToolError({
+          code: TIER_NOT_PERMITTED_CODE,
+          message: `action '${actionId}' is not permitted for the '${tier}' tier.`,
+        });
+      }
     }
 
     // Idempotency dedup for the creation-tool allowlist. Same-moment duplicates
