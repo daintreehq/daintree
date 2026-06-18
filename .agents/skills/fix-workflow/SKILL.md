@@ -14,7 +14,7 @@ Drive Daintree release dry-run and nightly workflows to green. Treat this as a d
 - Prefer fixing Daintree over relaxing tests. Update a test only when the test is stale, over-specific, or asserting behavior that the product no longer promises.
 - Do not blindly rerun the same failing job without learning something. Rerun after a code/test/workflow fix, or once for an obvious external/transient service failure.
 - Never allow more than one active GitHub Actions run per target workflow on the repair branch. For release dry runs, at most three full release runs may be active at once: one `release-macos.yml`, one `release-linux.yml`, and one `release-windows.yml`. For nightly, at most one `nightly.yml` run may be active. Before dispatching a replacement full workflow, list active runs for that workflow and cancel or wait for the superseded run to stop; this is especially important for macOS runner cost.
-- Unless the user explicitly says not to, make local testing the first validation line after harvesting the failure: reproduce the narrow failure locally, then run the local E2E surface that matches the workflow before leaning on GitHub Actions. For release workflow fixes, this means the full release-gated Playwright command (`core`, all `full-*`, and `online`) before redispatching a dry run. For nightly fixes, include the `nightly` project as well. This repo is expected to be worked on from a powerful local Mac, so prefer using it.
+- **Local-first is the default, not an option.** This repo is worked on from a powerful local Mac, so the full local suite is the primary validation line, not a warm-up for GitHub Actions. Everything that can run locally must pass locally before any GitHub Actions run is dispatched. That means the complete local gate is green first: `npm run check`, `npm run test`, `npm run test:integration`, `npm run knip`, `npm run build`, `npm run test:smoke`, and ALL end-to-end suites — `core`, every `full-*` bucket, and `online` (add `nightly`, serialized, when targeting nightly). Reproduce, fix, and prove every failure locally; only then trigger GitHub. Do not use a GitHub macOS dry run to discover failures the local Mac can surface in full — it is slower, costs runner money, and the local machine already covers that surface completely. GitHub Actions is reserved for what genuinely cannot run locally: the non-macOS platforms (Linux, Windows) and CI-only packaging/signing/notarization/Store/R2/update-metadata steps.
 - Expect several hours of iteration. Do not stop after the first fixed test, the first green single-spec run, or the first green job; the task is complete only when the full nightly or full release dry-run workflow passes on the repair branch.
 - After each full workflow failure, harvest all failed jobs before editing. Fix the earliest/root failure first, but keep the other failures in a visible queue so secondary failures are not lost.
 - Before touching production code, read the relevant project instructions (`AGENTS.md`, and `CLAUDE.md` if present) and preserve Daintree architectural invariants.
@@ -41,16 +41,23 @@ Track:
 - Failure queue: job, platform, step, suite/spec, suspected cause, current status.
 - Narrow validation commands already run.
 
-Loop until done:
+The loop has two phases. Phase A (local) runs to completion before Phase B (GitHub) begins.
 
-1. Trigger or inspect the full target workflow.
-2. Wait for completion with `gh run watch <run-id> --exit-status`; long waits are expected.
-3. If it fails, inspect every failed job with `gh run view <run-id> --log-failed` and artifacts as needed.
-4. Pick the narrowest root failure, reproduce it locally first, and fix it. Use `e2e-single.yml` only after local reproduction is impossible, OS-specific, or already green locally.
-5. Run the individual failing test/command until it passes.
-6. Run the relevant suite or job-level validation.
-7. Push the branch and rerun the full workflow.
-8. Repeat from step 2 until the full workflow is green.
+Phase A — fix everything locally first:
+
+1. Identify the failure (from the user's run URL, or by inspecting the latest failed run with `gh run view <run-id> --log-failed`).
+2. Run the full local gate: `npm run check`, `npm run test`, `npm run test:integration`, `npm run knip`, `npm run build`, `npm run test:smoke`, and every E2E suite — `core`, all `full-*`, `online` (plus serialized `nightly` when targeting nightly).
+3. For each failure, reproduce the narrowest surface locally, fix the app/test/workflow, and rerun that narrow surface until it passes.
+4. Rerun the broader local suite that owns the fix to catch regressions.
+5. Repeat 2–4 until the entire local gate is green — all unit, integration, knip, build, smoke, and all E2E suites pass locally. Do not dispatch any GitHub run while a locally-runnable surface is still red.
+
+Phase B — validate the CI-only surface on GitHub:
+
+6. Only after the full local gate is green, push the branch and dispatch the target workflow(s). The remaining job here is the surface the local Mac cannot cover: Linux, Windows, and CI-only packaging/signing/notarization/Store/R2/update-metadata.
+7. Wait for completion with `gh run watch <run-id> --exit-status`; long waits are expected.
+8. If it fails, inspect every failed job with `gh run view <run-id> --log-failed` and artifacts as needed.
+9. If a failure is reproducible locally (any macOS/Linux-agnostic surface), drop back to Phase A: fix and prove it locally before redispatching. Only genuinely OS-specific failures get iterated via `e2e-single.yml` on the target platform.
+10. Push and rerun the full workflow. Repeat from step 7 until the full target workflow is green.
 
 If a run is still in progress when reporting status, give the run URL, elapsed time, current failed/pending jobs, and the next action. Do not present the work as complete while any required workflow is still running.
 
@@ -88,7 +95,7 @@ npx playwright test --project=<suite> <path/to/spec.spec.ts> --workers=1
 npx playwright test --project=core --project=full-terminal --project=full-worktree --project=full-presets --project=full-platform --project=full-panels --project=full-resilience --project=full-plugins --project=online
 ```
 
-For release dry-run E2E work, the multi-project Playwright command above is the required local broad pass: it matches the release-gated `core`, all `full-*`, and `online` projects without pulling in unrelated `nightly` soak or manual `screenshots` jobs. Run it before the next full dry-run dispatch unless the user explicitly opts out or the current failure is only reproducible on another OS.
+For release dry-run E2E work, the multi-project Playwright command above is the mandatory local broad pass: it matches the release-gated `core`, all `full-*`, and `online` projects without pulling in unrelated `nightly` soak or manual `screenshots` jobs. It must pass locally before any dry run is dispatched. Because the local machine is a full macOS host, this command fully covers the macOS dry-run E2E surface — do not lean on a GitHub macOS dry run to find these failures.
 
 ## Branch Setup
 
@@ -145,10 +152,10 @@ Reproduce the smallest failing surface first.
 - Build/package/update metadata failure: run `npm run build`, then the failing `electron-builder` or `scripts/ci/*` command from the workflow. Packaging, signing, notarization, Windows Store, and R2 checks may only be fully reproducible in Actions.
 - E2E failure: run the exact Playwright project and spec locally, usually with `--workers=1`. Use the suite that owns the spec path.
 
-After the narrow local repro passes, broaden locally before pushing and before redispatching the full workflow unless the user opted out or the failure is only reproducible on another OS:
+After the narrow local repro passes, broaden locally. The full local gate must be green before pushing or dispatching any GitHub run; the only failures exempt from local proof are ones reproducible solely on another OS (Linux/Windows) or in CI-only packaging/signing steps.
 
 - Same suite: `npx playwright test --project=<suite>`
-- Release-gated all-e2e: `npx playwright test --project=core --project=full-terminal --project=full-worktree --project=full-presets --project=full-platform --project=full-panels --project=full-resilience --project=full-plugins --project=online`
+- Release-gated all-e2e (required local pass before any dry run): `npx playwright test --project=core --project=full-terminal --project=full-worktree --project=full-presets --project=full-platform --project=full-panels --project=full-resilience --project=full-plugins --project=online`
 - Nightly target: include `--project=nightly` and keep it serialized.
 
 Suite-to-path mapping:
