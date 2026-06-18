@@ -6,7 +6,7 @@ import {
 } from "./pty/AgentPatternDetector.js";
 import { PatternBuffer } from "./pty/PatternBuffer.js";
 import { InputTracker } from "./pty/InputTracker.js";
-import { OutputVolumeDetector } from "./pty/OutputVolumeDetector.js";
+import { OutputVolumeDetector, type OutputVolumeConfig } from "./pty/OutputVolumeDetector.js";
 import { HighOutputDetector } from "./pty/HighOutputDetector.js";
 import { WorkingSignalDebouncer } from "./pty/WorkingSignalDebouncer.js";
 import { LineRewriteDetector, isStatusLineRewrite } from "./pty/LineRewriteDetector.js";
@@ -124,6 +124,14 @@ export interface ActivityMonitorOptions {
   maxCpuHighEscapeMs?: number;
   maxWaitingSilenceMs?: number;
   simpleOutputState?: boolean;
+  // Leaky-bucket byte-volume detector for the simpleOutputState early-return
+  // path (#10664). Agent terminals short-circuit before the non-simple
+  // first-output-byte recovery guard, so a sustained stream of appended output
+  // (e.g. a long investigation result) never drove waiting→working. This
+  // dedicated detector — kept separate from `outputActivityDetection` so it
+  // can't perturb the polling cycle's `hasRecentOutputActivity` signal —
+  // recovers idle→busy once enough stripped output accumulates.
+  simpleOutputVolumeRecovery?: OutputVolumeConfig;
   // Consecutive watchdog ticks that must all observe a dead-looking probe
   // result before onWaitingTimeout fires. Defaults to 3 (≈15s of sustained
   // consensus at the 5s watchdog cadence) to ride through transient false
@@ -167,6 +175,9 @@ export class ActivityMonitor {
   private readonly inputTracker: InputTracker;
   private readonly patternBuf: PatternBuffer;
   private readonly outputVolumeDetector: OutputVolumeDetector;
+  // Volume-based idle→busy recovery for the simpleOutputState path (#10664).
+  // Undefined unless `simpleOutputVolumeRecovery` is configured.
+  private readonly simpleOutputVolumeDetector?: OutputVolumeDetector;
   private readonly highOutputDetector: HighOutputDetector;
   private readonly workingSignalDebouncer: WorkingSignalDebouncer;
   // Dedicated debouncer for the idle-state cosmetic-redraw recovery path
@@ -288,6 +299,9 @@ export class ActivityMonitor {
     this.patternBuf = new PatternBuffer(options?.patternBufferSize ?? 10000);
 
     this.outputVolumeDetector = new OutputVolumeDetector(options?.outputActivityDetection);
+    this.simpleOutputVolumeDetector = options?.simpleOutputVolumeRecovery
+      ? new OutputVolumeDetector(options.simpleOutputVolumeRecovery)
+      : undefined;
 
     this.highOutputDetector = new HighOutputDetector(options?.highOutputThreshold);
 
@@ -550,6 +564,25 @@ export class ActivityMonitor {
           now,
           isIndicatorRewrite ? "indicator" : "content"
         );
+      }
+      // Byte-volume liveness floor (#10664). The visible-content temperature
+      // model reports changedChars: 0 for appended/scrolled output, so a long
+      // stream of investigation text never recovers waiting→working. Count the
+      // stripped bytes into a dedicated leaky bucket and, once it fires, recover
+      // idle→busy under the same suppression guards the non-simple
+      // first-output-byte path uses (#6388 strip-then-count, #8867 focus gate).
+      if (this.state === "idle" && this.simpleOutputVolumeDetector) {
+        const filteredLength = Buffer.byteLength(stripIdleTerminalSequences(data), "utf8");
+        if (
+          filteredLength > 0 &&
+          this.simpleOutputVolumeDetector.update(filteredLength, now) &&
+          !this.isResizeSuppressed(now) &&
+          !this.isFocusSuppressed(now) &&
+          !this.inputTracker.isRecentUserInput(now) &&
+          this.bootDetector.hasExitedBootState
+        ) {
+          this.becomeBusy({ trigger: "output" }, now);
+        }
       }
       return;
     }

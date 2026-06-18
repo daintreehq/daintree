@@ -1362,6 +1362,94 @@ describe("ActivityMonitor", () => {
 
       monitor.dispose();
     });
+
+    it("recovers waiting→working from sustained byte volume alone (#10664)", () => {
+      const onStateChange = vi.fn();
+      let visible = ["idle prompt"];
+      const monitor = new ActivityMonitor("simple-volume", 1000, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => visible,
+        getCursorLine: () => visible[visible.length - 1],
+        initialState: "idle",
+        skipInitialStateEmit: true,
+        simpleOutputVolumeRecovery: {
+          enabled: true,
+          leakRatePerMs: 0.1,
+          activationThreshold: 512,
+          maxBytesPerFrame: 256,
+        },
+      });
+
+      monitor.startPolling();
+      // Drive boot exit + a real work cycle, then let the agent settle back to
+      // waiting with a static screen the polling cycle can't recover from.
+      driveBusyViaOutputChanges(monitor, (text) => {
+        visible = [text];
+      });
+      visible = ["idle prompt"];
+      vi.advanceTimersByTime(8200);
+      expect(monitor.getState()).toBe("idle");
+      onStateChange.mockClear();
+
+      // Heavy streaming output whose visible-content diff registers no change
+      // (pure appended text). Only the byte-volume floor can recover here.
+      const chunk = "investigation result ".repeat(16); // > maxBytesPerFrame
+      monitor.onData(chunk);
+      expect(monitor.getState()).toBe("idle"); // one frame is capped below threshold
+      monitor.onData(chunk);
+
+      expect(monitor.getState()).toBe("busy");
+      expect(onStateChange).toHaveBeenCalledWith("simple-volume", 1000, "busy", {
+        trigger: "output",
+      });
+
+      monitor.dispose();
+    });
+
+    it("does not recover idle→busy from byte volume during focus suppression (#10664)", () => {
+      const onStateChange = vi.fn();
+      let visible = ["idle prompt"];
+      const monitor = new ActivityMonitor("simple-volume-focus", 1000, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => visible,
+        getCursorLine: () => visible[visible.length - 1],
+        initialState: "idle",
+        skipInitialStateEmit: true,
+        simpleOutputVolumeRecovery: {
+          enabled: true,
+          leakRatePerMs: 0.1,
+          activationThreshold: 512,
+          maxBytesPerFrame: 256,
+        },
+      });
+
+      monitor.startPolling();
+      driveBusyViaOutputChanges(monitor, (text) => {
+        visible = [text];
+      });
+      visible = ["idle prompt"];
+      vi.advanceTimersByTime(8200);
+      expect(monitor.getState()).toBe("idle");
+      onStateChange.mockClear();
+
+      // A window-focus repaint suppresses promotion (#8867). Even a volume
+      // burst that crosses the threshold must not flip idle→busy.
+      monitor.notifyFocus(2000);
+      const chunk = "investigation result ".repeat(16);
+      monitor.onData(chunk);
+      monitor.onData(chunk);
+      monitor.onData(chunk);
+
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange).not.toHaveBeenCalledWith(
+        "simple-volume-focus",
+        1000,
+        "busy",
+        expect.anything()
+      );
+
+      monitor.dispose();
+    });
   });
 
   describe("notifySubmission (hybrid input bar)", () => {
