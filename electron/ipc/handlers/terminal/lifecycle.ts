@@ -256,6 +256,14 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     if (isHelpLaunch && launchAgentId) {
       const dangerous = DEFAULT_DANGEROUS_ARGS[launchAgentId];
       const bypassPermissions = helpSessionService.getBypassPermissions(helpToken);
+      // The Daintree Assistant is not Claude Code — it has no
+      // `--dangerously-skip-permissions` flag (no DEFAULT_DANGEROUS_ARGS entry).
+      // For it, the user's "bypass permissions" preference maps to skipping the
+      // assistant's OWN per-action confirm sheet, which the CLI reads from this
+      // env var at startup. The capability tier remains the only safeguard.
+      if (launchAgentId === "daintree-assistant" && bypassPermissions) {
+        spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_ASSISTANT_AUTO_APPROVE: "1" };
+      }
       // Honor the agent's `supports.permissionBypass` declaration: only
       // append the dangerous flag when the agent has opted in. Gemini help
       // sessions sit at `permissionBypass: false` (Phase 1 stays in plan

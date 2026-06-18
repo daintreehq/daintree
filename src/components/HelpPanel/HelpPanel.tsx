@@ -26,6 +26,7 @@ import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
 import { HelpLaunchingState } from "./HelpLaunchingState";
 import { McpActivityStrip } from "./McpActivityStrip";
 import { McpAnomalyFooterLink } from "./McpAnomalyFooterLink";
+import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { TurnOutcomePip } from "./TurnOutcomePip";
 import { FigureRail } from "./FigureRail";
 import {
@@ -1051,13 +1052,27 @@ export function HelpPanel({
                 Start new session
               </button>
             )}
-            <span
-              className="flex items-center gap-1 shrink-0"
-              title={`Assistant agent: ${agentConfig.name}`}
-            >
-              <agentConfig.icon className="w-3.5 h-3.5" />
-              {agentConfig.name}
-            </span>
+            {agentId === "daintree-assistant" ? (
+              // The Daintree Assistant is the workspace's own conductor, so the
+              // brand mark already says "Daintree" — pairing it with just
+              // "assistant" keeps this status row from repeating the word twice
+              // and frees up the tight footer width.
+              <span
+                className="flex items-center gap-1 shrink-0"
+                title={`Assistant agent: ${agentConfig.name}`}
+              >
+                <DaintreeIcon className="w-3.5 h-3.5" />
+                Assistant
+              </span>
+            ) : (
+              <span
+                className="flex items-center gap-1 shrink-0"
+                title={`Assistant agent: ${agentConfig.name}`}
+              >
+                <agentConfig.icon className="w-3.5 h-3.5" />
+                {agentConfig.name}
+              </span>
+            )}
           </span>
         </div>
       )}

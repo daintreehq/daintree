@@ -849,6 +849,60 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(mockPreparePaneConfig).not.toHaveBeenCalled();
   });
 
+  it("injects DAINTREE_ASSISTANT_AUTO_APPROVE=1 when the Daintree Assistant launches with bypassPermissions on", async () => {
+    mockValidateToken.mockImplementation((token) =>
+      token === "assistant-bypass" ? "system" : false
+    );
+    mockGetBypassPermissions.mockImplementation((token) => token === "assistant-bypass");
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "daintree-assistant",
+        launchAgentId: "daintree-assistant",
+        env: { DAINTREE_MCP_TOKEN: "assistant-bypass" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.env?.DAINTREE_ASSISTANT_AUTO_APPROVE).toBe("1");
+    // The assistant is not Claude Code — no CLI permission flag is appended.
+    expect(spawnArgs.command).not.toContain("--dangerously-skip-permissions");
+  });
+
+  it("does NOT inject DAINTREE_ASSISTANT_AUTO_APPROVE when the assistant launches with bypassPermissions off", async () => {
+    mockValidateToken.mockImplementation((token) =>
+      token === "assistant-nobypass" ? "system" : false
+    );
+    mockGetBypassPermissions.mockImplementation(() => false);
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "daintree-assistant",
+        launchAgentId: "daintree-assistant",
+        env: { DAINTREE_MCP_TOKEN: "assistant-nobypass" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.env?.DAINTREE_ASSISTANT_AUTO_APPROVE).toBeUndefined();
+  });
+
   it("appends --dangerously-skip-permissions even at action tier when bypassPermissions is on", async () => {
     // Tier and bypassPermissions are decoupled (#7532): an action-tier
     // session with bypass on should still skip the CLI confirmation gate.
