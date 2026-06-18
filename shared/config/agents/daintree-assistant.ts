@@ -3,9 +3,8 @@ import type { AgentConfig } from "../agentRegistry.js";
 // The Daintree CLI assistant is a standalone orchestration agent with its own
 // login and backend. Daintree does not configure model providers for it — it
 // connects over MCP and discovers its own context, so context-tree injection
-// is off. Wired at `experimental` tier: structurally enabled and auto-detected
-// on PATH by CliAvailabilityService, but hidden from the stable assistant
-// picker until the wiring is validated end to end.
+// is off. Wired at `stable` tier: structurally enabled, auto-detected on PATH
+// by CliAvailabilityService, and surfaced in the assistant picker.
 export const config: AgentConfig = {
   id: "daintree-assistant",
   name: "Daintree Assistant",
@@ -31,7 +30,7 @@ export const config: AgentConfig = {
     permissionBypass: false,
     trustDialog: false,
     versionProbe: true,
-    tier: "experimental",
+    tier: "stable",
   },
   prerequisites: [
     {

@@ -184,10 +184,10 @@ describe("agentRegistry", () => {
   });
 
   describe("assistant support", () => {
-    it("returns claude and codex as the stable-tier assistant agents", () => {
+    it("returns claude, codex, and daintree-assistant as the stable-tier assistant agents", () => {
       const ids = getAssistantSupportedAgentIds();
-      expect(ids).toEqual(expect.arrayContaining(["claude", "codex"]));
-      expect(ids).toHaveLength(2);
+      expect(ids).toEqual(expect.arrayContaining(["claude", "codex", "daintree-assistant"]));
+      expect(ids).toHaveLength(3);
     });
 
     it("claude has structured assistant supports at stable tier", () => {
@@ -268,16 +268,16 @@ describe("agentRegistry", () => {
       expect(wired).not.toContain("cursor");
     });
 
-    it("daintree-assistant is wired at experimental tier and hidden from the stable picker (#10634)", () => {
+    it("daintree-assistant is wired at stable tier and shown in the assistant picker (#10634)", () => {
       expect(getAssistantWiredAgentIds()).toContain("daintree-assistant");
-      expect(getAssistantSupportedAgentIds()).not.toContain("daintree-assistant");
+      expect(getAssistantSupportedAgentIds()).toContain("daintree-assistant");
       expect(getAgentConfig("daintree-assistant")?.supports).toMatchObject({
         mcpInjection: "env-only",
         settingsOverlay: false,
         permissionBypass: false,
         trustDialog: false,
         versionProbe: true,
-        tier: "experimental",
+        tier: "stable",
       });
     });
 
@@ -449,8 +449,8 @@ describe("agentRegistry", () => {
     it("empty user registry produces same supported list as before", () => {
       setUserRegistry({});
       const ids = getAssistantSupportedAgentIds();
-      expect(ids).toEqual(expect.arrayContaining(["claude", "codex"]));
-      expect(ids).toHaveLength(2);
+      expect(ids).toEqual(expect.arrayContaining(["claude", "codex", "daintree-assistant"]));
+      expect(ids).toHaveLength(3);
     });
 
     it("supported list returns built-ins in BUILT_IN_AGENT_IDS order then user-defined", () => {
@@ -469,11 +469,12 @@ describe("agentRegistry", () => {
       setUserRegistry({ "zzz-last-agent": userAgent1, "aaa-first-agent": userAgent2 });
       try {
         const ids = getAssistantSupportedAgentIds();
-        // Built-ins first: claude, codex (in BUILT_IN_AGENT_IDS order)
+        // Built-ins first, in BUILT_IN_AGENT_IDS order
         expect(ids[0]).toBe("claude");
         expect(ids[1]).toBe("codex");
+        expect(ids[2]).toBe("daintree-assistant");
         // Then user-defined agents in registration order
-        const userDefinedIds = ids.slice(2);
+        const userDefinedIds = ids.slice(3);
         expect(userDefinedIds[0]).toBe("zzz-last-agent");
         expect(userDefinedIds[1]).toBe("aaa-first-agent");
       } finally {
