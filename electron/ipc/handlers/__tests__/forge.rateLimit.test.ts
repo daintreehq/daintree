@@ -28,6 +28,13 @@ const fakeImpl = vi.hoisted(() => ({
   markPRReadyForReview: vi.fn(),
   commentOnPR: vi.fn(),
   editPR: vi.fn(),
+  createIssue: vi.fn(),
+  closeIssue: vi.fn(),
+  reopenIssue: vi.fn(),
+  editIssue: vi.fn(),
+  addIssueComment: vi.fn(),
+  addIssueLabel: vi.fn(),
+  removeIssueLabel: vi.fn(),
   validateToken: vi.fn(),
   classifyPushError: vi.fn(),
   listIssues: vi.fn(),
@@ -324,6 +331,60 @@ describe("forge handlers — rate limiting", () => {
     });
   });
 
+  describe("write-op input validation", () => {
+    it("rejects a blank editIssue title before touching the provider", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_EDIT_ISSUE);
+
+      await expect(
+        handler({}, { cwd: "/tmp/project", issueNumber: 1, input: { title: "   " } })
+      ).rejects.toThrow(/title cannot be blank/i);
+      expect(fakeImpl.editIssue).not.toHaveBeenCalled();
+    });
+
+    it("rejects an editIssue with neither title nor body", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_EDIT_ISSUE);
+
+      await expect(handler({}, { cwd: "/tmp/project", issueNumber: 1, input: {} })).rejects.toThrow(
+        /title or body/i
+      );
+      expect(fakeImpl.editIssue).not.toHaveBeenCalled();
+    });
+
+    it("rejects an invalid closeIssue state reason", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_CLOSE_ISSUE);
+
+      await expect(
+        handler({}, { cwd: "/tmp/project", issueNumber: 1, stateReason: "bogus" })
+      ).rejects.toThrow(/state reason/i);
+      expect(fakeImpl.closeIssue).not.toHaveBeenCalled();
+    });
+
+    it("accepts 'duplicate' as a closeIssue state reason", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_CLOSE_ISSUE);
+
+      await handler({}, { cwd: "/tmp/project", issueNumber: 1, stateReason: "duplicate" });
+      expect(fakeImpl.closeIssue).toHaveBeenCalledWith(expect.anything(), 1, "duplicate");
+    });
+
+    it("rejects a blank addIssueComment body", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_ADD_ISSUE_COMMENT);
+
+      await expect(
+        handler({}, { cwd: "/tmp/project", issueNumber: 1, body: "  " })
+      ).rejects.toThrow(/comment body is required/i);
+      expect(fakeImpl.addIssueComment).not.toHaveBeenCalled();
+    });
+
+    it("rejects a blank addIssueLabel name", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_ADD_ISSUE_LABEL);
+
+      await expect(
+        handler({}, { cwd: "/tmp/project", issueNumber: 1, label: "  " })
+      ).rejects.toThrow(/label name is required/i);
+      expect(fakeImpl.addIssueLabel).not.toHaveBeenCalled();
+    });
+  });
+
   describe("token family (forge:validate-token)", () => {
     const validatePayload = { providerId: "fake-plugin.fake", token: "fake_token" };
 
@@ -497,6 +558,42 @@ describe("forge handlers — rate limiting", () => {
         maxCalls: 3,
         invoke: (h) => h({}, { cwd, prNumber: 1, users: ["octocat"] }),
       },
+      // issue-write ops: 5/10s (matches the mutation tier — assign-issue)
+      {
+        channel: CHANNELS.FORGE_CREATE_ISSUE,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, input: { title: "New issue" } }),
+      },
+      {
+        channel: CHANNELS.FORGE_CLOSE_ISSUE,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, issueNumber: 1 }),
+      },
+      {
+        channel: CHANNELS.FORGE_REOPEN_ISSUE,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, issueNumber: 1 }),
+      },
+      {
+        channel: CHANNELS.FORGE_EDIT_ISSUE,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, issueNumber: 1, input: { title: "Updated" } }),
+      },
+      {
+        channel: CHANNELS.FORGE_ADD_ISSUE_COMMENT,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, issueNumber: 1, body: "Looks good" }),
+      },
+      {
+        channel: CHANNELS.FORGE_ADD_ISSUE_LABEL,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, issueNumber: 1, label: "bug" }),
+      },
+      {
+        channel: CHANNELS.FORGE_REMOVE_ISSUE_LABEL,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, issueNumber: 1, label: "bug" }),
+      },
       // open-PR: 20/10s (matches forge:open-issue)
       { channel: CHANNELS.FORGE_OPEN_PR, maxCalls: 20, invoke: (h) => h({}, { cwd, prNumber: 1 }) },
       // PR write family: 5/10s (matches the mutation tier — assign-issue)
@@ -581,12 +678,12 @@ describe("forge handlers — rate limiting", () => {
       },
     ];
 
-    it("registers all forge channels (37 rate-limited + 2 unrated probes)", () => {
-      expect(specs).toHaveLength(37);
+    it("registers all forge channels (44 rate-limited + 2 unrated probes)", () => {
+      expect(specs).toHaveLength(44);
       // FORGE_GET_CURRENT_USER and FORGE_GET_TOKEN_HEALTH are intentionally
       // unrated replay/identity probes with no checkRateLimit, so they register
       // handlers but stay out of `specs`.
-      expect(ipcMainMock.handle).toHaveBeenCalledTimes(39);
+      expect(ipcMainMock.handle).toHaveBeenCalledTimes(46);
     });
 
     it.each(specs)(

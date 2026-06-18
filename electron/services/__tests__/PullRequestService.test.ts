@@ -145,6 +145,12 @@ function mockForgeProviderResolved(
     markPRReadyForReview: vi.fn(),
     commentOnPR: vi.fn(),
     editPR: vi.fn(),
+    closeIssue: vi.fn(),
+    reopenIssue: vi.fn(),
+    editIssue: vi.fn(),
+    addIssueComment: vi.fn(),
+    addIssueLabel: vi.fn(),
+    removeIssueLabel: vi.fn(),
     validateToken: vi.fn(),
     getRateLimit: vi.fn().mockResolvedValue({ limit: null, remaining: null, resetAt: null }),
   };
@@ -238,6 +244,12 @@ function makeMockEmptyImpl(): ForgeProviderImpl {
     markPRReadyForReview: vi.fn(),
     commentOnPR: vi.fn(),
     editPR: vi.fn(),
+    closeIssue: vi.fn(),
+    reopenIssue: vi.fn(),
+    editIssue: vi.fn(),
+    addIssueComment: vi.fn(),
+    addIssueLabel: vi.fn(),
+    removeIssueLabel: vi.fn(),
     validateToken: vi.fn(),
   };
 }

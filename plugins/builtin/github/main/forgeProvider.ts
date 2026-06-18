@@ -10,6 +10,7 @@ import type {
   CreatePRInput,
   Credentials,
   EditPRInput,
+  EditIssueInput,
   FirstPageSnapshot,
   ForgeProviderImpl,
   ForgeRepoCounts,
@@ -19,6 +20,8 @@ import type {
   HealthEventsCapability,
   IdentityCapability,
   Issue,
+  IssueCloseReason,
+  IssueComment,
   IssueTooltipData,
   LinkedPRSummary,
   ListOptions,
@@ -344,6 +347,26 @@ function restToForgePR(raw: Record<string, unknown>): PR {
   };
 }
 
+/**
+ * Map a GitHub REST label array (the body returned by the add/remove-label
+ * endpoints) to the contract {@link ForgeLabel}[]. Entries without a string
+ * `name` are skipped.
+ */
+function restToForgeLabels(raw: unknown): ForgeLabel[] {
+  if (!Array.isArray(raw)) return [];
+  const labels: ForgeLabel[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const label = entry as { name?: unknown; color?: unknown };
+    if (typeof label.name !== "string") continue;
+    labels.push({
+      name: label.name,
+      ...(typeof label.color === "string" ? { color: label.color } : {}),
+    });
+  }
+  return labels;
+}
+
 function requireGitHubToken(): string {
   const token = GitHubAuth.getToken();
   if (!token) {
@@ -359,6 +382,42 @@ function githubMutationHeaders(token: string): Record<string, string> {
     "X-GitHub-Api-Version": "2022-11-28",
     "Content-Type": "application/json",
   };
+}
+
+/**
+ * Shared `PATCH /repos/{owner}/{repo}/issues/{number}` call backing
+ * close/reopen/edit. Sends the given partial issue fields, validates the
+ * mutation result, clears the issue caches, and returns the normalized
+ * {@link Issue}. Callers own building the body (state/state_reason/title/body).
+ */
+async function patchIssue(
+  repo: RepoRef,
+  issueNumber: number,
+  fields: Record<string, unknown>,
+  failurePrefix: string
+): Promise<Issue> {
+  const token = requireGitHubToken();
+  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/issues/${issueNumber}`;
+  const response = await fetch(url, {
+    method: "PATCH",
+    headers: githubMutationHeaders(token),
+    body: JSON.stringify(fields),
+    signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(
+      `${failurePrefix}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
+    );
+  }
+  const data = (await response.json()) as Record<string, unknown>;
+  if (typeof data.number !== "number" || typeof data.html_url !== "string") {
+    throw new Error("Unexpected response from GitHub: missing issue number or URL.");
+  }
+  // Provider-owned invalidation: state/title/body changes affect list and stat
+  // views, so drop the caches (mirrors createIssue).
+  clearGitHubCaches();
+  return restToForgeIssue(data);
 }
 
 // Shared PATCH for close/reopen — both flip `state` on the same endpoint.
@@ -2085,6 +2144,146 @@ export const githubForgeProvider: ForgeProviderImpl = {
     }
     clearPRCaches();
     return restToForgePR(data);
+  },
+
+  async closeIssue(
+    repo: RepoRef,
+    issueNumber: number,
+    stateReason?: IssueCloseReason
+  ): Promise<Issue> {
+    const fields: Record<string, unknown> = { state: "closed" };
+    if (stateReason) fields.state_reason = stateReason;
+    return patchIssue(repo, issueNumber, fields, `Failed to close issue #${issueNumber}`);
+  },
+
+  async reopenIssue(repo: RepoRef, issueNumber: number): Promise<Issue> {
+    // Clear any prior `not_planned`/`completed` reason so a reopened issue isn't
+    // left with a stale close reason.
+    return patchIssue(
+      repo,
+      issueNumber,
+      { state: "open", state_reason: null },
+      `Failed to reopen issue #${issueNumber}`
+    );
+  },
+
+  async editIssue(repo: RepoRef, issueNumber: number, input: EditIssueInput): Promise<Issue> {
+    const fields: Record<string, unknown> = {};
+    if (input.title !== undefined) fields.title = input.title;
+    if (input.body !== undefined) fields.body = input.body;
+    if (Object.keys(fields).length === 0) {
+      throw new Error("editIssue requires at least one of title or body.");
+    }
+    return patchIssue(repo, issueNumber, fields, `Failed to edit issue #${issueNumber}`);
+  },
+
+  async addIssueComment(repo: RepoRef, issueNumber: number, body: string): Promise<IssueComment> {
+    const token = GitHubAuth.getToken();
+    if (!token) {
+      throw new Error("GitHub token not configured. Set it in Settings.");
+    }
+    if (!body || !body.trim()) {
+      throw new Error("Comment body is required.");
+    }
+    const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/issues/${issueNumber}/comments`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ body }),
+      signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `Failed to comment on issue #${issueNumber}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
+      );
+    }
+    const data = (await response.json()) as Record<string, unknown>;
+    if (typeof data.id !== "number" || typeof data.html_url !== "string") {
+      throw new Error("Unexpected response from GitHub: missing comment id or URL.");
+    }
+    // A new comment changes the issue's comment count, which the tooltip cache
+    // holds. List/stat caches are unaffected, so a targeted invalidation is
+    // enough (avoids the heavier clearGitHubCaches()).
+    issueTooltipCache.invalidate(`${repo.owner}/${repo.repo}:${issueNumber}`);
+    return {
+      id: String(data.id),
+      body: typeof data.body === "string" ? data.body : "",
+      url: data.html_url,
+      author: restUserToForgeUser(data.user),
+      createdAt: isoToMs(data.created_at ?? data.updated_at),
+      rawData: data,
+    };
+  },
+
+  async addIssueLabel(repo: RepoRef, issueNumber: number, label: string): Promise<ForgeLabel[]> {
+    const token = GitHubAuth.getToken();
+    if (!token) {
+      throw new Error("GitHub token not configured. Set it in Settings.");
+    }
+    const name = label?.trim();
+    if (!name) {
+      throw new Error("Label name is required.");
+    }
+    const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/issues/${issueNumber}/labels`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ labels: [name] }),
+      signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `Failed to add label '${name}' to issue #${issueNumber}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
+      );
+    }
+    const data = await response.json();
+    clearGitHubCaches();
+    return restToForgeLabels(data);
+  },
+
+  async removeIssueLabel(repo: RepoRef, issueNumber: number, label: string): Promise<ForgeLabel[]> {
+    const token = GitHubAuth.getToken();
+    if (!token) {
+      throw new Error("GitHub token not configured. Set it in Settings.");
+    }
+    const name = label?.trim();
+    if (!name) {
+      throw new Error("Label name is required.");
+    }
+    const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/issues/${issueNumber}/labels/${encodeURIComponent(name)}`;
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+    });
+    if (response.status === 404) {
+      throw new Error(`Label '${name}' is not on issue #${issueNumber}.`);
+    }
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `Failed to remove label '${name}' from issue #${issueNumber}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
+      );
+    }
+    const data = await response.json();
+    clearGitHubCaches();
+    return restToForgeLabels(data);
   },
 
   async validateToken(token: string): Promise<AuthValidation> {

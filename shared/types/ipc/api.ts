@@ -29,6 +29,11 @@ import type {
   RepoMetadata,
   ListOptions,
   ForgeUser,
+  ForgeLabel,
+  IssueComment,
+  CreateIssueInput,
+  EditIssueInput,
+  IssueCloseReason,
   ReviewThread,
   ForgeTokenHealthState,
   RateLimitDetails,
@@ -1279,6 +1284,36 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     assignIssue(payload: { cwd: string; issueNumber: number; username: string }): Promise<void>;
     /** Unassign a user from an issue via the resolved forge provider. */
     unassignIssue(payload: { cwd: string; issueNumber: number; username: string }): Promise<void>;
+    /** Create a new issue via the resolved forge provider, returning the created issue. */
+    createIssue(payload: { cwd: string; input: CreateIssueInput }): Promise<Issue>;
+    /** Close an open issue via the resolved forge provider, returning the updated issue. */
+    closeIssue(payload: {
+      cwd: string;
+      issueNumber: number;
+      stateReason?: IssueCloseReason;
+    }): Promise<Issue>;
+    /** Reopen a closed issue via the resolved forge provider, returning the updated issue. */
+    reopenIssue(payload: { cwd: string; issueNumber: number }): Promise<Issue>;
+    /** Edit an issue's title and/or body via the resolved forge provider, returning the updated issue. */
+    editIssue(payload: { cwd: string; issueNumber: number; input: EditIssueInput }): Promise<Issue>;
+    /** Add a comment to an issue via the resolved forge provider, returning the created comment. */
+    addIssueComment(payload: {
+      cwd: string;
+      issueNumber: number;
+      body: string;
+    }): Promise<IssueComment>;
+    /** Add a label (by name) to an issue, returning the issue's full label set. */
+    addIssueLabel(payload: {
+      cwd: string;
+      issueNumber: number;
+      label: string;
+    }): Promise<ForgeLabel[]>;
+    /** Remove a label (by name) from an issue, returning the issue's remaining label set. */
+    removeIssueLabel(payload: {
+      cwd: string;
+      issueNumber: number;
+      label: string;
+    }): Promise<ForgeLabel[]>;
     /**
      * Approve a pull request via the resolved provider's `reviews` capability.
      * `body` is an optional approval comment. Rejects when the provider lacks

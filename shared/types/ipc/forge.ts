@@ -239,6 +239,12 @@ export type ForgeProviderMethodName =
   | "markPRReadyForReview"
   | "commentOnPR"
   | "editPR"
+  | "closeIssue"
+  | "reopenIssue"
+  | "editIssue"
+  | "addIssueComment"
+  | "addIssueLabel"
+  | "removeIssueLabel"
   | "validateToken"
   | "getCurrentUser";
 

@@ -2460,6 +2460,28 @@ function buildElectronApi(): ElectronAPI {
         users?: string[];
         teams?: string[];
       }) => _unwrappingInvoke(CHANNELS.FORGE_REQUEST_REVIEWERS, payload),
+      createIssue: (payload: {
+        cwd: string;
+        input: { title: string; body?: string; labels?: string[] };
+      }) => _unwrappingInvoke(CHANNELS.FORGE_CREATE_ISSUE, payload),
+      closeIssue: (payload: {
+        cwd: string;
+        issueNumber: number;
+        stateReason?: "completed" | "not_planned";
+      }) => _unwrappingInvoke(CHANNELS.FORGE_CLOSE_ISSUE, payload),
+      reopenIssue: (payload: { cwd: string; issueNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_REOPEN_ISSUE, payload),
+      editIssue: (payload: {
+        cwd: string;
+        issueNumber: number;
+        input: { title?: string; body?: string };
+      }) => _unwrappingInvoke(CHANNELS.FORGE_EDIT_ISSUE, payload),
+      addIssueComment: (payload: { cwd: string; issueNumber: number; body: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_ADD_ISSUE_COMMENT, payload),
+      addIssueLabel: (payload: { cwd: string; issueNumber: number; label: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_ADD_ISSUE_LABEL, payload),
+      removeIssueLabel: (payload: { cwd: string; issueNumber: number; label: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_REMOVE_ISSUE_LABEL, payload),
       validateToken: (payload: { providerId: string; token: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_VALIDATE_TOKEN, payload),
       setCredential: (providerId: string, credentials: Record<string, string>) =>

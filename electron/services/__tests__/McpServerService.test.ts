@@ -2760,6 +2760,46 @@ describe("McpServerService", () => {
         description: "Assign an issue via the forge provider",
       }),
       createManifestEntry({
+        id: "forge.unassignIssue" as ActionId,
+        title: "Unassign Issue (Forge)",
+        description: "Remove an assignment from an issue via the forge provider",
+      }),
+      createManifestEntry({
+        id: "forge.createIssue" as ActionId,
+        title: "Create Issue (Forge)",
+        description: "Create an issue via the forge provider",
+      }),
+      createManifestEntry({
+        id: "forge.closeIssue" as ActionId,
+        title: "Close Issue (Forge)",
+        description: "Close an issue via the forge provider",
+      }),
+      createManifestEntry({
+        id: "forge.reopenIssue" as ActionId,
+        title: "Reopen Issue (Forge)",
+        description: "Reopen an issue via the forge provider",
+      }),
+      createManifestEntry({
+        id: "forge.editIssue" as ActionId,
+        title: "Edit Issue (Forge)",
+        description: "Edit an issue's title or body via the forge provider",
+      }),
+      createManifestEntry({
+        id: "forge.addIssueComment" as ActionId,
+        title: "Add Issue Comment (Forge)",
+        description: "Add a comment to an issue via the forge provider",
+      }),
+      createManifestEntry({
+        id: "forge.addIssueLabel" as ActionId,
+        title: "Add Issue Label (Forge)",
+        description: "Add a label to an issue via the forge provider",
+      }),
+      createManifestEntry({
+        id: "forge.removeIssueLabel" as ActionId,
+        title: "Remove Issue Label (Forge)",
+        description: "Remove a label from an issue via the forge provider",
+      }),
+      createManifestEntry({
         id: "forge.validateToken" as ActionId,
         title: "Validate Token (Forge)",
         description: "Validate credentials via the forge provider",

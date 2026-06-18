@@ -336,6 +336,39 @@ export interface EditPRInput {
   body?: string;
 }
 
+/**
+ * Provider-neutral reason an issue was closed. GitHub maps `completed` /
+ * `not_planned` onto its `state_reason`; forges without the concept ignore it.
+ */
+export type IssueCloseReason = "completed" | "not_planned" | "duplicate";
+
+/**
+ * Normalized input for {@link ForgeProviderImpl.editIssue}. Both fields are
+ * optional so callers can patch the title, the body, or both — providers apply
+ * only the fields present and leave the rest untouched. Callers must supply at
+ * least one field; an all-empty input is rejected by the host.
+ */
+export interface EditIssueInput {
+  title?: string;
+  body?: string;
+}
+
+/**
+ * Normalized projection of a comment created via
+ * {@link ForgeProviderImpl.addIssueComment}. Mirrors the lowest common
+ * denominator across forges.
+ */
+export interface IssueComment {
+  /** Provider comment id, as a string so non-numeric forges fit. */
+  id: string;
+  body: string;
+  url: string;
+  author?: ForgeUser;
+  /** Epoch milliseconds. */
+  createdAt: number;
+  rawData: unknown;
+}
+
 export interface PR {
   number: number;
   title: string;
@@ -951,6 +984,40 @@ export interface ForgeProviderImpl {
    * normalized {@link PR}.
    */
   editPR(repo: RepoRef, prNumber: number, input: EditPRInput): Promise<PR>;
+  /**
+   * Close an open issue, returning the updated {@link Issue}. The optional
+   * `stateReason` lets the caller record why (GitHub: `completed` /
+   * `not_planned`); providers that don't model a reason ignore it. The host
+   * clears its issue caches after a successful close.
+   */
+  closeIssue(repo: RepoRef, issueNumber: number, stateReason?: IssueCloseReason): Promise<Issue>;
+  /**
+   * Reopen a closed issue, returning the updated {@link Issue}. The host clears
+   * its issue caches after a successful reopen.
+   */
+  reopenIssue(repo: RepoRef, issueNumber: number): Promise<Issue>;
+  /**
+   * Edit an issue's title and/or body, returning the updated {@link Issue}. At
+   * least one field of `input` must be present. The host clears its issue
+   * caches after a successful edit.
+   */
+  editIssue(repo: RepoRef, issueNumber: number, input: EditIssueInput): Promise<Issue>;
+  /**
+   * Add a comment to an issue, returning the created {@link IssueComment}.
+   */
+  addIssueComment(repo: RepoRef, issueNumber: number, body: string): Promise<IssueComment>;
+  /**
+   * Add a single label (by name) to an issue, returning the issue's full label
+   * set after the add. Additive — existing labels are preserved. The host
+   * clears its issue caches after a successful add.
+   */
+  addIssueLabel(repo: RepoRef, issueNumber: number, label: string): Promise<ForgeLabel[]>;
+  /**
+   * Remove a single label (by name) from an issue, returning the issue's
+   * remaining label set. Throws when the label isn't present on the issue. The
+   * host clears its issue caches after a successful remove.
+   */
+  removeIssueLabel(repo: RepoRef, issueNumber: number, label: string): Promise<ForgeLabel[]>;
   /**
    * Validate a single freshly-entered credential value at save time. The host
    * passes exactly one string — the primary of the provider's declared

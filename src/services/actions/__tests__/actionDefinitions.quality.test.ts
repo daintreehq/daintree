@@ -341,6 +341,8 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "forge.markPRReadyForReview",
   "forge.commentOnPR",
   "forge.editPR",
+  "forge.closeIssue",
+  "forge.editIssue",
 ];
 
 /**
@@ -419,6 +421,12 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   "forge.markPRReadyForReview",
   "forge.commentOnPR",
   "forge.editPR",
+  // Agent/MCP-only forge write surface (#10653) — no user-side ConfirmDialog.
+  // danger:"confirm" gates agent dispatch only (closing an issue / overwriting
+  // its body on the shared forge are D2 mutations needing acknowledgment); user
+  // dispatch happens through the forge UI, not these actions.
+  "forge.closeIssue",
+  "forge.editIssue",
 ];
 
 describe("destructive-action confirm wiring", () => {
@@ -493,6 +501,10 @@ describe("destructive-action danger metadata", () => {
       base: "main",
       title: "placeholder",
       body: "placeholder",
+      // forge.closeIssue/editIssue need a valid issueNumber (+ a title so
+      // editIssue's title-or-body refinement passes) to clear arg validation
+      // and reach the confirm gate.
+      issueNumber: 1,
     };
 
     // Some listed actions (e.g. worktree.resource.teardown) gate availability
