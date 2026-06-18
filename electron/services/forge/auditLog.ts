@@ -65,8 +65,14 @@ export function summarizeForgeArgs(
     case "getIssue":
     case "getPR":
     case "assignIssue":
-    case "unassignIssue": {
-      // assign/unassign also receive a username — deliberately omitted (PII).
+    case "unassignIssue":
+    case "approvePR":
+    case "requestChanges":
+    case "dismissReview":
+    case "requestReviewers": {
+      // These also receive content (review body, dismissal message),
+      // identifiers (review id), or PII (username, reviewer logins) —
+      // deliberately omitted. Only the resource number is safe metadata.
       const num = typeof args === "number" ? args : undefined;
       return JSON.stringify(num !== undefined ? { number: num } : {});
     }

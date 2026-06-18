@@ -327,6 +327,14 @@ export interface GeneratedIpcInvokeMap {
     args: [projectPath: string];
     result: void;
   };
+  "forge:approve-pr": {
+    args: [payload: { cwd: string; prNumber: number; body?: string | undefined }];
+    result: void;
+  };
+  "forge:dismiss-review": {
+    args: [payload: { cwd: string; prNumber: number; reviewId: number; message: string }];
+    result: void;
+  };
   "forge:get-first-page-cache": {
     args: [payload: { cwd: string }];
     result: import("./forge.js").ForgeFirstPageCachePayload | null;
@@ -369,6 +377,21 @@ export interface GeneratedIpcInvokeMap {
   };
   "forge:open-pr": {
     args: [payload: { cwd: string; prNumber: number }];
+    result: void;
+  };
+  "forge:request-changes": {
+    args: [payload: { cwd: string; prNumber: number; body: string }];
+    result: void;
+  };
+  "forge:request-reviewers": {
+    args: [
+      payload: {
+        cwd: string;
+        prNumber: number;
+        users?: string[] | undefined;
+        teams?: string[] | undefined;
+      },
+    ];
     result: void;
   };
   "forge:resolve-author-avatar": {

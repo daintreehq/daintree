@@ -1558,6 +1558,224 @@ describe("createIssue", () => {
   });
 });
 
+describe("review write operations", () => {
+  function mockReviewFetchOk(status = 200) {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status });
+    (globalThis as unknown as { fetch: typeof fetchMock }).fetch = fetchMock;
+    return fetchMock;
+  }
+
+  function expectStandardHeaders(init: RequestInit) {
+    const headers = init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer test-token");
+    expect(headers.Accept).toBe("application/vnd.github+json");
+    expect(headers["X-GitHub-Api-Version"]).toBe("2022-11-28");
+    expect(headers["Content-Type"]).toBe("application/json");
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  }
+
+  beforeEach(() => {
+    vi.mocked(GitHubAuth.getToken).mockReturnValue("test-token");
+  });
+
+  describe("approvePR", () => {
+    it("POSTs an APPROVE review to the reviews endpoint with standard headers", async () => {
+      const fetchMock = mockReviewFetchOk();
+
+      await githubForgeProvider.reviews!.approvePR!(repo, 3);
+
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("https://api.github.com/repos/owner/repo/pulls/3/reviews");
+      expect(init.method).toBe("POST");
+      expectStandardHeaders(init);
+      // No body field when no approval comment is supplied.
+      expect(JSON.parse(init.body as string)).toEqual({ event: "APPROVE" });
+    });
+
+    it("includes the approval comment when provided", async () => {
+      const fetchMock = mockReviewFetchOk();
+
+      await githubForgeProvider.reviews!.approvePR!(repo, 3, "LGTM");
+
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      expect(JSON.parse(init.body as string)).toEqual({ event: "APPROVE", body: "LGTM" });
+    });
+
+    it("invalidates the PR caches so the next getPR reflects the new reviewDecision", async () => {
+      mockReviewFetchOk();
+      prTooltipCache.set("owner/repo:3", {} as never);
+      expect(prTooltipCache.get("owner/repo:3")).toBeDefined();
+
+      await githubForgeProvider.reviews!.approvePR!(repo, 3);
+
+      expect(prTooltipCache.get("owner/repo:3")).toBeUndefined();
+    });
+
+    it("throws when no token is configured", async () => {
+      vi.mocked(GitHubAuth.getToken).mockReturnValue("");
+
+      await expect(githubForgeProvider.reviews!.approvePR!(repo, 3)).rejects.toThrow(
+        /token not configured/i
+      );
+    });
+
+    it("surfaces the HTTP status when the forge rejects the review", async () => {
+      (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
+        .fn()
+        .mockResolvedValue({
+          ok: false,
+          status: 422,
+          text: vi.fn().mockResolvedValue("Can not approve your own pull request"),
+        });
+
+      await expect(githubForgeProvider.reviews!.approvePR!(repo, 3)).rejects.toThrow(/HTTP 422/);
+    });
+  });
+
+  describe("requestChanges", () => {
+    it("POSTs a REQUEST_CHANGES review carrying the body", async () => {
+      const fetchMock = mockReviewFetchOk();
+
+      await githubForgeProvider.reviews!.requestChanges!(repo, 4, "Please fix the types");
+
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("https://api.github.com/repos/owner/repo/pulls/4/reviews");
+      expect(init.method).toBe("POST");
+      expectStandardHeaders(init);
+      expect(JSON.parse(init.body as string)).toEqual({
+        event: "REQUEST_CHANGES",
+        body: "Please fix the types",
+      });
+    });
+
+    it("invalidates the PR caches", async () => {
+      mockReviewFetchOk();
+      prTooltipCache.set("owner/repo:4", {} as never);
+
+      await githubForgeProvider.reviews!.requestChanges!(repo, 4, "fix");
+
+      expect(prTooltipCache.get("owner/repo:4")).toBeUndefined();
+    });
+
+    it("surfaces the HTTP status on failure", async () => {
+      (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
+        .fn()
+        .mockResolvedValue({
+          ok: false,
+          status: 422,
+          text: vi.fn().mockResolvedValue("Validation failed"),
+        });
+
+      await expect(githubForgeProvider.reviews!.requestChanges!(repo, 4, "fix")).rejects.toThrow(
+        /HTTP 422/
+      );
+    });
+  });
+
+  describe("dismissReview", () => {
+    it("PUTs to the dismissals endpoint with the message and DISMISS event", async () => {
+      const fetchMock = mockReviewFetchOk();
+
+      await githubForgeProvider.reviews!.dismissReview!(repo, 5, 99, "No longer relevant");
+
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("https://api.github.com/repos/owner/repo/pulls/5/reviews/99/dismissals");
+      expect(init.method).toBe("PUT");
+      expectStandardHeaders(init);
+      expect(JSON.parse(init.body as string)).toEqual({
+        message: "No longer relevant",
+        event: "DISMISS",
+      });
+    });
+
+    it("surfaces the HTTP status on failure", async () => {
+      (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
+        .fn()
+        .mockResolvedValue({
+          ok: false,
+          status: 404,
+          text: vi.fn().mockResolvedValue("Not Found"),
+        });
+
+      await expect(githubForgeProvider.reviews!.dismissReview!(repo, 5, 99, "x")).rejects.toThrow(
+        /HTTP 404/
+      );
+    });
+
+    it("throws when no token is configured", async () => {
+      vi.mocked(GitHubAuth.getToken).mockReturnValue("");
+
+      await expect(githubForgeProvider.reviews!.dismissReview!(repo, 5, 99, "x")).rejects.toThrow(
+        /token not configured/i
+      );
+    });
+  });
+
+  describe("requestReviewers", () => {
+    it("POSTs users as reviewers and teams as team_reviewers", async () => {
+      const fetchMock = mockReviewFetchOk(201);
+
+      await githubForgeProvider.reviews!.requestReviewers!(repo, 6, {
+        users: ["octocat"],
+        teams: ["core-team"],
+      });
+
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("https://api.github.com/repos/owner/repo/pulls/6/requested_reviewers");
+      expect(init.method).toBe("POST");
+      expectStandardHeaders(init);
+      expect(JSON.parse(init.body as string)).toEqual({
+        reviewers: ["octocat"],
+        team_reviewers: ["core-team"],
+      });
+    });
+
+    it("sends empty arrays for the side not supplied", async () => {
+      const fetchMock = mockReviewFetchOk(201);
+
+      await githubForgeProvider.reviews!.requestReviewers!(repo, 6, { users: ["octocat"] });
+
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      expect(JSON.parse(init.body as string)).toEqual({
+        reviewers: ["octocat"],
+        team_reviewers: [],
+      });
+    });
+
+    it("rejects without hitting the network when no reviewer is supplied", async () => {
+      const fetchMock = mockReviewFetchOk(201);
+
+      await expect(githubForgeProvider.reviews!.requestReviewers!(repo, 6, {})).rejects.toThrow(
+        /at least one user or team/i
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("surfaces the HTTP status on failure", async () => {
+      (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
+        .fn()
+        .mockResolvedValue({
+          ok: false,
+          status: 422,
+          text: vi.fn().mockResolvedValue("Reviewer is not a collaborator"),
+        });
+
+      await expect(
+        githubForgeProvider.reviews!.requestReviewers!(repo, 6, { users: ["octocat"] })
+      ).rejects.toThrow(/HTTP 422/);
+    });
+
+    it("does NOT invalidate the PR caches (requested reviewers are not part of the cached PR)", async () => {
+      mockReviewFetchOk(201);
+      prTooltipCache.set("owner/repo:6", {} as never);
+
+      await githubForgeProvider.reviews!.requestReviewers!(repo, 6, { users: ["octocat"] });
+
+      expect(prTooltipCache.get("owner/repo:6")).toBeDefined();
+    });
+  });
+});
+
 function parseBuiltUrl(s: string) {
   const url = new URL(s);
   return { path: url.pathname, q: url.searchParams.get("q") };

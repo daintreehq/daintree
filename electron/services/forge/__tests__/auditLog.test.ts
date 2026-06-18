@@ -230,6 +230,24 @@ describe("summarizeForgeArgs redaction", () => {
     expect(summarizeForgeArgs("assignIssue", 99)).toBe('{"number":99}');
   });
 
+  it("keeps only the PR number for review-write ops, omitting bodies/ids/reviewers", () => {
+    // Each of these receives content (review body, dismissal message),
+    // identifiers (review id), or PII (reviewer logins) beyond the PR number —
+    // only the number is recorded, and it is passed positionally.
+    expect(summarizeForgeArgs("approvePR", 12)).toBe('{"number":12}');
+    expect(summarizeForgeArgs("requestChanges", 4)).toBe('{"number":4}');
+    expect(summarizeForgeArgs("dismissReview", 5)).toBe('{"number":5}');
+    expect(summarizeForgeArgs("requestReviewers", 6)).toBe('{"number":6}');
+  });
+
+  it("never leaks review content even if a non-number arg is passed", () => {
+    // The number group only records a scalar number; an object arg (body,
+    // message, reviewer logins) is fully redacted to an empty object.
+    expect(summarizeForgeArgs("requestChanges", { body: "secret rationale" })).toBe("{}");
+    expect(summarizeForgeArgs("dismissReview", { message: "secret", reviewId: 7 })).toBe("{}");
+    expect(summarizeForgeArgs("requestReviewers", { users: ["alice"] })).toBe("{}");
+  });
+
   it("redacts createIssue title/body, keeping only the label count", () => {
     expect(
       summarizeForgeArgs("createIssue", {

@@ -2769,6 +2769,30 @@ describe("McpServerService", () => {
         title: "Open PR",
         description: "Open a pull request via the forge provider",
       }),
+      createManifestEntry({
+        id: "forge.approvePR" as ActionId,
+        title: "Approve PR (Forge)",
+        description: "Submit an approving review via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.requestChanges" as ActionId,
+        title: "Request Changes (Forge)",
+        description: "Submit a request-changes review via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.dismissReview" as ActionId,
+        title: "Dismiss Review (Forge)",
+        description: "Dismiss a submitted review via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.requestReviewers" as ActionId,
+        title: "Request Reviewers (Forge)",
+        description: "Request reviewers via the forge provider",
+        danger: "confirm",
+      }),
     ];
 
     // Tier action/addon sets are sourced from the production allowlists so a

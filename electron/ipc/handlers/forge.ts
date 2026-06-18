@@ -59,6 +59,185 @@ export const forgeUnassignIssueNamespace = defineIpcNamespace({
   },
 });
 
+function validatePRNumber(value: unknown): asserts value is number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error("Invalid PR number");
+  }
+}
+
+async function handleForgeApprovePR(payload: {
+  cwd: string;
+  prNumber: number;
+  body?: string;
+}): Promise<void> {
+  checkRateLimit(CHANNELS.FORGE_APPROVE_PR, 3, 10_000);
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid payload");
+  }
+  if (typeof payload.cwd !== "string" || !payload.cwd.trim()) {
+    throw new Error("Invalid working directory");
+  }
+  validatePRNumber(payload.prNumber);
+  if (payload.body !== undefined && typeof payload.body !== "string") {
+    throw new Error("Invalid review body");
+  }
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  const approvePR = impl.reviews?.approvePR?.bind(impl.reviews);
+  if (!approvePR) {
+    throw new Error("The active forge provider does not support approving pull requests");
+  }
+  await auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "approvePR",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("approvePR", payload.prNumber),
+    },
+    () => approvePR(repoRef, payload.prNumber, payload.body)
+  );
+}
+
+async function handleForgeRequestChanges(payload: {
+  cwd: string;
+  prNumber: number;
+  body: string;
+}): Promise<void> {
+  checkRateLimit(CHANNELS.FORGE_REQUEST_CHANGES, 3, 10_000);
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid payload");
+  }
+  if (typeof payload.cwd !== "string" || !payload.cwd.trim()) {
+    throw new Error("Invalid working directory");
+  }
+  validatePRNumber(payload.prNumber);
+  if (typeof payload.body !== "string" || !payload.body.trim()) {
+    throw new Error("A review body is required when requesting changes");
+  }
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  const requestChanges = impl.reviews?.requestChanges?.bind(impl.reviews);
+  if (!requestChanges) {
+    throw new Error(
+      "The active forge provider does not support requesting changes on pull requests"
+    );
+  }
+  await auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "requestChanges",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("requestChanges", payload.prNumber),
+    },
+    () => requestChanges(repoRef, payload.prNumber, payload.body)
+  );
+}
+
+async function handleForgeDismissReview(payload: {
+  cwd: string;
+  prNumber: number;
+  reviewId: number;
+  message: string;
+}): Promise<void> {
+  checkRateLimit(CHANNELS.FORGE_DISMISS_REVIEW, 3, 10_000);
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid payload");
+  }
+  if (typeof payload.cwd !== "string" || !payload.cwd.trim()) {
+    throw new Error("Invalid working directory");
+  }
+  validatePRNumber(payload.prNumber);
+  if (
+    typeof payload.reviewId !== "number" ||
+    !Number.isInteger(payload.reviewId) ||
+    payload.reviewId <= 0
+  ) {
+    throw new Error("Invalid review id");
+  }
+  if (typeof payload.message !== "string" || !payload.message.trim()) {
+    throw new Error("A dismissal message is required");
+  }
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  const dismissReview = impl.reviews?.dismissReview?.bind(impl.reviews);
+  if (!dismissReview) {
+    throw new Error("The active forge provider does not support dismissing reviews");
+  }
+  await auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "dismissReview",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("dismissReview", payload.prNumber),
+    },
+    () => dismissReview(repoRef, payload.prNumber, payload.reviewId, payload.message)
+  );
+}
+
+async function handleForgeRequestReviewers(payload: {
+  cwd: string;
+  prNumber: number;
+  users?: string[];
+  teams?: string[];
+}): Promise<void> {
+  checkRateLimit(CHANNELS.FORGE_REQUEST_REVIEWERS, 3, 10_000);
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid payload");
+  }
+  if (typeof payload.cwd !== "string" || !payload.cwd.trim()) {
+    throw new Error("Invalid working directory");
+  }
+  validatePRNumber(payload.prNumber);
+  const sanitize = (value: unknown, label: string): string[] => {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)) {
+      throw new Error(`Invalid ${label}`);
+    }
+    return value.map((entry) => {
+      if (typeof entry !== "string" || !entry.trim()) {
+        throw new Error(`Invalid ${label}`);
+      }
+      return entry.trim();
+    });
+  };
+  const users = sanitize(payload.users, "reviewer");
+  const teams = sanitize(payload.teams, "team reviewer");
+  if (users.length === 0 && teams.length === 0) {
+    throw new Error("Provide at least one user or team to request a review from");
+  }
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  const requestReviewers = impl.reviews?.requestReviewers?.bind(impl.reviews);
+  if (!requestReviewers) {
+    throw new Error("The active forge provider does not support requesting reviewers");
+  }
+  await auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "requestReviewers",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("requestReviewers", payload.prNumber),
+    },
+    () => requestReviewers(repoRef, payload.prNumber, { users, teams })
+  );
+}
+
+// Review-write operations share one namespace — the declarative surface
+// `defineIpcNamespace` gives over the legacy `typedHandle` helper (#8577).
+export const forgeReviewNamespace = defineIpcNamespace({
+  name: "forgeReview",
+  ops: {
+    approvePR: op(CHANNELS.FORGE_APPROVE_PR, handleForgeApprovePR),
+    requestChanges: op(CHANNELS.FORGE_REQUEST_CHANGES, handleForgeRequestChanges),
+    dismissReview: op(CHANNELS.FORGE_DISMISS_REVIEW, handleForgeDismissReview),
+    requestReviewers: op(CHANNELS.FORGE_REQUEST_REVIEWERS, handleForgeRequestReviewers),
+  },
+});
+
 async function handleForgeOpenPR(payload: { cwd: string; prNumber: number }): Promise<void> {
   checkRateLimit(CHANNELS.FORGE_OPEN_PR, 20, 10_000);
   if (!payload || typeof payload !== "object") {
@@ -215,6 +394,7 @@ export function registerForgeHandlers(): () => void {
   );
 
   cleanups.push(forgeUnassignIssueNamespace.register());
+  cleanups.push(forgeReviewNamespace.register());
 
   cleanups.push(
     typedHandle(

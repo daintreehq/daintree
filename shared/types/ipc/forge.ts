@@ -227,6 +227,10 @@ export type ForgeProviderMethodName =
   | "createIssue"
   | "assignIssue"
   | "unassignIssue"
+  | "approvePR"
+  | "requestChanges"
+  | "dismissReview"
+  | "requestReviewers"
   | "validateToken"
   | "getCurrentUser";
 

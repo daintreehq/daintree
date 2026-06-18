@@ -28,6 +28,13 @@ const fakeImpl = vi.hoisted(() => ({
   getPR: vi.fn(),
   getRepoMetadata: vi.fn(),
   repoStats: { getRepoStats: vi.fn() },
+  reviews: {
+    getReviewThreads: vi.fn(),
+    approvePR: vi.fn(),
+    requestChanges: vi.fn(),
+    dismissReview: vi.fn(),
+    requestReviewers: vi.fn(),
+  },
 }));
 
 const resolveForCwdMock = vi.hoisted(() => vi.fn());
@@ -360,6 +367,27 @@ describe("forge handlers — rate limiting", () => {
         maxCalls: 5,
         invoke: (h) => h({}, { cwd, issueNumber: 1, username: "octocat" }),
       },
+      // review-write ops: 3/10s (more conservative than assign — higher blast radius)
+      {
+        channel: CHANNELS.FORGE_APPROVE_PR,
+        maxCalls: 3,
+        invoke: (h) => h({}, { cwd, prNumber: 1 }),
+      },
+      {
+        channel: CHANNELS.FORGE_REQUEST_CHANGES,
+        maxCalls: 3,
+        invoke: (h) => h({}, { cwd, prNumber: 1, body: "please fix" }),
+      },
+      {
+        channel: CHANNELS.FORGE_DISMISS_REVIEW,
+        maxCalls: 3,
+        invoke: (h) => h({}, { cwd, prNumber: 1, reviewId: 1, message: "stale" }),
+      },
+      {
+        channel: CHANNELS.FORGE_REQUEST_REVIEWERS,
+        maxCalls: 3,
+        invoke: (h) => h({}, { cwd, prNumber: 1, users: ["octocat"] }),
+      },
       // open-PR: 20/10s (matches forge:open-issue)
       { channel: CHANNELS.FORGE_OPEN_PR, maxCalls: 20, invoke: (h) => h({}, { cwd, prNumber: 1 }) },
       // capability reads: 10/10s (matches github:get-repo-stats family)
@@ -407,12 +435,12 @@ describe("forge handlers — rate limiting", () => {
       },
     ];
 
-    it("registers all forge channels (25 rate-limited + 2 unrated probes)", () => {
-      expect(specs).toHaveLength(25);
+    it("registers all forge channels (29 rate-limited + 2 unrated probes)", () => {
+      expect(specs).toHaveLength(29);
       // FORGE_GET_CURRENT_USER and FORGE_GET_TOKEN_HEALTH are intentionally
       // unrated replay/identity probes with no checkRateLimit, so they register
       // handlers but stay out of `specs`.
-      expect(ipcMainMock.handle).toHaveBeenCalledTimes(27);
+      expect(ipcMainMock.handle).toHaveBeenCalledTimes(31);
     });
 
     it.each(specs)(
