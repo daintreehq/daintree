@@ -173,6 +173,51 @@ describe("AssistantHostSessionDescriptorSchema", () => {
       AssistantHostSessionDescriptorSchema.safeParse({ ...descriptor, protocolVersion: 0 }).success
     ).toBe(false);
   });
+
+  it("rejects a negative windowId (matches the >= 0 invariant the service enforces)", () => {
+    expect(
+      AssistantHostSessionDescriptorSchema.safeParse({ ...descriptor, windowId: -1 }).success
+    ).toBe(false);
+  });
+
+  it("rejects a whitespace-only sessionId (would fail delivery pinning)", () => {
+    expect(parseAssistantHostSessionDescriptor({ ...descriptor, sessionId: "   " })).toBeNull();
+  });
+});
+
+describe("numeric and blank-id bounds on events", () => {
+  const turnEnd = VALID_EVENTS.find((e) => e.type === "turn:end")!;
+  const toolSettled = VALID_EVENTS.find((e) => e.type === "tool:settled")!;
+  const turnStart = VALID_EVENTS.find((e) => e.type === "turn:start")!;
+
+  it("rejects a negative timestamp", () => {
+    expect(parseAssistantHostEvent({ ...turnEnd, endedAt: -1 })).toBeNull();
+  });
+
+  it("rejects a non-finite timestamp", () => {
+    expect(
+      parseAssistantHostEvent({ ...turnStart, startedAt: Number.POSITIVE_INFINITY })
+    ).toBeNull();
+    expect(parseAssistantHostEvent({ ...turnStart, startedAt: Number.NaN })).toBeNull();
+  });
+
+  it("rejects a negative tool durationMs", () => {
+    expect(parseAssistantHostEvent({ ...toolSettled, durationMs: -50 })).toBeNull();
+  });
+
+  it("rejects a whitespace-only turnId", () => {
+    expect(parseAssistantHostEvent({ ...turnEnd, turnId: "  " })).toBeNull();
+  });
+
+  it("strips an extra field rather than forwarding it (secrets never ride an event)", () => {
+    const base = VALID_EVENTS.find((e) => e.type === "host:error")!;
+    const parsed = parseAssistantHostEvent({ ...base, token: "secret-bearer" }) as Record<
+      string,
+      unknown
+    > | null;
+    expect(parsed).not.toBeNull();
+    expect(parsed).not.toHaveProperty("token");
+  });
 });
 
 describe("AssistantHostCommandSchema / EventSchema separation", () => {

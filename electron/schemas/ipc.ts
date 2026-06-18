@@ -11,6 +11,12 @@ import {
   type AssistantHostCommand,
   type AssistantHostSessionDescriptor,
 } from "../../shared/types/ipc/assistantHost.js";
+import type {
+  McpAuditResult,
+  McpAuditSeverity,
+  McpConfirmationDecision,
+  TurnOutcomeClass,
+} from "../../shared/types/ipc/mcpServer.js";
 
 /** Schema for a launch hint — built-in agent id or plugin-provided string. */
 const LaunchAgentIdSchema = z.union([z.enum(BUILT_IN_AGENT_IDS), z.string().min(1)]);
@@ -752,124 +758,160 @@ const AssistantTurnRoleSchema = z.enum(["user", "assistant"]);
 
 const AssistantHostShutdownReasonSchema = z.enum(["hibernate", "revoke", "error", "exit"]);
 
+// Compile-time parity guard. These Zod enums duplicate the audit-aligned string
+// unions from `mcpServer.ts` (Zod has no way to derive an enum from a bare TS
+// union). If a member is added or removed there without a matching change here,
+// one of these assignments fails to typecheck — turning silent runtime drift
+// (valid events rejected, or invalid ones accepted) into a build error.
+type ExactlyEqual<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+type AssertTrue<T extends true> = T;
+type _AuditResultParity = AssertTrue<
+  ExactlyEqual<z.infer<typeof McpAuditResultSchema>, McpAuditResult>
+>;
+type _AuditSeverityParity = AssertTrue<
+  ExactlyEqual<z.infer<typeof McpAuditSeveritySchema>, McpAuditSeverity>
+>;
+type _ConfirmationDecisionParity = AssertTrue<
+  ExactlyEqual<z.infer<typeof McpConfirmationDecisionSchema>, McpConfirmationDecision>
+>;
+type _TurnOutcomeParity = AssertTrue<
+  ExactlyEqual<z.infer<typeof TurnOutcomeClassSchema>, TurnOutcomeClass>
+>;
+
+/**
+ * Identifier string carrying at least one non-whitespace character. A blank or
+ * whitespace-only id passes a bare `.min(1)` but fails delivery-pinning
+ * downstream, so it is rejected at the parse boundary instead.
+ */
+const IdString = z.string().refine((s) => s.trim().length > 0, { message: "must not be blank" });
+
+/**
+ * Wall-clock timestamp / duration in milliseconds. Finite and non-negative so
+ * downstream ordering and duration math can never be poisoned by `NaN`,
+ * `Infinity`, or a negative value slipping through the contract.
+ */
+const Timestamp = z.number().finite().nonnegative();
+
 /**
  * Non-secret descriptor handed to the host at fork. The bearer token and MCP
  * URL are intentionally absent — they travel via env vars — so the schema
- * rejects any descriptor that smuggles a `token`/`mcpUrl` field.
+ * rejects any descriptor that smuggles a `token`/`mcpUrl` field. `windowId` is
+ * `.nonnegative()` to match the `>= 0` invariant `HelpSessionService` enforces.
  */
 export const AssistantHostSessionDescriptorSchema = z
   .object({
-    sessionId: z.string().min(1),
-    windowId: z.number().int(),
-    projectId: z.string().min(1),
-    cwd: z.string().min(1),
-    tier: z.string().min(1),
+    sessionId: IdString,
+    windowId: z.number().int().nonnegative(),
+    projectId: IdString,
+    cwd: IdString,
+    tier: IdString,
     protocolVersion: z.number().int().positive(),
-    resumeSessionId: z.string().min(1).optional(),
+    resumeSessionId: IdString.optional(),
   })
   .strict();
 
 export const AssistantHostEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("host:ready"),
-    sessionId: z.string().min(1),
+    sessionId: IdString,
     protocolVersion: z.number().int().positive(),
-    resumedSessionId: z.string().min(1).optional(),
+    resumedSessionId: IdString.optional(),
   }),
   z.object({
     type: z.literal("turn:start"),
-    sessionId: z.string().min(1),
-    turnId: z.string().min(1),
+    sessionId: IdString,
+    turnId: IdString,
     role: AssistantTurnRoleSchema,
-    startedAt: z.number(),
+    startedAt: Timestamp,
   }),
   z.object({
     type: z.literal("turn:token"),
-    sessionId: z.string().min(1),
-    turnId: z.string().min(1),
+    sessionId: IdString,
+    turnId: IdString,
     chunk: z.string(),
   }),
   z.object({
     type: z.literal("turn:end"),
-    sessionId: z.string().min(1),
-    turnId: z.string().min(1),
-    endedAt: z.number(),
+    sessionId: IdString,
+    turnId: IdString,
+    endedAt: Timestamp,
     outcome: TurnOutcomeClassSchema.optional(),
   }),
   z.object({
     type: z.literal("tool:started"),
-    sessionId: z.string().min(1),
-    toolCallId: z.string().min(1),
-    toolId: z.string().min(1),
+    sessionId: IdString,
+    toolCallId: IdString,
+    toolId: IdString,
     argsSummary: z.string(),
-    startedAt: z.number(),
-    turnId: z.string().min(1).optional(),
+    startedAt: Timestamp,
+    turnId: IdString.optional(),
     danger: z.boolean(),
   }),
   z.object({
     type: z.literal("tool:settled"),
-    sessionId: z.string().min(1),
-    toolCallId: z.string().min(1),
-    toolId: z.string().min(1),
-    durationMs: z.number(),
+    sessionId: IdString,
+    toolCallId: IdString,
+    toolId: IdString,
+    durationMs: Timestamp,
     result: McpAuditResultSchema,
     severity: McpAuditSeveritySchema,
     errorCode: z.string().optional(),
-    turnId: z.string().min(1).optional(),
+    turnId: IdString.optional(),
   }),
   z.object({
     type: z.literal("approval:requested"),
-    sessionId: z.string().min(1),
-    approvalId: z.string().min(1),
-    toolId: z.string().min(1),
+    sessionId: IdString,
+    approvalId: IdString,
+    toolId: IdString,
     summary: z.string(),
-    requestedAt: z.number(),
-    turnId: z.string().min(1).optional(),
+    requestedAt: Timestamp,
+    turnId: IdString.optional(),
   }),
   z.object({
     type: z.literal("approval:decided"),
-    sessionId: z.string().min(1),
-    approvalId: z.string().min(1),
+    sessionId: IdString,
+    approvalId: IdString,
     decision: McpConfirmationDecisionSchema,
-    decidedAt: z.number(),
+    decidedAt: Timestamp,
   }),
   z.object({
     type: z.literal("host:error"),
-    sessionId: z.string().min(1),
-    code: z.string().min(1),
+    sessionId: IdString,
+    code: IdString,
     message: z.string(),
   }),
   z.object({
     type: z.literal("host:shutdown"),
-    sessionId: z.string().min(1),
+    sessionId: IdString,
     reason: AssistantHostShutdownReasonSchema,
-    resumeSessionId: z.string().min(1).optional(),
+    resumeSessionId: IdString.optional(),
   }),
 ]);
 
 export const AssistantHostCommandSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("prompt"),
-    sessionId: z.string().min(1),
+    sessionId: IdString,
     text: z.string(),
   }),
   z.object({
     type: z.literal("approval:decide"),
-    sessionId: z.string().min(1),
-    approvalId: z.string().min(1),
+    sessionId: IdString,
+    approvalId: IdString,
     decision: McpConfirmationDecisionSchema,
   }),
   z.object({
     type: z.literal("interrupt"),
-    sessionId: z.string().min(1),
+    sessionId: IdString,
   }),
   z.object({
     type: z.literal("hibernate"),
-    sessionId: z.string().min(1),
+    sessionId: IdString,
   }),
   z.object({
     type: z.literal("shutdown"),
-    sessionId: z.string().min(1),
+    sessionId: IdString,
   }),
 ]);
 
