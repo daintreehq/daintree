@@ -5,6 +5,12 @@
 import { z } from "zod";
 import { BUILT_IN_PANEL_KINDS, panelKindHasPty } from "../../shared/config/panelKindRegistry.js";
 import { BUILT_IN_AGENT_IDS } from "../../shared/config/agentIds.js";
+import {
+  ASSISTANT_HOST_PROTOCOL_VERSION,
+  type AssistantHostEvent,
+  type AssistantHostCommand,
+  type AssistantHostSessionDescriptor,
+} from "../../shared/types/ipc/assistantHost.js";
 
 /** Schema for a launch hint — built-in agent id or plugin-provided string. */
 const LaunchAgentIdSchema = z.union([z.enum(BUILT_IN_AGENT_IDS), z.string().min(1)]);
@@ -701,3 +707,191 @@ export type TerminalReplayHistoryPayload = z.infer<typeof TerminalReplayHistoryP
 export type DevPreviewStartPayload = z.infer<typeof DevPreviewStartPayloadSchema>;
 export type WorktreeSetActivePayload = z.infer<typeof WorktreeSetActivePayloadSchema>;
 export type WorktreeCreatePayload = z.infer<typeof WorktreeCreatePayloadSchema>;
+
+// ============================================================================
+// Assistant Native-Host Protocol Schemas (#10649)
+// ============================================================================
+//
+// Validation for the typed boundary between a future `daintree-assistant`
+// runtime hosted as a utility process and Daintree's main/renderer surfaces.
+// The main process parses every inbound host message before forwarding to the
+// pinned renderer — a malformed or unknown-`type` message is rejected, never
+// guessed at. Vocabularies mirror the audit-aligned types in
+// `shared/types/ipc/mcpServer.ts` so the native timeline and the audit log
+// cannot drift. See `shared/types/ipc/assistantHost.ts` for the source types.
+
+const McpAuditResultSchema = z.enum([
+  "success",
+  "error",
+  "confirmation-pending",
+  "unauthorized",
+  "dedup",
+  "collision",
+  "rate_limited",
+]);
+
+const McpAuditSeveritySchema = z.enum(["info", "notice", "warning", "error", "critical"]);
+
+const McpConfirmationDecisionSchema = z.enum(["approved", "rejected", "timeout"]);
+
+const TurnOutcomeClassSchema = z.enum([
+  "answered",
+  "hedged",
+  "refused",
+  "docs-empty",
+  "tier-rejected",
+  "mcp-not-ready",
+  "agent-stuck",
+  "tool-error",
+  "reasoning-loop",
+  "hibernate-resume-stale",
+  "unknown",
+]);
+
+const AssistantTurnRoleSchema = z.enum(["user", "assistant"]);
+
+const AssistantHostShutdownReasonSchema = z.enum(["hibernate", "revoke", "error", "exit"]);
+
+/**
+ * Non-secret descriptor handed to the host at fork. The bearer token and MCP
+ * URL are intentionally absent — they travel via env vars — so the schema
+ * rejects any descriptor that smuggles a `token`/`mcpUrl` field.
+ */
+export const AssistantHostSessionDescriptorSchema = z
+  .object({
+    sessionId: z.string().min(1),
+    windowId: z.number().int(),
+    projectId: z.string().min(1),
+    cwd: z.string().min(1),
+    tier: z.string().min(1),
+    protocolVersion: z.number().int().positive(),
+    resumeSessionId: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const AssistantHostEventSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("host:ready"),
+    sessionId: z.string().min(1),
+    protocolVersion: z.number().int().positive(),
+    resumedSessionId: z.string().min(1).optional(),
+  }),
+  z.object({
+    type: z.literal("turn:start"),
+    sessionId: z.string().min(1),
+    turnId: z.string().min(1),
+    role: AssistantTurnRoleSchema,
+    startedAt: z.number(),
+  }),
+  z.object({
+    type: z.literal("turn:token"),
+    sessionId: z.string().min(1),
+    turnId: z.string().min(1),
+    chunk: z.string(),
+  }),
+  z.object({
+    type: z.literal("turn:end"),
+    sessionId: z.string().min(1),
+    turnId: z.string().min(1),
+    endedAt: z.number(),
+    outcome: TurnOutcomeClassSchema.optional(),
+  }),
+  z.object({
+    type: z.literal("tool:started"),
+    sessionId: z.string().min(1),
+    toolCallId: z.string().min(1),
+    toolId: z.string().min(1),
+    argsSummary: z.string(),
+    startedAt: z.number(),
+    turnId: z.string().min(1).optional(),
+    danger: z.boolean(),
+  }),
+  z.object({
+    type: z.literal("tool:settled"),
+    sessionId: z.string().min(1),
+    toolCallId: z.string().min(1),
+    toolId: z.string().min(1),
+    durationMs: z.number(),
+    result: McpAuditResultSchema,
+    severity: McpAuditSeveritySchema,
+    errorCode: z.string().optional(),
+    turnId: z.string().min(1).optional(),
+  }),
+  z.object({
+    type: z.literal("approval:requested"),
+    sessionId: z.string().min(1),
+    approvalId: z.string().min(1),
+    toolId: z.string().min(1),
+    summary: z.string(),
+    requestedAt: z.number(),
+    turnId: z.string().min(1).optional(),
+  }),
+  z.object({
+    type: z.literal("approval:decided"),
+    sessionId: z.string().min(1),
+    approvalId: z.string().min(1),
+    decision: McpConfirmationDecisionSchema,
+    decidedAt: z.number(),
+  }),
+  z.object({
+    type: z.literal("host:error"),
+    sessionId: z.string().min(1),
+    code: z.string().min(1),
+    message: z.string(),
+  }),
+  z.object({
+    type: z.literal("host:shutdown"),
+    sessionId: z.string().min(1),
+    reason: AssistantHostShutdownReasonSchema,
+    resumeSessionId: z.string().min(1).optional(),
+  }),
+]);
+
+export const AssistantHostCommandSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("prompt"),
+    sessionId: z.string().min(1),
+    text: z.string(),
+  }),
+  z.object({
+    type: z.literal("approval:decide"),
+    sessionId: z.string().min(1),
+    approvalId: z.string().min(1),
+    decision: McpConfirmationDecisionSchema,
+  }),
+  z.object({
+    type: z.literal("interrupt"),
+    sessionId: z.string().min(1),
+  }),
+  z.object({
+    type: z.literal("hibernate"),
+    sessionId: z.string().min(1),
+  }),
+  z.object({
+    type: z.literal("shutdown"),
+    sessionId: z.string().min(1),
+  }),
+]);
+
+/** Parse an inbound host event, returning `null` for any invalid message. */
+export function parseAssistantHostEvent(value: unknown): AssistantHostEvent | null {
+  const result = AssistantHostEventSchema.safeParse(value);
+  return result.success ? (result.data as AssistantHostEvent) : null;
+}
+
+/** Parse an outbound host command, returning `null` for any invalid message. */
+export function parseAssistantHostCommand(value: unknown): AssistantHostCommand | null {
+  const result = AssistantHostCommandSchema.safeParse(value);
+  return result.success ? (result.data as AssistantHostCommand) : null;
+}
+
+/** Parse a fork-time descriptor, returning `null` if it is malformed. */
+export function parseAssistantHostSessionDescriptor(
+  value: unknown
+): AssistantHostSessionDescriptor | null {
+  const result = AssistantHostSessionDescriptorSchema.safeParse(value);
+  return result.success ? (result.data as AssistantHostSessionDescriptor) : null;
+}
+
+/** Re-exported so callers validating a handshake don't import two modules. */
+export { ASSISTANT_HOST_PROTOCOL_VERSION };
