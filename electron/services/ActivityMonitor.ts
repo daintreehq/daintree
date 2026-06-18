@@ -178,6 +178,13 @@ export class ActivityMonitor {
   // Volume-based idle→busy recovery for the simpleOutputState path (#10664).
   // Undefined unless `simpleOutputVolumeRecovery` is configured.
   private readonly simpleOutputVolumeDetector?: OutputVolumeDetector;
+  // Wall-clock of the last sustained-volume bucket fire (#10664). Defers both
+  // simpleOutputState waiting-demotion gates (the polling idle gate and the
+  // temperature `stateHint: idle` gate) for the quiet floor after heavy
+  // streaming, since appended output leaves the visible-content diff flat.
+  // Stays 0 — and thus inert — for any monitor whose volume detector never
+  // fires, so non-agent and unconfigured paths are unaffected.
+  private lastSimpleOutputVolumeAt = 0;
   private readonly highOutputDetector: HighOutputDetector;
   private readonly workingSignalDebouncer: WorkingSignalDebouncer;
   // Dedicated debouncer for the idle-state cosmetic-redraw recovery path
@@ -567,11 +574,15 @@ export class ActivityMonitor {
       }
       // Byte-volume liveness floor (#10664). The visible-content temperature
       // model reports changedChars: 0 for appended/scrolled output, so a long
-      // stream of investigation text never recovers waiting→working. Count the
-      // stripped bytes into a dedicated leaky bucket and, once it fires, recover
-      // idle→busy under the same suppression guards the non-simple
-      // first-output-byte path uses (#6388 strip-then-count, #8867 focus gate).
-      if (this.state === "idle" && this.simpleOutputVolumeDetector) {
+      // stream of investigation text never recovers waiting→working and, once
+      // recovered, the simpleOutputState idle gate (which keys off
+      // `lastActivityTimestamp`, only moved by visible-snapshot changes) would
+      // bounce it straight back to waiting. Count the stripped bytes into a
+      // dedicated leaky bucket; when it fires under the same suppression guards
+      // the non-simple first-output-byte path uses (#6388 strip-then-count,
+      // #8867 focus gate), treat that as activity: refresh the activity clock
+      // so heavy streaming keeps the agent working, and recover idle→busy.
+      if (this.simpleOutputVolumeDetector) {
         const filteredLength = Buffer.byteLength(stripIdleTerminalSequences(data), "utf8");
         if (
           filteredLength > 0 &&
@@ -581,7 +592,10 @@ export class ActivityMonitor {
           !this.inputTracker.isRecentUserInput(now) &&
           this.bootDetector.hasExitedBootState
         ) {
-          this.becomeBusy({ trigger: "output" }, now);
+          this.lastSimpleOutputVolumeAt = now;
+          if (this.state === "idle") {
+            this.becomeBusy({ trigger: "output" }, now);
+          }
         }
       }
       return;
@@ -877,7 +891,15 @@ export class ActivityMonitor {
       return;
     }
 
-    if (this.state === "busy" && result.stateHint === "idle" && now >= this.workingHoldUntil) {
+    if (
+      this.state === "busy" &&
+      result.stateHint === "idle" &&
+      now >= this.workingHoldUntil &&
+      // Heavy appended streaming leaves the visible-content diff flat, so the
+      // temperature reports "idle" even while output pours in. Defer demotion
+      // while the byte-volume floor has fired within the quiet window (#10664).
+      !this.hasRecentSimpleOutputVolume(now)
+    ) {
       this.transitionSimpleToIdle(now);
     }
   }
@@ -918,6 +940,7 @@ export class ActivityMonitor {
     this.completionTimer.dispose();
     this.inputTracker.reset();
     this.outputVolumeDetector.reset();
+    this.simpleOutputVolumeDetector?.reset();
     this.highOutputDetector.reset();
     this.workingSignalDebouncer.reset();
     this.cosmeticRecoveryDebouncer.reset();
@@ -937,6 +960,7 @@ export class ActivityMonitor {
     this.cpuTracker.reset();
     this.workingHoldUntil = 0;
     this.lastDataTimestamp = 0;
+    this.lastSimpleOutputVolumeAt = 0;
     this.lastOutputActivityAt = 0;
     this.lastStatusRewriteAt = 0;
     this.lastWorkingIndicatorTimestamp = 0;
@@ -1051,6 +1075,18 @@ export class ActivityMonitor {
       this.state = "busy";
       this.idleSince = now;
     }
+  }
+
+  // True while the simpleOutputState byte-volume floor (#10664) has fired
+  // within the waiting-quiet window. Used to defer waiting-demotion during
+  // heavy appended streaming, which leaves the visible-content diff flat. The
+  // `> 0` guard keeps a never-fired clock (0) from blocking demotion at small
+  // synthetic timestamps, so monitors without a volume detector are inert here.
+  private hasRecentSimpleOutputVolume(now: number): boolean {
+    return (
+      this.lastSimpleOutputVolumeAt > 0 &&
+      now - this.lastSimpleOutputVolumeAt < this.IDLE_DEBOUNCE_MS
+    );
   }
 
   notifyResize(suppressionMs = 500): void {
@@ -1197,6 +1233,7 @@ export class ActivityMonitor {
         this.state === "busy" &&
         !this.completionTimer.emitted &&
         now - this.lastActivityTimestamp >= this.IDLE_DEBOUNCE_MS &&
+        !this.hasRecentSimpleOutputVolume(now) &&
         now >= this.workingHoldUntil
       ) {
         this.transitionSimpleToIdle(now);
@@ -1678,6 +1715,7 @@ export class ActivityMonitor {
         if (
           this.state === "busy" &&
           now - this.lastActivityTimestamp >= this.IDLE_DEBOUNCE_MS &&
+          !this.hasRecentSimpleOutputVolume(now) &&
           now >= this.workingHoldUntil
         ) {
           this.transitionSimpleToIdle(now);

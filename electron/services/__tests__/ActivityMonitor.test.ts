@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ActivityMonitor } from "../ActivityMonitor.js";
 import { AGENT_OUTPUT_ACTIVITY_LINE_COUNT } from "../pty/AgentActivityTemperature.js";
+import { buildActivityMonitorOptions } from "../pty/terminalActivityPatterns.js";
 import {
   createVisibleCellContentSnapshot,
   createVisibleContentSnapshot,
@@ -1363,7 +1364,7 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
-    it("recovers waiting→working from sustained byte volume alone (#10664)", () => {
+    it("recovers waiting→working from sustained byte volume and stays working through the stream (#10664)", () => {
       const onStateChange = vi.fn();
       let visible = ["idle prompt"];
       const monitor = new ActivityMonitor("simple-volume", 1000, onStateChange, {
@@ -1402,6 +1403,22 @@ describe("ActivityMonitor", () => {
       expect(onStateChange).toHaveBeenCalledWith("simple-volume", 1000, "busy", {
         trigger: "output",
       });
+
+      // The visible screen never changes, so the only thing keeping the agent
+      // working is the volume floor refreshing the activity clock. Keep
+      // streaming for well past WORKING_HOLD_MS (1.5s) and IDLE_DEBOUNCE_MS (8s)
+      // and confirm it does not bounce back to waiting mid-stream.
+      for (let i = 0; i < 60; i += 1) {
+        vi.advanceTimersByTime(500);
+        monitor.onData(chunk);
+      }
+      expect(monitor.getState()).toBe("busy");
+      expect(onStateChange.mock.calls.filter((call) => call[2] === "idle")).toHaveLength(0);
+
+      // Once the stream stops, the agent settles back to waiting after the gate.
+      visible = ["idle prompt"];
+      vi.advanceTimersByTime(8200);
+      expect(monitor.getState()).toBe("idle");
 
       monitor.dispose();
     });
@@ -1449,6 +1466,19 @@ describe("ActivityMonitor", () => {
       );
 
       monitor.dispose();
+    });
+
+    it("wires simpleOutputVolumeRecovery for agent terminals only (#10664)", () => {
+      const agentOptions = buildActivityMonitorOptions("claude", {});
+      expect(agentOptions.simpleOutputVolumeRecovery?.enabled).toBe(true);
+      // Threshold must exceed the per-frame cap so a single chunk can never fire
+      // the bucket on its own — recovery requires sustained volume.
+      const recovery = agentOptions.simpleOutputVolumeRecovery!;
+      expect(recovery.activationThreshold!).toBeGreaterThan(recovery.maxBytesPerFrame!);
+
+      // Non-agent terminals don't get the recovery detector.
+      const plainOptions = buildActivityMonitorOptions(undefined, {});
+      expect(plainOptions.simpleOutputVolumeRecovery).toBeUndefined();
     });
   });
 
