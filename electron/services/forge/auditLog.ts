@@ -69,13 +69,24 @@ export function summarizeForgeArgs(
     case "approvePR":
     case "requestChanges":
     case "dismissReview":
-    case "requestReviewers": {
-      // These also receive content (review body, dismissal message),
-      // identifiers (review id), or PII (username, reviewer logins) —
-      // deliberately omitted. Only the resource number is safe metadata.
+    case "requestReviewers":
+    case "closePR":
+    case "reopenPR":
+    case "mergePR":
+    case "convertPRToDraft":
+    case "markPRReadyForReview":
+    case "commentOnPR":
+    case "editPR": {
+      // These also receive content (review/comment body, dismissal message,
+      // edit title/body, merge commit text), identifiers (review id), or PII
+      // (username, reviewer logins) — deliberately omitted. Only the resource
+      // number is safe metadata.
       const num = typeof args === "number" ? args : undefined;
       return JSON.stringify(num !== undefined ? { number: num } : {});
     }
+    case "createPR":
+      // head/base/title/body are all user content — and there's no number yet.
+      return "";
     case "createIssue": {
       // Only the label count is safe metadata — title and body are user content.
       const input = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;

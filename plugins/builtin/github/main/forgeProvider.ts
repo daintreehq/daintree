@@ -7,7 +7,9 @@ import type {
   CIStatus,
   CIStatusState,
   CreateIssueInput,
+  CreatePRInput,
   Credentials,
+  EditPRInput,
   FirstPageSnapshot,
   ForgeProviderImpl,
   ForgeRepoCounts,
@@ -20,6 +22,7 @@ import type {
   IssueTooltipData,
   LinkedPRSummary,
   ListOptions,
+  MergePRInput,
   NormalizedIssueState,
   NormalizedPRState,
   NormalizedReviewDecision,
@@ -54,6 +57,9 @@ import {
   GET_ISSUE_QUERY,
   GET_PR_QUERY,
   GET_PR_REVIEW_THREADS_QUERY,
+  GET_PR_NODE_ID_QUERY,
+  CONVERT_PR_TO_DRAFT_MUTATION,
+  MARK_PR_READY_FOR_REVIEW_MUTATION,
   BATCH_BRANCH_CHUNK_SIZE,
   GRAPHQL_BATCH_CHUNK_SIZE,
   buildBatchBranchPRQuery,
@@ -301,6 +307,96 @@ function restToForgeIssue(raw: Record<string, unknown>): Issue {
     closedAt: isoToMsOrNull(raw.closed_at),
     rawData: raw,
   };
+}
+
+/**
+ * Normalize a GitHub REST pull-request payload (the `POST .../pulls` create and
+ * `PATCH .../pulls/{n}` edit responses) to the contract {@link PR}. REST field
+ * names diverge from the GraphQL projection {@link toForgePR} handles — `body`
+ * vs `bodyText`, `draft` vs `isDraft`, snake_case timestamps, nested
+ * `base.ref`/`head.ref` rather than `baseRefName`/`headRefName` — so a dedicated
+ * mapper is needed.
+ */
+function restToForgePR(raw: Record<string, unknown>): PR {
+  const merged = raw.merged === true || typeof raw.merged_at === "string";
+  const rawState = typeof raw.state === "string" ? raw.state : "open";
+  const base = raw.base as { ref?: unknown } | undefined;
+  const head = raw.head as { ref?: unknown } | undefined;
+  const mergeable = typeof raw.mergeable === "boolean" ? raw.mergeable : null;
+  return {
+    number: raw.number as number,
+    title: typeof raw.title === "string" ? raw.title : "",
+    body: typeof raw.body === "string" ? raw.body : "",
+    state: normalizePRState(rawState, merged),
+    rawState,
+    isDraft: raw.draft === true,
+    merged,
+    url: typeof raw.html_url === "string" ? raw.html_url : "",
+    author: restUserToForgeUser(raw.user),
+    baseRef: typeof base?.ref === "string" ? base.ref : "",
+    headRef: typeof head?.ref === "string" ? head.ref : "",
+    mergeable,
+    createdAt: isoToMs(raw.created_at ?? raw.updated_at),
+    updatedAt: isoToMs(raw.updated_at),
+    closedAt: isoToMsOrNull(raw.closed_at),
+    mergedAt: isoToMsOrNull(raw.merged_at),
+    rawData: raw,
+  };
+}
+
+function requireGitHubToken(): string {
+  const token = GitHubAuth.getToken();
+  if (!token) {
+    throw new Error("GitHub token not configured. Set it in Settings.");
+  }
+  return token;
+}
+
+function githubMutationHeaders(token: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "Content-Type": "application/json",
+  };
+}
+
+// Shared PATCH for close/reopen — both flip `state` on the same endpoint.
+async function patchPRState(
+  repo: RepoRef,
+  prNumber: number,
+  state: "open" | "closed"
+): Promise<void> {
+  const token = requireGitHubToken();
+  const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls/${prNumber}`;
+  const response = await fetch(url, {
+    method: "PATCH",
+    headers: githubMutationHeaders(token),
+    body: JSON.stringify({ state }),
+    signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    const verb = state === "closed" ? "close" : "reopen";
+    throw new Error(
+      `Failed to ${verb} pull request #${prNumber}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
+    );
+  }
+}
+
+// Resolve a PR's GraphQL node id for the draft-toggle mutations.
+async function fetchPRNodeId(repo: RepoRef, prNumber: number): Promise<string> {
+  const response = await dispatchQuery(
+    GET_PR_NODE_ID_QUERY,
+    { owner: repo.owner, repo: repo.repo, number: prNumber },
+    "GET_PR_NODE_ID_QUERY"
+  );
+  const id = (response as { repository?: { pullRequest?: { id?: unknown } | null } | null })
+    ?.repository?.pullRequest?.id;
+  if (typeof id !== "string" || !id) {
+    throw new Error(`Pull request #${prNumber} not found.`);
+  }
+  return id;
 }
 
 function toForgePR(node: Record<string, unknown>): PR {
@@ -1835,6 +1931,160 @@ export const githubForgeProvider: ForgeProviderImpl = {
         `Failed to unassign issue #${issueNumber} from ${username}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
       );
     }
+  },
+
+  async createPR(repo: RepoRef, input: CreatePRInput): Promise<PR> {
+    const token = requireGitHubToken();
+    const head = input.head?.trim();
+    const base = input.base?.trim();
+    const title = input.title?.trim();
+    if (!head) throw new Error("PR head branch is required.");
+    if (!base) throw new Error("PR base branch is required.");
+    if (!title) throw new Error("PR title is required.");
+    const requestBody: Record<string, unknown> = { head, base, title };
+    if (input.body) requestBody.body = input.body;
+    if (input.draft) requestBody.draft = true;
+
+    const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: githubMutationHeaders(token),
+      body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      // 422 = head doesn't exist, no diff between head/base, or a PR for this
+      // head/base pair is already open. Surface GitHub's body so the user can tell.
+      throw new Error(
+        `Failed to create pull request: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
+      );
+    }
+    const data = (await response.json()) as Record<string, unknown>;
+    if (typeof data.number !== "number" || typeof data.html_url !== "string") {
+      throw new Error("Unexpected response from GitHub: missing PR number or URL.");
+    }
+    clearPRCaches();
+    return restToForgePR(data);
+  },
+
+  async closePR(repo: RepoRef, prNumber: number): Promise<void> {
+    await patchPRState(repo, prNumber, "closed");
+    clearPRCaches();
+  },
+
+  async reopenPR(repo: RepoRef, prNumber: number): Promise<void> {
+    await patchPRState(repo, prNumber, "open");
+    clearPRCaches();
+  },
+
+  async mergePR(repo: RepoRef, prNumber: number, input?: MergePRInput): Promise<void> {
+    const token = requireGitHubToken();
+    const requestBody: Record<string, unknown> = {};
+    if (input?.mergeMethod) requestBody.merge_method = input.mergeMethod;
+    if (input?.commitTitle) requestBody.commit_title = input.commitTitle;
+    if (input?.commitMessage) requestBody.commit_message = input.commitMessage;
+
+    const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls/${prNumber}/merge`;
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: githubMutationHeaders(token),
+      body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      // Classify by status, not message substring (lesson from #7079).
+      if (response.status === 405) {
+        throw new Error(
+          `Pull request #${prNumber} is not mergeable — it may be a draft, have conflicts, or fail required checks.`
+        );
+      }
+      if (response.status === 409) {
+        throw new Error(
+          `Pull request #${prNumber} head branch changed since it was last fetched — re-fetch the PR and try again.`
+        );
+      }
+      throw new Error(
+        `Failed to merge pull request #${prNumber}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
+      );
+    }
+    clearPRCaches();
+  },
+
+  async convertPRToDraft(repo: RepoRef, prNumber: number): Promise<void> {
+    // REST PATCH can't toggle draft state — GraphQL is the only path, and it
+    // needs the PR's node id, which the normalized PR type intentionally omits.
+    const nodeId = await fetchPRNodeId(repo, prNumber);
+    await dispatchQuery(CONVERT_PR_TO_DRAFT_MUTATION, { id: nodeId }, "convertPullRequestToDraft");
+    clearPRCaches();
+  },
+
+  async markPRReadyForReview(repo: RepoRef, prNumber: number): Promise<void> {
+    const nodeId = await fetchPRNodeId(repo, prNumber);
+    await dispatchQuery(
+      MARK_PR_READY_FOR_REVIEW_MUTATION,
+      { id: nodeId },
+      "markPullRequestReadyForReview"
+    );
+    clearPRCaches();
+  },
+
+  async commentOnPR(repo: RepoRef, prNumber: number, body: string): Promise<void> {
+    const token = requireGitHubToken();
+    // Reject an empty/whitespace body, but post the original text verbatim —
+    // trimming would mangle leading indentation in fenced code blocks.
+    if (!body?.trim()) throw new Error("Comment body is required.");
+    // PR comments use the issues endpoint — PR number === issue number on GitHub.
+    const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/issues/${prNumber}/comments`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: githubMutationHeaders(token),
+      body: JSON.stringify({ body }),
+      signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `Failed to comment on pull request #${prNumber}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
+      );
+    }
+    // A comment changes the PR's comment count and timeline — drop PR caches so
+    // the next read reflects it (matches every other PR mutation).
+    clearPRCaches();
+  },
+
+  async editPR(repo: RepoRef, prNumber: number, input: EditPRInput): Promise<PR> {
+    const token = requireGitHubToken();
+    const requestBody: Record<string, unknown> = {};
+    if (typeof input.title === "string") {
+      const title = input.title.trim();
+      if (!title) throw new Error("PR title cannot be empty.");
+      requestBody.title = title;
+    }
+    if (typeof input.body === "string") requestBody.body = input.body;
+    if (Object.keys(requestBody).length === 0) {
+      throw new Error("Provide a title or body to edit.");
+    }
+    const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls/${prNumber}`;
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: githubMutationHeaders(token),
+      body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `Failed to edit pull request #${prNumber}: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
+      );
+    }
+    const data = (await response.json()) as Record<string, unknown>;
+    if (typeof data.number !== "number" || typeof data.html_url !== "string") {
+      throw new Error("Unexpected response from GitHub: missing PR number or URL.");
+    }
+    clearPRCaches();
+    return restToForgePR(data);
   },
 
   async validateToken(token: string): Promise<AuthValidation> {

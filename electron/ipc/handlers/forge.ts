@@ -9,7 +9,7 @@ import {
 } from "../../services/forgeProviderRegistry.js";
 import { resolveForCwd, getImplForNamespace } from "./forgeResolution.js";
 import { auditForgeCall, summarizeForgeArgs } from "../../services/forge/forgeAuditService.js";
-import type { PushErrorClassification } from "../../../shared/types/forge.js";
+import type { PR, PushErrorClassification } from "../../../shared/types/forge.js";
 import {
   makeForgeProviderId,
   normalizeProviderId,
@@ -266,6 +266,257 @@ export const forgeOpenPRNamespace = defineIpcNamespace({
   },
 });
 
+function assertCwd(cwd: unknown): asserts cwd is string {
+  if (typeof cwd !== "string" || !cwd.trim()) {
+    throw new Error("Invalid working directory");
+  }
+}
+
+function assertPRNumber(prNumber: unknown): asserts prNumber is number {
+  if (typeof prNumber !== "number" || !Number.isInteger(prNumber) || prNumber <= 0) {
+    throw new Error("Invalid PR number");
+  }
+}
+
+async function handleForgeCreatePR(payload: {
+  cwd: string;
+  head: string;
+  base: string;
+  title: string;
+  body?: string;
+  draft?: boolean;
+}): Promise<PR> {
+  checkRateLimit(CHANNELS.FORGE_CREATE_PR, 5, 10_000);
+  if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
+  assertCwd(payload.cwd);
+  if (typeof payload.head !== "string" || !payload.head.trim()) {
+    throw new Error("Invalid head branch");
+  }
+  if (typeof payload.base !== "string" || !payload.base.trim()) {
+    throw new Error("Invalid base branch");
+  }
+  if (typeof payload.title !== "string" || !payload.title.trim()) {
+    throw new Error("Invalid PR title");
+  }
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  return auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "createPR",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("createPR", payload),
+    },
+    () =>
+      impl.createPR(repoRef, {
+        head: payload.head,
+        base: payload.base,
+        title: payload.title,
+        ...(typeof payload.body === "string" ? { body: payload.body } : {}),
+        ...(payload.draft ? { draft: true } : {}),
+      })
+  );
+}
+
+async function handleForgeClosePR(payload: { cwd: string; prNumber: number }): Promise<void> {
+  checkRateLimit(CHANNELS.FORGE_CLOSE_PR, 5, 10_000);
+  if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
+  assertCwd(payload.cwd);
+  assertPRNumber(payload.prNumber);
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  await auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "closePR",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("closePR", payload.prNumber),
+    },
+    () => impl.closePR(repoRef, payload.prNumber)
+  );
+}
+
+async function handleForgeReopenPR(payload: { cwd: string; prNumber: number }): Promise<void> {
+  checkRateLimit(CHANNELS.FORGE_REOPEN_PR, 5, 10_000);
+  if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
+  assertCwd(payload.cwd);
+  assertPRNumber(payload.prNumber);
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  await auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "reopenPR",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("reopenPR", payload.prNumber),
+    },
+    () => impl.reopenPR(repoRef, payload.prNumber)
+  );
+}
+
+async function handleForgeMergePR(payload: {
+  cwd: string;
+  prNumber: number;
+  mergeMethod?: "merge" | "squash" | "rebase";
+  commitTitle?: string;
+  commitMessage?: string;
+}): Promise<void> {
+  checkRateLimit(CHANNELS.FORGE_MERGE_PR, 5, 10_000);
+  if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
+  assertCwd(payload.cwd);
+  assertPRNumber(payload.prNumber);
+  if (
+    payload.mergeMethod !== undefined &&
+    payload.mergeMethod !== "merge" &&
+    payload.mergeMethod !== "squash" &&
+    payload.mergeMethod !== "rebase"
+  ) {
+    throw new Error("Invalid merge method");
+  }
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  await auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "mergePR",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("mergePR", payload.prNumber),
+    },
+    () =>
+      impl.mergePR(repoRef, payload.prNumber, {
+        ...(payload.mergeMethod ? { mergeMethod: payload.mergeMethod } : {}),
+        ...(typeof payload.commitTitle === "string" ? { commitTitle: payload.commitTitle } : {}),
+        ...(typeof payload.commitMessage === "string"
+          ? { commitMessage: payload.commitMessage }
+          : {}),
+      })
+  );
+}
+
+async function handleForgeConvertPRToDraft(payload: {
+  cwd: string;
+  prNumber: number;
+}): Promise<void> {
+  checkRateLimit(CHANNELS.FORGE_CONVERT_PR_TO_DRAFT, 5, 10_000);
+  if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
+  assertCwd(payload.cwd);
+  assertPRNumber(payload.prNumber);
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  await auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "convertPRToDraft",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("convertPRToDraft", payload.prNumber),
+    },
+    () => impl.convertPRToDraft(repoRef, payload.prNumber)
+  );
+}
+
+async function handleForgeMarkPRReadyForReview(payload: {
+  cwd: string;
+  prNumber: number;
+}): Promise<void> {
+  checkRateLimit(CHANNELS.FORGE_MARK_PR_READY_FOR_REVIEW, 5, 10_000);
+  if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
+  assertCwd(payload.cwd);
+  assertPRNumber(payload.prNumber);
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  await auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "markPRReadyForReview",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("markPRReadyForReview", payload.prNumber),
+    },
+    () => impl.markPRReadyForReview(repoRef, payload.prNumber)
+  );
+}
+
+async function handleForgeCommentOnPR(payload: {
+  cwd: string;
+  prNumber: number;
+  body: string;
+}): Promise<void> {
+  checkRateLimit(CHANNELS.FORGE_COMMENT_ON_PR, 5, 10_000);
+  if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
+  assertCwd(payload.cwd);
+  assertPRNumber(payload.prNumber);
+  if (typeof payload.body !== "string" || !payload.body.trim()) {
+    throw new Error("Comment body is required");
+  }
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  await auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "commentOnPR",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("commentOnPR", payload.prNumber),
+    },
+    () => impl.commentOnPR(repoRef, payload.prNumber, payload.body)
+  );
+}
+
+async function handleForgeEditPR(payload: {
+  cwd: string;
+  prNumber: number;
+  title?: string;
+  body?: string;
+}): Promise<PR> {
+  checkRateLimit(CHANNELS.FORGE_EDIT_PR, 5, 10_000);
+  if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
+  assertCwd(payload.cwd);
+  assertPRNumber(payload.prNumber);
+  const hasTitle = typeof payload.title === "string";
+  const hasBody = typeof payload.body === "string";
+  if (!hasTitle && !hasBody) {
+    throw new Error("Provide a title or body to edit");
+  }
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  return auditForgeCall(
+    {
+      providerId: namespaceId,
+      methodName: "editPR",
+      repoOwner: repoRef.owner,
+      repoName: repoRef.repo,
+      argsSummary: summarizeForgeArgs("editPR", payload.prNumber),
+    },
+    () =>
+      impl.editPR(repoRef, payload.prNumber, {
+        ...(hasTitle ? { title: payload.title } : {}),
+        ...(hasBody ? { body: payload.body } : {}),
+      })
+  );
+}
+
+export const forgePRWritesNamespace = defineIpcNamespace({
+  name: "forgePRWrites",
+  ops: {
+    createPR: op(CHANNELS.FORGE_CREATE_PR, handleForgeCreatePR),
+    closePR: op(CHANNELS.FORGE_CLOSE_PR, handleForgeClosePR),
+    reopenPR: op(CHANNELS.FORGE_REOPEN_PR, handleForgeReopenPR),
+    mergePR: op(CHANNELS.FORGE_MERGE_PR, handleForgeMergePR),
+    convertPRToDraft: op(CHANNELS.FORGE_CONVERT_PR_TO_DRAFT, handleForgeConvertPRToDraft),
+    markPRReadyForReview: op(
+      CHANNELS.FORGE_MARK_PR_READY_FOR_REVIEW,
+      handleForgeMarkPRReadyForReview
+    ),
+    commentOnPR: op(CHANNELS.FORGE_COMMENT_ON_PR, handleForgeCommentOnPR),
+    editPR: op(CHANNELS.FORGE_EDIT_PR, handleForgeEditPR),
+  },
+});
+
 export function registerForgeHandlers(): () => void {
   const cleanups: Array<() => void> = [];
 
@@ -329,6 +580,7 @@ export function registerForgeHandlers(): () => void {
   );
 
   cleanups.push(forgeOpenPRNamespace.register());
+  cleanups.push(forgePRWritesNamespace.register());
 
   cleanups.push(
     typedHandle(

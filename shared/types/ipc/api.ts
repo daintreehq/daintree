@@ -1445,6 +1445,35 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getRateLimitDetails(payload: { cwd: string }): Promise<RateLimitDetails | null>;
     /** Open a single PR in the system browser via the resolved forge provider. */
     openPR(payload: { cwd: string; prNumber: number }): Promise<void>;
+    /** Open a new pull request from `head` into `base` via the resolved forge provider. */
+    createPR(payload: {
+      cwd: string;
+      head: string;
+      base: string;
+      title: string;
+      body?: string;
+      draft?: boolean;
+    }): Promise<PR>;
+    /** Close an open pull request without merging. */
+    closePR(payload: { cwd: string; prNumber: number }): Promise<void>;
+    /** Reopen a previously closed pull request. */
+    reopenPR(payload: { cwd: string; prNumber: number }): Promise<void>;
+    /** Merge a pull request with the optional strategy/commit overrides. Irreversible. */
+    mergePR(payload: {
+      cwd: string;
+      prNumber: number;
+      mergeMethod?: "merge" | "squash" | "rebase";
+      commitTitle?: string;
+      commitMessage?: string;
+    }): Promise<void>;
+    /** Convert an open pull request to a draft. */
+    convertPRToDraft(payload: { cwd: string; prNumber: number }): Promise<void>;
+    /** Mark a draft pull request ready for review. */
+    markPRReadyForReview(payload: { cwd: string; prNumber: number }): Promise<void>;
+    /** Post a comment on a pull request. */
+    commentOnPR(payload: { cwd: string; prNumber: number; body: string }): Promise<void>;
+    /** Edit a pull request's title and/or body via the resolved forge provider. */
+    editPR(payload: { cwd: string; prNumber: number; title?: string; body?: string }): Promise<PR>;
     /** Provider-keyed stats + first-page push after a fresh network poll. */
     onRepoStatsAndPageUpdated(callback: (data: ForgeRepoStatsAndPagePayload) => void): () => void;
     /** Provider-keyed count-only stats push (cheap background poll path). */

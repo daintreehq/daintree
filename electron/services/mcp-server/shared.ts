@@ -314,12 +314,21 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "forge.listIssues",
   "forge.listPRs",
   "forge.getIssue",
+  "forge.getPR",
   "forge.openIssues",
   "forge.openPRs",
   "forge.openCommits",
   "forge.openIssue",
   "forge.openPR",
   "forge.assignIssue",
+  "forge.createPR",
+  "forge.closePR",
+  "forge.reopenPR",
+  "forge.mergePR",
+  "forge.convertPRToDraft",
+  "forge.markPRReadyForReview",
+  "forge.commentOnPR",
+  "forge.editPR",
   "forge.validateToken",
 
   "terminal.list",
@@ -418,6 +427,12 @@ export const MCP_DEDUP_ALLOWLIST: ReadonlySet<string> = new Set([
   "git.snapshotRevert",
   "git.snapshotDelete",
   "forge.assignIssue",
+  // PR writes where an LLM retry within the dispatch window leaves a visible
+  // duplicate: a second open PR, a re-merge attempt, or a duplicate comment
+  // (lesson #7554). Idempotent state-sets (close/reopen/draft/edit) are omitted.
+  "forge.createPR",
+  "forge.mergePR",
+  "forge.commentOnPR",
 ]);
 
 /**
@@ -486,6 +501,14 @@ export const RATE_LIMIT_TOOL_MAP: ReadonlyMap<string, RateLimitConfig> = new Map
   ["git.snapshotRevert", RATE_LIMIT_TIERS.mutation],
   ["git.snapshotDelete", RATE_LIMIT_TIERS.mutation],
   ["forge.assignIssue", RATE_LIMIT_TIERS.mutation],
+  ["forge.createPR", RATE_LIMIT_TIERS.mutation],
+  ["forge.closePR", RATE_LIMIT_TIERS.mutation],
+  ["forge.reopenPR", RATE_LIMIT_TIERS.mutation],
+  ["forge.mergePR", RATE_LIMIT_TIERS.mutation],
+  ["forge.convertPRToDraft", RATE_LIMIT_TIERS.mutation],
+  ["forge.markPRReadyForReview", RATE_LIMIT_TIERS.mutation],
+  ["forge.commentOnPR", RATE_LIMIT_TIERS.mutation],
+  ["forge.editPR", RATE_LIMIT_TIERS.mutation],
   // Not a git mutation, but capped at the mutation tier (10/min) so a runaway
   // model can't flood the assistant panel's figure rail with images (#9828).
   ["help.displayImage", RATE_LIMIT_TIERS.mutation],

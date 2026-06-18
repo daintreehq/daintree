@@ -50,6 +50,7 @@ export const WORKBENCH_TIER_TOOLS = [
   "forge.listIssues",
   "forge.listPRs",
   "forge.getIssue",
+  "forge.getPR",
 
   "workflow.prepBranchForReview",
 
@@ -133,6 +134,14 @@ export const SYSTEM_TIER_ADDONS = [
   "forge.requestChanges",
   "forge.dismissReview",
   "forge.requestReviewers",
+  "forge.createPR",
+  "forge.closePR",
+  "forge.reopenPR",
+  "forge.mergePR",
+  "forge.convertPRToDraft",
+  "forge.markPRReadyForReview",
+  "forge.commentOnPR",
+  "forge.editPR",
   "forge.validateToken",
 ] as const satisfies readonly BuiltInActionId[];
 

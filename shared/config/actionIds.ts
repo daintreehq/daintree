@@ -205,6 +205,15 @@ export const BUILT_IN_ACTION_IDS = [
   "forge.listIssues",
   "forge.listPRs",
   "forge.getIssue",
+  "forge.getPR",
+  "forge.createPR",
+  "forge.closePR",
+  "forge.reopenPR",
+  "forge.mergePR",
+  "forge.convertPRToDraft",
+  "forge.markPRReadyForReview",
+  "forge.commentOnPR",
+  "forge.editPR",
 
   // -- projectActions --
   "project.getAll",

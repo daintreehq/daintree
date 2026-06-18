@@ -331,9 +331,45 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { cwd: string; prNumber: number; body?: string | undefined }];
     result: void;
   };
+  "forge:close-pr": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: void;
+  };
+  "forge:comment-on-pr": {
+    args: [payload: { cwd: string; prNumber: number; body: string }];
+    result: void;
+  };
+  "forge:convert-pr-to-draft": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: void;
+  };
+  "forge:create-pr": {
+    args: [
+      payload: {
+        cwd: string;
+        head: string;
+        base: string;
+        title: string;
+        body?: string | undefined;
+        draft?: boolean | undefined;
+      },
+    ];
+    result: import("../forge.js").PR;
+  };
   "forge:dismiss-review": {
     args: [payload: { cwd: string; prNumber: number; reviewId: number; message: string }];
     result: void;
+  };
+  "forge:edit-pr": {
+    args: [
+      payload: {
+        cwd: string;
+        prNumber: number;
+        title?: string | undefined;
+        body?: string | undefined;
+      },
+    ];
+    result: import("../forge.js").PR;
   };
   "forge:get-first-page-cache": {
     args: [payload: { cwd: string }];
@@ -375,7 +411,27 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { providerId: string }];
     result: import("../forge.js").ForgeTokenHealthState | null;
   };
+  "forge:mark-pr-ready-for-review": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: void;
+  };
+  "forge:merge-pr": {
+    args: [
+      payload: {
+        cwd: string;
+        prNumber: number;
+        mergeMethod?: "merge" | "squash" | "rebase" | undefined;
+        commitTitle?: string | undefined;
+        commitMessage?: string | undefined;
+      },
+    ];
+    result: void;
+  };
   "forge:open-pr": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: void;
+  };
+  "forge:reopen-pr": {
     args: [payload: { cwd: string; prNumber: number }];
     result: void;
   };

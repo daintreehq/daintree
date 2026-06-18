@@ -2516,6 +2516,33 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_GET_RATE_LIMIT_DETAILS, payload),
       openPR: (payload: { cwd: string; prNumber: number }) =>
         _unwrappingInvoke(CHANNELS.FORGE_OPEN_PR, payload),
+      createPR: (payload: {
+        cwd: string;
+        head: string;
+        base: string;
+        title: string;
+        body?: string;
+        draft?: boolean;
+      }) => _unwrappingInvoke(CHANNELS.FORGE_CREATE_PR, payload),
+      closePR: (payload: { cwd: string; prNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_CLOSE_PR, payload),
+      reopenPR: (payload: { cwd: string; prNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_REOPEN_PR, payload),
+      mergePR: (payload: {
+        cwd: string;
+        prNumber: number;
+        mergeMethod?: "merge" | "squash" | "rebase";
+        commitTitle?: string;
+        commitMessage?: string;
+      }) => _unwrappingInvoke(CHANNELS.FORGE_MERGE_PR, payload),
+      convertPRToDraft: (payload: { cwd: string; prNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_CONVERT_PR_TO_DRAFT, payload),
+      markPRReadyForReview: (payload: { cwd: string; prNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_MARK_PR_READY_FOR_REVIEW, payload),
+      commentOnPR: (payload: { cwd: string; prNumber: number; body: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_COMMENT_ON_PR, payload),
+      editPR: (payload: { cwd: string; prNumber: number; title?: string; body?: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_EDIT_PR, payload),
       onRepoStatsAndPageUpdated: (
         callback: (
           data: import("../shared/types/ipc/forge.js").ForgeRepoStatsAndPagePayload

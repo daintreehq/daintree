@@ -299,6 +299,43 @@ export interface CreateIssueInput {
   labels?: string[];
 }
 
+/**
+ * Normalized input for {@link ForgeProviderImpl.createPR}. Provider-neutral:
+ * `head` and `base` are branch names, `title` is required, `body` and `draft`
+ * are optional. Providers map these onto their own create payload and silently
+ * ignore fields they don't support.
+ */
+export interface CreatePRInput {
+  /** Source branch the changes come from. */
+  head: string;
+  /** Target branch the PR merges into. */
+  base: string;
+  title: string;
+  body?: string;
+  draft?: boolean;
+}
+
+/**
+ * Normalized input for {@link ForgeProviderImpl.mergePR}. `mergeMethod` names
+ * the strategy shared across forges; providers reject methods they don't
+ * support. `commitTitle`/`commitMessage` override the merge commit text when
+ * the chosen method produces a commit.
+ */
+export interface MergePRInput {
+  mergeMethod?: "merge" | "squash" | "rebase";
+  commitTitle?: string;
+  commitMessage?: string;
+}
+
+/**
+ * Normalized input for {@link ForgeProviderImpl.editPR}. Both fields are
+ * optional; callers supply at least one. Providers ignore unset fields.
+ */
+export interface EditPRInput {
+  title?: string;
+  body?: string;
+}
+
 export interface PR {
   number: number;
   title: string;
@@ -886,6 +923,34 @@ export interface ForgeProviderImpl {
   createIssue(repo: RepoRef, input: CreateIssueInput): Promise<Issue>;
   assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<void>;
   unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<void>;
+  /**
+   * Open a new pull request from `input.head` into `input.base` and return the
+   * normalized {@link PR}. Providers that can't create PRs throw
+   * `"Not supported"`. The host clears its PR caches after a successful create
+   * so the new PR shows up in subsequent {@link listPRs} calls.
+   */
+  createPR(repo: RepoRef, input: CreatePRInput): Promise<PR>;
+  /** Close an open pull request without merging. */
+  closePR(repo: RepoRef, prNumber: number): Promise<void>;
+  /** Reopen a previously closed pull request. */
+  reopenPR(repo: RepoRef, prNumber: number): Promise<void>;
+  /**
+   * Merge a pull request using the optional {@link MergePRInput} strategy.
+   * Irreversible. Providers surface unmergeable states (draft, conflicts,
+   * failing required checks, stale head) as errors.
+   */
+  mergePR(repo: RepoRef, prNumber: number, input?: MergePRInput): Promise<void>;
+  /** Convert an open pull request to a draft. */
+  convertPRToDraft(repo: RepoRef, prNumber: number): Promise<void>;
+  /** Mark a draft pull request ready for review. */
+  markPRReadyForReview(repo: RepoRef, prNumber: number): Promise<void>;
+  /** Post a comment on a pull request. */
+  commentOnPR(repo: RepoRef, prNumber: number, body: string): Promise<void>;
+  /**
+   * Edit a pull request's title and/or body and return the updated
+   * normalized {@link PR}.
+   */
+  editPR(repo: RepoRef, prNumber: number, input: EditPRInput): Promise<PR>;
   /**
    * Validate a single freshly-entered credential value at save time. The host
    * passes exactly one string — the primary of the provider's declared
