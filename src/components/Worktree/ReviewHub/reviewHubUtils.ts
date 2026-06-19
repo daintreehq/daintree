@@ -66,6 +66,13 @@ export const PUSH_BANNER_CONFIGS: Record<GitOperationReason, PushBannerConfig> =
     // the active forge provider resolves — no CTA when it can't, since there's
     // no provider-agnostic settings route to send the user to.
   },
+  "rate-limited": {
+    message:
+      getGitRecoveryHint("rate-limited") ??
+      "The forge is rate-limiting requests. Try again shortly.",
+    detailPolicy: "hide",
+    cta: { kind: "retry", label: "Retry" },
+  },
   "network-unavailable": {
     message: getGitRecoveryHint("network-unavailable") ?? "Could not reach the remote.",
     detailPolicy: "hide",
