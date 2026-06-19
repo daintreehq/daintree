@@ -289,4 +289,56 @@ describe("HelpPanel — WebGL focus pin wiring (#10672)", () => {
     });
     expect(setFocusedMock).not.toHaveBeenCalled();
   });
+
+  it("releases the pin when the panel collapses to zero width without a blur", () => {
+    // A width collapse can tear down the focused descendant (xterm) without
+    // firing a blur — the !isVisible guard must still drop the pin.
+    const { rerender } = render(<HelpPanel width={380} />);
+    act(() => {
+      fireEvent.focus(getAside());
+    });
+    expect(pinCalls()).toContainEqual(["t-1", true]);
+
+    setFocusedMock.mockClear();
+    rerender(<HelpPanel width={0} isVisible={false} />);
+    expect(setFocusedMock).toHaveBeenCalledWith("t-1", false);
+    expect(pinCalls()).toHaveLength(0);
+  });
+
+  it("moves the pin to the new terminal when the assistant terminal id changes", () => {
+    const { rerender } = render(<HelpPanel width={380} />);
+    act(() => {
+      fireEvent.focus(getAside());
+    });
+    expect(pinCalls()).toContainEqual(["t-1", true]);
+
+    setFocusedMock.mockClear();
+    helpPanelState.terminalId = "t-2";
+    panelStoreState.panelIds = ["t-2"];
+    panelStoreState.panelsById = {
+      "t-2": { agentState: "idle", cwd: "/repo", spawnStatus: "ready" },
+    };
+    rerender(<HelpPanel width={380} />);
+    // Cleanup releases the old id, then the rerun pins the new one.
+    expect(setFocusedMock).toHaveBeenCalledWith("t-1", false);
+    expect(pinCalls()).toContainEqual(["t-2", true]);
+  });
+
+  it("keeps the pin across a focus hop between controls inside the panel", () => {
+    render(<HelpPanel width={380} />);
+    const aside = getAside();
+    act(() => {
+      fireEvent.focus(aside);
+    });
+    expect(pinCalls()).toContainEqual(["t-1", true]);
+
+    setFocusedMock.mockClear();
+    // Focus moves to a descendant still inside the aside → not a real blur,
+    // so hasDomFocus stays true and the pin is neither released nor churned.
+    const child = aside.querySelector("*") ?? aside;
+    act(() => {
+      fireEvent.blur(aside, { relatedTarget: child });
+    });
+    expect(setFocusedMock).not.toHaveBeenCalledWith("t-1", false);
+  });
 });
