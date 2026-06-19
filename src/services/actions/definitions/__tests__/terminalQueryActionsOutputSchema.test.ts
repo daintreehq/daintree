@@ -18,6 +18,9 @@ vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 // terminalQueryActions reaches into the renderer-only client/store layer at
 // module load; stub those so the definitions register in a node test.
 vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: vi.fn() } }));
+vi.mock("@/store/fleetArmingStore", () => ({
+  useFleetArmingStore: { getState: () => ({ armedIds: new Set<string>() }) },
+}));
 vi.mock("@/clients", () => ({ terminalClient: { submit: vi.fn() } }));
 vi.mock("@shared/config/panelKindRegistry", () => ({
   panelKindHasPty: (kind: string) => kind === "terminal" || kind === "agent",

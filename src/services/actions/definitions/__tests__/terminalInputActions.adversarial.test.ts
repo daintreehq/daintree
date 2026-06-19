@@ -296,4 +296,84 @@ describe("terminalInputActions adversarial", () => {
       expect(armAll).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe("terminal.arm / disarm / disarmAll (MCP-exposed fleet primitives)", () => {
+    it("arms an eligible terminal and echoes back the resulting armed set in order", async () => {
+      const armId = vi.fn();
+      fleetArmingMock.isFleetArmEligible.mockReturnValueOnce(true);
+      fleetArmingMock.useFleetArmingStore.getState.mockReturnValue({
+        armId,
+        armOrder: ["t1", "t2"],
+      } as never);
+      setPanelState({ panelsById: { t1: { kind: "agent" } } });
+
+      const { run } = setupActions();
+      const result = await run("terminal.arm", { terminalId: "t1" });
+
+      expect(armId).toHaveBeenCalledWith("t1");
+      expect(result).toEqual({ armed: ["t1", "t2"] });
+    });
+
+    it("does not arm an ineligible terminal but still echoes the current armed set", async () => {
+      const armId = vi.fn();
+      fleetArmingMock.isFleetArmEligible.mockReturnValue(false);
+      fleetArmingMock.useFleetArmingStore.getState.mockReturnValue({
+        armId,
+        armOrder: ["existing"],
+      } as never);
+      setPanelState({ panelsById: { browser: { kind: "browser" } } });
+
+      const { run } = setupActions();
+      const result = await run("terminal.arm", { terminalId: "browser" });
+
+      expect(armId).not.toHaveBeenCalled();
+      expect(result).toEqual({ armed: ["existing"] });
+    });
+
+    it("disarm removes the terminal and echoes the resulting armed set", async () => {
+      const disarmId = vi.fn();
+      fleetArmingMock.useFleetArmingStore.getState.mockReturnValue({
+        disarmId,
+        armOrder: ["t2"],
+      } as never);
+
+      const { run } = setupActions();
+      const result = await run("terminal.disarm", { terminalId: "t1" });
+
+      expect(disarmId).toHaveBeenCalledWith("t1");
+      expect(result).toEqual({ armed: ["t2"] });
+    });
+
+    it("disarmAll clears the set and echoes an empty armed set", async () => {
+      const clear = vi.fn();
+      fleetArmingMock.useFleetArmingStore.getState.mockReturnValue({
+        clear,
+        armOrder: [],
+      } as never);
+
+      const { run } = setupActions();
+      const result = await run("terminal.disarmAll");
+
+      expect(clear).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ armed: [] });
+    });
+
+    it("gates only arm behind confirmation — disarm/disarmAll stay safe de-escalations", () => {
+      const actions: ActionRegistry = new Map();
+      registerTerminalInputActions(actions, {
+        getActiveWorktreeId: vi.fn(),
+        onInject: vi.fn(),
+      } as unknown as ActionCallbacks);
+      const arm = actions.get("terminal.arm")!() as AnyActionDefinition;
+      const disarm = actions.get("terminal.disarm")!() as AnyActionDefinition;
+      const disarmAll = actions.get("terminal.disarmAll")!() as AnyActionDefinition;
+
+      expect(arm.danger).toBe("confirm");
+      expect(arm.dangerRationale?.trim()).toBeTruthy();
+      // The footgun is arming (reroutes keystrokes); disarming is the recovery,
+      // so it must not be harder to reach than arming.
+      expect(disarm.danger).toBe("safe");
+      expect(disarmAll.danger).toBe("safe");
+    });
+  });
 });
