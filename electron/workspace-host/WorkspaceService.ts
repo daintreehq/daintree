@@ -198,6 +198,11 @@ export class WorkspaceService {
   /** Session-scoped guard so we notify the user about the macOS FSEvents file
    *  descriptor ceiling only once, even if many worktrees hit EMFILE concurrently. */
   private emfileLimitNotified = false;
+  /** Per-commondir guard so a confirmed forge-auth failure raises its single
+   *  escalation toast once, not once per sibling worktree. Cleared by
+   *  `retryAuthFetch()` / credential rotation so a later re-confirmation can
+   *  re-notify. */
+  private readonly authFailureConfirmedNotified = new Set<string>();
 
   /** Per-worktree WSL git opt-in state forwarded from main on load and toggle. */
   private wslGitByWorktree: Record<string, { enabled: boolean; dismissed: boolean }> = {};
@@ -319,6 +324,8 @@ export class WorkspaceService {
         // fire-and-forget; fetch success must never block.
         monitor.triggerRefreshIfUpdating();
       },
+      onAuthFailureConfirmed: (commonDir, reason) =>
+        this.handleAuthFailureConfirmed(commonDir, reason),
     });
     const prCallbacks: PRIntegrationCallbacks = {
       onPRDetected: (worktreeId, data) => {
@@ -1495,6 +1502,24 @@ export class WorkspaceService {
     this.inotifyLimitNotified = false;
     this.emfileLimitNotified = false;
     this.sendEvent({ type: "watcher-recovered" });
+  }
+
+  /**
+   * A repo's background-fetch auth failure persisted past the coordinator's
+   * confirmation threshold. Emit a single escalation event per commondir per
+   * session (the renderer turns it into one toast). The per-commondir guard
+   * dedups the fan-out across sibling worktrees; it's reset by
+   * `retryAuthFetch()` / credential rotation so a re-confirmation re-notifies.
+   * The raw commondir path never leaves the host — only the classified reason
+   * crosses the IPC boundary.
+   */
+  private handleAuthFailureConfirmed(
+    commonDir: string,
+    reason: import("../../shared/types/ipc/errors.js").GitOperationReason
+  ): void {
+    if (this.authFailureConfirmedNotified.has(commonDir)) return;
+    this.authFailureConfirmedNotified.add(commonDir);
+    this.sendEvent({ type: "fetch-auth-failure-confirmed", reason });
   }
 
   /**
@@ -3220,6 +3245,9 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       // the next scheduled fetch retries. Network/transient entries stay so we
       // don't immediately re-storm an offline remote.
       this.fetchCoordinator.clearAuthFailures();
+      // Re-arm the escalation guard so a credential that's still broken can
+      // surface its toast again after this attempt.
+      this.authFailureConfirmedNotified.clear();
       // Trigger an opportunistic fetch on every worktree so the user sees
       // refreshed counts shortly after sign-in / token rotation.
       for (const monitor of this.monitors.values()) {
@@ -3231,16 +3259,18 @@ ${lines.map((l) => "+" + l).join("\n")}`;
   }
 
   /**
-   * User-triggered retry of auth-suspended fetches. Auth failures suspend a
-   * repo's fetch cache indefinitely (AUTH_FAILURE_TTL_MS = POSITIVE_INFINITY) to
-   * avoid storming GitHub's secondary rate limits with repeated bad-token
-   * attempts. The only safe way out is an explicit user action — e.g. clicking
-   * the auth-failed sync badge — which clears the suspension and re-fetches.
+   * User-triggered retry of auth-suspended fetches. Auth failures back off on a
+   * widening exponential schedule (RepoFetchCoordinator), so an explicit user
+   * action — e.g. clicking the auth-failed sync badge — clears the suspension
+   * and re-fetches immediately rather than waiting for the next backoff window.
    * Mirrors the credential branch of updateForgeCredentials but without a
    * credential update (the user may be retrying after fixing the token elsewhere).
    */
   retryAuthFetch(): void {
     this.fetchCoordinator.clearAuthFailures();
+    // Re-arm the per-commondir escalation guard so a still-broken credential
+    // can re-surface its toast after this retry confirms the failure again.
+    this.authFailureConfirmedNotified.clear();
     for (const monitor of this.monitors.values()) {
       if (monitor.isRunning) {
         void monitor.triggerFetchNow();

@@ -612,6 +612,13 @@ export type WorkspaceHostEvent =
   // Clears the one-shot degradation guards so a later relapse can re-signal,
   // and hides the persistent degraded indicator in the renderer.
   | { type: "watcher-recovered" }
+  // Fired once per repo (guarded host-side) when a background-fetch auth
+  // failure persists past the retry/backoff confirmation threshold — i.e. the
+  // forge credential is genuinely broken, not a transient blip. The renderer
+  // surfaces a single escalation toast instead of the per-card auth stripe.
+  // Re-armed by `retry-auth-fetch` / credential rotation so a later
+  // re-confirmation can re-signal.
+  | { type: "fetch-auth-failure-confirmed"; reason: import("./ipc/errors.js").GitOperationReason }
   // Fired when the topology watcher goes "dark": either the `@parcel/watcher`
   // subscribe() rejected at cold start (no events will ever arrive), or a 5s
   // pending-event safety valve expired without the watcher delivering the
