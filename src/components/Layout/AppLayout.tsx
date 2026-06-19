@@ -39,7 +39,7 @@ import type { CliAvailability, AgentSettings } from "@shared/types";
 import { useLayoutState, useOverlayOpen } from "@/hooks";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
-import { suppressSidebarResizes } from "@/lib/sidebarToggle";
+import { releaseAssistantResizeLock, suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { logError } from "@/utils/logger";
 
 function preloadGlobalBannerCoordinator() {
@@ -214,6 +214,36 @@ export function AppLayout({
       }
     },
     [showSidebar]
+  );
+
+  // #10693: the Assistant pane's width animation (0↔full over 250ms) drives a
+  // per-frame ResizeObserver storm that machine-guns SIGWINCH at the hosted CLI
+  // while its own width state lags, orphaning a status-line row into scrollback
+  // each show/hide cycle. Arm the PTY resize lock at the real animation start —
+  // closing the ~16ms gap left by the toggle-time suppressSidebarResizes() call
+  // — and release it, with one corrective repaint, the instant the transition
+  // settles. Filter on width + target===currentTarget to ignore other
+  // properties and bubbled child transitions, mirroring the sidebar handler.
+  const handleAssistantTransitionStart = useCallback(
+    (event: React.TransitionEvent<HTMLDivElement>) => {
+      if (event.propertyName === "width" && event.target === event.currentTarget) {
+        suppressSidebarResizes();
+      }
+    },
+    []
+  );
+
+  // transitioncancel is mandatory, not redundant: a rapid hide→show reverses the
+  // animation mid-flight and fires transitioncancel (never transitionend), so
+  // wiring only transitionend would strand the lock and silence every later PTY
+  // resize for that terminal session.
+  const handleAssistantTransitionSettled = useCallback(
+    (event: React.TransitionEvent<HTMLDivElement>) => {
+      if (event.propertyName === "width" && event.target === event.currentTarget) {
+        releaseAssistantResizeLock();
+      }
+    },
+    []
   );
 
   useEffect(() => {
@@ -701,6 +731,9 @@ export function AppLayout({
                 !showAssistant && "pointer-events-none"
               )}
               style={{ width: effectiveAssistantWidth, contain: "layout paint" }}
+              onTransitionStart={handleAssistantTransitionStart}
+              onTransitionEnd={handleAssistantTransitionSettled}
+              onTransitionCancel={handleAssistantTransitionSettled}
             >
               <div
                 className="absolute top-0 right-0 h-full"

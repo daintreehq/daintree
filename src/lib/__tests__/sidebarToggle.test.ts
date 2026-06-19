@@ -2,13 +2,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const suppressMock = vi.hoisted(() => vi.fn());
+const lockResizeMock = vi.hoisted(() => vi.fn());
+const repaintForRevealMock = vi.hoisted(() => vi.fn());
 const lockMock = vi.hoisted(() => vi.fn());
 const getPanelStateMock = vi.hoisted(() => vi.fn());
 const getWorktreeSelectionStateMock = vi.hoisted(() => vi.fn());
+const getHelpPanelStateMock = vi.hoisted(() =>
+  vi.fn(() => ({ terminalId: null }) as { terminalId: string | null })
+);
 
 vi.mock("@/services/terminal/TerminalInstanceService", () => ({
   terminalInstanceService: {
     suppressResizesDuringLayoutTransition: suppressMock,
+    lockResize: lockResizeMock,
+    repaintForReveal: repaintForRevealMock,
   },
 }));
 
@@ -20,11 +27,15 @@ vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: { getState: getWorktreeSelectionStateMock },
 }));
 
+vi.mock("@/store/helpPanelStore", () => ({
+  useHelpPanelStore: { getState: getHelpPanelStateMock },
+}));
+
 vi.mock("../layoutTransitionLock", () => ({
   lockSidebarLayoutTransition: lockMock,
 }));
 
-import { suppressSidebarResizes } from "../sidebarToggle";
+import { releaseAssistantResizeLock, suppressSidebarResizes } from "../sidebarToggle";
 import { SIDEBAR_TOGGLE_LOCK_MS } from "../terminalLayout";
 
 type PanelFixture = {
@@ -118,5 +129,41 @@ describe("suppressSidebarResizes", () => {
 
     expect(lockMock).toHaveBeenCalledTimes(1);
     expect(lockMock).toHaveBeenCalledWith(SIDEBAR_TOGGLE_LOCK_MS);
+  });
+});
+
+describe("releaseAssistantResizeLock", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getHelpPanelStateMock.mockReturnValue({ terminalId: null });
+  });
+
+  it("unlocks the assistant terminal and fires one corrective repaint", () => {
+    getHelpPanelStateMock.mockReturnValue({ terminalId: "assistant-1" });
+
+    releaseAssistantResizeLock();
+
+    expect(lockResizeMock).toHaveBeenCalledWith("assistant-1", false);
+    expect(repaintForRevealMock).toHaveBeenCalledWith("assistant-1");
+  });
+
+  it("unlocks before repainting so the corrective resize isn't swallowed by the lock", () => {
+    getHelpPanelStateMock.mockReturnValue({ terminalId: "assistant-1" });
+
+    releaseAssistantResizeLock();
+
+    // repaintForReveal's geometry reconciliation is gated by the resize lock,
+    // so the unlock must be ordered strictly before the repaint.
+    const unlockOrder = lockResizeMock.mock.invocationCallOrder[0];
+    const repaintOrder = repaintForRevealMock.mock.invocationCallOrder[0];
+    expect(unlockOrder).toBeLessThan(repaintOrder);
+  });
+
+  it("is a no-op when no assistant terminal is present", () => {
+    getHelpPanelStateMock.mockReturnValue({ terminalId: null });
+
+    expect(() => releaseAssistantResizeLock()).not.toThrow();
+    expect(lockResizeMock).not.toHaveBeenCalled();
+    expect(repaintForRevealMock).not.toHaveBeenCalled();
   });
 });

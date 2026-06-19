@@ -38,3 +38,24 @@ export function suppressSidebarResizes(): void {
   // reflows every frame against the animating sidebar slot (see #6979).
   lockSidebarLayoutTransition(SIDEBAR_TOGGLE_LOCK_MS);
 }
+
+/**
+ * Release the Assistant terminal's resize lock the instant its width
+ * transition settles, then issue one corrective repaint. Wired to the wrapper's
+ * transitionend/transitioncancel in AppLayout so the lock clears at the real
+ * animation boundary instead of waiting out the dead-man TTL.
+ *
+ * transitioncancel is the load-bearing caller: a rapid hide→show reverses the
+ * width animation mid-flight and fires transitioncancel (never transitionend),
+ * so routing only transitionend here would strand the lock and silence every
+ * later PTY resize for that terminal session (#10693).
+ */
+export function releaseAssistantResizeLock(): void {
+  const assistantTerminalId = useHelpPanelStore.getState().terminalId;
+  if (!assistantTerminalId) return;
+  // Unlock BEFORE repainting: repaintForReveal's geometry reconciliation is
+  // itself gated by the resize lock, so the single authoritative SIGWINCH it
+  // sends would be swallowed if the lock were still armed.
+  terminalInstanceService.lockResize(assistantTerminalId, false);
+  terminalInstanceService.repaintForReveal(assistantTerminalId);
+}
