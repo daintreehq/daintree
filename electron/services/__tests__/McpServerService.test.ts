@@ -2526,6 +2526,11 @@ describe("McpServerService", () => {
         description: "Permanently remove all terminals",
       }),
       createManifestEntry({
+        id: "terminal.restart" as ActionId,
+        title: "Restart Terminal",
+        description: "Restart the terminal process",
+      }),
+      createManifestEntry({
         id: "copyTree.generateAndCopyFile" as ActionId,
         title: "Generate And Copy Context",
         description: "Write generated context to the OS clipboard",
