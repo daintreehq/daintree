@@ -296,11 +296,12 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     palette: { mode: "hidden" },
     title: "Get Browser Console Messages",
     description:
-      "Read captured console output (logs, warnings, errors, and stack traces) from a browser or dev-preview panel. Returns the most recent messages plus error/warning counts so an agent can inspect runtime issues without opening the console UI.",
+      "Read captured console output (logs, warnings, errors, and stack traces) from a dev preview panel. Returns the most recent messages plus error/warning counts so an agent can inspect runtime issues without opening the console UI.",
     category: "browser",
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    mcpOutputSchema: true,
     argsSchema: z
       .object({
         terminalId: z.string().optional(),
@@ -330,10 +331,18 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     run: async (args: unknown) => {
       const { terminalId, level, limit } =
         (args as { terminalId?: string; level?: ConsoleLevel; limit?: number } | undefined) ?? {};
-      const targetId = terminalId ?? usePanelStore.getState().focusedId;
+      const panelStore = usePanelStore.getState();
+      const targetId = terminalId ?? panelStore.focusedId;
       if (!targetId) {
+        throw new Error("No dev preview panel: pass terminalId or focus a dev preview panel first");
+      }
+      // Only dev preview panels capture console output (via
+      // useDevPreviewConsoleCapture); guard so a wrong-kind target returns an
+      // explicit error rather than a misleading empty result.
+      const panel = panelStore.panelsById[targetId];
+      if (!panel || !isDevPreviewPanel(panel)) {
         throw new Error(
-          "No browser panel: pass terminalId or focus a browser/dev-preview panel first"
+          "Console capture is only available for dev preview panels; target a dev preview panel"
         );
       }
       // Commit rows still buffered for the current animation frame so a read

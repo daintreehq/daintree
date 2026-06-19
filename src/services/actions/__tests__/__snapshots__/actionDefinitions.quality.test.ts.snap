@@ -724,7 +724,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "browser",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Read captured console output (logs, warnings, errors, and stack traces) from a browser or dev-preview panel. Returns the most recent messages plus error/warning counts so an agent can inspect runtime issues without opening the console UI.",
+    "description": "Read captured console output (logs, warnings, errors, and stack traces) from a dev preview panel. Returns the most recent messages plus error/warning counts so an agent can inspect runtime issues without opening the console UI.",
     "examples": undefined,
     "id": "browser.getConsoleMessages",
     "keywords": undefined,

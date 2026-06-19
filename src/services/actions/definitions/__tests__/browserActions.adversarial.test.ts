@@ -323,8 +323,14 @@ describe("browserActions adversarial", () => {
     expect(dispatchSpy).not.toHaveBeenCalled();
   });
 
+  // Console-read tests seed a dev-preview panel as the target since only
+  // dev-preview panels capture console output.
+  function devPreviewPanels(ids: string[]): Record<string, { id: string; kind: string }> {
+    return Object.fromEntries(ids.map((id) => [id, { id, kind: "dev-preview" }]));
+  }
+
   it("browser.getConsoleMessages returns messages and counts for the focused pane", async () => {
-    setPanelState({ focusedId: "b1" });
+    setPanelState({ focusedId: "b1", panelsById: devPreviewPanels(["b1"]) });
     setConsoleState([makeRow({ id: 1, summaryText: "hello" })], { errorCount: 2, warnCount: 1 });
     const run = setupActions();
     const result = (await run("browser.getConsoleMessages")) as {
@@ -341,7 +347,7 @@ describe("browserActions adversarial", () => {
   });
 
   it("browser.getConsoleMessages strips renderer-only UI fields", async () => {
-    setPanelState({ focusedId: "b1" });
+    setPanelState({ focusedId: "b1", panelsById: devPreviewPanels(["b1"]) });
     setConsoleState([makeRow()]);
     const run = setupActions();
     const result = (await run("browser.getConsoleMessages")) as {
@@ -355,7 +361,7 @@ describe("browserActions adversarial", () => {
   });
 
   it("browser.getConsoleMessages flushes the ingest buffer before reading", async () => {
-    setPanelState({ focusedId: "b1" });
+    setPanelState({ focusedId: "b1", panelsById: devPreviewPanels(["b1"]) });
     setConsoleState([makeRow()]);
     const run = setupActions();
     await run("browser.getConsoleMessages");
@@ -367,7 +373,7 @@ describe("browserActions adversarial", () => {
   });
 
   it("browser.getConsoleMessages filters by level", async () => {
-    setPanelState({ focusedId: "b1" });
+    setPanelState({ focusedId: "b1", panelsById: devPreviewPanels(["b1"]) });
     setConsoleState([
       makeRow({ id: 1, level: "log" }),
       makeRow({ id: 2, level: "error" }),
@@ -382,7 +388,7 @@ describe("browserActions adversarial", () => {
   });
 
   it("browser.getConsoleMessages applies limit to the most recent rows after filtering", async () => {
-    setPanelState({ focusedId: "b1" });
+    setPanelState({ focusedId: "b1", panelsById: devPreviewPanels(["b1"]) });
     setConsoleState([
       makeRow({ id: 1 }),
       makeRow({ id: 2 }),
@@ -397,8 +403,26 @@ describe("browserActions adversarial", () => {
     expect(result.messages.map((m) => m.id)).toEqual([3, 4]);
   });
 
+  it("browser.getConsoleMessages applies limit to the most recent rows of the filtered level", async () => {
+    setPanelState({ focusedId: "b1", panelsById: devPreviewPanels(["b1"]) });
+    setConsoleState([
+      makeRow({ id: 1, level: "log" }),
+      makeRow({ id: 2, level: "error" }),
+      makeRow({ id: 3, level: "log" }),
+      makeRow({ id: 4, level: "error" }),
+      makeRow({ id: 5, level: "error" }),
+    ]);
+    const run = setupActions();
+    const result = (await run("browser.getConsoleMessages", { level: "error", limit: 2 })) as {
+      messages: Array<{ id: number }>;
+    };
+
+    // Must be the last 2 errors (4, 5), not the last 2 rows — filter before limit.
+    expect(result.messages.map((m) => m.id)).toEqual([4, 5]);
+  });
+
   it("browser.getConsoleMessages uses explicit terminalId over focus", async () => {
-    setPanelState({ focusedId: "focused" });
+    setPanelState({ focusedId: "focused", panelsById: devPreviewPanels(["focused", "other"]) });
     setConsoleState([]);
     const run = setupActions();
     const result = (await run("browser.getConsoleMessages", { terminalId: "other" })) as {
@@ -410,7 +434,7 @@ describe("browserActions adversarial", () => {
   });
 
   it("browser.getConsoleMessages returns empty result for a pane with no messages", async () => {
-    setPanelState({ focusedId: "b1" });
+    setPanelState({ focusedId: "b1", panelsById: devPreviewPanels(["b1"]) });
     setConsoleState([]);
     const run = setupActions();
     const result = (await run("browser.getConsoleMessages")) as {
@@ -426,7 +450,20 @@ describe("browserActions adversarial", () => {
     setPanelState({ focusedId: null });
     const run = setupActions();
 
-    await expect(run("browser.getConsoleMessages")).rejects.toThrow(/No browser panel/);
+    await expect(run("browser.getConsoleMessages")).rejects.toThrow(/No dev preview panel/);
     expect(consoleCaptureMock.flush).not.toHaveBeenCalled();
+  });
+
+  it("browser.getConsoleMessages throws for a non-dev-preview target instead of returning empty", async () => {
+    setPanelState({
+      focusedId: "t1",
+      panelsById: { t1: { id: "t1", kind: "terminal" } },
+    });
+    setConsoleState([makeRow()]);
+    const run = setupActions();
+
+    await expect(run("browser.getConsoleMessages")).rejects.toThrow(/dev preview panels/);
+    expect(consoleCaptureMock.flush).not.toHaveBeenCalled();
+    expect(getMessagesSpy).not.toHaveBeenCalled();
   });
 });
