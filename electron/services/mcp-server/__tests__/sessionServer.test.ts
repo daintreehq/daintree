@@ -2767,11 +2767,26 @@ describe("help.displayImage short-circuit (#9828)", () => {
 describe("structuredContent for terminal query actions (#10676)", () => {
   // The three high-value query actions carry `mcpOutputSchema: true`, so the real
   // manifest entry the renderer reports back carries an object-typed outputSchema.
-  // Mirror that here so the CallTool path exercises buildStructuredContent.
+  // Mirror that here (per-action, so the fixture shape tracks the real result)
+  // so the CallTool path exercises buildStructuredContent.
+  const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
+    "terminal.list": { type: "object", properties: { terminals: { type: "array" } } },
+    "terminal.getStatus": { type: "object", properties: { terminals: { type: "array" } } },
+    "terminal.getOutput": {
+      type: "object",
+      properties: {
+        terminalId: { type: "string" },
+        content: { type: ["string", "null"] },
+        lineCount: { type: "number" },
+        truncated: { type: "boolean" },
+      },
+    },
+  };
+
   function entryWithOutputSchema(id: string): ActionManifestEntry {
     return {
       ...makeManifestEntry(id),
-      outputSchema: { type: "object", properties: { terminals: { type: "array" } } },
+      outputSchema: OUTPUT_SCHEMAS[id] ?? { type: "object", properties: {} },
     };
   }
 

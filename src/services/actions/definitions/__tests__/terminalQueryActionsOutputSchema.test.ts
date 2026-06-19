@@ -74,6 +74,17 @@ describe("terminal query actions emit a manifest outputSchema (#10676)", () => {
     expect(props.truncated).toBeDefined();
   });
 
+  it("does not mark terminal.list's `type` as required (runtime emits it undefined)", () => {
+    // terminal.list returns `type: undefined`, which drops on JSON serialization,
+    // so the advertised schema must not require the key — otherwise a strict MCP
+    // client validating structuredContent against outputSchema would reject it.
+    const schema = outputSchema(registerAll(), "terminal.list")!;
+    const items = (schema.properties as { terminals: { items?: Record<string, unknown> } })
+      .terminals.items;
+    const required = (items?.required as string[] | undefined) ?? [];
+    expect(required).not.toContain("type");
+  });
+
   // The watchout from the issue: do not flip the flag on neighbours. waitUntilIdle
   // uses the main-process rawOutputSchema path (no mcpOutputSchema flag), and
   // sendCommand has no resultSchema at all — both must stay schema-less here.
