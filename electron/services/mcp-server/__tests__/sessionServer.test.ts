@@ -2763,3 +2763,105 @@ describe("help.displayImage short-circuit (#9828)", () => {
     expect(notifyDisplayImage).not.toHaveBeenCalled();
   });
 });
+
+describe("structuredContent for terminal query actions (#10676)", () => {
+  // The three high-value query actions carry `mcpOutputSchema: true`, so the real
+  // manifest entry the renderer reports back carries an object-typed outputSchema.
+  // Mirror that here (per-action, so the fixture shape tracks the real result)
+  // so the CallTool path exercises buildStructuredContent.
+  const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
+    "terminal.list": { type: "object", properties: { terminals: { type: "array" } } },
+    "terminal.getStatus": { type: "object", properties: { terminals: { type: "array" } } },
+    "terminal.getOutput": {
+      type: "object",
+      properties: {
+        terminalId: { type: "string" },
+        content: { type: ["string", "null"] },
+        lineCount: { type: "number" },
+        truncated: { type: "boolean" },
+      },
+    },
+  };
+
+  function entryWithOutputSchema(id: string): ActionManifestEntry {
+    return {
+      ...makeManifestEntry(id),
+      outputSchema: OUTPUT_SCHEMAS[id] ?? { type: "object", properties: {} },
+    };
+  }
+
+  function structuredOf(result: unknown): Record<string, unknown> | undefined {
+    return (result as { structuredContent?: Record<string, unknown> }).structuredContent;
+  }
+
+  function textOf(result: unknown): string {
+    return (result as { content: { text: string }[] }).content[0].text;
+  }
+
+  // tier "external" + getFullToolSurface bypasses the per-id allowlist, so the
+  // call reaches dispatch regardless of TIER_ALLOWLISTS membership.
+  function deps(id: string, payload: unknown, withSchema = true): SessionServerDeps {
+    return fakeDeps({
+      sessionStore: fakeSessionStore("external"),
+      getFullToolSurface: vi.fn(() => true),
+      requestManifest: vi
+        .fn()
+        .mockResolvedValue([withSchema ? entryWithOutputSchema(id) : makeManifestEntry(id)]),
+      dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result: payload } }),
+    });
+  }
+
+  it("emits structuredContent for terminal.list and still emits the JSON text body", async () => {
+    const payload = { terminals: [{ id: "t-1", kind: "terminal", isFocused: true }] };
+    const server = createSessionServer("sc-list", deps("terminal.list", payload));
+    const result = await callTool(server, { name: "terminal.list", arguments: {} });
+
+    expect(structuredOf(result)).toEqual(payload);
+    // Backward compatibility: the text body is preserved for clients that ignore
+    // structuredContent, and it serializes the same data.
+    expect(JSON.parse(textOf(result))).toEqual(payload);
+  });
+
+  it("emits structuredContent for terminal.getStatus", async () => {
+    const payload = {
+      terminals: [{ terminalId: "t-1", agentId: "claude", agentState: "working" }],
+    };
+    const server = createSessionServer("sc-status", deps("terminal.getStatus", payload));
+    const result = await callTool(server, { name: "terminal.getStatus", arguments: {} });
+
+    expect(structuredOf(result)).toEqual(payload);
+  });
+
+  it("emits structuredContent for terminal.getOutput", async () => {
+    const payload = { terminalId: "t-1", content: "hello", lineCount: 1, truncated: false };
+    const server = createSessionServer("sc-output", deps("terminal.getOutput", payload));
+    const result = await callTool(server, {
+      name: "terminal.getOutput",
+      arguments: { terminalId: "t-1" },
+    });
+
+    expect(structuredOf(result)).toEqual(payload);
+  });
+
+  it("emits structuredContent for an empty result set (not just non-empty)", async () => {
+    const payload = { terminals: [] };
+    const server = createSessionServer("sc-empty", deps("terminal.list", payload));
+    const result = await callTool(server, { name: "terminal.list", arguments: {} });
+
+    expect(structuredOf(result)).toEqual(payload);
+  });
+
+  it("omits structuredContent when the manifest entry carries no outputSchema", async () => {
+    // Proves the outputSchema gate is load-bearing: without it, the same object
+    // result falls back to a text-only response (the pre-#10676 behavior).
+    const payload = { terminals: [{ id: "t-1" }] };
+    const server = createSessionServer(
+      "sc-noschema",
+      deps("terminal.list", payload, /* withSchema */ false)
+    );
+    const result = await callTool(server, { name: "terminal.list", arguments: {} });
+
+    expect(structuredOf(result)).toBeUndefined();
+    expect(JSON.parse(textOf(result))).toEqual(payload);
+  });
+});

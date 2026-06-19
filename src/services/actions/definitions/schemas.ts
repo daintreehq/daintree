@@ -144,7 +144,10 @@ export const WorktreeSummarySchema = z.object({
 export const TerminalSummarySchema = z.object({
   id: z.string(),
   kind: z.string(),
-  type: z.unknown().nullable(),
+  // Vestigial: terminal.list always emits this as `undefined`, which drops out
+  // on JSON serialization. Keep it optional so the advertised MCP outputSchema
+  // (#10676) does not mark a key the structuredContent never carries as required.
+  type: z.unknown().nullable().optional(),
   worktreeId: z.string().nullable(),
   title: z.string().nullable(),
   location: z.enum(["grid", "dock", "trash", "background"]),

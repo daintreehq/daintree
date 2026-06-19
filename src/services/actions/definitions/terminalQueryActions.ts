@@ -34,6 +34,7 @@ export function registerTerminalQueryActions(
       })
       .optional(),
     resultSchema: z.object({ terminals: z.array(TerminalSummarySchema) }),
+    mcpOutputSchema: true,
     run: async (args: unknown) => {
       const { worktreeId, location } = (args ?? {}) as {
         worktreeId?: string;
@@ -125,6 +126,7 @@ export function registerTerminalQueryActions(
       truncated: z.boolean(),
       error: z.string().optional(),
     }),
+    mcpOutputSchema: true,
     run: async (args: unknown) => {
       const {
         terminalId,
@@ -225,6 +227,7 @@ export function registerTerminalQueryActions(
       })
       .optional(),
     resultSchema: z.object({ terminals: z.array(TerminalStatusEntrySchema) }),
+    mcpOutputSchema: true,
     run: async (args: unknown) => {
       const { terminalIds, worktreeId, location, includeOutput } = (args ?? {}) as {
         terminalIds?: string[];
