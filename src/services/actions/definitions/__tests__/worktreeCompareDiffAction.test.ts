@@ -162,7 +162,7 @@ describe("worktree.compareDiff run() (#10684)", () => {
     ).rejects.toThrow(/Worktree not found: missing/);
   });
 
-  it("throws when a side has no branch (detached HEAD)", async () => {
+  it("throws when the base side has no branch (detached HEAD)", async () => {
     setWorktrees([
       { id: "wt-left", path: "/repo/left", branch: undefined },
       { id: "wt-right", path: "/repo/right", branch: "feature/b" },
@@ -175,6 +175,40 @@ describe("worktree.compareDiff run() (#10684)", () => {
       )
     ).rejects.toThrow(/detached HEAD/);
     expect(mockCompareWorktrees).not.toHaveBeenCalled();
+  });
+
+  it("throws when the compare-to side has no branch (detached HEAD)", async () => {
+    setWorktrees([
+      { id: "wt-left", path: "/repo/left", branch: "feature/a" },
+      { id: "wt-right", path: "/repo/right", branch: undefined },
+    ]);
+    const run = getRun();
+    await expect(
+      run(
+        { worktreeId: "wt-left", compareToWorktreeId: "wt-right" } as never,
+        {} as ActionContext
+      )
+    ).rejects.toThrow(/detached HEAD/);
+    expect(mockCompareWorktrees).not.toHaveBeenCalled();
+  });
+
+  it("delegates self-comparison to the IPC (no client-side guard)", async () => {
+    // The action does not block worktreeId === compareToWorktreeId; it forwards
+    // both (identical) branches to git, which returns an empty file list. This
+    // documents that the data contract delegates the equality case downstream.
+    const run = getRun();
+    await run(
+      { worktreeId: "wt-left", compareToWorktreeId: "wt-left" } as never,
+      {} as ActionContext
+    );
+    expect(mockCompareWorktrees).toHaveBeenCalledWith(
+      "/repo/left",
+      "feature/a",
+      "feature/a",
+      undefined,
+      undefined,
+      undefined
+    );
   });
 
   it("throws when the IPC returns a raw diff string instead of a file list", async () => {

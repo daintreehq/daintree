@@ -74,9 +74,37 @@ describe("worktree.compareDiff emits a manifest outputSchema (#10684)", () => {
     expect(itemProps.deletions).toBeDefined();
   });
 
-  it("classifies the action as a read-only query", () => {
+  it("requires the top-level result keys and encodes nullable line counts", () => {
+    const schema = outputSchema(registerAll(), "worktree.compareDiff")!;
+    const required = (schema.required as string[] | undefined) ?? [];
+    expect(required).toEqual(expect.arrayContaining(["branch1", "branch2", "files"]));
+
+    const files = (schema.properties as { files: Record<string, unknown> }).files;
+    const items = files.items as Record<string, unknown>;
+    const itemRequired = (items.required as string[] | undefined) ?? [];
+    expect(itemRequired).toEqual(
+      expect.arrayContaining(["path", "status", "insertions", "deletions"])
+    );
+    // insertions/deletions are `number | null` — the schema must admit null, not
+    // just number, or a strict MCP client would reject a binary-file entry.
+    const itemProps = items.properties as Record<string, unknown>;
+    expect(JSON.stringify(itemProps.insertions)).toContain("null");
+  });
+
+  it("marks only compareToWorktreeId as a required input", () => {
+    const entry = registerAll().get("worktree.compareDiff" as ActionId);
+    const required = ((entry?.inputSchema?.required as string[] | undefined) ?? []).slice();
+    expect(required).toEqual(["compareToWorktreeId"]);
+  });
+
+  it("classifies the action as a read-only query with read-only annotations", () => {
     const entry = registerAll().get("worktree.compareDiff" as ActionId);
     expect(entry?.kind).toBe("query");
     expect(entry?.danger).toBe("safe");
+    expect(entry?.mcpAnnotations).toMatchObject({
+      readOnlyHint: true,
+      idempotentHint: true,
+      destructiveHint: false,
+    });
   });
 });
