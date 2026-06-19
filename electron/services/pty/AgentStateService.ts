@@ -293,7 +293,8 @@ export class AgentStateService {
     // Parse a structured check result from recent output as the agent settles
     // out of "working". Only a NEW (changed) result is attached to the event,
     // so working↔waiting flapping doesn't spam identical updates (issue #10682).
-    const newCheckResult = this.detectCheckResultOnSettle(terminal, newState, timestamp);
+    // Stored on the terminal AFTER validation succeeds (see the commit block).
+    const newCheckResult = this.detectCheckResultOnSettle(terminal, newState, event, timestamp);
 
     const stateChangePayload = {
       agentId: effectiveAgentId,
@@ -357,6 +358,15 @@ export class AgentStateService {
     terminal.agentState = newState;
     terminal.lastStateChange = timestamp;
 
+    // Persist the parsed check result post-validation (#10682). A respawn
+    // starts a new session, so any prior run's result is dropped — even though
+    // the old summary may still sit in the semantic buffer.
+    if (event.type === "respawn") {
+      terminal.lastCheckResult = undefined;
+    } else if (newCheckResult) {
+      terminal.lastCheckResult = newCheckResult;
+    }
+
     // Refresh the hysteresis lock only when a high-confidence transition
     // actually crosses the active/passive boundary. Lifecycle events clear
     // the lock to prevent cross-session leakage.
@@ -383,16 +393,19 @@ export class AgentStateService {
 
   /**
    * Parse the recent semantic buffer for a test/lint/build summary as the agent
-   * settles out of "working" (issue #10682). Stores the result on the terminal
-   * for `getPublicState()` hydration and returns it ONLY when it differs from
-   * the stored result — so the caller attaches it to the event just once, and
-   * the original `ranAt` is preserved across repeat detections of the same run.
+   * settles out of "working" (issue #10682). Pure read — the caller stores the
+   * result post-validation. Returns it ONLY when it differs from the stored
+   * result, so the event carries it just once and the original `ranAt` is
+   * preserved across repeat detections of the same run. Skips respawns, whose
+   * buffer still holds the prior session's (now irrelevant) summary.
    */
   private detectCheckResultOnSettle(
     terminal: TerminalInfo,
     newState: AgentState,
+    event: AgentEvent,
     timestamp: number
   ): TerminalCheckResult | undefined {
+    if (event.type === "respawn") return undefined;
     if (!CHECK_SETTLE_STATES.has(newState)) return undefined;
 
     const detected = detectCheckResult(terminal.semanticBuffer.join("\n"), timestamp);
@@ -403,7 +416,6 @@ export class AgentStateService {
       return undefined;
     }
 
-    terminal.lastCheckResult = detected;
     return detected;
   }
 

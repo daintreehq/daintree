@@ -21,8 +21,32 @@ const COMMAND_MAX_CHARS = 120;
 /** Lines that indicate a failure, used to assemble `failureSummary`. */
 const ERROR_LINE_RE = /\b(error|errors|fail|failed|failure|failing)\b|error TS\d+|[✖✗×]|\bFAIL\b/i;
 
+type SummaryKind = "tsc" | "eslint" | "test-counts";
+
 interface SummaryVerdict {
   passed: boolean;
+  kind: SummaryKind;
+}
+
+/**
+ * Verdict for a single Vitest/Jest "Test Files"/"Tests" count row, or `null`
+ * when the line is not such a row.
+ *   Vitest: "Tests  2 failed | 8 passed (10)" / "Tests  10 passed (10)"
+ *   Jest:   "Tests:       2 failed, 8 passed, 10 total"
+ */
+function classifyTestCountRow(line: string): boolean | null {
+  if (!/\b(Test Files|Tests)\b[:\s]/.test(line) || !/\bpassed\b|\bfailed\b/.test(line)) {
+    return null;
+  }
+  const failedMatch = line.match(/(\d+) failed/);
+  if (failedMatch) {
+    return Number(failedMatch[1]) === 0;
+  }
+  // A "passed" row with no "failed" count is a clean run.
+  if (/\d+ passed/.test(line)) {
+    return true;
+  }
+  return null;
 }
 
 /**
@@ -33,28 +57,19 @@ function classifySummaryLine(line: string): SummaryVerdict | null {
   // TypeScript (tsc): "Found 0 errors." / "Found 3 errors in 2 files."
   const tsc = line.match(/\bFound (\d+) errors?\b/);
   if (tsc) {
-    return { passed: Number(tsc[1]) === 0 };
+    return { passed: Number(tsc[1]) === 0, kind: "tsc" };
   }
 
   // ESLint: "✖ 5 problems (3 errors, 2 warnings)" — verdict keys off errors,
   // not warnings (a lint run with only warnings still "passes" the gate).
   const eslint = line.match(/\b(\d+) problems? \((\d+) errors?, (\d+) warnings?\)/);
   if (eslint) {
-    return { passed: Number(eslint[2]) === 0 };
+    return { passed: Number(eslint[2]) === 0, kind: "eslint" };
   }
 
-  // Vitest / Jest "Tests" and "Test Files" summary rows.
-  //   Vitest: "Tests  2 failed | 8 passed (10)" / "Tests  10 passed (10)"
-  //   Jest:   "Tests:       2 failed, 8 passed, 10 total"
-  if (/\b(Test Files|Tests)\b[:\s]/.test(line) && /\bpassed\b|\bfailed\b/.test(line)) {
-    const failedMatch = line.match(/(\d+) failed/);
-    if (failedMatch) {
-      return { passed: Number(failedMatch[1]) === 0 };
-    }
-    // A "passed" row with no "failed" count is a clean run.
-    if (/\d+ passed/.test(line)) {
-      return { passed: true };
-    }
+  const testRow = classifyTestCountRow(line);
+  if (testRow !== null) {
+    return { passed: testRow, kind: "test-counts" };
   }
 
   return null;
@@ -132,6 +147,24 @@ export function detectCheckResult(rawText: string, ranAt: number): TerminalCheck
   }
 
   if (summaryIndex === -1 || verdict === null) return null;
+
+  // Vitest/Jest print TWO adjacent rows per run ("Test Files" + "Tests"). The
+  // bottom-up scan hits "Tests" first, which can read "passed" while a sibling
+  // file failed to compile (0 tests ran in it). Take the pessimistic verdict
+  // across the adjacent rows of the SAME run so a file-level failure isn't
+  // masked. Scoped to ±3 lines so an earlier, already-fixed run isn't pulled in.
+  if (verdict.kind === "test-counts" && verdict.passed) {
+    const lo = Math.max(0, summaryIndex - 3);
+    const hi = Math.min(lines.length - 1, summaryIndex + 3);
+    for (let i = lo; i <= hi; i++) {
+      if (i === summaryIndex) continue;
+      if (classifyTestCountRow(lines[i]) === false) {
+        verdict = { passed: false, kind: "test-counts" };
+        summaryIndex = i;
+        break;
+      }
+    }
+  }
 
   const command = findCommand(lines, summaryIndex);
   if (verdict.passed) {

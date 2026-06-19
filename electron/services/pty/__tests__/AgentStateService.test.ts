@@ -1226,5 +1226,31 @@ describe("AgentStateService", () => {
         false
       );
     });
+
+    it("clears the stored result on respawn and does not re-detect the old buffer", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        agentState: "exited",
+        // Stale summary from the prior session still sitting in the buffer.
+        semanticBuffer: ["> tsc --noEmit", "Found 0 errors."],
+        lastCheckResult: {
+          command: "tsc --noEmit",
+          passed: true,
+          ranAt: 1,
+          failureSummary: null,
+          truncated: false,
+        },
+      });
+      const payloads: Array<{ lastCheckResult?: unknown }> = [];
+      events.on("agent:state-changed", (payload) => payloads.push(payload));
+
+      // respawn: exited → idle (a settle state) — must NOT resurrect the stale result.
+      service.updateAgentState(terminal, { type: "respawn" });
+
+      expect(terminal.agentState).toBe("idle");
+      expect(terminal.lastCheckResult).toBeUndefined();
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.lastCheckResult).toBeUndefined();
+    });
   });
 });

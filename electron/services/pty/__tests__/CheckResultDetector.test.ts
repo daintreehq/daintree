@@ -61,6 +61,19 @@ describe("detectCheckResult", () => {
     expect(detectCheckResult(out, RAN_AT)?.passed).toBe(true);
   });
 
+  it("fails when a Vitest file fails to compile even if the Tests row shows all passed", () => {
+    // A file that fails to compile contributes 0 tests, so the "Tests" row
+    // (scanned first, bottom-up) can read clean while "Test Files" shows the
+    // failure. The verdict must be pessimistic across the two adjacent rows.
+    const out = [
+      "$ vitest run",
+      " FAIL  src/broken.test.ts [ import error ]",
+      "Test Files  1 failed | 1 passed (2)",
+      "     Tests  5 passed (5)",
+    ].join("\n");
+    expect(detectCheckResult(out, RAN_AT)?.passed).toBe(false);
+  });
+
   it("detects a failing Jest run", () => {
     const out = ["$ jest", "Tests:       2 failed, 8 passed, 10 total"].join("\n");
     const result = detectCheckResult(out, RAN_AT);
