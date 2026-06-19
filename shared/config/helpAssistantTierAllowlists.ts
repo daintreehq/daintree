@@ -75,6 +75,7 @@ export const ACTION_TIER_ADDONS = [
   "terminal.closeAll",
   "terminal.kill",
   "terminal.killAll",
+  "terminal.restart",
   "terminal.moveToDock",
   "terminal.moveToGrid",
   "terminal.toggleDock",
