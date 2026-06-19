@@ -70,30 +70,188 @@ describe("RepoFetchCoordinator", () => {
     expect(args).toEqual(["fetch", "origin", "--no-auto-gc", "--prune", "--no-write-fetch-head"]);
   });
 
-  it("propagates authFailed=true via FetchResult on auth-class failures and skips", async () => {
+  it("suppresses the per-card auth stripe until an auth failure is confirmed", async () => {
     mockGetGitCommonDir.mockReturnValue("/repo/.git");
     mockCreateBackgroundFetchGit.mockReturnValue(
       makeMockGit(() => Promise.reject(new Error("Authentication failed for 'https://x'")))
     );
 
     const coord = new RepoFetchCoordinator();
+    // First auth failure is not yet confirmed — surfaces the softer transient
+    // signal (networkFailed) instead of the alarming per-card auth stripe.
     const failed = await coord.fetchForWorktree({
       worktreeId: "wt1",
       worktreePath: "/repo",
     });
     expect(failed.status).toBe("failed");
-    expect(failed.authFailed).toBe(true);
+    expect(failed.reason).toBe("auth-failed");
+    expect(failed.authFailed).toBe(false);
+    expect(failed.networkFailed).toBe(true);
     expect(failed.lastFetchedAt).toBeNull();
 
-    // Subsequent skip from auth suspension also carries authFailed=true so the
-    // renderer keeps the "Sign in to refresh" affordance visible.
+    // A retry inside the backoff window skips with the same unconfirmed
+    // semantics — still no stripe.
     const skipped = await coord.fetchForWorktree({
       worktreeId: "wt1",
       worktreePath: "/repo",
     });
     expect(skipped.status).toBe("skipped");
     expect(skipped.skipReason).toBe("auth-suspended");
+    expect(skipped.authFailed).toBe(false);
+    expect(skipped.networkFailed).toBe(true);
+  });
+
+  it("auto-retries auth failures on backoff and confirms after the threshold, firing once", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    mockCreateBackgroundFetchGit.mockReturnValue(
+      makeMockGit(() => Promise.reject(new Error("Authentication failed for 'https://x'")))
+    );
+
+    const onAuthFailureConfirmed = vi.fn();
+    const coord = new RepoFetchCoordinator({ onAuthFailureConfirmed });
+
+    // Failure 1 — unconfirmed, schedules a retry on the first backoff step.
+    const f1 = await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    expect(f1.authFailed).toBe(false);
+    expect(onAuthFailureConfirmed).not.toHaveBeenCalled();
+
+    // Advance past the 5-min step and retry → failure 2, still unconfirmed.
+    vi.advanceTimersByTime(5 * 60_000 + 1_000);
+    const f2 = await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    expect(f2.status).toBe("failed");
+    expect(f2.authFailed).toBe(false);
+    expect(onAuthFailureConfirmed).not.toHaveBeenCalled();
+
+    // Advance past the 15-min step and retry → failure 3 confirms the failure.
+    vi.advanceTimersByTime(15 * 60_000 + 1_000);
+    const f3 = await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    expect(f3.status).toBe("failed");
+    expect(f3.authFailed).toBe(true);
+    expect(onAuthFailureConfirmed).toHaveBeenCalledTimes(1);
+    expect(onAuthFailureConfirmed).toHaveBeenCalledWith("/repo/.git", "auth-failed");
+
+    // A skip after confirmation keeps the stripe up but does not re-fire.
+    const skipped = await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    expect(skipped.status).toBe("skipped");
     expect(skipped.authFailed).toBe(true);
+    expect(onAuthFailureConfirmed).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not confirm an auth failure on a concurrent sibling burst", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    mockCreateBackgroundFetchGit.mockReturnValue(
+      makeMockGit(() => Promise.reject(new Error("Authentication failed for 'https://x'")))
+    );
+
+    const onAuthFailureConfirmed = vi.fn();
+    const coord = new RepoFetchCoordinator({ onAuthFailureConfirmed });
+
+    // Five siblings sharing one commondir all fetch at once (cold start). Only
+    // the first should spawn git; the rest skip on the cached failure. The
+    // single failure must not confirm just because many cards observed it.
+    const results = await Promise.all(
+      ["a", "b", "c", "d", "e"].map((s) =>
+        coord.fetchForWorktree({ worktreeId: `wt-${s}`, worktreePath: `/repo/${s}` })
+      )
+    );
+
+    expect(mockCreateBackgroundFetchGit).toHaveBeenCalledTimes(1);
+    expect(onAuthFailureConfirmed).not.toHaveBeenCalled();
+    // No card shows the alarming auth stripe yet — only the soft transient.
+    expect(results.every((r) => r.authFailed === false)).toBe(true);
+    expect(results.some((r) => r.networkFailed === true)).toBe(true);
+  });
+
+  it("does not re-confirm immediately when force-retries burst inside the backoff window", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    mockCreateBackgroundFetchGit.mockReturnValue(
+      makeMockGit(() => Promise.reject(new Error("Authentication failed for 'https://x'")))
+    );
+
+    const onAuthFailureConfirmed = vi.fn();
+    const coord = new RepoFetchCoordinator({ onAuthFailureConfirmed });
+
+    // Drive the failure to confirmed over time (3 retries across backoff steps).
+    await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    vi.advanceTimersByTime(5 * 60_000 + 1_000);
+    await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    vi.advanceTimersByTime(15 * 60_000 + 1_000);
+    await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    expect(onAuthFailureConfirmed).toHaveBeenCalledTimes(1);
+
+    // Simulate retryAuthFetch: clear failures, then a burst of force fetches
+    // (which bypass the failure-cache skip) from several sibling monitors.
+    coord.clearAuthFailures();
+    const retried = await Promise.all(
+      ["a", "b", "c", "d"].map((s) =>
+        coord.fetchForWorktree({ worktreeId: `wt-${s}`, worktreePath: `/repo/${s}`, force: true })
+      )
+    );
+
+    // The credential is still broken, but a single user-triggered round must
+    // not re-confirm instantly — the failure drops back to the soft state and
+    // the toast does NOT re-fire until retries reconfirm over time.
+    expect(onAuthFailureConfirmed).toHaveBeenCalledTimes(1);
+    expect(retried.every((r) => r.authFailed === false)).toBe(true);
+  });
+
+  it("resets the auth retry count after a successful fetch", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    let mode: "fail" | "ok" = "fail";
+    mockCreateBackgroundFetchGit.mockReturnValue(
+      makeMockGit(() =>
+        mode === "fail"
+          ? Promise.reject(new Error("Authentication failed for 'https://x'"))
+          : Promise.resolve()
+      )
+    );
+
+    const onAuthFailureConfirmed = vi.fn();
+    const coord = new RepoFetchCoordinator({ onAuthFailureConfirmed });
+
+    // Two unconfirmed auth failures.
+    await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    vi.advanceTimersByTime(5 * 60_000 + 1_000);
+    await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+
+    // A success clears the failure (and the retry count) before confirmation.
+    mode = "ok";
+    vi.advanceTimersByTime(15 * 60_000 + 1_000);
+    const ok = await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    expect(ok.status).toBe("success");
+    expect(coord.hasFailureFor("/repo/.git")).toBe(false);
+
+    // The next auth failure starts fresh — a single failure must not confirm.
+    mode = "fail";
+    vi.advanceTimersByTime(20_000);
+    const again = await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    expect(again.authFailed).toBe(false);
+    expect(onAuthFailureConfirmed).not.toHaveBeenCalled();
+  });
+
+  it("does not corrupt failure state when onAuthFailureConfirmed throws", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    mockCreateBackgroundFetchGit.mockReturnValue(
+      makeMockGit(() => Promise.reject(new Error("Authentication failed for 'https://x'")))
+    );
+
+    const onAuthFailureConfirmed = vi.fn(() => {
+      throw new Error("observer boom");
+    });
+    const coord = new RepoFetchCoordinator({ onAuthFailureConfirmed });
+
+    await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    vi.advanceTimersByTime(5 * 60_000 + 1_000);
+    await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    vi.advanceTimersByTime(15 * 60_000 + 1_000);
+    const confirmed = await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+
+    // The throwing observer was called, but the failure entry is still cached
+    // and reports the confirmed auth state.
+    expect(onAuthFailureConfirmed).toHaveBeenCalledTimes(1);
+    expect(confirmed.status).toBe("failed");
+    expect(confirmed.authFailed).toBe(true);
+    expect(coord.hasFailureFor("/repo/.git")).toBe(true);
   });
 
   it("preserves the prior lastFetchedAt across a transient failure", async () => {
@@ -135,8 +293,9 @@ describe("RepoFetchCoordinator", () => {
   it("serializes fetches for sibling worktrees sharing a commondir", async () => {
     mockGetGitCommonDir.mockReturnValue("/repo/.git");
 
-    // Failing fetches never record a success, so each queued sibling still
-    // runs a real fetch — exercising the per-commondir chain itself.
+    // Force fetches bypass both the recency dedup and the failure-cache skip,
+    // so each queued sibling still runs a real fetch — exercising the
+    // per-commondir chain itself (the failing fetches never record a success).
     let inFlight = 0;
     let maxInFlight = 0;
     mockCreateBackgroundFetchGit.mockReturnValue(
@@ -151,14 +310,35 @@ describe("RepoFetchCoordinator", () => {
     );
 
     const coord = new RepoFetchCoordinator();
-    const a = coord.fetchForWorktree({ worktreeId: "wtA", worktreePath: "/repo/a" });
-    const b = coord.fetchForWorktree({ worktreeId: "wtB", worktreePath: "/repo/b" });
-    const c = coord.fetchForWorktree({ worktreeId: "wtC", worktreePath: "/repo/c" });
+    const a = coord.fetchForWorktree({ worktreeId: "wtA", worktreePath: "/repo/a", force: true });
+    const b = coord.fetchForWorktree({ worktreeId: "wtB", worktreePath: "/repo/b", force: true });
+    const c = coord.fetchForWorktree({ worktreeId: "wtC", worktreePath: "/repo/c", force: true });
 
     await Promise.all([a, b, c]);
 
     expect(maxInFlight).toBe(1);
     expect(mockCreateBackgroundFetchGit).toHaveBeenCalledTimes(3);
+  });
+
+  it("dedups queued sibling fetches once the first one in the chain caches a failure", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    mockCreateBackgroundFetchGit.mockReturnValue(
+      makeMockGit(() => Promise.reject(new Error("the remote end hung up unexpectedly")))
+    );
+
+    const coord = new RepoFetchCoordinator();
+    // Non-force sibling burst: the first records the transient failure, the
+    // rest skip on it rather than each storming the remote with another fetch.
+    const results = await Promise.all([
+      coord.fetchForWorktree({ worktreeId: "wtA", worktreePath: "/repo/a" }),
+      coord.fetchForWorktree({ worktreeId: "wtB", worktreePath: "/repo/b" }),
+      coord.fetchForWorktree({ worktreeId: "wtC", worktreePath: "/repo/c" }),
+    ]);
+
+    expect(mockCreateBackgroundFetchGit).toHaveBeenCalledTimes(1);
+    // Every sibling still surfaces the transient failure to its card.
+    expect(results.every((r) => r.networkFailed === true)).toBe(true);
+    expect(results.every((r) => r.authFailed === false)).toBe(true);
   });
 
   it("dedups queued sibling fetches once the first one in the chain succeeds", async () => {
@@ -286,7 +466,7 @@ describe("RepoFetchCoordinator", () => {
     expect(maxInFlight).toBeGreaterThan(1);
   });
 
-  it("classifies auth failures and suspends future fetches indefinitely", async () => {
+  it("caches auth failures and skips fetches inside the backoff window", async () => {
     mockGetGitCommonDir.mockReturnValue("/repo/.git");
     mockCreateBackgroundFetchGit.mockReturnValue(
       makeMockGit(() =>
@@ -303,7 +483,7 @@ describe("RepoFetchCoordinator", () => {
     expect(first.reason).toBe("auth-failed");
     expect(coord.hasFailureFor("/repo/.git")).toBe(true);
 
-    // Second attempt should skip without invoking git.
+    // Second attempt inside the first backoff step skips without invoking git.
     mockCreateBackgroundFetchGit.mockClear();
     const second = await coord.fetchForWorktree({
       worktreeId: "wt1",
@@ -312,6 +492,47 @@ describe("RepoFetchCoordinator", () => {
     expect(second.status).toBe("skipped");
     expect(second.skipReason).toBe("auth-suspended");
     expect(mockCreateBackgroundFetchGit).not.toHaveBeenCalled();
+
+    // Once the backoff window elapses, the next attempt actually re-fetches.
+    vi.advanceTimersByTime(5 * 60_000 + 1_000);
+    const retried = await coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+    });
+    expect(retried.status).toBe("failed");
+    expect(mockCreateBackgroundFetchGit).toHaveBeenCalledTimes(1);
+  });
+
+  it("classifies forge secondary rate limits as transient, not auth", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    mockCreateBackgroundFetchGit.mockReturnValue(
+      makeMockGit(() =>
+        Promise.reject(
+          new Error(
+            "fatal: unable to access 'https://github.com/x.git/': The requested URL returned error: 403\n" +
+              "remote: You have exceeded a secondary rate limit. Please wait a few minutes before you try again."
+          )
+        )
+      )
+    );
+
+    const onAuthFailureConfirmed = vi.fn();
+    const coord = new RepoFetchCoordinator({ onAuthFailureConfirmed });
+    const result = await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("rate-limited");
+    // Rate limits never show the auth stripe, even if repeated.
+    expect(result.authFailed).toBe(false);
+    expect(result.networkFailed).toBe(true);
+    expect(onAuthFailureConfirmed).not.toHaveBeenCalled();
+
+    // Treated as a (long) transient — cleared by the wake/reconnect hook, not
+    // by clearAuthFailures.
+    coord.clearAuthFailures();
+    expect(coord.hasFailureFor("/repo/.git")).toBe(true);
+    coord.clearNetworkFailures();
+    expect(coord.hasFailureFor("/repo/.git")).toBe(false);
   });
 
   it("clears auth suspensions on demand", async () => {

@@ -632,6 +632,36 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       })
     );
 
+    // Confirmed forge-auth failure — a background fetch's credential is
+    // genuinely broken (it survived several auto-retries). The host emits this
+    // once per repo instead of flagging every worktree card, so we raise a
+    // single escalation toast pointing at the forge settings. Transient blips
+    // during the retry window never reach here (they show the softer
+    // per-card "couldn't reach origin" tooltip instead).
+    cleanups.push(
+      worktreePort.onEvent("fetch-auth-failure-confirmed", () => {
+        notify({
+          type: "error",
+          title: "Forge authentication failed",
+          message:
+            "Background fetches are paused because your code forge credentials were rejected. Sign in again to resume.",
+          action: {
+            label: "Open settings",
+            actionId: "app.settings.openTab",
+            onClick: () => {
+              void actionService.dispatch(
+                "app.settings.openTab",
+                { tab: "code-forge" },
+                { source: "user" }
+              );
+            },
+          },
+          supersedeKey: "forge-auth-failure-confirmed",
+          context: { eventKind: "git" },
+        });
+      })
+    );
+
     // Topology-watcher-dark/recovered — the worktree list may have silently
     // drifted. The store flag drives the Tier-1 pip; arming/clearing the 30s
     // Tier-3 escalation is shared with the hydration path (#9908).

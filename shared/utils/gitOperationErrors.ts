@@ -55,9 +55,25 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
     /batch response:.*(?:exceeded.*LFS budget|over.*data quota|LFS budget)|reached.*free storage limit.*(?:Git LFS|git[- ]lfs|LFS)|(?:Git LFS|git[- ]lfs|LFS).*reached.*free storage limit|HTTP 413.*LFS|VS403658:/i,
   ],
   [
+    // MUST run before `auth-failed`: GitHub returns HTTP 403 for a secondary
+    // rate limit on the same `unable to access ...: The requested URL returned
+    // error: 403` line that `auth-failed` matches, but adds a sideband
+    // `remote: You have exceeded a secondary rate limit ...` line (the
+    // `remote: ` prefix is already stripped by `normalizeGitErrorMessage`). A
+    // rate limit is transient — bucketing it as `auth-failed` would suspend the
+    // repo's background fetch on a throttle that clears on its own. Do not
+    // reorder without updating the "prefers rate-limited over auth-failed" test.
+    "rate-limited",
+    /secondary rate limit|You have exceeded a secondary rate limit|abuse detection mechanism/i,
+  ],
+  [
     "auth-failed",
     // HTTPS 401/403/407 (auth/perm/proxy-auth) as well as the direct SSH/HTTPS messages.
-    /Authentication failed|Permission denied \(publickey\)|could not read Username for|unable to access.*: The requested URL returned error: 40[137]/i,
+    // `could not read Username for` is intentionally NOT matched here: background
+    // fetches run with `GIT_TERMINAL_PROMPT=0`, so a credential-helper hiccup
+    // surfaces that message transiently. Leaving it to fall through to `unknown`
+    // (a short transient retry) avoids suspending the repo on a recoverable blip.
+    /Authentication failed|Permission denied \(publickey\)|unable to access.*: The requested URL returned error: 40[137]/i,
   ],
   [
     // Run BEFORE repository-not-found: when both signals appear (network failure plus
@@ -121,6 +137,8 @@ export function classifyGitError(error: unknown): GitOperationReason {
 
 const RECOVERY_HINTS: Record<GitOperationReason, string | undefined> = {
   "auth-failed": "Check your Git credentials or SSH key configuration.",
+  "rate-limited":
+    "The forge is rate-limiting requests. Background fetches will resume automatically once the limit clears.",
   "network-unavailable": "Check your internet connection and try again.",
   "repository-not-found":
     "The remote repository is unreachable — check the URL or your access permissions.",
