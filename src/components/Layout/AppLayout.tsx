@@ -39,7 +39,7 @@ import type { CliAvailability, AgentSettings } from "@shared/types";
 import { useLayoutState, useOverlayOpen } from "@/hooks";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
-import { releaseAssistantResizeLock, suppressSidebarResizes } from "@/lib/sidebarToggle";
+import { repaintAssistantAfterTransition, suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { logError } from "@/utils/logger";
 
 function preloadGlobalBannerCoordinator() {
@@ -220,10 +220,11 @@ export function AppLayout({
   // per-frame ResizeObserver storm that machine-guns SIGWINCH at the hosted CLI
   // while its own width state lags, orphaning a status-line row into scrollback
   // each show/hide cycle. Arm the PTY resize lock at the real animation start —
-  // closing the ~16ms gap left by the toggle-time suppressSidebarResizes() call
-  // — and release it, with one corrective repaint, the instant the transition
-  // settles. Filter on width + target===currentTarget to ignore other
-  // properties and bubbled child transitions, mirroring the sidebar handler.
+  // closing the ~16ms gap left by the toggle-time suppressSidebarResizes() call,
+  // which is kept as a reduced-motion/performanceMode fallback (those modes
+  // strip transition-[width], so no transition events fire). Filter on width +
+  // target===currentTarget to ignore other properties and bubbled child
+  // transitions, mirroring the sidebar handler.
   const handleAssistantTransitionStart = useCallback(
     (event: React.TransitionEvent<HTMLDivElement>) => {
       if (event.propertyName === "width" && event.target === event.currentTarget) {
@@ -233,14 +234,15 @@ export function AppLayout({
     []
   );
 
-  // transitioncancel is mandatory, not redundant: a rapid hide→show reverses the
-  // animation mid-flight and fires transitioncancel (never transitionend), so
-  // wiring only transitionend would strand the lock and silence every later PTY
-  // resize for that terminal session.
-  const handleAssistantTransitionSettled = useCallback(
+  // Only the settle (transitionend) path issues the corrective repaint. A rapid
+  // hide→show fires transitioncancel at an intermediate animating width, where a
+  // repaint would assert a transient wrong column count — the suppression timer
+  // owns the unlock and the following show's transitionend repaints correctly,
+  // so the cancel needs no handler.
+  const handleAssistantTransitionEnd = useCallback(
     (event: React.TransitionEvent<HTMLDivElement>) => {
       if (event.propertyName === "width" && event.target === event.currentTarget) {
-        releaseAssistantResizeLock();
+        repaintAssistantAfterTransition();
       }
     },
     []
@@ -732,8 +734,7 @@ export function AppLayout({
               )}
               style={{ width: effectiveAssistantWidth, contain: "layout paint" }}
               onTransitionStart={handleAssistantTransitionStart}
-              onTransitionEnd={handleAssistantTransitionSettled}
-              onTransitionCancel={handleAssistantTransitionSettled}
+              onTransitionEnd={handleAssistantTransitionEnd}
             >
               <div
                 className="absolute top-0 right-0 h-full"
