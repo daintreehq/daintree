@@ -2746,6 +2746,41 @@ describe("McpServerService", () => {
         title: "Focus Panel",
         description: "Focus a specific panel by id",
       }),
+      createManifestEntry({
+        id: "devPreview.reloadPreview" as ActionId,
+        title: "Reload Dev Preview",
+        description: "Reload the dev preview panel",
+      }),
+      createManifestEntry({
+        id: "devPreview.restart" as ActionId,
+        title: "Restart Dev Server",
+        description: "Restart the dev server for the dev preview panel",
+      }),
+      createManifestEntry({
+        id: "devPreview.promoteToPortal" as ActionId,
+        title: "Promote Dev Preview to Portal",
+        description: "Promote a dev preview panel to a portal tab",
+      }),
+      createManifestEntry({
+        id: "portal.openUrl" as ActionId,
+        title: "Open URL in Portal",
+        description: "Open a URL in a new portal tab",
+      }),
+      createManifestEntry({
+        id: "portal.newTab" as ActionId,
+        title: "New Portal Tab",
+        description: "Open a new portal tab",
+      }),
+      createManifestEntry({
+        id: "portal.toggle" as ActionId,
+        title: "Toggle Portal",
+        description: "Show or hide the portal",
+      }),
+      createManifestEntry({
+        id: "portal.toggleDevDashboard" as ActionId,
+        title: "Toggle Dev Dashboard",
+        description: "Show or hide the portal dev dashboard",
+      }),
       // Additional entries needed for full SYSTEM_TIER_ADDONS coverage.
       createManifestEntry({
         id: "worktree.resource.teardown" as ActionId,

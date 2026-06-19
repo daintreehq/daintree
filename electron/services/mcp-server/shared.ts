@@ -553,6 +553,7 @@ export const RATE_LIMIT_TOOL_MAP: ReadonlyMap<string, RateLimitConfig> = new Map
   ["terminal.getOutput", RATE_LIMIT_TIERS.highFreqRead],
   ["terminal.getStatus", RATE_LIMIT_TIERS.highFreqRead],
   ["actions.getContext", RATE_LIMIT_TIERS.highFreqRead],
+  ["browser.getConsoleMessages", RATE_LIMIT_TIERS.highFreqRead],
   ["git.commit", RATE_LIMIT_TIERS.mutation],
   ["git.push", RATE_LIMIT_TIERS.mutation],
   ["forge.openIssue", RATE_LIMIT_TIERS.mutation],

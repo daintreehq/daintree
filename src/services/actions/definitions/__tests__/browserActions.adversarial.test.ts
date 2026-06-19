@@ -4,9 +4,14 @@ import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../..
 
 const systemClientMock = vi.hoisted(() => ({ openExternal: vi.fn() }));
 const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
+const consoleCaptureMock = vi.hoisted(() => ({ getState: vi.fn(), flush: vi.fn() }));
 
 vi.mock("@/clients", () => ({ systemClient: systemClientMock }));
 vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
+vi.mock("@/store/consoleCaptureStore", () => ({
+  useConsoleCaptureStore: { getState: consoleCaptureMock.getState },
+  flushConsoleCaptureBuffer: consoleCaptureMock.flush,
+}));
 
 import { registerBrowserActions } from "../browserActions";
 
@@ -44,6 +49,57 @@ function setPanelState(state: {
 const dispatchSpy = vi.fn<(event: Event) => boolean>(() => true);
 const clipboardSpy = vi.fn<(text: string) => Promise<void>>();
 
+const getMessagesSpy = vi.fn();
+const getCountsSpy = vi.fn();
+
+interface FakeRow {
+  id: number;
+  paneId: string;
+  level: "log" | "info" | "warning" | "error";
+  cdpType: string;
+  args: unknown[];
+  summaryText: string;
+  stackTrace?: unknown;
+  groupDepth: number;
+  timestamp: number;
+  navigationGeneration: number;
+  category?: string;
+  // Renderer-only UI fields that must be stripped from the action result.
+  isStale: boolean;
+  timeLabel: string;
+  isGroupHeader: boolean;
+}
+
+function makeRow(overrides: Partial<FakeRow> = {}): FakeRow {
+  return {
+    id: 1,
+    paneId: "b1",
+    level: "log",
+    cdpType: "log",
+    args: [],
+    summaryText: "message",
+    groupDepth: 0,
+    timestamp: 0,
+    navigationGeneration: 0,
+    isStale: false,
+    timeLabel: "00:00:00.000",
+    isGroupHeader: false,
+    ...overrides,
+  };
+}
+
+function setConsoleState(
+  rows: FakeRow[],
+  counts: { errorCount: number; warnCount: number } = { errorCount: 0, warnCount: 0 }
+) {
+  getMessagesSpy.mockReturnValue(rows);
+  getCountsSpy.mockReturnValue(counts);
+  consoleCaptureMock.getState.mockReturnValue({
+    getMessages: getMessagesSpy,
+    getCounts: getCountsSpy,
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   dispatchSpy.mockReset().mockReturnValue(true);
@@ -51,6 +107,10 @@ beforeEach(() => {
   addPanelSpy.mockReset().mockResolvedValue("new-panel");
   setBrowserUrlSpy.mockReset();
   activateTerminalSpy.mockReset();
+  getMessagesSpy.mockReset();
+  getCountsSpy.mockReset();
+  consoleCaptureMock.flush.mockReset();
+  consoleCaptureMock.getState.mockReset();
   systemClientMock.openExternal.mockResolvedValue(undefined);
   Object.defineProperty(globalThis.window, "dispatchEvent", {
     value: dispatchSpy,
@@ -261,5 +321,112 @@ describe("browserActions adversarial", () => {
     const run = setupActions();
     await run("browser.toggleDevTools");
     expect(dispatchSpy).not.toHaveBeenCalled();
+  });
+
+  it("browser.getConsoleMessages returns messages and counts for the focused pane", async () => {
+    setPanelState({ focusedId: "b1" });
+    setConsoleState([makeRow({ id: 1, summaryText: "hello" })], { errorCount: 2, warnCount: 1 });
+    const run = setupActions();
+    const result = (await run("browser.getConsoleMessages")) as {
+      paneId: string;
+      messages: Array<{ id: number; summaryText: string }>;
+      counts: { errorCount: number; warnCount: number };
+    };
+
+    expect(getMessagesSpy).toHaveBeenCalledWith("b1");
+    expect(result.paneId).toBe("b1");
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toMatchObject({ id: 1, summaryText: "hello" });
+    expect(result.counts).toEqual({ errorCount: 2, warnCount: 1 });
+  });
+
+  it("browser.getConsoleMessages strips renderer-only UI fields", async () => {
+    setPanelState({ focusedId: "b1" });
+    setConsoleState([makeRow()]);
+    const run = setupActions();
+    const result = (await run("browser.getConsoleMessages")) as {
+      messages: Array<Record<string, unknown>>;
+    };
+
+    const msg = result.messages[0]!;
+    expect(msg).not.toHaveProperty("isStale");
+    expect(msg).not.toHaveProperty("timeLabel");
+    expect(msg).not.toHaveProperty("isGroupHeader");
+  });
+
+  it("browser.getConsoleMessages flushes the ingest buffer before reading", async () => {
+    setPanelState({ focusedId: "b1" });
+    setConsoleState([makeRow()]);
+    const run = setupActions();
+    await run("browser.getConsoleMessages");
+
+    expect(consoleCaptureMock.flush).toHaveBeenCalledTimes(1);
+    const flushOrder = consoleCaptureMock.flush.mock.invocationCallOrder[0]!;
+    const readOrder = getMessagesSpy.mock.invocationCallOrder[0]!;
+    expect(flushOrder).toBeLessThan(readOrder);
+  });
+
+  it("browser.getConsoleMessages filters by level", async () => {
+    setPanelState({ focusedId: "b1" });
+    setConsoleState([
+      makeRow({ id: 1, level: "log" }),
+      makeRow({ id: 2, level: "error" }),
+      makeRow({ id: 3, level: "error" }),
+    ]);
+    const run = setupActions();
+    const result = (await run("browser.getConsoleMessages", { level: "error" })) as {
+      messages: Array<{ id: number; level: string }>;
+    };
+
+    expect(result.messages.map((m) => m.id)).toEqual([2, 3]);
+  });
+
+  it("browser.getConsoleMessages applies limit to the most recent rows after filtering", async () => {
+    setPanelState({ focusedId: "b1" });
+    setConsoleState([
+      makeRow({ id: 1 }),
+      makeRow({ id: 2 }),
+      makeRow({ id: 3 }),
+      makeRow({ id: 4 }),
+    ]);
+    const run = setupActions();
+    const result = (await run("browser.getConsoleMessages", { limit: 2 })) as {
+      messages: Array<{ id: number }>;
+    };
+
+    expect(result.messages.map((m) => m.id)).toEqual([3, 4]);
+  });
+
+  it("browser.getConsoleMessages uses explicit terminalId over focus", async () => {
+    setPanelState({ focusedId: "focused" });
+    setConsoleState([]);
+    const run = setupActions();
+    const result = (await run("browser.getConsoleMessages", { terminalId: "other" })) as {
+      paneId: string;
+    };
+
+    expect(getMessagesSpy).toHaveBeenCalledWith("other");
+    expect(result.paneId).toBe("other");
+  });
+
+  it("browser.getConsoleMessages returns empty result for a pane with no messages", async () => {
+    setPanelState({ focusedId: "b1" });
+    setConsoleState([]);
+    const run = setupActions();
+    const result = (await run("browser.getConsoleMessages")) as {
+      messages: unknown[];
+      counts: { errorCount: number; warnCount: number };
+    };
+
+    expect(result.messages).toEqual([]);
+    expect(result.counts).toEqual({ errorCount: 0, warnCount: 0 });
+  });
+
+  it("browser.getConsoleMessages throws when no target panel exists", async () => {
+    setPanelState({ focusedId: null });
+    const run = setupActions();
+
+    await expect(run("browser.getConsoleMessages")).rejects.toThrow(/No browser panel/);
+    expect(consoleCaptureMock.flush).not.toHaveBeenCalled();
   });
 });

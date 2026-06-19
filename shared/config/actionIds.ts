@@ -389,6 +389,7 @@ export const BUILT_IN_ACTION_IDS = [
   "browser.captureScreenshot",
   "browser.toggleConsole",
   "browser.clearConsole",
+  "browser.getConsoleMessages",
   "browser.toggleDevTools",
   "browser.hardReload",
 
