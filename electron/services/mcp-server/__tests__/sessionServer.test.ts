@@ -2567,6 +2567,23 @@ describe("MCP_DEDUP_ALLOWLIST widening (#8468)", () => {
   });
 });
 
+describe("worktree resource lifecycle dedup/rate-limit (#10683)", () => {
+  it("dedups + mutation-rate-limits provision (spins up a remote resource)", () => {
+    expect(MCP_DEDUP_ALLOWLIST.has("worktree.resource.provision")).toBe(true);
+    expect(RATE_LIMIT_TOOL_MAP.get("worktree.resource.provision")).toBe(RATE_LIMIT_TIERS.mutation);
+  });
+
+  it("does not dedup pause/resume/teardown (intentionally re-runnable)", () => {
+    for (const tool of [
+      "worktree.resource.pause",
+      "worktree.resource.resume",
+      "worktree.resource.teardown",
+    ]) {
+      expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(false);
+    }
+  });
+});
+
 describe("MCP_DEDUP_ALLOWLIST widening (#9156)", () => {
   const NEW_MUTATIONS = [
     "worktree.delete",

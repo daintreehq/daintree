@@ -81,6 +81,21 @@ describe("worktree resource action definitions", () => {
     expect(def.danger).toBe(expectedDanger);
   });
 
+  it.each([
+    "worktree.resource.provision",
+    "worktree.resource.teardown",
+    "worktree.resource.resume",
+    "worktree.resource.pause",
+  ] as const)("%s is a discoverable MCP tool (kept off the eager tools/list)", (id) => {
+    const def = registry.get(id)!();
+    expect(def.mcpVisibility).toBe("discoverable");
+  });
+
+  it("status keeps its eager (unclassified) MCP visibility", () => {
+    const def = registry.get("worktree.resource.status")!();
+    expect(def.mcpVisibility).toBeUndefined();
+  });
+
   it("all resource actions have category=worktree and kind=command", () => {
     for (const id of RESOURCE_ACTION_IDS) {
       const def = registry.get(id)!();

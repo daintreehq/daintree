@@ -21,6 +21,7 @@ import {
   RESOURCE_PROFILE_CONFIGS,
   type ResourceProfile,
   type ResourceProfilePayload,
+  type ResourceProfileSnapshot,
 } from "../../shared/types/resourceProfile.js";
 import { ACTIVE_AGENT_STATES, type AgentState } from "../../shared/types/agent.js";
 
@@ -127,14 +128,7 @@ export interface ResourceProfileDeps {
   hasSustainedRendererSaturation?: () => boolean;
 }
 
-/** Read-only resource-profile state surfaced in the diagnostics export (#10500). */
-export interface ResourceProfileSnapshot {
-  profile: ResourceProfile;
-  thermalState: "unknown" | "nominal" | "fair" | "serious" | "critical";
-  isOnBattery: boolean;
-  speedLimit: number;
-  lagPressureActive: boolean;
-}
+export type { ResourceProfileSnapshot };
 
 export class ResourceProfileService {
   private currentProfile: ResourceProfile = "balanced";

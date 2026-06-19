@@ -1211,6 +1211,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../resourceProfile.js").ResourceProfilePayload;
   };
+  "system:get-resource-profile-snapshot": {
+    args: [];
+    result: import("../resourceProfile.js").ResourceProfileSnapshot;
+  };
   "telemetry:get": {
     args: [];
     result: { enabled: boolean; hasSeenPrompt: boolean };

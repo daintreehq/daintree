@@ -43,6 +43,12 @@ export const systemClient = {
     return window.electron.system.getHomeDir();
   },
 
+  getResourceProfileSnapshot: (): ReturnType<
+    typeof window.electron.system.getResourceProfileSnapshot
+  > => {
+    return window.electron.system.getResourceProfileSnapshot();
+  },
+
   getTmpDir: (): Promise<string> => {
     if (cachedTmpDir !== null) return Promise.resolve(cachedTmpDir);
     if (tmpDirInflight) return tmpDirInflight;

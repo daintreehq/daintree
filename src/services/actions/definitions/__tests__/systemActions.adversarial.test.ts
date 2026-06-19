@@ -24,6 +24,7 @@ const systemClientMock = vi.hoisted(() => ({
   checkCommand: vi.fn(),
   checkDirectory: vi.fn(),
   getHomeDir: vi.fn(),
+  getResourceProfileSnapshot: vi.fn(),
 }));
 
 const cliAvailabilityClientMock = vi.hoisted(() => ({
@@ -57,17 +58,19 @@ import { registerSystemActions } from "../systemActions";
 
 function setupActions(): {
   run: (id: string, args?: unknown, ctx?: Record<string, unknown>) => Promise<unknown>;
+  getDef: (id: string) => AnyActionDefinition;
 } {
   const actions: ActionRegistry = new Map();
   const callbacks: ActionCallbacks = {} as unknown as ActionCallbacks;
   registerSystemActions(actions, callbacks);
+  const getDef = (id: string): AnyActionDefinition => {
+    const factory = actions.get(id);
+    if (!factory) throw new Error(`missing ${id}`);
+    return factory() as AnyActionDefinition;
+  };
   return {
-    run: async (id, args, ctx) => {
-      const factory = actions.get(id);
-      if (!factory) throw new Error(`missing ${id}`);
-      const def = factory() as AnyActionDefinition;
-      return def.run(args, (ctx ?? {}) as never);
-    },
+    run: async (id, args, ctx) => getDef(id).run(args, (ctx ?? {}) as never),
+    getDef,
   };
 }
 
@@ -126,6 +129,31 @@ describe("systemActions adversarial", () => {
         agentId: "claude",
         projectPath: "/repo",
       });
+    });
+  });
+
+  describe("system.getResourceProfileSnapshot", () => {
+    it("returns the client snapshot verbatim", async () => {
+      const snapshot = {
+        profile: "efficiency" as const,
+        thermalState: "serious" as const,
+        isOnBattery: true,
+        speedLimit: 60,
+        lagPressureActive: true,
+      };
+      systemClientMock.getResourceProfileSnapshot.mockResolvedValue(snapshot);
+      const { run } = setupActions();
+      const result = await run("system.getResourceProfileSnapshot");
+      expect(systemClientMock.getResourceProfileSnapshot).toHaveBeenCalledOnce();
+      expect(result).toEqual(snapshot);
+    });
+
+    it("is a discoverable read-only MCP tool (kept off the eager tools/list)", () => {
+      const { getDef } = setupActions();
+      const def = getDef("system.getResourceProfileSnapshot");
+      expect(def.kind).toBe("query");
+      expect(def.danger).toBe("safe");
+      expect(def.mcpVisibility).toBe("discoverable");
     });
   });
 

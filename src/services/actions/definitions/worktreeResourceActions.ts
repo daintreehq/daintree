@@ -37,11 +37,13 @@ export function registerWorktreeResourceActions(
     defineAction({
       id: "worktree.resource.provision",
       title: "Provision Resource",
-      description: "Run resource provisioning commands for a worktree",
+      description:
+        "Run the configured provisioning commands for a worktree's remote resource (e.g. spin up a cloud devbox). Args: `worktreeId` (optional) — a worktree id from `worktree.list`; defaults to the focused or active worktree. Errors when no worktree is selected; a failing command surfaces an error toast rather than throwing.",
       category: "worktree",
       kind: "command",
       danger: "safe",
       scope: "renderer",
+      mcpVisibility: "discoverable",
       argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
       isEnabled: (ctx: ActionContext) => {
         const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
@@ -73,11 +75,13 @@ export function registerWorktreeResourceActions(
     defineAction({
       id: "worktree.resource.teardown",
       title: "Teardown Resource",
-      description: "Run resource teardown commands for a worktree",
+      description:
+        "Run the configured teardown commands for a worktree's remote resource (e.g. destroy a cloud devbox). Args: `worktreeId` (optional) — a worktree id from `worktree.list`; defaults to the focused or active worktree. Destructive: recovery requires re-provisioning. Errors when no worktree is selected; a failing command surfaces an error toast rather than throwing.",
       category: "worktree",
       kind: "command",
       danger: "confirm",
       scope: "renderer",
+      mcpVisibility: "discoverable",
       dangerRationale:
         "Destroys the cloud resource associated with a worktree. Recovery requires re-provisioning.",
       argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
@@ -111,11 +115,13 @@ export function registerWorktreeResourceActions(
     defineAction({
       id: "worktree.resource.resume",
       title: "Resume Resource",
-      description: "Resume the resource associated with a worktree",
+      description:
+        "Run the configured resume commands for a worktree's paused remote resource. Args: `worktreeId` (optional) — a worktree id from `worktree.list`; defaults to the focused or active worktree. Errors when no worktree is selected; a failing command surfaces an error toast rather than throwing.",
       category: "worktree",
       kind: "command",
       danger: "safe",
       scope: "renderer",
+      mcpVisibility: "discoverable",
       argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
       isEnabled: (ctx: ActionContext) => {
         const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
@@ -147,11 +153,13 @@ export function registerWorktreeResourceActions(
     defineAction({
       id: "worktree.resource.pause",
       title: "Pause Resource",
-      description: "Pause the resource associated with a worktree",
+      description:
+        "Run the configured pause commands for a worktree's remote resource (e.g. stop a cloud devbox to save cost). Args: `worktreeId` (optional) — a worktree id from `worktree.list`; defaults to the focused or active worktree. Errors when no worktree is selected; a failing command surfaces an error toast rather than throwing.",
       category: "worktree",
       kind: "command",
       danger: "safe",
       scope: "renderer",
+      mcpVisibility: "discoverable",
       argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
       isEnabled: (ctx: ActionContext) => {
         const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;

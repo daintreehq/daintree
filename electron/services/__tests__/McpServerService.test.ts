@@ -2618,6 +2618,24 @@ describe("McpServerService", () => {
         kind: "query",
       }),
       createManifestEntry({
+        id: "system.getResourceProfileSnapshot" as ActionId,
+        title: "Get Resource Profile Snapshot",
+        description: "Read host resource pressure and the active resource profile",
+        kind: "query",
+      }),
+      createManifestEntry({
+        id: "cliAvailability.get" as ActionId,
+        title: "Get CLI Availability",
+        description: "Read cached agent CLI availability",
+        kind: "query",
+      }),
+      createManifestEntry({
+        id: "hibernation.getConfig" as ActionId,
+        title: "Get Hibernation Config",
+        description: "Read auto-hibernation configuration",
+        kind: "query",
+      }),
+      createManifestEntry({
         id: "project.update" as ActionId,
         title: "Update Project",
         description: "Update project metadata",
@@ -2642,6 +2660,21 @@ describe("McpServerService", () => {
         id: "worktree.refresh" as ActionId,
         title: "Refresh Worktrees",
         description: "Refresh worktree status from disk",
+      }),
+      createManifestEntry({
+        id: "worktree.resource.provision" as ActionId,
+        title: "Provision Resource",
+        description: "Run resource provisioning commands for a worktree",
+      }),
+      createManifestEntry({
+        id: "worktree.resource.pause" as ActionId,
+        title: "Pause Resource",
+        description: "Pause the resource associated with a worktree",
+      }),
+      createManifestEntry({
+        id: "worktree.resource.resume" as ActionId,
+        title: "Resume Resource",
+        description: "Resume the resource associated with a worktree",
       }),
       createManifestEntry({
         id: "terminal.inject" as ActionId,
@@ -2714,6 +2747,12 @@ describe("McpServerService", () => {
         description: "Focus a specific panel by id",
       }),
       // Additional entries needed for full SYSTEM_TIER_ADDONS coverage.
+      createManifestEntry({
+        id: "worktree.resource.teardown" as ActionId,
+        title: "Teardown Resource",
+        description: "Run resource teardown commands for a worktree",
+        danger: "confirm",
+      }),
       createManifestEntry({
         id: "git.stageFile" as ActionId,
         title: "Stage File",
@@ -2910,6 +2949,9 @@ describe("McpServerService", () => {
       WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "workflow.prepBranchForReview")!,
       WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "agentSettings.get")!,
       WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "keybinding.getOverrides")!,
+      WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "system.getResourceProfileSnapshot")!,
+      WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "cliAvailability.get")!,
+      WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "hibernation.getConfig")!,
     ] as const;
 
     // Fleet-broadcast primitives are renderer-only — they remain available

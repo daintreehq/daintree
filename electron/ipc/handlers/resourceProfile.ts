@@ -2,6 +2,7 @@ import { defineIpcNamespace, op } from "../define.js";
 import {
   RESOURCE_PROFILE_CONFIGS,
   type ResourceProfilePayload,
+  type ResourceProfileSnapshot,
 } from "../../../shared/types/resourceProfile.js";
 import { getResourceProfileService } from "../../window/serviceRefs.js";
 import type { HandlerDependencies } from "../types.js";
@@ -20,6 +21,24 @@ export function registerResourceProfileHandlers(_deps: HandlerDependencies): () 
         async (): Promise<ResourceProfilePayload> => {
           const profile = getResourceProfileService()?.getProfile() ?? "balanced";
           return { profile, config: RESOURCE_PROFILE_CONFIGS[profile] };
+        }
+      ),
+      // Read-only host-pressure projection (profile + thermal/battery/CPU/lag
+      // inputs) for diagnostics (#10500) and the MCP orchestrator (#10683).
+      // Falls back to the balanced/unknown baseline when the service has not
+      // started (early boot, or a renderer recreated before init).
+      getResourceProfileSnapshot: op(
+        RESOURCE_PROFILE_METHOD_CHANNELS.getResourceProfileSnapshot,
+        async (): Promise<ResourceProfileSnapshot> => {
+          return (
+            getResourceProfileService()?.getSnapshot() ?? {
+              profile: "balanced",
+              thermalState: "unknown",
+              isOnBattery: false,
+              speedLimit: 100,
+              lagPressureActive: false,
+            }
+          );
         }
       ),
     },
