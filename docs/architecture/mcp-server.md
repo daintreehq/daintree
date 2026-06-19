@@ -175,6 +175,66 @@ Gate order is load-bearing: rate-limit is charged **after** the tier/grant check
 - **Rate limits** (`RATE_LIMIT_TIERS`, `RATE_LIMIT_TOOL_MAP`): per-`(session, toolId)` token bucket. `highFreqRead` (60/min) for cheap polling, `standard` (30/min) default, `mutation` (10/min) for side-effecting tools (commit, push, issue/PR, worktree.delete, snapshot revert/delete).
 - **Dedup** (`MCP_DEDUP_ALLOWLIST`): only creation/destructive tools where an LLM retry would produce a visible duplicate (orphan terminal, duplicate commit, duplicate PR). Keyed by a caller-supplied `requestKey` (prefixed with `actionId`, capped at `MAX_REQUEST_KEY_LENGTH`) or an auto canonical args hash, with an args-hash collision guard (#8429). TTL `MCP_DEDUP_TTL_MS` (120s), FIFO-capped at `MCP_DEDUP_MAX_ENTRIES_PER_SESSION` (256).
 
+## Forge action surface (`forgeActions.ts`)
+
+The `forge.*` tools are how an agent reads and mutates the project's issues, pull requests, and reviews over MCP. Every action is defined in [`src/services/actions/definitions/forgeActions.ts`](../../src/services/actions/definitions/forgeActions.ts); the `run()` bodies stay provider-agnostic and provider routing (GitHub, GitLab, …) is resolved at the IPC layer in `electron/ipc/handlers/forge.ts`. For how a provider is selected and normalized, see [`forge-provider-abstraction.md`](./forge-provider-abstraction.md) — this section documents only the MCP-facing contract (id, args, tier, `danger`, rate limit, dedup). No forge action sets `mcpVisibility`, so they all take the eager `tools/list` path and surface whenever the caller's tier permits them.
+
+The tables below are the authoritative `forge.*` surface, derived from three sources that must stay in sync: `forgeActions.ts` (`kind`, `danger`, `argsSchema`), `shared/config/helpAssistantTierAllowlists.ts` (tier membership — `WORKBENCH_TIER_TOOLS` reads, `SYSTEM_TIER_ADDONS` writes), and `electron/services/mcp-server/shared.ts` (`MCP_TOOL_ALLOWLIST` for the external surface, `RATE_LIMIT_TOOL_MAP` for the bucket, `MCP_DEDUP_ALLOWLIST` for dedup). Where it appears, `cwd` is listed last and is always optional, defaulting to the active worktree path; the three browser-open list actions (`forge.openIssues`/`forge.openPRs`/`forge.openCommits`) take `projectPath?` instead and resolve against the current project's path, and `forge.validateToken` takes no location arg.
+
+Three axes are independent — do not infer one from another:
+
+- **`danger`** gates the user-facing confirm. `danger:"confirm"` routes the call through an MCP elicitation prompt before dispatch (see [Risk bands and `danger`](#risk-bands-and-danger)); `danger:"safe"` does not. It says nothing about rate limit. `forge.createIssue` is `safe` while `forge.closeIssue` is `confirm`; `forge.approvePR` is `confirm` yet on the `standard` bucket while `forge.createPR` is `confirm` on `mutation`.
+- **Rate limit** is the token bucket (`standard` 30/min, `mutation` 10/min). It is set per-id in `RATE_LIMIT_TOOL_MAP`, not derived from `danger` or write-intent — the browser-open commands `forge.openIssue`/`forge.openPR` are `safe` but `mutation`-bucketed because an LLM retry would pop a duplicate browser tab.
+- **External** marks whether the action is in `MCP_TOOL_ALLOWLIST` and therefore reachable by `external` (API-key) callers. All writes require the `system` tier; the twelve marked `External: no` are reachable _only_ via a `system`-tier session (the in-app help assistant), not by an external API key (unless `fullToolSurface` is enabled, which lets `external` bypass `MCP_TOOL_ALLOWLIST` entirely — see [Tier model](#tier-model-sharedts)), even though they pass the `system` floor.
+
+### Forge reads (`workbench` tier)
+
+All five are in `WORKBENCH_TIER_TOOLS` (the help-assistant baseline) and in `MCP_TOOL_ALLOWLIST`, so they are reachable at every tier including `external`. All are `kind:"query"`, `danger:"safe"`, on the `standard` bucket, and not deduped.
+
+| Action ID            | Key args                               |
+| -------------------- | -------------------------------------- |
+| `forge.getRepoStats` | `bypassCache?`, `cwd?`                 |
+| `forge.listIssues`   | `search?`, `state?`, `cursor?`, `cwd?` |
+| `forge.listPRs`      | `search?`, `state?`, `cursor?`, `cwd?` |
+| `forge.getIssue`     | `issueNumber`, `cwd?`                  |
+| `forge.getPR`        | `prNumber`, `cwd?`                     |
+
+### Forge writes and commands (`system` tier)
+
+Every action below is in `SYSTEM_TIER_ADDONS` and requires the `system` tier (or a per-tool grant) to dispatch. All are `kind:"command"` except `forge.validateToken`, which is a non-mutating `query` that still lives in the system tier. Rows are in `SYSTEM_TIER_ADDONS` order.
+
+| Action ID | Danger | Rate limit | Dedup | External | Key args |
+| --- | --- | --- | --- | --- | --- |
+| `forge.openIssues` | safe | standard | no | yes | `projectPath?`, `query?`, `state?` |
+| `forge.openPRs` | safe | standard | no | yes | `projectPath?`, `query?`, `state?` |
+| `forge.openCommits` | safe | standard | no | yes | `projectPath?`, `branch?` |
+| `forge.openIssue` | safe | mutation | yes | yes | `issueNumber`, `cwd?` |
+| `forge.openPR` | safe | mutation | yes | yes | `prNumber`, `cwd?` |
+| `forge.assignIssue` | safe | mutation | yes | yes | `issueNumber`, `username`, `cwd?` |
+| `forge.unassignIssue` | safe | standard | no | no | `issueNumber`, `username`, `cwd?` |
+| `forge.approvePR` | confirm | standard | no | no | `prNumber`, `body?`, `cwd?` |
+| `forge.requestChanges` | confirm | standard | no | no | `prNumber`, `body`, `cwd?` |
+| `forge.dismissReview` | confirm | standard | no | no | `prNumber`, `reviewId`, `message`, `cwd?` |
+| `forge.requestReviewers` | confirm | standard | no | no | `prNumber`, `users?`, `teams?` (at least one), `cwd?` |
+| `forge.createPR` | confirm | mutation | yes | yes | `head`, `base`, `title`, `body?`, `draft?`, `cwd?` |
+| `forge.closePR` | confirm | mutation | no | yes | `prNumber`, `cwd?` |
+| `forge.reopenPR` | confirm | mutation | no | yes | `prNumber`, `cwd?` |
+| `forge.mergePR` | confirm | mutation | yes | yes | `prNumber`, `mergeMethod?`, `commitTitle?`, `commitMessage?`, `cwd?` |
+| `forge.convertPRToDraft` | confirm | mutation | no | yes | `prNumber`, `cwd?` |
+| `forge.markPRReadyForReview` | confirm | mutation | no | yes | `prNumber`, `cwd?` |
+| `forge.commentOnPR` | confirm | mutation | yes | yes | `prNumber`, `body`, `cwd?` |
+| `forge.editPR` | confirm | mutation | no | yes | `prNumber`, `title?`, `body?` (at least one), `cwd?` |
+| `forge.createIssue` | safe | standard | no | no | `title`, `body?`, `labels?`, `cwd?` |
+| `forge.closeIssue` | confirm | standard | no | no | `issueNumber`, `stateReason?`, `cwd?` |
+| `forge.reopenIssue` | safe | standard | no | no | `issueNumber`, `cwd?` |
+| `forge.editIssue` | confirm | standard | no | no | `issueNumber`, `title?`, `body?` (at least one), `cwd?` |
+| `forge.addIssueComment` | safe | standard | no | no | `issueNumber`, `body`, `cwd?` |
+| `forge.addIssueLabel` | safe | standard | no | no | `issueNumber`, `label`, `cwd?` |
+| `forge.removeIssueLabel` | safe | standard | no | no | `issueNumber`, `label`, `cwd?` |
+| `forge.validateToken` | safe | standard | no | yes | `providerId`, `token` |
+
+The twelve `External: no` actions — `forge.unassignIssue`, `forge.approvePR`, `forge.requestChanges`, `forge.dismissReview`, `forge.requestReviewers`, `forge.createIssue`, `forge.closeIssue`, `forge.reopenIssue`, `forge.editIssue`, `forge.addIssueComment`, `forge.addIssueLabel`, `forge.removeIssueLabel` — are deliberately absent from `MCP_TOOL_ALLOWLIST`: the curated default-deny external surface (lesson #6318) is narrower than the full `system` addon set, so an API-key caller cannot reach them. Keep these three lists in lockstep when adding a forge action; the `forge.rateLimit` test and the tier snapshots guard against drift.
+
 ## The `waitUntilIdle` handshake (`waitUntilIdle.ts`)
 
 `terminal.waitUntilIdle` is the agent-orchestration primitive: an orchestrator agent kicks off a task in another terminal, then waits on `waitUntilIdle` until that agent's FSM leaves the `working` state (or the wait times out — `timedOut: true` means "still working, re-poll"), before issuing its next dispatch. It is the synchronization point between independent agents.
