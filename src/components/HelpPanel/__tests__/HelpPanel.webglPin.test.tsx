@@ -1,19 +1,23 @@
 // @vitest-environment jsdom
-import { render, act } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { render, act, fireEvent } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mirrors the worktree-terminal reveal cadence test
-// (WorktreeStoreContext.scheduleWake) for the Daintree Assistant: the panel
-// arms 1s/3s timed backstops on `app:view-revealed`, each re-running the same
-// visibility-/box-guarded repaintForReveal, and clears them on re-reveal/unmount.
+// Regression for #10672: the Daintree Assistant terminal couldn't regain a
+// WebGL context when the fleet was in DOM mode (context count at cap). The
+// panel only ever called `terminalInstanceService.focus()` (xterm DOM focus),
+// never `setFocused()` — the sole service path that pins the WebGL context via
+// `webGLManager.pinFocus()`. These tests assert the panel now routes its focus
+// state through `setFocused`, and that a closed / hidden / blurred panel never
+// claims the pin.
 
-const { repaintForRevealMock, helpPanelState, panelStoreState } = vi.hoisted(() => ({
-  repaintForRevealMock: vi.fn(),
+const { setFocusedMock, focusMock, helpPanelState, panelStoreState } = vi.hoisted(() => ({
+  setFocusedMock: vi.fn(),
+  focusMock: vi.fn(),
   helpPanelState: {
     isOpen: true,
     width: 380,
-    terminalId: null as string | null,
-    agentId: null as string | null,
+    terminalId: "t-1" as string | null,
+    agentId: "claude" as string | null,
     preferredAgentId: null as string | null,
     sessionId: null as string | null,
     introDismissed: true,
@@ -32,8 +36,10 @@ const { repaintForRevealMock, helpPanelState, panelStoreState } = vi.hoisted(() 
     clearHibernateSession: vi.fn(),
   },
   panelStoreState: {
-    panelIds: [] as string[],
-    panelsById: {} as Record<string, { agentState?: string; cwd?: string; spawnStatus?: string }>,
+    panelIds: ["t-1"] as string[],
+    panelsById: {
+      "t-1": { agentState: "idle", cwd: "/repo", spawnStatus: "ready" },
+    } as Record<string, { agentState?: string; cwd?: string; spawnStatus?: string }>,
     removePanel: vi.fn(),
     addPanel: vi.fn().mockResolvedValue(""),
   },
@@ -83,10 +89,10 @@ vi.mock("./HelpPanelBanners", () => ({ HelpPanelBanners: () => null }));
 vi.mock("./HelpPanelVersionGate", () => ({ HelpPanelVersionGate: () => null }));
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
-    focus: vi.fn(),
-    setFocused: vi.fn(),
+    focus: (...args: unknown[]) => focusMock(...args),
+    setFocused: (...args: unknown[]) => setFocusedMock(...args),
     notifyUserInput: vi.fn(),
-    repaintForReveal: (...args: unknown[]) => repaintForRevealMock(...args),
+    repaintForReveal: vi.fn(),
   },
 }));
 vi.mock("@/clients", () => ({ terminalClient: { submit: vi.fn(), sendKey: vi.fn() } }));
@@ -168,7 +174,7 @@ vi.mock("@/store", () => {
 });
 
 vi.mock("@/store/macroFocusStore", () => {
-  const state = { focusedRegion: null, setRegionRef: vi.fn() };
+  const state = { focusedRegion: null as string | null, setRegionRef: vi.fn() };
   const store = (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state);
   store.getState = () => state;
   store.setState = (
@@ -185,53 +191,20 @@ vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 
 import { HelpPanel } from "../HelpPanel";
 
-// rAF mock: drive the bounded reveal poll synchronously per flushed frame.
-const rafQueue = new Map<number, FrameRequestCallback>();
-let rafIdCounter = 0;
-function flushFrame(): void {
-  const pending = [...rafQueue.values()];
-  rafQueue.clear();
-  for (const cb of pending) cb(0);
+function getAside(): HTMLElement {
+  const aside = document.getElementById("daintree-assistant-panel");
+  if (!aside) throw new Error("assistant aside not found");
+  return aside;
 }
 
-let viewRevealedCb: (() => void) | null = null;
-
-function setVisibilityState(state: DocumentVisibilityState): void {
-  Object.defineProperty(document, "visibilityState", {
-    configurable: true,
-    get: () => state,
-  });
-}
-
-// The reveal poll only repaints once the container reports real width. jsdom
-// leaves clientWidth at 0, so stub it to a sized value (>= MIN_WIDTH/4 = 80).
-let clientWidthDescriptor: PropertyDescriptor | undefined;
-function setContainerWidth(width: number): void {
-  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
-    configurable: true,
-    get: () => width,
-  });
+// Only the `setFocused(id, true)` calls — pin acquisition — matter for the bug.
+function pinCalls(): unknown[][] {
+  return setFocusedMock.mock.calls.filter((c) => c[1] === true);
 }
 
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  rafQueue.clear();
-  rafIdCounter = 0;
-  repaintForRevealMock.mockClear();
-  viewRevealedCb = null;
-
-  globalThis.requestAnimationFrame = ((cb: FrameRequestCallback): number => {
-    const id = ++rafIdCounter;
-    rafQueue.set(id, cb);
-    return id;
-  }) as typeof globalThis.requestAnimationFrame;
-  globalThis.cancelAnimationFrame = ((id: number): void => {
-    rafQueue.delete(id);
-  }) as typeof globalThis.cancelAnimationFrame;
-
-  setVisibilityState("visible");
-  clientWidthDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
-  setContainerWidth(400);
+  setFocusedMock.mockClear();
+  focusMock.mockClear();
 
   helpPanelState.isOpen = true;
   helpPanelState.terminalId = "t-1";
@@ -247,14 +220,7 @@ beforeEach(() => {
     value: {
       electron: {
         help: { getPinnedActionContext: vi.fn().mockResolvedValue({}) },
-        app: {
-          onViewRevealed: (cb: () => void) => {
-            viewRevealedCb = cb;
-            return () => {
-              viewRevealedCb = null;
-            };
-          },
-        },
+        app: { onViewRevealed: () => () => {} },
       },
     },
     writable: true,
@@ -262,97 +228,117 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
-  Reflect.deleteProperty(document, "visibilityState");
-  if (clientWidthDescriptor) {
-    Object.defineProperty(HTMLElement.prototype, "clientWidth", clientWidthDescriptor);
-  } else {
-    Reflect.deleteProperty(HTMLElement.prototype, "clientWidth");
-  }
-  vi.useRealTimers();
-});
-
-// The reveal poll's tick runs on a frame; flush one frame to let the width-gated
-// repaint land.
-function fireReveal(): void {
-  act(() => viewRevealedCb?.());
-  act(() => flushFrame());
-}
-
-describe("HelpPanel — Daintree Assistant reveal redraw backstop", () => {
-  it("repaints immediately on reveal, then re-runs on the 1s and 3s backstops", () => {
+describe("HelpPanel — WebGL focus pin wiring (#10672)", () => {
+  it("does not pin the assistant terminal while it lacks DOM focus", () => {
     render(<HelpPanel width={380} />);
-    expect(viewRevealedCb).not.toBeNull();
-    repaintForRevealMock.mockClear();
-
-    fireReveal();
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(1);
-
-    // Each backstop delay re-runs the same repaint with no further user action —
-    // this is what replaces a manual Redraw the Assistant never had.
-    act(() => vi.advanceTimersByTime(1000));
-    act(() => flushFrame());
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(2);
-
-    act(() => vi.advanceTimersByTime(2000));
-    act(() => flushFrame());
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(3);
-
-    // No further passes scheduled past the last backstop.
-    act(() => vi.advanceTimersByTime(10_000));
-    act(() => flushFrame());
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(3);
+    // Open + visible but never focused: the panel must not claim the pin.
+    expect(pinCalls()).toHaveLength(0);
   });
 
-  it("suppresses backstop repaints once the view is hidden again", () => {
+  it("pins the assistant terminal when DOM focus lands inside the open panel", () => {
     render(<HelpPanel width={380} />);
-    repaintForRevealMock.mockClear();
-
-    fireReveal();
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(1);
-
-    // User switches away before the backstops fire: timers still elapse, but the
-    // visibility guard no-ops them, so a backgrounded Assistant is never repainted.
-    setVisibilityState("hidden");
-    act(() => vi.advanceTimersByTime(5000));
-    act(() => flushFrame());
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(1);
+    act(() => {
+      fireEvent.focus(getAside());
+    });
+    expect(pinCalls()).toContainEqual(["t-1", true]);
   });
 
-  it("cancels a prior switch's pending backstops on re-reveal (no stacking)", () => {
+  it("releases the pin (setFocused false) when focus leaves the panel", () => {
     render(<HelpPanel width={380} />);
-    repaintForRevealMock.mockClear();
-
-    // Reveal 1 at t=0 arms its first backstop for t=1000.
-    fireReveal();
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(1);
-
-    // Reveal 2 at t=500 must cancel reveal 1's pending timers and re-arm its own.
-    act(() => vi.advanceTimersByTime(500));
-    fireReveal();
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(2);
-
-    // At t=1000 reveal 1's stale backstop WOULD have fired if not cancelled.
-    act(() => vi.advanceTimersByTime(500));
-    act(() => flushFrame());
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(2);
-
-    // Reveal 2's own first backstop fires on schedule at t=1500.
-    act(() => vi.advanceTimersByTime(500));
-    act(() => flushFrame());
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(3);
+    act(() => {
+      fireEvent.focus(getAside());
+    });
+    setFocusedMock.mockClear();
+    act(() => {
+      // relatedTarget outside the aside → real blur, not an inside-panel hop.
+      fireEvent.blur(getAside(), { relatedTarget: document.body });
+    });
+    expect(setFocusedMock).toHaveBeenCalledWith("t-1", false);
+    expect(pinCalls()).toHaveLength(0);
   });
 
-  it("cancels pending backstops when the panel unmounts", () => {
-    const { unmount } = render(<HelpPanel width={380} />);
-    repaintForRevealMock.mockClear();
+  it("does not pin a hidden-but-mounted panel even when focused", () => {
+    render(<HelpPanel width={0} isVisible={false} />);
+    act(() => {
+      fireEvent.focus(getAside());
+    });
+    expect(pinCalls()).toHaveLength(0);
+  });
 
-    fireReveal();
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(1);
+  it("releases the pin when the panel closes", () => {
+    const { rerender } = render(<HelpPanel width={380} />);
+    act(() => {
+      fireEvent.focus(getAside());
+    });
+    expect(pinCalls()).toContainEqual(["t-1", true]);
 
-    unmount();
-    act(() => vi.advanceTimersByTime(5000));
-    act(() => flushFrame());
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(1);
+    setFocusedMock.mockClear();
+    helpPanelState.isOpen = false;
+    rerender(<HelpPanel width={380} />);
+    expect(setFocusedMock).toHaveBeenCalledWith("t-1", false);
+    expect(pinCalls()).toHaveLength(0);
+  });
+
+  it("no-ops when there is no assistant terminal", () => {
+    helpPanelState.terminalId = null;
+    panelStoreState.panelIds = [];
+    panelStoreState.panelsById = {};
+    render(<HelpPanel width={380} />);
+    act(() => {
+      fireEvent.focus(getAside());
+    });
+    expect(setFocusedMock).not.toHaveBeenCalled();
+  });
+
+  it("releases the pin when the panel collapses to zero width without a blur", () => {
+    // A width collapse can tear down the focused descendant (xterm) without
+    // firing a blur — the !isVisible guard must still drop the pin.
+    const { rerender } = render(<HelpPanel width={380} />);
+    act(() => {
+      fireEvent.focus(getAside());
+    });
+    expect(pinCalls()).toContainEqual(["t-1", true]);
+
+    setFocusedMock.mockClear();
+    rerender(<HelpPanel width={0} isVisible={false} />);
+    expect(setFocusedMock).toHaveBeenCalledWith("t-1", false);
+    expect(pinCalls()).toHaveLength(0);
+  });
+
+  it("moves the pin to the new terminal when the assistant terminal id changes", () => {
+    const { rerender } = render(<HelpPanel width={380} />);
+    act(() => {
+      fireEvent.focus(getAside());
+    });
+    expect(pinCalls()).toContainEqual(["t-1", true]);
+
+    setFocusedMock.mockClear();
+    helpPanelState.terminalId = "t-2";
+    panelStoreState.panelIds = ["t-2"];
+    panelStoreState.panelsById = {
+      "t-2": { agentState: "idle", cwd: "/repo", spawnStatus: "ready" },
+    };
+    rerender(<HelpPanel width={380} />);
+    // Cleanup releases the old id, then the rerun pins the new one.
+    expect(setFocusedMock).toHaveBeenCalledWith("t-1", false);
+    expect(pinCalls()).toContainEqual(["t-2", true]);
+  });
+
+  it("keeps the pin across a focus hop between controls inside the panel", () => {
+    render(<HelpPanel width={380} />);
+    const aside = getAside();
+    act(() => {
+      fireEvent.focus(aside);
+    });
+    expect(pinCalls()).toContainEqual(["t-1", true]);
+
+    setFocusedMock.mockClear();
+    // Focus moves to a descendant still inside the aside → not a real blur,
+    // so hasDomFocus stays true and the pin is neither released nor churned.
+    const child = aside.querySelector("*") ?? aside;
+    act(() => {
+      fireEvent.blur(aside, { relatedTarget: child });
+    });
+    expect(setFocusedMock).not.toHaveBeenCalledWith("t-1", false);
   });
 });

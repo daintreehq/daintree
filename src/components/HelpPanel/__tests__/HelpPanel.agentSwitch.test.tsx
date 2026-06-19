@@ -82,7 +82,7 @@ vi.mock("./HelpPanelHeader", () => ({ HelpPanelHeader: () => null }));
 vi.mock("./HelpPanelBanners", () => ({ HelpPanelBanners: () => null }));
 vi.mock("./HelpPanelVersionGate", () => ({ HelpPanelVersionGate: () => null }));
 vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { focus: vi.fn(), notifyUserInput: vi.fn() },
+  terminalInstanceService: { focus: vi.fn(), setFocused: vi.fn(), notifyUserInput: vi.fn() },
 }));
 vi.mock("@/clients", () => ({ terminalClient: { submit: vi.fn(), sendKey: vi.fn() } }));
 vi.mock("@shared/config/agentIds", () => ({

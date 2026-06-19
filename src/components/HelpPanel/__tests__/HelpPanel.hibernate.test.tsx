@@ -144,6 +144,7 @@ vi.mock("@/clients", () => ({
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     focus: vi.fn(),
+    setFocused: vi.fn(),
     notifyUserInput: (...args: unknown[]) => mockNotifyUserInput(...args),
   },
 }));

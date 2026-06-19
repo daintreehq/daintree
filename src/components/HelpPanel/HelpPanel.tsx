@@ -492,6 +492,24 @@ export function HelpPanel({
     return undefined;
   }, [isOpen, isVisible, focusRequest, terminalId, terminal, showHybridInputBar]);
 
+  // Pin the WebGL context to the assistant terminal while it owns focus (#10672).
+  // The reveal effect above only calls `focus()` (xterm DOM focus); it never
+  // routes through `setFocused()`, which is the sole service path that calls
+  // `webGLManager.pinFocus()`. Without this, when the fleet falls to DOM mode
+  // (WebGL context count at cap) the assistant could never become the pinned
+  // context and rendered garbled. Drive it from real DOM focus — not the reveal
+  // trigger — so a closed/hidden-but-mounted panel never grabs the pin. The
+  // cleanup's `setFocused(false)` covers close, visibility collapse, terminal
+  // change, blur, and unmount; it only clears `managed.isFocused` (it does not
+  // release the pin — that resolves on the next grid-terminal focus).
+  useEffect(() => {
+    if (!terminalId) return undefined;
+    terminalInstanceService.setFocused(terminalId, isOpen && isVisible && hasDomFocus);
+    return () => {
+      terminalInstanceService.setFocused(terminalId, false);
+    };
+  }, [isOpen, isVisible, hasDomFocus, terminalId]);
+
   // Post-reveal repaint for the assistant terminal (#10362). The project-level
   // reveal sweep folds the assistant into its targets, but it repaints on a
   // fixed double-rAF tuned to the project grid — and this slide-out panel can
