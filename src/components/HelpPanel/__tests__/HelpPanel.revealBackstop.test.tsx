@@ -84,6 +84,7 @@ vi.mock("./HelpPanelVersionGate", () => ({ HelpPanelVersionGate: () => null }));
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     focus: vi.fn(),
+    setFocused: vi.fn(),
     notifyUserInput: vi.fn(),
     repaintForReveal: (...args: unknown[]) => repaintForRevealMock(...args),
   },

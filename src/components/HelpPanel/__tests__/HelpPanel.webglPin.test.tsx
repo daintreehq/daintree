@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { render, act, fireEvent } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Regression for #10672: the Daintree Assistant terminal couldn't regain a
 // WebGL context when the fleet was in DOM mode (context count at cap). The
