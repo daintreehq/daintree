@@ -647,6 +647,10 @@ export function BulkCreateWorktreeDialog({
               // rate limit (~60s) doesn't widen worktree/terminal retry delays.
               if (planned.mode === "issue" && assignWorktreeToSelf && itemNumber) {
                 const username = viewerRef.current?.login;
+                // Snap the avatar alongside the login before any async work so
+                // the optimistic cache entry matches the user we assign to,
+                // mirroring the single-create flow (#10529).
+                const assignAvatarUrl = viewerRef.current?.avatarUrl;
                 if (username) {
                   dispatchProgress({
                     type: "ITEM_ASSIGNING",
@@ -665,7 +669,6 @@ export function BulkCreateWorktreeDialog({
                       // Mirrors the single-create flow (#10529). The dedup guard
                       // inside the transform makes a re-assign a no-op, and the
                       // forge refresh remains the correctness backstop.
-                      const assignAvatarUrl = viewerRef.current?.avatarUrl;
                       try {
                         mutateCacheEntries(rootPath, "issue", (entry) => {
                           let changed = false;

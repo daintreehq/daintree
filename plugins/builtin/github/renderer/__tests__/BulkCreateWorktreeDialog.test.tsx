@@ -1999,11 +1999,61 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     viewerHolder.user = { login: "me", avatarUrl: "https://example.com/me.png" };
     mockAssignIssue.mockResolvedValue(undefined);
 
-    // Seed a cached open-issues slot (prefix `${rootPath}:issue:`) holding the
-    // issue being assigned plus a sibling that must stay untouched.
+    // Seed two cached slots (different sort orders) under the same
+    // `${rootPath}:issue:` prefix — mutateCacheEntries must patch every slot.
+    // Each holds the issue being assigned plus a sibling that stays untouched.
+    const keyA = buildCacheKey("/test/root", "issue", "open", "created_at:desc");
+    const keyB = buildCacheKey("/test/root", "issue", "open", "updated_at:desc");
+    // A slot for a different project must NOT be touched.
+    const keyOther = buildCacheKey("/other/root", "issue", "open", "created_at:desc");
+    for (const k of [keyA, keyB, keyOther]) {
+      setCache(k, {
+        items: [makeIssue(1), makeIssue(2)],
+        nextCursor: null,
+        hasMore: false,
+        timestamp: Date.now(),
+      });
+    }
+
+    render(<BulkCreateWorktreeDialog {...assignProps} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+
+    expect(mockAssignIssue).toHaveBeenCalledWith("/test/root", 1, "me");
+
+    for (const k of [keyA, keyB]) {
+      const patched = getCache(k);
+      const issue1 = patched?.items.find((i) => i.number === 1) as Issue;
+      expect(issue1.assignees).toContainEqual({
+        login: "me",
+        avatarUrl: "https://example.com/me.png",
+        rawData: null,
+      });
+      // The sibling issue (not assigned) keeps its empty assignees list.
+      const issue2 = patched?.items.find((i) => i.number === 2) as Issue;
+      expect(issue2.assignees).toEqual([]);
+    }
+    // A different project's slot is untouched by the prefix-scoped patch.
+    const otherIssue1 = getCache(keyOther)?.items.find((i) => i.number === 1) as Issue;
+    expect(otherIssue1.assignees).toEqual([]);
+    // The cache patch succeeded, so no cache-error log was emitted.
+    expect(mockLogError).not.toHaveBeenCalled();
+  });
+
+  it("contains a cache-patch throw without failing the assignment", async () => {
+    prefsHolder.assignWorktreeToSelf = true;
+    viewerHolder.user = { login: "me" };
+    mockAssignIssue.mockResolvedValue(undefined);
+
+    // A malformed entry (items not an array) makes the in-transform map() throw,
+    // exercising the try/catch guard: the assignment already succeeded server
+    // side, so the item must still count as created and the error is only logged.
     const key = buildCacheKey("/test/root", "issue", "open", "created_at:desc");
     setCache(key, {
-      items: [makeIssue(1), makeIssue(2)],
+      items: null as unknown as Issue[],
       nextCursor: null,
       hasMore: false,
       timestamp: Date.now(),
@@ -2017,19 +2067,12 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     await advanceTimersGradually(5000);
 
     expect(mockAssignIssue).toHaveBeenCalledWith("/test/root", 1, "me");
-
-    const patched = getCache(key);
-    const issue1 = patched?.items.find((i) => i.number === 1) as Issue;
-    expect(issue1.assignees).toContainEqual({
-      login: "me",
-      avatarUrl: "https://example.com/me.png",
-      rawData: null,
-    });
-    // The sibling issue (not assigned) keeps its empty assignees list.
-    const issue2 = patched?.items.find((i) => i.number === 2) as Issue;
-    expect(issue2.assignees).toEqual([]);
-    // The cache patch succeeded, so no cache-error log was emitted.
-    expect(mockLogError).not.toHaveBeenCalled();
+    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    expect(screen.queryByText(/failed/)).toBeNull();
+    expect(mockLogError).toHaveBeenCalledWith(
+      "Failed to patch issue cache after bulk self-assign",
+      expect.any(Error)
+    );
   });
 
   it("does not duplicate the assignee when the cached issue already lists the user", async () => {
