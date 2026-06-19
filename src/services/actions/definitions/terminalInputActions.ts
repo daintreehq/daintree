@@ -212,7 +212,7 @@ export function registerTerminalInputActions(
     // palette so a palette pick can't bypass the agent-dispatch confirmation.
     palette: { mode: "hidden" },
     scope: "renderer",
-    argsSchema: z.object({ terminalId: z.string() }),
+    argsSchema: z.object({ terminalId: z.string().min(1) }),
     resultSchema: z.object({ armed: z.array(z.string()) }),
     mcpOutputSchema: true,
     run: async (args: unknown) => {
@@ -234,7 +234,7 @@ export function registerTerminalInputActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ terminalId: z.string() }),
+    argsSchema: z.object({ terminalId: z.string().min(1) }),
     resultSchema: z.object({ armed: z.array(z.string()) }),
     mcpOutputSchema: true,
     run: async (args: unknown) => {

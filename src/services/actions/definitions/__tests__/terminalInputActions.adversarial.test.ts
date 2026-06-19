@@ -298,29 +298,32 @@ describe("terminalInputActions adversarial", () => {
   });
 
   describe("terminal.arm / disarm / disarmAll (MCP-exposed fleet primitives)", () => {
-    it("arms an eligible terminal and echoes back the resulting armed set in order", async () => {
-      const armId = vi.fn();
+    it("arms an eligible terminal and echoes the POST-mutation armed set in order", async () => {
+      // Stateful mock: armId mutates the same armOrder the run() echoes, so a
+      // read-before-mutate regression (spreading armOrder before armId runs)
+      // would surface as a stale echo here, not pass silently.
+      const armOrder: string[] = ["t2"];
+      const armId = vi.fn((id: string) => {
+        armOrder.push(id);
+      });
       fleetArmingMock.isFleetArmEligible.mockReturnValueOnce(true);
-      fleetArmingMock.useFleetArmingStore.getState.mockReturnValue({
-        armId,
-        armOrder: ["t1", "t2"],
-      } as never);
+      fleetArmingMock.useFleetArmingStore.getState.mockReturnValue({ armId, armOrder } as never);
       setPanelState({ panelsById: { t1: { kind: "agent" } } });
 
       const { run } = setupActions();
       const result = await run("terminal.arm", { terminalId: "t1" });
 
       expect(armId).toHaveBeenCalledWith("t1");
-      expect(result).toEqual({ armed: ["t1", "t2"] });
+      expect(result).toEqual({ armed: ["t2", "t1"] });
     });
 
     it("does not arm an ineligible terminal but still echoes the current armed set", async () => {
-      const armId = vi.fn();
+      const armOrder: string[] = ["existing"];
+      const armId = vi.fn((id: string) => {
+        armOrder.push(id);
+      });
       fleetArmingMock.isFleetArmEligible.mockReturnValue(false);
-      fleetArmingMock.useFleetArmingStore.getState.mockReturnValue({
-        armId,
-        armOrder: ["existing"],
-      } as never);
+      fleetArmingMock.useFleetArmingStore.getState.mockReturnValue({ armId, armOrder } as never);
       setPanelState({ panelsById: { browser: { kind: "browser" } } });
 
       const { run } = setupActions();
@@ -330,12 +333,13 @@ describe("terminalInputActions adversarial", () => {
       expect(result).toEqual({ armed: ["existing"] });
     });
 
-    it("disarm removes the terminal and echoes the resulting armed set", async () => {
-      const disarmId = vi.fn();
-      fleetArmingMock.useFleetArmingStore.getState.mockReturnValue({
-        disarmId,
-        armOrder: ["t2"],
-      } as never);
+    it("disarm removes the terminal and echoes the POST-mutation armed set", async () => {
+      const armOrder: string[] = ["t1", "t2"];
+      const disarmId = vi.fn((id: string) => {
+        const i = armOrder.indexOf(id);
+        if (i >= 0) armOrder.splice(i, 1);
+      });
+      fleetArmingMock.useFleetArmingStore.getState.mockReturnValue({ disarmId, armOrder } as never);
 
       const { run } = setupActions();
       const result = await run("terminal.disarm", { terminalId: "t1" });
@@ -344,12 +348,12 @@ describe("terminalInputActions adversarial", () => {
       expect(result).toEqual({ armed: ["t2"] });
     });
 
-    it("disarmAll clears the set and echoes an empty armed set", async () => {
-      const clear = vi.fn();
-      fleetArmingMock.useFleetArmingStore.getState.mockReturnValue({
-        clear,
-        armOrder: [],
-      } as never);
+    it("disarmAll clears the set and echoes the now-empty armed set", async () => {
+      const armOrder: string[] = ["t1", "t2"];
+      const clear = vi.fn(() => {
+        armOrder.length = 0;
+      });
+      fleetArmingMock.useFleetArmingStore.getState.mockReturnValue({ clear, armOrder } as never);
 
       const { run } = setupActions();
       const result = await run("terminal.disarmAll");
