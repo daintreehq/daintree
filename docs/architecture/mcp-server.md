@@ -191,13 +191,13 @@ Three axes are independent — do not infer one from another:
 
 All five are in `WORKBENCH_TIER_TOOLS` (the help-assistant baseline) and in `MCP_TOOL_ALLOWLIST`, so they are reachable at every tier including `external`. All are `kind:"query"`, `danger:"safe"`, on the `standard` bucket, and not deduped.
 
-| Action ID | Key args |
-| --- | --- |
-| `forge.getRepoStats` | `bypassCache?`, `cwd?` |
-| `forge.listIssues` | `search?`, `state?`, `cursor?`, `cwd?` |
-| `forge.listPRs` | `search?`, `state?`, `cursor?`, `cwd?` |
-| `forge.getIssue` | `issueNumber`, `cwd?` |
-| `forge.getPR` | `prNumber`, `cwd?` |
+| Action ID            | Key args                               |
+| -------------------- | -------------------------------------- |
+| `forge.getRepoStats` | `bypassCache?`, `cwd?`                 |
+| `forge.listIssues`   | `search?`, `state?`, `cursor?`, `cwd?` |
+| `forge.listPRs`      | `search?`, `state?`, `cursor?`, `cwd?` |
+| `forge.getIssue`     | `issueNumber`, `cwd?`                  |
+| `forge.getPR`        | `prNumber`, `cwd?`                     |
 
 ### Forge writes and commands (`system` tier)
 
