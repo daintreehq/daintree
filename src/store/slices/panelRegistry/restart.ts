@@ -585,6 +585,9 @@ export const createRestartActions = (
           isRestarting: true,
           restartError: undefined,
           exitCode: undefined,
+          // Drop the prior session's parsed check result (#10682) — a fresh
+          // run hasn't produced one yet, and a stale pass/fail would mislead.
+          lastCheckResult: undefined,
           startedAt: Date.now(),
         };
         const newById = { ...state.panelsById, [id]: updated };
@@ -1074,6 +1077,9 @@ export const createRestartActions = (
           isRestarting: true,
           restartError: undefined,
           exitCode: undefined,
+          // Drop the prior session's parsed check result (#10682) — a fresh
+          // run hasn't produced one yet, and a stale pass/fail would mislead.
+          lastCheckResult: undefined,
           startedAt: Date.now(),
         };
         const newById = { ...state.panelsById, [id]: updated };

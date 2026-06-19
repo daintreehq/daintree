@@ -543,6 +543,8 @@ export type DaintreeEventMap = {
     heatAdded?: number;
     /** Number of changed characters in the most recent sample. */
     changedChars?: number;
+    /** Parsed test/lint/build result captured at this transition (#10682). Best-effort, not an authoritative exit code. */
+    lastCheckResult?: import("../../shared/types/checkResult.js").TerminalCheckResult;
   }>;
 
   /**

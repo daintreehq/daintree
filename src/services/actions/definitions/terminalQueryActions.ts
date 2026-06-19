@@ -8,6 +8,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import type { AgentState, WaitingReason } from "@shared/types/agent";
+import type { TerminalCheckResult } from "@shared/types/checkResult";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS,
@@ -179,7 +180,7 @@ export function registerTerminalQueryActions(
     id: "terminal.getStatus",
     title: "Get Terminal Status",
     description:
-      "Poll agent/terminal state across many terminals in one call. Args (all optional): `terminalIds` (1-256 explicit ids from `terminal.list`; when set, worktreeId/location are ignored and unknown ids return a per-entry `error`); `worktreeId`/`location` filters; `includeOutput:{ lines, stripAnsi }` to also return recent scrollback tails. Returns { terminals } — each with terminalId, agentId, agentState, waitingReason, lastTransitionAt, exitCode (number|null — set once the PTY has exited, null while running; read with agentState to tell a clean finish from a failure), spawnedAt, optional recentOutput, optional per-entry error. Never throws. Do NOT use `terminal.getOutput` for fleet polling, or `terminal.list` for agent state — this is the batched path.",
+      "Poll agent/terminal state across many terminals in one call. Args (all optional): `terminalIds` (1-256 ids from `terminal.list`; when set, worktreeId/location are ignored and unknown ids return a per-entry `error`); `worktreeId`/`location` filters; `includeOutput:{ lines, stripAnsi }` for recent scrollback tails. Returns { terminals } — each with terminalId, agentId, agentState, waitingReason, lastTransitionAt, exitCode (number|null — set once the PTY exits, null while running), spawnedAt, optional lastCheckResult, optional recentOutput, optional per-entry error. `lastCheckResult` is a PARSED test/lint/build signal { command, passed, ranAt, failureSummary, truncated } from tsc/ESLint/Vitest/Jest output — best-effort, NOT an authoritative exit code; absence means no recognized summary (not pass, not no-run), so read `ranAt` for freshness. Never throws. Do NOT use `terminal.getOutput` for fleet polling or `terminal.list` for agent state — this is the batched path.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -247,6 +248,7 @@ export function registerTerminalQueryActions(
         lastTransitionAt?: number;
         exitCode?: number | null;
         spawnedAt?: number;
+        lastCheckResult?: TerminalCheckResult;
         recentOutput?: string | null;
         error?: string;
       };
@@ -333,6 +335,9 @@ export function registerTerminalQueryActions(
           // running); spawnedAt comes from the panel's creation timestamp.
           exitCode: isPtyPanel(terminal) ? (terminal.exitCode ?? null) : undefined,
           spawnedAt: isPtyPanel(terminal) ? terminal.startedAt : undefined,
+          // Parsed test/lint/check result (issue #10682). Best-effort, not
+          // authoritative — see TerminalCheckResult / the schema doc above.
+          lastCheckResult: isPtyPanel(terminal) ? terminal.lastCheckResult : undefined,
         };
 
         if (

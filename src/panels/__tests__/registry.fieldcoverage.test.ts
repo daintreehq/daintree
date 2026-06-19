@@ -107,6 +107,9 @@ const PTY_FIELD_CLASSIFICATION = {
   removeOnExit: false,
   startedAt: false,
   exitCode: false,
+  // Parsed check result (#10682) — live signal from agent:state-changed,
+  // cleared on restart; intentionally not persisted by the PTY serializer.
+  lastCheckResult: false,
   // BasePanelData carrier-bookkeeping timestamps — written by the base
   // serialization layer in panelToSnapshot, not the PTY serializer.
   createdAt: false,

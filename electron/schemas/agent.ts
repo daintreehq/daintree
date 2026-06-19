@@ -79,6 +79,18 @@ export const AgentStateChangedSchema = z.extend(EventContextSchema, {
   temperature: z.optional(z.number()),
   heatAdded: z.optional(z.number().check(z.nonnegative())),
   changedChars: z.optional(nonNegativeInt),
+  // Parsed test/lint/build result captured at this transition (issue #10682).
+  // Best-effort, not authoritative — see `TerminalCheckResult`. Present only on
+  // settling transitions where a NEW recognized check summary was detected.
+  lastCheckResult: z.optional(
+    z.object({
+      command: z.nullable(z.string()),
+      passed: z.boolean(),
+      ranAt: positiveInt,
+      failureSummary: z.nullable(z.string()),
+      truncated: z.boolean(),
+    })
+  ),
 });
 
 /**

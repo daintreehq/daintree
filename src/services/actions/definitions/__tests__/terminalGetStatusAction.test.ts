@@ -23,6 +23,13 @@ type StatusEntry = {
   lastTransitionAt?: number;
   exitCode?: number | null;
   spawnedAt?: number;
+  lastCheckResult?: {
+    command: string | null;
+    passed: boolean;
+    ranAt: number;
+    failureSummary: string | null;
+    truncated: boolean;
+  };
   recentOutput?: string | null;
   error?: string;
 };
@@ -311,6 +318,41 @@ describe("terminal.getStatus", () => {
     });
     expect(terminals[1]?.exitCode).toBeNull();
     expect(terminals[1]?.spawnedAt).toBe(1_700_000_001_000);
+  });
+
+  it("surfaces lastCheckResult from the panel, undefined when absent (#10682)", async () => {
+    const checkResult = {
+      command: "npm run check",
+      passed: false,
+      ranAt: 1_700_000_000_500,
+      failureSummary: "Found 2 errors.",
+      truncated: false,
+    };
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["t1", "t2"],
+      panelsById: {
+        t1: {
+          id: "t1",
+          kind: "terminal",
+          location: "grid",
+          agentState: "waiting",
+          launchAgentId: "claude",
+          lastCheckResult: checkResult,
+        },
+        // No check observed → field absent in the entry.
+        t2: {
+          id: "t2",
+          kind: "terminal",
+          location: "grid",
+          agentState: "working",
+          launchAgentId: "claude",
+        },
+      },
+    });
+
+    const { terminals } = await callGetStatus(setupActions(), { terminalIds: ["t1", "t2"] });
+    expect(terminals[0]?.lastCheckResult).toEqual(checkResult);
+    expect(terminals[1]?.lastCheckResult).toBeUndefined();
   });
 
   it("does not call getSerializedStates when includeOutput is omitted", async () => {

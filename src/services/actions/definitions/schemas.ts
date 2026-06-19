@@ -169,6 +169,22 @@ export const TerminalStatusEntrySchema = z.object({
   exitCode: z.number().int().nullable().optional(),
   // Wall-clock spawn timestamp (ms), for run-duration/staleness reasoning.
   spawnedAt: z.number().optional(),
+  // Parsed test/lint/build result from the agent's most recent recognized check
+  // summary (issue #10682). Best-effort and PARSED, not an authoritative exit
+  // code — the check runs as a child of the agent CLI inside the PTY, so the
+  // real subcommand exit code is unobservable. `passed` is derived from
+  // tsc/ESLint/Vitest/Jest summary lines; absence means "no recognized check
+  // summary was seen", NOT "no check ran" and NOT "passed". Read `ranAt` for
+  // freshness and `command` (may be null) for which check it was.
+  lastCheckResult: z
+    .object({
+      command: z.string().nullable(),
+      passed: z.boolean(),
+      ranAt: z.number(),
+      failureSummary: z.string().nullable(),
+      truncated: z.boolean(),
+    })
+    .optional(),
   recentOutput: z.string().nullable().optional(),
   error: z.string().optional(),
 });
