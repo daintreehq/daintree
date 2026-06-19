@@ -22,6 +22,7 @@ export const WORKBENCH_TIER_TOOLS = [
   "worktree.getDefaultPath",
   "worktree.getAvailableBranch",
   "worktree.resource.status",
+  "worktree.compareDiff",
 
   "files.search",
   "file.view",
