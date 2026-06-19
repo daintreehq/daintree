@@ -41,7 +41,21 @@ export const webviewCaptureNamespace = defineIpcNamespace({
           });
         }
 
-        const image = await wc.capturePage();
+        let image: Electron.NativeImage;
+        try {
+          image = await wc.capturePage();
+        } catch (err) {
+          // The webContents can be destroyed in the gap between the isDestroyed
+          // check and this await (tab closed / project evicted mid-call), which
+          // surfaces as a raw Electron rejection. Normalize it to the same
+          // AppError the caller and MCP error path expect.
+          throw new AppError({
+            code: "NOT_FOUND",
+            message: "Browser panel became unavailable during capture",
+            context: { panelId, webContentsId },
+            cause: err instanceof Error ? err : undefined,
+          });
+        }
         if (image.isEmpty()) {
           throw new AppError({
             code: "INTERNAL",

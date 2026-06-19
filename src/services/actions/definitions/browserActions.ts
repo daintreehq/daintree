@@ -258,7 +258,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       // Preserve the user-facing "copy to clipboard" affordance for keybinding /
       // toolbar dispatch; agent (MCP) calls receive the bytes in the result and
       // must not clobber the user's clipboard.
-      if (ctx.dispatchSource !== "agent") {
+      if (ctx?.dispatchSource !== "agent") {
         try {
           const binary = atob(shot.pngBase64);
           const bytes = new Uint8Array(binary.length);

@@ -35,6 +35,17 @@ class WebviewDialogService {
     }
 
     this.panelMap.set(webContentsId, panelId);
+    // A remount (LRU restore, partition change, dev double-mount) registers a
+    // new webContentsId for the same panelId before the old guest fires
+    // `destroyed`. Drop the stale duplicate now so the reverse lookup
+    // (getWebContentsId) resolves to the live webview rather than the
+    // torn-down one, whose capturePage() would return the old page's pixels.
+    for (const [otherWebContentsId, mappedPanelId] of this.panelMap) {
+      if (mappedPanelId === panelId && otherWebContentsId !== webContentsId) {
+        this.panelMap.delete(otherWebContentsId);
+        this.kindMap.delete(otherWebContentsId);
+      }
+    }
     // Registration happens from multiple effects (dialog + console capture);
     // only some pass a kind. Preserve a previously-set kind when omitted.
     if (kind !== undefined) {

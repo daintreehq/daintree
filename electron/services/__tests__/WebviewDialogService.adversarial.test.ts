@@ -208,6 +208,44 @@ describe("WebviewDialogService adversarial", () => {
     expect(survivingCallback).toHaveBeenCalledTimes(1);
   });
 
+  it("GET_WEBCONTENTS_ID_REVERSE_LOOKUP", async () => {
+    guestRegistry.set(1, createGuest());
+    guestRegistry.set(2, createGuest());
+
+    const { getWebviewDialogService } = await import("../WebviewDialogService.js");
+    const service = getWebviewDialogService();
+
+    service.registerPanel(1, "panel-a");
+    service.registerPanel(2, "panel-b");
+
+    expect(service.getWebContentsId("panel-a")).toBe(1);
+    expect(service.getWebContentsId("panel-b")).toBe(2);
+    expect(service.getWebContentsId("panel-missing")).toBeUndefined();
+  });
+
+  it("REMOUNT_DROPS_STALE_REVERSE_LOOKUP_ENTRY", async () => {
+    // A panel remount (LRU restore / partition change) registers a new
+    // webContentsId for the same panelId before the old guest fires
+    // `destroyed`. The reverse lookup must resolve to the live webview.
+    guestRegistry.set(10, createGuest());
+    guestRegistry.set(11, createGuest());
+
+    const { getWebviewDialogService } = await import("../WebviewDialogService.js");
+    const service = getWebviewDialogService();
+
+    service.registerPanel(10, "panel-a", "browser");
+    expect(service.getWebContentsId("panel-a")).toBe(10);
+
+    // Remount: same panelId, new (still-live) webContentsId.
+    service.registerPanel(11, "panel-a", "browser");
+
+    expect(service.getWebContentsId("panel-a")).toBe(11);
+    // The stale forward + kind entries for the old webContents are cleared too.
+    expect(service.getPanelId(10)).toBeUndefined();
+    expect(service.getPanelKind(10)).toBeUndefined();
+    expect(service.getPanelId(11)).toBe("panel-a");
+  });
+
   it("REJECTED_OAUTH_PROMISE_ONE_SHOT", async () => {
     const { getWebviewDialogService } = await import("../WebviewDialogService.js");
     const service = getWebviewDialogService();
