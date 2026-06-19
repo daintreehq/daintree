@@ -10,6 +10,7 @@ import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { probeMcpServer, probeMcpSseServer } from "./mcp-server/readinessProbe.js";
 import { getAssistantWiredAgentIds } from "../../shared/config/agentRegistry.js";
+import { ASSISTANT_ONLY_AGENT_IDS } from "../../shared/config/agentIds.js";
 import type { HelpAssistantTier } from "../../shared/types/ipc/maps.js";
 import type { ActionContext } from "../../shared/types/actions.js";
 import type { PtyClient } from "./PtyClient.js";
@@ -495,7 +496,18 @@ export class HelpSessionService {
     pathHash: string
   ): Promise<ProvisionResult | null> {
     const settings = this.readSettings();
-    const tier = settings.tier;
+    // The Daintree Assistant is the workspace's first-class conductor: when the
+    // user explicitly selects it, it runs at the top `system` tier so the full
+    // action surface — forge writes, git mutations, worktree.delete — is reachable
+    // (still behind the per-action confirm gate; the tier opens the door, it does
+    // not skip confirmation). Other help-overlay agents (Claude/Codex) keep the
+    // deliberate `action` floor from settings, where irreversible mutations need a
+    // human-approved scoped grant. Policy locks live in
+    // `mcp-server/__tests__/tierAuth.test.ts`.
+    const isDaintreeAssistant = (ASSISTANT_ONLY_AGENT_IDS as readonly string[]).includes(
+      input.agentId
+    );
+    const tier: HelpAssistantTier = isDaintreeAssistant ? "system" : settings.tier;
     const sessionId = randomUUID();
     const token = randomBytes(SESSION_TOKEN_BYTES).toString("hex");
     const sessionsRoot = this.getSessionsRoot();

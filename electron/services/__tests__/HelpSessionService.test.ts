@@ -387,6 +387,33 @@ describe("HelpSessionService", () => {
     expect(settings.defaultMode).toBeUndefined();
   });
 
+  it("provisions the Daintree Assistant at the system tier regardless of the stored setting", async () => {
+    // Selecting the Daintree Assistant grants full capability (system tier),
+    // overriding the action-tier floor that governs the Claude/Codex help
+    // overlays. The stored setting here says `action`; the agent identity wins.
+    mockStoreGet.mockReturnValue({ tier: "action", bypassPermissions: false });
+
+    const result = await service.provisionSession({
+      ...provisionInput(),
+      agentId: "daintree-assistant",
+    });
+    if (!result) throw new Error("expected result");
+    expect(result.tier).toBe("system");
+  });
+
+  it("leaves non-assistant help agents on the stored action tier", async () => {
+    // Contrast with the Daintree Assistant override above: a Claude help overlay
+    // keeps the deliberate action floor so irreversible mutations still need a grant.
+    mockStoreGet.mockReturnValue({ tier: "action", bypassPermissions: false });
+
+    const result = await service.provisionSession({
+      ...provisionInput(),
+      agentId: "claude",
+    });
+    if (!result) throw new Error("expected result");
+    expect(result.tier).toBe("action");
+  });
+
   it("getBypassPermissions returns the snapshot taken at provision time", async () => {
     mockStoreGet.mockReturnValue({ tier: "action", bypassPermissions: true });
 

@@ -2703,6 +2703,11 @@ describe("McpServerService", () => {
         title: "Open URL in Browser",
         description: "Open a URL in a browser panel, reusing an existing one or creating a new one",
       }),
+      createManifestEntry({
+        id: "panel.focus" as ActionId,
+        title: "Focus Panel",
+        description: "Focus a specific panel by id",
+      }),
       // Additional entries needed for full SYSTEM_TIER_ADDONS coverage.
       createManifestEntry({
         id: "git.stageFile" as ActionId,

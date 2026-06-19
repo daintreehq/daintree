@@ -387,17 +387,19 @@ describe("buildAnnotations", () => {
   });
 });
 
-// Policy guard for the Daintree Assistant CLI's MCP tier (#10640). The
-// assistant is a headless conductor and runs at the `action` tier (the
-// help-session `DEFAULT_TIER`), NOT the `external` tier an api-key bearer
-// falls into by default. The distinction is load-bearing: `external` auto-
-// permits irreversible mutations (git.push, worktree.delete) subject only to
-// the confirm gate, whereas `action` leaves them TIER_NOT_PERMITTED so they
-// require a human-approved scoped grant to run at all. These assertions lock
-// that invariant against allowlist drift (e.g. someone promoting git.push into
-// the action tier). They test the runtime gate `isTierPermitted`, not the raw
+// Policy guard for the help-session MCP tiers (#10640). NOTE: the Daintree
+// Assistant itself is now provisioned at the `system` tier (see
+// HelpSessionService.doProvision — selecting it grants full capability), so the
+// assertions below lock the `action` tier that still governs the Claude/Codex
+// help OVERLAYS, plus the system/external boundaries the assistant relies on.
+// The distinction is load-bearing: `action` leaves irreversible mutations
+// (git.push, worktree.delete) TIER_NOT_PERMITTED so the overlays need a
+// human-approved scoped grant, while `system` (the assistant) and `external`
+// permit them subject only to the confirm gate. These assertions lock those
+// invariants against allowlist drift (e.g. someone promoting git.push into the
+// action tier). They test the runtime gate `isTierPermitted`, not the raw
 // allowlist arrays, so they fail closed if the tier wiring itself regresses.
-describe("Daintree Assistant tier policy (#10640)", () => {
+describe("help-session tier policy (#10640)", () => {
   // The conductor's working tool set — orchestration, terminal driving, branch
   // setup, recipes, and reads — all resolve under `action`.
   const ASSISTANT_REQUIRED_TOOLS = [

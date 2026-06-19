@@ -95,6 +95,8 @@ export const ACTION_TIER_ADDONS = [
   "agent.focusNextAgent",
   "agent.focusPreviousAgent",
 
+  "panel.focus",
+
   "workflow.startWorkOnIssue",
   "workflow.focusNextAttention",
 
