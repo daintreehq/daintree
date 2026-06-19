@@ -580,6 +580,7 @@ describe("system action hardening", () => {
       "system.checkCommand",
       "system.checkDirectory",
       "system.getHomeDir",
+      "system.getResourceProfileSnapshot",
       "cliAvailability.get",
       "cliAvailability.refresh",
       "files.search",

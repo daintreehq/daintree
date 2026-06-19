@@ -101,11 +101,13 @@ export function registerAppConfigActions(
   actions.set("hibernation.getConfig", () => ({
     id: "hibernation.getConfig",
     title: "Get Hibernation Config",
-    description: "Get auto-hibernation configuration",
+    description:
+      "Read the auto-hibernation configuration that governs when idle worktrees are suspended to reclaim host memory. No arguments. Returns { enabled, inactiveThresholdHours }: `enabled` is whether auto-hibernation is on; `inactiveThresholdHours` is how long a worktree must be idle before it hibernates.",
     category: "settings",
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    mcpVisibility: "discoverable",
     resultSchema: z.object({
       enabled: z.boolean(),
       inactiveThresholdHours: z.number(),

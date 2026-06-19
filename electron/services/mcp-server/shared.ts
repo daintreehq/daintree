@@ -397,6 +397,10 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "worktree.delete",
   "worktree.setActive",
   "worktree.resource.status",
+  "worktree.resource.provision",
+  "worktree.resource.pause",
+  "worktree.resource.resume",
+  "worktree.resource.teardown",
 
   "workflow.startWorkOnIssue",
   "workflow.prepBranchForReview",
@@ -425,6 +429,11 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
 
   "system.checkCommand",
   "system.checkDirectory",
+  "system.getResourceProfileSnapshot",
+
+  "cliAvailability.get",
+
+  "hibernation.getConfig",
 ] as const satisfies readonly BuiltInActionId[];
 
 const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set(MCP_TOOL_ALLOWLIST_ENTRIES);
@@ -471,6 +480,10 @@ export const MCP_DEDUP_ALLOWLIST: ReadonlySet<string> = new Set([
   "forge.openIssue",
   "forge.openPR",
   "worktree.delete",
+  // Provisioning spins up a remote/cloud resource — an LLM retry after a
+  // transient failure could spawn a second one. Pause/resume/teardown are
+  // idempotent enough (or intentionally re-runnable) to stay out.
+  "worktree.resource.provision",
   "git.snapshotRevert",
   "git.snapshotDelete",
   "forge.assignIssue",
@@ -545,6 +558,11 @@ export const RATE_LIMIT_TOOL_MAP: ReadonlyMap<string, RateLimitConfig> = new Map
   ["forge.openIssue", RATE_LIMIT_TIERS.mutation],
   ["forge.openPR", RATE_LIMIT_TIERS.mutation],
   ["worktree.delete", RATE_LIMIT_TIERS.mutation],
+  ["worktree.resource.provision", RATE_LIMIT_TIERS.mutation],
+  // Destructive (D2): a tear-down loop against a re-provisioned resource could
+  // destroy the fresh instance. Mutation-tier even though it's not deduped —
+  // each teardown is intentionally re-runnable, but not at 30/min.
+  ["worktree.resource.teardown", RATE_LIMIT_TIERS.mutation],
   ["git.snapshotRevert", RATE_LIMIT_TIERS.mutation],
   ["git.snapshotDelete", RATE_LIMIT_TIERS.mutation],
   ["forge.assignIssue", RATE_LIMIT_TIERS.mutation],

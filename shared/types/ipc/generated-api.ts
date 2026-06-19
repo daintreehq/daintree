@@ -603,6 +603,9 @@ export interface GeneratedElectronAPI {
     getResourceProfile(
       ...args: IpcInvokeMap["system:get-resource-profile"]["args"]
     ): Promise<IpcInvokeMap["system:get-resource-profile"]["result"]>;
+    getResourceProfileSnapshot(
+      ...args: IpcInvokeMap["system:get-resource-profile-snapshot"]["args"]
+    ): Promise<IpcInvokeMap["system:get-resource-profile-snapshot"]["result"]>;
   };
   systemSleep: {
     getAwakeTime(

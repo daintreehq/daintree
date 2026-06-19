@@ -119,14 +119,41 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     },
   }));
 
+  actions.set("system.getResourceProfileSnapshot", () =>
+    defineAction({
+      id: "system.getResourceProfileSnapshot",
+      title: "Get Resource Profile Snapshot",
+      description:
+        "Read a snapshot of the host machine's resource pressure and the active resource profile. Use this to gauge whether the machine has headroom before launching more agents or heavy work. No arguments. Returns { profile, thermalState, isOnBattery, speedLimit, lagPressureActive }: `profile` is 'performance' | 'balanced' | 'efficiency' (the adaptive mode currently in effect); `thermalState` is the OS thermal reading ('unknown' off macOS); `isOnBattery` is true when running unplugged; `speedLimit` is the OS CPU speed-limit percentage (0–100, 100 = unthrottled); `lagPressureActive` is true when sustained event-loop-lag mitigation is latched. Never errors — falls back to the balanced/unknown baseline when the service is still initializing.",
+      category: "system",
+      kind: "query",
+      danger: "safe",
+      scope: "renderer",
+      mcpVisibility: "discoverable",
+      mcpOutputSchema: true,
+      resultSchema: z.object({
+        profile: z.enum(["performance", "balanced", "efficiency"]),
+        thermalState: z.enum(["unknown", "nominal", "fair", "serious", "critical"]),
+        isOnBattery: z.boolean(),
+        speedLimit: z.number(),
+        lagPressureActive: z.boolean(),
+      }),
+      run: async () => {
+        return await systemClient.getResourceProfileSnapshot();
+      },
+    })
+  );
+
   actions.set("cliAvailability.get", () => ({
     id: "cliAvailability.get",
     title: "Get CLI Availability",
-    description: "Get cached agent CLI availability",
+    description:
+      "Get the cached availability of agent CLIs (e.g. claude, codex, gemini) on the host. Use this to confirm an agent's CLI is installed before launching it. No arguments. Returns a map of agent id to a status string. Reads a cache populated at startup; call `cliAvailability.refresh` to force a re-check.",
     category: "system",
     kind: "query",
     danger: "safe",
     scope: "renderer",
+    mcpVisibility: "discoverable",
     resultSchema: z.record(z.string(), z.string()),
     run: async () => {
       return await cliAvailabilityClient.get();

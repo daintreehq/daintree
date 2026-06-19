@@ -90,6 +90,7 @@ export const BUILT_IN_ACTION_IDS = [
   "system.checkCommand",
   "system.checkDirectory",
   "system.getHomeDir",
+  "system.getResourceProfileSnapshot",
 
   // -- cliAvailabilityActions --
   "cliAvailability.get",

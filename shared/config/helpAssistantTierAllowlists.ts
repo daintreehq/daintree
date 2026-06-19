@@ -56,6 +56,11 @@ export const WORKBENCH_TIER_TOOLS = [
 
   "system.checkCommand",
   "system.checkDirectory",
+  "system.getResourceProfileSnapshot",
+
+  "cliAvailability.get",
+
+  "hibernation.getConfig",
 
   "notifications.recent",
   "errors.recent",
@@ -67,6 +72,9 @@ export const ACTION_TIER_ADDONS = [
   "worktree.createWithRecipe",
   "worktree.setActive",
   "worktree.refresh",
+  "worktree.resource.provision",
+  "worktree.resource.pause",
+  "worktree.resource.resume",
 
   "terminal.inject",
   "terminal.new",
@@ -115,6 +123,7 @@ export const ACTION_TIER_ADDONS = [
 
 export const SYSTEM_TIER_ADDONS = [
   "worktree.delete",
+  "worktree.resource.teardown",
 
   "copyTree.generateAndCopyFile",
 
