@@ -294,7 +294,10 @@ class TerminalInstanceService {
 
         if (this.wantsWebGLAtTier(managed, tier)) {
           this.webGLManager.ensureContext(id, managed);
-        } else if (!managed.isVisible || !managed.runtimeAgentId) {
+        } else if (
+          (managed.webGLHideTimer === undefined && !managed.isVisible) ||
+          !managed.runtimeAgentId
+        ) {
           // Agent terminals keep WebGL while visible — releasing causes a
           // one-frame renderer gap, and VISIBLE is an eligible tier for them
           // anyway. Plain terminals release as soon as they stop being
@@ -302,7 +305,13 @@ class TerminalInstanceService {
           // status-quo at VISIBLE, and a lingering want per previously
           // focused shell would accumulate toward the mode-switch threshold.
           // Tier demotion is an authoritative signal — cancel any pending
-          // hide-dwell and release immediately.
+          // hide-dwell and release immediately. The webGLHideTimer guard keeps
+          // the dwell window intact for a hidden agent still streaming at BURST:
+          // wantsWebGLAtTier now returns false for off-screen panes (#10671), so
+          // without it the next write's tier-apply would release on frame 1
+          // instead of after WEBGL_HIDE_DWELL_MS — defeating the hide→show
+          // anti-churn dwell. Once the dwell timer fires (or never armed), the
+          // guard is undefined and the release proceeds.
           this.cancelWebGLHideTimer(managed);
           const hadWebGL = this.webGLManager.isActive(id);
           this.webGLManager.releaseContext(id);
@@ -528,6 +537,13 @@ class TerminalInstanceService {
     tier: TerminalRefreshTier | undefined
   ): boolean {
     if (!isWebGLEligibleTier(tier)) return false;
+    // Visibility gates every case: an off-screen pane never wants WebGL, even
+    // an agent streaming at BURST. The want set is fleet-wide per project view,
+    // so hidden streaming agents would otherwise accumulate wants and trip the
+    // count-based mode switch, dropping the whole visible fleet to DOM
+    // (#10671). The reveal path (setVisible(true) → debounced shouldRestoreWebGL
+    // → ensureContext) re-acquires the want once the pane is on-screen again.
+    if (!managed.isVisible) return false;
     if (managed.runtimeAgentId) return true;
     return (
       tier === TerminalRefreshTier.FOCUSED ||
@@ -3181,7 +3197,10 @@ class TerminalInstanceService {
     // policy now so background promotions don't keep the blink timer alive.
     this.applyCursorBlinkPolicy(managed);
     restoreScrollback(managed);
-    if (managed.isOpened && isWebGLEligibleTier(managed.lastAppliedTier)) {
+    // Route through wantsWebGLAtTier so an off-screen promotion (background
+    // worktree detected mid-stream) doesn't register a fleet-wide want; the
+    // reveal path re-acquires it when the pane comes on-screen (#10671).
+    if (managed.isOpened && this.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
       this.webGLManager.ensureContext(id, managed);
     }
   }

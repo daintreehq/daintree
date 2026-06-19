@@ -55,10 +55,13 @@ type WebGLVisibilityService = {
   setVisible: (id: string, visible: boolean, expectedGeneration?: number) => void;
   destroy: (id: string) => void;
   applyRendererPolicy: (id: string, tier: TerminalRefreshTier) => void;
+  applyAgentPromotion: (id: string, agentId: string) => void;
   webGLManager: {
     isActive: (id: string) => boolean;
     ensureContext: (id: string, managed: unknown) => void;
     releaseContext: (id: string) => void;
+    getMode: () => "webgl" | "dom";
+    getWantsSize: () => number;
   };
 };
 
@@ -472,5 +475,173 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
     // shouldRestoreWebGL re-checks eligibility in the timer callback,
     // so the deferred restore must not fire after demotion.
     expect(service.webGLManager.isActive("t1")).toBe(false);
+  });
+
+  // #10671: off-screen agent terminals must not register a fleet-wide WebGL
+  // want. The want set is per project view, so enough hidden streaming agents
+  // would trip the count-based mode switch and drop the visible fleet to DOM.
+  it("hidden agent at BURST tier does not acquire WebGL (#10671)", () => {
+    const managed = makeMockManaged({
+      isVisible: false,
+      lastAppliedTier: TerminalRefreshTier.VISIBLE,
+      getRefreshTier: () => TerminalRefreshTier.VISIBLE,
+    });
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+    // A PTY write while off-screen drives the pane to BURST. The tier still
+    // applies (backpressure cadence), but the want must not be registered.
+    service.applyRendererPolicy("t1", TerminalRefreshTier.BURST);
+
+    expect(service.webGLManager.isActive("t1")).toBe(false);
+    expect(managed.lastAppliedTier).toBe(TerminalRefreshTier.BURST);
+  });
+
+  it("visible agent at BURST tier still acquires WebGL (no regression)", () => {
+    const managed = makeMockManaged({
+      isVisible: true,
+      lastAppliedTier: TerminalRefreshTier.FOCUSED,
+      getRefreshTier: () => TerminalRefreshTier.FOCUSED,
+    });
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+    service.applyRendererPolicy("t1", TerminalRefreshTier.BURST);
+
+    expect(service.webGLManager.isActive("t1")).toBe(true);
+  });
+
+  it("applyAgentPromotion on a hidden terminal does not acquire WebGL (#10671)", () => {
+    const managed = makeMockManaged({
+      isVisible: false,
+      runtimeAgentId: undefined,
+      launchAgentId: undefined,
+      lastAppliedTier: TerminalRefreshTier.VISIBLE,
+      getRefreshTier: () => TerminalRefreshTier.VISIBLE,
+    });
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+    service.applyAgentPromotion("t1", "claude");
+
+    expect(managed.runtimeAgentId).toBe("claude");
+    expect(service.webGLManager.isActive("t1")).toBe(false);
+  });
+
+  it("applyAgentPromotion on a visible terminal acquires WebGL", () => {
+    const managed = makeMockManaged({
+      isVisible: true,
+      runtimeAgentId: undefined,
+      launchAgentId: undefined,
+      lastAppliedTier: TerminalRefreshTier.VISIBLE,
+      getRefreshTier: () => TerminalRefreshTier.VISIBLE,
+    });
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+    service.applyAgentPromotion("t1", "claude");
+
+    expect(service.webGLManager.isActive("t1")).toBe(true);
+  });
+
+  it("hidden agent revealed via setVisible(true) re-acquires WebGL (#10671)", () => {
+    const managed = makeMockManaged({
+      isVisible: false,
+      lastAppliedTier: TerminalRefreshTier.VISIBLE,
+      getRefreshTier: () => TerminalRefreshTier.VISIBLE,
+    });
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+    // Off-screen: even at an eligible tier the want is withheld.
+    service.applyRendererPolicy("t1", TerminalRefreshTier.BURST);
+    expect(service.webGLManager.isActive("t1")).toBe(false);
+
+    // Reveal re-acquires through the debounced restore path.
+    service.setVisible("t1", true);
+    vi.advanceTimersByTime(100);
+    expect(service.webGLManager.isActive("t1")).toBe(true);
+  });
+
+  it("hidden agent streaming at BURST keeps WebGL through the hide dwell, then releases (#10671)", () => {
+    // A visible agent that goes off-screen mid-stream must keep its context for
+    // the WEBGL_HIDE_DWELL_MS window (anti-churn for hide→show toggles) even
+    // though wantsWebGLAtTier now returns false off-screen — the webGLHideTimer
+    // guard in onTierApplied preserves the dwell instead of releasing on the
+    // next write's tier apply.
+    const managed = makeMockManaged({
+      isVisible: true,
+      lastAppliedTier: TerminalRefreshTier.FOCUSED,
+      getRefreshTier: () => TerminalRefreshTier.FOCUSED,
+    });
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+    service.webGLManager.ensureContext("t1", managed);
+    expect(service.webGLManager.isActive("t1")).toBe(true);
+
+    service.setVisible("t1", false);
+
+    // Streaming continues while off-screen — drives BURST during the dwell.
+    service.applyRendererPolicy("t1", TerminalRefreshTier.BURST);
+    vi.advanceTimersByTime(499);
+    expect(service.webGLManager.isActive("t1")).toBe(true);
+
+    // Dwell elapses — context released, no longer consuming the fleet budget.
+    vi.advanceTimersByTime(1);
+    expect(service.webGLManager.isActive("t1")).toBe(false);
+  });
+
+  it("hidden streaming agents do not inflate the fleet want count or flip to DOM (#10671)", () => {
+    // The literal #10671 scenario: a handful of visible agents plus many hidden
+    // background-worktree agents all streaming at BURST. Pre-fix, each hidden
+    // agent registered a want; 3 visible + 15 hidden = 18 wants would exceed the
+    // upper threshold and flip the whole fleet to DOM. Post-fix, only the
+    // visible agents contribute wants, so the fleet stays in WebGL.
+    for (let i = 0; i < 3; i++) {
+      const id = `vis-${i}`;
+      service.instances.set(
+        id,
+        makeMockManaged({
+          isVisible: true,
+          lastAppliedTier: TerminalRefreshTier.FOCUSED,
+          getRefreshTier: () => TerminalRefreshTier.FOCUSED,
+        }) as unknown as Record<string, unknown>
+      );
+      service.applyRendererPolicy(id, TerminalRefreshTier.BURST);
+    }
+
+    for (let i = 0; i < 15; i++) {
+      const id = `hid-${i}`;
+      service.instances.set(
+        id,
+        makeMockManaged({
+          isVisible: false,
+          lastAppliedTier: TerminalRefreshTier.VISIBLE,
+          getRefreshTier: () => TerminalRefreshTier.VISIBLE,
+        }) as unknown as Record<string, unknown>
+      );
+      service.applyRendererPolicy(id, TerminalRefreshTier.BURST);
+    }
+
+    expect(service.webGLManager.getWantsSize()).toBe(3);
+    expect(service.webGLManager.getMode()).toBe("webgl");
+    for (let i = 0; i < 3; i++) {
+      expect(service.webGLManager.isActive(`vis-${i}`)).toBe(true);
+    }
+  });
+
+  it("agent promoted while hidden re-acquires WebGL only after reveal (#10671)", () => {
+    const managed = makeMockManaged({
+      isVisible: false,
+      runtimeAgentId: undefined,
+      launchAgentId: undefined,
+      lastAppliedTier: TerminalRefreshTier.VISIBLE,
+      getRefreshTier: () => TerminalRefreshTier.VISIBLE,
+    });
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+    // Background detection promotes the off-screen pane — want is withheld.
+    service.applyAgentPromotion("t1", "claude");
+    expect(managed.runtimeAgentId).toBe("claude");
+    expect(service.webGLManager.isActive("t1")).toBe(false);
+
+    // Reveal drives the debounced restore, which now passes the visibility gate.
+    service.setVisible("t1", true);
+    vi.advanceTimersByTime(100);
+    expect(service.webGLManager.isActive("t1")).toBe(true);
   });
 });
