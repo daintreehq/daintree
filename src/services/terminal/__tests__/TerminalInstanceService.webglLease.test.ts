@@ -247,6 +247,10 @@ describe("onTierApplied handler — WebGL manager integration", () => {
     ) {
       webGLManager.ensureContext(id, m);
     } else if (!m.isVisible) {
+      // This model intentionally omits the production webGLHideTimer dwell
+      // guard (TerminalInstanceService.onTierApplied) — the lease suite covers
+      // pure tier→WebGL mapping; hide-dwell timing lives in
+      // webglVisibility.test.ts, which drives the real service.
       const hadWebGL = webGLManager.isActive(id);
       webGLManager.releaseContext(id);
       if (hadWebGL && m.terminal.rows > 0) {

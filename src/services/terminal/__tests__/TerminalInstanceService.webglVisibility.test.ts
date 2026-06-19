@@ -60,6 +60,8 @@ type WebGLVisibilityService = {
     isActive: (id: string) => boolean;
     ensureContext: (id: string, managed: unknown) => void;
     releaseContext: (id: string) => void;
+    getMode: () => "webgl" | "dom";
+    getWantsSize: () => number;
   };
 };
 
@@ -581,5 +583,65 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
     // Dwell elapses — context released, no longer consuming the fleet budget.
     vi.advanceTimersByTime(1);
     expect(service.webGLManager.isActive("t1")).toBe(false);
+  });
+
+  it("hidden streaming agents do not inflate the fleet want count or flip to DOM (#10671)", () => {
+    // The literal #10671 scenario: a handful of visible agents plus many hidden
+    // background-worktree agents all streaming at BURST. Pre-fix, each hidden
+    // agent registered a want; 3 visible + 15 hidden = 18 wants would exceed the
+    // upper threshold and flip the whole fleet to DOM. Post-fix, only the
+    // visible agents contribute wants, so the fleet stays in WebGL.
+    for (let i = 0; i < 3; i++) {
+      const id = `vis-${i}`;
+      service.instances.set(
+        id,
+        makeMockManaged({
+          isVisible: true,
+          lastAppliedTier: TerminalRefreshTier.FOCUSED,
+          getRefreshTier: () => TerminalRefreshTier.FOCUSED,
+        }) as unknown as Record<string, unknown>
+      );
+      service.applyRendererPolicy(id, TerminalRefreshTier.BURST);
+    }
+
+    for (let i = 0; i < 15; i++) {
+      const id = `hid-${i}`;
+      service.instances.set(
+        id,
+        makeMockManaged({
+          isVisible: false,
+          lastAppliedTier: TerminalRefreshTier.VISIBLE,
+          getRefreshTier: () => TerminalRefreshTier.VISIBLE,
+        }) as unknown as Record<string, unknown>
+      );
+      service.applyRendererPolicy(id, TerminalRefreshTier.BURST);
+    }
+
+    expect(service.webGLManager.getWantsSize()).toBe(3);
+    expect(service.webGLManager.getMode()).toBe("webgl");
+    for (let i = 0; i < 3; i++) {
+      expect(service.webGLManager.isActive(`vis-${i}`)).toBe(true);
+    }
+  });
+
+  it("agent promoted while hidden re-acquires WebGL only after reveal (#10671)", () => {
+    const managed = makeMockManaged({
+      isVisible: false,
+      runtimeAgentId: undefined,
+      launchAgentId: undefined,
+      lastAppliedTier: TerminalRefreshTier.VISIBLE,
+      getRefreshTier: () => TerminalRefreshTier.VISIBLE,
+    });
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+    // Background detection promotes the off-screen pane — want is withheld.
+    service.applyAgentPromotion("t1", "claude");
+    expect(managed.runtimeAgentId).toBe("claude");
+    expect(service.webGLManager.isActive("t1")).toBe(false);
+
+    // Reveal drives the debounced restore, which now passes the visibility gate.
+    service.setVisible("t1", true);
+    vi.advanceTimersByTime(100);
+    expect(service.webGLManager.isActive("t1")).toBe(true);
   });
 });
