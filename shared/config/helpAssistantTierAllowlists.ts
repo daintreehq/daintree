@@ -115,6 +115,7 @@ export const ACTION_TIER_ADDONS = [
 
   "browser.navigate",
   "browser.openUrl",
+  "browser.captureScreenshot",
 
   "devPreview.reloadPreview",
   "devPreview.restart",

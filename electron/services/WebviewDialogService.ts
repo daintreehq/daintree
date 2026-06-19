@@ -64,6 +64,19 @@ class WebviewDialogService {
     return this.kindMap.get(webContentsId);
   }
 
+  /**
+   * Reverse of {@link getPanelId}: resolve a panel's live webContentsId from its
+   * panel id. `panelMap` is keyed by webContentsId, so this is an O(n) scan —
+   * negligible at the handful-of-webview-panels scale it runs at. Returns the
+   * first match; a webContents is rebound to at most one panel at a time.
+   */
+  getWebContentsId(panelId: string): number | undefined {
+    for (const [webContentsId, mappedPanelId] of this.panelMap) {
+      if (mappedPanelId === panelId) return webContentsId;
+    }
+    return undefined;
+  }
+
   registerDialog(
     dialogId: string,
     webContentsId: number,

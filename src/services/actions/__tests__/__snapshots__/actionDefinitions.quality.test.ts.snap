@@ -676,7 +676,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "browser",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Capture a screenshot of the browser viewport and copy to clipboard",
+    "description": "Capture a screenshot of the focused browser panel and return it as a PNG image",
     "examples": undefined,
     "id": "browser.captureScreenshot",
     "keywords": undefined,

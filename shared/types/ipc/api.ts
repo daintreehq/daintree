@@ -926,6 +926,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     reloadIgnoringCache(webContentsId: number, panelId: string): Promise<void>;
     /** Read the current scroll position from Blink layout — works on frozen pages */
     getScrollPosition(webContentsId: number): Promise<number>;
+    /** Capture the panel's webview viewport as a PNG, returned base64-encoded */
+    captureScreenshot(
+      panelId: string
+    ): Promise<{ pngBase64: string; width: number; height: number }>;
     /** Read Chromium navigation history for the webview */
     getNavigationHistory(
       webContentsId: number
