@@ -237,10 +237,13 @@ describe("onTierApplied handler — WebGL manager integration", () => {
   function simulateOnTierApplied(id: string, tier: TerminalRefreshTier, m: ManagedTerminal) {
     if (!m.runtimeAgentId) return;
 
+    // Mirrors wantsWebGLAtTier: an off-screen pane never wants WebGL, even an
+    // agent at an eligible tier (#10671).
     if (
-      tier === TerminalRefreshTier.FOCUSED ||
-      tier === TerminalRefreshTier.BURST ||
-      tier === TerminalRefreshTier.VISIBLE
+      m.isVisible &&
+      (tier === TerminalRefreshTier.FOCUSED ||
+        tier === TerminalRefreshTier.BURST ||
+        tier === TerminalRefreshTier.VISIBLE)
     ) {
       webGLManager.ensureContext(id, m);
     } else if (!m.isVisible) {
