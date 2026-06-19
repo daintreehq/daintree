@@ -619,6 +619,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["system-sleep:reset"]["result"]>;
   };
   webview: {
+    captureScreenshot(
+      ...args: IpcInvokeMap["webview:capture-screenshot"]["args"]
+    ): Promise<IpcInvokeMap["webview:capture-screenshot"]["result"]>;
     getNavigationHistory(
       ...args: IpcInvokeMap["webview:get-navigation-history"]["args"]
     ): Promise<IpcInvokeMap["webview:get-navigation-history"]["result"]>;

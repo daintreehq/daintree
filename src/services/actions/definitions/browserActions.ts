@@ -239,19 +239,37 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     id: "browser.captureScreenshot",
     palette: { mode: "hidden" },
     title: "Capture Browser Screenshot",
-    description: "Capture a screenshot of the browser viewport and copy to clipboard",
+    description: "Capture a screenshot of the focused browser panel and return it as a PNG image",
     category: "browser",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
-      if (!targetId) return;
-      window.dispatchEvent(
-        new CustomEvent("daintree:browser-capture-screenshot", { detail: { id: targetId } })
-      );
+      // No silent no-op: returning `undefined` here would make ActionService
+      // report `{ ok: true }` with no image, leaving an MCP caller unable to
+      // tell that nothing was captured. Throw so the failure is explicit.
+      if (!targetId) {
+        throw new Error("No browser panel: pass terminalId or focus a browser panel first");
+      }
+      const shot = await window.electron.webview.captureScreenshot(targetId);
+      // Preserve the user-facing "copy to clipboard" affordance for keybinding /
+      // toolbar dispatch; agent (MCP) calls receive the bytes in the result and
+      // must not clobber the user's clipboard.
+      if (ctx?.dispatchSource !== "agent") {
+        try {
+          const binary = atob(shot.pngBase64);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          await window.electron.clipboard.writeImage(bytes);
+        } catch {
+          // Clipboard write is a best-effort side-effect — the captured image is
+          // still returned to the caller even if the copy fails.
+        }
+      }
+      return shot;
     },
   }));
 

@@ -77,6 +77,28 @@ import {
 
 const TERMINAL_WAIT_UNTIL_IDLE_TOOL = "terminal.waitUntilIdle";
 const HELP_DISPLAY_IMAGE_TOOL = "help.displayImage";
+const BROWSER_CAPTURE_SCREENSHOT_TOOL = "browser.captureScreenshot";
+
+/**
+ * Narrow a `browser.captureScreenshot` result to its base64-PNG payload so the
+ * tool response can carry a real MCP `image` content block (the generic path
+ * only ever text-serializes results). Guarded structurally rather than trusting
+ * the action id alone.
+ */
+function asScreenshotResult(
+  result: unknown
+): { pngBase64: string; width: number; height: number } | null {
+  if (
+    result !== null &&
+    typeof result === "object" &&
+    typeof (result as { pngBase64?: unknown }).pngBase64 === "string" &&
+    typeof (result as { width?: unknown }).width === "number" &&
+    typeof (result as { height?: unknown }).height === "number"
+  ) {
+    return result as { pngBase64: string; width: number; height: number };
+  }
+  return null;
+}
 import type { SessionStore } from "./sessionStore.js";
 
 /**
@@ -892,6 +914,23 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               sessionStore.resetIdleTimer(sessionId);
             } else if (sessionStore.httpSessions.has(sessionId)) {
               sessionStore.resetHttpIdleTimer(sessionId);
+            }
+          }
+          // browser.captureScreenshot returns PNG bytes — surface them as a real
+          // MCP image content block so the model receives a usable image, not a
+          // base64 blob text-serialized into the transcript.
+          if (actionId === BROWSER_CAPTURE_SCREENSHOT_TOOL) {
+            const shot = asScreenshotResult(outcome.value.result);
+            if (shot) {
+              return {
+                content: [
+                  { type: "image" as const, data: shot.pngBase64, mimeType: "image/png" },
+                  {
+                    type: "text" as const,
+                    text: `Screenshot captured (${shot.width}×${shot.height})`,
+                  },
+                ],
+              };
             }
           }
           const structuredContent = buildStructuredContent(entry, outcome.value.result);

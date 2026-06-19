@@ -48,6 +48,9 @@ function setPanelState(state: {
 
 const dispatchSpy = vi.fn<(event: Event) => boolean>(() => true);
 const clipboardSpy = vi.fn<(text: string) => Promise<void>>();
+const captureScreenshotSpy =
+  vi.fn<(panelId: string) => Promise<{ pngBase64: string; width: number; height: number }>>();
+const writeImageSpy = vi.fn<(bytes: Uint8Array) => Promise<void>>();
 
 const getMessagesSpy = vi.fn();
 const getCountsSpy = vi.fn();
@@ -112,6 +115,17 @@ beforeEach(() => {
   consoleCaptureMock.flush.mockReset();
   consoleCaptureMock.getState.mockReset();
   systemClientMock.openExternal.mockResolvedValue(undefined);
+  captureScreenshotSpy
+    .mockReset()
+    .mockResolvedValue({ pngBase64: btoa("png-bytes"), width: 1024, height: 768 });
+  writeImageSpy.mockReset().mockResolvedValue(undefined);
+  Object.defineProperty(globalThis.window, "electron", {
+    value: {
+      webview: { captureScreenshot: captureScreenshotSpy },
+      clipboard: { writeImage: writeImageSpy },
+    },
+    configurable: true,
+  });
   Object.defineProperty(globalThis.window, "dispatchEvent", {
     value: dispatchSpy,
     configurable: true,
@@ -465,5 +479,56 @@ describe("browserActions adversarial", () => {
     await expect(run("browser.getConsoleMessages")).rejects.toThrow(/dev preview panels/);
     expect(consoleCaptureMock.flush).not.toHaveBeenCalled();
     expect(getMessagesSpy).not.toHaveBeenCalled();
+  });
+
+  it("browser.captureScreenshot captures the focused panel and returns PNG bytes", async () => {
+    setPanelState({ focusedId: "b1" });
+    const run = setupActions();
+    const result = await run("browser.captureScreenshot");
+
+    expect(captureScreenshotSpy).toHaveBeenCalledWith("b1");
+    expect(result).toEqual({ pngBase64: btoa("png-bytes"), width: 1024, height: 768 });
+  });
+
+  it("browser.captureScreenshot explicit terminalId overrides focusedId", async () => {
+    setPanelState({ focusedId: "b1" });
+    const run = setupActions();
+    await run("browser.captureScreenshot", { terminalId: "b2" });
+
+    expect(captureScreenshotSpy).toHaveBeenCalledWith("b2");
+  });
+
+  it("browser.captureScreenshot copies to clipboard for non-agent dispatch", async () => {
+    setPanelState({ focusedId: "b1" });
+    const run = setupActions();
+    await run("browser.captureScreenshot");
+
+    expect(writeImageSpy).toHaveBeenCalledTimes(1);
+    const bytes = writeImageSpy.mock.calls[0]![0];
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    // Decoded base64 round-trips back to the original PNG bytes.
+    expect(String.fromCharCode(...bytes)).toBe("png-bytes");
+  });
+
+  it("browser.captureScreenshot does NOT touch the clipboard for agent dispatch", async () => {
+    setPanelState({ focusedId: "b1" });
+    const actions: ActionRegistry = new Map();
+    registerBrowserActions(actions, {} as unknown as ActionCallbacks);
+    const def = actions.get("browser.captureScreenshot")!() as AnyActionDefinition;
+
+    const result = await def.run(undefined, { dispatchSource: "agent" } as never);
+
+    expect(captureScreenshotSpy).toHaveBeenCalledWith("b1");
+    expect(writeImageSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({ pngBase64: btoa("png-bytes"), width: 1024, height: 768 });
+  });
+
+  it("browser.captureScreenshot throws when no target panel exists (no silent ok:true)", async () => {
+    setPanelState({ focusedId: null });
+    const run = setupActions();
+
+    await expect(run("browser.captureScreenshot")).rejects.toThrow(/No browser panel/);
+    expect(captureScreenshotSpy).not.toHaveBeenCalled();
+    expect(writeImageSpy).not.toHaveBeenCalled();
   });
 });

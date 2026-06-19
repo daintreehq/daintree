@@ -71,6 +71,7 @@ import { buildCliPreloadBindings } from "./ipc/handlers/cli.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
 import { buildWebviewNavigationPreloadBindings } from "./ipc/handlers/webviewNavigation.preload.js";
+import { buildWebviewCapturePreloadBindings } from "./ipc/handlers/webviewCapture.preload.js";
 import { buildWorktreeConfigPreloadBindings } from "./ipc/handlers/worktreeConfig.preload.js";
 import { buildTerminalLayoutPreloadBindings } from "./ipc/handlers/terminalLayout.preload.js";
 import { buildTerminalConfigPreloadBindings } from "./ipc/handlers/terminalConfig.preload.js";
@@ -2009,6 +2010,7 @@ function buildElectronApi(): ElectronAPI {
       getScrollPosition: (webContentsId: number): Promise<number> =>
         _unwrappingInvoke(CHANNELS.WEBVIEW_GET_SCROLL_POSITION, webContentsId),
       ...buildWebviewNavigationPreloadBindings(_unwrappingInvoke),
+      ...buildWebviewCapturePreloadBindings(_unwrappingInvoke),
     },
 
     // Hibernation API

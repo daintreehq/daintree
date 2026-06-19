@@ -1440,6 +1440,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  "webview:capture-screenshot": {
+    args: [panelId: string];
+    result: { pngBase64: string; width: number; height: number };
+  };
   "webview:get-navigation-history": {
     args: [webContentsId: number];
     result: {
