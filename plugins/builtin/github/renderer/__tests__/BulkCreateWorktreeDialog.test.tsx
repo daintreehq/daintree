@@ -5,6 +5,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, act } from "@testing-library/react";
 import React from "react";
 import type { Issue, PR } from "@shared/types/forge";
+import {
+  setCache,
+  getCache,
+  buildCacheKey,
+  _resetForTests as resetForgeResourceCache,
+} from "@/lib/forgeResourceCache";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -21,6 +27,7 @@ const mockGetDefaultPath = vi.fn();
 const mockListBranches = vi.fn();
 const mockFetchPRBranch = vi.fn();
 const mockAssignIssue = vi.fn();
+const mockLogError = vi.fn();
 const mockAgentSettingsGet = vi.fn();
 const mockSystemGetTmpDir = vi.fn();
 const mockGetAgentConfig = vi.fn();
@@ -82,6 +89,10 @@ vi.mock("@/utils/textParsing", () => ({
 
 vi.mock("@/lib/notify", () => ({
   notify: vi.fn(),
+}));
+
+vi.mock("@/utils/logger", () => ({
+  logError: (...args: unknown[]) => mockLogError(...args),
 }));
 
 const prefsHolder: { assignWorktreeToSelf: boolean } = { assignWorktreeToSelf: false };
@@ -318,6 +329,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  resetForgeResourceCache();
 });
 
 describe("BulkCreateWorktreeDialog", () => {
@@ -1980,6 +1992,114 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
 
     expect(screen.getByText(/Assignment failed/)).toBeTruthy();
     expect(screen.queryByText(/Missing terminals/)).toBeNull();
+  });
+
+  it("patches the cached issue-list slot so the dropdown reflects the self-assign", async () => {
+    prefsHolder.assignWorktreeToSelf = true;
+    viewerHolder.user = { login: "me", avatarUrl: "https://example.com/me.png" };
+    mockAssignIssue.mockResolvedValue(undefined);
+
+    // Seed two cached slots (different sort orders) under the same
+    // `${rootPath}:issue:` prefix — mutateCacheEntries must patch every slot.
+    // Each holds the issue being assigned plus a sibling that stays untouched.
+    const keyA = buildCacheKey("/test/root", "issue", "open", "created_at:desc");
+    const keyB = buildCacheKey("/test/root", "issue", "open", "updated_at:desc");
+    // A slot for a different project must NOT be touched.
+    const keyOther = buildCacheKey("/other/root", "issue", "open", "created_at:desc");
+    for (const k of [keyA, keyB, keyOther]) {
+      setCache(k, {
+        items: [makeIssue(1), makeIssue(2)],
+        nextCursor: null,
+        hasMore: false,
+        timestamp: Date.now(),
+      });
+    }
+
+    render(<BulkCreateWorktreeDialog {...assignProps} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+
+    expect(mockAssignIssue).toHaveBeenCalledWith("/test/root", 1, "me");
+
+    for (const k of [keyA, keyB]) {
+      const patched = getCache(k);
+      const issue1 = patched?.items.find((i) => i.number === 1) as Issue;
+      expect(issue1.assignees).toContainEqual({
+        login: "me",
+        avatarUrl: "https://example.com/me.png",
+        rawData: null,
+      });
+      // The sibling issue (not assigned) keeps its empty assignees list.
+      const issue2 = patched?.items.find((i) => i.number === 2) as Issue;
+      expect(issue2.assignees).toEqual([]);
+    }
+    // A different project's slot is untouched by the prefix-scoped patch.
+    const otherIssue1 = getCache(keyOther)?.items.find((i) => i.number === 1) as Issue;
+    expect(otherIssue1.assignees).toEqual([]);
+    // The cache patch succeeded, so no cache-error log was emitted.
+    expect(mockLogError).not.toHaveBeenCalled();
+  });
+
+  it("contains a cache-patch throw without failing the assignment", async () => {
+    prefsHolder.assignWorktreeToSelf = true;
+    viewerHolder.user = { login: "me" };
+    mockAssignIssue.mockResolvedValue(undefined);
+
+    // A malformed entry (items not an array) makes the in-transform map() throw,
+    // exercising the try/catch guard: the assignment already succeeded server
+    // side, so the item must still count as created and the error is only logged.
+    const key = buildCacheKey("/test/root", "issue", "open", "created_at:desc");
+    setCache(key, {
+      items: null as unknown as Issue[],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+    });
+
+    render(<BulkCreateWorktreeDialog {...assignProps} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+
+    expect(mockAssignIssue).toHaveBeenCalledWith("/test/root", 1, "me");
+    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    expect(screen.queryByText(/failed/)).toBeNull();
+    expect(mockLogError).toHaveBeenCalledWith(
+      "Failed to patch issue cache after bulk self-assign",
+      expect.any(Error)
+    );
+  });
+
+  it("does not duplicate the assignee when the cached issue already lists the user", async () => {
+    prefsHolder.assignWorktreeToSelf = true;
+    viewerHolder.user = { login: "me" };
+    mockAssignIssue.mockResolvedValue(undefined);
+
+    const key = buildCacheKey("/test/root", "issue", "open", "created_at:desc");
+    const seeded = makeIssue(1);
+    seeded.assignees = [{ login: "me", avatarUrl: undefined, rawData: null }];
+    setCache(key, {
+      items: [seeded],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+    });
+
+    render(<BulkCreateWorktreeDialog {...assignProps} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+
+    const issue1 = getCache(key)?.items.find((i) => i.number === 1) as Issue;
+    expect(issue1.assignees).toHaveLength(1);
+    expect(issue1.assignees.filter((a) => a.login === "me")).toHaveLength(1);
   });
 });
 
