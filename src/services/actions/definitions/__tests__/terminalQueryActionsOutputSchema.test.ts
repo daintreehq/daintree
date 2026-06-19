@@ -70,8 +70,8 @@ describe("terminal query actions emit a manifest outputSchema (#10676)", () => {
 
   it("terminal.getStatus advertises the `armed` flag in its per-entry schema (#10695)", () => {
     const schema = outputSchema(registerAll(), "terminal.getStatus")!;
-    const items = (schema.properties as { terminals: { items?: Record<string, unknown> } }).terminals
-      .items;
+    const items = (schema.properties as { terminals: { items?: Record<string, unknown> } })
+      .terminals.items;
     const props = (items?.properties as Record<string, unknown>) ?? {};
     // An MCP client introspecting structuredContent must see `armed` so the
     // read path stays discoverable if the schema field is ever dropped.
