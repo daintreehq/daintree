@@ -756,6 +756,7 @@ export class TerminalProcess {
       spawnArgs: t.spawnArgs,
       exitCode: t.exitCode,
       exitSignal: t.exitSignal,
+      lastCheckResult: t.lastCheckResult,
       worktreeId: t.worktreeId,
       lastObservedTitle: t.lastObservedTitle,
       agentPresetId: t.agentPresetId,

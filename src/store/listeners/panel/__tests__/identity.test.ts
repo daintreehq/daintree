@@ -323,6 +323,57 @@ describe("identity listener — completed-with-changes notification", () => {
     d.dispose();
   });
 
+  it("writes lastCheckResult from the payload onto the panel (#10682)", () => {
+    setupPanel({ agentState: "working" });
+    const d = setupIdentityListeners();
+
+    const checkResult = {
+      command: "npm run check",
+      passed: false,
+      ranAt: nextTimestamp(),
+      failureSummary: "Found 2 errors.",
+      truncated: false,
+    };
+    emitState(
+      makePayload({
+        state: "waiting",
+        previousState: "working",
+        timestamp: nextTimestamp(),
+        lastCheckResult: checkResult,
+      })
+    );
+
+    const panel = usePanelStore.getState().panelsById["term-1"] as unknown as {
+      lastCheckResult?: typeof checkResult;
+    };
+    expect(panel.lastCheckResult).toEqual(checkResult);
+
+    d.dispose();
+  });
+
+  it("leaves lastCheckResult untouched when the payload omits it (#10682)", () => {
+    const existing = {
+      command: "npm test",
+      passed: true,
+      ranAt: 123,
+      failureSummary: null,
+      truncated: false,
+    };
+    setupPanel({ agentState: "working", lastCheckResult: existing });
+    const d = setupIdentityListeners();
+
+    emitState(
+      makePayload({ state: "waiting", previousState: "working", timestamp: nextTimestamp() })
+    );
+
+    const panel = usePanelStore.getState().panelsById["term-1"] as unknown as {
+      lastCheckResult?: typeof existing;
+    };
+    expect(panel.lastCheckResult).toEqual(existing);
+
+    d.dispose();
+  });
+
   it("dispatches worktree.openReviewHub when the action onClick fires", () => {
     setupPanel();
     const d = setupIdentityListeners();

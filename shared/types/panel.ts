@@ -1,4 +1,5 @@
 import type { AgentState, AgentStateChangeTrigger, AgentId, WaitingReason } from "./agent.js";
+import type { TerminalCheckResult } from "./checkResult.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { BrowserHistory } from "./browser.js";
 import { BUILT_IN_PANEL_KINDS, type BuiltInPanelKind } from "../config/panelKindRegistry.js";
@@ -445,6 +446,13 @@ export interface PtyPanelData extends BasePanelData {
   startedAt?: number;
   /** Exit code from the last process exit */
   exitCode?: number;
+  /**
+   * Parsed test/lint/build result from the most recent recognized check
+   * summary (issue #10682). Best-effort, not an authoritative exit code — see
+   * `TerminalCheckResult`. Surfaced over MCP via `terminal.getStatus`.
+   * Live-only: set from `agent:state-changed`, never persisted.
+   */
+  lastCheckResult?: TerminalCheckResult;
   /**
    * Live-only spawn lifecycle state. "spawning" from the moment the optimistic
    * placeholder lands in `panelsById` until the PTY IPC round-trip resolves;

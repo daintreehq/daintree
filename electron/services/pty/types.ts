@@ -2,6 +2,7 @@ import type * as pty from "node-pty";
 import type { Terminal as HeadlessTerminal } from "@xterm/headless";
 import type { SerializeAddon } from "@xterm/addon-serialize";
 import type { AgentState, AgentId, WaitingReason } from "../../../shared/types/agent.js";
+import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
 import type { PanelKind, PanelTitleMode } from "../../../shared/types/panel.js";
 import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
@@ -86,6 +87,13 @@ export interface TerminalPublicState {
   exitCode?: number;
   /** Raw OS signal number that terminated the PTY process, when applicable. */
   exitSignal?: number;
+  /**
+   * Parsed test/lint/build result from the most recently observed check
+   * summary (issue #10682). Best-effort, not an authoritative exit code — see
+   * `TerminalCheckResult`. Updated in `AgentStateService` on settling
+   * transitions; ephemeral (not persisted).
+   */
+  lastCheckResult?: TerminalCheckResult;
   /** Worktree the terminal was spawned in; used when persisting agent session history */
   worktreeId?: string;
   /** Last non-useless title observed from xterm OSC updates (renderer-synced) */

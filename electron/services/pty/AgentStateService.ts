@@ -15,7 +15,18 @@ import {
 import type { AgentActivityObservationResult } from "./AgentActivityTemperature.js";
 import type { TerminalInfo } from "./types.js";
 import { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
+import { checkResultsEqual, detectCheckResult } from "./CheckResultDetector.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
+import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
+
+// States where the agent has just settled out of "working" — the moment a
+// just-finished check's summary lines sit at the tail of the semantic buffer.
+const CHECK_SETTLE_STATES: ReadonlySet<AgentState> = new Set([
+  "idle",
+  "waiting",
+  "completed",
+  "exited",
+]);
 
 // Hysteresis tunables. Window is conservative — long enough to absorb
 // sub-second flip races (timeout/heuristic firing right after input/output)
@@ -278,6 +289,12 @@ export class AgentStateService {
 
     // Build and validate state change payload BEFORE mutating terminal state.
     const timestamp = getStateChangeTimestamp();
+
+    // Parse a structured check result from recent output as the agent settles
+    // out of "working". Only a NEW (changed) result is attached to the event,
+    // so working↔waiting flapping doesn't spam identical updates (issue #10682).
+    const newCheckResult = this.detectCheckResultOnSettle(terminal, newState, timestamp);
+
     const stateChangePayload = {
       agentId: effectiveAgentId,
       state: newState,
@@ -313,6 +330,7 @@ export class AgentStateService {
             changedChars: temperature.changedChars,
           }
         : {}),
+      ...(newCheckResult ? { lastCheckResult: newCheckResult } : {}),
     };
 
     const validatedStateChange = AgentStateChangedSchema.safeParse(stateChangePayload);
@@ -361,6 +379,32 @@ export class AgentStateService {
     this.emitTerminalActivity(terminal);
 
     return true;
+  }
+
+  /**
+   * Parse the recent semantic buffer for a test/lint/build summary as the agent
+   * settles out of "working" (issue #10682). Stores the result on the terminal
+   * for `getPublicState()` hydration and returns it ONLY when it differs from
+   * the stored result — so the caller attaches it to the event just once, and
+   * the original `ranAt` is preserved across repeat detections of the same run.
+   */
+  private detectCheckResultOnSettle(
+    terminal: TerminalInfo,
+    newState: AgentState,
+    timestamp: number
+  ): TerminalCheckResult | undefined {
+    if (!CHECK_SETTLE_STATES.has(newState)) return undefined;
+
+    const detected = detectCheckResult(terminal.semanticBuffer.join("\n"), timestamp);
+    if (!detected) return undefined;
+
+    if (checkResultsEqual(terminal.lastCheckResult, detected)) {
+      // Same check as last time — keep the original timestamp, emit nothing new.
+      return undefined;
+    }
+
+    terminal.lastCheckResult = detected;
+    return detected;
   }
 
   /**

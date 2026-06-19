@@ -1164,4 +1164,67 @@ describe("AgentStateService", () => {
       expect(stateChanges[0]?.trigger).toBe("exit");
     });
   });
+
+  describe("lastCheckResult detection (issue #10682)", () => {
+    it("attaches a parsed check result when settling out of working", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        agentState: "working",
+        semanticBuffer: ["> tsc --noEmit", "Found 0 errors."],
+      });
+      const payloads: Array<{ lastCheckResult?: unknown }> = [];
+      events.on("agent:state-changed", (payload) => payloads.push(payload));
+
+      service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+      expect(terminal.agentState).toBe("waiting");
+      expect(payloads).toHaveLength(1);
+      const result = payloads[0]?.lastCheckResult as
+        | { passed: boolean; command: string | null }
+        | undefined;
+      expect(result?.passed).toBe(true);
+      expect(result?.command).toContain("tsc");
+      // Stored on the terminal for getPublicState() hydration.
+      expect(terminal.lastCheckResult?.passed).toBe(true);
+    });
+
+    it("does not attach a result for transitions with no recognized summary", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        agentState: "working",
+        semanticBuffer: ["just some agent narration", "no structured summary here"],
+      });
+      const payloads: Array<{ lastCheckResult?: unknown }> = [];
+      events.on("agent:state-changed", (payload) => payloads.push(payload));
+
+      service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.lastCheckResult).toBeUndefined();
+      expect(terminal.lastCheckResult).toBeUndefined();
+    });
+
+    it("does not re-attach an identical result on repeat settles", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        agentState: "working",
+        semanticBuffer: ["> eslint .", "✖ 2 problems (2 errors, 0 warnings)"],
+      });
+      const payloads: Array<{ lastCheckResult?: unknown }> = [];
+      events.on("agent:state-changed", (payload) => payloads.push(payload));
+
+      // working → waiting (first detection)
+      service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+      // waiting → working (no detection; not a settle state)
+      service.updateAgentState(terminal, { type: "busy" }, "activity", 1.0);
+      // working → waiting again, same buffer (deduped — no new attach)
+      service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+      const withResult = payloads.filter((p) => p.lastCheckResult !== undefined);
+      expect(withResult).toHaveLength(1);
+      expect((withResult[0]?.lastCheckResult as { passed: boolean } | undefined)?.passed).toBe(
+        false
+      );
+    });
+  });
 });
