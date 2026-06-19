@@ -206,6 +206,22 @@ export function buildActivityMonitorOptions(
     maxBytesPerFrame: 64,
   };
 
+  // Dedicated byte-volume floor for the simpleOutputState early-return path
+  // (#10664). Deliberately more conservative than outputActivityDetection: it
+  // only recovers waiting→working on a *sustained* stream (>100 B/s for a few
+  // seconds), so it ignores the small inter-tool-call writes that
+  // simpleOutputState was introduced to tolerate, while still escaping the
+  // stuck-waiting state during heavy streaming output. 0.1 B/ms drain means a
+  // ~100 B/s flow never fills the 512-byte bucket; heavier flows fire within a
+  // few seconds. maxBytesPerFrame caps any single status payload so one burst
+  // can't fire alone.
+  const simpleOutputVolumeRecovery = {
+    enabled: true,
+    leakRatePerMs: 0.1,
+    activationThreshold: 512,
+    maxBytesPerFrame: 256,
+  };
+
   const getVisibleLines = effectiveAgentId ? deps.getVisibleLines : undefined;
   const getVisibleContentSnapshot = effectiveAgentId ? deps.getVisibleContentSnapshot : undefined;
   const getCursorLine = effectiveAgentId ? deps.getCursorLine : undefined;
@@ -240,6 +256,8 @@ export function buildActivityMonitorOptions(
     idleDebounceMs,
     promptFastPathMinQuietMs,
     simpleOutputState: effectiveAgentId !== undefined,
+    simpleOutputVolumeRecovery:
+      effectiveAgentId !== undefined ? simpleOutputVolumeRecovery : undefined,
     maxWaitingSilenceMs: 600_000,
     // Background polling (500ms) shortens the recovery debouncer so
     // backgrounded agents can escape "waiting" when output resumes (#6641).
