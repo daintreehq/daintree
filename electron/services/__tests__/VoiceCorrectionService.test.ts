@@ -105,6 +105,48 @@ describe("VoiceCorrectionService", () => {
     expect(result.confirmedText).toBe("leave this alone");
   });
 
+  it("canonicalizes exact custom dictionary term casing deterministically", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        makeFetchResponse({
+          action: "no_change",
+          corrected_text: "we need to update the daintree dashboard",
+        })
+      )
+    );
+
+    const svc = new VoiceCorrectionService();
+    const result = await svc.correct(
+      { rawText: "we need to update the daintree dashboard" },
+      { ...BASE_SETTINGS, customDictionary: ["Daintree"] }
+    );
+
+    expect(result.action).toBe("replace");
+    expect(result.correctedText).toBe("we need to update the Daintree dashboard");
+    expect(result.confirmedText).toBe("we need to update the Daintree dashboard");
+  });
+
+  it("does not force custom dictionary terms inside larger words", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        makeFetchResponse({
+          action: "replace",
+          corrected_text: "the daintreehouse fixture mentions daintree",
+        })
+      )
+    );
+
+    const svc = new VoiceCorrectionService();
+    const result = await svc.correct(
+      { rawText: "the daintreehouse fixture mentions daintree" },
+      { ...BASE_SETTINGS, customDictionary: ["Daintree"] }
+    );
+
+    expect(result.confirmedText).toBe("the daintreehouse fixture mentions Daintree");
+  });
+
   it("falls back to raw text on API error", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeFetchResponse({}, false, 500)));
 
