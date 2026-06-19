@@ -15,6 +15,8 @@ import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { cn } from "@/lib/utils";
 import { worktreeClient, forgeClient, agentSettingsClient, systemClient } from "@/clients";
+import { mutateCacheEntries } from "@/lib/forgeResourceCache";
+import { logError } from "@/utils/logger";
 import { resolveIssuePrequeries } from "./bulkCreatePrequery";
 import { notify } from "@/lib/notify";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -87,7 +89,7 @@ export function BulkCreateWorktreeDialog({
   // Viewer identity through the forge identity capability — drives the
   // "assign to me" affordance and the run-loop assignment below.
   const [viewer, setViewer] = useState<{ login: string; avatarUrl?: string } | null>(null);
-  const viewerRef = useRef<{ login: string } | null>(null);
+  const viewerRef = useRef<{ login: string; avatarUrl?: string } | null>(null);
   const currentUser = viewer?.login;
   const currentUserAvatar = viewer?.avatarUrl;
 
@@ -657,6 +659,37 @@ export function BulkCreateWorktreeDialog({
                     assignAttempt++;
                     try {
                       await forgeClient.assignIssue(rootPath, itemNumber, username);
+                      // Optimistically patch every cached issue-list slot so the
+                      // open issues dropdown reflects the assignment immediately
+                      // instead of waiting for the next SWR revalidate (#10667).
+                      // Mirrors the single-create flow (#10529). The dedup guard
+                      // inside the transform makes a re-assign a no-op, and the
+                      // forge refresh remains the correctness backstop.
+                      const assignAvatarUrl = viewerRef.current?.avatarUrl;
+                      try {
+                        mutateCacheEntries(rootPath, "issue", (entry) => {
+                          let changed = false;
+                          const items = entry.items.map((item) => {
+                            // `assignees` exists only on Issue, so this `in` check
+                            // narrows the Issue|PR union and skips non-issue slots.
+                            if (!("assignees" in item) || item.number !== itemNumber) return item;
+                            if (item.assignees.some((a) => a.login === username)) return item;
+                            changed = true;
+                            return {
+                              ...item,
+                              assignees: [
+                                ...item.assignees,
+                                { login: username, avatarUrl: assignAvatarUrl, rawData: null },
+                              ],
+                            };
+                          });
+                          return changed ? { ...entry, items } : null;
+                        });
+                      } catch (cacheErr) {
+                        // A cache-layer throw must not masquerade as an assignment
+                        // failure: the server-side assign already succeeded here.
+                        logError("Failed to patch issue cache after bulk self-assign", cacheErr);
+                      }
                       break;
                     } catch (err) {
                       const assignErr = normalizeError(err);
