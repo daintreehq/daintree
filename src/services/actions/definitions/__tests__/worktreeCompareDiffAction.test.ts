@@ -145,20 +145,14 @@ describe("worktree.compareDiff run() (#10684)", () => {
   it("throws when the base worktree id is unknown", async () => {
     const run = getRun();
     await expect(
-      run(
-        { worktreeId: "missing", compareToWorktreeId: "wt-right" } as never,
-        {} as ActionContext
-      )
+      run({ worktreeId: "missing", compareToWorktreeId: "wt-right" } as never, {} as ActionContext)
     ).rejects.toThrow(/Worktree not found: missing/);
   });
 
   it("throws when the compare-to worktree id is unknown", async () => {
     const run = getRun();
     await expect(
-      run(
-        { worktreeId: "wt-left", compareToWorktreeId: "missing" } as never,
-        {} as ActionContext
-      )
+      run({ worktreeId: "wt-left", compareToWorktreeId: "missing" } as never, {} as ActionContext)
     ).rejects.toThrow(/Worktree not found: missing/);
   });
 
@@ -169,10 +163,7 @@ describe("worktree.compareDiff run() (#10684)", () => {
     ]);
     const run = getRun();
     await expect(
-      run(
-        { worktreeId: "wt-left", compareToWorktreeId: "wt-right" } as never,
-        {} as ActionContext
-      )
+      run({ worktreeId: "wt-left", compareToWorktreeId: "wt-right" } as never, {} as ActionContext)
     ).rejects.toThrow(/detached HEAD/);
     expect(mockCompareWorktrees).not.toHaveBeenCalled();
   });
@@ -184,10 +175,7 @@ describe("worktree.compareDiff run() (#10684)", () => {
     ]);
     const run = getRun();
     await expect(
-      run(
-        { worktreeId: "wt-left", compareToWorktreeId: "wt-right" } as never,
-        {} as ActionContext
-      )
+      run({ worktreeId: "wt-left", compareToWorktreeId: "wt-right" } as never, {} as ActionContext)
     ).rejects.toThrow(/detached HEAD/);
     expect(mockCompareWorktrees).not.toHaveBeenCalled();
   });
@@ -215,10 +203,7 @@ describe("worktree.compareDiff run() (#10684)", () => {
     mockCompareWorktrees.mockResolvedValue("raw diff text");
     const run = getRun();
     await expect(
-      run(
-        { worktreeId: "wt-left", compareToWorktreeId: "wt-right" } as never,
-        {} as ActionContext
-      )
+      run({ worktreeId: "wt-left", compareToWorktreeId: "wt-right" } as never, {} as ActionContext)
     ).rejects.toThrow(/Unexpected diff string/);
   });
 
@@ -226,10 +211,7 @@ describe("worktree.compareDiff run() (#10684)", () => {
     mockCompareWorktrees.mockRejectedValue(new Error("branch not found"));
     const run = getRun();
     await expect(
-      run(
-        { worktreeId: "wt-left", compareToWorktreeId: "wt-right" } as never,
-        {} as ActionContext
-      )
+      run({ worktreeId: "wt-left", compareToWorktreeId: "wt-right" } as never, {} as ActionContext)
     ).rejects.toThrow(/branch not found/);
   });
 });
