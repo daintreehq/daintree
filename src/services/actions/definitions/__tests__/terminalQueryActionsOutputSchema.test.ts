@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ActionCallbacks, ActionId, AnyActionDefinition } from "@shared/types/actions";
-import type { ActionRegistry } from "../../actionTypes";
+import type { ActionId } from "@shared/types/actions";
+import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
 // ActionService pulls in the shortcut-hint store, keybinding service, and notify
 // at module load / dispatch time. Registration only needs the module to import
