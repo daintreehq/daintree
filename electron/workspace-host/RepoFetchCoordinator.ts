@@ -178,26 +178,12 @@ export class RepoFetchCoordinator {
 
     const state = this.getOrCreateState(commonDir);
 
-    if (!opts.force && state.failure) {
-      const failure = state.failure;
-      if (Date.now() < failure.retryAt) {
-        const isAuth = failure.kind === "auth";
-        return {
-          status: "skipped",
-          skipReason: isAuth ? "auth-suspended" : "in-failure-window",
-          reason: failure.reason,
-          lastFetchedAt: state.lastSuccessfulFetch,
-          // Only surface the per-card auth stripe once the failure is
-          // confirmed (several retries exhausted). Pre-confirmation auth
-          // failures show the softer transient "Couldn't reach origin" tooltip
-          // instead, so a single blip doesn't alarm every worktree card.
-          authFailed: isAuth && failure.confirmed === true,
-          networkFailed: isAuth ? failure.confirmed !== true : true,
-        };
-      }
-      // The backoff window elapsed — fall through and re-attempt the fetch.
-      // Auth-class failures auto-retry on a widening schedule rather than
-      // suspending the repo's fetch indefinitely.
+    if (!opts.force) {
+      const skip = this.failureSkipResult(state);
+      // Inside the backoff window we skip; once it elapses, fall through and
+      // re-attempt. Auth-class failures auto-retry on a widening schedule
+      // rather than suspending the repo's fetch indefinitely.
+      if (skip) return skip;
     }
 
     const recent = this.recentSuccessResult(state, opts.force === true);
@@ -293,6 +279,31 @@ export class RepoFetchCoordinator {
     };
   }
 
+  /**
+   * Skip result for a repo still inside its failure backoff window — `null`
+   * once the window elapses (so the caller re-attempts the fetch). Shared by
+   * the pre-queue check and the post-chain re-check so a burst of sibling
+   * fetches that all queue before the first failure lands still collapses to a
+   * single git invocation once that failure is cached.
+   */
+  private failureSkipResult(state: RepoState): FetchResult | null {
+    const failure = state.failure;
+    if (!failure || Date.now() >= failure.retryAt) return null;
+    const isAuth = failure.kind === "auth";
+    return {
+      status: "skipped",
+      skipReason: isAuth ? "auth-suspended" : "in-failure-window",
+      reason: failure.reason,
+      lastFetchedAt: state.lastSuccessfulFetch,
+      // Only surface the per-card auth stripe once the failure is confirmed
+      // (several retries exhausted). Pre-confirmation auth failures show the
+      // softer transient "Couldn't reach origin" tooltip instead, so a single
+      // blip doesn't alarm every worktree card.
+      authFailed: isAuth && failure.confirmed === true,
+      networkFailed: isAuth ? failure.confirmed !== true : true,
+    };
+  }
+
   private getOrCreateState(commonDir: string): RepoState {
     let state = this.states.get(commonDir);
     if (!state) {
@@ -322,6 +333,14 @@ export class RepoFetchCoordinator {
     const recent = this.recentSuccessResult(stateAtStart, opts.force === true);
     if (recent) {
       return recent;
+    }
+    // Same dedup for failures: once the first sibling in a burst caches a
+    // failure, the rest skip instead of each spawning another git fetch (and
+    // re-incrementing the auth retry count). Force fetches still bypass this —
+    // their same-window failures are coalesced in `buildAuthFailureEntry`.
+    if (opts.force !== true) {
+      const skip = this.failureSkipResult(stateAtStart);
+      if (skip) return skip;
     }
 
     const controller = new AbortController();
@@ -457,6 +476,15 @@ export class RepoFetchCoordinator {
     now: number
   ): FetchFailureEntry {
     const prior = state.failure?.kind === "auth" ? state.failure : null;
+    // A failure observed while the prior backoff window is still open belongs
+    // to the SAME retry round — concurrent sibling fetches and force-retries
+    // (which bypass the failure-cache skip) all land here within milliseconds.
+    // Counting each would confirm the failure on a single burst instead of
+    // across retries over time, re-alarming every card. Keep the prior entry
+    // unchanged so the count only advances once per elapsed backoff window.
+    if (prior && now < prior.retryAt) {
+      return prior;
+    }
     const authRetryCount = (prior?.authRetryCount ?? 0) + 1;
     const stepIndex = Math.min(authRetryCount - 1, AUTH_FAILURE_BACKOFF_SCHEDULE_MS.length - 1);
     const confirmed = authRetryCount >= AUTH_FAILURE_CONFIRM_RETRIES;

@@ -3322,6 +3322,9 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     // project's monitors get a clean coordinator and stale completions are
     // discarded by the generation guard.
     this.fetchCoordinator.destroy();
+    // Reset the escalation guard so the same broken repo re-opened later can
+    // re-surface its toast instead of being silently suppressed.
+    this.authFailureConfirmedNotified.clear();
     this.pollQueue.clear();
 
     this.activeWorktreeId = null;
@@ -3449,6 +3452,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.monitors.clear();
     this.backgroundGitWatcherLru.clear();
     this.fetchCoordinator.destroy();
+    this.authFailureConfirmedNotified.clear();
     this.pollQueue.clear();
     this.listService.invalidateCache();
   }

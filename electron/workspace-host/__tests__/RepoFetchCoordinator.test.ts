@@ -137,6 +137,64 @@ describe("RepoFetchCoordinator", () => {
     expect(onAuthFailureConfirmed).toHaveBeenCalledTimes(1);
   });
 
+  it("does not confirm an auth failure on a concurrent sibling burst", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    mockCreateBackgroundFetchGit.mockReturnValue(
+      makeMockGit(() => Promise.reject(new Error("Authentication failed for 'https://x'")))
+    );
+
+    const onAuthFailureConfirmed = vi.fn();
+    const coord = new RepoFetchCoordinator({ onAuthFailureConfirmed });
+
+    // Five siblings sharing one commondir all fetch at once (cold start). Only
+    // the first should spawn git; the rest skip on the cached failure. The
+    // single failure must not confirm just because many cards observed it.
+    const results = await Promise.all(
+      ["a", "b", "c", "d", "e"].map((s) =>
+        coord.fetchForWorktree({ worktreeId: `wt-${s}`, worktreePath: `/repo/${s}` })
+      )
+    );
+
+    expect(mockCreateBackgroundFetchGit).toHaveBeenCalledTimes(1);
+    expect(onAuthFailureConfirmed).not.toHaveBeenCalled();
+    // No card shows the alarming auth stripe yet — only the soft transient.
+    expect(results.every((r) => r.authFailed === false)).toBe(true);
+    expect(results.some((r) => r.networkFailed === true)).toBe(true);
+  });
+
+  it("does not re-confirm immediately when force-retries burst inside the backoff window", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    mockCreateBackgroundFetchGit.mockReturnValue(
+      makeMockGit(() => Promise.reject(new Error("Authentication failed for 'https://x'")))
+    );
+
+    const onAuthFailureConfirmed = vi.fn();
+    const coord = new RepoFetchCoordinator({ onAuthFailureConfirmed });
+
+    // Drive the failure to confirmed over time (3 retries across backoff steps).
+    await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    vi.advanceTimersByTime(5 * 60_000 + 1_000);
+    await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    vi.advanceTimersByTime(15 * 60_000 + 1_000);
+    await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    expect(onAuthFailureConfirmed).toHaveBeenCalledTimes(1);
+
+    // Simulate retryAuthFetch: clear failures, then a burst of force fetches
+    // (which bypass the failure-cache skip) from several sibling monitors.
+    coord.clearAuthFailures();
+    const retried = await Promise.all(
+      ["a", "b", "c", "d"].map((s) =>
+        coord.fetchForWorktree({ worktreeId: `wt-${s}`, worktreePath: `/repo/${s}`, force: true })
+      )
+    );
+
+    // The credential is still broken, but a single user-triggered round must
+    // not re-confirm instantly — the failure drops back to the soft state and
+    // the toast does NOT re-fire until retries reconfirm over time.
+    expect(onAuthFailureConfirmed).toHaveBeenCalledTimes(1);
+    expect(retried.every((r) => r.authFailed === false)).toBe(true);
+  });
+
   it("resets the auth retry count after a successful fetch", async () => {
     mockGetGitCommonDir.mockReturnValue("/repo/.git");
     let mode: "fail" | "ok" = "fail";
@@ -235,8 +293,9 @@ describe("RepoFetchCoordinator", () => {
   it("serializes fetches for sibling worktrees sharing a commondir", async () => {
     mockGetGitCommonDir.mockReturnValue("/repo/.git");
 
-    // Failing fetches never record a success, so each queued sibling still
-    // runs a real fetch — exercising the per-commondir chain itself.
+    // Force fetches bypass both the recency dedup and the failure-cache skip,
+    // so each queued sibling still runs a real fetch — exercising the
+    // per-commondir chain itself (the failing fetches never record a success).
     let inFlight = 0;
     let maxInFlight = 0;
     mockCreateBackgroundFetchGit.mockReturnValue(
@@ -251,14 +310,35 @@ describe("RepoFetchCoordinator", () => {
     );
 
     const coord = new RepoFetchCoordinator();
-    const a = coord.fetchForWorktree({ worktreeId: "wtA", worktreePath: "/repo/a" });
-    const b = coord.fetchForWorktree({ worktreeId: "wtB", worktreePath: "/repo/b" });
-    const c = coord.fetchForWorktree({ worktreeId: "wtC", worktreePath: "/repo/c" });
+    const a = coord.fetchForWorktree({ worktreeId: "wtA", worktreePath: "/repo/a", force: true });
+    const b = coord.fetchForWorktree({ worktreeId: "wtB", worktreePath: "/repo/b", force: true });
+    const c = coord.fetchForWorktree({ worktreeId: "wtC", worktreePath: "/repo/c", force: true });
 
     await Promise.all([a, b, c]);
 
     expect(maxInFlight).toBe(1);
     expect(mockCreateBackgroundFetchGit).toHaveBeenCalledTimes(3);
+  });
+
+  it("dedups queued sibling fetches once the first one in the chain caches a failure", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    mockCreateBackgroundFetchGit.mockReturnValue(
+      makeMockGit(() => Promise.reject(new Error("the remote end hung up unexpectedly")))
+    );
+
+    const coord = new RepoFetchCoordinator();
+    // Non-force sibling burst: the first records the transient failure, the
+    // rest skip on it rather than each storming the remote with another fetch.
+    const results = await Promise.all([
+      coord.fetchForWorktree({ worktreeId: "wtA", worktreePath: "/repo/a" }),
+      coord.fetchForWorktree({ worktreeId: "wtB", worktreePath: "/repo/b" }),
+      coord.fetchForWorktree({ worktreeId: "wtC", worktreePath: "/repo/c" }),
+    ]);
+
+    expect(mockCreateBackgroundFetchGit).toHaveBeenCalledTimes(1);
+    // Every sibling still surfaces the transient failure to its card.
+    expect(results.every((r) => r.networkFailed === true)).toBe(true);
+    expect(results.every((r) => r.authFailed === false)).toBe(true);
   });
 
   it("dedups queued sibling fetches once the first one in the chain succeeds", async () => {

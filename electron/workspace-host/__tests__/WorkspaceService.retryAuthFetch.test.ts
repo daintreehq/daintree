@@ -294,4 +294,19 @@ describe("WorkspaceService — handleAuthFailureConfirmed", () => {
     expect(events).toHaveLength(2);
     expect(events.map((e) => e.reason)).toEqual(["auth-failed", "repository-not-found"]);
   });
+
+  it("re-arms the escalation guard on project switch so a re-opened repo can re-notify", async () => {
+    service["handleAuthFailureConfirmed"]("/repoA/.git", "auth-failed");
+    service["handleAuthFailureConfirmed"]("/repoA/.git", "auth-failed");
+    expect(
+      mockSendEvent.mock.calls.filter((c) => c[0]?.type === "fetch-auth-failure-confirmed").length
+    ).toBe(1);
+
+    await service.onProjectSwitch("req-1");
+
+    service["handleAuthFailureConfirmed"]("/repoA/.git", "auth-failed");
+    expect(
+      mockSendEvent.mock.calls.filter((c) => c[0]?.type === "fetch-auth-failure-confirmed").length
+    ).toBe(2);
+  });
 });
