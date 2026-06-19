@@ -29,6 +29,7 @@ import {
   MCP_RATE_LIMITED_CODE,
   RATE_LIMIT_TIERS,
   RATE_LIMIT_TOOL_MAP,
+  minimumPermittingTier,
   unwrapDispatchResult,
 } from "../shared.js";
 import { SessionBindingError, RendererBridgeUnavailableError } from "../rendererBridge.js";
@@ -2581,6 +2582,25 @@ describe("worktree resource lifecycle dedup/rate-limit (#10683)", () => {
     ]) {
       expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(false);
     }
+  });
+
+  it("mutation-rate-limits teardown despite not deduping it (D2 destructive)", () => {
+    expect(RATE_LIMIT_TOOL_MAP.get("worktree.resource.teardown")).toBe(RATE_LIMIT_TIERS.mutation);
+  });
+
+  it("leaves reversible pause/resume at the standard rate-limit tier", () => {
+    expect(RATE_LIMIT_TOOL_MAP.has("worktree.resource.pause")).toBe(false);
+    expect(RATE_LIMIT_TOOL_MAP.has("worktree.resource.resume")).toBe(false);
+  });
+
+  it("gates each tool at its intended minimum tier", () => {
+    expect(minimumPermittingTier("worktree.resource.provision")).toBe("action");
+    expect(minimumPermittingTier("worktree.resource.pause")).toBe("action");
+    expect(minimumPermittingTier("worktree.resource.resume")).toBe("action");
+    expect(minimumPermittingTier("worktree.resource.teardown")).toBe("system");
+    expect(minimumPermittingTier("system.getResourceProfileSnapshot")).toBe("workbench");
+    expect(minimumPermittingTier("cliAvailability.get")).toBe("workbench");
+    expect(minimumPermittingTier("hibernation.getConfig")).toBe("workbench");
   });
 });
 

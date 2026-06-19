@@ -130,6 +130,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       danger: "safe",
       scope: "renderer",
       mcpVisibility: "discoverable",
+      mcpOutputSchema: true,
       resultSchema: z.object({
         profile: z.enum(["performance", "balanced", "efficiency"]),
         thermalState: z.enum(["unknown", "nominal", "fair", "serious", "critical"]),

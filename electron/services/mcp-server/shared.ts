@@ -559,6 +559,10 @@ export const RATE_LIMIT_TOOL_MAP: ReadonlyMap<string, RateLimitConfig> = new Map
   ["forge.openPR", RATE_LIMIT_TIERS.mutation],
   ["worktree.delete", RATE_LIMIT_TIERS.mutation],
   ["worktree.resource.provision", RATE_LIMIT_TIERS.mutation],
+  // Destructive (D2): a tear-down loop against a re-provisioned resource could
+  // destroy the fresh instance. Mutation-tier even though it's not deduped —
+  // each teardown is intentionally re-runnable, but not at 30/min.
+  ["worktree.resource.teardown", RATE_LIMIT_TIERS.mutation],
   ["git.snapshotRevert", RATE_LIMIT_TIERS.mutation],
   ["git.snapshotDelete", RATE_LIMIT_TIERS.mutation],
   ["forge.assignIssue", RATE_LIMIT_TIERS.mutation],
