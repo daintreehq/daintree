@@ -154,6 +154,14 @@ export function AppLayout({
   const showSidebar = !layout.gestureSidebarHidden && currentProject != null;
   const showAssistant = !layout.gestureAssistantHidden && layout.helpPanelOpen;
   const effectiveAssistantWidth = showAssistant ? layout.helpPanelWidth : 0;
+  // #10693 (off-canvas): the assistant wrapper is always full-width and slides
+  // via transform, so when hidden it still has a real DOM box off-screen. Mark
+  // it inert once it has finished sliding out so keyboard focus and scroll can't
+  // land in the parked panel. Applied only AFTER the slide settles (and removed
+  // immediately on show) so a Radix Presence teardown inside the panel keeps its
+  // transitionend (#6182). pointer-events-none + the panel's own tabIndex gating
+  // already cover the in-flight window.
+  const [assistantInert, setAssistantInert] = useState(!showAssistant);
 
   // Issue #9864: the sidebar wrapper carries overflowClipMargin: 6px so the
   // resize handle's overhang paints outside the contain boundary. But
@@ -216,16 +224,15 @@ export function AppLayout({
     [showSidebar]
   );
 
-  // #10693: the Assistant pane's width animation (0↔full over 250ms) drives a
-  // per-frame ResizeObserver storm that machine-guns SIGWINCH at the hosted CLI
-  // while its own width state lags, orphaning a status-line row into scrollback
-  // each show/hide cycle. Arm the PTY resize lock at the real animation start —
-  // closing the ~16ms gap left by the toggle-time suppressSidebarResizes() call,
-  // which is kept as a reduced-motion/performanceMode fallback (those modes
-  // strip transition-[width], so no transition events fire). Filter on width +
-  // target===currentTarget to ignore other properties and bubbled child
-  // transitions, mirroring the sidebar handler.
-  const handleAssistantTransitionStart = useCallback(
+  // #10693 (off-canvas): the assistant slides via a composited transform on a
+  // fixed-width wrapper, so the terminal box never resizes during show/hide and
+  // the SIGWINCH storm can't form. The PUSH (main grid reclaiming the space) is
+  // driven by a sibling layout spacer that animates its width — that spacer is
+  // the <main> reflow driver, so arm the grid-resize lock when ITS width
+  // transition starts, exactly as the wrapper's width transition used to do.
+  // Filter on width + target===currentTarget to ignore other properties and
+  // bubbled child transitions, mirroring the sidebar handler.
+  const handleAssistantSpacerTransitionStart = useCallback(
     (event: React.TransitionEvent<HTMLDivElement>) => {
       if (event.propertyName === "width" && event.target === event.currentTarget) {
         suppressSidebarResizes();
@@ -234,18 +241,19 @@ export function AppLayout({
     []
   );
 
-  // Only the settle (transitionend) path issues the corrective repaint. A rapid
-  // hide→show fires transitioncancel at an intermediate animating width, where a
-  // repaint would assert a transient wrong column count — the suppression timer
-  // owns the unlock and the following show's transitionend repaints correctly,
-  // so the cancel needs no handler.
+  // When the wrapper's transform slide settles, issue the one corrective repaint
+  // (reveal) and, on a hide, mark the parked wrapper inert. Filter on transform
+  // because that is the property the wrapper now animates. transitioncancel is
+  // intentionally unwired: a rapid hide→show re-targets the same transform and
+  // the final transitionend resolves the correct state.
   const handleAssistantTransitionEnd = useCallback(
     (event: React.TransitionEvent<HTMLDivElement>) => {
-      if (event.propertyName === "width" && event.target === event.currentTarget) {
+      if (event.propertyName === "transform" && event.target === event.currentTarget) {
         repaintAssistantAfterTransition();
+        if (!showAssistant) setAssistantInert(true);
       }
     },
-    []
+    [showAssistant]
   );
 
   useEffect(() => {
@@ -539,6 +547,26 @@ export function AppLayout({
     useMacroFocusStore.getState().setVisibility("assistant", showAssistant);
   }, [showAssistant]);
 
+  // #10693 (off-canvas): drive the inert/repaint settle for the paths where no
+  // transform transition fires. On show, clear inert immediately so focus can
+  // enter before the slide finishes. When the slide is animated, the transition
+  // handlers own the settle; when it is suppressed (reduced-motion preference,
+  // OS prefers-reduced-motion, or performance mode) there is no transitionend,
+  // so reconcile geometry and toggle inert synchronously here instead.
+  useEffect(() => {
+    const noTransition =
+      reduceAnimations ||
+      layout.performanceMode ||
+      (typeof window !== "undefined" &&
+        window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true);
+    if (showAssistant) {
+      setAssistantInert(false);
+      if (noTransition) repaintAssistantAfterTransition();
+    } else if (noTransition) {
+      setAssistantInert(true);
+    }
+  }, [showAssistant, reduceAnimations, layout.performanceMode]);
+
   // Clear macro focus on mouse interaction. A click inside the currently-
   // focused region must NOT clear the claim — otherwise a click within the
   // already-focused assistant (or any other claimed region) drops the macro
@@ -723,17 +751,39 @@ export function AppLayout({
               <TerminalDockRegion />
             </main>
           </ErrorBoundary>
+          {/* #10693 (off-canvas): this spacer drives the <main> push by
+              animating its width 0↔helpPanelWidth, while the panel itself slides
+              over the reclaimed space via the wrapper's transform. The spacer is
+              the grid-reflow driver, so it carries the resize-lock arming
+              transition handler the width-wrapper used to own. */}
+          <div
+            aria-hidden
+            className={cn(
+              "shrink-0 pointer-events-none",
+              !reduceAnimations &&
+                !isAssistantResizing &&
+                "transition-[width] duration-[var(--duration-250)] ease-[var(--ease-out-expo)] motion-reduce:transition-none"
+            )}
+            style={{ width: effectiveAssistantWidth }}
+            onTransitionStart={handleAssistantSpacerTransitionStart}
+          />
           <ErrorBoundary variant="section" componentName="HelpPanel">
             <div
               className={cn(
-                "relative h-full shrink-0 overflow-hidden",
+                "absolute top-0 right-0 h-full overflow-hidden",
                 !reduceAnimations &&
                   !isAssistantResizing &&
-                  "transition-[width] duration-[var(--duration-250)] ease-[var(--ease-out-expo)] motion-reduce:transition-none",
+                  "transition-transform duration-[var(--duration-250)] ease-[var(--ease-out-expo)] motion-reduce:transition-none",
                 !showAssistant && "pointer-events-none"
               )}
-              style={{ width: effectiveAssistantWidth, contain: "layout paint" }}
-              onTransitionStart={handleAssistantTransitionStart}
+              style={{
+                width: layout.helpPanelWidth,
+                transform: showAssistant
+                  ? "translateX(0)"
+                  : `translateX(${layout.helpPanelWidth}px)`,
+                contain: "layout paint",
+              }}
+              inert={assistantInert}
               onTransitionEnd={handleAssistantTransitionEnd}
             >
               <div

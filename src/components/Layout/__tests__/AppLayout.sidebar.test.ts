@@ -68,17 +68,21 @@ describe("AppLayout assistant push sidebar — issue #6619", () => {
     expect(source).not.toContain("assistantSlotReserved");
   });
 
-  it("mounts HelpPanel unconditionally inside a flex-reserved sidebar slot (issue #6619, #6816)", () => {
+  it("mounts HelpPanel unconditionally and reserves its space with a layout spacer (issue #6619, #6816)", () => {
     // The old conditional-render guard (which destroyed the PTY on every
     // toggle) must not be reintroduced.
     expect(source).not.toMatch(/\{layout\.helpPanelOpen && \(\s*\n\s*<ErrorBoundary[^>]*HelpPanel/);
     expect(source).toMatch(
       /<HelpPanel\s+width=\{layout\.helpPanelWidth\}\s+isVisible=\{showAssistant\}\s+isReadyToLaunch=\{isHydrated\}/
     );
-    // The Assistant must remain a structural flex sibling that reserves
-    // horizontal space instead of reverting to an overlay on top of terminals.
-    expect(source).toContain('"relative h-full shrink-0 overflow-hidden"');
-    expect(source).toContain("width: effectiveAssistantWidth");
+    // The Assistant must reserve horizontal space (push the grid) rather than
+    // float over terminals. Under the off-canvas model (#10693) a sibling layout
+    // spacer is the structural flex element reserving the slot width; the panel
+    // slides over that reserved space via transform, never over the grid. The
+    // old z-30 floating-overlay form must not return.
+    expect(source).toMatch(
+      /aria-hidden[\s\S]*?shrink-0[\s\S]*?style=\{\{ width: effectiveAssistantWidth \}\}/
+    );
     expect(source).not.toMatch(/"absolute top-0 right-0 bottom-0 z-30"/);
   });
 
@@ -93,16 +97,17 @@ describe("AppLayout assistant push sidebar — issue #6619", () => {
     expect(source).toContain("void preloadHelpPanel();");
   });
 
-  it("clips a full-width Assistant while the right sidebar slot animates like the worktree sidebar", () => {
-    // The Assistant content stays full width and pinned to the viewport edge.
-    // The flex slot width animates underneath it, so the panel grid slides
-    // over the Assistant instead of the Assistant floating over terminals.
+  it("keeps the Assistant content full width while the slot animates (issue #10693 off-canvas)", () => {
+    // The Assistant content stays full width and pinned to the viewport edge;
+    // the wrapper slides off-canvas via transform while the spacer's width
+    // animates the <main> push. The content must never be resized to the slot
+    // width — that would reflow the terminal, which is the orphaned-row bug.
     expect(source).toContain("isReadyToLaunch={isHydrated}");
     expect(source).toContain("transition-[width]");
     expect(source).toContain('className="absolute top-0 right-0 h-full"');
+    // The slot must not be hidden with a Tailwind translate utility (which would
+    // animate via class swap rather than the gated inline transform).
     expect(source).not.toContain("translate-x-full");
-    // The effective slot width must not be passed as the content width; that
-    // would resize the Assistant contents instead of clipping/revealing them.
     expect(source).not.toContain("<HelpPanel width={effectiveAssistantWidth}");
   });
 
@@ -346,8 +351,11 @@ describe("AppLayout CSS layout containment — issue #9014", () => {
     );
   });
 
-  it("applies contain: layout paint to the resizable assistant wrapper", () => {
-    expect(source).toMatch(/width:\s*effectiveAssistantWidth,\s*contain:\s*"layout paint"/);
+  it("applies contain: layout paint to the off-canvas assistant wrapper", () => {
+    // The wrapper now animates transform (off-canvas slide, #10693) at a
+    // constant width; containment stays on it to isolate the slide's layout and
+    // paint from the rest of the row. Issue #9014.
+    expect(source).toMatch(/transform: showAssistant[\s\S]{0,300}contain:\s*"layout paint"/);
   });
 });
 

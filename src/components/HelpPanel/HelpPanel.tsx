@@ -74,9 +74,10 @@ interface HelpPanelProps {
    */
   width: number;
   /**
-   * Whether the panel is visible. When false, AppLayout collapses the clipped
-   * right-sidebar slot so the panel grid slides over it. Defaults to width > 0
-   * for backward compatibility.
+   * Whether the panel is visible. When false, AppLayout slides the fixed-width
+   * wrapper off-canvas via transform while a sibling spacer animates the <main>
+   * push, and marks the parked wrapper inert once the slide settles (#10693).
+   * Defaults to width > 0 for backward compatibility.
    */
   isVisible?: boolean;
   /**
