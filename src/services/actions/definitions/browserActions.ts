@@ -2,7 +2,16 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { systemClient } from "@/clients";
 import { usePanelStore } from "@/store/panelStore";
+import { flushConsoleCaptureBuffer, useConsoleCaptureStore } from "@/store/consoleCaptureStore";
 import { isBrowserPanel, isDevPreviewPanel } from "@shared/types/panel";
+
+const getConsoleMessagesArgsSchema = z
+  .object({
+    terminalId: z.string().optional(),
+    level: z.enum(["log", "info", "warning", "error"]).optional(),
+    limit: z.number().int().positive().max(500).optional(),
+  })
+  .optional();
 
 function readBrowserUrl(id: string | undefined): string | undefined {
   if (!id) return undefined;
@@ -283,6 +292,83 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       window.dispatchEvent(
         new CustomEvent("daintree:browser-clear-console", { detail: { id: targetId } })
       );
+    },
+  }));
+
+  actions.set("browser.getConsoleMessages", () => ({
+    id: "browser.getConsoleMessages",
+    palette: { mode: "hidden" },
+    title: "Get Browser Console Messages",
+    description:
+      "Read captured console output (logs, warnings, errors, and stack traces) from a dev preview panel. Returns the most recent messages plus error/warning counts so an agent can inspect runtime issues without opening the console UI.",
+    category: "browser",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    mcpOutputSchema: true,
+    argsSchema: getConsoleMessagesArgsSchema,
+    resultSchema: z.object({
+      paneId: z.string(),
+      messages: z.array(
+        z.object({
+          id: z.number(),
+          paneId: z.string(),
+          level: z.enum(["log", "info", "warning", "error"]),
+          cdpType: z.string(),
+          summaryText: z.string(),
+          args: z.array(z.unknown()),
+          stackTrace: z.unknown().optional(),
+          groupDepth: z.number(),
+          timestamp: z.number(),
+          navigationGeneration: z.number(),
+          category: z.string().optional(),
+        })
+      ),
+      counts: z.object({ errorCount: z.number(), warnCount: z.number() }),
+    }),
+    run: async (args: unknown) => {
+      const { terminalId, level, limit } = getConsoleMessagesArgsSchema.parse(args) ?? {};
+      const panelStore = usePanelStore.getState();
+      const targetId = terminalId ?? panelStore.focusedId;
+      if (!targetId) {
+        throw new Error("No dev preview panel: pass terminalId or focus a dev preview panel first");
+      }
+      // Only dev preview panels capture console output (via
+      // useDevPreviewConsoleCapture); guard so a wrong-kind target returns an
+      // explicit error rather than a misleading empty result.
+      const panel = panelStore.panelsById[targetId];
+      if (!panel || !isDevPreviewPanel(panel)) {
+        throw new Error(
+          "Console capture is only available for dev preview panels; target a dev preview panel"
+        );
+      }
+      // Commit rows still buffered for the current animation frame so a read
+      // immediately after a log isn't missed (mirrors markStale()).
+      flushConsoleCaptureBuffer();
+      const store = useConsoleCaptureStore.getState();
+      let rows = store.getMessages(targetId);
+      if (level) {
+        rows = rows.filter((row) => row.level === level);
+      }
+      if (limit !== undefined && rows.length > limit) {
+        rows = rows.slice(rows.length - limit);
+      }
+      // Strip renderer-only UI fields (isStale, timeLabel, isGroupHeader);
+      // return only the serialized wire fields an agent can act on.
+      const messages = rows.map((row) => ({
+        id: row.id,
+        paneId: row.paneId,
+        level: row.level,
+        cdpType: row.cdpType,
+        summaryText: row.summaryText,
+        args: row.args,
+        stackTrace: row.stackTrace,
+        groupDepth: row.groupDepth,
+        timestamp: row.timestamp,
+        navigationGeneration: row.navigationGeneration,
+        category: row.category,
+      }));
+      return { paneId: targetId, messages, counts: store.getCounts(targetId) };
     },
   }));
 

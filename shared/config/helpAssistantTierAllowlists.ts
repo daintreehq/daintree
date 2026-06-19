@@ -33,6 +33,9 @@ export const WORKBENCH_TIER_TOOLS = [
   "terminal.getOutput",
   "terminal.getStatus",
 
+  "browser.getConsoleMessages",
+  "portal.listTabs",
+
   "agent.getState",
 
   "agentSettings.get",
@@ -112,6 +115,15 @@ export const ACTION_TIER_ADDONS = [
 
   "browser.navigate",
   "browser.openUrl",
+
+  "devPreview.reloadPreview",
+  "devPreview.restart",
+  "devPreview.promoteToPortal",
+
+  "portal.openUrl",
+  "portal.newTab",
+  "portal.toggle",
+  "portal.toggleDevDashboard",
 
   "app.theme.pick",
   "app.theme.browser.open",
