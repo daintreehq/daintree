@@ -2,12 +2,16 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { systemClient } from "@/clients";
 import { usePanelStore } from "@/store/panelStore";
-import {
-  flushConsoleCaptureBuffer,
-  useConsoleCaptureStore,
-  type ConsoleLevel,
-} from "@/store/consoleCaptureStore";
+import { flushConsoleCaptureBuffer, useConsoleCaptureStore } from "@/store/consoleCaptureStore";
 import { isBrowserPanel, isDevPreviewPanel } from "@shared/types/panel";
+
+const getConsoleMessagesArgsSchema = z
+  .object({
+    terminalId: z.string().optional(),
+    level: z.enum(["log", "info", "warning", "error"]).optional(),
+    limit: z.number().int().positive().max(500).optional(),
+  })
+  .optional();
 
 function readBrowserUrl(id: string | undefined): string | undefined {
   if (!id) return undefined;
@@ -302,13 +306,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     danger: "safe",
     scope: "renderer",
     mcpOutputSchema: true,
-    argsSchema: z
-      .object({
-        terminalId: z.string().optional(),
-        level: z.enum(["log", "info", "warning", "error"]).optional(),
-        limit: z.number().int().positive().max(500).optional(),
-      })
-      .optional(),
+    argsSchema: getConsoleMessagesArgsSchema,
     resultSchema: z.object({
       paneId: z.string(),
       messages: z.array(
@@ -329,8 +327,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       counts: z.object({ errorCount: z.number(), warnCount: z.number() }),
     }),
     run: async (args: unknown) => {
-      const { terminalId, level, limit } =
-        (args as { terminalId?: string; level?: ConsoleLevel; limit?: number } | undefined) ?? {};
+      const { terminalId, level, limit } = getConsoleMessagesArgsSchema.parse(args) ?? {};
       const panelStore = usePanelStore.getState();
       const targetId = terminalId ?? panelStore.focusedId;
       if (!targetId) {
