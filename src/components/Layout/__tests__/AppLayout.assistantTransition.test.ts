@@ -84,4 +84,20 @@ describe("AppLayout assistant off-canvas slide — issue #10693", () => {
   it("does not wire transitioncancel (the final transitionend resolves rapid toggles)", () => {
     expect(source).not.toContain("onTransitionCancel");
   });
+
+  it("settles inert/repaint itself for every path that suppresses the transition", () => {
+    // reduce-animations, performance mode, OS prefers-reduced-motion, and an
+    // in-flight drag-resize all strip the transform transition, so no
+    // transitionend arrives — the effect must settle inert + repaint on its own.
+    const settle = source.match(/const settle = \(\) => \{([\s\S]*?)\n {4}\};/);
+    expect(settle).not.toBeNull();
+    expect(settle![1]).toContain("reduceAnimations");
+    expect(settle![1]).toContain("layout.performanceMode");
+    expect(settle![1]).toContain("isAssistantResizing");
+    expect(settle![1]).toContain("mql?.matches === true");
+    // The media query is subscribed so an OS reduced-motion flip mid-slide still
+    // parks the wrapper inert (the read alone would not re-run).
+    expect(source).toContain('mql?.addEventListener("change", settle)');
+    expect(source).toContain('mql?.removeEventListener("change", settle)');
+  });
 });

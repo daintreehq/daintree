@@ -550,22 +550,31 @@ export function AppLayout({
   // #10693 (off-canvas): drive the inert/repaint settle for the paths where no
   // transform transition fires. On show, clear inert immediately so focus can
   // enter before the slide finishes. When the slide is animated, the transition
-  // handlers own the settle; when it is suppressed (reduced-motion preference,
-  // OS prefers-reduced-motion, or performance mode) there is no transitionend,
-  // so reconcile geometry and toggle inert synchronously here instead.
+  // handlers own the settle; when it is suppressed there is no transitionend, so
+  // reconcile geometry and toggle inert synchronously here instead. A slide is
+  // suppressed by the reduce-animations preference, performance mode, an OS
+  // prefers-reduced-motion match, OR an in-flight drag-resize (which strips the
+  // transition so the handle tracks the cursor 1:1). The media query is also
+  // subscribed so flipping the OS setting mid-hide still parks the wrapper inert.
   useEffect(() => {
-    const noTransition =
-      reduceAnimations ||
-      layout.performanceMode ||
-      (typeof window !== "undefined" &&
-        window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true);
-    if (showAssistant) {
-      setAssistantInert(false);
-      if (noTransition) repaintAssistantAfterTransition();
-    } else if (noTransition) {
-      setAssistantInert(true);
-    }
-  }, [showAssistant, reduceAnimations, layout.performanceMode]);
+    const mql =
+      typeof window !== "undefined"
+        ? window.matchMedia?.("(prefers-reduced-motion: reduce)")
+        : undefined;
+    const settle = () => {
+      const noTransition =
+        reduceAnimations || layout.performanceMode || isAssistantResizing || mql?.matches === true;
+      if (showAssistant) {
+        setAssistantInert(false);
+        if (noTransition) repaintAssistantAfterTransition();
+      } else if (noTransition) {
+        setAssistantInert(true);
+      }
+    };
+    settle();
+    mql?.addEventListener("change", settle);
+    return () => mql?.removeEventListener("change", settle);
+  }, [showAssistant, reduceAnimations, layout.performanceMode, isAssistantResizing]);
 
   // Clear macro focus on mouse interaction. A click inside the currently-
   // focused region must NOT clear the claim — otherwise a click within the
