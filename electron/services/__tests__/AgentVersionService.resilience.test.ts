@@ -325,7 +325,9 @@ describe("AgentVersionService resilience", () => {
       const result = await service.getVersion("claude" as AgentId);
 
       expect(result.installedVersion).toBe("1.2.3");
-      expect(killSpy).not.toHaveBeenCalledWith(-4242, "SIGKILL");
+      // No reap of any kind on the close path — not a group kill, not a direct
+      // kill, not a taskkill — because every fd-holder has already exited.
+      expect(killSpy).not.toHaveBeenCalled();
       expect(spawnSyncMock).not.toHaveBeenCalled();
       killSpy.mockRestore();
     });
@@ -402,6 +404,86 @@ describe("AgentVersionService resilience", () => {
       await Promise.all([b, c]);
 
       expect(spawnMock).toHaveBeenCalledTimes(2);
+    });
+
+    // The Windows reap branch is dead code on POSIX CI, so force-exercise it by
+    // faking `process.platform`. Asserts the exit-grace path shells out to
+    // `taskkill /T` (whole tree) and never falls back to a group/foreground kill.
+    it("reaps via taskkill on the exit-grace path when platform is win32", async () => {
+      (registryMock.getEffectiveAgentConfig as Mock).mockReturnValue({
+        id: "claude",
+        name: "Claude",
+        command: "claude",
+        version: { args: ["--version"] },
+      });
+
+      const realPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+      spawnSyncMock.mockReturnValue({ status: 0 });
+      spawnMock.mockImplementation((() => {
+        const child = makeFakeChild();
+        queueMicrotask(() => {
+          child.stdout.emit("data", Buffer.from("1.2.3\n"));
+          child.emit("exit", 0, null);
+          // No `close` — a grandchild holds the pipe.
+        });
+        return child;
+      }) as never);
+
+      vi.useFakeTimers();
+      try {
+        const { service } = createService(async () => ({ claude: "ready" }));
+        const pending = service.getVersion("claude" as AgentId);
+        await vi.advanceTimersByTimeAsync(300);
+        const result = await pending;
+
+        expect(result.installedVersion).toBe("1.2.3");
+        expect(spawnSyncMock).toHaveBeenCalledWith(
+          "taskkill",
+          ["/T", "/F", "/PID", "4242"],
+          expect.objectContaining({ windowsHide: true, stdio: "ignore", timeout: 3000 })
+        );
+        // Windows has no process group here — no SIGKILL fallback.
+        expect(killSpy).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+        killSpy.mockRestore();
+        Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+      }
+    });
+
+    // Regression guard for the cleanup ordering: cleanup() destroys the pipes,
+    // which can surface a pending EIO/EBADF `error` on the next tick. The no-op
+    // error sinks must outlive that destroy, so a stream error after settle
+    // never escapes as an uncaughtException.
+    it("survives a stdout `error` emitted after the probe has settled", async () => {
+      (registryMock.getEffectiveAgentConfig as Mock).mockReturnValue({
+        id: "claude",
+        name: "Claude",
+        command: "claude",
+        version: { args: ["--version"] },
+      });
+
+      let spawnedChild: ReturnType<typeof makeFakeChild> | null = null;
+      spawnMock.mockImplementation((() => {
+        const child = makeFakeChild();
+        spawnedChild = child;
+        queueMicrotask(() => {
+          child.stdout.emit("data", Buffer.from("1.0.0\n"));
+          child.emit("exit", 0, null);
+          child.emit("close", 0, null);
+        });
+        return child;
+      }) as never);
+
+      const { service } = createService(async () => ({ claude: "ready" }));
+      const result = await service.getVersion("claude" as AgentId);
+      expect(result.installedVersion).toBe("1.0.0");
+
+      // A late pipe error must have a live listener (else Node makes it fatal).
+      expect(() => spawnedChild!.stdout.emit("error", new Error("EIO"))).not.toThrow();
+      expect(spawnedChild!.stdout.listenerCount("error")).toBeGreaterThan(0);
     });
   });
 

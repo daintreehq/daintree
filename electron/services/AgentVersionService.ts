@@ -284,14 +284,26 @@ export class AgentVersionService {
           // `taskkill /T` to reap the whole tree (repo pattern: ProcessTreeKiller,
           // PtyClient). `timeout`/`stdio: ignore` keep it from blocking the probe.
           try {
-            spawnSync("taskkill", ["/T", "/F", "/PID", String(pid)], {
+            const result = spawnSync("taskkill", ["/T", "/F", "/PID", String(pid)], {
               windowsHide: true,
               stdio: "ignore",
               timeout: 3000,
             });
+            // spawnSync reports failure in the result, not by throwing: `error`
+            // is set if it couldn't launch / timed out; status 0 = killed and
+            // 128 = no such process (already exited — benign, like ESRCH). Any
+            // other non-zero (e.g. 1 access denied) leaves the tree alive, so
+            // warn rather than swallow.
+            if (result?.error) {
+              console.warn(
+                `[AgentVersionService] taskkill pid=${pid}: ${this.toErrorString(result.error)}`
+              );
+            } else if (result && result.status !== 0 && result.status !== 128) {
+              console.warn(`[AgentVersionService] taskkill pid=${pid} exited ${result.status}`);
+            }
           } catch (error) {
-            // taskkill itself failed to launch — the tree may still be alive.
-            console.warn(`[AgentVersionService] taskkill pid=${pid}:`, this.toErrorString(error));
+            // Defensive: spawnSync normally returns rather than throws.
+            console.warn(`[AgentVersionService] taskkill pid=${pid}: ${this.toErrorString(error)}`);
           }
           return;
         }
@@ -329,8 +341,13 @@ export class AgentVersionService {
       function cleanup(): void {
         clearTimeout(timer);
         if (exitGraceTimer) clearTimeout(exitGraceTimer);
-        child.stdout?.removeAllListeners();
-        child.stderr?.removeAllListeners();
+        // Drop only the `data` handlers so a post-settle chunk can't re-enter
+        // killTree/finish — but KEEP the no-op `error` sinks (added below): the
+        // `destroy()` calls can surface a pending EIO/EBADF on the next tick,
+        // and an unhandled stream `error` is fatal in the main process. A blanket
+        // removeAllListeners() here would strip those sinks and reopen #5648.
+        child.stdout?.removeAllListeners("data");
+        child.stderr?.removeAllListeners("data");
         child.stdout?.destroy();
         child.stderr?.destroy();
       }
@@ -343,8 +360,9 @@ export class AgentVersionService {
       }
 
       // A rare pipe error (EBADF/EIO on a dead/closed fd) on a piped stream
-      // becomes an uncaughtException if unhandled (lesson from #5648). The
-      // `settled` guard already covers teardown, so these can be no-ops.
+      // becomes an uncaughtException if unhandled (lesson from #5648). These
+      // sinks must outlive cleanup()'s destroy() — which can itself surface a
+      // pending error on the next tick — so cleanup() only removes `data`.
       child.stdout?.on("error", () => {});
       child.stderr?.on("error", () => {});
 
