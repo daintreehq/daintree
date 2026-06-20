@@ -186,6 +186,10 @@ export const TerminalStatusEntrySchema = z.object({
     })
     .optional(),
   recentOutput: z.string().nullable().optional(),
+  // True when this terminal is in the fleet arming set (broadcast input is
+  // routed to it). Always populated for found terminals; absent on not-found
+  // entries (which carry `error` instead).
+  armed: z.boolean().optional(),
   error: z.string().optional(),
 });
 

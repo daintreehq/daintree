@@ -18,6 +18,9 @@ vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 // terminalQueryActions reaches into the renderer-only client/store layer at
 // module load; stub those so the definitions register in a node test.
 vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: vi.fn() } }));
+vi.mock("@/store/fleetArmingStore", () => ({
+  useFleetArmingStore: { getState: () => ({ armedIds: new Set<string>() }) },
+}));
 vi.mock("@/clients", () => ({ terminalClient: { submit: vi.fn() } }));
 vi.mock("@shared/config/panelKindRegistry", () => ({
   panelKindHasPty: (kind: string) => kind === "terminal" || kind === "agent",
@@ -63,6 +66,16 @@ describe("terminal query actions emit a manifest outputSchema (#10676)", () => {
       const props = (outputSchema(service, id)!.properties as Record<string, unknown>) ?? {};
       expect(props.terminals).toBeDefined();
     }
+  });
+
+  it("terminal.getStatus advertises the `armed` flag in its per-entry schema (#10695)", () => {
+    const schema = outputSchema(registerAll(), "terminal.getStatus")!;
+    const items = (schema.properties as { terminals: { items?: Record<string, unknown> } })
+      .terminals.items;
+    const props = (items?.properties as Record<string, unknown>) ?? {};
+    // An MCP client introspecting structuredContent must see `armed` so the
+    // read path stays discoverable if the schema field is ever dropped.
+    expect(props.armed).toBeDefined();
   });
 
   it("terminal.getOutput exposes content/lineCount/truncated properties", () => {

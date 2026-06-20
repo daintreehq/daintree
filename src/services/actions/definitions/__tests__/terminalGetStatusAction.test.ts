@@ -4,9 +4,13 @@ import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../..
 const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const terminalClientMock = vi.hoisted(() => ({ submit: vi.fn() }));
 const getSerializedStatesMock = vi.hoisted(() => vi.fn());
+const fleetArmingMock = vi.hoisted(() => ({ armedIds: new Set<string>() }));
 
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: { getState: panelStoreMock.getState },
+}));
+vi.mock("@/store/fleetArmingStore", () => ({
+  useFleetArmingStore: { getState: () => ({ armedIds: fleetArmingMock.armedIds }) },
 }));
 vi.mock("@/clients", () => ({ terminalClient: terminalClientMock }));
 vi.mock("@shared/config/panelKindRegistry", () => ({
@@ -31,6 +35,7 @@ type StatusEntry = {
     truncated: boolean;
   };
   recentOutput?: string | null;
+  armed?: boolean;
   error?: string;
 };
 
@@ -51,6 +56,7 @@ async function callGetStatus(actions: ActionRegistry, args?: unknown): Promise<S
 
 beforeEach(() => {
   vi.clearAllMocks();
+  fleetArmingMock.armedIds = new Set<string>();
   Object.defineProperty(globalThis, "window", {
     value: {
       electron: {
@@ -594,5 +600,40 @@ describe("terminal.getStatus", () => {
     expect(t1?.error).toBeUndefined();
     expect(t2?.recentOutput).toBeNull();
     expect(t2?.error).toBeUndefined();
+  });
+
+  it("reflects the fleet arming set: armed true only for armed terminals", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["t1", "t2"],
+      panelsById: {
+        t1: { id: "t1", kind: "terminal", location: "grid", agentState: "working" },
+        t2: { id: "t2", kind: "terminal", location: "grid", agentState: "idle" },
+      },
+    });
+    fleetArmingMock.armedIds = new Set<string>(["t1"]);
+
+    const { terminals } = await callGetStatus(setupActions());
+
+    expect(terminals.find((t) => t.terminalId === "t1")?.armed).toBe(true);
+    expect(terminals.find((t) => t.terminalId === "t2")?.armed).toBe(false);
+  });
+
+  it("omits armed on not-found entries (they carry error instead)", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["t1"],
+      panelsById: {
+        t1: { id: "t1", kind: "terminal", location: "grid", agentState: "idle" },
+      },
+    });
+    fleetArmingMock.armedIds = new Set<string>(["t1"]);
+
+    const { terminals } = await callGetStatus(setupActions(), {
+      terminalIds: ["t1", "missing"],
+    });
+
+    expect(terminals.find((t) => t.terminalId === "t1")?.armed).toBe(true);
+    const missing = terminals.find((t) => t.terminalId === "missing");
+    expect(missing?.error).toBe("Terminal not found");
+    expect(missing?.armed).toBeUndefined();
   });
 });

@@ -4,6 +4,7 @@ import { TerminalSummarySchema, TerminalStatusEntrySchema } from "./schemas";
 import { stripAnsiCodes } from "@shared/utils/artifactParser";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalClient } from "@/clients";
+import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
@@ -180,7 +181,7 @@ export function registerTerminalQueryActions(
     id: "terminal.getStatus",
     title: "Get Terminal Status",
     description:
-      "Poll agent/terminal state across many terminals in one call. Args (all optional): `terminalIds` (1-256 ids from `terminal.list`; when set, worktreeId/location are ignored and unknown ids return a per-entry `error`); `worktreeId`/`location` filters; `includeOutput:{ lines, stripAnsi }` for recent scrollback tails. Returns { terminals } — each with terminalId, agentId, agentState, waitingReason, lastTransitionAt, exitCode (number|null — set once the PTY exits, null while running), spawnedAt, optional lastCheckResult, optional recentOutput, optional per-entry error. `lastCheckResult` is a PARSED test/lint/build signal { command, passed, ranAt, failureSummary, truncated } from tsc/ESLint/Vitest/Jest output — best-effort, NOT an authoritative exit code; absence means no recognized summary (not pass, not no-run), so read `ranAt` for freshness. Never throws. Do NOT use `terminal.getOutput` for fleet polling or `terminal.list` for agent state — this is the batched path.",
+      "Poll agent/terminal state across many terminals in one call. Args (all optional): `terminalIds` (1-256 ids from `terminal.list`; when set, worktreeId/location are ignored and unknown ids return a per-entry `error`); `worktreeId`/`location` filters; `includeOutput:{ lines, stripAnsi }` for recent scrollback tails. Returns { terminals } — each with terminalId, agentId, agentState, waitingReason, lastTransitionAt, exitCode (number|null — set once the PTY exits), spawnedAt, optional lastCheckResult, optional recentOutput, `armed` (in the fleet broadcast set; set via `terminal.arm`/`terminal.disarm`), optional per-entry error. `lastCheckResult` is a PARSED test/lint/build signal { command, passed, ranAt, failureSummary, truncated } from tsc/ESLint/Vitest/Jest output — best-effort, NOT an exit code; absence means no recognized summary, so read `ranAt` for freshness. Never throws. Do NOT use `terminal.getOutput` for fleet polling or `terminal.list` for agent state — this is the batched path.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -239,6 +240,8 @@ export function registerTerminalQueryActions(
 
       const state = usePanelStore.getState();
       const panelsById = state.panelsById;
+      // Fresh point-in-time snapshot of the fleet arming set for this call.
+      const armedIds = useFleetArmingStore.getState().armedIds;
 
       type StatusEntry = {
         terminalId: string;
@@ -250,6 +253,7 @@ export function registerTerminalQueryActions(
         spawnedAt?: number;
         lastCheckResult?: TerminalCheckResult;
         recentOutput?: string | null;
+        armed?: boolean;
         error?: string;
       };
 
@@ -338,6 +342,8 @@ export function registerTerminalQueryActions(
           // Parsed test/lint/check result (issue #10682). Best-effort, not
           // authoritative — see TerminalCheckResult / the schema doc above.
           lastCheckResult: isPtyPanel(terminal) ? terminal.lastCheckResult : undefined,
+          // Whether this terminal is in the fleet arming/broadcast set (#10695).
+          armed: armedIds.has(terminal.id),
         };
 
         if (

@@ -386,6 +386,9 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "terminal.new",
   "terminal.rename",
   "terminal.waitUntilIdle",
+  "terminal.arm",
+  "terminal.disarm",
+  "terminal.disarmAll",
 
   "worktree.list",
   "worktree.getCurrent",
@@ -578,6 +581,13 @@ export const RATE_LIMIT_TOOL_MAP: ReadonlyMap<string, RateLimitConfig> = new Map
   // Not a git mutation, but capped at the mutation tier (10/min) so a runaway
   // model can't flood the assistant panel's figure rail with images (#9828).
   ["help.displayImage", RATE_LIMIT_TIERS.mutation],
+  // Fleet-arming mutations (#10695): churning the broadcast set reroutes the
+  // human's keystrokes, so cap at mutation tier rather than 30/min standard.
+  // disarm/disarmAll have no per-call confirm gate; arm is confirm-gated but
+  // tiered alongside them for a consistent cohort.
+  ["terminal.arm", RATE_LIMIT_TIERS.mutation],
+  ["terminal.disarm", RATE_LIMIT_TIERS.mutation],
+  ["terminal.disarmAll", RATE_LIMIT_TIERS.mutation],
 ] as Array<[string, RateLimitConfig]>);
 
 /**
