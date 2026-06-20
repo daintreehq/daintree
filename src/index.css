@@ -456,6 +456,7 @@
 @theme {
   --duration-75: 75ms;
   --duration-100: 100ms;
+  --duration-120: 120ms;
   --duration-150: 150ms;
   --duration-200: 200ms;
   --duration-250: 250ms;
@@ -479,6 +480,10 @@
   );
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-exit: cubic-bezier(0.2, 0, 0.7, 0);
+  /* Tier-3 panel-motion accelerate-exit curve. Mirrors PANEL_MINIMIZE_EASING in
+     src/lib/animationUtils.ts; the parity contract in animationUtils.test.ts
+     enforces this. Pairs with --duration-120 for panel slide-out. */
+  --ease-panel-minimize: cubic-bezier(0.3, 0, 0.8, 0.15);
 }
 
 pre code.hljs {
