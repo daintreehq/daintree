@@ -23,6 +23,8 @@ import {
   resolveTokenTier,
   shouldExposeTool,
 } from "../tierAuth.js";
+import { MCP_FULL_TOOL_SURFACE_ALLOWLIST, TIER_ALLOWLISTS } from "../shared.js";
+import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 
 beforeEach(() => {
@@ -347,14 +349,28 @@ describe("shouldExposeTool", () => {
 // (isTierPermitted) — a divergence would advertise a tool the dispatcher then
 // rejects, or vice versa (#7155).
 describe("fullToolSurface allowlist invariants (#10701)", () => {
-  // danger:"safe" actions with real side effects that are deliberately NOT in
-  // the curated external allowlist. fullToolSurface used to expose all of these.
+  const builtInIds = new Set<string>(BUILT_IN_ACTION_IDS);
+
+  // Real, currently-shipping danger:"safe" actions with genuine side effects
+  // (launch a URL/path in the OS, inject env vars, clone an arbitrary repo)
+  // that are deliberately absent from the curated external allowlist.
+  // fullToolSurface used to expose every one of these.
   const SENSITIVE_NON_ALLOWLISTED = [
     "system.openExternal",
     "system.openPath",
     "env.global.set",
-    "app.quit",
+    "project.cloneRepo",
   ];
+
+  // Pin the sentinels to ground truth so the suite below is a real regression
+  // guard, not "unknown strings aren't in a set": each must be an actual
+  // built-in action that is genuinely outside the curated external allowlist.
+  // If one is renamed or promoted into the allowlist, this fails loudly rather
+  // than silently asserting nothing.
+  it.each(SENSITIVE_NON_ALLOWLISTED)("%s is a real built-in action outside the allowlist", (id) => {
+    expect(builtInIds.has(id)).toBe(true);
+    expect(TIER_ALLOWLISTS.external.has(id)).toBe(false);
+  });
 
   it.each(SENSITIVE_NON_ALLOWLISTED)(
     "does not expose sensitive non-allowlisted action %s even with fullToolSurface",
@@ -382,6 +398,29 @@ describe("fullToolSurface allowlist invariants (#10701)", () => {
     const entry = makeEntry({ id: "actions.list" });
     expect(shouldExposeTool(entry, "external", true)).toBe(true);
     expect(isTierPermitted("external", "actions.list", true)).toBe(true);
+  });
+
+  // The full surface is a strict *superset* of the curated external allowlist:
+  // fullToolSurface can only ever widen, never narrow. This guards against a
+  // future edit that makes the opt-in surface smaller than the default
+  // external surface (which would silently revoke tools when the flag is on).
+  it("is a superset of the curated external allowlist", () => {
+    for (const id of TIER_ALLOWLISTS.external) {
+      expect(MCP_FULL_TOOL_SURFACE_ALLOWLIST.has(id)).toBe(true);
+    }
+  });
+
+  // fullToolSurface=false must fall through to the plain external allowlist,
+  // independent of the full-surface set — so the two paths stay distinct even
+  // once the add-on seam is non-empty.
+  it("ignores the full-surface add-ons when fullToolSurface is off", () => {
+    const entry = makeEntry({ id: "actions.list" });
+    expect(shouldExposeTool(entry, "external", false)).toBe(
+      TIER_ALLOWLISTS.external.has("actions.list")
+    );
+    expect(isTierPermitted("external", "actions.list", false)).toBe(
+      TIER_ALLOWLISTS.external.has("actions.list")
+    );
   });
 });
 
