@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "child_process";
+import { spawn, spawnSync, type ChildProcess } from "child_process";
 import * as semver from "semver";
 import {
   getEffectiveAgentConfig,
@@ -117,7 +117,13 @@ export class AgentVersionService {
     } catch (error) {
       return this.createErrorInfo(agentId, error);
     } finally {
-      this.inFlightChecks.delete(agentId);
+      // Promise-identity guard: a `refresh=true` call bypasses the in-flight
+      // check and overwrites this entry, so an older probe settling later must
+      // only evict its OWN promise. Deleting unconditionally would drop a newer
+      // refresh probe's entry and let a concurrent caller miss dedup.
+      if (this.inFlightChecks.get(agentId) === checkPromise) {
+        this.inFlightChecks.delete(agentId);
+      }
     }
   }
 
@@ -218,17 +224,19 @@ export class AgentVersionService {
    * on "Checking version…" (its phase reset lives in a `finally` that an
    * unsettled await never reaches).
    *
-   * Settle order: prefer `close` (full output, the normal fast path); on `exit`
-   * arm a short grace timer (`EXIT_DRAIN_MS`) so a grandchild holding the pipe
-   * can't keep us pending past the process actually terminating, while still
-   * letting any stdout delivered between `exit` and `close` land. `exit` does
-   * NOT guarantee stdout is flushed, so we never finish on it directly. A hard
-   * wall-clock deadline is the final backstop: it kills the whole process group
-   * (`detached` on POSIX) so a foreground that genuinely hangs — and any
-   * grandchildren still holding the pipe — are reaped, then resolves with
-   * whatever was captured (usually the version line, else an empty string →
-   * `parseVersion` → null → "indeterminate" → the launch proceeds rather than
-   * blocking on an outdated-CLI gate).
+   * Settle order: prefer `close` (full output, the normal fast path, and the
+   * only path where every fd-holder has already exited — so it never needs to
+   * reap); on `exit` arm a short grace timer (`EXIT_DRAIN_MS`) so a grandchild
+   * holding the pipe can't keep us pending past the process actually
+   * terminating, while still letting any stdout delivered between `exit` and
+   * `close` land. `exit` does NOT guarantee stdout is flushed, so we never
+   * finish on it directly. Every settle that bypasses `close` — the exit-grace
+   * timer and the hard wall-clock deadline — reaps the whole process group
+   * (`detached` SIGKILL on POSIX, `taskkill /T` on Windows) so a foreground that
+   * exited (or genuinely hangs) leaves no grandchild still holding the pipe,
+   * then resolves with whatever was captured (usually the version line, else an
+   * empty string → `parseVersion` → null → "indeterminate" → the launch proceeds
+   * rather than blocking on an outdated-CLI gate).
    */
   private runVersionProbe(command: string, args: string[]): Promise<string> {
     return new Promise<string>((resolve, reject) => {
@@ -251,6 +259,11 @@ export class AgentVersionService {
         return;
       }
 
+      // Detached + unref'd so an in-flight probe can't pin main-process teardown
+      // during `app.quit()`. unref only drops the event-loop ref-count; the
+      // ChildProcess object stays referenced here and its events still deliver.
+      child.unref();
+
       let stdout = "";
       let stderr = "";
       let settled = false;
@@ -258,22 +271,57 @@ export class AgentVersionService {
       // stdout has been delivered (Node only guarantees that by `close`), so we
       // don't finish on `exit` directly — we give the pipes a short grace to
       // flush. If `close` arrives in that window we finish with the full output;
-      // if it never comes (a daemon grandchild is holding the pipe open), the
-      // grace timer finishes with whatever the foreground printed before exiting.
+      // if it never comes (a grandchild is holding the pipe open), the grace
+      // timer reaps the group and finishes with whatever the foreground printed.
       let exitGraceTimer: ReturnType<typeof setTimeout> | null = null;
 
       const killTree = (): void => {
-        try {
-          if (useGroup && typeof child.pid === "number") {
-            // Negative pid → signal the whole process group (the grandchild
-            // holding the pipe lives here unless it properly daemonized via
-            // setsid, in which case it has escaped the hang anyway).
-            process.kill(-child.pid, "SIGKILL");
-          } else {
-            child.kill("SIGKILL");
+        const pid = child.pid;
+        if (typeof pid !== "number") return;
+        if (!useGroup) {
+          // Windows has no process groups here: `child.kill()` TerminateProcess-es
+          // only the foreground, orphaning the inherited-pipe grandchild. Use
+          // `taskkill /T` to reap the whole tree (repo pattern: ProcessTreeKiller,
+          // PtyClient). `timeout`/`stdio: ignore` keep it from blocking the probe.
+          try {
+            const result = spawnSync("taskkill", ["/T", "/F", "/PID", String(pid)], {
+              windowsHide: true,
+              stdio: "ignore",
+              timeout: 3000,
+            });
+            // spawnSync reports failure in the result, not by throwing: `error`
+            // is set if it couldn't launch / timed out; status 0 = killed and
+            // 128 = no such process (already exited — benign, like ESRCH). Any
+            // other non-zero (e.g. 1 access denied) leaves the tree alive, so
+            // warn rather than swallow.
+            if (result?.error) {
+              console.warn(
+                `[AgentVersionService] taskkill pid=${pid}: ${this.toErrorString(result.error)}`
+              );
+            } else if (result && result.status !== 0 && result.status !== 128) {
+              console.warn(`[AgentVersionService] taskkill pid=${pid} exited ${result.status}`);
+            }
+          } catch (error) {
+            // Defensive: spawnSync normally returns rather than throws.
+            console.warn(`[AgentVersionService] taskkill pid=${pid}: ${this.toErrorString(error)}`);
           }
-        } catch {
-          // ESRCH — the process/group is already gone. Nothing to reap.
+          return;
+        }
+        try {
+          // Negative pid → signal the whole process group (the grandchild
+          // holding the pipe lives here unless it properly daemonized via
+          // setsid, in which case it has escaped the hang anyway).
+          process.kill(-pid, "SIGKILL");
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          // ESRCH: the group is already gone — nothing to reap, silent. EPERM/
+          // EINVAL mean the tree may still be alive and the operator needs to
+          // know, so surface them rather than swallowing every failure.
+          if (code !== "ESRCH") {
+            console.warn(
+              `[AgentVersionService] SIGKILL group pid=${pid}: ${this.toErrorString(error)}`
+            );
+          }
         }
       };
 
@@ -286,12 +334,20 @@ export class AgentVersionService {
         killTree();
         finish(stdout || stderr);
       }, this.TIMEOUT_MS);
+      // Don't let the deadline timer pin event-loop teardown (the optional call
+      // guards Vitest fake-timer objects that lack `unref`).
+      timer.unref?.();
 
       function cleanup(): void {
         clearTimeout(timer);
         if (exitGraceTimer) clearTimeout(exitGraceTimer);
-        child.stdout?.removeAllListeners();
-        child.stderr?.removeAllListeners();
+        // Drop only the `data` handlers so a post-settle chunk can't re-enter
+        // killTree/finish — but KEEP the no-op `error` sinks (added below): the
+        // `destroy()` calls can surface a pending EIO/EBADF on the next tick,
+        // and an unhandled stream `error` is fatal in the main process. A blanket
+        // removeAllListeners() here would strip those sinks and reopen #5648.
+        child.stdout?.removeAllListeners("data");
+        child.stderr?.removeAllListeners("data");
         child.stdout?.destroy();
         child.stderr?.destroy();
       }
@@ -302,6 +358,13 @@ export class AgentVersionService {
         cleanup();
         resolve(value);
       }
+
+      // A rare pipe error (EBADF/EIO on a dead/closed fd) on a piped stream
+      // becomes an uncaughtException if unhandled (lesson from #5648). These
+      // sinks must outlive cleanup()'s destroy() — which can itself surface a
+      // pending error on the next tick — so cleanup() only removes `data`.
+      child.stdout?.on("error", () => {});
+      child.stderr?.on("error", () => {});
 
       child.stdout?.on("data", (chunk: Buffer) => {
         if (stdout.length >= this.MAX_BUFFER) return;
@@ -330,7 +393,15 @@ export class AgentVersionService {
       // can't keep us pending. `close` (if it comes) clears this via `cleanup`.
       child.on("exit", () => {
         if (settled || exitGraceTimer) return;
-        exitGraceTimer = setTimeout(() => finish(stdout || stderr), this.EXIT_DRAIN_MS);
+        exitGraceTimer = setTimeout(() => {
+          // `close` never came within the grace window, so a grandchild is still
+          // holding the pipe open — reap the whole group before settling, else
+          // the detached process the probe exists to kill leaks. (The `close`
+          // path stays kill-free: it fires only once every fd-holder has exited.)
+          killTree();
+          finish(stdout || stderr);
+        }, this.EXIT_DRAIN_MS);
+        exitGraceTimer.unref?.();
       });
 
       child.on("error", (error: NodeJS.ErrnoException) => {
