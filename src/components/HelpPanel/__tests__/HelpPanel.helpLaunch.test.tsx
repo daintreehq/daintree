@@ -1459,6 +1459,75 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     expect(mockDispatch).not.toHaveBeenCalled();
   });
 
+  it("'Start assistant' CTA records consent and launches, with no auto-launch beforehand (#10699)", async () => {
+    // Consent off: opening the panel must show the CTA and start nothing.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "cta-term" } });
+
+    render(<HelpPanel width={380} />);
+
+    expect(mockProvisionSession).not.toHaveBeenCalled();
+
+    const cta = await screen.findByTestId("help-start-assistant");
+    await act(async () => {
+      fireEvent.click(cta);
+    });
+
+    expect(helpPanelState.setAutoLaunchEnabled).toHaveBeenCalledWith(true);
+    expect(mockProvisionSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "claude" })
+    );
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "claude" }),
+      { source: "user" }
+    );
+  });
+
+  it("first-run starter-prompt chip records consent and launches (#10699)", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
+    // No prior agent launches → the first-run starter chips render.
+    panelStoreState.panelIds = [];
+    panelStoreState.panelsById = {};
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "chip-term" } });
+
+    render(<HelpPanel width={380} />);
+
+    const chip = await screen.findByRole("button", {
+      name: /How do I set up a new worktree\?/i,
+    });
+    await act(async () => {
+      fireEvent.click(chip);
+    });
+
+    expect(helpPanelState.setAutoLaunchEnabled).toHaveBeenCalledWith(true);
+    expect(mockProvisionSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "claude" })
+    );
+  });
+
+  it("renders the configure-in-settings fallback and no Start CTA when no single launchable agent (#10699)", () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = null;
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+
+    render(<HelpPanel width={380} />);
+
+    expect(
+      screen.getByText(/Configure an assistant agent in settings to get started/i)
+    ).toBeTruthy();
+    expect(screen.queryByTestId("help-start-assistant")).toBeNull();
+  });
+
   it("dispatches app.settings.openTab with tab='assistant' when the empty-state settings link is clicked", async () => {
     helpPanelState.preferredAgentId = null;
     cliAvailabilityState.availability = { claude: "ready", codex: "ready" };

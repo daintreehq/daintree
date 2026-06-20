@@ -517,6 +517,28 @@ describe("HelpPanel — resume from hibernated session", () => {
     );
   });
 
+  it("does NOT resume a matching hibernated session when autoLaunchEnabled is false (#10699)", async () => {
+    // Consent gates the resume path too — a returning user post-migration must
+    // not silently spend tokens re-launching a hibernated agent on panel open.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
+    helpPanelState.hibernateSessions = {
+      "proj-1": { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+    };
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("resumed-term-1");
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+
+    expect(mockBuildResumeCommand).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+    expect(mockProvisionSession).not.toHaveBeenCalled();
+    expect(helpPanelState.clearHibernateSession).not.toHaveBeenCalled();
+  });
+
   it("renders the resume banner after a successful resume", async () => {
     helpPanelState.preferredAgentId = "claude";
     helpPanelState.hibernateSessions = {

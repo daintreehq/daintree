@@ -717,6 +717,9 @@ describe("HelpSessionController — launch phase FSM", () => {
     });
     expect(ctrl.getSnapshot().phase).toBe("idle");
     expect(vi.mocked(actionService.dispatch)).not.toHaveBeenCalled();
+    // No billed work may even begin — the gate must short-circuit before the
+    // session is provisioned, not merely before the terminal is dispatched.
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
     ctrl.stop();
   });
 
@@ -738,6 +741,7 @@ describe("HelpSessionController — launch phase FSM", () => {
     expect(ctrl.getSnapshot().phase).toBe("idle");
     expect(ctrl["_hasAutoLaunched"]).toBe(false);
     expect(vi.mocked(actionService.dispatch)).not.toHaveBeenCalled();
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
     ctrl.stop();
   });
 
