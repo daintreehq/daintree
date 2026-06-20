@@ -273,12 +273,14 @@ export function HelpPanel({
     let modelId: string | null = null;
     for (let i = flags.length - 1; i >= 0; i--) {
       const flag = flags[i];
+      if (!flag) continue;
       if (flag.startsWith("--model=")) {
         modelId = flag.slice("--model=".length);
         break;
       }
-      if (flag === "--model" && i + 1 < flags.length && !flags[i + 1].startsWith("-")) {
-        modelId = flags[i + 1];
+      const next = flags[i + 1];
+      if (flag === "--model" && next && !next.startsWith("-")) {
+        modelId = next;
         break;
       }
     }
