@@ -902,6 +902,43 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(screen.queryByTestId("assistant-version-warning-banner")).toBeNull();
   });
 
+  it("clears the version warning when switching to an agent with no minimum", async () => {
+    helpPanelState.preferredAgentId = "claude";
+    installApi(
+      {},
+      {},
+      {
+        getAgentVersion: vi.fn().mockResolvedValue({
+          agentId: "claude",
+          installedVersion: "1.0.0",
+          latestVersion: null,
+          updateAvailable: false,
+          lastChecked: null,
+        }),
+      }
+    );
+
+    const { rerender } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await screen.findByTestId("assistant-version-warning-banner");
+
+    // Codex has no assistantMinVersion in the mock, so the probe effect must
+    // clear the prior agent's warning synchronously on switch.
+    helpPanelState.preferredAgentId = "codex";
+    rerender(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("assistant-version-warning-banner")).toBeNull();
+    });
+  });
+
   it("does not probe versions when no agent is selected", async () => {
     helpPanelState.preferredAgentId = null;
 

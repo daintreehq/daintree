@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 vi.stubGlobal(
@@ -77,6 +77,46 @@ describe("TurnOutcomeDiagnostics", () => {
 
     expect(onRefresh).toHaveBeenCalledTimes(1);
     expect(getTurnOutcomeRecords).not.toHaveBeenCalled();
+  });
+
+  it("controlled Clear log clears the log then refreshes via onRefresh", async () => {
+    const onRefresh = vi.fn().mockResolvedValue(undefined);
+    render(<TurnOutcomeDiagnostics records={[sampleRecord]} onRefresh={onRefresh} />);
+
+    await screen.findByText("(1 turns)");
+    fireEvent.click(screen.getByRole("button", { name: "Clear log" }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Clear log" }));
+
+    await waitFor(() => {
+      expect(clearTurnOutcomeLog).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(onRefresh).toHaveBeenCalledTimes(1);
+    });
+    // Controlled mode never touches the internal self-fetch path.
+    expect(getTurnOutcomeRecords).not.toHaveBeenCalled();
+  });
+
+  it("controlled Clear log still closes the dialog when onRefresh rejects", async () => {
+    const onRefresh = vi.fn().mockRejectedValue(new Error("refresh boom"));
+    render(<TurnOutcomeDiagnostics records={[sampleRecord]} onRefresh={onRefresh} />);
+
+    await screen.findByText("(1 turns)");
+    fireEvent.click(screen.getByRole("button", { name: "Clear log" }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Clear log" }));
+
+    await waitFor(() => {
+      expect(clearTurnOutcomeLog).toHaveBeenCalledTimes(1);
+    });
+    // Clear committed, so the dialog must not linger or re-surface despite the
+    // post-clear refresh failure.
+    await waitFor(() => {
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    });
   });
 
   it("uncontrolled Refresh re-fetches records", async () => {

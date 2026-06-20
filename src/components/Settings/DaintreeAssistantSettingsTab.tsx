@@ -404,6 +404,9 @@ export function DaintreeAssistantSettingsTab() {
       return;
     }
     const agentName = config?.name ?? preferredAgentId;
+    // Drop any prior agent's warning up front so the banner never shows a stale
+    // name/version while this probe is in flight.
+    setVersionWarning(null);
     window.electron.system
       .getAgentVersion(preferredAgentId)
       .then((info) => {

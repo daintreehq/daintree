@@ -106,18 +106,26 @@ export function TurnOutcomeDiagnostics({
   const confirmClearTurnOutcomeLog = async () => {
     if (isClearing) return;
     setIsClearing(true);
+    let cleared = false;
     try {
       await window.electron.mcpServer.clearTurnOutcomeLog();
-      if (isControlled) {
-        await onRefresh?.();
-      } else {
-        setInternalRecords([]);
-      }
+      cleared = true;
+      if (!isControlled) setInternalRecords([]);
       setShowClearConfirm(false);
     } catch (err) {
       logError("Failed to clear turn outcome log", err);
     } finally {
       setIsClearing(false);
+    }
+    // The post-clear refresh is best-effort: the clear already committed, so a
+    // refresh failure must not reopen the dialog or re-surface the destructive
+    // action — log it separately and leave the closed, cleared state intact.
+    if (cleared && isControlled) {
+      try {
+        await onRefresh?.();
+      } catch (err) {
+        logError("Failed to refresh turn outcomes after clearing log", err);
+      }
     }
   };
 
@@ -156,6 +164,9 @@ export function TurnOutcomeDiagnostics({
       });
 
     return () => {
+      // Mark settled so a late-resolving fetch can't write state after unmount
+      // or after a switch into controlled mode.
+      settled = true;
       clearTimeout(timer);
     };
   }, [isControlled]);
