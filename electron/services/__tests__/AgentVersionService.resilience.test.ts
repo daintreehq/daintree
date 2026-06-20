@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { EventEmitter } from "events";
 import type { AgentId } from "../../../shared/types/agent.js";
 
 const registryMock = vi.hoisted(() => ({
@@ -6,34 +7,71 @@ const registryMock = vi.hoisted(() => ({
   getEffectiveAgentConfig: vi.fn(),
 }));
 
-// Hoisted execFile mock — vi.spyOn can't redefine ESM-namespace exports of
-// `child_process`, so we substitute the whole module at hoist time. Tests
-// that need a custom impl mutate `execFileMock` via mockImplementationOnce.
-const { execFileMock } = vi.hoisted(() => {
-  const mock = vi.fn();
-  (mock as any)[Symbol.for("nodejs.util.promisify.custom")] = function (
-    cmd: string,
-    args: readonly string[],
-    opts: unknown
-  ) {
-    return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-      mock(cmd, args, opts, (err: unknown, stdout: string, stderr: string) => {
-        if (err) return reject(err);
-        resolve({ stdout, stderr });
-      });
-    });
-  };
-  return { execFileMock: mock };
-});
+// Hoisted spawn mock — vi.spyOn can't redefine ESM-namespace exports of
+// `child_process`, so we substitute the whole module at hoist time. The
+// installed-version probe spawns `<command> --version` and resolves on the
+// child's `exit` event; tests drive a fake ChildProcess via the helpers below.
+const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 
 vi.mock("child_process", () => ({
-  execFile: execFileMock,
+  spawn: spawnMock,
 }));
 
 vi.mock("../../../shared/config/agentRegistry.js", () => registryMock);
 
 import { AgentVersionService } from "../AgentVersionService.js";
 import type { CliAvailabilityService } from "../CliAvailabilityService.js";
+
+// Build a minimal fake ChildProcess: stdout/stderr as EventEmitters (with the
+// `destroy` the probe calls on settle) plus `exit`/`error` events and a pid.
+function makeFakeChild(): EventEmitter & {
+  pid: number;
+  kill: Mock;
+  stdout: EventEmitter & { destroy: Mock };
+  stderr: EventEmitter & { destroy: Mock };
+} {
+  const child = new EventEmitter() as EventEmitter & {
+    pid: number;
+    kill: Mock;
+    stdout: EventEmitter & { destroy: Mock };
+    stderr: EventEmitter & { destroy: Mock };
+  };
+  child.pid = 4242;
+  child.kill = vi.fn();
+  const stdout = new EventEmitter() as EventEmitter & { destroy: Mock };
+  stdout.destroy = vi.fn();
+  const stderr = new EventEmitter() as EventEmitter & { destroy: Mock };
+  stderr.destroy = vi.fn();
+  child.stdout = stdout;
+  child.stderr = stderr;
+  return child;
+}
+
+// spawn returns a child that prints `output` to stdout and then exits cleanly,
+// emitting `close` after `exit` (the normal CLI flow — `close` carries the full
+// output, so the probe settles immediately without the post-exit grace).
+function setSpawnSuccess(output: string): void {
+  spawnMock.mockImplementation((() => {
+    const child = makeFakeChild();
+    // Emit after the probe has attached its listeners (the Promise executor
+    // runs synchronously during `new Promise`, so a microtask suffices).
+    queueMicrotask(() => {
+      child.stdout.emit("data", Buffer.from(output));
+      child.emit("exit", 0, null);
+      child.emit("close", 0, null);
+    });
+    return child;
+  }) as never);
+}
+
+// spawn returns a child that fails with the given error (e.g. ENOENT/EACCES).
+function setSpawnError(error: NodeJS.ErrnoException): void {
+  spawnMock.mockImplementation((() => {
+    const child = makeFakeChild();
+    queueMicrotask(() => child.emit("error", error));
+    return child;
+  }) as never);
+}
 
 describe("AgentVersionService resilience", () => {
   beforeEach(() => {
@@ -82,11 +120,126 @@ describe("AgentVersionService resilience", () => {
     } as unknown as CliAvailabilityService;
     const service = new AgentVersionService(cliAvailabilityService);
 
-    // The constant gates execFileAsync timeout AND the two AbortController-based
-    // fetch paths in getLatestNpmVersion / getLatestGitHubVersion. 5s was too
-    // tight on Windows AV-scanned PATH entries, slow npm CDN edges, and WSL2
-    // boundaries (issue #6041).
+    // The constant gates the spawn-probe wall-clock deadline AND the two
+    // AbortController-based fetch paths in getLatestNpmVersion /
+    // getLatestGitHubVersion. 5s was too tight on Windows AV-scanned PATH
+    // entries, slow npm CDN edges, and WSL2 boundaries (issue #6041).
     expect((service as unknown as { TIMEOUT_MS: number }).TIMEOUT_MS).toBe(10000);
+  });
+
+  // Regression: a never-settling installed-version probe stranded the assistant
+  // launch FSM on "Checking version…" forever. The old `execFile` resolved on
+  // `close` (all stdio EOF), so a daemon grandchild inheriting the stdout fd
+  // kept the promise pending and the 10s `timeout` was ineffective (it signals
+  // the already-exited foreground PID, never the grandchild). The probe now
+  // resolves on `exit` and hard-reaps the tree on a deadline.
+  describe("installed-version probe hang resistance", () => {
+    beforeEach(() => {
+      spawnMock.mockReset();
+    });
+
+    it("settles via the post-exit grace timer when `close` never fires (grandchild holds the pipe)", async () => {
+      (registryMock.getEffectiveAgentConfig as Mock).mockReturnValue({
+        id: "claude",
+        name: "Claude",
+        command: "claude",
+        version: { args: ["--version"] },
+      });
+
+      // Foreground prints its version and exits, but a grandchild holds the
+      // stdout pipe open so `close` never fires — only `exit` does. The probe
+      // must still settle (via the short post-exit grace), never hang on `close`.
+      spawnMock.mockImplementation((() => {
+        const child = makeFakeChild();
+        queueMicrotask(() => {
+          child.stdout.emit("data", Buffer.from("1.2.3\n"));
+          child.emit("exit", 0, null);
+          // Deliberately never emit `close` — the inherited pipe never EOFs.
+        });
+        return child;
+      }) as never);
+
+      vi.useFakeTimers();
+      try {
+        const { service } = createService(async () => ({ claude: "ready" }));
+        const pending = service.getVersion("claude" as AgentId);
+        // Advance past the grace window (EXIT_DRAIN_MS) but nowhere near the
+        // 10s hard deadline — proving we settle off `exit`+grace, not the deadline.
+        await vi.advanceTimersByTimeAsync(300);
+        const result = await pending;
+        expect(result.installedVersion).toBe("1.2.3");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("captures stdout delivered after `exit` but before `close` (no lost version)", async () => {
+      (registryMock.getEffectiveAgentConfig as Mock).mockReturnValue({
+        id: "claude",
+        name: "Claude",
+        command: "claude",
+        version: { args: ["--version"] },
+      });
+
+      // Node does not guarantee all stdout is delivered by `exit` — `data` can
+      // arrive between `exit` and `close`. Settling on `close` (not `exit`) must
+      // still capture the version line.
+      spawnMock.mockImplementation((() => {
+        const child = makeFakeChild();
+        queueMicrotask(() => {
+          child.emit("exit", 0, null);
+          child.stdout.emit("data", Buffer.from("9.9.9\n"));
+          child.emit("close", 0, null);
+        });
+        return child;
+      }) as never);
+
+      const { service } = createService(async () => ({ claude: "ready" }));
+      const result = await service.getVersion("claude" as AgentId);
+      expect(result.installedVersion).toBe("9.9.9");
+    });
+
+    it("reaps the process tree and resolves with captured output past the deadline", async () => {
+      (registryMock.getEffectiveAgentConfig as Mock).mockReturnValue({
+        id: "claude",
+        name: "Claude",
+        command: "claude",
+        version: { args: ["--version"] },
+      });
+
+      const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+      let spawnedChild: ReturnType<typeof makeFakeChild> | null = null;
+      // A genuinely hung foreground: prints its version but never exits.
+      spawnMock.mockImplementation((() => {
+        const child = makeFakeChild();
+        spawnedChild = child;
+        queueMicrotask(() => child.stdout.emit("data", Buffer.from("4.5.6\n")));
+        return child;
+      }) as never);
+
+      vi.useFakeTimers();
+      try {
+        const { service } = createService(async () => ({ claude: "ready" }));
+        const pending = service.getVersion("claude" as AgentId);
+        await vi.advanceTimersByTimeAsync(10000);
+        const result = await pending;
+
+        // The deadline force-resolves with what the CLI already printed rather
+        // than leaving the launch FSM stuck on "Checking version…".
+        expect(result.installedVersion).toBe("4.5.6");
+        // The hung tree is reaped: POSIX SIGKILLs the whole process group
+        // (negative pid) so a grandchild holding the pipe dies too; Windows has
+        // no group here and falls back to killing the child directly.
+        if (process.platform === "win32") {
+          expect(spawnedChild!.kill).toHaveBeenCalledWith("SIGKILL");
+        } else {
+          expect(killSpy).toHaveBeenCalledWith(-4242, "SIGKILL");
+        }
+      } finally {
+        vi.useRealTimers();
+        killSpy.mockRestore();
+      }
+    });
   });
 
   it("returns per-agent results even when one config lookup throws", async () => {
@@ -135,13 +288,7 @@ describe("AgentVersionService resilience", () => {
       process.env = originalEnv;
     });
 
-    function setExecFileImpl(
-      impl: (cmd: string, args: string[], opts: unknown, cb: (...cbArgs: unknown[]) => void) => void
-    ): void {
-      execFileMock.mockImplementation(impl as never);
-    }
-
-    it("passes a sandboxed env to execFile (excludes ANTHROPIC_API_KEY, GITHUB_TOKEN)", async () => {
+    it("passes a sandboxed env to spawn (excludes ANTHROPIC_API_KEY, GITHUB_TOKEN)", async () => {
       process.env = {
         ...originalEnv,
         ANTHROPIC_API_KEY: "sk-ant-x",
@@ -156,21 +303,12 @@ describe("AgentVersionService resilience", () => {
         version: { args: ["--version"] },
       });
 
-      setExecFileImpl(
-        (
-          _cmd: string,
-          _args: string[],
-          _opts: unknown,
-          cb: (err: unknown, stdout: string, stderr: string) => void
-        ) => {
-          cb(null, "1.0.0\n", "");
-        }
-      );
+      setSpawnSuccess("1.0.0\n");
 
       const { service } = createService(async () => ({ claude: "ready" }));
       await service.getVersion("claude" as AgentId);
 
-      const opts = execFileMock.mock.calls[0][2] as { env?: Record<string, string> };
+      const opts = spawnMock.mock.calls[0][2] as { env?: Record<string, string> };
       expect(opts.env).toBeDefined();
       expect(opts.env!.ANTHROPIC_API_KEY).toBeUndefined();
       expect(opts.env!.GITHUB_TOKEN).toBeUndefined();
@@ -187,18 +325,9 @@ describe("AgentVersionService resilience", () => {
         version: { args: ["--version"] },
       });
 
-      setExecFileImpl(
-        (_cmd: string, _args: string[], _opts: unknown, cb: (err: unknown) => void) => {
-          const err = new Error(leakingMessage) as NodeJS.ErrnoException & {
-            stdout?: string;
-            stderr?: string;
-          };
-          err.code = "EUNKNOWN";
-          err.stdout = "";
-          err.stderr = "";
-          cb(err);
-        }
-      );
+      const err = new Error(leakingMessage) as NodeJS.ErrnoException;
+      err.code = "EUNKNOWN";
+      setSpawnError(err);
 
       const { service } = createService(async () => ({ claude: "ready" }));
       const result = await service.getVersion("claude" as AgentId);
@@ -213,18 +342,11 @@ describe("AgentVersionService resilience", () => {
     // success so getInstalledVersion returns a parseable value and the
     // assertion focuses on the latest-version branch.
     function setExecFileSuccess(): void {
-      execFileMock.mockImplementation(((
-        _cmd: string,
-        _args: readonly string[],
-        _opts: unknown,
-        cb: (err: unknown, stdout: string, stderr: string) => void
-      ) => {
-        cb(null, "1.0.0\n", "");
-      }) as never);
+      setSpawnSuccess("1.0.0\n");
     }
 
     beforeEach(() => {
-      execFileMock.mockReset();
+      spawnMock.mockReset();
     });
 
     it("fetches the latest version from pypi.org/pypi/<pkg>/json", async () => {
@@ -307,18 +429,11 @@ describe("AgentVersionService resilience", () => {
 
   describe("npm version feed", () => {
     function setExecFileSuccess(): void {
-      execFileMock.mockImplementation(((
-        _cmd: string,
-        _args: readonly string[],
-        _opts: unknown,
-        cb: (err: unknown, stdout: string, stderr: string) => void
-      ) => {
-        cb(null, "1.0.0\n", "");
-      }) as never);
+      setSpawnSuccess("1.0.0\n");
     }
 
     beforeEach(() => {
-      execFileMock.mockReset();
+      spawnMock.mockReset();
     });
 
     it("uses the abbreviated packument Accept header and User-Agent", async () => {
@@ -460,18 +575,11 @@ describe("AgentVersionService resilience", () => {
 
   describe("checkVersion parallelism", () => {
     function setExecFileSuccess(): void {
-      execFileMock.mockImplementation(((
-        _cmd: string,
-        _args: readonly string[],
-        _opts: unknown,
-        cb: (err: unknown, stdout: string, stderr: string) => void
-      ) => {
-        cb(null, "1.9.5\n", "");
-      }) as never);
+      setSpawnSuccess("1.9.5\n");
     }
 
     beforeEach(() => {
-      execFileMock.mockReset();
+      spawnMock.mockReset();
     });
 
     it("returns both installed and latest when both probes succeed", async () => {
@@ -532,16 +640,9 @@ describe("AgentVersionService resilience", () => {
         version: { args: ["--version"], npmPackage: "claude-pkg" },
       });
 
-      execFileMock.mockImplementation(((
-        _cmd: string,
-        _args: readonly string[],
-        _opts: unknown,
-        cb: (err: unknown) => void
-      ) => {
-        const error = new Error("EACCES") as NodeJS.ErrnoException;
-        error.code = "EACCES";
-        cb(error);
-      }) as never);
+      const eaccesError = new Error("EACCES") as NodeJS.ErrnoException;
+      eaccesError.code = "EACCES";
+      setSpawnError(eaccesError);
 
       const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
         ok: true,
@@ -567,16 +668,9 @@ describe("AgentVersionService resilience", () => {
         version: { args: ["--version"], npmPackage: "claude-pkg" },
       });
 
-      execFileMock.mockImplementation(((
-        _cmd: string,
-        _args: readonly string[],
-        _opts: unknown,
-        cb: (err: unknown) => void
-      ) => {
-        const error = new Error("ETIMEDOUT") as NodeJS.ErrnoException;
-        error.code = "ETIMEDOUT";
-        cb(error);
-      }) as never);
+      const etimedoutError = new Error("ETIMEDOUT") as NodeJS.ErrnoException;
+      etimedoutError.code = "ETIMEDOUT";
+      setSpawnError(etimedoutError);
 
       const fetchSpy = vi
         .spyOn(globalThis, "fetch")

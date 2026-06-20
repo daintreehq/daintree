@@ -553,6 +553,11 @@ export class HelpSessionController {
   private _started = false;
   private _launchGen = 0;
   private _isLaunching = false;
+  // Generation of the launch() that currently owns `_isLaunching`. The flow
+  // releases the guard only when it still owns this token, so a stale unwind
+  // can't drop a newer launch's guard, and a non-launch() supersession (the
+  // auto-launch path bumping the gen) still lets the owner release.
+  private _isLaunchingGen = -1;
   private _hasAutoLaunched = false;
   private _pendingSessionId: string | null = null;
   private _pendingNewTerminalId: string | null = null;
@@ -573,6 +578,18 @@ export class HelpSessionController {
   private _checkAgainCooldownTimer: ReturnType<typeof setTimeout> | null = null;
   private _checkAgainCooldownFired = false;
   private _checkAgainProbeSettled = false;
+  /**
+   * Dead-man timer for an in-flight launch. The launch FSM resets its loading
+   * phase in a `finally` that only runs once the awaited IPCs settle — so a
+   * never-settling bridge call (e.g. a hung CLI version probe) would otherwise
+   * strand the panel on "Checking version…"/"Provisioning…" indefinitely. If a
+   * launch hasn't reached a terminal state within `LAUNCH_WATCHDOG_MS`, this
+   * supersedes it and surfaces a retryable error instead of an infinite
+   * skeleton. The ceiling is generous (provision+launch legitimately runs
+   * 6–45s) so it only fires on a genuine stall.
+   */
+  private _launchWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly LAUNCH_WATCHDOG_MS = 90_000;
   /**
    * Once-per-terminal-id guard for the auto-snapshot pre-flight. Stores the
    * terminal id we last took a snapshot for so React 19 StrictMode's
@@ -709,6 +726,10 @@ export class HelpSessionController {
     this._clearSnapshotBannerTimer();
     this._clearGrantEndedTimer();
     this._clearCheckAgainCooldownTimer();
+    this._clearLaunchWatchdog();
+    // Release the re-entrancy guard on teardown so a same-instance start() after
+    // a never-settled launch (StrictMode remount) isn't permanently blocked.
+    this._isLaunching = false;
     // Bumping the gen invalidates any in-flight launch so its post-await
     // checkpoints bail. Live store state is left intact so a StrictMode
     // synthetic unmount doesn't tear down the user's session; explicit
@@ -896,7 +917,13 @@ export class HelpSessionController {
       notifyLaunchFailed(launchAgentId, "Project state is still loading. Try again.");
       return;
     }
-    if (this._isLaunching) return;
+    // Block only while a launch() that is STILL the current generation owns the
+    // guard. If the owning launch was superseded (its generation is stale) but
+    // never unwound — e.g. a hung IPC, or the preferred-agent auto-launch path
+    // bumping the gen without owning `_isLaunching` — its orphaned guard must
+    // not block every future launch. The watchdog reaps the phase; this keeps
+    // the re-entrancy guard from outliving the flow that set it.
+    if (this._isLaunching && this._isLaunchingGen === this._launchGen) return;
 
     const launchProject = inputs.currentProject;
     this._isLaunching = true;
@@ -912,6 +939,10 @@ export class HelpSessionController {
     const launchContext = actionService.getContext();
 
     const gen = ++this._launchGen;
+    // Tie the re-entrancy guard to this generation so only the launch() that
+    // set it releases it (see `_executeLaunch`'s finally) — a flow superseded
+    // by a newer launch() must not drop the newer guard.
+    this._isLaunchingGen = gen;
     const replaceExisting = options.replaceExisting === true;
     const reservedId = options.requestedId ?? null;
     let presetEnv: Record<string, string> | undefined;
@@ -1133,6 +1164,7 @@ export class HelpSessionController {
   cancelLaunch(): void {
     this._launchGen++;
     this._isLaunching = false;
+    this._clearLaunchWatchdog();
     this._resetPhase();
   }
 
@@ -1199,6 +1231,37 @@ export class HelpSessionController {
 
   private _resetPhase(): void {
     this._patch({ phase: "idle" });
+  }
+
+  /**
+   * Arm the launch dead-man timer for generation `gen`. If the launch is still
+   * in a loading phase when it fires, a bridge call has hung past the ceiling:
+   * bump `_launchGen` so the stalled flow's later gen-checks bail, clear the
+   * re-entrancy guards, reset the phase, and surface a retryable launch error.
+   * A superseded or already-settled launch is a no-op.
+   */
+  private _armLaunchWatchdog(gen: number, agentId: string): void {
+    this._clearLaunchWatchdog();
+    this._launchWatchdogTimer = setTimeout(() => {
+      this._launchWatchdogTimer = null;
+      if (gen !== this._launchGen) return;
+      const phase = this._snapshot.phase;
+      if (phase === "idle" || phase === "live") return;
+      // Supersede the stranded flow so its in-flight await resolves into a
+      // gen-mismatch bail instead of patching stale state back in.
+      this._launchGen++;
+      this._hasAutoLaunched = false;
+      this._isLaunching = false;
+      this._resetPhase();
+      this._surfaceLaunchError(agentId, "spawn-failed");
+    }, this.LAUNCH_WATCHDOG_MS);
+  }
+
+  private _clearLaunchWatchdog(): void {
+    if (this._launchWatchdogTimer) {
+      clearTimeout(this._launchWatchdogTimer);
+      this._launchWatchdogTimer = null;
+    }
   }
 
   private _armCheckAgainCooldownTimer(): void {
@@ -1901,6 +1964,7 @@ export class HelpSessionController {
     // Clear any prior failure banner up front so a retry immediately drops the
     // stale error while the new attempt is in flight.
     this._patch({ launchError: null });
+    this._armLaunchWatchdog(gen, launchAgentId);
     try {
       this._patch({ phase: "version-checking" });
       const folderPath = await window.electron.help.getFolderPath();
@@ -2100,7 +2164,12 @@ export class HelpSessionController {
       this._pendingSessionId = null;
       this._surfaceLaunchError(launchAgentId, "spawn-failed");
     } finally {
-      if (gen === this._launchGen && !reached) this._resetPhase();
+      // Only the generation that still owns the launch clears the watchdog and
+      // resets the phase — a superseding launch has already armed its own.
+      if (gen === this._launchGen) {
+        this._clearLaunchWatchdog();
+        if (!reached) this._resetPhase();
+      }
     }
   }
 
@@ -2121,6 +2190,7 @@ export class HelpSessionController {
     // Clear any prior failure banner up front so a retry immediately drops the
     // stale error while the new attempt is in flight.
     this._patch({ launchError: null });
+    this._armLaunchWatchdog(gen, launchAgentId);
     try {
       // reservedId paths (newSession/runAnyway) skip the version gate, so they
       // open straight at "provisioning"; the empty-state flow starts at the
@@ -2336,8 +2406,18 @@ export class HelpSessionController {
       }
       this._surfaceLaunchError(launchAgentId, "spawn-failed");
     } finally {
-      this._isLaunching = false;
-      if (gen === this._launchGen && !reached) this._resetPhase();
+      // Release the re-entrancy guard only if THIS launch() still owns it —
+      // clearing it unconditionally let a stale unwind drop a newer launch's
+      // guard and admit a concurrent third launch (#10693 review). A
+      // non-launch() supersession (auto-launch bumping the gen) leaves the token
+      // intact, so this owner still releases.
+      if (this._isLaunchingGen === gen) this._isLaunching = false;
+      // Watchdog + phase are owned by the current launch generation — a
+      // superseding launch has already armed/reset its own.
+      if (gen === this._launchGen) {
+        this._clearLaunchWatchdog();
+        if (!reached) this._resetPhase();
+      }
     }
   }
 }

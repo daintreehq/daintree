@@ -530,6 +530,81 @@ describe("HelpSessionController — launch phase FSM", () => {
     expect(ctrl["_launchGen"]).toBe(genBefore + 1);
   });
 
+  it("watchdog supersedes a launch stuck on version-checking and surfaces a retryable error", async () => {
+    vi.useFakeTimers();
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    // Hang the first bridge await so the launch can never leave version-checking
+    // — the real-world failure is a CLI version probe that never resolves.
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise(() => {})
+    );
+    try {
+      ctrl.syncInputs({
+        isOpen: true,
+        isReadyToLaunch: true,
+        currentProject: { id: "proj", path: "/repo" },
+        terminalId: null,
+        preferredAgentId: "claude",
+        supportedInstalledAgentIds: ["claude"],
+        visibilityEpoch: 0,
+      });
+      expect(ctrl.getSnapshot().phase).toBe("version-checking");
+      const genBefore = ctrl["_launchGen"] as number;
+
+      // Below the ceiling the panel is still legitimately loading.
+      await vi.advanceTimersByTimeAsync(89_000);
+      expect(ctrl.getSnapshot().phase).toBe("version-checking");
+      expect(ctrl.getSnapshot().launchError).toBeNull();
+
+      // Past the ceiling the dead-man timer reclaims the stranded FSM.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(ctrl.getSnapshot().phase).toBe("idle");
+      expect(ctrl.getSnapshot().launchError).toEqual(
+        expect.objectContaining({ agentId: "claude", kind: "spawn-failed" })
+      );
+      // Gen bumped so the stalled flow's eventual await resolves into a bail,
+      // and the auto-launch guard is cleared so a retry can re-drive.
+      expect(ctrl["_launchGen"]).toBe(genBefore + 1);
+      expect(ctrl["_hasAutoLaunched"]).toBe(false);
+    } finally {
+      ctrl.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-entrancy guard blocks a current owner but ignores a stale (superseded) one", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: null,
+      supportedInstalledAgentIds: [],
+      visibilityEpoch: 0,
+    });
+
+    // A launch() owned by the CURRENT generation is genuinely in flight → a
+    // second launch() must be dropped (no gen bump).
+    ctrl["_isLaunching"] = true;
+    ctrl["_isLaunchingGen"] = ctrl["_launchGen"] as number;
+    const genCurrent = ctrl["_launchGen"] as number;
+    ctrl.launch({ agentId: "claude", requestedId: "term-blocked" });
+    expect(ctrl["_launchGen"]).toBe(genCurrent);
+
+    // A guard left by a SUPERSEDED launch (its owner generation is stale, e.g.
+    // a hung flow the auto-launch path bumped past) must not block forever.
+    ctrl["_isLaunching"] = true;
+    ctrl["_isLaunchingGen"] = (ctrl["_launchGen"] as number) - 1;
+    ctrl.launch({ agentId: "claude", requestedId: "term-allowed" });
+    expect(ctrl["_launchGen"]).toBe(genCurrent + 1);
+
+    ctrl.stop();
+  });
+
   it("auto-launch enters version-checking synchronously and reaches live on success", async () => {
     const ctrl = new HelpSessionController();
     ctrl.start();
@@ -573,6 +648,10 @@ describe("HelpSessionController — launch phase FSM", () => {
       }),
       expect.anything()
     );
+    // The watchdog must be cleared once the launch reaches a terminal state, so
+    // it can never fire 90s later and tear down a healthy live session.
+    expect(ctrl["_launchWatchdogTimer"]).toBeNull();
+    expect(ctrl.getSnapshot().launchError).toBeNull();
     ctrl.stop();
   });
 
