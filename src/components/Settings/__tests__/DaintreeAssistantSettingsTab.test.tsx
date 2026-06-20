@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 vi.stubGlobal(
@@ -66,17 +66,20 @@ interface SettingsSelectStubOption {
 vi.mock("../SettingsSelect", () => ({
   SettingsSelect: ({
     label,
+    description,
     value,
     onValueChange,
     options,
   }: {
     label: string;
+    description?: React.ReactNode;
     value: string;
     onValueChange: (v: string) => void;
     options: SettingsSelectStubOption[];
   }) => (
     <label>
       {label}
+      {description != null && <span>{description}</span>}
       <select aria-label={label} value={value} onChange={(e) => onValueChange(e.target.value)}>
         {options.map((o) => (
           <option key={o.value} value={o.value}>
@@ -117,8 +120,10 @@ vi.mock("../SettingsInput", () => ({
 
 const helpPanelState = {
   preferredAgentId: null as string | null,
+  droppedPreferredAgentId: null as string | null,
   sessionId: null as string | null,
   setPreferredAgent: vi.fn(),
+  clearDroppedPreferredAgent: vi.fn(),
 };
 
 vi.mock("@/store/helpPanelStore", () => {
@@ -141,7 +146,7 @@ vi.mock("@/config/agents", () => ({
   getAgentIds: () => ["claude", "codex"],
   getAssistantSupportedAgentIds: () => mockGetAssistantSupportedAgentIds(),
   getAgentConfig: (id: string) => {
-    if (id === "claude") return { name: "Claude Code" };
+    if (id === "claude") return { name: "Claude Code", assistantMinVersion: "2.0.0" };
     if (id === "codex") return { name: "Codex" };
     return undefined;
   },
@@ -176,9 +181,14 @@ interface McpServerApi {
   clearAuditLog: ReturnType<typeof vi.fn>;
 }
 
+interface SystemApi {
+  getAgentVersion: ReturnType<typeof vi.fn>;
+}
+
 function installApi(
   helpAssistant: Partial<HelpAssistantApi> = {},
-  mcpServer: Partial<McpServerApi> = {}
+  mcpServer: Partial<McpServerApi> = {},
+  system: Partial<SystemApi> = {}
 ) {
   const helpDefaults: HelpAssistantApi = {
     getSettings: vi.fn().mockResolvedValue({
@@ -223,9 +233,21 @@ function installApi(
     getTurnOutcomeRecords: vi.fn().mockResolvedValue([]),
     clearAuditLog: vi.fn().mockResolvedValue(undefined),
   };
+  const systemDefaults: SystemApi = {
+    // Indeterminate by default (no installed version) so the version probe
+    // never raises a warning unless a test opts in with a concrete version.
+    getAgentVersion: vi.fn().mockResolvedValue({
+      agentId: "claude",
+      installedVersion: null,
+      latestVersion: null,
+      updateAvailable: false,
+      lastChecked: null,
+    }),
+  };
   window.electron = {
     helpAssistant: { ...helpDefaults, ...helpAssistant },
     mcpServer: { ...mcpDefaults, ...mcpServer },
+    system: { ...systemDefaults, ...system },
   } as unknown as typeof window.electron;
 }
 
@@ -233,8 +255,10 @@ describe("DaintreeAssistantSettingsTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     helpPanelState.preferredAgentId = null;
+    helpPanelState.droppedPreferredAgentId = null;
     helpPanelState.sessionId = null;
     helpPanelState.setPreferredAgent = vi.fn();
+    helpPanelState.clearDroppedPreferredAgent = vi.fn();
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
     Object.defineProperty(navigator, "clipboard", {
       value: { writeText },
@@ -776,6 +800,178 @@ describe("DaintreeAssistantSettingsTab", () => {
     fireEvent.change(select, { target: { value: "claude" } });
 
     expect(helpPanelState.setPreferredAgent).toHaveBeenCalledWith("claude");
+  });
+
+  it("shows the dropped-agent banner when a persisted agent was dropped", async () => {
+    helpPanelState.droppedPreferredAgentId = "claude";
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Agent");
+
+    const banner = await screen.findByTestId("assistant-dropped-agent-banner");
+    expect(banner.textContent).toContain("Claude Code is no longer available");
+  });
+
+  it("hides the dropped-agent banner when nothing was dropped", async () => {
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Agent");
+
+    expect(screen.queryByTestId("assistant-dropped-agent-banner")).toBeNull();
+  });
+
+  it("dismissing the dropped-agent banner calls clearDroppedPreferredAgent", async () => {
+    helpPanelState.droppedPreferredAgentId = "claude";
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Agent");
+
+    const banner = await screen.findByTestId("assistant-dropped-agent-banner");
+    fireEvent.click(within(banner).getByRole("button", { name: "Dismiss" }));
+
+    expect(helpPanelState.clearDroppedPreferredAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("warns when the selected agent's CLI is older than the assistant minimum", async () => {
+    helpPanelState.preferredAgentId = "claude";
+    installApi(
+      {},
+      {},
+      {
+        getAgentVersion: vi.fn().mockResolvedValue({
+          agentId: "claude",
+          installedVersion: "1.0.0",
+          latestVersion: null,
+          updateAvailable: false,
+          lastChecked: null,
+        }),
+      }
+    );
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Agent");
+
+    const banner = await screen.findByTestId("assistant-version-warning-banner");
+    expect(banner.textContent).toContain("Claude Code needs an update");
+    expect(banner.textContent).toContain("2.0.0");
+    expect(banner.textContent).toContain("1.0.0");
+    expect(window.electron.system.getAgentVersion).toHaveBeenCalledWith("claude");
+  });
+
+  it("does not warn when the installed CLI meets the assistant minimum", async () => {
+    helpPanelState.preferredAgentId = "claude";
+    installApi(
+      {},
+      {},
+      {
+        getAgentVersion: vi.fn().mockResolvedValue({
+          agentId: "claude",
+          installedVersion: "2.5.0",
+          latestVersion: null,
+          updateAvailable: false,
+          lastChecked: null,
+        }),
+      }
+    );
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Agent");
+    await waitFor(() => {
+      expect(window.electron.system.getAgentVersion).toHaveBeenCalledWith("claude");
+    });
+
+    expect(screen.queryByTestId("assistant-version-warning-banner")).toBeNull();
+  });
+
+  it("clears the version warning when switching to an agent with no minimum", async () => {
+    helpPanelState.preferredAgentId = "claude";
+    installApi(
+      {},
+      {},
+      {
+        getAgentVersion: vi.fn().mockResolvedValue({
+          agentId: "claude",
+          installedVersion: "1.0.0",
+          latestVersion: null,
+          updateAvailable: false,
+          lastChecked: null,
+        }),
+      }
+    );
+
+    const { rerender } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await screen.findByTestId("assistant-version-warning-banner");
+
+    // Codex has no assistantMinVersion in the mock, so the probe effect must
+    // clear the prior agent's warning synchronously on switch.
+    helpPanelState.preferredAgentId = "codex";
+    rerender(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("assistant-version-warning-banner")).toBeNull();
+    });
+  });
+
+  it("does not probe versions when no agent is selected", async () => {
+    helpPanelState.preferredAgentId = null;
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Agent");
+
+    expect(screen.queryByTestId("assistant-version-warning-banner")).toBeNull();
+    expect(window.electron.system.getAgentVersion).not.toHaveBeenCalled();
+  });
+
+  it("audit retention description no longer claims logging can be skipped entirely", async () => {
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Audit log retention");
+
+    expect(container.textContent).not.toContain("skip logging entirely");
+    expect(container.textContent).toContain("recorded separately");
+  });
+
+  it("renders turn-outcome diagnostics in the privacy section", async () => {
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Turn outcomes by class");
   });
 
   it("loads customArgs from the IPC settings into the input", async () => {
