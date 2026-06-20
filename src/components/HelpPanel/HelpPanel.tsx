@@ -788,7 +788,7 @@ export function HelpPanel({
       }}
       className={cn(
         "relative shrink-0 flex flex-col h-full overflow-hidden outline-hidden",
-        "bg-daintree-bg border-l border-daintree-border transition-colors duration-300",
+        "bg-daintree-bg border-l border-daintree-border transition-[border-left-color,box-shadow] duration-150",
         isHighlighted && "assistant-focused",
         !isVisible && "pointer-events-none"
       )}
@@ -940,7 +940,7 @@ export function HelpPanel({
                     longer available
                   </p>
                   <p className="mt-0.5 text-daintree-text/70">
-                    The agent was removed or is no longer supported as an assistant backend.
+                    The agent was removed or is no longer supported as an assistant backend
                   </p>
                   <button
                     type="button"
@@ -953,7 +953,7 @@ export function HelpPanel({
                 <button
                   type="button"
                   onClick={clearDroppedPreferredAgent}
-                  aria-label="Dismiss"
+                  aria-label="Dismiss agent unavailable notice"
                   className="text-daintree-text/50 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                 >
                   <X className="w-3 h-3" />
@@ -1098,7 +1098,7 @@ export function HelpPanel({
       <ConfirmDialog
         isOpen={showNewSessionConfirm}
         title="Start a new session?"
-        description="The current agent will stop and the conversation will be discarded."
+        description="The current agent will stop and the conversation will be discarded"
         confirmLabel="Start new session"
         onConfirm={handleConfirmNewSession}
         onClose={handleCancelNewSession}
@@ -1109,7 +1109,7 @@ export function HelpPanel({
         title={`Switch to ${
           getAgentConfig(preferredAgentId ?? "")?.name ?? preferredAgentId ?? "agent"
         }?`}
-        description="The current session will end and the conversation will be discarded."
+        description="The current session will end and the conversation will be discarded"
         confirmLabel="Switch agent"
         onConfirm={handleConfirmAgentSwitch}
         onClose={handleCancelAgentSwitch}

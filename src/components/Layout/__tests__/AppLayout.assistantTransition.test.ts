@@ -85,6 +85,38 @@ describe("AppLayout assistant off-canvas slide — issue #10693", () => {
     expect(source).not.toContain("onTransitionCancel");
   });
 
+  // Issue #10704: the slide must use asymmetric Tier-3 panel-motion timing —
+  // decelerate on enter (200ms ease-out-expo), accelerate on exit (120ms
+  // ease-panel-minimize) — switched on showAssistant, not a symmetric 250ms.
+  it("uses asymmetric panel-motion-tier timing switched on showAssistant", () => {
+    // Anchor to the assistant region (first aria-hidden = the spacer) so the
+    // sidebar's legitimate symmetric 250ms width transition isn't captured.
+    const region = source.match(
+      /aria-hidden[\s\S]*?onTransitionEnd=\{handleAssistantTransitionEnd\}/
+    );
+    expect(region).not.toBeNull();
+    const slide = region![0];
+
+    // Bind direction to branch: the enter (200ms decelerate) class must sit on
+    // the `showAssistant ?` true-arm and the exit (120ms accelerate) class on
+    // the `:` false-arm. A bare toContain would pass even if the branches were
+    // swapped (both strings exist either way), so match the ternary shape.
+    // `transitionClass` is the literal (regex-escaped) transition utility: the
+    // spacer animates width via `transition-[width]`, the wrapper slides via
+    // `transition-transform`.
+    const ternary = (transitionClass: string): RegExp =>
+      new RegExp(
+        `showAssistant\\s*\\?\\s*"${transitionClass} duration-\\[var\\(--duration-200\\)\\] ease-\\[var\\(--ease-out-expo\\)\\][^"]*"\\s*:\\s*"${transitionClass} duration-\\[var\\(--duration-120\\)\\] ease-\\[var\\(--ease-panel-minimize\\)\\]`
+      );
+    // The spacer (width push) and the wrapper (transform slide) must carry
+    // identical timing per direction or the push and slide visibly desync.
+    expect(slide).toMatch(ternary("transition-\\[width\\]"));
+    expect(slide).toMatch(ternary("transition-transform"));
+    // The old symmetric 250ms is gone from the assistant slide (it remains
+    // correct for the sidebar above this region).
+    expect(slide).not.toContain("--duration-250");
+  });
+
   it("settles inert/repaint itself for every path that suppresses the transition", () => {
     // reduce-animations, performance mode, OS prefers-reduced-motion, and an
     // in-flight drag-resize all strip the transform transition, so no

@@ -782,7 +782,9 @@ export function AppLayout({
               "shrink-0 pointer-events-none",
               !reduceAnimations &&
                 !isAssistantResizing &&
-                "transition-[width] duration-[var(--duration-250)] ease-[var(--ease-out-expo)] motion-reduce:transition-none"
+                (showAssistant
+                  ? "transition-[width] duration-[var(--duration-200)] ease-[var(--ease-out-expo)] motion-reduce:transition-none"
+                  : "transition-[width] duration-[var(--duration-120)] ease-[var(--ease-panel-minimize)] motion-reduce:transition-none")
             )}
             style={{ width: effectiveAssistantWidth }}
             onTransitionStart={handleAssistantSpacerTransitionStart}
@@ -793,7 +795,9 @@ export function AppLayout({
                 "absolute top-0 right-0 h-full overflow-hidden",
                 !reduceAnimations &&
                   !isAssistantResizing &&
-                  "transition-transform duration-[var(--duration-250)] ease-[var(--ease-out-expo)] motion-reduce:transition-none",
+                  (showAssistant
+                    ? "transition-transform duration-[var(--duration-200)] ease-[var(--ease-out-expo)] motion-reduce:transition-none"
+                    : "transition-transform duration-[var(--duration-120)] ease-[var(--ease-panel-minimize)] motion-reduce:transition-none"),
                 !showAssistant && "pointer-events-none"
               )}
               style={{

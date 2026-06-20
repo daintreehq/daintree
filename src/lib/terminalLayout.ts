@@ -72,6 +72,12 @@ export const GRID_TRANSITION_DURATION_MS = 200;
  * doesn't deliver mid-animation fractional dimensions to the host.
  */
 export const SIDEBAR_TRANSITION_MS = 250;
+/**
+ * Dead-man TTL for the resize-suppression lock armed on a sidebar/assistant
+ * width transition. Pegged to the 250ms sidebar transition. The assistant slide
+ * (#10704) is asymmetric — 200ms enter / 120ms exit — so its longest leg (200ms)
+ * is conservatively covered by this 250ms lock; no separate assistant TTL needed.
+ */
 export const SIDEBAR_TOGGLE_LOCK_MS = SIDEBAR_TRANSITION_MS;
 
 // ---------------------------------------------------------------------------
