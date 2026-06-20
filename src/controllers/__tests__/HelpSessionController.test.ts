@@ -120,7 +120,7 @@ vi.mock("@/utils/safeFireAndForget", () => ({
   safeFireAndForget: (p: Promise<unknown>) => p,
 }));
 
-import { HelpSessionController } from "../HelpSessionController";
+import { HelpSessionController, loadCustomLaunchFlags } from "../HelpSessionController";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 
@@ -2014,5 +2014,45 @@ describe("HelpSessionController — MCP tool activity strip (#9759)", () => {
     expect(a?.toolId).toBe("b");
     expect(a?.durationMs).toBe(25);
     ctrl.stop();
+  });
+});
+
+describe("loadCustomLaunchFlags — model + custom args composition", () => {
+  const getSettings = () => window.electron.helpAssistant.getSettings as ReturnType<typeof vi.fn>;
+
+  it("returns no flags when neither modelId nor customArgs is set", async () => {
+    getSettings().mockResolvedValue({ modelId: "", customArgs: "" });
+    expect(await loadCustomLaunchFlags()).toEqual([]);
+  });
+
+  it("injects --model when modelId is set", async () => {
+    getSettings().mockResolvedValue({ modelId: "claude-sonnet-4-6", customArgs: "" });
+    expect(await loadCustomLaunchFlags()).toEqual(["--model", "claude-sonnet-4-6"]);
+  });
+
+  it("prepends the model flag before custom args so a custom --model wins (last-flag semantics)", async () => {
+    getSettings().mockResolvedValue({ modelId: "sonnet", customArgs: "--model opus --verbose" });
+    expect(await loadCustomLaunchFlags()).toEqual([
+      "--model",
+      "sonnet",
+      "--model",
+      "opus",
+      "--verbose",
+    ]);
+  });
+
+  it("returns only custom args when no model is selected", async () => {
+    getSettings().mockResolvedValue({ modelId: "", customArgs: "--verbose --foo bar" });
+    expect(await loadCustomLaunchFlags()).toEqual(["--verbose", "--foo", "bar"]);
+  });
+
+  it("tolerates absent modelId (legacy settings) and falls back to custom args only", async () => {
+    getSettings().mockResolvedValue({ customArgs: "--verbose" });
+    expect(await loadCustomLaunchFlags()).toEqual(["--verbose"]);
+  });
+
+  it("returns [] when reading settings throws", async () => {
+    getSettings().mockRejectedValue(new Error("ipc down"));
+    expect(await loadCustomLaunchFlags()).toEqual([]);
   });
 });
