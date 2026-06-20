@@ -694,7 +694,6 @@ describe("McpServerService", () => {
   });
 
   it("applies mcpAnnotations overrides on top of kind/danger defaults", async () => {
-    storeState.mcpServer.fullToolSurface = true;
     const { window } = createMockWindow({
       getManifest: () => [
         // Query that requires UX confirmation but is not destructive.
@@ -709,9 +708,9 @@ describe("McpServerService", () => {
         // Command that is semantically a read-only lookup; both readOnly and
         // idempotent hints are forced on via override.
         createManifestEntry({
-          id: "test.readOnlyCommand" as ActionId,
+          id: "git.stageFile" as ActionId,
           title: "Read Only Command",
-          description: "Synthetic read-only command for override coverage",
+          description: "Allowlisted command used for override coverage",
           kind: "command",
           danger: "safe",
           mcpAnnotations: { readOnlyHint: true, idempotentHint: true },
@@ -719,9 +718,9 @@ describe("McpServerService", () => {
         // Query whose readOnly/idempotent hints are explicitly forced off via
         // override — guards against regressing the merge from `??` to `||`.
         createManifestEntry({
-          id: "test.queryOverriddenFalse" as ActionId,
+          id: "git.listCommits" as ActionId,
           title: "Query With False Overrides",
-          description: "Synthetic query whose hints are explicitly false",
+          description: "Allowlisted query whose hints are explicitly false",
           kind: "query",
           danger: "safe",
           mcpAnnotations: { readOnlyHint: false, idempotentHint: false },
@@ -735,8 +734,8 @@ describe("McpServerService", () => {
 
     const result = await client.listTools();
     const generate = result.tools.find((t) => t.name === "copyTree.generate");
-    const readOnlyCmd = result.tools.find((t) => t.name === "test.readOnlyCommand");
-    const queryFalse = result.tools.find((t) => t.name === "test.queryOverriddenFalse");
+    const readOnlyCmd = result.tools.find((t) => t.name === "git.stageFile");
+    const queryFalse = result.tools.find((t) => t.name === "git.listCommits");
 
     // Override flips destructiveHint off; readOnlyHint/idempotentHint still
     // come from the `kind: "query"` default. openWorldHint now defaults to true.
@@ -772,12 +771,11 @@ describe("McpServerService", () => {
   });
 
   it("allows overriding openWorldHint via mcpAnnotations", async () => {
-    storeState.mcpServer.fullToolSurface = true;
     const { window } = createMockWindow({
       getManifest: () => [
         // openWorldHint defaults to true; explicit false override must win.
         createManifestEntry({
-          id: "keybinding.resetAll" as ActionId,
+          id: "worktree.delete" as ActionId,
           title: "Reset All Keybindings",
           description: "Local-only destructive action",
           category: "settings",
@@ -787,7 +785,7 @@ describe("McpServerService", () => {
         }),
         // No override — must default to true (spec-conservative).
         createManifestEntry({
-          id: "github.someTool" as ActionId,
+          id: "forge.createPR" as ActionId,
           title: "Some GitHub Tool",
           description: "Tool without openWorldHint override",
           category: "github",
@@ -807,15 +805,14 @@ describe("McpServerService", () => {
     transports.push(transport);
 
     const result = await client.listTools();
-    const localTool = result.tools.find((t) => t.name === "keybinding.resetAll");
-    const ghTool = result.tools.find((t) => t.name === "github.someTool");
+    const localTool = result.tools.find((t) => t.name === "worktree.delete");
+    const ghTool = result.tools.find((t) => t.name === "forge.createPR");
 
     expect(localTool?.annotations?.openWorldHint).toBe(false);
     expect(ghTool?.annotations?.openWorldHint).toBe(true);
   });
 
   it("defaults openWorldHint to true for all categories per spec", async () => {
-    storeState.mcpServer.fullToolSurface = true;
     const { window } = createMockWindow({
       getManifest: () => [
         createManifestEntry({
@@ -833,7 +830,7 @@ describe("McpServerService", () => {
           kind: "query",
         }),
         createManifestEntry({
-          id: "worktree.create" as ActionId,
+          id: "worktree.createWithRecipe" as ActionId,
           title: "Create Worktree",
           description: "Create a new worktree",
           category: "worktree",
@@ -849,7 +846,7 @@ describe("McpServerService", () => {
     const result = await client.listTools();
     const ghTool = result.tools.find((t) => t.name === "forge.listPRs");
     const systemTool = result.tools.find((t) => t.name === "system.checkCommand");
-    const wtTool = result.tools.find((t) => t.name === "worktree.create");
+    const wtTool = result.tools.find((t) => t.name === "worktree.createWithRecipe");
 
     expect(ghTool?.annotations?.openWorldHint).toBe(true);
     expect(systemTool?.annotations?.openWorldHint).toBe(true);
@@ -2091,7 +2088,7 @@ describe("McpServerService", () => {
     expect(ids).not.toContain("panel.gridLayout.setStrategy");
   });
 
-  it("exposes the full non-restricted surface when fullToolSurface is enabled", async () => {
+  it("keeps non-allowlisted tools off the surface even when fullToolSurface is enabled (#10701)", async () => {
     storeState.mcpServer.fullToolSurface = true;
     const { window } = createMockWindow({
       getManifest: () => [
@@ -2104,7 +2101,7 @@ describe("McpServerService", () => {
         createManifestEntry({
           id: "panel.gridLayout.setStrategy" as ActionId,
           title: "Set grid layout",
-          description: "Power-user UI plumbing",
+          description: "Sensitive UI plumbing — not in the curated allowlist",
         }),
         createManifestEntry({
           id: "internal.dangerous" as ActionId,
@@ -2122,12 +2119,15 @@ describe("McpServerService", () => {
     const result = await client.listTools();
     const ids = result.tools.map((tool) => tool.name);
 
+    // fullToolSurface lifts the floor through the curated full-surface allowlist;
+    // it does not bypass it. Allowlisted tools stay reachable; non-allowlisted
+    // and restricted tools stay hidden.
     expect(ids).toContain("actions.list");
-    expect(ids).toContain("panel.gridLayout.setStrategy");
+    expect(ids).not.toContain("panel.gridLayout.setStrategy");
     expect(ids).not.toContain("internal.dangerous");
   });
 
-  it("dispatches fullToolSurface external tools that are outside the curated allowlist", async () => {
+  it("denies dispatch of non-allowlisted tools even with fullToolSurface enabled (#10701)", async () => {
     storeState.mcpServer.fullToolSurface = true;
     const dispatchMock = vi.fn(
       (payload: DispatchRequest): ActionDispatchResult => ({
@@ -2140,7 +2140,7 @@ describe("McpServerService", () => {
         createManifestEntry({
           id: "panel.gridLayout.setStrategy" as ActionId,
           title: "Set grid layout",
-          description: "Power-user UI plumbing",
+          description: "Sensitive UI plumbing — not in the curated allowlist",
         }),
       ],
       dispatchAction: dispatchMock,
@@ -2157,11 +2157,10 @@ describe("McpServerService", () => {
       })
     );
 
-    expect(result.isError).not.toBe(true);
-    expect(result.content[0].text).toContain('"dispatched": "panel.gridLayout.setStrategy"');
-    expect(dispatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({ actionId: "panel.gridLayout.setStrategy" })
-    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("TIER_NOT_PERMITTED");
+    expect(result.content[0].text).toContain("panel.gridLayout.setStrategy");
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("treats non-true fullToolSurface values as curated (fail-closed)", async () => {
@@ -4187,18 +4186,17 @@ describe("McpServerService", () => {
     };
 
     it("advertises outputSchema in listTools for actions with an object resultSchema", async () => {
-      storeState.mcpServer.fullToolSurface = true;
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "log.getEntries" as ActionId,
+            id: "git.getProjectPulse" as ActionId,
             title: "Get Log Entries",
             description: "Returns log entries",
             kind: "query",
             outputSchema: objectSchema,
           }),
           createManifestEntry({
-            id: "worktree.create" as ActionId,
+            id: "worktree.createWithRecipe" as ActionId,
             title: "Create Worktree",
             description: "Create a worktree",
             kind: "command",
@@ -4218,8 +4216,8 @@ describe("McpServerService", () => {
       transports.push(transport);
 
       const result = await client.listTools();
-      const objectTool = result.tools.find((t) => t.name === "log.getEntries");
-      const primitiveTool = result.tools.find((t) => t.name === "worktree.create");
+      const objectTool = result.tools.find((t) => t.name === "git.getProjectPulse");
+      const primitiveTool = result.tools.find((t) => t.name === "worktree.createWithRecipe");
       const noSchemaTool = result.tools.find((t) => t.name === "actions.list");
 
       expect(objectTool).toBeDefined();
@@ -4231,12 +4229,11 @@ describe("McpServerService", () => {
     });
 
     it("emits structuredContent on callTool when the action has an object outputSchema and an object result", async () => {
-      storeState.mcpServer.fullToolSurface = true;
       const objectResult = { count: 7, label: "ok" };
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "log.getEntries" as ActionId,
+            id: "git.getProjectPulse" as ActionId,
             title: "Get Log Entries",
             description: "Returns log entries",
             kind: "query",
@@ -4252,7 +4249,7 @@ describe("McpServerService", () => {
 
       await client.listTools();
       const result = (await client.callTool({
-        name: "log.getEntries",
+        name: "git.getProjectPulse",
         arguments: {},
       })) as {
         content: Array<{ type: string; text: string }>;
@@ -4265,11 +4262,10 @@ describe("McpServerService", () => {
     });
 
     it("omits structuredContent when the action has a primitive resultSchema", async () => {
-      storeState.mcpServer.fullToolSurface = true;
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "worktree.create" as ActionId,
+            id: "worktree.createWithRecipe" as ActionId,
             title: "Create Worktree",
             description: "Create a worktree",
             kind: "command",
@@ -4285,7 +4281,7 @@ describe("McpServerService", () => {
 
       await client.listTools();
       const result = (await client.callTool({
-        name: "worktree.create",
+        name: "worktree.createWithRecipe",
         arguments: {},
       })) as {
         content: Array<{ type: string; text: string }>;
@@ -4361,11 +4357,10 @@ describe("McpServerService", () => {
     });
 
     it("does not emit structuredContent on failed tool calls", async () => {
-      storeState.mcpServer.fullToolSurface = true;
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "log.getEntries" as ActionId,
+            id: "git.getProjectPulse" as ActionId,
             title: "Get Log Entries",
             description: "Returns log entries",
             kind: "query",
@@ -4384,7 +4379,7 @@ describe("McpServerService", () => {
 
       await client.listTools();
       const result = (await client.callTool({
-        name: "log.getEntries",
+        name: "git.getProjectPulse",
         arguments: {},
       })) as {
         content: Array<{ type: string; text: string }>;

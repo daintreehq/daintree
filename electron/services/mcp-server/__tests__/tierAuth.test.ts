@@ -23,6 +23,8 @@ import {
   resolveTokenTier,
   shouldExposeTool,
 } from "../tierAuth.js";
+import { MCP_FULL_TOOL_SURFACE_ALLOWLIST, TIER_ALLOWLISTS } from "../shared.js";
+import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 
 beforeEach(() => {
@@ -336,6 +338,89 @@ describe("shouldExposeTool", () => {
   it("still excludes hidden entries even with fullToolSurface", () => {
     const entry = makeEntry({ id: "actions.search", mcpVisibility: "hidden" });
     expect(shouldExposeTool(entry, "external", true)).toBe(false);
+  });
+});
+
+// #10701: fullToolSurface must route through the curated full-surface allowlist
+// (MCP_FULL_TOOL_SURFACE_ALLOWLIST), not bypass the allowlist and trust the
+// author-set `danger` field. Sensitive side-effecting actions that are absent
+// from the allowlist must stay blocked even when fullToolSurface is on, and the
+// gate must agree across exposure (shouldExposeTool) and dispatch
+// (isTierPermitted) — a divergence would advertise a tool the dispatcher then
+// rejects, or vice versa (#7155).
+describe("fullToolSurface allowlist invariants (#10701)", () => {
+  const builtInIds = new Set<string>(BUILT_IN_ACTION_IDS);
+
+  // Real, currently-shipping danger:"safe" actions with genuine side effects
+  // (launch a URL/path in the OS, inject env vars, clone an arbitrary repo)
+  // that are deliberately absent from the curated external allowlist.
+  // fullToolSurface used to expose every one of these.
+  const SENSITIVE_NON_ALLOWLISTED = [
+    "system.openExternal",
+    "system.openPath",
+    "env.global.set",
+    "project.cloneRepo",
+  ];
+
+  // Pin the sentinels to ground truth so the suite below is a real regression
+  // guard, not "unknown strings aren't in a set": each must be an actual
+  // built-in action that is genuinely outside the curated external allowlist.
+  // If one is renamed or promoted into the allowlist, this fails loudly rather
+  // than silently asserting nothing.
+  it.each(SENSITIVE_NON_ALLOWLISTED)("%s is a real built-in action outside the allowlist", (id) => {
+    expect(builtInIds.has(id)).toBe(true);
+    expect(TIER_ALLOWLISTS.external.has(id)).toBe(false);
+  });
+
+  it.each(SENSITIVE_NON_ALLOWLISTED)(
+    "does not expose sensitive non-allowlisted action %s even with fullToolSurface",
+    (actionId) => {
+      const entry = makeEntry({ id: actionId, danger: "safe" });
+      expect(shouldExposeTool(entry, "external", true)).toBe(false);
+    }
+  );
+
+  it.each(SENSITIVE_NON_ALLOWLISTED)(
+    "does not permit dispatch of sensitive non-allowlisted action %s even with fullToolSurface",
+    (actionId) => {
+      expect(isTierPermitted("external", actionId, true)).toBe(false);
+    }
+  );
+
+  it("exposure and dispatch gates agree for a sensitive non-allowlisted action", () => {
+    const entry = makeEntry({ id: "system.openExternal", danger: "safe" });
+    expect(shouldExposeTool(entry, "external", true)).toBe(
+      isTierPermitted("external", "system.openExternal", true)
+    );
+  });
+
+  it("still reaches curated-allowlist tools with fullToolSurface on", () => {
+    const entry = makeEntry({ id: "actions.list" });
+    expect(shouldExposeTool(entry, "external", true)).toBe(true);
+    expect(isTierPermitted("external", "actions.list", true)).toBe(true);
+  });
+
+  // The full surface is a strict *superset* of the curated external allowlist:
+  // fullToolSurface can only ever widen, never narrow. This guards against a
+  // future edit that makes the opt-in surface smaller than the default
+  // external surface (which would silently revoke tools when the flag is on).
+  it("is a superset of the curated external allowlist", () => {
+    for (const id of TIER_ALLOWLISTS.external) {
+      expect(MCP_FULL_TOOL_SURFACE_ALLOWLIST.has(id)).toBe(true);
+    }
+  });
+
+  // fullToolSurface=false must fall through to the plain external allowlist,
+  // independent of the full-surface set — so the two paths stay distinct even
+  // once the add-on seam is non-empty.
+  it("ignores the full-surface add-ons when fullToolSurface is off", () => {
+    const entry = makeEntry({ id: "actions.list" });
+    expect(shouldExposeTool(entry, "external", false)).toBe(
+      TIER_ALLOWLISTS.external.has("actions.list")
+    );
+    expect(isTierPermitted("external", "actions.list", false)).toBe(
+      TIER_ALLOWLISTS.external.has("actions.list")
+    );
   });
 });
 
