@@ -60,7 +60,10 @@ const DEFAULT_BYPASS_PERMISSIONS = false;
 // mid-launch), the record can outlive the launch with a live token but no bound
 // terminal. The periodic sweep revokes any such unbound record older than this
 // ceiling. Bound sessions are never swept regardless of age — they're healthy
-// long-lived assistants. 30 min mirrors the MCP idle-reaper horizon.
+// long-lived assistants. 30 min mirrors the MCP idle-reaper horizon; an orphan
+// is reaped between 30 and ~35 min old (this floor plus up to one sweep
+// interval). The 90s launch watchdog is the primary fix — this is the
+// renderer-crash backstop, so the coarse timing is intentional.
 const ORPHAN_SESSION_MAX_AGE_MS = 30 * 60 * 1000;
 const ORPHAN_SESSION_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 

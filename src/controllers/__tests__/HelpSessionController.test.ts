@@ -786,6 +786,14 @@ describe("HelpSessionController — launch phase FSM", () => {
       // agent.launch has been dispatched (and is now hanging).
       await vi.advanceTimersByTimeAsync(1_000);
       expect(ctrl["_pendingSessionId"]).toBe("sess-hang");
+      // Prove the flow actually reached (and is now hung on) agent.launch, so
+      // the revoke below is exercising the post-provision stall, not an earlier
+      // bail before the bearer was put at risk.
+      expect(vi.mocked(actionService.dispatch)).toHaveBeenCalledWith(
+        "agent.launch",
+        expect.anything(),
+        expect.anything()
+      );
       expect(window.electron.help.revokeSession).not.toHaveBeenCalled();
 
       // Past the 90s ceiling the dead-man timer reclaims the stranded FSM and
