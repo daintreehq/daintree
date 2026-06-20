@@ -848,6 +848,7 @@ describe("HelpSessionController — launch phase FSM", () => {
         terminalId: null,
         preferredAgentId: "claude",
         supportedInstalledAgentIds: ["claude"],
+        autoLaunchEnabled: true,
         visibilityEpoch: 0,
       });
 
@@ -905,6 +906,7 @@ describe("HelpSessionController — launch phase FSM", () => {
       terminalId: null,
       preferredAgentId: "claude",
       supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
       visibilityEpoch: 0,
     });
     await vi.waitFor(() => {
