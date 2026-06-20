@@ -198,6 +198,13 @@ export async function stubRepoStats(
         fetchedAt: now,
       });
     }
+    // Force the stats hook through its normal successful-fetch path as well.
+    // The count push can be ignored by the hook's freshness guard if a previous
+    // token-error snapshot had an equal-or-newer timestamp, but the refresh
+    // event re-reads the stubbed handler and clears `isTokenError`.
+    await window.evaluate(() => {
+      window.dispatchEvent(new CustomEvent("daintree:refresh-sidebar"));
+    });
   }
 }
 

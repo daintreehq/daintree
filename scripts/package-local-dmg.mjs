@@ -19,7 +19,14 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, isAbsolute } from "node:path";
-import { readFileSync as read, existsSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import {
+  readFileSync as read,
+  existsSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -121,11 +128,39 @@ if (process.env.CSC_LINK) {
 // this avoids it even attempting to zip the bundle.
 if (!process.env.APPLE_API_ISSUER) process.env.DAINTREE_SKIP_NOTARIZATION = "true";
 
-const unsignedArgs = [
-  "-c.mac.identity=null",
-  "-c.mac.forceCodeSigning=false",
-  "-c.electronFuses=null",
-];
+let builderConfig = "electron-builder.config.cjs";
+if (!signed) {
+  const tmpDir = join(root, "tmp");
+  mkdirSync(tmpDir, { recursive: true });
+  builderConfig = join(tmpDir, "electron-builder.local-unsigned.cjs");
+  writeFileSync(
+    builderConfig,
+    `const baseFactory = require("../electron-builder.config.cjs");
+
+module.exports = async function localUnsignedConfig(context) {
+  const base = await baseFactory(context);
+  return {
+    ...base,
+    electronFuses: null,
+    mac: {
+      ...base.mac,
+      identity: null,
+      forceCodeSigning: false,
+      notarize: false,
+    },
+  };
+};
+`,
+    "utf8"
+  );
+  process.on("exit", () => {
+    try {
+      rmSync(builderConfig, { force: true });
+    } catch {
+      // best-effort
+    }
+  });
+}
 
 console.log(
   `Packaging local ${isDir ? "app dir" : "dmg"} as v${devVersion} ` +
@@ -143,12 +178,11 @@ run("npx", [
   // passed explicitly — same as the release workflows. Without this the build
   // falls back to defaults and lands in dist/ instead of release/.
   "--config",
-  "electron-builder.config.cjs",
+  builderConfig,
   "--mac",
   target,
   "-c.mac.notarize=false",
   `-c.extraMetadata.version=${devVersion}`,
-  ...(signed ? [] : unsignedArgs),
   ...passthrough,
 ]);
 

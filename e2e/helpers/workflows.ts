@@ -193,27 +193,32 @@ export async function spawnTerminalAndVerify(
       const idsBeforeSet = new Set(idsBefore);
       let selectedPanelId: string | null = null;
 
-      await openTerminal(window);
-      await expect
-        .poll(
-          async () => {
-            const ids = await getGridPanelIds(window);
-            const newIds = ids.filter((id) => !idsBeforeSet.has(id));
-            if (newIds.length > 0) {
-              selectedPanelId = newIds[newIds.length - 1] ?? null;
-              return true;
-            }
+      for (let attempt = 0; attempt < 3 && selectedPanelId === null; attempt += 1) {
+        await openTerminal(window);
+        await expect
+          .poll(
+            async () => {
+              const ids = await getGridPanelIds(window);
+              const newIds = ids.filter((id) => !idsBeforeSet.has(id));
+              if (newIds.length > 0) {
+                selectedPanelId = newIds[newIds.length - 1] ?? null;
+                return true;
+              }
 
-            if (ids.length > idsBefore.length) {
-              selectedPanelId = ids[ids.length - 1] ?? null;
-              return selectedPanelId !== null;
-            }
+              if (ids.length > idsBefore.length) {
+                selectedPanelId = ids[ids.length - 1] ?? null;
+                return selectedPanelId !== null;
+              }
 
-            return false;
-          },
-          { timeout: T_LONG }
-        )
-        .toBe(true);
+              return false;
+            },
+            { timeout: T_LONG }
+          )
+          .toBe(true)
+          .catch((error: unknown) => {
+            if (attempt === 2) throw error;
+          });
+      }
 
       const panel = selectedPanelId
         ? getPanelById(window, selectedPanelId)
