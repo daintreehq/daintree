@@ -68,6 +68,9 @@ const {
     terminalId: null as string | null,
     agentId: null as string | null,
     preferredAgentId: null as string | null,
+    // Consent granted by default (#10699) so the resume/auto-launch coverage
+    // runs; the consent gate is unit-tested in HelpSessionController.test.ts.
+    autoLaunchEnabled: true,
     sessionId: null as string | null,
     introDismissed: true,
     conversationTouched: false,
@@ -76,6 +79,7 @@ const {
     markConversationStarted: vi.fn(),
     setWidth: vi.fn(),
     setOpen: vi.fn(),
+    setAutoLaunchEnabled: vi.fn(),
     clearTerminal: vi.fn(),
     setPreferredAgent: vi.fn(),
     setTerminal: vi.fn(),
@@ -321,6 +325,7 @@ function resetState() {
   helpPanelState.terminalId = null;
   helpPanelState.agentId = null;
   helpPanelState.preferredAgentId = null;
+  helpPanelState.autoLaunchEnabled = true;
   helpPanelState.sessionId = null;
   helpPanelState.introDismissed = true;
   helpPanelState.conversationTouched = false;
@@ -329,6 +334,7 @@ function resetState() {
   helpPanelState.markConversationStarted = vi.fn();
   helpPanelState.setTerminal = vi.fn();
   helpPanelState.setOpen = vi.fn();
+  helpPanelState.setAutoLaunchEnabled = vi.fn();
   helpPanelState.setWidth = vi.fn();
   helpPanelState.clearTerminal = vi.fn();
   helpPanelState.setPreferredAgent = vi.fn();
@@ -509,6 +515,28 @@ describe("HelpPanel — resume from hibernated session", () => {
       "claude",
       "fresh-session"
     );
+  });
+
+  it("does NOT resume a matching hibernated session when autoLaunchEnabled is false (#10699)", async () => {
+    // Consent gates the resume path too — a returning user post-migration must
+    // not silently spend tokens re-launching a hibernated agent on panel open.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
+    helpPanelState.hibernateSessions = {
+      "proj-1": { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+    };
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("resumed-term-1");
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+
+    expect(mockBuildResumeCommand).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+    expect(mockProvisionSession).not.toHaveBeenCalled();
+    expect(helpPanelState.clearHibernateSession).not.toHaveBeenCalled();
   });
 
   it("renders the resume banner after a successful resume", async () => {

@@ -9,8 +9,9 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { ExternalLink, Settings2, ShieldAlert, X } from "lucide-react";
+import { ExternalLink, MessageCircle, Settings2, ShieldAlert, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
 import { MissingCliGate } from "@/components/Terminal/MissingCliGate";
 import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
@@ -65,6 +66,16 @@ const RESIZE_PAGE_STEP = 50;
 
 const ASSISTANT_DOCS_URL = "https://daintree.org/assistant";
 const ASSISTANT_INSTALLER_URL = "https://daintree.org/download";
+
+// First-run starter prompts. Clicking one starts the assistant AND seeds the
+// agent with the question, so the very first session is an explicit, useful
+// action rather than a bare empty terminal. Shown only before the user has
+// ever launched an agent (#10699).
+const STARTER_PROMPTS = [
+  "How do I set up a new worktree?",
+  "Explain Daintree's panel system",
+  "Help me configure my first agent",
+] as const;
 
 interface HelpPanelProps {
   /**
@@ -152,6 +163,7 @@ export function HelpPanel({
     sessionId,
     agentId,
     preferredAgentId,
+    autoLaunchEnabled,
     droppedPreferredAgentId,
     introDismissed,
     conversationTouched,
@@ -160,6 +172,7 @@ export function HelpPanel({
     markConversationStarted,
     setWidth,
     setOpen,
+    setAutoLaunchEnabled,
     dismissIntro,
     clearDroppedPreferredAgent,
   } = useHelpPanelStore(
@@ -170,6 +183,7 @@ export function HelpPanel({
       sessionId: s.sessionId,
       agentId: s.agentId,
       preferredAgentId: s.preferredAgentId,
+      autoLaunchEnabled: s.autoLaunchEnabled,
       droppedPreferredAgentId: s.droppedPreferredAgentId,
       introDismissed: s.introDismissed,
       conversationTouched: s.conversationTouched,
@@ -178,6 +192,7 @@ export function HelpPanel({
       markConversationStarted: s.markConversationStarted,
       setWidth: s.setWidth,
       setOpen: s.setOpen,
+      setAutoLaunchEnabled: s.setAutoLaunchEnabled,
       dismissIntro: s.dismissIntro,
       clearDroppedPreferredAgent: s.clearDroppedPreferredAgent,
     }))
@@ -323,6 +338,7 @@ export function HelpPanel({
       terminalId,
       preferredAgentId,
       supportedInstalledAgentIds,
+      autoLaunchEnabled,
       visibilityEpoch,
     });
   }, [
@@ -334,6 +350,7 @@ export function HelpPanel({
     preferredAgentId,
     supportedInstalledAgentIdsKey,
     supportedInstalledAgentIds,
+    autoLaunchEnabled,
     visibilityEpoch,
   ]);
 
@@ -734,6 +751,31 @@ export function HelpPanel({
     controller.runAnyway();
   }, [controller]);
 
+  // The agent the idle empty state's "Start assistant" CTA would launch — the
+  // user's preference, or the sole installed assistant backend. Mirrors the
+  // controller's own auto-launch eligibility so the CTA is shown only when a
+  // single unambiguous target exists; otherwise the user is sent to settings.
+  const launchableAgentId =
+    preferredAgentId ??
+    (supportedInstalledAgentIds.length === 1 ? (supportedInstalledAgentIds[0] ?? null) : null);
+
+  // Explicit, billed start (#10699). Records consent so future opens may
+  // auto-launch, then launches directly — relying on syncInputs re-evaluation
+  // would leave a render-cycle gap. An optional starter prompt seeds the first
+  // turn (skips the resume path by design).
+  const handleStartAssistant = useCallback(
+    (seedPrompt?: string) => {
+      if (!launchableAgentId) return;
+      setAutoLaunchEnabled(true);
+      controller.launch({
+        agentId: launchableAgentId,
+        replaceExisting: true,
+        ...(seedPrompt ? { seedPrompt } : {}),
+      });
+    },
+    [controller, launchableAgentId, setAutoLaunchEnabled]
+  );
+
   const dismissResume = useCallback(() => controller.dismissResumeBanner(), [controller]);
   const dismissSnapshot = useCallback(() => controller.dismissPreflightSnapshot(), [controller]);
   const dismissTierMismatch = useCallback(() => controller.dismissTierMismatch(), [controller]);
@@ -991,11 +1033,46 @@ export function HelpPanel({
               <p className="text-sm text-daintree-text/70 max-w-[30ch]">
                 Use Daintree Assistant to configure and navigate Daintree.
               </p>
+              {launchableAgentId ? (
+                <div className="flex flex-col items-center gap-4 w-full max-w-[34ch]">
+                  {/* Explicit start — opening the panel no longer auto-bills a
+                      session (#10699); the user kicks it off here. This is the
+                      single load-bearing accent in the idle focus region. */}
+                  <Button
+                    type="button"
+                    onClick={() => handleStartAssistant()}
+                    data-testid="help-start-assistant"
+                  >
+                    <Sparkles />
+                    Start assistant
+                  </Button>
+                  {!hasEverLaunchedAgent && (
+                    <div className="flex flex-col gap-1.5 w-full">
+                      <p className="text-[11px] text-daintree-text/60">Or start with a question</p>
+                      {STARTER_PROMPTS.map((prompt) => (
+                        <button
+                          key={prompt}
+                          type="button"
+                          onClick={() => handleStartAssistant(prompt)}
+                          className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs rounded-[var(--radius-md)] border border-daintree-border text-daintree-text/80 hover:text-daintree-text hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                        >
+                          <MessageCircle className="w-3.5 h-3.5 shrink-0 text-daintree-text/50" />
+                          <span>{prompt}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-daintree-text/70 max-w-[32ch]">
+                  Configure an assistant agent in settings to get started.
+                </p>
+              )}
               <div className="flex flex-col gap-2">
                 <button
                   type="button"
                   onClick={handleOpenSettings}
-                  className="flex items-center gap-1 text-[11px] text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                  className="flex items-center gap-1 text-[11px] text-daintree-text/70 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                 >
                   <Settings2 className="w-3.5 h-3.5" />
                   Assistant settings
@@ -1003,7 +1080,7 @@ export function HelpPanel({
                 <button
                   type="button"
                   onClick={handleOpenAssistantDocs}
-                  className="flex items-center gap-1 text-[11px] text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                  className="flex items-center gap-1 text-[11px] text-daintree-text/70 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                   Daintree Assistant guide
