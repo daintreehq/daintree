@@ -248,6 +248,12 @@ function installApi(
     helpAssistant: { ...helpDefaults, ...helpAssistant },
     mcpServer: { ...mcpDefaults, ...mcpServer },
     system: { ...systemDefaults, ...system },
+    agentCapabilities: {
+      // The model picker (PR #10711) resolves the agent's model catalog on
+      // mount. Default to none so the picker stays hidden and these tests
+      // exercise the pre-picker layout they were written against.
+      getResolvedModelList: vi.fn().mockResolvedValue(null),
+    },
   } as unknown as typeof window.electron;
 }
 
