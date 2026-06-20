@@ -97,24 +97,23 @@ describe("AppLayout assistant off-canvas slide — issue #10693", () => {
     expect(region).not.toBeNull();
     const slide = region![0];
 
-    // Enter (showAssistant): decelerate, 200ms — on both the width spacer and
-    // the transform wrapper so push and slide stay in lockstep.
-    expect(slide).toContain(
-      "transition-[width] duration-[var(--duration-200)] ease-[var(--ease-out-expo)]"
-    );
-    expect(slide).toContain(
-      "transition-transform duration-[var(--duration-200)] ease-[var(--ease-out-expo)]"
-    );
-    // Exit (!showAssistant): accelerate, 120ms.
-    expect(slide).toContain(
-      "transition-[width] duration-[var(--duration-120)] ease-[var(--ease-panel-minimize)]"
-    );
-    expect(slide).toContain(
-      "transition-transform duration-[var(--duration-120)] ease-[var(--ease-panel-minimize)]"
-    );
-    // The asymmetry is driven by showAssistant, and the old symmetric 250ms is
-    // gone from the assistant slide (it remains correct for the sidebar above).
-    expect(slide).toContain("showAssistant");
+    // Bind direction to branch: the enter (200ms decelerate) class must sit on
+    // the `showAssistant ?` true-arm and the exit (120ms accelerate) class on
+    // the `:` false-arm. A bare toContain would pass even if the branches were
+    // swapped (both strings exist either way), so match the ternary shape.
+    // `transitionClass` is the literal (regex-escaped) transition utility: the
+    // spacer animates width via `transition-[width]`, the wrapper slides via
+    // `transition-transform`.
+    const ternary = (transitionClass: string): RegExp =>
+      new RegExp(
+        `showAssistant\\s*\\?\\s*"${transitionClass} duration-\\[var\\(--duration-200\\)\\] ease-\\[var\\(--ease-out-expo\\)\\][^"]*"\\s*:\\s*"${transitionClass} duration-\\[var\\(--duration-120\\)\\] ease-\\[var\\(--ease-panel-minimize\\)\\]`
+      );
+    // The spacer (width push) and the wrapper (transform slide) must carry
+    // identical timing per direction or the push and slide visibly desync.
+    expect(slide).toMatch(ternary("transition-\\[width\\]"));
+    expect(slide).toMatch(ternary("transition-transform"));
+    // The old symmetric 250ms is gone from the assistant slide (it remains
+    // correct for the sidebar above this region).
     expect(slide).not.toContain("--duration-250");
   });
 

@@ -21,6 +21,7 @@ import {
   PANEL_MINIMIZE_DURATION,
   PANEL_MINIMIZE_EASING,
   PANEL_RESTORE_DURATION,
+  PANEL_RESTORE_EASING,
   TERMINAL_ANIMATION_DURATION,
   UI_ANIMATION_DURATION,
   UI_DOHERTY_THRESHOLD,
@@ -340,5 +341,17 @@ describe("panel-motion-tier CSS contract (#10704)", () => {
     const match = css.match(/--ease-panel-minimize\s*:\s*([^;]+);/);
     expect(match).not.toBeNull();
     expect(match?.[1]?.trim()).toBe(PANEL_MINIMIZE_EASING);
+  });
+
+  it("--duration-200 token matches PANEL_RESTORE_DURATION (enter side)", () => {
+    const match = css.match(/--duration-200\s*:\s*([^;]+);/);
+    expect(match).not.toBeNull();
+    expect(match?.[1]?.trim()).toBe(`${PANEL_RESTORE_DURATION}ms`);
+  });
+
+  it("--ease-out-expo token matches PANEL_RESTORE_EASING (enter side)", () => {
+    const match = css.match(/--ease-out-expo\s*:\s*([^;]+);/);
+    expect(match).not.toBeNull();
+    expect(match?.[1]?.trim()).toBe(PANEL_RESTORE_EASING);
   });
 });
