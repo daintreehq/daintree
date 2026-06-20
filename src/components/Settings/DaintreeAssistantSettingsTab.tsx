@@ -35,6 +35,8 @@ import { useDebounce } from "@/hooks/useDebounce";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
+import { agentCapabilitiesClient } from "@/clients/agentCapabilitiesClient";
+import type { AgentModelConfig } from "@shared/config/agentRegistry";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import type {
   HelpAssistantSettings,
@@ -60,9 +62,14 @@ const DEFAULT_SETTINGS: HelpAssistantSettings = {
   tier: "action",
   bypassPermissions: false,
   auditRetention: 7,
+  modelId: "",
   customArgs: "",
   idleHibernateMinutes: 30,
 };
+
+// Radix Select rejects an empty-string item value, so the "use the CLI default"
+// choice carries a sentinel in the dropdown and maps back to "" on persist.
+const MODEL_DEFAULT_SENTINEL = "__default__";
 
 const TIER_OPTIONS = [
   { value: "workbench", label: "Workbench — read-only" },
@@ -194,6 +201,52 @@ export function DaintreeAssistantSettingsTab() {
   // suggest a value is set when it isn't, leaving onChange unfired and the help
   // panel still in its empty state. The placeholder makes "no selection" explicit.
   const agentSelectValue = preferredAgentId ?? "";
+
+  // Resolved model catalog for the currently-preferred agent. `null` means "not
+  // loaded / unavailable" (we render nothing); an empty array means "agent has
+  // no models" (also nothing). The model picker only appears once a non-empty
+  // catalog resolves for the selected agent.
+  const [resolvedModels, setResolvedModels] = useState<AgentModelConfig[] | null>(null);
+
+  useEffect(() => {
+    if (!preferredAgentId) {
+      setResolvedModels(null);
+      return;
+    }
+    let cancelled = false;
+    setResolvedModels(null);
+    agentCapabilitiesClient
+      .getResolvedModelList(preferredAgentId)
+      .then((catalog) => {
+        if (cancelled) return;
+        setResolvedModels(catalog?.models ?? []);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setResolvedModels([]);
+        logError("Failed to load model catalog for assistant tab", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [preferredAgentId]);
+
+  const modelOptions = useMemo(() => {
+    const models = resolvedModels ?? [];
+    const options = [
+      { value: MODEL_DEFAULT_SENTINEL, label: "Default (CLI default)" },
+      ...models.map((m) => ({ value: m.id, label: m.name })),
+    ];
+    // A persisted model that's no longer in the catalog (custom CLI, renamed
+    // model) still needs a matching option or Radix shows a blank trigger.
+    if (settings.modelId && !models.some((m) => m.id === settings.modelId)) {
+      options.push({ value: settings.modelId, label: settings.modelId });
+    }
+    return options;
+  }, [resolvedModels, settings.modelId]);
+
+  const modelSelectValue = settings.modelId || MODEL_DEFAULT_SENTINEL;
+  const showModelPicker = Boolean(resolvedModels && resolvedModels.length > 0);
 
   useEffect(() => {
     let cancelled = false;
@@ -432,6 +485,13 @@ export function DaintreeAssistantSettingsTab() {
 
   const handleAgentChange = (value: string) => {
     setPreferredAgent(value || null);
+    // Model IDs are agent-specific — a Claude model passed to Gemini's --model
+    // would break the launch — so clear any stale selection on agent change.
+    if (settings.modelId) void persist({ modelId: "" });
+  };
+
+  const handleModelChange = (value: string) => {
+    void persist({ modelId: value === MODEL_DEFAULT_SENTINEL ? "" : value });
   };
 
   const handleCustomArgsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -542,13 +602,23 @@ export function DaintreeAssistantSettingsTab() {
           placeholder="Choose an agent"
           disabled={loading || agentOptions.length === 0}
         />
+        {showModelPicker && (
+          <SettingsSelect
+            label="Model"
+            description="The model the assistant launches with. Custom CLI args override this."
+            value={modelSelectValue}
+            onValueChange={handleModelChange}
+            options={modelOptions}
+            disabled={loading}
+          />
+        )}
         <SettingsInput
           label="Custom CLI args"
           description={
             <>
-              Whitespace-separated flags appended to the launch command — e.g.{" "}
-              <code className="font-mono text-[11px]">--model sonnet</code>. Applies to new
-              assistant sessions.
+              Advanced — whitespace-separated flags appended to the launch command. Use the Model
+              picker above for the model; a <code className="font-mono text-[11px]">--model</code>{" "}
+              flag here overrides it. Applies to new assistant sessions.
             </>
           }
           type="text"
@@ -556,7 +626,7 @@ export function DaintreeAssistantSettingsTab() {
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"
-          placeholder="--model sonnet"
+          placeholder="--verbose"
           value={displayedCustomArgs}
           onChange={handleCustomArgsChange}
           disabled={loading}

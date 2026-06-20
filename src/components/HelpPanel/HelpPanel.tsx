@@ -260,6 +260,19 @@ export function HelpPanel({
     pinnedContext.worktreeId !== focusedWorktreeId;
 
   const agentConfig = agentId ? getAgentConfig(agentId) : undefined;
+  // The model the live session actually launched with, read from its persisted
+  // launch flags (not current settings — those can drift after the session
+  // starts). `lastIndexOf` so a custom-args `--model` override wins, matching the
+  // CLI's last-flag semantics. Resolved to the catalog short label when known.
+  const launchedModelLabel = useMemo(() => {
+    const flags = terminalPty?.agentLaunchFlags;
+    if (!flags || !agentId) return null;
+    const idx = flags.lastIndexOf("--model");
+    if (idx === -1 || idx + 1 >= flags.length) return null;
+    const modelId = flags[idx + 1];
+    if (!modelId) return null;
+    return getAgentConfig(agentId)?.models?.find((m) => m.id === modelId)?.shortLabel ?? modelId;
+  }, [terminalPty?.agentLaunchFlags, agentId]);
   const effectiveAgentId = isBuiltInAgentId(agentId) ? agentId : undefined;
   const showHybridInputBar = shouldShowHybridInputBar({
     hasAgentIdentity: effectiveAgentId !== undefined,
@@ -1078,18 +1091,32 @@ export function HelpPanel({
               // and frees up the tight footer width.
               <span
                 className="flex items-center gap-1 shrink-0"
-                title={`Assistant agent: ${agentConfig.name}`}
+                title={
+                  launchedModelLabel
+                    ? `Assistant agent: ${agentConfig.name} · ${launchedModelLabel}`
+                    : `Assistant agent: ${agentConfig.name}`
+                }
               >
                 <DaintreeIcon className="w-3.5 h-3.5" />
                 Assistant
+                {launchedModelLabel && (
+                  <span className="text-daintree-text/50">· {launchedModelLabel}</span>
+                )}
               </span>
             ) : (
               <span
                 className="flex items-center gap-1 shrink-0"
-                title={`Assistant agent: ${agentConfig.name}`}
+                title={
+                  launchedModelLabel
+                    ? `Assistant agent: ${agentConfig.name} · ${launchedModelLabel}`
+                    : `Assistant agent: ${agentConfig.name}`
+                }
               >
                 <agentConfig.icon className="w-3.5 h-3.5" />
                 {agentConfig.name}
+                {launchedModelLabel && (
+                  <span className="text-daintree-text/50">· {launchedModelLabel}</span>
+                )}
               </span>
             )}
           </span>

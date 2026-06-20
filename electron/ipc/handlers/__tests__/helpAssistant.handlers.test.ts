@@ -81,6 +81,7 @@ describe("registerHelpAssistantHandlers", () => {
       tier: "action",
       bypassPermissions: false,
       auditRetention: 7,
+      modelId: "",
       customArgs: "",
       idleHibernateMinutes: 30,
     });
@@ -102,6 +103,7 @@ describe("registerHelpAssistantHandlers", () => {
       tier: "system",
       bypassPermissions: true,
       auditRetention: 30,
+      modelId: "",
       customArgs: "",
       idleHibernateMinutes: 30,
     });
@@ -274,6 +276,7 @@ describe("registerHelpAssistantHandlers", () => {
       tier: "action",
       bypassPermissions: false,
       auditRetention: 7,
+      modelId: "",
       customArgs: "",
       idleHibernateMinutes: 30,
     });
@@ -458,6 +461,104 @@ describe("registerHelpAssistantHandlers", () => {
 
     const result = await handler(null);
     expect(result).toMatchObject({ customArgs: "--model sonnet" });
+  });
+
+  it("persists a valid modelId", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { modelId: "claude-sonnet-4-6" });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith(
+      "helpAssistant.modelId",
+      "claude-sonnet-4-6"
+    );
+  });
+
+  it("persists an empty modelId so the user can clear back to the CLI default", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { modelId: "" });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelId", "");
+  });
+
+  it("trims surrounding whitespace from modelId", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { modelId: "  gpt-5.5  " });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelId", "gpt-5.5");
+  });
+
+  it("rejects a modelId with internal whitespace (not a single token)", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { modelId: "claude sonnet" });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("rejects a modelId that would inject a bare flag (leading dash)", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { modelId: "--dangerously-skip-permissions" });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("rejects a modelId containing shell metacharacters", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { modelId: "sonnet;rm -rf /" });
+    await handler(null, { modelId: "$(whoami)" });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("rejects a modelId that is not a string", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { modelId: 42 as unknown as string });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("caps modelId length at 200 characters", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { modelId: "m".repeat(250) });
+
+    const call = storeMock.set.mock.calls[0];
+    expect(call?.[0]).toBe("helpAssistant.modelId");
+    expect((call?.[1] as string).length).toBe(200);
+  });
+
+  it("loads a valid stored modelId from the store", async () => {
+    storeMock.get.mockReturnValue({ modelId: "claude-opus-4-8" });
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
+
+    const result = await handler(null);
+    expect(result).toMatchObject({ modelId: "claude-opus-4-8" });
+  });
+
+  it("sanitizes a corrupted stored modelId back to the empty-string default", async () => {
+    storeMock.get.mockReturnValue({
+      modelId: "sonnet;rm -rf /" as unknown as string,
+    });
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
+
+    const result = await handler(null);
+    expect(result).toMatchObject({ modelId: "" });
   });
 });
 

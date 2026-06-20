@@ -407,14 +407,21 @@ async function checkAssistantVersion(
   return result.status === "too-old" ? result.block : null;
 }
 
-async function loadCustomLaunchFlags(): Promise<string[]> {
+// Exported for unit coverage of the model/customArgs flag composition.
+export async function loadCustomLaunchFlags(): Promise<string[]> {
   try {
     const settings = await window.electron.helpAssistant.getSettings();
+    const flags: string[] = [];
+    // The model picker injects `--model <id>` first so a `--model` typed into
+    // custom args still wins (CLIs are last-flag-wins on repeated `--model`),
+    // keeping custom args the advanced override.
+    const modelId = settings.modelId?.trim();
+    if (modelId) flags.push("--model", modelId);
     const raw = settings.customArgs?.trim();
-    if (!raw) return [];
-    return raw.split(/\s+/).filter(Boolean);
+    if (raw) flags.push(...raw.split(/\s+/).filter(Boolean));
+    return flags;
   } catch (err) {
-    logError("Failed to load helpAssistant customArgs", err);
+    logError("Failed to load helpAssistant launch flags", err);
     return [];
   }
 }

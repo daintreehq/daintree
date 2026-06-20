@@ -2015,7 +2015,15 @@ export interface HelpAssistantSettings {
   bypassPermissions: boolean;
   /** How long to retain help-session audit logs. 7 = 7 days, 30 = 30 days, 0 = off. Defaults to 7. */
   auditRetention: HelpAssistantAuditRetention;
-  /** Whitespace-separated CLI flags appended at assistant launch (e.g. "--model sonnet"). Defaults to "". */
+  /**
+   * Model the assistant launches with, injected as `--model <id>` ahead of
+   * {@link customArgs} so a `--model` in custom args still wins as the advanced
+   * override. Empty string means "use the CLI's default model" (no flag).
+   * Model IDs are agent-specific, so this is reset whenever the agent changes.
+   * Defaults to "".
+   */
+  modelId: string;
+  /** Whitespace-separated CLI flags appended at assistant launch (advanced override). Defaults to "". */
   customArgs: string;
   /**
    * Minutes the assistant panel must be continuously hidden before its PTY is

@@ -26,6 +26,9 @@ async function getMcpServerService(): Promise<McpServerSingleton> {
 }
 
 const CUSTOM_ARGS_MAX_LEN = 10000;
+// A model ID is a single CLI token (e.g. "claude-sonnet-4-6"); cap well above
+// any realistic ID so a corrupted store value can't bloat the launch command.
+const MODEL_ID_MAX_LEN = 200;
 
 const HELP_ASSISTANT_DEFAULTS: HelpAssistantSettings = {
   docSearch: true,
@@ -33,6 +36,7 @@ const HELP_ASSISTANT_DEFAULTS: HelpAssistantSettings = {
   tier: "action",
   bypassPermissions: false,
   auditRetention: 7,
+  modelId: "",
   customArgs: "",
   idleHibernateMinutes: 30,
 };
@@ -43,6 +47,7 @@ const HELP_ASSISTANT_KEYS = [
   "tier",
   "bypassPermissions",
   "auditRetention",
+  "modelId",
   "customArgs",
   "idleHibernateMinutes",
 ] as const satisfies ReadonlyArray<keyof HelpAssistantSettings>;
@@ -69,6 +74,22 @@ function sanitizeCustomArgs(value: unknown): string | undefined {
   return collapsed.slice(0, CUSTOM_ARGS_MAX_LEN);
 }
 
+// A valid model ID is a single shell-safe token. The empty string is valid and
+// means "use the CLI default" (no `--model` injected). Anything with
+// whitespace, a leading `-` (would inject a bare flag), or shell metacharacters
+// is rejected outright rather than coerced — the picker only ever emits clean
+// IDs, so a dirty value is corruption, not a near-miss to salvage.
+function sanitizeModelId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  // eslint-disable-next-line no-control-regex
+  const cleaned = value.replace(/[\x00-\x1f\x7f]/g, "").trim();
+  if (cleaned === "") return "";
+  if (/\s/.test(cleaned)) return undefined;
+  if (cleaned.startsWith("-")) return undefined;
+  if (hasShellMetachar(cleaned)) return undefined;
+  return cleaned.slice(0, MODEL_ID_MAX_LEN);
+}
+
 function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {
   if (!stored || typeof stored !== "object") return {};
   const out: Partial<HelpAssistantSettings> = {};
@@ -93,6 +114,8 @@ function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {
   if (isValidIdleHibernateMinutes(record.idleHibernateMinutes)) {
     out.idleHibernateMinutes = record.idleHibernateMinutes;
   }
+  const sanitizedModelId = sanitizeModelId(record.modelId);
+  if (sanitizedModelId !== undefined) out.modelId = sanitizedModelId;
   const sanitizedArgs = sanitizeCustomArgs(record.customArgs);
   if (sanitizedArgs !== undefined) out.customArgs = sanitizedArgs;
   return out;
@@ -149,6 +172,11 @@ export const helpAssistantNamespace = defineIpcNamespace({
           let storedValue: unknown = value;
           if (field === "customArgs") {
             const sanitized = sanitizeCustomArgs(value);
+            if (sanitized === undefined) continue;
+            storedValue = sanitized;
+          }
+          if (field === "modelId") {
+            const sanitized = sanitizeModelId(value);
             if (sanitized === undefined) continue;
             storedValue = sanitized;
           }
