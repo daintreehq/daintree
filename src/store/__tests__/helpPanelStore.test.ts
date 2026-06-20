@@ -227,7 +227,7 @@ describe("helpPanelStore persistence migration", () => {
           introDismissed: boolean;
         };
       };
-      expect(parsed.version).toBe(4);
+      expect(parsed.version).toBe(5);
       expect(parsed.state.width).toBe(450);
       expect(parsed.state.preferredAgentId).toBeNull();
     } finally {
@@ -295,7 +295,7 @@ describe("helpPanelStore persistence migration", () => {
       expect(written).toBeDefined();
       const parsed: unknown = JSON.parse(written!);
       expect(parsed).toMatchObject({
-        version: 4,
+        version: 5,
         state: { introDismissed: true },
       });
     } finally {
@@ -357,7 +357,7 @@ describe("helpPanelStore persistence migration", () => {
         version: number;
         state: Record<string, unknown>;
       };
-      expect(parsed.version).toBe(4);
+      expect(parsed.version).toBe(5);
       expect(parsed.state).not.toHaveProperty("isOpen");
     } finally {
       vi.useRealTimers();
@@ -604,7 +604,7 @@ describe("helpPanelStore persistence migration", () => {
           version: number;
           state: { hibernateSessions: Record<string, unknown> };
         };
-        expect(parsed.version).toBe(4);
+        expect(parsed.version).toBe(5);
         expect(parsed.state.hibernateSessions).toEqual({
           "proj-a": { sessionId: "session-a", cwd: "/tmp/a", agentId: "claude" },
         });
@@ -707,6 +707,92 @@ describe("helpPanelStore persistence migration", () => {
       // Other fields still load correctly
       expect(store.getState().preferredAgentId).toBe("claude");
       expect(store.getState().introDismissed).toBe(true);
+    });
+  });
+
+  describe("autoLaunchEnabled (#10699)", () => {
+    it("starts false on a fresh install so opening the panel never auto-bills a session", async () => {
+      installLocalStorage({});
+
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+      expect(store.getState().autoLaunchEnabled).toBe(false);
+    });
+
+    it("defaults to false for a returning v4 user with a preferredAgentId set (no carve-out)", async () => {
+      // The whole point of #10699: existing installs must NOT keep silently
+      // auto-launching. A v4 blob has no autoLaunchEnabled field at all.
+      const v4Blob = JSON.stringify({
+        version: 4,
+        state: { width: 400, preferredAgentId: "claude", introDismissed: true },
+      });
+      installLocalStorage({ [STORAGE_KEY]: v4Blob });
+
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+      expect(store.getState().preferredAgentId).toBe("claude");
+      expect(store.getState().autoLaunchEnabled).toBe(false);
+    });
+
+    it("preserves autoLaunchEnabled: true from a persisted blob across rehydration", async () => {
+      const blob = JSON.stringify({
+        version: 5,
+        state: { width: 400, preferredAgentId: "claude", autoLaunchEnabled: true },
+      });
+      installLocalStorage({ [STORAGE_KEY]: blob });
+
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+      expect(store.getState().autoLaunchEnabled).toBe(true);
+    });
+
+    it("falls back to false when persisted autoLaunchEnabled has a non-boolean type", async () => {
+      const malformed = JSON.stringify({
+        version: 5,
+        state: { width: 400, preferredAgentId: null, autoLaunchEnabled: "true" },
+      });
+      installLocalStorage({ [STORAGE_KEY]: malformed });
+
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+      expect(store.getState().autoLaunchEnabled).toBe(false);
+    });
+
+    it("setAutoLaunchEnabled(true) records consent and persists it", async () => {
+      vi.useFakeTimers();
+      try {
+        const backing = installLocalStorage({});
+
+        const { useHelpPanelStore: store } = await import("../helpPanelStore");
+        store.getState().setAutoLaunchEnabled(true);
+        expect(store.getState().autoLaunchEnabled).toBe(true);
+        vi.advanceTimersByTime(400);
+
+        const written = backing.get(STORAGE_KEY);
+        expect(written).toBeDefined();
+        const parsed = JSON.parse(written!) as {
+          version: number;
+          state: Record<string, unknown>;
+        };
+        expect(parsed.version).toBe(5);
+        expect(parsed.state.autoLaunchEnabled).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("setAutoLaunchEnabled(false) flips consent back off", async () => {
+      const blob = JSON.stringify({
+        version: 5,
+        state: { width: 400, preferredAgentId: "claude", autoLaunchEnabled: true },
+      });
+      installLocalStorage({ [STORAGE_KEY]: blob });
+
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      expect(store.getState().autoLaunchEnabled).toBe(true);
+
+      store.getState().setAutoLaunchEnabled(false);
+      expect(store.getState().autoLaunchEnabled).toBe(false);
     });
   });
 

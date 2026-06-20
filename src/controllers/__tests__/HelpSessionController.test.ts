@@ -498,6 +498,7 @@ describe("HelpSessionController — syncInputs", () => {
       terminalId: null,
       preferredAgentId: "claude",
       supportedInstalledAgentIds: [],
+      autoLaunchEnabled: true,
       visibilityEpoch: 0,
     });
     expect(ctrl.getSnapshot().assistantVersionTooOld).not.toBeNull();
@@ -509,6 +510,7 @@ describe("HelpSessionController — syncInputs", () => {
       terminalId: null,
       preferredAgentId: "codex",
       supportedInstalledAgentIds: [],
+      autoLaunchEnabled: true,
       visibilityEpoch: 0,
     });
     expect(ctrl.getSnapshot().assistantVersionTooOld).toBeNull();
@@ -548,6 +550,7 @@ describe("HelpSessionController — launch phase FSM", () => {
         terminalId: null,
         preferredAgentId: "claude",
         supportedInstalledAgentIds: ["claude"],
+        autoLaunchEnabled: true,
         visibilityEpoch: 0,
       });
       expect(ctrl.getSnapshot().phase).toBe("version-checking");
@@ -584,6 +587,7 @@ describe("HelpSessionController — launch phase FSM", () => {
       terminalId: null,
       preferredAgentId: null,
       supportedInstalledAgentIds: [],
+      autoLaunchEnabled: true,
       visibilityEpoch: 0,
     });
 
@@ -628,6 +632,7 @@ describe("HelpSessionController — launch phase FSM", () => {
       terminalId: null,
       preferredAgentId: "claude",
       supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
       visibilityEpoch: 0,
     });
 
@@ -667,12 +672,71 @@ describe("HelpSessionController — launch phase FSM", () => {
       terminalId: null,
       preferredAgentId: "claude",
       supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
       visibilityEpoch: 0,
     });
 
     await vi.waitFor(() => {
       expect(ctrl.getSnapshot().phase).toBe("idle");
     });
+    expect(vi.mocked(actionService.dispatch)).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("does NOT auto-launch when autoLaunchEnabled is false, despite a preferred agent + open ready panel (#10699)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: false,
+      visibilityEpoch: 0,
+    });
+
+    // The auto-launch path writes phase synchronously before its first await,
+    // so an idle phase here proves the consent gate short-circuited it.
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    expect(ctrl["_hasAutoLaunched"]).toBe(false);
+
+    // A visibility-restore epoch bump must not bypass consent either.
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: false,
+      visibilityEpoch: 1,
+    });
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    expect(vi.mocked(actionService.dispatch)).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("does NOT auto-launch a sole installed agent when autoLaunchEnabled is false (#10699)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: null,
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: false,
+      visibilityEpoch: 0,
+    });
+
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    expect(ctrl["_hasAutoLaunched"]).toBe(false);
     expect(vi.mocked(actionService.dispatch)).not.toHaveBeenCalled();
     ctrl.stop();
   });
@@ -745,6 +809,7 @@ describe("HelpSessionController — launch phase FSM", () => {
       terminalId: null,
       preferredAgentId: "claude",
       supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
       visibilityEpoch: 0,
     });
 
@@ -1016,6 +1081,7 @@ describe("HelpSessionController — session revoked (#10017)", () => {
       terminalId: null,
       preferredAgentId: "claude",
       supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
       visibilityEpoch: 0,
     };
     ctrl["_patch"]({ sessionRevoked: { sessionId: "sess-old", denialKind: "tierMismatch" } });
@@ -1541,6 +1607,7 @@ describe("HelpSessionController — launch error routing", () => {
       terminalId: null,
       preferredAgentId: "claude",
       supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
       visibilityEpoch: 0,
     };
   }
@@ -1753,6 +1820,7 @@ describe("HelpSessionController — launch error routing", () => {
       terminalId: null,
       preferredAgentId,
       supportedInstalledAgentIds: ["claude", "codex"],
+      autoLaunchEnabled: true,
       visibilityEpoch: 0,
     });
     ctrl.syncInputs(inputs("claude"));

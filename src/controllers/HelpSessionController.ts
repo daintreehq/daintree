@@ -230,6 +230,12 @@ export interface HelpSessionInputs {
   terminalId: string | null;
   preferredAgentId: string | null;
   supportedInstalledAgentIds: readonly string[];
+  /**
+   * User consent to auto-launch a billed session when the panel opens (#10699).
+   * False until the user explicitly starts the assistant once; auto-launch is
+   * fully suppressed while false, so revealing the panel never bills a session.
+   */
+  autoLaunchEnabled: boolean;
   /** Bumped each time the panel becomes visible — re-evaluates auto-launch. */
   visibilityEpoch: number;
 }
@@ -1886,6 +1892,10 @@ export class HelpSessionController {
   }
 
   private _maybeAutoLaunch(inputs: HelpSessionInputs): void {
+    // Consent gate first (#10699): with no explicit opt-in, opening the panel
+    // must never start a billed session. Placed ahead of the visibility check
+    // so a visibilityEpoch re-arm can't bypass consent on a restore.
+    if (!inputs.autoLaunchEnabled) return;
     if (typeof document !== "undefined" && document.hidden) return;
     if (!inputs.isOpen) return;
     if (!inputs.isReadyToLaunch) return;
