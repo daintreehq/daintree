@@ -759,6 +759,13 @@ export async function initGlobalServices(
     // reference store — no MCP SDK loaded.
     helpSessionService.setMcpRegistry(registryRef);
 
+    // Arm the periodic orphan-bearer sweep (#10698): a defense-in-depth bound
+    // that revokes provisional session tokens minted by a launch that hung and
+    // was abandoned without the renderer revoking. The renderer watchdog is the
+    // primary fix; this catches the residual case (renderer crash / view torn
+    // down mid-launch). The timer is unref'd, so it never holds the process up.
+    helpSessionService.startOrphanSweep();
+
     // Load the pending-hibernation file and wire it into HelpSessionService.
     // Floated, not awaited: the deadline is the user's first project switch
     // (project-view eviction fires inside `pvm.switchTo()`, possibly before

@@ -1259,6 +1259,10 @@ export class HelpSessionController {
       this._launchGen++;
       this._hasAutoLaunched = false;
       this._isLaunching = false;
+      // The gen-check above proves we still own `_pendingSessionId`, so a
+      // post-provision hang doesn't strand the minted bearer. Revoke it
+      // before resetting — otherwise the token outlives the launch forever.
+      this._revokePendingSession();
       this._resetPhase();
       this._surfaceLaunchError(agentId, "spawn-failed");
     }, this.LAUNCH_WATCHDOG_MS);
@@ -2118,7 +2122,9 @@ export class HelpSessionController {
           usePanelStore.getState().removePanel(result.result.terminalId);
         }
         revokeHelpSession(session?.sessionId ?? null);
-        this._pendingSessionId = null;
+        if (this._pendingSessionId === session?.sessionId) {
+          this._pendingSessionId = null;
+        }
         this._hasAutoLaunched = false;
         // The preference changed mid-launch, so re-evaluate against the
         // current inputs rather than waiting on an incidental re-render to
@@ -2138,7 +2144,9 @@ export class HelpSessionController {
       if (!result.ok || !result.result?.terminalId) {
         this._hasAutoLaunched = false;
         revokeHelpSession(session?.sessionId ?? null);
-        this._pendingSessionId = null;
+        if (this._pendingSessionId === session?.sessionId) {
+          this._pendingSessionId = null;
+        }
         logError("Help auto-launch failed", { agentId: launchAgentId, result });
         this._surfaceLaunchError(launchAgentId, "spawn-failed");
         return;
@@ -2167,8 +2175,13 @@ export class HelpSessionController {
       // provision step (e.g. agent.launch rejecting) leaves a live session
       // token with no bound terminal. Revoke it, clear the pending-session
       // guard, and surface the failure so the panel isn't left silently empty.
+      // A late-rejecting dispatch can reach here AFTER the watchdog (or a
+      // newer launch) bumped the generation — only null `_pendingSessionId`
+      // when it's still ours, so we don't clobber a newer launch's guard.
       revokeHelpSession(session?.sessionId ?? null);
-      this._pendingSessionId = null;
+      if (this._pendingSessionId === session?.sessionId) {
+        this._pendingSessionId = null;
+      }
       this._surfaceLaunchError(launchAgentId, "spawn-failed");
     } finally {
       // Only the generation that still owns the launch clears the watchdog and
@@ -2408,7 +2421,12 @@ export class HelpSessionController {
       } else {
         this._hasAutoLaunched = false;
         revokeHelpSession(session?.sessionId ?? null);
-        this._pendingSessionId = null;
+        // A late-rejecting dispatch can land here after the watchdog (or a
+        // newer launch) bumped the generation — only clear the guard when the
+        // pending session is still ours, never a newer launch's.
+        if (this._pendingSessionId === session?.sessionId) {
+          this._pendingSessionId = null;
+        }
         logError("Help select-agent launch failed", error);
       }
       this._surfaceLaunchError(launchAgentId, "spawn-failed");
