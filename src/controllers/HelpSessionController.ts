@@ -1995,6 +1995,12 @@ export class HelpSessionController {
     // The finally drops the phase back to idle on a non-success exit that's
     // still the current generation, so the loading skeleton never sticks.
     let reached = false;
+    // Set by the preferred-agent stale guard when the preference changed
+    // mid-flight: the re-launch for the now-current agent must run AFTER the
+    // finally releases `_isLaunching`, or launch()'s re-entrancy guard would
+    // see this generation still holding it and silently drop the relaunch
+    // (#10703) — leaving `_hasAutoLaunched` stuck and blocking all auto-launch.
+    let pendingReEval: HelpSessionInputs | null = null;
     // Clear any prior failure banner up front so a retry immediately drops the
     // stale error while the new attempt is in flight.
     this._patch({ launchError: null });
@@ -2183,8 +2189,12 @@ export class HelpSessionController {
             this._pendingSessionId = null;
           }
           this._hasAutoLaunched = false;
+          // Defer the relaunch to the finally so it runs after `_isLaunching`
+          // is released (see `pendingReEval`). Read preferredAgentId straight
+          // from the store so the re-eval targets the agent that superseded
+          // this one, never looping on the old agent.
           if (this._lastInputs) {
-            this._maybeAutoLaunch({ ...this._lastInputs, preferredAgentId: currentPreferred });
+            pendingReEval = { ...this._lastInputs, preferredAgentId: currentPreferred };
           }
           return;
         }
@@ -2267,6 +2277,10 @@ export class HelpSessionController {
         this._clearLaunchWatchdog();
         if (!reached) this._resetPhase();
       }
+      // Preference changed mid-flight: re-evaluate now that the guard is
+      // released so the now-current preferred agent can auto-launch instead of
+      // waiting on an incidental render to re-fire the effect.
+      if (pendingReEval) this._maybeAutoLaunch(pendingReEval);
     }
   }
 }

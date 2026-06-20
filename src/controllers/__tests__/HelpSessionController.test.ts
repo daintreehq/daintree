@@ -1819,32 +1819,84 @@ describe("HelpSessionController — launch error routing", () => {
     ctrl.stop();
   });
 
-  it("preferred-agent auto-launch abandons and re-evaluates when preferredAgentId changes mid-dispatch (#10703)", async () => {
+  it("preferred-agent auto-launch abandons and relaunches the new agent when preferredAgentId changes mid-dispatch (#10703)", async () => {
     const ctrl = new HelpSessionController();
     ctrl.start();
-    primeInputs(ctrl, true);
     helpPanelState.preferredAgentId = "claude";
-    ctrl["_launchGen"] = 7;
-    provisionMock().mockResolvedValueOnce({
-      sessionId: "sess-stale",
-      sessionPath: "/s/stale",
-      token: "tok",
-      mcpUrl: null,
-      windowId: 1,
-    });
     (
       window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
     ).takePendingHibernation = vi.fn().mockResolvedValue(null);
-    // The user switches preferred agent while the launch IPC is in flight.
-    (actionService.dispatch as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
-      helpPanelState.preferredAgentId = "codex";
-      return { ok: true, result: { terminalId: "term-stale" } };
-    });
-    const reEval = vi.spyOn(
-      ctrl as unknown as { _maybeAutoLaunch: () => void },
-      "_maybeAutoLaunch"
+    provisionMock()
+      .mockResolvedValueOnce({
+        sessionId: "sess-claude",
+        sessionPath: "/s/claude",
+        token: "tok",
+        mcpUrl: null,
+        windowId: 1,
+      })
+      .mockResolvedValueOnce({
+        sessionId: "sess-codex",
+        sessionPath: "/s/codex",
+        token: "tok",
+        mcpUrl: null,
+        windowId: 1,
+      });
+    // The user switches preferred agent while the claude launch IPC is in
+    // flight; the codex relaunch must then succeed.
+    (actionService.dispatch as ReturnType<typeof vi.fn>).mockImplementation(
+      async (_action: string, args: { agentId: string }) => {
+        if (args.agentId === "claude") {
+          helpPanelState.preferredAgentId = "codex";
+          return { ok: true, result: { terminalId: "term-claude" } };
+        }
+        return { ok: true, result: { terminalId: "term-codex" } };
+      }
     );
-    reEval.mockImplementation(() => {});
+
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "p1", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude", "codex"],
+      autoLaunchEnabled: true,
+      visibilityEpoch: 0,
+    });
+
+    // The relaunch must actually reach the codex agent — the bug this guards
+    // against is the re-eval's launch() being swallowed by the still-held
+    // re-entrancy guard, leaving _hasAutoLaunched stuck and codex unlaunched.
+    await vi.waitFor(() => {
+      expect(helpPanelState.setTerminal).toHaveBeenCalledWith("term-codex", "codex", "sess-codex");
+    });
+    // The superseded claude attempt is cleaned up: orphan terminal removed,
+    // stale session token revoked.
+    expect(panelStoreState.removePanel).toHaveBeenCalledWith("term-claude");
+    expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-claude");
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "codex" }),
+      expect.anything()
+    );
+    expect(ctrl.getSnapshot().phase).toBe("live");
+    ctrl.stop();
+  });
+
+  it("skips the version-too-old banner when preferredAgentId changes during the probe (#10703)", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    ctrl["_hasAutoLaunched"] = true;
+    ctrl["_launchGen"] = 7;
+    // The probe reports claude as too old, but the user switches to codex
+    // before it resolves — the stale "Update Claude" gate must not apply.
+    (window.electron.system.getAgentVersion as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async () => {
+        helpPanelState.preferredAgentId = "codex";
+        return { installedVersion: "0.9.0", latestVersion: "1.2.0" };
+      }
+    );
 
     await ctrl["_executeLaunch"](
       7,
@@ -1853,17 +1905,11 @@ describe("HelpSessionController — launch error routing", () => {
       undefined
     );
 
-    // The orphaned terminal is removed and the stale session token revoked,
-    // rather than binding the panel to the superseded agent.
-    expect(panelStoreState.removePanel).toHaveBeenCalledWith("term-stale");
-    expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-stale");
-    expect(ctrl["_pendingSessionId"]).toBeNull();
+    expect(ctrl.getSnapshot().assistantVersionTooOld).toBeNull();
+    // _hasAutoLaunched is released so codex can auto-launch on the next render.
     expect(ctrl["_hasAutoLaunched"]).toBe(false);
-    // The launch re-evaluates against the now-current preference so the newly
-    // preferred agent auto-launches instead of waiting on an incidental render.
-    expect(reEval).toHaveBeenCalledWith(expect.objectContaining({ preferredAgentId: "codex" }));
-    // It must not have left the panel bound to the stale agent.
-    expect(ctrl.getSnapshot().phase).not.toBe("live");
+    // The abandoned claude launch must never have minted a session.
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
     ctrl.stop();
   });
 
