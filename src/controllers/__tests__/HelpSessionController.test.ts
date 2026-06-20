@@ -1806,11 +1806,64 @@ describe("HelpSessionController — launch error routing", () => {
     ).takePendingHibernation = vi.fn().mockResolvedValue(null);
     (actionService.dispatch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("boom"));
 
-    await ctrl["_executeAutoLaunch"](7, "claude", { id: "p1", path: "/repo" });
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
 
     expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-x");
     expect(ctrl["_pendingSessionId"]).toBeNull();
     expect(ctrl.getSnapshot().launchError).toEqual({ agentId: "claude", kind: "spawn-failed" });
+    ctrl.stop();
+  });
+
+  it("preferred-agent auto-launch abandons and re-evaluates when preferredAgentId changes mid-dispatch (#10703)", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    primeInputs(ctrl, true);
+    helpPanelState.preferredAgentId = "claude";
+    ctrl["_launchGen"] = 7;
+    provisionMock().mockResolvedValueOnce({
+      sessionId: "sess-stale",
+      sessionPath: "/s/stale",
+      token: "tok",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    (
+      window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
+    ).takePendingHibernation = vi.fn().mockResolvedValue(null);
+    // The user switches preferred agent while the launch IPC is in flight.
+    (actionService.dispatch as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+      helpPanelState.preferredAgentId = "codex";
+      return { ok: true, result: { terminalId: "term-stale" } };
+    });
+    const reEval = vi.spyOn(
+      ctrl as unknown as { _maybeAutoLaunch: () => void },
+      "_maybeAutoLaunch"
+    );
+    reEval.mockImplementation(() => {});
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    // The orphaned terminal is removed and the stale session token revoked,
+    // rather than binding the panel to the superseded agent.
+    expect(panelStoreState.removePanel).toHaveBeenCalledWith("term-stale");
+    expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-stale");
+    expect(ctrl["_pendingSessionId"]).toBeNull();
+    expect(ctrl["_hasAutoLaunched"]).toBe(false);
+    // The launch re-evaluates against the now-current preference so the newly
+    // preferred agent auto-launches instead of waiting on an incidental render.
+    expect(reEval).toHaveBeenCalledWith(expect.objectContaining({ preferredAgentId: "codex" }));
+    // It must not have left the panel bound to the stale agent.
+    expect(ctrl.getSnapshot().phase).not.toBe("live");
     ctrl.stop();
   });
 
@@ -1870,7 +1923,12 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
       agentId: "claude",
     };
 
-    await ctrl["_executeAutoLaunch"](7, "claude", { id: "p1", path: "/repo" });
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
 
     // The phase still reached live (the spawn succeeded via --continue) but
     // the resume-banner claim is suppressed because we never had a real id.
@@ -1896,7 +1954,12 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
       agentId: "claude",
     };
 
-    await ctrl["_executeAutoLaunch"](7, "claude", { id: "p1", path: "/repo" });
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
 
     expect(ctrl.getSnapshot().phase).toBe("live");
     expect(ctrl.getSnapshot().showResumeBanner).toBe(true);
