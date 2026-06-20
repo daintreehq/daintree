@@ -611,8 +611,8 @@ export const RATE_LIMIT_TOOL_MAP: ReadonlyMap<string, RateLimitConfig> = new Map
   ["help.displayImage", RATE_LIMIT_TIERS.mutation],
   // Fleet-arming mutations (#10695): churning the broadcast set reroutes the
   // human's keystrokes, so cap at mutation tier rather than 30/min standard.
-  // disarm/disarmAll have no per-call confirm gate; arm is confirm-gated but
-  // tiered alongside them for a consistent cohort.
+  // None carry a per-call confirm gate (all classified danger:"safe"); the
+  // mutation-tier rate limit is the cohort's shared throttle.
   ["terminal.arm", RATE_LIMIT_TIERS.mutation],
   ["terminal.disarm", RATE_LIMIT_TIERS.mutation],
   ["terminal.disarmAll", RATE_LIMIT_TIERS.mutation],

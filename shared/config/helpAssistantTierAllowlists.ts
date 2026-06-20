@@ -139,6 +139,10 @@ export const SYSTEM_TIER_ADDONS = [
   "worktree.delete",
   "worktree.resource.teardown",
 
+  "terminal.arm",
+  "terminal.disarm",
+  "terminal.disarmAll",
+
   "copyTree.generateAndCopyFile",
 
   "git.stageFile",
