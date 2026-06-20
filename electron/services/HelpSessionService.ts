@@ -53,6 +53,17 @@ const DEFAULT_DAINTREE_CONTROL = true;
 const DEFAULT_DOC_SEARCH = true;
 const DEFAULT_BYPASS_PERMISSIONS = false;
 
+// Belt-and-suspenders bound for orphaned provisional bearers (#10698). A
+// session record is minted at provision time, then bound to a PTY terminal once
+// the agent spawns. If the launch hangs past the renderer watchdog AND the
+// watchdog's revoke somehow didn't run (renderer crash, view torn down
+// mid-launch), the record can outlive the launch with a live token but no bound
+// terminal. The periodic sweep revokes any such unbound record older than this
+// ceiling. Bound sessions are never swept regardless of age — they're healthy
+// long-lived assistants. 30 min mirrors the MCP idle-reaper horizon.
+const ORPHAN_SESSION_MAX_AGE_MS = 30 * 60 * 1000;
+const ORPHAN_SESSION_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
 function isHelpAssistantTier(value: unknown): value is HelpAssistantTier {
   return value === "workbench" || value === "action" || value === "system";
 }
@@ -266,6 +277,7 @@ export class HelpSessionService {
   private readonly pendingCapturesByProject = new Map<string, string>();
   private onMcpSessionRevokedFn: ((token: string) => void) | null = null;
   private disposed = false;
+  private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   setMcpRegistry(registry: WindowRegistry): void {
     this.mcpRegistry = registry;
@@ -1184,8 +1196,51 @@ export class HelpSessionService {
     );
   }
 
+  /**
+   * Arm the periodic orphan-bearer sweep (#10698). Wired once at app boot from
+   * `globalServicesInit`. Idempotent and a no-op after `dispose`. The timer is
+   * `unref`'d so it never keeps the process alive on its own.
+   */
+  startOrphanSweep(): void {
+    if (this.disposed || this.sweepTimer) return;
+    this.sweepTimer = setInterval(() => {
+      try {
+        this.sweepOrphanSessions(ORPHAN_SESSION_MAX_AGE_MS);
+      } catch (err) {
+        console.warn("[HelpSessionService] Orphan-bearer sweep failed:", err);
+      }
+    }, ORPHAN_SESSION_SWEEP_INTERVAL_MS);
+    this.sweepTimer.unref?.();
+  }
+
+  /**
+   * Revoke every unrevoked session record that was minted more than `maxAgeMs`
+   * ago but never bound to a PTY terminal — an orphaned provisional bearer
+   * whose launch was abandoned without the renderer revoking its token. Bound
+   * sessions (present in `terminalBySessionId`) are skipped regardless of age:
+   * a healthy long-running assistant must never be swept. Snapshots the target
+   * list before mutating so the `revokeSession` map deletes don't disturb the
+   * iteration.
+   */
+  sweepOrphanSessions(maxAgeMs: number): void {
+    const cutoff = Date.now() - maxAgeMs;
+    const orphans = [...this.sessionsById.values()].filter(
+      (record) =>
+        !record.revoked &&
+        !this.terminalBySessionId.has(record.sessionId) &&
+        record.createdAt <= cutoff
+    );
+    for (const record of orphans) {
+      void this.revokeSession(record.sessionId);
+    }
+  }
+
   dispose(): void {
     this.disposed = true;
+    if (this.sweepTimer) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = null;
+    }
     void this.revokeAll();
   }
 

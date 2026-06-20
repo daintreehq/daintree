@@ -1056,6 +1056,94 @@ describe("HelpSessionService", () => {
     });
   });
 
+  describe("orphan-bearer sweep (#10698)", () => {
+    it("revokes an unbound bearer older than the ceiling and tears down its MCP session", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.validateToken(result.token)).toBe("action");
+      // Wire the teardown spy AFTER provisioning — `ensureMcpServerReady` (run
+      // during provision) re-sets `onMcpSessionRevoked`, so an earlier spy
+      // would be overwritten before the sweep fires.
+      const onRevoked = vi.fn();
+      service.setOnMcpSessionRevoked(onRevoked);
+
+      // maxAge 0 → cutoff is now, so the just-minted record (createdAt <= now)
+      // counts as past-ceiling. It was never bound to a terminal → orphan.
+      service.sweepOrphanSessions(0);
+      await Promise.resolve();
+
+      expect(service.validateToken(result.token)).toBe(false);
+      expect(onRevoked).toHaveBeenCalledWith(result.token);
+      // No terminal was ever bound, so there's nothing to kill.
+      expect(mockPtyKill).not.toHaveBeenCalled();
+    });
+
+    it("leaves a freshly provisioned bearer alone (younger than the ceiling)", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      // A generous ceiling means the just-minted record is well within it.
+      service.sweepOrphanSessions(60 * 60 * 1000);
+      await Promise.resolve();
+
+      expect(service.validateToken(result.token)).toBe("action");
+    });
+
+    it("never sweeps a bound session regardless of age", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+
+      // Even with maxAge 0 (sweep everything past now), the bound session is
+      // a healthy live assistant and must survive.
+      service.sweepOrphanSessions(0);
+      await Promise.resolve();
+
+      expect(service.validateToken(result.token)).toBe("action");
+      expect(mockPtyKill).not.toHaveBeenCalled();
+    });
+
+    it("does not re-revoke an already-revoked session", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      // Wire the spy after provision (see note above) so it's the active
+      // teardown hook when revokeSession and the sweep run.
+      const onRevoked = vi.fn();
+      service.setOnMcpSessionRevoked(onRevoked);
+      await service.revokeSession(result.sessionId);
+      expect(onRevoked).toHaveBeenCalledTimes(1);
+
+      // The revoked record was already dropped from the index, so the sweep
+      // can't see it and the teardown callback never fires a second time.
+      service.sweepOrphanSessions(0);
+      await Promise.resolve();
+
+      expect(onRevoked).toHaveBeenCalledTimes(1);
+    });
+
+    it("startOrphanSweep arms a periodic sweep that dispose tears down", () => {
+      vi.useFakeTimers();
+      const svc = new HelpSessionService();
+      svc.setMcpRegistry({} as never);
+      const sweepSpy = vi.spyOn(svc, "sweepOrphanSessions").mockImplementation(() => {});
+      try {
+        svc.startOrphanSweep();
+        svc.startOrphanSweep(); // idempotent — must not arm a second timer
+
+        vi.advanceTimersByTime(5 * 60 * 1000);
+        expect(sweepSpy).toHaveBeenCalledTimes(1);
+        vi.advanceTimersByTime(5 * 60 * 1000);
+        expect(sweepSpy).toHaveBeenCalledTimes(2);
+
+        svc.dispose();
+        vi.advanceTimersByTime(15 * 60 * 1000);
+        expect(sweepSpy).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe("hibernation capture on eviction (project-switch persistence)", () => {
     let hibernationStore: {
       get: ReturnType<typeof vi.fn>;

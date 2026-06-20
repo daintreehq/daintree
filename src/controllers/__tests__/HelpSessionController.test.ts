@@ -754,6 +754,99 @@ describe("HelpSessionController — launch phase FSM", () => {
     expect(ctrl.getSnapshot().phase).toBe("idle");
     ctrl.stop();
   });
+
+  it("watchdog revokes the provisioned session when agent.launch hangs after provisioning (#10698)", async () => {
+    vi.useFakeTimers();
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    (window.electron.help.provisionSession as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sessionId: "sess-hang",
+      sessionPath: "/help",
+      token: "tok-hang",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    // Provisioning succeeds (the bearer is minted), then agent.launch never
+    // settles — the post-provision stall the watchdog must reclaim. Without the
+    // fix the watchdog reset the phase but left the live token orphaned forever.
+    vi.mocked(actionService.dispatch).mockReturnValue(new Promise(() => {}) as never);
+    try {
+      ctrl.syncInputs({
+        isOpen: true,
+        isReadyToLaunch: true,
+        currentProject: { id: "proj", path: "/repo" },
+        terminalId: null,
+        preferredAgentId: "claude",
+        supportedInstalledAgentIds: ["claude"],
+        visibilityEpoch: 0,
+      });
+
+      // Let the provision microtask chain settle so the bearer is minted and
+      // agent.launch has been dispatched (and is now hanging).
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(ctrl["_pendingSessionId"]).toBe("sess-hang");
+      expect(window.electron.help.revokeSession).not.toHaveBeenCalled();
+
+      // Past the 90s ceiling the dead-man timer reclaims the stranded FSM and
+      // revokes the orphaned bearer so the token can't outlive the launch.
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-hang");
+      expect(ctrl["_pendingSessionId"]).toBeNull();
+      expect(ctrl.getSnapshot().phase).toBe("idle");
+      expect(ctrl.getSnapshot().launchError).toEqual(
+        expect.objectContaining({ agentId: "claude", kind: "spawn-failed" })
+      );
+    } finally {
+      ctrl.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("a late-rejecting stale launch revokes its own token but spares a newer launch's pending session (#10698)", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    (window.electron.help.provisionSession as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sessionId: "sess-stale",
+      sessionPath: "/help",
+      token: "tok-stale",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    let rejectDispatch: (err: unknown) => void = () => {};
+    vi.mocked(actionService.dispatch).mockReturnValueOnce(
+      new Promise((_, reject) => {
+        rejectDispatch = reject;
+      }) as never
+    );
+
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      visibilityEpoch: 0,
+    });
+    await vi.waitFor(() => {
+      expect(ctrl["_pendingSessionId"]).toBe("sess-stale");
+    });
+
+    // A newer launch wins the race and takes ownership of the pending-session
+    // slot while the stale launch's dispatch is still in flight.
+    ctrl["_pendingSessionId"] = "sess-new";
+
+    // The stale launch's dispatch finally rejects. Its catch must revoke ITS
+    // own bearer but must NOT null the newer launch's pending-session guard.
+    rejectDispatch(new Error("late boom"));
+    await vi.waitFor(() => {
+      expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-stale");
+    });
+    expect(ctrl["_pendingSessionId"]).toBe("sess-new");
+    ctrl.stop();
+  });
 });
 
 describe("HelpSessionController — tier-mismatch handlers", () => {
