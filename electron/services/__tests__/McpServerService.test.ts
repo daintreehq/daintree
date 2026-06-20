@@ -2577,6 +2577,21 @@ describe("McpServerService", () => {
         description: "Restart the terminal process",
       }),
       createManifestEntry({
+        id: "terminal.arm" as ActionId,
+        title: "Arm Terminal",
+        description: "Add a terminal to the fleet broadcast set",
+      }),
+      createManifestEntry({
+        id: "terminal.disarm" as ActionId,
+        title: "Disarm Terminal",
+        description: "Remove a terminal from the fleet broadcast set",
+      }),
+      createManifestEntry({
+        id: "terminal.disarmAll" as ActionId,
+        title: "Disarm All Terminals",
+        description: "Clear the fleet broadcast set",
+      }),
+      createManifestEntry({
         id: "copyTree.generateAndCopyFile" as ActionId,
         title: "Generate And Copy Context",
         description: "Write generated context to the OS clipboard",
@@ -3041,9 +3056,11 @@ describe("McpServerService", () => {
       WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "hibernation.getConfig")!,
     ] as const;
 
-    // Fleet-broadcast primitives are renderer-only — they remain available
-    // via keybindings, palette, and menus, but are NOT exposed through the
-    // MCP control plane on any tier.
+    // terminal.bulkCommand (the one-shot broadcast-send) is renderer-only — it
+    // remains available via keybindings, palette, and menus, but is NOT exposed
+    // through the MCP control plane on any tier. (Distinct from the arming
+    // primitives terminal.arm/disarm/disarmAll, which only edit the broadcast
+    // membership set and ARE exposed at the system tier.)
     const NEVER_EXPOSED_VIA_MCP = ["terminal.bulkCommand"] as const;
 
     // External tier (apiKey) curates MCP_TOOL_ALLOWLIST independently from the
