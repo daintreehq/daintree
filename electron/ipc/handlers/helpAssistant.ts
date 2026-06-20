@@ -75,19 +75,21 @@ function sanitizeCustomArgs(value: unknown): string | undefined {
 }
 
 // A valid model ID is a single shell-safe token. The empty string is valid and
-// means "use the CLI default" (no `--model` injected). Anything with
-// whitespace, a leading `-` (would inject a bare flag), or shell metacharacters
-// is rejected outright rather than coerced — the picker only ever emits clean
-// IDs, so a dirty value is corruption, not a near-miss to salvage.
+// means "use the CLI default" (no `--model` injected). Anything with internal
+// whitespace, control characters, a leading `-` (would inject a bare flag), or
+// shell metacharacters is rejected outright rather than coerced — the picker
+// only ever emits clean IDs, so a dirty value is corruption, not a near-miss to
+// salvage. Whitespace/control chars are checked, not stripped, so a tab or
+// newline can't be silently collapsed into a bogus token.
 function sanitizeModelId(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (trimmed === "") return "";
   // eslint-disable-next-line no-control-regex
-  const cleaned = value.replace(/[\x00-\x1f\x7f]/g, "").trim();
-  if (cleaned === "") return "";
-  if (/\s/.test(cleaned)) return undefined;
-  if (cleaned.startsWith("-")) return undefined;
-  if (hasShellMetachar(cleaned)) return undefined;
-  return cleaned.slice(0, MODEL_ID_MAX_LEN);
+  if (/[\s\x00-\x1f\x7f]/.test(trimmed)) return undefined;
+  if (trimmed.startsWith("-")) return undefined;
+  if (hasShellMetachar(trimmed)) return undefined;
+  return trimmed.slice(0, MODEL_ID_MAX_LEN);
 }
 
 function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {

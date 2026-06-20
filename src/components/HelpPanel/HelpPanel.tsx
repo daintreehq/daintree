@@ -267,9 +267,21 @@ export function HelpPanel({
   const launchedModelLabel = useMemo(() => {
     const flags = terminalPty?.agentLaunchFlags;
     if (!flags || !agentId) return null;
-    const idx = flags.lastIndexOf("--model");
-    if (idx === -1 || idx + 1 >= flags.length) return null;
-    const modelId = flags[idx + 1];
+    // Scan from the end so a later (custom-args) --model override wins, matching
+    // the CLI's last-flag semantics. Handles both "--model X" and "--model=X",
+    // and ignores a dangling "--model" or one followed by another flag.
+    let modelId: string | null = null;
+    for (let i = flags.length - 1; i >= 0; i--) {
+      const flag = flags[i];
+      if (flag.startsWith("--model=")) {
+        modelId = flag.slice("--model=".length);
+        break;
+      }
+      if (flag === "--model" && i + 1 < flags.length && !flags[i + 1].startsWith("-")) {
+        modelId = flags[i + 1];
+        break;
+      }
+    }
     if (!modelId) return null;
     return getAgentConfig(agentId)?.models?.find((m) => m.id === modelId)?.shortLabel ?? modelId;
   }, [terminalPty?.agentLaunchFlags, agentId]);

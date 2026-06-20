@@ -502,6 +502,27 @@ describe("registerHelpAssistantHandlers", () => {
     expect(storeMock.set).not.toHaveBeenCalled();
   });
 
+  it("rejects a modelId with an internal tab rather than collapsing it", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    // A tab is a control char; stripping-before-checking would silently coerce
+    // this to "claudesonnet". It must be rejected as a non-single-token value.
+    await handler(null, { modelId: "claude\tsonnet" });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("accepts a modelId exactly at the 200-char cap unchanged", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    const exact = "m".repeat(200);
+    await handler(null, { modelId: exact });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelId", exact);
+  });
+
   it("rejects a modelId that would inject a bare flag (leading dash)", async () => {
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
