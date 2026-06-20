@@ -91,7 +91,7 @@ type McpTier = "workbench" | "action" | "system" | "external";
 | `workbench` | `WORKBENCH_TIER_TOOLS` — read-only / low-risk introspection (the help-assistant baseline). |
 | `action` | workbench ∪ `ACTION_TIER_ADDONS` (includes `terminal.waitUntilIdle`). |
 | `system` | workbench ∪ action ∪ `SYSTEM_TIER_ADDONS`. |
-| `external` | `MCP_TOOL_ALLOWLIST` — the full vetted tool set for API-key callers (when `fullToolSurface` is on, `external` may bypass the allowlist entirely). |
+| `external` | `MCP_TOOL_ALLOWLIST` — the full vetted tool set for API-key callers (when `fullToolSurface` is on, `external` uses `MCP_FULL_TOOL_SURFACE_ALLOWLIST` — an explicit, fail-closed superset of `MCP_TOOL_ALLOWLIST`, never a bypass). |
 
 `shouldExposeTool` (used by `tools/list`) and `isTierPermitted` (used by `tools/call`) are the two gates. Both **hard-deny `danger === "restricted"`** and any tool whose `mcpVisibility` is `hidden` or `discoverable` — `restricted` actions are never reachable over MCP regardless of tier.
 
@@ -185,7 +185,7 @@ Three axes are independent — do not infer one from another:
 
 - **`danger`** gates the user-facing confirm. `danger:"confirm"` routes the call through an MCP elicitation prompt before dispatch (see [Risk bands and `danger`](#risk-bands-and-danger)); `danger:"safe"` does not. It says nothing about rate limit. `forge.createIssue` is `safe` while `forge.closeIssue` is `confirm`; `forge.approvePR` is `confirm` yet on the `standard` bucket while `forge.createPR` is `confirm` on `mutation`.
 - **Rate limit** is the token bucket (`standard` 30/min, `mutation` 10/min). It is set per-id in `RATE_LIMIT_TOOL_MAP`, not derived from `danger` or write-intent — the browser-open commands `forge.openIssue`/`forge.openPR` are `safe` but `mutation`-bucketed because an LLM retry would pop a duplicate browser tab.
-- **External** marks whether the action is in `MCP_TOOL_ALLOWLIST` and therefore reachable by `external` (API-key) callers. All writes require the `system` tier; the twelve marked `External: no` are reachable _only_ via a `system`-tier session (the in-app help assistant), not by an external API key (unless `fullToolSurface` is enabled, which lets `external` bypass `MCP_TOOL_ALLOWLIST` entirely — see [Tier model](#tier-model-sharedts)), even though they pass the `system` floor.
+- **External** marks whether the action is in `MCP_TOOL_ALLOWLIST` and therefore reachable by `external` (API-key) callers. All writes require the `system` tier; the twelve marked `External: no` are reachable _only_ via a `system`-tier session (the in-app help assistant), not by an external API key (unless `fullToolSurface` is enabled, which switches `external` to `MCP_FULL_TOOL_SURFACE_ALLOWLIST` — a fail-closed superset of `MCP_TOOL_ALLOWLIST`, not a bypass — see [Tier model](#tier-model-sharedts)), even though they pass the `system` floor.
 
 ### Forge reads (`workbench` tier)
 

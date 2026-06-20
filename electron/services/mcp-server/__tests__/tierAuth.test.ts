@@ -339,6 +339,52 @@ describe("shouldExposeTool", () => {
   });
 });
 
+// #10701: fullToolSurface must route through the curated full-surface allowlist
+// (MCP_FULL_TOOL_SURFACE_ALLOWLIST), not bypass the allowlist and trust the
+// author-set `danger` field. Sensitive side-effecting actions that are absent
+// from the allowlist must stay blocked even when fullToolSurface is on, and the
+// gate must agree across exposure (shouldExposeTool) and dispatch
+// (isTierPermitted) — a divergence would advertise a tool the dispatcher then
+// rejects, or vice versa (#7155).
+describe("fullToolSurface allowlist invariants (#10701)", () => {
+  // danger:"safe" actions with real side effects that are deliberately NOT in
+  // the curated external allowlist. fullToolSurface used to expose all of these.
+  const SENSITIVE_NON_ALLOWLISTED = [
+    "system.openExternal",
+    "system.openPath",
+    "env.global.set",
+    "app.quit",
+  ];
+
+  it.each(SENSITIVE_NON_ALLOWLISTED)(
+    "does not expose sensitive non-allowlisted action %s even with fullToolSurface",
+    (actionId) => {
+      const entry = makeEntry({ id: actionId, danger: "safe" });
+      expect(shouldExposeTool(entry, "external", true)).toBe(false);
+    }
+  );
+
+  it.each(SENSITIVE_NON_ALLOWLISTED)(
+    "does not permit dispatch of sensitive non-allowlisted action %s even with fullToolSurface",
+    (actionId) => {
+      expect(isTierPermitted("external", actionId, true)).toBe(false);
+    }
+  );
+
+  it("exposure and dispatch gates agree for a sensitive non-allowlisted action", () => {
+    const entry = makeEntry({ id: "system.openExternal", danger: "safe" });
+    expect(shouldExposeTool(entry, "external", true)).toBe(
+      isTierPermitted("external", "system.openExternal", true)
+    );
+  });
+
+  it("still reaches curated-allowlist tools with fullToolSurface on", () => {
+    const entry = makeEntry({ id: "actions.list" });
+    expect(shouldExposeTool(entry, "external", true)).toBe(true);
+    expect(isTierPermitted("external", "actions.list", true)).toBe(true);
+  });
+});
+
 describe("buildAnnotations", () => {
   it("safe command → destructiveHint: false", () => {
     const entry = makeEntry({ kind: "command", danger: "safe" });

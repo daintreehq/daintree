@@ -4,7 +4,7 @@ import { deriveBand, BAND_OVERRIDES } from "../../../shared/utils/actionRiskBand
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { mcpPaneConfigService } from "../McpPaneConfigService.js";
 import type { HelpTokenValidator } from "./shared.js";
-import { type McpTier, TIER_ALLOWLISTS } from "./shared.js";
+import { type McpTier, TIER_ALLOWLISTS, MCP_FULL_TOOL_SURFACE_ALLOWLIST } from "./shared.js";
 
 export { deriveBand, BAND_OVERRIDES };
 
@@ -98,7 +98,7 @@ export function shouldExposeTool(
     return false;
   }
   if (tier === "external" && fullToolSurface) {
-    return true;
+    return MCP_FULL_TOOL_SURFACE_ALLOWLIST.has(entry.id);
   }
   return TIER_ALLOWLISTS[tier].has(entry.id);
 }
@@ -109,7 +109,7 @@ export function isTierPermitted(
   fullToolSurface: boolean
 ): boolean {
   if (tier === "external" && fullToolSurface) {
-    return true;
+    return MCP_FULL_TOOL_SURFACE_ALLOWLIST.has(actionId);
   }
   return TIER_ALLOWLISTS[tier].has(actionId);
 }
