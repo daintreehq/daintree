@@ -702,9 +702,20 @@ export function AppLayout({
         className="flex-1 flex flex-col overflow-hidden"
         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}
       >
+        {/* #10693 (off-canvas): overflow MUST be `clip`, not `hidden`. The
+            assistant wrapper is parked at right:0 + translateX(+helpPanelWidth),
+            i.e. entirely beyond this row's right edge, so it extends the row's
+            scrollable overflow rightward. `overflow:hidden` clips visually but is
+            still a scroll container, so when the panel is shown the first time
+            and HelpPanel programmatically focuses its freshly-mounted xterm while
+            the slide is still off-screen, the browser's focus scrollIntoView
+            scrolls this row right — shifting sidebar+main left and pushing the
+            worktree sidebar off the left edge. `overflow:clip` is not a scroll
+            container, so focus can never scroll it. Both the class and the inline
+            style are set because the inline `overflow` wins over the utility. */}
         <div
-          className="flex-1 flex overflow-hidden relative"
-          style={{ flex: 1, display: "flex", overflow: "hidden", position: "relative" }}
+          className="flex-1 flex overflow-clip relative"
+          style={{ flex: 1, display: "flex", overflow: "clip", position: "relative" }}
         >
           <div
             className={cn(
