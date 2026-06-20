@@ -315,7 +315,6 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "terminal.killAll",
   "terminal.restart",
   "terminal.restartAll",
-  "terminal.arm",
   "worktree.delete",
   "worktree.sessions.endAll",
   "worktree.sessions.trashAll",
@@ -402,11 +401,6 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // Agent-dispatch only — no user-side ConfirmDialog. danger:"confirm" gates MCP/agent
   // dispatch only; user dispatch of recipe.run is intentionally ungated.
   "recipe.run",
-  // Agent/MCP-only confirm gate (#10695) — palette-hidden, no user-side ConfirmDialog.
-  // User arming happens through the fleet UI (toggleId/armAll), not this action;
-  // danger:"confirm" gates agent dispatch because arming reroutes the human's
-  // keystrokes to every armed terminal.
-  "terminal.arm",
   // Agent/MCP-only — palette-hidden and unbound, configured from Settings via the
   // client (not ActionService). danger:"confirm" gates agent dispatch (resetting
   // all agents at once is destructive-local with no undo); there is no UI
@@ -511,7 +505,7 @@ describe("destructive-action danger metadata", () => {
       // editIssue's title-or-body refinement passes) to clear arg validation
       // and reach the confirm gate.
       issueNumber: 1,
-      // terminal.arm requires a terminalId before its confirm gate runs.
+      // terminal.kill/restart require a terminalId before their confirm gate runs.
       terminalId: "term-placeholder",
     };
 

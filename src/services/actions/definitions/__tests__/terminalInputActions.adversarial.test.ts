@@ -362,7 +362,7 @@ describe("terminalInputActions adversarial", () => {
       expect(result).toEqual({ armed: [] });
     });
 
-    it("gates only arm behind confirmation — disarm/disarmAll stay safe de-escalations", () => {
+    it("keeps every arm/disarm primitive safe — they only edit the broadcast set", () => {
       const actions: ActionRegistry = new Map();
       registerTerminalInputActions(actions, {
         getActiveWorktreeId: vi.fn(),
@@ -372,10 +372,9 @@ describe("terminalInputActions adversarial", () => {
       const disarm = actions.get("terminal.disarm")!() as AnyActionDefinition;
       const disarmAll = actions.get("terminal.disarmAll")!() as AnyActionDefinition;
 
-      expect(arm.danger).toBe("confirm");
-      expect(arm.dangerRationale?.trim()).toBeTruthy();
-      // The footgun is arming (reroutes keystrokes); disarming is the recovery,
-      // so it must not be harder to reach than arming.
+      // Arming/disarming routes the *next* input and mutates nothing on its own;
+      // it's fully reversible via disarm, so none of it carries a confirm gate.
+      expect(arm.danger).toBe("safe");
       expect(disarm.danger).toBe("safe");
       expect(disarmAll.danger).toBe("safe");
     });

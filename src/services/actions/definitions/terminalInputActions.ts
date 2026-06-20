@@ -202,14 +202,14 @@ export function registerTerminalInputActions(
     id: "terminal.arm",
     title: "Arm Terminal",
     description:
-      "Add a terminal to the fleet arming set so the next broadcast input is also routed to it. Args: `terminalId` (required) — panel UUID from `terminal.list` (the `id` field); ignored when the terminal is not arm-eligible. Returns { armed } — the resulting armed terminal IDs in broadcast (arm) order. Arming reroutes the human's keystrokes to every armed terminal, so agent dispatch must be confirmed first.",
+      "Add a terminal to the fleet arming set so the next broadcast input is also routed to it. Args: `terminalId` (required) — panel UUID from `terminal.list` (the `id` field); ignored when the terminal is not arm-eligible. Returns { armed } — the resulting armed terminal IDs in broadcast (arm) order.",
     category: "terminal",
     kind: "command",
-    danger: "confirm",
-    dangerRationale:
-      "Arming reroutes the human's next keystrokes to every armed terminal — an assistant arming a set the user forgets can broadcast commands to multiple terminals unintentionally.",
-    // Agent/MCP-only confirm gate — no user-side ConfirmDialog. Hidden from the
-    // palette so a palette pick can't bypass the agent-dispatch confirmation.
+    // Arming only edits the broadcast set — it routes the *next* input, mutates
+    // nothing, and is reversible via `terminal.disarm`/`terminal.disarmAll`, so
+    // it needs no confirmation. Hidden from the palette so user arming stays in
+    // the fleet UI (ribbon `toggleId`/`armAll`) rather than a stray palette pick.
+    danger: "safe",
     palette: { mode: "hidden" },
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().min(1) }),

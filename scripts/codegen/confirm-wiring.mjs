@@ -34,7 +34,6 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "terminal.killAll",
   "terminal.restart",
   "terminal.restartAll",
-  "terminal.arm",
   "worktree.delete",
   "worktree.sessions.endAll",
   "worktree.sessions.trashAll",
@@ -100,7 +99,6 @@ const BYPASS_WIRED = new Set([
   "git.pullRebase", // IPC bypass in ReviewHubContent.tsx; ConfirmDialog wired but ID not co-located
   "project.remove", // confirm in ProjectSwitcherPalette.tsx; action ID not co-located
   "recipe.run", // agent-dispatch only; no user-side ConfirmDialog (danger:"confirm" gates MCP only)
-  "terminal.arm", // agent/MCP-only (#10695); palette-hidden, no user-side ConfirmDialog (danger:"confirm" gates agent dispatch — arming reroutes keystrokes to N terminals)
   "artifact.applyPatch", // ConfirmDialog in ArtifactOverlay.tsx; dispatch in useArtifacts.ts (ID not co-located)
   "agentSettings.reset", // agent/MCP-only; palette-hidden, configured from Settings via client (danger:"confirm" gates agent dispatch only)
   // Forge PR write actions are agent/MCP-only (issue #10654); danger:"confirm"

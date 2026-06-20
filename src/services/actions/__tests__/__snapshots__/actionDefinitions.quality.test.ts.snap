@@ -3722,9 +3722,9 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   },
   {
     "category": "terminal",
-    "danger": "confirm",
-    "dangerRationale": "Arming reroutes the human's next keystrokes to every armed terminal — an assistant arming a set the user forgets can broadcast commands to multiple terminals unintentionally.",
-    "description": "Add a terminal to the fleet arming set so the next broadcast input is also routed to it. Args: \`terminalId\` (required) — panel UUID from \`terminal.list\` (the \`id\` field); ignored when the terminal is not arm-eligible. Returns { armed } — the resulting armed terminal IDs in broadcast (arm) order. Arming reroutes the human's keystrokes to every armed terminal, so agent dispatch must be confirmed first.",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Add a terminal to the fleet arming set so the next broadcast input is also routed to it. Args: \`terminalId\` (required) — panel UUID from \`terminal.list\` (the \`id\` field); ignored when the terminal is not arm-eligible. Returns { armed } — the resulting armed terminal IDs in broadcast (arm) order.",
     "examples": undefined,
     "id": "terminal.arm",
     "keywords": undefined,
