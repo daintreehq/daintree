@@ -839,7 +839,13 @@ class TerminalInstanceService {
       clearTimeout(this.layoutTransitionTimer);
     }
 
-    const safetyTtl = durationMs + 100;
+    // Dead-man fallback that outlives the timer-driven unlock below. The +150
+    // margin (vs the +100 it covered before) spans XtermAdapter's ~50ms
+    // ResizeObserver debounce plus its rAF: an observer entry queued a frame
+    // before the transition settles fires its resize() ~50ms later, which must
+    // still land inside the lock window — otherwise it slips through as a
+    // post-transition SIGWINCH (#10693).
+    const safetyTtl = durationMs + 150;
     for (const id of panelIds) {
       this.resizeController.lockResize(id, true, safetyTtl);
     }
