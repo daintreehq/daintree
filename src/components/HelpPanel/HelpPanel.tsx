@@ -124,6 +124,10 @@ export function HelpPanel({
   // it on close so keyboard users return to where they were rather than
   // body. Mirrors the pattern in AppDialog/AppPaletteDialog.
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  // Idempotent teardown for an in-flight resize drag. Stored in a ref so an
+  // unmount (or window blur) mid-drag can run it and never leak the document
+  // listeners or the body userSelect/cursor overrides. Mirrors TwoPaneSplitDivider.
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
   const [isResizing, setIsResizing] = useState(false);
   const isMacroFocused = useMacroFocusStore((s) => s.focusedRegion === "assistant");
   // Ordinary DOM focus (click-to-focus, programmatic) inside the aside — the
@@ -622,6 +626,7 @@ export function HelpPanel({
   // Resize via mouse drag
   const handleResizeStart = useCallback(
     (e: React.MouseEvent) => {
+      if (e.button !== 0) return;
       e.preventDefault();
       onResizeStart?.();
       setIsResizing(true);
@@ -640,21 +645,35 @@ export function HelpPanel({
       const prevUserSelect = document.body.style.userSelect;
       const prevCursor = document.body.style.cursor;
 
-      const restoreBodyStyles = () => {
-        document.body.style.userSelect = prevUserSelect;
-        document.body.style.cursor = prevCursor;
-      };
-
-      const onMouseUp = () => {
-        setIsResizing(false);
-        onResizeEnd?.();
-        restoreBodyStyles();
+      // Idempotent: removing absent listeners and reassigning styles is a no-op,
+      // so unmount/blur/mouseup can all call this without double-restore hazards.
+      const cleanup = () => {
         document.removeEventListener("mousemove", onMouseMove);
         document.removeEventListener("mouseup", onMouseUp);
+        window.removeEventListener("blur", onWindowBlur);
+        document.body.style.userSelect = prevUserSelect;
+        document.body.style.cursor = prevCursor;
+        resizeCleanupRef.current = null;
       };
+
+      const endResize = () => {
+        // Tear down listeners/styles before user callbacks so a throwing
+        // onResizeEnd can't leak the global userSelect/cursor overrides.
+        cleanup();
+        setIsResizing(false);
+        onResizeEnd?.();
+      };
+
+      const onMouseUp = () => endResize();
+      // Drag interrupted (alt-tab, OS gesture) — restore everything; no commit
+      // needed since width is applied live during the drag.
+      const onWindowBlur = () => endResize();
+
+      resizeCleanupRef.current = cleanup;
 
       document.addEventListener("mousemove", onMouseMove);
       document.addEventListener("mouseup", onMouseUp);
+      window.addEventListener("blur", onWindowBlur);
       // Suppress text selection during the drag. Without this, a fast drag
       // selects across the terminal rows while they reflow, and xterm's
       // AccessibilityManager throws "invalid range" on the torn selection.
@@ -663,6 +682,13 @@ export function HelpPanel({
     },
     [width, setWidth, onResizeStart, onResizeEnd]
   );
+
+  // Run any in-flight resize teardown if the panel unmounts mid-drag.
+  useEffect(() => {
+    return () => {
+      resizeCleanupRef.current?.();
+    };
+  }, []);
 
   // Resize via keyboard.
   const handleResizeKeyDown = useCallback(
