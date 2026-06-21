@@ -674,6 +674,15 @@ export function HelpPanel({
       document.addEventListener("mousemove", onMouseMove);
       document.addEventListener("mouseup", onMouseUp);
       window.addEventListener("blur", onWindowBlur);
+      // Drop any live selection before the drag. userSelect:none below only
+      // stops NEW drag-selections from forming; a selection that already exists
+      // in the terminal still gets torn as the rows reflow, firing a document
+      // `selectionchange` that makes xterm's AccessibilityManager recompute an
+      // inverted (start >= end) range and throw "invalid range". Collapsing it
+      // up front leaves nothing to tear (the collapse itself is handled by the
+      // manager's isCollapsed early-return).
+      const selection = document.getSelection();
+      if (selection && !selection.isCollapsed) selection.removeAllRanges();
       // Suppress text selection during the drag. Without this, a fast drag
       // selects across the terminal rows while they reflow, and xterm's
       // AccessibilityManager throws "invalid range" on the torn selection.
