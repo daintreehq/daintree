@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AgentState, TerminalRecipe, WorktreeState } from "@/types";
-import type { GitStateIndicator, GitStateKind } from "./hooks/useWorktreeStatus";
+import type { RepoState } from "@shared/types";
+import type { GitStateIndicator } from "./hooks/useWorktreeStatus";
 import { cn } from "@/lib/utils";
 import { STATE_LABELS, STATE_PRIORITY } from "../terminalStateConfig";
 import { BranchLabel } from "../BranchLabel";
@@ -218,14 +219,20 @@ function GitStatusFreshnessPill({
   );
 }
 
-// Blocking git operations the card can recover from inline. Excludes
-// "conflicted" (defer to ReviewHub) and "detached" (not an in-progress op).
-const BLOCKING_OP_KINDS = ["reverting", "rebasing", "merging", "cherry-picking"] as const;
-type BlockingOpKind = (typeof BLOCKING_OP_KINDS)[number];
+// Blocking git operations the card can recover from inline.
+type BlockingOpKind = "reverting" | "rebasing" | "merging" | "cherry-picking";
 
-function isBlockingOpKind(kind: GitStateKind): kind is BlockingOpKind {
-  return (BLOCKING_OP_KINDS as readonly GitStateKind[]).includes(kind);
-}
+// Derived from worktree.repoState (the raw in-progress operation), NOT from
+// gitStateIndicator: the indicator gives "conflicted" priority over the
+// operation, so a revert/rebase/merge/cherry-pick that hit conflicts — the
+// canonical stuck case — would otherwise never surface the recovery row
+// (#10715). The Continue button stays disabled while conflicts remain.
+const REPO_STATE_TO_BLOCKING_KIND: Partial<Record<RepoState, BlockingOpKind>> = {
+  REVERTING: "reverting",
+  REBASING: "rebasing",
+  MERGING: "merging",
+  CHERRY_PICKING: "cherry-picking",
+};
 
 // User-facing operation noun (lowercase, for inline button/dialog copy).
 const BLOCKING_OP_LABEL: Record<BlockingOpKind, string> = {
@@ -298,7 +305,7 @@ function BlockingOpRow({
         size="xs"
         variant="outline"
         loading={isContinuing}
-        disabled={hasUnresolvedConflicts}
+        disabled={hasUnresolvedConflicts || isAborting || isAbortOpen}
         title={
           hasUnresolvedConflicts ? "Resolve the remaining conflicts before continuing" : undefined
         }
@@ -314,6 +321,7 @@ function BlockingOpRow({
         type="button"
         size="xs"
         variant="ghost-danger"
+        disabled={isContinuing}
         onClick={(e) => {
           e.stopPropagation();
           setIsAbortOpen(true);
@@ -420,13 +428,14 @@ export function WorktreeHeader({
   );
   const isMainStandardLayout = !!(isMainOnStandardBranch && !hasDisplayTitle);
 
-  // Inline recovery for a stuck blocking git operation. Only mounts when the
-  // indicator resolves to one of the in-progress operation kinds (not
-  // "conflicted" — that defers to ReviewHub — nor "detached"). Continue is
-  // gated on there being no unresolved conflicts, the same source the indicator
-  // uses, so a half-resolved revert can't be advanced prematurely.
-  const blockingOpKind =
-    gitStateIndicator && isBlockingOpKind(gitStateIndicator.kind) ? gitStateIndicator.kind : null;
+  // Inline recovery for a stuck blocking git operation (revert/rebase/merge/
+  // cherry-pick). Mounts whenever an operation is in progress, even when it has
+  // conflicts (the badge then reads "conflicted" but the op is still abortable).
+  // Continue is gated on there being no unresolved conflicts so a half-resolved
+  // operation can't be advanced prematurely.
+  const blockingOpKind = worktree.repoState
+    ? (REPO_STATE_TO_BLOCKING_KIND[worktree.repoState] ?? null)
+    : null;
   const hasUnresolvedConflicts = !!worktree.worktreeChanges?.changes?.some(
     (c) => c.status === "conflicted"
   );

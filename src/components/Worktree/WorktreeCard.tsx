@@ -677,8 +677,8 @@ export function WorktreeCard({
   const handleAbortRepositoryOperation = useCallback(async () => {
     try {
       await window.electron.git.abortRepositoryOperation(worktree.path);
-      await worktreeClient.refresh(worktree.id);
     } catch (err) {
+      // The git abort itself failed — the operation is still in progress.
       notify({
         type: "error",
         title: "Abort failed",
@@ -690,12 +690,14 @@ export function WorktreeCard({
       });
       throw err;
     }
+    // Abort succeeded; a refresh failure is non-fatal (the watcher will pick up
+    // the cleared sentinel), so swallow it rather than report a false "failed".
+    await worktreeClient.refresh(worktree.id).catch(() => {});
   }, [worktree.path, worktree.id]);
 
   const handleContinueRepositoryOperation = useCallback(async () => {
     try {
       await window.electron.git.continueRepositoryOperation(worktree.path);
-      await worktreeClient.refresh(worktree.id);
     } catch (err) {
       notify({
         type: "error",
@@ -708,6 +710,7 @@ export function WorktreeCard({
       });
       throw err;
     }
+    await worktreeClient.refresh(worktree.id).catch(() => {});
   }, [worktree.path, worktree.id]);
 
   const handlePointerEnter = useCallback(() => {
