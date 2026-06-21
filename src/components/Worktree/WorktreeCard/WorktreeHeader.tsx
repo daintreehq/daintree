@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AgentState, TerminalRecipe, WorktreeState } from "@/types";
-import type { GitStateIndicator } from "./hooks/useWorktreeStatus";
+import type { GitStateIndicator, GitStateKind } from "./hooks/useWorktreeStatus";
 import { cn } from "@/lib/utils";
 import { STATE_LABELS, STATE_PRIORITY } from "../terminalStateConfig";
 import { BranchLabel } from "../BranchLabel";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { Sprout, Pin, BellOff, RefreshCw } from "lucide-react";
+import { Sprout, Pin, BellOff, RefreshCw, Play, Ban } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import type { AggregateCounts } from "./MainWorktreeSummaryRows";
 import { IssueBadge } from "./IssueBadge";
 import { PRBadge } from "./PRBadge";
@@ -58,6 +60,8 @@ export interface WorktreeHeaderProps {
   };
 
   gitStateIndicator: GitStateIndicator | null;
+  onAbortRepositoryOperation?: () => Promise<void>;
+  onContinueRepositoryOperation?: () => Promise<void>;
 
   menu: {
     launchAgents: import("../WorktreeMenuItems").WorktreeLaunchAgentItem[];
@@ -214,6 +218,128 @@ function GitStatusFreshnessPill({
   );
 }
 
+// Blocking git operations the card can recover from inline. Excludes
+// "conflicted" (defer to ReviewHub) and "detached" (not an in-progress op).
+const BLOCKING_OP_KINDS = ["reverting", "rebasing", "merging", "cherry-picking"] as const;
+type BlockingOpKind = (typeof BLOCKING_OP_KINDS)[number];
+
+function isBlockingOpKind(kind: GitStateKind): kind is BlockingOpKind {
+  return (BLOCKING_OP_KINDS as readonly GitStateKind[]).includes(kind);
+}
+
+// User-facing operation noun (lowercase, for inline button/dialog copy).
+const BLOCKING_OP_LABEL: Record<BlockingOpKind, string> = {
+  reverting: "revert",
+  rebasing: "rebase",
+  merging: "merge",
+  "cherry-picking": "cherry-pick",
+};
+
+// Abort consequence copy, mirrored from ConflictPanel's ABORT_RESTORE_SUFFIX so
+// the dialog states the specific outcome rather than generic irreversibility.
+const BLOCKING_OP_ABORT_DESCRIPTION: Record<BlockingOpKind, string> = {
+  reverting:
+    "Discards the in-progress revert and restores the working tree to the state before it started.",
+  rebasing: "Discards the in-progress rebase and returns HEAD to the original branch tip.",
+  merging: "Discards the in-progress merge and restores the working tree to its pre-merge state.",
+  "cherry-picking":
+    "Discards the in-progress cherry-pick and restores the working tree to the state before it started.",
+};
+
+/**
+ * Inline recovery row for a stuck blocking git operation (revert/rebase/merge/
+ * cherry-pick) — surfaced on the card so the user isn't left with a permanent
+ * state badge and no way out (#10715). Continue is disabled while conflicts
+ * remain unresolved; Abort is a D1 destructive action gated by a ConfirmDialog.
+ */
+function BlockingOpRow({
+  kind,
+  hasUnresolvedConflicts,
+  onAbort,
+  onContinue,
+}: {
+  kind: BlockingOpKind;
+  hasUnresolvedConflicts: boolean;
+  onAbort: () => Promise<void>;
+  onContinue: () => Promise<void>;
+}) {
+  const [isAbortOpen, setIsAbortOpen] = useState(false);
+  const [isAborting, setIsAborting] = useState(false);
+  const [isContinuing, setIsContinuing] = useState(false);
+  const label = BLOCKING_OP_LABEL[kind];
+
+  const handleAbort = useCallback(async () => {
+    setIsAborting(true);
+    try {
+      await onAbort();
+      setIsAbortOpen(false);
+    } catch {
+      // Error surfaced via notify() in the parent; keep the dialog open to retry.
+    } finally {
+      setIsAborting(false);
+    }
+  }, [onAbort]);
+
+  const handleContinue = useCallback(async () => {
+    setIsContinuing(true);
+    try {
+      await onContinue();
+    } catch {
+      // Error surfaced via notify() in the parent.
+    } finally {
+      setIsContinuing(false);
+    }
+  }, [onContinue]);
+
+  return (
+    <div className="mt-1.5 flex items-center gap-1.5">
+      <Button
+        type="button"
+        size="xs"
+        variant="outline"
+        loading={isContinuing}
+        disabled={hasUnresolvedConflicts}
+        title={
+          hasUnresolvedConflicts ? "Resolve the remaining conflicts before continuing" : undefined
+        }
+        onClick={(e) => {
+          e.stopPropagation();
+          void handleContinue();
+        }}
+      >
+        <Play aria-hidden="true" />
+        Continue {label}
+      </Button>
+      <Button
+        type="button"
+        size="xs"
+        variant="ghost-danger"
+        onClick={(e) => {
+          e.stopPropagation();
+          setIsAbortOpen(true);
+        }}
+      >
+        <Ban aria-hidden="true" />
+        Abort {label}
+      </Button>
+
+      <ConfirmDialog
+        isOpen={isAbortOpen}
+        onClose={() => {
+          if (!isAborting) setIsAbortOpen(false);
+        }}
+        title={`Abort ${label}?`}
+        description={BLOCKING_OP_ABORT_DESCRIPTION[kind]}
+        confirmLabel={`Abort ${label}`}
+        cancelLabel="Keep working"
+        onConfirm={() => void handleAbort()}
+        isConfirmLoading={isAborting}
+        variant="destructive"
+      />
+    </div>
+  );
+}
+
 export function WorktreeHeader({
   worktree,
   isActive,
@@ -245,6 +371,8 @@ export function WorktreeHeader({
   onCleanupWorktree,
   badges,
   gitStateIndicator,
+  onAbortRepositoryOperation,
+  onContinueRepositoryOperation,
   menu,
 }: WorktreeHeaderProps) {
   const recipeOptions = useMemo(
@@ -291,6 +419,18 @@ export function WorktreeHeader({
     (worktree.matchedForgeProviderId != null || worktree.linked?.providerId != null)
   );
   const isMainStandardLayout = !!(isMainOnStandardBranch && !hasDisplayTitle);
+
+  // Inline recovery for a stuck blocking git operation. Only mounts when the
+  // indicator resolves to one of the in-progress operation kinds (not
+  // "conflicted" — that defers to ReviewHub — nor "detached"). Continue is
+  // gated on there being no unresolved conflicts, the same source the indicator
+  // uses, so a half-resolved revert can't be advanced prematurely.
+  const blockingOpKind =
+    gitStateIndicator && isBlockingOpKind(gitStateIndicator.kind) ? gitStateIndicator.kind : null;
+  const hasUnresolvedConflicts = !!worktree.worktreeChanges?.changes?.some(
+    (c) => c.status === "conflicted"
+  );
+  const showBlockingOpRow = !isCollapsed && blockingOpKind !== null;
 
   const prState = worktree.linked?.pr?.state;
   const isPrLive = prState !== undefined && prState !== "closed" && prState !== "declined";
@@ -458,6 +598,18 @@ export function WorktreeHeader({
           handleLaunchAgent={handleLaunchAgent}
         />
       </div>
+
+      {showBlockingOpRow &&
+        blockingOpKind &&
+        onAbortRepositoryOperation &&
+        onContinueRepositoryOperation && (
+          <BlockingOpRow
+            kind={blockingOpKind}
+            hasUnresolvedConflicts={hasUnresolvedConflicts}
+            onAbort={onAbortRepositoryOperation}
+            onContinue={onContinueRepositoryOperation}
+          />
+        )}
 
       {!isCollapsed && isMainStandardLayout && (
         <MainWorktreeSecondaryRow

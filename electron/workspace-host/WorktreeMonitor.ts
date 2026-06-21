@@ -1538,11 +1538,27 @@ export class WorktreeMonitor {
     }
 
     if (gitDir && opState !== undefined) {
+      const wasInitialStatus = this._hasInitialStatus;
       // If we're skipping the very first poll (e.g. app started mid-rebase),
       // emit a default snapshot so the renderer can still display the worktree.
       // Mirrors startWithoutGitStatus()'s contract.
       if (!this._hasInitialStatus) {
         this._hasInitialStatus = true;
+        this.emitUpdate();
+      }
+      // Stamp the completion timestamp even though git status was skipped: the
+      // sentinel state was freshly observed above, so the freshness signal is
+      // accurate, and the heartbeat-gap detector (which reads this field) won't
+      // false-positive on a long blocking operation. Without this, a
+      // user-triggered refresh during a stuck blocking operation never advances
+      // lastGitStatusCompletedAt, leaving the freshness pill permanently stale
+      // and its Refresh button a no-op (#10715).
+      this.lastGitStatusCompletedAt = Date.now();
+      // On a forced refresh (the user clicked Refresh on a stale card), emit so
+      // the renderer actually receives the advanced timestamp and the freshness
+      // pill resets — otherwise the click is silently dropped. Background polls
+      // stamp silently; the watcher emits a real status once sentinels clear.
+      if (forceRefresh && wasInitialStatus) {
         this.emitUpdate();
       }
       return;

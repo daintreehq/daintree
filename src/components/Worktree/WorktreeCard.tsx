@@ -22,6 +22,8 @@ import {
 } from "../../store/projectSettingsStore";
 import { useWorktreeFilterStore } from "../../store/worktreeFilterStore";
 import { errorsClient, worktreeClient } from "@/clients";
+import { notify } from "@/lib/notify";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { actionService } from "@/services/ActionService";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -666,6 +668,48 @@ export function WorktreeCard({
       .catch(() => {});
   }, [isActive, worktree.lastGitStatusCheckedAt]);
 
+  // Abort/continue a stuck blocking git operation (revert/rebase/merge/
+  // cherry-pick) directly from the card. The IPC handlers live in
+  // git-write.ts; this mirrors ReviewHubContent's wiring. After the call we
+  // refresh the worktree directly (not via handleRevalidate, which has a 10s
+  // freshness gate that would suppress this user-driven refresh) so the card
+  // recovers immediately instead of waiting for the filesystem watcher.
+  const handleAbortRepositoryOperation = useCallback(async () => {
+    try {
+      await window.electron.git.abortRepositoryOperation(worktree.path);
+      await worktreeClient.refresh(worktree.id);
+    } catch (err) {
+      notify({
+        type: "error",
+        title: "Abort failed",
+        message: formatErrorMessage(
+          err,
+          "Couldn't abort the operation. The working tree is unchanged."
+        ),
+        action: { label: "Retry", onClick: () => void handleAbortRepositoryOperation() },
+      });
+      throw err;
+    }
+  }, [worktree.path, worktree.id]);
+
+  const handleContinueRepositoryOperation = useCallback(async () => {
+    try {
+      await window.electron.git.continueRepositoryOperation(worktree.path);
+      await worktreeClient.refresh(worktree.id);
+    } catch (err) {
+      notify({
+        type: "error",
+        title: "Continue failed",
+        message: formatErrorMessage(
+          err,
+          "Couldn't continue the operation. Resolve any remaining conflicts and try again."
+        ),
+        action: { label: "Retry", onClick: () => void handleContinueRepositoryOperation() },
+      });
+      throw err;
+    }
+  }, [worktree.path, worktree.id]);
+
   const handlePointerEnter = useCallback(() => {
     if (isActive || !worktree.lastGitStatusCheckedAt) return;
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
@@ -951,6 +995,8 @@ export function WorktreeCard({
                   onOpenPlan: worktree.hasPlanFile ? () => setShowPlanViewer(true) : undefined,
                 }}
                 gitStateIndicator={gitStateIndicator}
+                onAbortRepositoryOperation={handleAbortRepositoryOperation}
+                onContinueRepositoryOperation={handleContinueRepositoryOperation}
                 menu={{
                   launchAgents,
                   recipes,

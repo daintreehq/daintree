@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { WorktreeHeader, type WorktreeHeaderProps } from "../WorktreeHeader";
@@ -13,6 +13,18 @@ import { actionService } from "@/services/ActionService";
 vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
   return { ...actual, createPortal: (children: ReactNode) => children };
+});
+
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+beforeAll(() => {
+  if (typeof globalThis.ResizeObserver === "undefined") {
+    globalThis.ResizeObserver = ResizeObserverStub as typeof ResizeObserver;
+  }
 });
 
 let mockMissingCredential = false;
@@ -1504,5 +1516,123 @@ describe("WorktreeHeader upstream sync indicator", () => {
     expect(indicator.getAttribute("data-fetch-auth-failed")).toBe("true");
     expect(indicator.getAttribute("data-fetch-network-failed")).toBeNull();
     expect(indicator.className).not.toContain("opacity-75");
+  });
+});
+
+describe("WorktreeHeader blocking-op recovery row (#10715)", () => {
+  type Kind = NonNullable<WorktreeHeaderProps["gitStateIndicator"]>["kind"];
+
+  function indicator(kind: Kind): WorktreeHeaderProps["gitStateIndicator"] {
+    return { kind, label: kind, tone: kind === "conflicted" ? "error" : "warning" };
+  }
+
+  function conflictedChanges(): WorktreeState["worktreeChanges"] {
+    return {
+      changedFileCount: 1,
+      changes: [{ path: "a.ts", status: "conflicted", insertions: null, deletions: null }],
+    } as WorktreeState["worktreeChanges"];
+  }
+
+  const BLOCKING: { kind: Kind; label: string }[] = [
+    { kind: "reverting", label: "revert" },
+    { kind: "rebasing", label: "rebase" },
+    { kind: "merging", label: "merge" },
+    { kind: "cherry-picking", label: "cherry-pick" },
+  ];
+
+  it.each(BLOCKING)("renders Continue + Abort for $kind", ({ kind, label }) => {
+    renderHeader({
+      gitStateIndicator: indicator(kind),
+      onAbortRepositoryOperation: vi.fn().mockResolvedValue(undefined),
+      onContinueRepositoryOperation: vi.fn().mockResolvedValue(undefined),
+    });
+    expect(screen.getByRole("button", { name: `Continue ${label}` })).toBeTruthy();
+    expect(screen.getByRole("button", { name: `Abort ${label}` })).toBeTruthy();
+  });
+
+  it.each(["conflicted", "detached"] as Kind[])(
+    "does not render the row for %s (defers to ReviewHub / not an op)",
+    (kind) => {
+      renderHeader({
+        gitStateIndicator: indicator(kind),
+        onAbortRepositoryOperation: vi.fn(),
+        onContinueRepositoryOperation: vi.fn(),
+      });
+      expect(screen.queryByRole("button", { name: /^Continue / })).toBeNull();
+      expect(screen.queryByRole("button", { name: /^Abort / })).toBeNull();
+    }
+  );
+
+  it("does not render the row when gitStateIndicator is null", () => {
+    renderHeader({
+      gitStateIndicator: null,
+      onAbortRepositoryOperation: vi.fn(),
+      onContinueRepositoryOperation: vi.fn(),
+    });
+    expect(screen.queryByRole("button", { name: /^Continue / })).toBeNull();
+  });
+
+  it("does not render the row when collapsed", () => {
+    renderHeader({
+      isCollapsed: true,
+      gitStateIndicator: indicator("reverting"),
+      onAbortRepositoryOperation: vi.fn(),
+      onContinueRepositoryOperation: vi.fn(),
+    });
+    expect(screen.queryByRole("button", { name: "Continue revert" })).toBeNull();
+  });
+
+  it("does not render the row when callbacks are absent", () => {
+    renderHeader({ gitStateIndicator: indicator("reverting") });
+    expect(screen.queryByRole("button", { name: "Continue revert" })).toBeNull();
+  });
+
+  it("Abort opens a destructive ConfirmDialog and confirming invokes onAbort", async () => {
+    const onAbort = vi.fn().mockResolvedValue(undefined);
+    renderHeader({
+      gitStateIndicator: indicator("reverting"),
+      onAbortRepositoryOperation: onAbort,
+      onContinueRepositoryOperation: vi.fn(),
+    });
+    // The inline Abort button only opens the dialog — it must not call IPC directly.
+    const triggers = screen.getAllByRole("button", { name: "Abort revert" });
+    fireEvent.click(triggers[0]);
+    expect(onAbort).not.toHaveBeenCalled();
+
+    // The dialog's confirm button carries the same verb-noun label; it's the
+    // last "Abort revert" button now that the dialog has opened.
+    const confirmButtons = screen.getAllByRole("button", { name: "Abort revert" });
+    const dialogConfirm = confirmButtons[confirmButtons.length - 1];
+    fireEvent.click(dialogConfirm);
+    await Promise.resolve();
+    expect(onAbort).toHaveBeenCalledTimes(1);
+  });
+
+  it("Continue invokes onContinue when there are no unresolved conflicts", async () => {
+    const onContinue = vi.fn().mockResolvedValue(undefined);
+    renderHeader({
+      gitStateIndicator: indicator("rebasing"),
+      onAbortRepositoryOperation: vi.fn(),
+      onContinueRepositoryOperation: onContinue,
+    });
+    const btn = screen.getByRole("button", { name: "Continue rebase" });
+    expect(btn.getAttribute("aria-disabled")).not.toBe("true");
+    fireEvent.click(btn);
+    await Promise.resolve();
+    expect(onContinue).toHaveBeenCalledTimes(1);
+  });
+
+  it("Continue is disabled while unresolved conflicts remain", () => {
+    const onContinue = vi.fn();
+    renderHeader({
+      worktree: { ...baseWorktree, repoState: "REBASING", worktreeChanges: conflictedChanges() },
+      gitStateIndicator: indicator("rebasing"),
+      onAbortRepositoryOperation: vi.fn(),
+      onContinueRepositoryOperation: onContinue,
+    });
+    const btn = screen.getByRole("button", { name: "Continue rebase" });
+    expect(btn.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(btn);
+    expect(onContinue).not.toHaveBeenCalled();
   });
 });
