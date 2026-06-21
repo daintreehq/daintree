@@ -687,6 +687,7 @@ export function WorktreeCard({
           "Couldn't abort the operation. The working tree is unchanged."
         ),
         action: { label: "Retry", onClick: () => void handleAbortRepositoryOperation() },
+        context: { eventKind: "git" },
       });
       throw err;
     }
@@ -707,6 +708,7 @@ export function WorktreeCard({
           "Couldn't continue the operation. Resolve any remaining conflicts and try again."
         ),
         action: { label: "Retry", onClick: () => void handleContinueRepositoryOperation() },
+        context: { eventKind: "git" },
       });
       throw err;
     }

@@ -1525,9 +1525,11 @@ describe("WorktreeHeader blocking-op recovery row (#10715)", () => {
   // "conflicted". gitStateIndicator only drives the inert badge label.
   function conflictedChanges(): WorktreeState["worktreeChanges"] {
     return {
+      worktreeId: "test-wt",
+      rootPath: "/tmp/test-wt",
       changedFileCount: 1,
       changes: [{ path: "a.ts", status: "conflicted", insertions: null, deletions: null }],
-    } as WorktreeState["worktreeChanges"];
+    };
   }
 
   function blockingHeader(
