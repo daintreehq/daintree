@@ -1225,7 +1225,7 @@ export class HelpSessionService {
    * list before mutating so the `revokeSession` map deletes don't disturb the
    * iteration.
    */
-  sweepOrphanSessions(maxAgeMs: number): void {
+  async sweepOrphanSessions(maxAgeMs: number): Promise<void> {
     const cutoff = Date.now() - maxAgeMs;
     const orphans = [...this.sessionsById.values()].filter(
       (record) =>
@@ -1233,9 +1233,7 @@ export class HelpSessionService {
         !this.terminalBySessionId.has(record.sessionId) &&
         record.createdAt <= cutoff
     );
-    for (const record of orphans) {
-      void this.revokeSession(record.sessionId);
-    }
+    await Promise.all(orphans.map((record) => this.revokeSession(record.sessionId)));
   }
 
   dispose(): void {

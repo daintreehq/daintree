@@ -1069,8 +1069,7 @@ describe("HelpSessionService", () => {
 
       // maxAge 0 → cutoff is now, so the just-minted record (createdAt <= now)
       // counts as past-ceiling. It was never bound to a terminal → orphan.
-      service.sweepOrphanSessions(0);
-      await Promise.resolve();
+      await service.sweepOrphanSessions(0);
 
       expect(service.validateToken(result.token)).toBe(false);
       expect(onRevoked).toHaveBeenCalledWith(result.token);
@@ -1083,8 +1082,7 @@ describe("HelpSessionService", () => {
       if (!result) throw new Error("expected result");
 
       // A generous ceiling means the just-minted record is well within it.
-      service.sweepOrphanSessions(60 * 60 * 1000);
-      await Promise.resolve();
+      await service.sweepOrphanSessions(60 * 60 * 1000);
 
       expect(service.validateToken(result.token)).toBe("action");
     });
@@ -1096,8 +1094,7 @@ describe("HelpSessionService", () => {
 
       // Even with maxAge 0 (sweep everything past now), the bound session is
       // a healthy live assistant and must survive.
-      service.sweepOrphanSessions(0);
-      await Promise.resolve();
+      await service.sweepOrphanSessions(0);
 
       expect(service.validateToken(result.token)).toBe("action");
       expect(mockPtyKill).not.toHaveBeenCalled();
@@ -1115,8 +1112,7 @@ describe("HelpSessionService", () => {
 
       // The revoked record was already dropped from the index, so the sweep
       // can't see it and the teardown callback never fires a second time.
-      service.sweepOrphanSessions(0);
-      await Promise.resolve();
+      await service.sweepOrphanSessions(0);
 
       expect(onRevoked).toHaveBeenCalledTimes(1);
     });
@@ -1125,7 +1121,7 @@ describe("HelpSessionService", () => {
       vi.useFakeTimers();
       const svc = new HelpSessionService();
       svc.setMcpRegistry({} as never);
-      const sweepSpy = vi.spyOn(svc, "sweepOrphanSessions").mockImplementation(() => {});
+      const sweepSpy = vi.spyOn(svc, "sweepOrphanSessions").mockResolvedValue(undefined);
       try {
         svc.startOrphanSweep();
         svc.startOrphanSweep(); // idempotent — must not arm a second timer
