@@ -637,15 +637,29 @@ export function HelpPanel({
         setWidth(newWidth);
       };
 
+      const prevUserSelect = document.body.style.userSelect;
+      const prevCursor = document.body.style.cursor;
+
+      const restoreBodyStyles = () => {
+        document.body.style.userSelect = prevUserSelect;
+        document.body.style.cursor = prevCursor;
+      };
+
       const onMouseUp = () => {
         setIsResizing(false);
         onResizeEnd?.();
+        restoreBodyStyles();
         document.removeEventListener("mousemove", onMouseMove);
         document.removeEventListener("mouseup", onMouseUp);
       };
 
       document.addEventListener("mousemove", onMouseMove);
       document.addEventListener("mouseup", onMouseUp);
+      // Suppress text selection during the drag. Without this, a fast drag
+      // selects across the terminal rows while they reflow, and xterm's
+      // AccessibilityManager throws "invalid range" on the torn selection.
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "col-resize";
     },
     [width, setWidth, onResizeStart, onResizeEnd]
   );
