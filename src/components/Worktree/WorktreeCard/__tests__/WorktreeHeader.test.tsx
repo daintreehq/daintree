@@ -1534,7 +1534,9 @@ describe("WorktreeHeader blocking-op recovery row (#10715)", () => {
 
   function blockingHeader(
     repoState: WorktreeState["repoState"],
-    overrides: Partial<WorktreeHeaderProps> = {}
+    overrides: Partial<Omit<WorktreeHeaderProps, "worktree">> & {
+      worktree?: Partial<WorktreeState>;
+    } = {}
   ) {
     const { worktree: worktreeOverride, ...rest } = overrides;
     return renderHeader({
@@ -1543,6 +1545,14 @@ describe("WorktreeHeader blocking-op recovery row (#10715)", () => {
       onContinueRepositoryOperation: vi.fn().mockResolvedValue(undefined),
       ...rest,
     });
+  }
+
+  // getAllByRole(...)[i] is `HTMLElement | undefined` under noUncheckedIndexedAccess.
+  function nthButton(name: string, index: number): HTMLElement {
+    const els = screen.getAllByRole("button", { name });
+    const el = index < 0 ? els[els.length + index] : els[index];
+    if (!el) throw new Error(`button "${name}" at index ${index} not found`);
+    return el;
   }
 
   const BLOCKING = [
@@ -1591,15 +1601,12 @@ describe("WorktreeHeader blocking-op recovery row (#10715)", () => {
     const onAbort = vi.fn().mockResolvedValue(undefined);
     blockingHeader("REVERTING", { onAbortRepositoryOperation: onAbort });
     // The inline Abort button only opens the dialog — it must not call IPC directly.
-    const triggers = screen.getAllByRole("button", { name: "Abort revert" });
-    fireEvent.click(triggers[0]);
+    fireEvent.click(nthButton("Abort revert", 0));
     expect(onAbort).not.toHaveBeenCalled();
 
     // The dialog's confirm button carries the same verb-noun label; it's the
     // last "Abort revert" button now that the dialog has opened.
-    const confirmButtons = screen.getAllByRole("button", { name: "Abort revert" });
-    const dialogConfirm = confirmButtons[confirmButtons.length - 1];
-    fireEvent.click(dialogConfirm);
+    fireEvent.click(nthButton("Abort revert", -1));
     await Promise.resolve();
     expect(onAbort).toHaveBeenCalledTimes(1);
   });
@@ -1607,9 +1614,8 @@ describe("WorktreeHeader blocking-op recovery row (#10715)", () => {
   it("keeps the abort dialog open when the abort fails so the user can retry", async () => {
     const onAbort = vi.fn().mockRejectedValue(new Error("nope"));
     blockingHeader("REVERTING", { onAbortRepositoryOperation: onAbort });
-    fireEvent.click(screen.getAllByRole("button", { name: "Abort revert" })[0]);
-    const confirmButtons = screen.getAllByRole("button", { name: "Abort revert" });
-    fireEvent.click(confirmButtons[confirmButtons.length - 1]);
+    fireEvent.click(nthButton("Abort revert", 0));
+    fireEvent.click(nthButton("Abort revert", -1));
     await Promise.resolve();
     await Promise.resolve();
     // Dialog still mounted (both trigger + confirm present) and not stuck loading.
