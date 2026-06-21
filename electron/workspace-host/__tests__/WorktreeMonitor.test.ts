@@ -2718,7 +2718,7 @@ describe("WorktreeMonitor", () => {
       expect(callbacks.onUpdate).toHaveBeenCalledTimes(1);
       expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
 
-      callbacks.onUpdate.mockClear();
+      vi.mocked(callbacks.onUpdate).mockClear();
       // The user clicks Refresh on the stale card → forced refresh. The op is
       // still in progress so git status stays skipped, but the renderer must
       // receive a fresh snapshot whose freshness timestamp has advanced —
@@ -2727,10 +2727,8 @@ describe("WorktreeMonitor", () => {
 
       expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
       expect(callbacks.onUpdate).toHaveBeenCalledTimes(1);
-      const snapshot = callbacks.onUpdate.mock.calls.at(-1)?.[0] as {
-        lastGitStatusCheckedAt: number;
-      };
-      expect(snapshot.lastGitStatusCheckedAt).toBeGreaterThan(0);
+      const snapshot = vi.mocked(callbacks.onUpdate).mock.calls.at(-1)?.[0];
+      expect(snapshot?.lastGitStatusCheckedAt).toBeGreaterThan(0);
 
       monitor.stop();
     });
@@ -2746,7 +2744,7 @@ describe("WorktreeMonitor", () => {
       await flushInitialStatus();
       expect(callbacks.onUpdate).toHaveBeenCalledTimes(1);
 
-      callbacks.onUpdate.mockClear();
+      vi.mocked(callbacks.onUpdate).mockClear();
       // A non-forced (background) poll advances the freshness stamp but must not
       // emit a redundant snapshot — only the user-driven forced refresh does.
       await monitor.updateGitStatus(false);
