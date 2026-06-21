@@ -8,6 +8,8 @@ import { getGridPanelIds, getPanelById, openTerminal } from "./panels";
 import { SEL } from "./selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "./timeouts";
 
+const terminalShortcut = process.platform === "darwin" ? "Meta+Alt+t" : "Control+Alt+t";
+
 export async function openProjectSwitcherPalette(window: Page): Promise<Locator> {
   const trigger = window.locator(SEL.toolbar.projectSwitcherTrigger);
   await expect(trigger).toBeVisible({ timeout: T_MEDIUM });
@@ -193,8 +195,7 @@ export async function spawnTerminalAndVerify(
       const idsBeforeSet = new Set(idsBefore);
       let selectedPanelId: string | null = null;
 
-      for (let attempt = 0; attempt < 3 && selectedPanelId === null; attempt += 1) {
-        await openTerminal(window);
+      const waitForNewGridPanel = async (timeout: number): Promise<boolean> => {
         await expect
           .poll(
             async () => {
@@ -212,12 +213,24 @@ export async function spawnTerminalAndVerify(
 
               return false;
             },
-            { timeout: T_LONG }
+            { timeout }
           )
-          .toBe(true)
-          .catch((error: unknown) => {
-            if (attempt === 2) throw error;
-          });
+          .toBe(true);
+        return true;
+      };
+
+      for (let attempt = 0; attempt < 4 && selectedPanelId === null; attempt += 1) {
+        await openTerminal(window);
+        try {
+          await waitForNewGridPanel(T_LONG + T_SHORT);
+        } catch (error: unknown) {
+          if (attempt === 3) throw error;
+
+          await dismissProjectSwitcherPalette(window);
+          await window.keyboard.press("Escape").catch(() => undefined);
+          await window.keyboard.press(terminalShortcut);
+          await waitForNewGridPanel(T_MEDIUM).catch(() => undefined);
+        }
       }
 
       const panel = selectedPanelId
