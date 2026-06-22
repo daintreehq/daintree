@@ -571,6 +571,23 @@ class TerminalInstanceService {
 
     this.rendererPolicy.applyRendererPolicy(id, TerminalRefreshTier.BURST);
 
+    // BURST and FOCUSED both map to the "active"/50ms backend tier, so when a
+    // paused-backpressure terminal is already cached at that tier the policy
+    // dedupes and no wake IPC reaches the host — typing leaves the visible
+    // "Paused" state stuck. Fire an explicit wake to resume the coordinator,
+    // mirroring the focus path. Skip backgrounded terminals (the #9906 guard):
+    // waking a hidden pane promotes the host to active streaming. Read both
+    // fields from one snapshot so they can't diverge. resource-governor pauses
+    // are intentionally excluded — wakeExecutor only releases the backpressure
+    // coordinator token, so a wake there is a no-op (#10669).
+    const panelState = usePanelStore.getState();
+    if (
+      panelState.panelsById[id]?.flowStatus === "paused-backpressure" &&
+      !panelState.backgroundedTerminals.has(id)
+    ) {
+      this.wake(id);
+    }
+
     if (managed.inputBurstTimer !== undefined) {
       clearTimeout(managed.inputBurstTimer);
     }

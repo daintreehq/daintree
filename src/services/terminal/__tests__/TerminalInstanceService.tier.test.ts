@@ -676,3 +676,79 @@ describe("TerminalInstanceService - Activity Tier", () => {
     });
   });
 });
+
+// A separate top-level block: these tests mutate the real panelStore singleton,
+// so each one resets modules to get a fresh store and a fresh service singleton
+// rather than leaking flowStatus/backgroundedTerminals across cases.
+type InputWakeService = {
+  instances: Map<string, Record<string, unknown>>;
+  onUserInput: (id: string, data: string) => void;
+};
+
+type PanelStoreModule = {
+  usePanelStore: {
+    getState: () => Record<string, unknown>;
+    setState: (partial: Record<string, unknown>) => void;
+  };
+};
+
+describe("TerminalInstanceService - onUserInput wake for paused-backpressure", () => {
+  let service: InputWakeService;
+  let panelStore: PanelStoreModule["usePanelStore"];
+
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    mockTerminalClient.wake.mockResolvedValue({ state: null, noChange: false });
+
+    ({ terminalInstanceService: service } =
+      (await import("../TerminalInstanceService")) as unknown as {
+        terminalInstanceService: InputWakeService;
+      });
+    ({ usePanelStore: panelStore } =
+      (await import("@/store/panelStore")) as unknown as PanelStoreModule);
+
+    service.instances.clear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    service.instances.clear();
+  });
+
+  function setStore(flowStatus: string, backgrounded: boolean) {
+    panelStore.setState({
+      panelsById: { t1: { flowStatus } },
+      backgroundedTerminals: backgrounded ? new Map([["t1", {}]]) : new Map(),
+    });
+  }
+
+  it("wakes a visible paused-backpressure terminal on user input", () => {
+    service.instances.set("t1", makeMockManaged() as unknown as Record<string, unknown>);
+    setStore("paused-backpressure", false);
+
+    service.onUserInput("t1", "a");
+
+    expect(mockTerminalClient.wake).toHaveBeenCalledTimes(1);
+    expect(mockTerminalClient.wake).toHaveBeenCalledWith("t1", expect.anything());
+  });
+
+  it("does not wake a backgrounded paused-backpressure terminal", () => {
+    service.instances.set("t1", makeMockManaged() as unknown as Record<string, unknown>);
+    setStore("paused-backpressure", true);
+
+    service.onUserInput("t1", "a");
+
+    expect(mockTerminalClient.wake).not.toHaveBeenCalled();
+  });
+
+  it("does not wake a running terminal on user input", () => {
+    service.instances.set("t1", makeMockManaged() as unknown as Record<string, unknown>);
+    setStore("running", false);
+
+    service.onUserInput("t1", "a");
+
+    expect(mockTerminalClient.wake).not.toHaveBeenCalled();
+  });
+});
