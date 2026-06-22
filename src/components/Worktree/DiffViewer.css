@@ -463,6 +463,22 @@
   background: var(--scrollbar-thumb-hover);
 }
 
+/* refractor's grammars tag syntax tokens with bare class names that collide
+   with Tailwind's display utilities — most importantly the Markdown table
+   grammar, which puts class="token table …" on every cell/punctuation token of
+   a table row. Tailwind's `.table { display: table }` utility then turns those
+   inline token spans into block-level table boxes, so each token stacks on its
+   own line and a one-line Markdown table row balloons to ~18 rows (looks like
+   the whole diff "collapses" once syntax highlighting lands — the second,
+   post-paint token pass). Other grammars can collide the same way (`hidden`,
+   `block`, `inline-block`, `table-cell`, …). Syntax tokens are always inline, so
+   pin them back to inline to be immune to any Tailwind display-utility name
+   clash. The reset is unlayered (DiffViewer.css isn't in a Tailwind @layer), so
+   it outranks the layered utility regardless of specificity. */
+.diff-viewer .diff-code .token {
+  display: inline;
+}
+
 /* Syntax highlighting overrides for Tokyo Night palette */
 .diff-viewer .token.comment,
 .diff-viewer .token.prolog,

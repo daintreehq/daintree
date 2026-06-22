@@ -720,3 +720,40 @@ describe("DiffViewer wrap CSS contract (#10623)", () => {
     }
   });
 });
+
+// refractor's Markdown grammar tags table-row tokens with class="token table …".
+// Tailwind ships `.table { display: table }`, so without an inline reset those
+// inline syntax tokens become block-level table boxes and a one-line Markdown
+// table row stacks to one token per line once the (post-paint) token pass lands
+// — the whole diff appears to "collapse". jsdom can't lay out row heights, but it
+// DOES resolve the `display` cascade, so render the colliding token and assert
+// the real DiffViewer.css pins it back to inline against a present `.table`
+// utility. The no-reset render proves the harness exercises the real collision,
+// so the positive case can't silently false-pass.
+describe("DiffViewer token CSS contract (Tailwind display-utility collision)", () => {
+  function computeTokenDisplay(diffViewerCss: string): string {
+    const style = document.createElement("style");
+    // `.table { display: table }` is Tailwind's colliding utility; refractor puts
+    // `class="token table …"` on Markdown table tokens.
+    style.textContent = `.table { display: table; }\n${diffViewerCss}`;
+    document.head.appendChild(style);
+    document.body.innerHTML =
+      '<div class="diff-viewer"><table class="diff"><tbody><tr>' +
+      '<td class="diff-code diff-code-insert">' +
+      '<span id="tok" class="token table table-data">x</span>' +
+      "</td></tr></tbody></table></div>";
+    const display = getComputedStyle(document.getElementById("tok")!).display;
+    document.body.innerHTML = "";
+    style.remove();
+    return display;
+  }
+
+  it("keeps Markdown table tokens inline despite Tailwind's .table utility", () => {
+    // Sanity: with no DiffViewer reset, Tailwind's `.table` wins and the token
+    // computes block-level `table` — the bug, and proof the harness hits it.
+    expect(computeTokenDisplay("")).toBe("table");
+    // With the real stylesheet the reset pins the token back to inline.
+    const css = readFileSync(join(__dirname, "..", "DiffViewer.css"), "utf8");
+    expect(computeTokenDisplay(css)).toBe("inline");
+  });
+});

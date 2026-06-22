@@ -726,13 +726,14 @@ describe("DaintreeAssistantSettingsTab", () => {
         <DaintreeAssistantSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "Search documentation");
+    await waitForContent(container, "Couldn't load MCP status");
 
-    const docSearchToggle = screen.getByLabelText(
-      "Allow the assistant to search Daintree documentation"
-    );
-    expect(docSearchToggle.getAttribute("data-state")).toBe("unchecked");
-    expect(container.textContent).toContain("Couldn't load MCP status");
+    await waitFor(() => {
+      const docSearchToggle = screen.getByLabelText(
+        "Allow the assistant to search Daintree documentation"
+      );
+      expect(docSearchToggle.getAttribute("data-state")).toBe("unchecked");
+    });
   });
 
   it("surfaces a setSettings IPC failure as an inline error banner", async () => {
