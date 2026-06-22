@@ -212,7 +212,7 @@ describe("LocalCommitsDropdown", () => {
     fireEvent.click(row!);
 
     await waitFor(() => {
-      const pre = document.querySelector("pre");
+      const pre = row!.querySelector("pre");
       expect(pre?.textContent).toBe(
         "This is the first wrapped line of the body and this is its continuation line."
       );
@@ -301,6 +301,38 @@ describe("reflowCommitBody", () => {
   it("keeps numbered list items on their own lines", () => {
     const body = "1. first step\n2. second step";
     expect(reflowCommitBody(body)).toBe(body);
+  });
+
+  it("keeps parenthesized numbered list items on their own lines", () => {
+    const body = "1) first step\n2) second step";
+    expect(reflowCommitBody(body)).toBe(body);
+  });
+
+  it("reflows a wrapped prose line that merely starts with a word and colon", () => {
+    const body = "This explains the behavior\nNote: it also applies on Windows";
+    expect(reflowCommitBody(body)).toBe("This explains the behavior Note: it also applies on Windows");
+  });
+
+  it("treats a Key: value line as a trailer only after a blank line", () => {
+    const reflowed = "body line\nFixes: a wrapped description that continues";
+    expect(reflowCommitBody(reflowed)).toBe("body line Fixes: a wrapped description that continues");
+
+    const trailer = "body line\n\nFixes: #123";
+    expect(reflowCommitBody(trailer)).toBe(trailer);
+  });
+
+  it("keeps a BREAKING CHANGE footer on its own line", () => {
+    const body = "Reworked the API.\n\nBREAKING CHANGE: the old method is gone";
+    expect(reflowCommitBody(body)).toBe(body);
+  });
+
+  it("keeps fenced code blocks intact", () => {
+    const body = "Example usage:\n\n```ts\nconst x = 1;\n```";
+    expect(reflowCommitBody(body)).toBe(body);
+  });
+
+  it("normalizes a bare carriage return", () => {
+    expect(reflowCommitBody("line one\rline two")).toBe("line one line two");
   });
 
   it("preserves indented continuation lines verbatim", () => {

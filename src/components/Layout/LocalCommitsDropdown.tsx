@@ -59,14 +59,20 @@ const skeletonRowCount = (initialCount: number | null | undefined) =>
 export function reflowCommitBody(body: string): string {
   if (!body) return body;
 
-  const lines = body.replace(/\r\n/g, "\n").split("\n");
+  const lines = body.replace(/\r\n?/g, "\n").split("\n");
 
-  const isStructural = (line: string): boolean =>
-    line.trim() === "" || // blank line (paragraph separator)
+  const isBlank = (line: string) => line.trim() === "";
+  // Lines whose own break is meaningful regardless of context.
+  const isAlwaysStructural = (line: string) =>
     /^\s/.test(line) || // indented / code / continuation line
     /^\s*[-*+]\s/.test(line) || // bullet list item
     /^\s*\d+[.)]\s/.test(line) || // numbered list item
-    /^[A-Za-z][A-Za-z0-9-]*:\s/.test(line); // trailer / key: value
+    line.startsWith("```"); // fenced code delimiter
+  // Trailer-shaped line (`Key: value`, incl. `BREAKING CHANGE:`). Only counts
+  // as structural inside a trailer block (see below) so a wrapped prose line
+  // that merely starts "Word: …" still reflows.
+  const isTrailerShaped = (line: string) =>
+    /^[A-Za-z][A-Za-z0-9-]*:\s/.test(line) || /^BREAKING CHANGE:\s/.test(line);
 
   const out: string[] = [];
   let paragraph: string[] = [];
@@ -78,13 +84,31 @@ export function reflowCommitBody(body: string): string {
     }
   };
 
+  // A trailer block is a run of `Key: value` lines that begins after a blank
+  // line (or at the body start) — matching git's own trailer convention. Mid-
+  // paragraph lines that happen to look like trailers are treated as prose.
+  let prevBlank = true;
+  let inTrailerBlock = false;
+
   for (const line of lines) {
-    if (isStructural(line)) {
+    if (isBlank(line)) {
       flush();
       out.push(line);
+      prevBlank = true;
+      inTrailerBlock = false;
+      continue;
+    }
+
+    const isTrailer = isTrailerShaped(line) && (prevBlank || inTrailerBlock);
+    if (isAlwaysStructural(line) || isTrailer) {
+      flush();
+      out.push(line);
+      inTrailerBlock = isTrailer;
     } else {
       paragraph.push(line.replace(/\s+$/, ""));
+      inTrailerBlock = false;
     }
+    prevBlank = false;
   }
   flush();
 
