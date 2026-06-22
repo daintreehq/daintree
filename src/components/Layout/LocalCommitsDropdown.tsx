@@ -99,7 +99,7 @@ export function reflowCommitBody(body: string): string {
       continue;
     }
 
-    const isTrailer = isTrailerShaped(line) && (prevBlank || inTrailerBlock);
+    const isTrailer: boolean = isTrailerShaped(line) && (prevBlank || inTrailerBlock);
     if (isAlwaysStructural(line) || isTrailer) {
       flush();
       out.push(line);
