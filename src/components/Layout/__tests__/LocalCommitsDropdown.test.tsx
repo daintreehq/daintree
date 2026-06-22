@@ -336,6 +336,24 @@ describe("reflowCommitBody", () => {
     expect(reflowCommitBody(body)).toBe(body);
   });
 
+  it("keeps multi-line unindented fenced code on separate lines", () => {
+    const body = "```\nconst x = 1;\nconst y = 2;\n```";
+    const result = reflowCommitBody(body);
+    expect(result).toBe(body);
+    // The two code lines must not be joined into one (the #10718 fence bug).
+    expect(result).not.toContain("const x = 1; const y = 2;");
+    expect(result.split("\n")).toContain("const x = 1;");
+    expect(result.split("\n")).toContain("const y = 2;");
+  });
+
+  it("reflows prose around a fenced block but keeps the fence verbatim", () => {
+    const body =
+      "Intro prose line one\nand its continuation.\n\n```\nfoo();\nbar();\n```\n\nClosing prose line\nand its continuation.";
+    expect(reflowCommitBody(body)).toBe(
+      "Intro prose line one and its continuation.\n\n```\nfoo();\nbar();\n```\n\nClosing prose line and its continuation."
+    );
+  });
+
   it("normalizes a bare carriage return", () => {
     expect(reflowCommitBody("line one\rline two")).toBe("line one line two");
   });

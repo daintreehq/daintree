@@ -62,12 +62,13 @@ export function reflowCommitBody(body: string): string {
   const lines = body.replace(/\r\n?/g, "\n").split("\n");
 
   const isBlank = (line: string) => line.trim() === "";
-  // Lines whose own break is meaningful regardless of context.
+  const isFenceDelimiter = (line: string) => line.startsWith("```");
+  // Lines whose own break is meaningful regardless of context. (Fence
+  // delimiters and fenced content are handled separately via inFence below.)
   const isAlwaysStructural = (line: string) =>
     /^\s/.test(line) || // indented / code / continuation line
     /^\s*[-*+]\s/.test(line) || // bullet list item
-    /^\s*\d+[.)]\s/.test(line) || // numbered list item
-    line.startsWith("```"); // fenced code delimiter
+    /^\s*\d+[.)]\s/.test(line); // numbered list item
   // Trailer-shaped line (`Key: value`, incl. `BREAKING CHANGE:`). Only counts
   // as structural inside a trailer block (see below) so a wrapped prose line
   // that merely starts "Word: …" still reflows.
@@ -89,8 +90,29 @@ export function reflowCommitBody(body: string): string {
   // paragraph lines that happen to look like trailers are treated as prose.
   let prevBlank = true;
   let inTrailerBlock = false;
+  // Track whether we're between fence delimiters. Inside a fence every line is
+  // verbatim code — even unindented ones — so it must not join the paragraph
+  // buffer the way a wrapped prose line would.
+  let inFence = false;
 
   for (const line of lines) {
+    if (isFenceDelimiter(line)) {
+      flush();
+      out.push(line);
+      inFence = !inFence;
+      prevBlank = false;
+      inTrailerBlock = false;
+      continue;
+    }
+
+    if (inFence) {
+      flush();
+      out.push(line);
+      prevBlank = false;
+      inTrailerBlock = false;
+      continue;
+    }
+
     if (isBlank(line)) {
       flush();
       out.push(line);
