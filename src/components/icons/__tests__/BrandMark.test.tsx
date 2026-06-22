@@ -85,4 +85,19 @@ describe("BrandMark", () => {
     expect(spanClass).toContain("mr-2");
     expect(getByTestId("icon").hasAttribute("class")).toBe(false);
   });
+
+  it("threads userChosen through to resolveBrandChip and renders no chip wrapper", () => {
+    // A user-chosen color bypasses the white tile in the resolver (returns null),
+    // so the child renders directly without a <span> wrapper.
+    resolveBrandChipMock.mockReturnValue(null);
+
+    const { container } = render(
+      <BrandMark brandColor="#000000" userChosen>
+        <TestIcon />
+      </BrandMark>
+    );
+
+    expect(resolveBrandChipMock).toHaveBeenCalledWith("#000000", expect.anything(), true);
+    expect(container.querySelector("span")).toBeNull();
+  });
 });
