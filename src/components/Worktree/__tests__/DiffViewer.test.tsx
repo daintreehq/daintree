@@ -690,5 +690,33 @@ describe("DiffViewer wrap CSS contract (#10623)", () => {
     expect(declarations).toMatch(/word-break:\s*normal/);
     expect(declarations).toMatch(/overflow-wrap:\s*anywhere/);
     expect(declarations).not.toMatch(/word-break:\s*break-all/);
+    // The screenshot regression is specifically pre-wrap with overflow-wrap: normal:
+    // soft-wrap on, but long unbreakable runs can't break, so a Markdown table that
+    // overflows the fixed wrap column collapses to one token per line. Guard the
+    // exact degenerate value, not just the absence of break-all.
+    expect(declarations).not.toMatch(/overflow-wrap:\s*normal/);
+  });
+
+  it("never enables soft-wrap anywhere in the sheet without a way to break long runs", () => {
+    // Broader than the single rule above: any rule that turns soft-wrapping on
+    // (white-space: pre-wrap) under the fixed-width wrap table must also let an
+    // unbreakable run break, or it reopens #10623. Guards future rules too, not
+    // just today's [data-wrap] one.
+    const withoutComments = readFileSync(join(__dirname, "..", "DiffViewer.css"), "utf8").replace(
+      /\/\*[\s\S]*?\*\//g,
+      ""
+    );
+    // Match innermost declaration blocks ({ ... } with no nested braces) so the
+    // invariant still holds for a soft-wrap rule nested inside an @media block.
+    const softWrapRules = (withoutComments.match(/\{[^{}]*\}/g) ?? []).filter((rule) =>
+      /white-space:\s*pre-wrap/.test(rule)
+    );
+    expect(softWrapRules.length).toBeGreaterThan(0);
+    for (const rule of softWrapRules) {
+      const canBreakLongRuns =
+        /overflow-wrap:\s*(anywhere|break-word)/.test(rule) ||
+        /word-break:\s*(break-all|break-word)/.test(rule);
+      expect(canBreakLongRuns).toBe(true);
+    }
   });
 });
