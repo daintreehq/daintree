@@ -1478,6 +1478,7 @@ describe("ProjectViewManager — telemetry", () => {
     // proj-c is now active; proj-a and proj-b are cached.
     const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")?.view
       .webContents as unknown as ReturnType<typeof createMockWebContents>;
+    const wcBPid = wcB.getOSProcessId();
 
     // proj-a's getOSProcessId throws — the iteration over proj-a must be skipped,
     // but proj-b must still be sampled.
@@ -1486,7 +1487,7 @@ describe("ProjectViewManager — telemetry", () => {
     });
 
     mockGetAppMetrics.mockReturnValue([
-      { pid: wcB.osPid, memory: { privateBytes: 400 * 1024 } },
+      { pid: wcBPid, memory: { privateBytes: 400 * 1024 } },
     ] as unknown as Electron.ProcessMetric[]);
 
     // Sweep fresh: a background sample timer may have cached empty metrics
@@ -1494,6 +1495,7 @@ describe("ProjectViewManager — telemetry", () => {
     // the mock this test just set.
     resetAppMetricsSnapshotForTesting();
     vi.mocked(logInfo).mockClear();
+    resetAppMetricsSnapshotForTesting();
 
     expect(() =>
       (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory()
