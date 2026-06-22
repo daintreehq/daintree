@@ -47,6 +47,50 @@ const COMMIT_ROW_HEIGHT_PX = 58;
 const skeletonRowCount = (initialCount: number | null | undefined) =>
   Math.max(1, Math.min(initialCount ?? 3, 8));
 
+// Commit bodies are conventionally hard-wrapped at ~72 columns. In the narrow
+// dropdown panel those hard breaks collide with the panel's own soft wrapping,
+// producing ragged double-wrapped text (issue #10718). Reflow continuation
+// prose lines back into their paragraph so soft-wrapping is the only break,
+// while preserving structure that depends on its own line breaks: blank lines
+// (paragraph separators), list items, indented/code lines, and `Key: value`
+// trailers (Co-authored-by:, Signed-off-by:, Fixes:, …). The <pre> keeps
+// whitespace-pre-wrap + break-words so long unwrapped lines (e.g. pasted URLs)
+// still wrap. Pure, non-throwing, and idempotent.
+export function reflowCommitBody(body: string): string {
+  if (!body) return body;
+
+  const lines = body.replace(/\r\n/g, "\n").split("\n");
+
+  const isStructural = (line: string): boolean =>
+    line.trim() === "" || // blank line (paragraph separator)
+    /^\s/.test(line) || // indented / code / continuation line
+    /^\s*[-*+]\s/.test(line) || // bullet list item
+    /^\s*\d+[.)]\s/.test(line) || // numbered list item
+    /^[A-Za-z][A-Za-z0-9-]*:\s/.test(line); // trailer / key: value
+
+  const out: string[] = [];
+  let paragraph: string[] = [];
+
+  const flush = () => {
+    if (paragraph.length > 0) {
+      out.push(paragraph.join(" "));
+      paragraph = [];
+    }
+  };
+
+  for (const line of lines) {
+    if (isStructural(line)) {
+      flush();
+      out.push(line);
+    } else {
+      paragraph.push(line.replace(/\s+$/, ""));
+    }
+  }
+  flush();
+
+  return out.join("\n");
+}
+
 function LocalCommitsSkeleton({ count }: { count: number | null | undefined }) {
   return (
     <div role="status" aria-live="polite" aria-busy="true" aria-label="Loading commits">
@@ -94,7 +138,7 @@ function LocalCommitRow({ commit, optionId, isActive, isExpanded, onToggle }: Lo
     };
   }, []);
 
-  const trimmedBody = commit.body?.trim() ?? "";
+  const trimmedBody = reflowCommitBody(commit.body?.trim() ?? "");
   const hasBody = trimmedBody.length > 0;
 
   const handleCopyHash = async (e: MouseEvent<HTMLButtonElement>) => {

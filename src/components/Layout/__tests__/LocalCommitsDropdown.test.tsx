@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { LocalCommitsDropdown } from "../LocalCommitsDropdown";
+import { LocalCommitsDropdown, reflowCommitBody } from "../LocalCommitsDropdown";
 import type { GitCommit, GitCommitListResponse } from "@shared/types/git";
 
 const listCommitsMock = vi.fn();
@@ -200,6 +200,26 @@ describe("LocalCommitsDropdown", () => {
     expect(bodyAfter?.getAttribute("aria-hidden")).toBe("false");
   });
 
+  it("reflows a hard-wrapped commit body so prose has no mid-paragraph breaks", async () => {
+    const wrappedBody = "This is the first wrapped line of the body\nand this is its continuation line.";
+    listCommitsMock.mockResolvedValue(makeResponse([makeCommit(1, wrappedBody)]));
+
+    const { findAllByText } = render(
+      <LocalCommitsDropdown cwd="/repo" open initialCount={1} />
+    );
+
+    const row = (await findAllByText("commit message 1"))[0]?.closest('[role="option"]');
+    fireEvent.click(row!);
+
+    await waitFor(() => {
+      const pre = document.querySelector("pre");
+      expect(pre?.textContent).toBe(
+        "This is the first wrapped line of the body and this is its continuation line."
+      );
+      expect(pre?.textContent).not.toContain("\n");
+    });
+  });
+
   it("clears rows from the previous repo when cwd changes while open", async () => {
     listCommitsMock.mockResolvedValueOnce(makeResponse([makeCommit(1)]));
 
@@ -257,5 +277,67 @@ describe("LocalCommitsDropdown", () => {
 
     expect((await findAllByText("commit message 30")).length).toBeGreaterThan(0);
     expect(listCommitsMock).toHaveBeenLastCalledWith(expect.objectContaining({ skip: 30 }));
+  });
+});
+
+describe("reflowCommitBody", () => {
+  it("collapses a hard-wrapped prose paragraph into one line", () => {
+    const body = "This sentence was hard wrapped\nat seventy-two columns\nby the author's editor.";
+    expect(reflowCommitBody(body)).toBe(
+      "This sentence was hard wrapped at seventy-two columns by the author's editor."
+    );
+  });
+
+  it("preserves blank-line paragraph separators", () => {
+    const body = "First paragraph line one\nline two\n\nSecond paragraph here";
+    expect(reflowCommitBody(body)).toBe("First paragraph line one line two\n\nSecond paragraph here");
+  });
+
+  it("keeps bullet list items on their own lines", () => {
+    const body = "- first bullet\n- second bullet\n- third bullet";
+    expect(reflowCommitBody(body)).toBe(body);
+  });
+
+  it("keeps numbered list items on their own lines", () => {
+    const body = "1. first step\n2. second step";
+    expect(reflowCommitBody(body)).toBe(body);
+  });
+
+  it("preserves indented continuation lines verbatim", () => {
+    const body = "- a bullet header\n  indented continuation";
+    expect(reflowCommitBody(body)).toBe(body);
+  });
+
+  it("keeps git trailers on their own lines", () => {
+    const body = "Body of the commit.\n\nCo-authored-by: Jane <jane@example.com>\nSigned-off-by: Joe <joe@example.com>\nFixes: #123";
+    expect(reflowCommitBody(body)).toBe(body);
+  });
+
+  it("preserves indented code blocks", () => {
+    const body = "Explanation paragraph.\n\n    const x = 1;\n    const y = 2;";
+    expect(reflowCommitBody(body)).toBe(body);
+  });
+
+  it("leaves a single long URL line untouched", () => {
+    const body = "https://example.com/a/very/long/path/that/exceeds/the/panel/width/and/keeps/going";
+    expect(reflowCommitBody(body)).toBe(body);
+  });
+
+  it("normalizes CRLF line endings without leaving stray carriage returns", () => {
+    const body = "line one\r\nline two";
+    const result = reflowCommitBody(body);
+    expect(result).not.toContain("\r");
+    expect(result).toBe("line one line two");
+  });
+
+  it("returns an empty string unchanged", () => {
+    expect(reflowCommitBody("")).toBe("");
+  });
+
+  it("is idempotent", () => {
+    const body =
+      "A wrapped prose paragraph\nthat continues here.\n\n- a bullet\n- another\n\nFixes: #1";
+    const once = reflowCommitBody(body);
+    expect(reflowCommitBody(once)).toBe(once);
   });
 });
