@@ -9,6 +9,7 @@ import {
   KeyRound,
   Moon,
   RefreshCw,
+  ScrollText,
   ShieldAlert,
   Sliders,
   Wrench,
@@ -68,6 +69,7 @@ const DEFAULT_SETTINGS: HelpAssistantSettings = {
   modelId: "",
   customArgs: "",
   idleHibernateMinutes: 30,
+  debugLogging: false,
 };
 
 // Radix Select rejects an empty-string item value, so the "use the CLI default"
@@ -533,6 +535,10 @@ export function DaintreeAssistantSettingsTab() {
     void persist({ bypassPermissions: !settings.bypassPermissions });
   };
 
+  const toggleDebugLogging = () => {
+    void persist({ debugLogging: !settings.debugLogging });
+  };
+
   const setRetention = (value: string) => {
     const parsed = Number(value);
     if (parsed !== 0 && parsed !== 7 && parsed !== 30) return;
@@ -764,6 +770,18 @@ export function DaintreeAssistantSettingsTab() {
           onChange={handleCustomArgsChange}
           disabled={loading}
         />
+        {preferredAgentId === "daintree-assistant" && (
+          <SettingsSwitchCard
+            variant="compact"
+            icon={ScrollText}
+            title="Debug logging"
+            subtitle="Write a full-fidelity per-session trace to ~/.daintree/logs. Applies to new assistant sessions."
+            isEnabled={settings.debugLogging}
+            onChange={toggleDebugLogging}
+            ariaLabel="Enable Daintree Assistant debug logging"
+            disabled={loading}
+          />
+        )}
       </SettingsSection>
 
       {/* Behavior */}

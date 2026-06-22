@@ -39,6 +39,7 @@ const HELP_ASSISTANT_DEFAULTS: HelpAssistantSettings = {
   modelId: "",
   customArgs: "",
   idleHibernateMinutes: 30,
+  debugLogging: false,
 };
 
 const HELP_ASSISTANT_KEYS = [
@@ -50,6 +51,7 @@ const HELP_ASSISTANT_KEYS = [
   "modelId",
   "customArgs",
   "idleHibernateMinutes",
+  "debugLogging",
 ] as const satisfies ReadonlyArray<keyof HelpAssistantSettings>;
 
 const KNOWN_KEYS: ReadonlySet<string> = new Set(HELP_ASSISTANT_KEYS);
@@ -98,6 +100,7 @@ function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {
   const record = stored as Record<string, unknown>;
   if (typeof record.docSearch === "boolean") out.docSearch = record.docSearch;
   if (typeof record.daintreeControl === "boolean") out.daintreeControl = record.daintreeControl;
+  if (typeof record.debugLogging === "boolean") out.debugLogging = record.debugLogging;
   // Read-time migration from the legacy `skipPermissions` boolean: if the
   // new fields aren't stored, derive them from the old boolean. New writes
   // never touch `skipPermissions`, so once a user has saved the new fields
@@ -166,7 +169,8 @@ export const helpAssistantNamespace = defineIpcNamespace({
           if (
             (field === "docSearch" ||
               field === "daintreeControl" ||
-              field === "bypassPermissions") &&
+              field === "bypassPermissions" ||
+              field === "debugLogging") &&
             typeof value !== "boolean"
           ) {
             continue;

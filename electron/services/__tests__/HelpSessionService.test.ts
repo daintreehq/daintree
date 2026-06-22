@@ -434,6 +434,30 @@ describe("HelpSessionService", () => {
     expect(service.getBypassPermissions(result.token)).toBe(false);
   });
 
+  it("getDebugLogging returns the snapshot taken at provision time", async () => {
+    mockStoreGet.mockReturnValue({ tier: "action", debugLogging: true });
+
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+
+    // Mutate the store after provisioning: the accessor must return the
+    // value captured at provision time, not re-read the live store.
+    mockStoreGet.mockReturnValue({ tier: "action", debugLogging: false });
+
+    expect(service.getDebugLogging(result.token)).toBe(true);
+    expect(service.getDebugLogging("not-a-token")).toBe(false);
+    expect(service.getDebugLogging("")).toBe(false);
+
+    await service.revokeSession(result.sessionId);
+    expect(service.getDebugLogging(result.token)).toBe(false);
+  });
+
+  it("getDebugLogging defaults to false when settings have not been touched", async () => {
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+    expect(service.getDebugLogging(result.token)).toBe(false);
+  });
+
   it("omits the daintree MCP server when daintreeControl is false", async () => {
     mockStoreGet.mockReturnValue({ daintreeControl: false });
 

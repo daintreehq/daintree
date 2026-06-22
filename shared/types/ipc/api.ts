@@ -2031,6 +2031,13 @@ export interface HelpAssistantSettings {
    * idle hibernation. Defaults to 30.
    */
   idleHibernateMinutes: HelpAssistantIdleHibernateMinutes;
+  /**
+   * Enable the Daintree Assistant's own full-fidelity debug log for new
+   * sessions, by setting `DAINTREE_ASSISTANT_DEBUG_LOG=1` in the spawn env.
+   * Only the `daintree-assistant` backend reads this var (per-session trace to
+   * `~/.daintree/logs`); it is a no-op for other assistant agents. Defaults to false.
+   */
+  debugLogging: boolean;
 }
 
 /**

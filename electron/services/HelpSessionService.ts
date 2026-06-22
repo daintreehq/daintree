@@ -52,6 +52,7 @@ const DEFAULT_TIER: HelpAssistantTier = "action";
 const DEFAULT_DAINTREE_CONTROL = true;
 const DEFAULT_DOC_SEARCH = true;
 const DEFAULT_BYPASS_PERMISSIONS = false;
+const DEFAULT_DEBUG_LOGGING = false;
 
 // Belt-and-suspenders bound for orphaned provisional bearers (#10698). A
 // session record is minted at provision time, then bound to a PTY terminal once
@@ -114,6 +115,12 @@ interface HelpSessionRecord {
    * can still bypass Claude's confirmation gate (and vice versa).
    */
   bypassPermissions: boolean;
+  /**
+   * Snapshot at provision time of the user's debug-logging preference. Consumed
+   * by `lifecycle.ts` to decide whether to inject `DAINTREE_ASSISTANT_DEBUG_LOG=1`
+   * into the spawn env. Only the `daintree-assistant` backend reads that var.
+   */
+  debugLogging: boolean;
   createdAt: number;
   revoked: boolean;
   /**
@@ -669,6 +676,7 @@ export class HelpSessionService {
       agentId: input.agentId,
       tier,
       bypassPermissions: settings.bypassPermissions,
+      debugLogging: settings.debugLogging,
       createdAt: now,
       revoked: false,
       actionContext: input.actionContext,
@@ -1284,6 +1292,7 @@ export class HelpSessionService {
     docSearch: boolean;
     tier: HelpAssistantTier;
     bypassPermissions: boolean;
+    debugLogging: boolean;
   } {
     const stored = (store.get("helpAssistant") as Record<string, unknown> | undefined) ?? {};
     // Read-time migration from the legacy `skipPermissions` boolean. This
@@ -1312,6 +1321,8 @@ export class HelpSessionService {
       docSearch: typeof stored.docSearch === "boolean" ? stored.docSearch : DEFAULT_DOC_SEARCH,
       tier,
       bypassPermissions,
+      debugLogging:
+        typeof stored.debugLogging === "boolean" ? stored.debugLogging : DEFAULT_DEBUG_LOGGING,
     };
   }
 
@@ -1343,6 +1354,18 @@ export class HelpSessionService {
     const record = this.sessionsByToken.get(token);
     if (!record || record.revoked) return false;
     return record.bypassPermissions;
+  }
+
+  /**
+   * Returns the snapshot of the user's debug-logging preference taken at
+   * provision time. `lifecycle.ts` reads this to decide whether to inject
+   * `DAINTREE_ASSISTANT_DEBUG_LOG=1` into the assistant spawn env.
+   */
+  getDebugLogging(token: string): boolean {
+    if (!token) return false;
+    const record = this.sessionsByToken.get(token);
+    if (!record || record.revoked) return false;
+    return record.debugLogging;
   }
 
   private getSessionsRoot(): string {

@@ -205,6 +205,8 @@ const mockUnbindTerminal = vi.hoisted(() => vi.fn<(terminalId: string) => void>(
 
 const mockGetBypassPermissions = vi.hoisted(() => vi.fn<(token: string) => boolean>(() => false));
 
+const mockGetDebugLogging = vi.hoisted(() => vi.fn<(token: string) => boolean>(() => false));
+
 const mockGetAssistantScratchEnv = vi.hoisted(() =>
   vi.fn<(token: string) => Record<string, string> | null>(() => null)
 );
@@ -218,6 +220,7 @@ vi.mock("../../../../services/HelpSessionService.js", () => ({
     getGeminiSpawnEnv: (token: string) => mockGetGeminiSpawnEnv(token),
     getAssistantScratchEnv: (token: string) => mockGetAssistantScratchEnv(token),
     getBypassPermissions: (token: string) => mockGetBypassPermissions(token),
+    getDebugLogging: (token: string) => mockGetDebugLogging(token),
     markTerminalForToken: (token: string, terminalId: string) =>
       mockMarkTerminalForToken(token, terminalId),
     unbindTerminal: (terminalId: string) => mockUnbindTerminal(terminalId),
@@ -901,6 +904,84 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
 
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.env?.DAINTREE_ASSISTANT_AUTO_APPROVE).toBeUndefined();
+  });
+
+  it("injects DAINTREE_ASSISTANT_DEBUG_LOG=1 when the Daintree Assistant launches with debugLogging on", async () => {
+    mockValidateToken.mockImplementation((token) =>
+      token === "assistant-debug" ? "action" : false
+    );
+    mockGetDebugLogging.mockImplementation((token) => token === "assistant-debug");
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "daintree-assistant",
+        launchAgentId: "daintree-assistant",
+        env: { DAINTREE_MCP_TOKEN: "assistant-debug" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.env?.DAINTREE_ASSISTANT_DEBUG_LOG).toBe("1");
+  });
+
+  it("does NOT inject DAINTREE_ASSISTANT_DEBUG_LOG when debugLogging is off", async () => {
+    mockValidateToken.mockImplementation((token) =>
+      token === "assistant-nodebug" ? "action" : false
+    );
+    mockGetDebugLogging.mockImplementation(() => false);
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "daintree-assistant",
+        launchAgentId: "daintree-assistant",
+        env: { DAINTREE_MCP_TOKEN: "assistant-nodebug" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.env?.DAINTREE_ASSISTANT_DEBUG_LOG).toBeUndefined();
+  });
+
+  it("does NOT inject DAINTREE_ASSISTANT_DEBUG_LOG for a non-assistant help agent even when debugLogging is on", async () => {
+    // The var is scoped to the daintree-assistant CLI; a claude help launch
+    // with debugLogging on must never receive it.
+    mockValidateToken.mockImplementation((token) => (token === "claude-debug" ? "action" : false));
+    mockGetDebugLogging.mockImplementation(() => true);
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "claude",
+        launchAgentId: "claude",
+        env: { DAINTREE_MCP_TOKEN: "claude-debug" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.env?.DAINTREE_ASSISTANT_DEBUG_LOG).toBeUndefined();
   });
 
   it("appends --dangerously-skip-permissions even at action tier when bypassPermissions is on", async () => {

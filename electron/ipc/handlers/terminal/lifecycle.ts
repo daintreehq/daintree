@@ -264,6 +264,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       if (launchAgentId === "daintree-assistant" && bypassPermissions) {
         spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_ASSISTANT_AUTO_APPROVE: "1" };
       }
+      // The Daintree Assistant emits a full-fidelity per-session debug trace
+      // when this env var is set (off by default). Gated on the user's
+      // provision-time preference; only the assistant's own CLI reads it.
+      if (launchAgentId === "daintree-assistant" && helpSessionService.getDebugLogging(helpToken)) {
+        spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_ASSISTANT_DEBUG_LOG: "1" };
+      }
       // Honor the agent's `supports.permissionBypass` declaration: only
       // append the dangerous flag when the agent has opted in. Gemini help
       // sessions sit at `permissionBypass: false` (Phase 1 stays in plan

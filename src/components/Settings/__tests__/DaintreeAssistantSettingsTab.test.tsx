@@ -310,6 +310,37 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
   });
 
+  it("hides the debug logging toggle unless the Daintree Assistant agent is selected", async () => {
+    helpPanelState.preferredAgentId = "claude";
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Search documentation");
+
+    expect(screen.queryByLabelText("Enable Daintree Assistant debug logging")).toBeNull();
+  });
+
+  it("shows the debug logging toggle for the Daintree Assistant agent and persists debugLogging=true", async () => {
+    helpPanelState.preferredAgentId = "daintree-assistant";
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Search documentation");
+
+    const toggle = screen.getByLabelText("Enable Daintree Assistant debug logging");
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+        debugLogging: true,
+      });
+    });
+  });
+
   it("turning on bypass permissions reveals the inline warning copy", async () => {
     const { container } = render(
       <SettingsValidationProvider>
