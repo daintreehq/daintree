@@ -870,9 +870,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             // The recipe's own `terminal.env` is caller-supplied and must win.
             const baseEnv = mergeAgentRuntimeEnv(entry, preset);
             const finalEnv =
-              baseEnv || terminal.env
-                ? { ...baseEnv, ...terminal.env }
-                : terminal.env;
+              baseEnv || terminal.env ? { ...baseEnv, ...terminal.env } : terminal.env;
 
             const command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
               initialPrompt,
