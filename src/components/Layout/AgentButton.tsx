@@ -421,7 +421,9 @@ export function AgentButton({
         className="group/preset-row items-stretch py-0 pr-2.5 pl-0"
         onSelect={(e) => e.preventDefault()}
         onClick={(e) => {
-          if ((e.target as HTMLElement).closest('[data-zone="gutter"]')) {
+          // Element (not HTMLElement) so a click landing on the gutter's SVG
+          // icon — an SVGElement — still resolves; closest() lives on Element.
+          if (e.target instanceof Element && e.target.closest('[data-zone="gutter"]')) {
             persistWorktreePick(preset.id);
             return;
           }
@@ -683,7 +685,9 @@ export function AgentButton({
                 className="group/preset-row items-stretch py-0 pr-2.5 pl-0"
                 onSelect={(e) => e.preventDefault()}
                 onClick={(e) => {
-                  if ((e.target as HTMLElement).closest('[data-zone="gutter"]')) {
+                  // Element (not HTMLElement) so a gutter SVG-icon click still
+                  // resolves; closest() lives on Element.
+                  if (e.target instanceof Element && e.target.closest('[data-zone="gutter"]')) {
                     // The agent-default gutter clears BOTH scopes: the
                     // worktree override and the stale agent-level pick that
                     // resolveEffectivePresetId would otherwise fall back to
