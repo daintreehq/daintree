@@ -17,7 +17,7 @@
  *    choices and warrants the picker.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, screen } from "@testing-library/react";
+import { render, fireEvent, screen, act } from "@testing-library/react";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import { MenuActionSourceContext } from "@/components/ui/menu-source";
 
@@ -26,6 +26,11 @@ const updateWorktreePresetMock = vi.fn();
 const updateAgentMock = vi.fn().mockResolvedValue(undefined);
 let dropdownCloseAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
 let dropdownPointerDownOutsideSpy: (() => void) | null = null;
+// Track the chevron dropdown's controlled-open contract (issue #10720): the
+// mock forwards the live `open` prop and `onOpenChange` so tests can open the
+// menu, then assert a gutter click keeps it open while a label click closes it.
+let dropdownOpenState: boolean | undefined;
+let dropdownOnOpenChange: ((open: boolean) => void) | null = null;
 
 let mockSettings: AgentSettings | null = null;
 let mockActiveWorktreeId: string | null = null;
@@ -36,6 +41,7 @@ const WithMenuSource = ({ children }: { children: React.ReactNode }) => (
   </MenuActionSourceContext.Provider>
 );
 let mockCcrPresetsByAgent: Record<string, Array<{ id: string; name: string }>> = {};
+let mockProjectPresetsByAgent: Record<string, Array<{ id: string; name: string }>> = {};
 let mockMergedPresetsFn: (
   agentId: string
 ) => Array<{ id: string; name: string; color?: string }> = () => [];
@@ -78,7 +84,7 @@ vi.mock("@/store/cliAvailabilityStore", () => ({
 vi.mock("@/store/projectPresetsStore", () => ({
   useProjectPresetsStore: (
     selector: (s: { presetsByAgent: Record<string, unknown[]> }) => unknown
-  ) => selector({ presetsByAgent: {} }),
+  ) => selector({ presetsByAgent: mockProjectPresetsByAgent }),
 }));
 
 let mockPanelsById: Record<string, unknown> = {};
@@ -176,7 +182,19 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 vi.mock("@/components/ui/dropdown-menu", () => ({
-  DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenu: ({
+    children,
+    open,
+    onOpenChange,
+  }: {
+    children: React.ReactNode;
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
+  }) => {
+    dropdownOpenState = open;
+    dropdownOnOpenChange = onOpenChange ?? null;
+    return <>{children}</>;
+  },
   DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   DropdownMenuContent: ({
     children,
@@ -381,6 +399,9 @@ describe("AgentButton preset UX", () => {
     mockExternalLinks = undefined;
     dropdownCloseAutoFocusSpy = null;
     dropdownPointerDownOutsideSpy = null;
+    dropdownOpenState = undefined;
+    dropdownOnOpenChange = null;
+    mockProjectPresetsByAgent = {};
   });
 
   describe("split threshold", () => {
@@ -767,6 +788,79 @@ describe("AgentButton preset UX", () => {
       );
       expect(updateWorktreePresetMock).not.toHaveBeenCalled();
     });
+
+    it("gutter click keeps the dropdown open", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      // Open the controlled menu, then click the gutter: it must stay open so
+      // the user can arm a default without the menu collapsing under them.
+      act(() => dropdownOnOpenChange!(true));
+      expect(dropdownOpenState).toBe(true);
+      clickGutter(rowByText(getAllByTestId, "Alpha"));
+      expect(dropdownOpenState).toBe(true);
+    });
+
+    it("label click closes the dropdown", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      act(() => dropdownOnOpenChange!(true));
+      expect(dropdownOpenState).toBe(true);
+      clickLabel(rowByText(getAllByTestId, "Alpha"));
+      // Launching closes the menu via the controlled setOpen(false) path.
+      expect(dropdownOpenState).toBe(false);
+    });
+
+    it("Project Shared group gutter persists and label launches (separate render path)", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({ claude: {} });
+      mockProjectPresetsByAgent = { claude: [{ id: "proj-x", name: "Project X" }] };
+      mockMergedPresetsFn = () => [{ id: "proj-x", name: "Project X" }];
+
+      const { getAllByTestId, rerender } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      clickGutter(rowByText(getAllByTestId, "Project X"));
+      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", "proj-x");
+      expect(dispatchMock).not.toHaveBeenCalled();
+
+      rerender(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      clickLabel(rowByText(getAllByTestId, "Project X"));
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "agent.launch",
+        { agentId: "claude", presetId: "proj-x" },
+        { source: "user" }
+      );
+    });
+
+    it("Agent default gutter clears the agent-level pick even with no active worktree", () => {
+      // persistWorktreePick guards on activeWorktreeId, but updateAgent does
+      // not — clearing the global default must still fire so the next launch
+      // doesn't resolve to the stale agent-level preset.
+      mockActiveWorktreeId = null;
+      mockSettings = settingsWith({ claude: { presetId: "user-alpha" } });
+      mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      clickGutter(rowByText(getAllByTestId, "Agent default"));
+
+      expect(updateAgentMock).toHaveBeenCalledWith("claude", { presetId: undefined });
+      expect(updateWorktreePresetMock).not.toHaveBeenCalled();
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
   });
 
   describe("tooltip surfaces active preset", () => {
@@ -908,7 +1002,7 @@ describe("AgentButton preset UX", () => {
       expect(getByTestId("context-radio-group").getAttribute("data-value")).toBe("user-blue");
     });
 
-    it("context-menu preset selection dispatches with source 'context-menu'", () => {
+    it("context-menu preset selection persists and launches (source falls back to 'user' without a menu-source provider)", () => {
       mockActiveWorktreeId = "wt-A";
       mockSettings = settingsWith({ claude: {} });
       mockMergedPresetsFn = () => [
