@@ -201,12 +201,11 @@ describe("LocalCommitsDropdown", () => {
   });
 
   it("reflows a hard-wrapped commit body so prose has no mid-paragraph breaks", async () => {
-    const wrappedBody = "This is the first wrapped line of the body\nand this is its continuation line.";
+    const wrappedBody =
+      "This is the first wrapped line of the body\nand this is its continuation line.";
     listCommitsMock.mockResolvedValue(makeResponse([makeCommit(1, wrappedBody)]));
 
-    const { findAllByText } = render(
-      <LocalCommitsDropdown cwd="/repo" open initialCount={1} />
-    );
+    const { findAllByText } = render(<LocalCommitsDropdown cwd="/repo" open initialCount={1} />);
 
     const row = (await findAllByText("commit message 1"))[0]?.closest('[role="option"]');
     fireEvent.click(row!);
@@ -290,7 +289,9 @@ describe("reflowCommitBody", () => {
 
   it("preserves blank-line paragraph separators", () => {
     const body = "First paragraph line one\nline two\n\nSecond paragraph here";
-    expect(reflowCommitBody(body)).toBe("First paragraph line one line two\n\nSecond paragraph here");
+    expect(reflowCommitBody(body)).toBe(
+      "First paragraph line one line two\n\nSecond paragraph here"
+    );
   });
 
   it("keeps bullet list items on their own lines", () => {
@@ -310,12 +311,16 @@ describe("reflowCommitBody", () => {
 
   it("reflows a wrapped prose line that merely starts with a word and colon", () => {
     const body = "This explains the behavior\nNote: it also applies on Windows";
-    expect(reflowCommitBody(body)).toBe("This explains the behavior Note: it also applies on Windows");
+    expect(reflowCommitBody(body)).toBe(
+      "This explains the behavior Note: it also applies on Windows"
+    );
   });
 
   it("treats a Key: value line as a trailer only after a blank line", () => {
     const reflowed = "body line\nFixes: a wrapped description that continues";
-    expect(reflowCommitBody(reflowed)).toBe("body line Fixes: a wrapped description that continues");
+    expect(reflowCommitBody(reflowed)).toBe(
+      "body line Fixes: a wrapped description that continues"
+    );
 
     const trailer = "body line\n\nFixes: #123";
     expect(reflowCommitBody(trailer)).toBe(trailer);
@@ -341,7 +346,8 @@ describe("reflowCommitBody", () => {
   });
 
   it("keeps git trailers on their own lines", () => {
-    const body = "Body of the commit.\n\nCo-authored-by: Jane <jane@example.com>\nSigned-off-by: Joe <joe@example.com>\nFixes: #123";
+    const body =
+      "Body of the commit.\n\nCo-authored-by: Jane <jane@example.com>\nSigned-off-by: Joe <joe@example.com>\nFixes: #123";
     expect(reflowCommitBody(body)).toBe(body);
   });
 
@@ -351,7 +357,8 @@ describe("reflowCommitBody", () => {
   });
 
   it("leaves a single long URL line untouched", () => {
-    const body = "https://example.com/a/very/long/path/that/exceeds/the/panel/width/and/keeps/going";
+    const body =
+      "https://example.com/a/very/long/path/that/exceeds/the/panel/width/and/keeps/going";
     expect(reflowCommitBody(body)).toBe(body);
   });
 
