@@ -133,6 +133,10 @@ describe("recipeStore", () => {
     panelStoreState.panelsById = {};
     ccrPresetsState.ccrPresetsByAgent = {};
     projectPresetsState.presetsByAgent = {};
+    // clearAllMocks resets call counts but not implementations — restore the
+    // hoisted default so each test starts from an empty agent-settings shape
+    // instead of inheriting a prior test's mockResolvedValue.
+    getAgentSettingsMock.mockResolvedValue({ agents: {} });
   });
 
   it("rejects malformed recipe json", async () => {
@@ -1171,6 +1175,9 @@ describe("recipeStore", () => {
         expect(call.command).not.toContain("--fast");
         expect(call.agentPresetId).toBe("careful");
         expect(call.agentPresetColor).toBe("#abcdef");
+        // Restart/resume must reproduce the scoped preset, so its args have to
+        // land in the persisted launch flags too — not just the live command.
+        expect(call.agentLaunchFlags).toEqual(expect.arrayContaining(["--careful"]));
       });
 
       it("lets recipe-defined env win over preset env on key conflicts", async () => {
@@ -1214,6 +1221,11 @@ describe("recipeStore", () => {
 
         expect(call.command).toContain("--dangerously-skip-permissions");
         expect(call.command).toContain("--verbose");
+        // effectiveEntry (not the raw entry) must reach buildAgentLaunchFlags so
+        // the bypass override survives a restart.
+        expect(call.agentLaunchFlags).toEqual(
+          expect.arrayContaining(["--dangerously-skip-permissions"])
+        );
       });
 
       it("falls back to the agent-wide default when the worktree preset is stale", async () => {
@@ -1259,6 +1271,23 @@ describe("recipeStore", () => {
 
         expect(call.command).toContain("--project");
         expect(call.agentPresetId).toBe("project-preset");
+      });
+
+      it("does not auto-apply a CCR/registry default when no preset is selected", async () => {
+        // Boundary of the #10722 fix: recipe launches honor an explicitly
+        // selected preset (agent-level or worktree-scoped) but, unlike manual
+        // launches, deliberately do not auto-select a registry/CCR default when
+        // the user never picked one — recipe launches stay conservative and
+        // never apply a preset the user didn't choose.
+        getAgentSettingsMock.mockResolvedValue({ agents: { claude: {} } });
+        ccrPresetsState.ccrPresetsByAgent = {
+          claude: [{ id: "ccr-default", name: "CCR Default", args: ["--ccr"] }],
+        };
+
+        const call = await runSingleAgentRecipe({ type: "claude", title: "Claude", env: {} });
+
+        expect(call.command).not.toContain("--ccr");
+        expect(call.agentPresetId).toBeUndefined();
       });
 
       it("does not attach preset metadata to non-agent terminals", async () => {
