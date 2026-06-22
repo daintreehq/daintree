@@ -858,6 +858,10 @@ describe("ProjectViewManager — eviction safety", () => {
       { pid: wcA.osPid, memory: { privateBytes: 250 * 1024 } },
     ] as unknown as Electron.ProcessMetric[]);
 
+    // Sweep fresh: a background sample timer may have cached empty metrics
+    // during the awaits above, and the 5s snapshot TTL would otherwise shadow
+    // the mock this eviction must read.
+    resetAppMetricsSnapshotForTesting();
     await managerWithLimit.switchTo("proj-c", "/path/c");
     await flushImmediates();
 
@@ -1325,6 +1329,10 @@ describe("ProjectViewManager — telemetry", () => {
       { pid: wcB.osPid, memory: { privateBytes: 300 * 1024 } },
     ] as unknown as Electron.ProcessMetric[]);
 
+    // Sweep fresh: a background sample timer may have cached empty metrics
+    // during the awaits above, and the 5s snapshot TTL would otherwise shadow
+    // the mock this test just set.
+    resetAppMetricsSnapshotForTesting();
     vi.mocked(logInfo).mockClear();
 
     (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
@@ -1372,6 +1380,10 @@ describe("ProjectViewManager — telemetry", () => {
       { pid: guestPid, memory: { privateBytes: 400 * 1024 } },
     ] as unknown as Electron.ProcessMetric[]);
 
+    // Sweep fresh: a background sample timer may have cached empty metrics
+    // during the awaits above, and the 5s snapshot TTL would otherwise shadow
+    // the mock this test just set.
+    resetAppMetricsSnapshotForTesting();
     vi.mocked(logInfo).mockClear();
 
     (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
@@ -1477,6 +1489,10 @@ describe("ProjectViewManager — telemetry", () => {
       { pid: wcB.osPid, memory: { privateBytes: 400 * 1024 } },
     ] as unknown as Electron.ProcessMetric[]);
 
+    // Sweep fresh: a background sample timer may have cached empty metrics
+    // during the awaits above, and the 5s snapshot TTL would otherwise shadow
+    // the mock this test just set.
+    resetAppMetricsSnapshotForTesting();
     vi.mocked(logInfo).mockClear();
 
     expect(() =>
