@@ -44,6 +44,7 @@ import {
 import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackController";
 import { DEFAULT_TERMINAL_FONT_FAMILY, onTerminalFontArrivedLate } from "@/config/terminalFont";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { isPtyPanel } from "@shared/types/panel";
 import { usePanelStore } from "@/store/panelStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
@@ -570,6 +571,26 @@ class TerminalInstanceService {
     if (!managed) return;
 
     this.rendererPolicy.applyRendererPolicy(id, TerminalRefreshTier.BURST);
+
+    // BURST and FOCUSED both map to the "active"/50ms backend tier, so when a
+    // paused-backpressure terminal is already cached at that tier the policy
+    // dedupes and no wake IPC reaches the host — typing leaves the visible
+    // "Paused" state stuck. Fire an explicit wake to resume the coordinator,
+    // mirroring the focus path. Skip backgrounded terminals (the #9906 guard):
+    // waking a hidden pane promotes the host to active streaming. Read both
+    // fields from one snapshot so they can't diverge. resource-governor pauses
+    // are intentionally excluded — wakeExecutor only releases the backpressure
+    // coordinator token, so a wake there is a no-op (#10669).
+    const panelState = usePanelStore.getState();
+    const panel = panelState.panelsById[id];
+    if (
+      panel &&
+      isPtyPanel(panel) &&
+      panel.flowStatus === "paused-backpressure" &&
+      !panelState.backgroundedTerminals.has(id)
+    ) {
+      this.wake(id);
+    }
 
     if (managed.inputBurstTimer !== undefined) {
       clearTimeout(managed.inputBurstTimer);
