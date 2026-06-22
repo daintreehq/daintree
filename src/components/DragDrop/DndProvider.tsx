@@ -35,8 +35,55 @@ import {
   type TouchSensorOptions,
   type Over,
   type ScreenReaderInstructions,
+  type KeyboardCoordinateGetter,
+  type UniqueIdentifier,
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
+
+/**
+ * Keyboard arrow-reorder must stay within the dragged item's own sortable
+ * container. The grid panels and the dock chips are both sortables in this one
+ * global DndContext, so dnd-kit's stock `sortableKeyboardCoordinates` weighs
+ * EVERY droppable — including dock chips and the trash pill — when resolving
+ * the next arrow step. With certain grid/dock geometries an arrow step can land
+ * the active grid panel on a dock droppable, and `handleDragEnd` then performs a
+ * cross-container move that silently ejects the panel into the dock. (#10713:
+ * the assistant off-canvas relayout shifted the dock geometry enough that the
+ * panel-reorder nightly began ejecting a grid panel into the dock — grid count
+ * 3 → 2 — on the second arrow step.)
+ *
+ * Narrow the candidate droppables to those sharing the active item's
+ * `sortable.containerId` before delegating to the stock resolver. Pointer drags
+ * — which intentionally support cross-container moves to the dock/trash — are
+ * untouched; this only scopes the keyboard sensor. Draggables outside any
+ * SortableContext (no `containerId`) fall through to the default behavior.
+ */
+export const sameContainerKeyboardCoordinates: KeyboardCoordinateGetter = (event, args) => {
+  const { context } = args;
+  const activeContainerId = context.active?.data.current?.sortable?.containerId;
+  const droppableContainers = context.droppableContainers;
+
+  if (activeContainerId == null) {
+    return sortableKeyboardCoordinates(event, args);
+  }
+
+  // sortableKeyboardCoordinates only reads getEnabled()/get() off this map, so a
+  // thin filtered facade (delegating get() to the full map so the active item
+  // still resolves) is sufficient and keeps the active sortable addressable.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- facade implements exactly the getEnabled()/get() surface the resolver invokes
+  const scopedDroppableContainers = {
+    getEnabled: () =>
+      droppableContainers
+        .getEnabled()
+        .filter((entry) => entry?.data.current?.sortable?.containerId === activeContainerId),
+    get: (id: UniqueIdentifier) => droppableContainers.get(id),
+  } as typeof droppableContainers;
+
+  return sortableKeyboardCoordinates(event, {
+    ...args,
+    context: { ...context, droppableContainers: scopedDroppableContainers },
+  });
+};
 import { usePanelStore, useWorktreeSelectionStore } from "@/store";
 import type { PanelInstance } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
@@ -564,8 +611,9 @@ export function DndProvider({ children }: DndProviderProps) {
   const [isCancelDrop, setIsCancelDrop] = useState(false);
 
   // Configure sensors with activation constraint so clicks work for popovers.
-  // KeyboardSensor uses sortableKeyboardCoordinates so arrow-key moves resolve
-  // against the sortable layout instead of pixel-stepping; the [data-no-dnd]
+  // KeyboardSensor uses sameContainerKeyboardCoordinates (a container-scoped
+  // sortableKeyboardCoordinates) so arrow-key moves resolve against the sortable
+  // layout instead of pixel-stepping and can't cross into the dock; the [data-no-dnd]
   // opt-out doesn't apply here because keyboard activation is explicit
   // (Space/Enter on a focused activator node, not bubbling pointer input).
   const sensors = useSensors(
@@ -576,7 +624,7 @@ export function DndProvider({ children }: DndProviderProps) {
       activationConstraint: { delay: 150, tolerance: 5 },
     }),
     useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
+      coordinateGetter: sameContainerKeyboardCoordinates,
     })
   );
 
