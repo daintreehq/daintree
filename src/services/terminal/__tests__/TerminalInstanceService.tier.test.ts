@@ -751,4 +751,15 @@ describe("TerminalInstanceService - onUserInput wake for paused-backpressure", (
 
     expect(mockTerminalClient.wake).not.toHaveBeenCalled();
   });
+
+  it("does not wake a paused-resource-governor terminal on user input", () => {
+    // wakeExecutor only releases the backpressure coordinator token, so a wake
+    // here is a no-op — the exclusion is intentional and locked by this test.
+    service.instances.set("t1", makeMockManaged() as unknown as Record<string, unknown>);
+    setStore("paused-resource-governor", false);
+
+    service.onUserInput("t1", "a");
+
+    expect(mockTerminalClient.wake).not.toHaveBeenCalled();
+  });
 });
