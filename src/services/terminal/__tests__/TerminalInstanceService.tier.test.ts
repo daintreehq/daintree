@@ -719,7 +719,7 @@ describe("TerminalInstanceService - onUserInput wake for paused-backpressure", (
 
   function setStore(flowStatus: string, backgrounded: boolean) {
     panelStore.setState({
-      panelsById: { t1: { flowStatus } },
+      panelsById: { t1: { kind: "terminal", flowStatus } },
       backgroundedTerminals: backgrounded ? new Map([["t1", {}]]) : new Map(),
     });
   }
@@ -757,6 +757,20 @@ describe("TerminalInstanceService - onUserInput wake for paused-backpressure", (
     // here is a no-op — the exclusion is intentional and locked by this test.
     service.instances.set("t1", makeMockManaged() as unknown as Record<string, unknown>);
     setStore("paused-resource-governor", false);
+
+    service.onUserInput("t1", "a");
+
+    expect(mockTerminalClient.wake).not.toHaveBeenCalled();
+  });
+
+  it("does not wake when the panel is not a PTY panel", () => {
+    // flowStatus is a PtyPanelData field; the isPtyPanel guard keeps the
+    // condition type-safe against the BrowserPanelData branch of the union.
+    service.instances.set("t1", makeMockManaged() as unknown as Record<string, unknown>);
+    panelStore.setState({
+      panelsById: { t1: { kind: "browser", flowStatus: "paused-backpressure" } },
+      backgroundedTerminals: new Map(),
+    });
 
     service.onUserInput("t1", "a");
 

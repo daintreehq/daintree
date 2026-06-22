@@ -44,6 +44,7 @@ import {
 import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackController";
 import { DEFAULT_TERMINAL_FONT_FAMILY, onTerminalFontArrivedLate } from "@/config/terminalFont";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { isPtyPanel } from "@shared/types/panel";
 import { usePanelStore } from "@/store/panelStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
@@ -581,8 +582,11 @@ class TerminalInstanceService {
     // are intentionally excluded — wakeExecutor only releases the backpressure
     // coordinator token, so a wake there is a no-op (#10669).
     const panelState = usePanelStore.getState();
+    const panel = panelState.panelsById[id];
     if (
-      panelState.panelsById[id]?.flowStatus === "paused-backpressure" &&
+      panel &&
+      isPtyPanel(panel) &&
+      panel.flowStatus === "paused-backpressure" &&
       !panelState.backgroundedTerminals.has(id)
     ) {
       this.wake(id);
