@@ -317,6 +317,14 @@ export class WorkspaceHostPool {
     oldEntry.refCount--;
 
     if (oldEntry.refCount <= 0) {
+      // No window holds this project anymore — demote its host to background so
+      // it stops full-rate git status / fetch / PR polling while it sits dormant
+      // (#10743). Switching back resumes it via `resumeProject` (foreground).
+      // Gated on refCount: a project still visible in another window must keep
+      // polling. Sent before scheduling cleanup so the grace-period host is
+      // already quiesced. Resume on switch-back is driven by the IPC handler's
+      // `resumeWorkspace` flag, not here.
+      oldEntry.host.send({ type: "background" });
       this.scheduleDormantCleanup(oldProjectPath, oldEntry);
     }
   }

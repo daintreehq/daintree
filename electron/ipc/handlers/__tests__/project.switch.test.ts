@@ -677,6 +677,8 @@ describe("project:switch worktree-load-status (#8400)", () => {
       loadProject: vi.fn(loadProject),
       attachDirectPort: vi.fn(),
       getHostForProject: vi.fn(() => null),
+      resumeProject: vi.fn(),
+      pauseProject: vi.fn(),
     };
 
     const deps = {
@@ -823,6 +825,8 @@ describe("project:switch PTY port ordering (#10075)", () => {
       loadProject: vi.fn(opts.loadProject),
       attachDirectPort: vi.fn(),
       getHostForProject: vi.fn(() => null),
+      resumeProject: vi.fn(),
+      pauseProject: vi.fn(),
     };
     const windowRegistry = makeWindowRegistry([makeWindowContext(7, 300)]);
     (
@@ -920,5 +924,18 @@ describe("project:switch PTY port ordering (#10075)", () => {
     expect(distributeMock).not.toHaveBeenCalled();
     // onProjectSwitch still fires regardless of new/warm.
     expect(ptyClient.onProjectSwitch).toHaveBeenCalledWith(7, "proj-new", "/projects/new");
+  });
+
+  it("resumes the incoming project's workspace host on switch (#10743)", async () => {
+    const { invoke, worktreeService } = setup({
+      isNew: false,
+      loadProject: async () => undefined,
+    });
+
+    await invoke();
+
+    // Switching TO a project must foreground its host so a previously
+    // backgrounded project resumes full-rate polling for fresh state.
+    expect(worktreeService.resumeProject).toHaveBeenCalledWith("/projects/new");
   });
 });
