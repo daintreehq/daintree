@@ -5,6 +5,9 @@ import {
   initializeLogger,
   getLogFilePath,
   pruneOldLogsAsync,
+  pruneHeapSnapshots,
+  pruneHeapSnapshotsAsync,
+  MAX_HEAP_SNAPSHOTS,
   logInfo,
   logWarn,
   logError,
@@ -446,6 +449,121 @@ describe("logger", () => {
       await expect(pruneOldLogsAsync(TEST_LOG_DIR, 30)).resolves.toBeUndefined();
 
       expect(existsSync(nestedDir)).toBe(true);
+    });
+  });
+
+  describe.each([
+    [
+      "pruneHeapSnapshots (sync)",
+      (dir: string, max: number) => Promise.resolve(pruneHeapSnapshots(dir, max)),
+    ],
+    ["pruneHeapSnapshotsAsync", (dir: string, max: number) => pruneHeapSnapshotsAsync(dir, max)],
+  ])("%s", (_label, prune) => {
+    // Heap snapshots land directly in app.getPath("logs"), so the prune target
+    // is the dir itself — not a userData base with logs/ + debug/ subdirs.
+    const snapDir = join(TEST_LOG_DIR, "heap");
+    const MINUTE_MS = 60 * 1000;
+
+    function seedSnapshot(name: string, ageMinutes: number): string {
+      mkdirSync(snapDir, { recursive: true });
+      const filePath = join(snapDir, name);
+      writeFileSync(filePath, "x");
+      const mtimeSeconds = (Date.now() - ageMinutes * MINUTE_MS) / 1000;
+      utimesSync(filePath, mtimeSeconds, mtimeSeconds);
+      return filePath;
+    }
+
+    it("keeps the newest maxCount snapshots and deletes the rest", async () => {
+      // Ages 1..6 minutes — older = larger ageMinutes.
+      const files = Array.from({ length: 6 }, (_, i) =>
+        seedSnapshot(`Heap.2026.${i}.heapsnapshot`, i + 1)
+      );
+
+      await prune(snapDir, 3);
+
+      // Newest 3 (ages 1,2,3 → indices 0,1,2) survive; oldest 3 deleted.
+      expect(existsSync(files[0])).toBe(true);
+      expect(existsSync(files[1])).toBe(true);
+      expect(existsSync(files[2])).toBe(true);
+      expect(existsSync(files[3])).toBe(false);
+      expect(existsSync(files[4])).toBe(false);
+      expect(existsSync(files[5])).toBe(false);
+    });
+
+    it("is a no-op when the snapshot count is at or below maxCount", async () => {
+      const a = seedSnapshot("Heap.a.heapsnapshot", 1);
+      const b = seedSnapshot("Heap.b.heapsnapshot", 2);
+
+      await prune(snapDir, 3);
+
+      expect(existsSync(a)).toBe(true);
+      expect(existsSync(b)).toBe(true);
+    });
+
+    it("never touches files without the .heapsnapshot extension", async () => {
+      const log = seedSnapshot("daintree.log", 100);
+      const looksClose = seedSnapshot("heap.heapsnapshot.log", 100);
+      const txt = seedSnapshot("notes.txt", 100);
+      // Enough real snapshots to force deletion past maxCount.
+      const snaps = Array.from({ length: 4 }, (_, i) =>
+        seedSnapshot(`Heap.${i}.heapsnapshot`, i + 1)
+      );
+
+      await prune(snapDir, 1);
+
+      // Non-snapshot siblings always survive regardless of age/count.
+      expect(existsSync(log)).toBe(true);
+      expect(existsSync(looksClose)).toBe(true);
+      expect(existsSync(txt)).toBe(true);
+      // Only the single newest snapshot remains.
+      expect(existsSync(snaps[0])).toBe(true);
+      expect(existsSync(snaps[1])).toBe(false);
+      expect(existsSync(snaps[2])).toBe(false);
+      expect(existsSync(snaps[3])).toBe(false);
+    });
+
+    it("ignores subdirectories that end in .heapsnapshot", async () => {
+      mkdirSync(snapDir, { recursive: true });
+      const dirNamedLikeSnapshot = join(snapDir, "weird.heapsnapshot");
+      mkdirSync(dirNamedLikeSnapshot, { recursive: true });
+      const realSnaps = Array.from({ length: 3 }, (_, i) =>
+        seedSnapshot(`Heap.${i}.heapsnapshot`, i + 1)
+      );
+
+      await prune(snapDir, 1);
+
+      expect(existsSync(dirNamedLikeSnapshot)).toBe(true);
+      expect(existsSync(realSnaps[0])).toBe(true);
+      expect(existsSync(realSnaps[1])).toBe(false);
+      expect(existsSync(realSnaps[2])).toBe(false);
+    });
+
+    it("is idempotent across repeated runs", async () => {
+      const files = Array.from({ length: 5 }, (_, i) =>
+        seedSnapshot(`Heap.${i}.heapsnapshot`, i + 1)
+      );
+
+      await prune(snapDir, 2);
+      await prune(snapDir, 2);
+
+      expect(existsSync(files[0])).toBe(true);
+      expect(existsSync(files[1])).toBe(true);
+      expect(existsSync(files[2])).toBe(false);
+    });
+
+    it("resolves without throwing when the directory does not exist", async () => {
+      const missing = join(TEST_LOG_DIR, "no-such-dir");
+      await expect(prune(missing, MAX_HEAP_SNAPSHOTS)).resolves.toBeUndefined();
+    });
+
+    it("does not delete anything when maxCount is negative", async () => {
+      const a = seedSnapshot("Heap.a.heapsnapshot", 1);
+      const b = seedSnapshot("Heap.b.heapsnapshot", 2);
+
+      await prune(snapDir, -1);
+
+      expect(existsSync(a)).toBe(true);
+      expect(existsSync(b)).toBe(true);
     });
   });
 });

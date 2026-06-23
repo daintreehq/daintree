@@ -5,12 +5,13 @@ const mockPowerMonitor = vi.hoisted(() => ({
 }));
 
 const mockApp = vi.hoisted(() => ({
-  getPath: vi.fn().mockReturnValue("/fake/userData"),
+  getPath: vi.fn((name: string) => `/fake/${name}`),
 }));
 
 const mockRunScratchCleanup = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockRunAssistantScratchCleanup = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockPruneOldLogs = vi.hoisted(() => vi.fn());
+const mockPruneHeapSnapshotsAsync = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockStoreGet = vi.hoisted(() => vi.fn().mockReturnValue({ logRetentionDays: 30 }));
 
 vi.mock("electron", () => ({
@@ -28,6 +29,8 @@ vi.mock("../AssistantScratchService.js", () => ({
 
 vi.mock("../../utils/logger.js", () => ({
   pruneOldLogs: mockPruneOldLogs,
+  pruneHeapSnapshotsAsync: mockPruneHeapSnapshotsAsync,
+  MAX_HEAP_SNAPSHOTS: 10,
   logError: vi.fn(),
 }));
 
@@ -44,9 +47,10 @@ describe("PeriodicCleanupService", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.clearAllMocks();
     mockPowerMonitor.getSystemIdleTime.mockReturnValue(120);
-    mockApp.getPath.mockReturnValue("/fake/userData");
+    mockApp.getPath.mockImplementation((name: string) => `/fake/${name}`);
     mockRunScratchCleanup.mockResolvedValue(undefined);
     mockRunAssistantScratchCleanup.mockResolvedValue(undefined);
+    mockPruneHeapSnapshotsAsync.mockResolvedValue(undefined);
     mockStoreGet.mockReturnValue({ logRetentionDays: 30 });
   });
 
@@ -59,20 +63,23 @@ describe("PeriodicCleanupService", () => {
     expect(mockRunScratchCleanup).not.toHaveBeenCalled();
     expect(mockRunAssistantScratchCleanup).not.toHaveBeenCalled();
     expect(mockPruneOldLogs).not.toHaveBeenCalled();
+    expect(mockPruneHeapSnapshotsAsync).not.toHaveBeenCalled();
   }
 
   function expectAllRoutinesRan() {
     expect(mockRunScratchCleanup).toHaveBeenCalledTimes(1);
     expect(mockRunAssistantScratchCleanup).toHaveBeenCalledTimes(1);
     expect(mockPruneOldLogs).toHaveBeenCalledTimes(1);
+    expect(mockPruneHeapSnapshotsAsync).toHaveBeenCalledTimes(1);
   }
 
-  it("runs all three routines when the system is idle", async () => {
+  it("runs all routines when the system is idle", async () => {
     const service = new PeriodicCleanupService();
     await service.tick();
 
     expectAllRoutinesRan();
     expect(mockPruneOldLogs).toHaveBeenCalledWith("/fake/userData", 30);
+    expect(mockPruneHeapSnapshotsAsync).toHaveBeenCalledWith("/fake/logs", 10);
     service.dispose();
   });
 
@@ -138,12 +145,14 @@ describe("PeriodicCleanupService", () => {
     service.dispose();
   });
 
-  it("skips log pruning when retention is zero", async () => {
+  it("skips log pruning when retention is zero but still prunes heap snapshots", async () => {
     mockStoreGet.mockReturnValue({ logRetentionDays: 0 });
     const service = new PeriodicCleanupService();
     await service.tick();
 
+    // Heap snapshot pruning is count-based, not gated on log retention.
     expect(mockPruneOldLogs).not.toHaveBeenCalled();
+    expect(mockPruneHeapSnapshotsAsync).toHaveBeenCalledWith("/fake/logs", 10);
     service.dispose();
   });
 
