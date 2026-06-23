@@ -140,6 +140,12 @@ export function AppLayout({
   // paint (the new width arrives with the class already gone — no animation).
   const [isSidebarWidthHydrating, setIsSidebarWidthHydrating] = useState(true);
   const currentProject = useProjectStore((state) => state.currentProject);
+  const isSwitchingProject = useProjectStore((state) => state.isSwitching);
+  const switchingToProjectName = useProjectStore((state) =>
+    state.switchingToProjectId
+      ? state.projects.find((p) => p.id === state.switchingToProjectId)?.name
+      : undefined
+  );
   const layout = useLayoutState();
   const diagnosticsMounted = useKeepMounted(layout.diagnosticsOpen);
   const isThemeBrowserOpen = useOverlayOpen("theme-browser");
@@ -837,7 +843,7 @@ export function AppLayout({
         )}
       </div>
 
-      <ProjectSwitchOverlay isSwitching={false} projectName={undefined} />
+      <ProjectSwitchOverlay isSwitching={isSwitchingProject} projectName={switchingToProjectName} />
       <ChordIndicator />
 
       <AllClearOverlay />

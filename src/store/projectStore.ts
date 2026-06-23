@@ -93,6 +93,21 @@ interface ProjectState {
   projects: Project[];
   currentProject: Project | null;
   isLoading: boolean;
+  /**
+   * True while a project switch is in flight (#10736). Distinct from the shared
+   * `isLoading`, which also fires for load/add/remove — this is scoped to the
+   * switch so the main-content busy overlay only appears during a switch. Set
+   * synchronously in `switchProject` before the fire-and-forget IPC; never
+   * cleared on the happy path (the outgoing renderer is detached and replaced),
+   * only in the `.catch()` where the outgoing view stays visible. Transient,
+   * never persisted.
+   */
+  isSwitching: boolean;
+  /**
+   * Id of the project being switched to while `isSwitching` is true, used to
+   * label the busy overlay. Set/cleared atomically with `isSwitching`.
+   */
+  switchingToProjectId: string | null;
   error: string | null;
   /**
    * True once the batched boot payload has seeded `projects` + `currentProject`
@@ -327,6 +342,8 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   projects: [],
   currentProject: null,
   isLoading: false,
+  isSwitching: false,
+  switchingToProjectId: null,
   isBootstrapped: false,
   gitInitDialogOpen: false,
   gitInitDirectoryPath: null,
@@ -533,7 +550,13 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     // Clear any stale worktree-load banner atomically with the switch start so
     // the previous project's failure never coexists with the new project (#8400,
     // mirrors the #4451 atomic-swap fix).
-    set({ isLoading: true, error: null, worktreeLoadError: null });
+    set({
+      isLoading: true,
+      isSwitching: true,
+      switchingToProjectId: projectId,
+      error: null,
+      worktreeLoadError: null,
+    });
     // Fire-and-forget: the main process swaps WebContentsViews, so this
     // renderer gets detached. Don't write the response into stores — the
     // new view handles its own state independently.
@@ -561,7 +584,10 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
           },
         ],
       });
-      set({ error: message, isLoading: false });
+      // The switch failed before the view swap, so this outgoing renderer stays
+      // visible — clear the busy flag here (the happy path never reaches this
+      // renderer again, so it needs no clear).
+      set({ error: message, isLoading: false, isSwitching: false, switchingToProjectId: null });
     });
   },
 
