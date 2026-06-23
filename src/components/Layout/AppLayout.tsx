@@ -141,11 +141,13 @@ export function AppLayout({
   const [isSidebarWidthHydrating, setIsSidebarWidthHydrating] = useState(true);
   const currentProject = useProjectStore((state) => state.currentProject);
   const isSwitchingProject = useProjectStore((state) => state.isSwitching);
+  const switchingToProjectId = useProjectStore((state) => state.switchingToProjectId);
   const switchingToProjectName = useProjectStore((state) =>
     state.switchingToProjectId
       ? state.projects.find((p) => p.id === state.switchingToProjectId)?.name
       : undefined
   );
+  const clearSwitching = useProjectStore((state) => state.clearSwitching);
   const layout = useLayoutState();
   const diagnosticsMounted = useKeepMounted(layout.diagnosticsOpen);
   const isThemeBrowserOpen = useOverlayOpen("theme-browser");
@@ -843,7 +845,12 @@ export function AppLayout({
         )}
       </div>
 
-      <ProjectSwitchOverlay isSwitching={isSwitchingProject} projectName={switchingToProjectName} />
+      <ProjectSwitchOverlay
+        isSwitching={isSwitchingProject}
+        projectName={switchingToProjectName}
+        switchTargetId={switchingToProjectId}
+        onAutoDismiss={clearSwitching}
+      />
       <ChordIndicator />
 
       <AllClearOverlay />

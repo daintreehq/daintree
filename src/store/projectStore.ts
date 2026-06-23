@@ -141,6 +141,7 @@ interface ProjectState {
     options?: { focusIntent?: "focus-next-waiting" }
   ) => Promise<void>;
   setWorktreeLoadError: (error: string | null) => void;
+  clearSwitching: () => void;
   updateProject: (id: string, updates: Partial<Project>) => Promise<void>;
   enableInRepoSettings: (id: string) => Promise<Project>;
   disableInRepoSettings: (id: string) => Promise<Project>;
@@ -593,6 +594,27 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
   setWorktreeLoadError: (worktreeLoadError) => {
     set({ worktreeLoadError });
+  },
+
+  /**
+   * Force-clears the switch busy state (#10736 follow-up). The happy path
+   * deliberately leaves `isSwitching`/`isLoading` set on the outgoing renderer
+   * (the view is detached and replaced, so it never re-renders) — but that
+   * renderer is kept in the LRU view cache and reactivated on a later switch
+   * *back*, where it would otherwise resurface its stale flags: the busy overlay
+   * re-shows forever (trapping all input) and `ProjectSwitcher` stays disabled
+   * on the stuck `isLoading`. This is the reset called when a cached view
+   * returns to the foreground, and the hard-stop the overlay watchdog invokes
+   * if the flag ever sticks.
+   *
+   * Gated on a switch actually being flagged so it never clobbers an unrelated
+   * `isLoading` (load/add/remove also use it); `isLoading` is only reset here
+   * because, in that branch, the in-flight load was the switch's own — a
+   * reactivated parked view has no other operation running. Idempotent.
+   */
+  clearSwitching: () => {
+    if (!get().isSwitching && get().switchingToProjectId === null) return;
+    set({ isSwitching: false, switchingToProjectId: null, isLoading: false });
   },
 
   updateProject: async (id, updates) => {

@@ -61,6 +61,7 @@ import {
   useForgeEnableRecommendation,
   useFocusOnActivateIntent,
   useBackgroundWindowResize,
+  useResetSwitchOverlayOnReveal,
   usePluginDeepLink,
   useNotificationHistoryPruning,
   useUnloadCleanup,
@@ -762,6 +763,9 @@ function AppInner() {
   // Background window-resize receiver — keeps PTY geometry tracking the
   // window while this project view is detached (#10415).
   useBackgroundWindowResize();
+  // Clears a stale switch busy flag when this cached view is reactivated, so a
+  // view that switched away never re-shows its switch overlay on return (#10736).
+  useResetSwitchOverlayOnReveal();
   // `daintree://` deep-link receiver (#9559). Surfaces the intent once hydration
   // settles; the effect below opens the Plugin Manager, which consumes it.
   const pluginDeepLink = usePluginDeepLink(isStateLoaded);

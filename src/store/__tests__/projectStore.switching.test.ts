@@ -684,6 +684,38 @@ describe("switch busy indication (#10736)", () => {
     expect(useProjectStore.getState().switchingToProjectId).toBeNull();
   });
 
+  it("clearSwitching resets the switch flags and the switch-owned loading state", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    // Mirrors a parked renderer reactivated from the LRU cache: switchProject
+    // left isSwitching + isLoading true and that renderer never re-rendered.
+    useProjectStore.setState({
+      isSwitching: true,
+      switchingToProjectId: projectB.id,
+      isLoading: true,
+    });
+
+    useProjectStore.getState().clearSwitching();
+
+    expect(useProjectStore.getState().isSwitching).toBe(false);
+    expect(useProjectStore.getState().switchingToProjectId).toBeNull();
+    // Without this the reactivated view's ProjectSwitcher stays disabled.
+    expect(useProjectStore.getState().isLoading).toBe(false);
+  });
+
+  it("clearSwitching leaves an unrelated load untouched when no switch is flagged", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    // A plain loadProjects/addProject is in flight — no switch flag set.
+    useProjectStore.setState({
+      isSwitching: false,
+      switchingToProjectId: null,
+      isLoading: true,
+    });
+
+    useProjectStore.getState().clearSwitching();
+
+    expect(useProjectStore.getState().isLoading).toBe(true);
+  });
+
   it("a superseded switch's rejection does not clobber the newer transition's busy state", async () => {
     // Switch A→B (requestId N), then A→C supersedes it (requestId N+1). When B's
     // IPC later rejects, the staleness guard must keep C's busy state intact so
