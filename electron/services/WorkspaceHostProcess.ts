@@ -43,6 +43,29 @@ const RESTART_CAP_MAX_MS = 10_000;
 const CRASH_THRESHOLD = 3;
 export const CRASH_WINDOW_MS = 30 * 60 * 1000;
 
+// Slow-OOM crash-loop detector. The burst guard above only trips when three
+// crashes land inside a single *fixed* 30-minute window. A host that OOMs every
+// 6-11 minutes restarts cleanly between crashes, and because the OOM cadence is
+// jittery (each crash writes a ~55 MB near-heap-limit snapshot, and GC during
+// the dump buys irregular extra time) the oldest timestamp routinely decays out
+// of the window before the third crash lands — so the burst guard never trips
+// and the host loops in "Reconnecting…" forever (#10729).
+//
+// This secondary detector keys on the *interval between consecutive crashes*
+// instead of a fixed window, which is robust to that jitter: when two
+// consecutive crashes are each less than `OOM_LOOP_INTERVAL_MS` apart, the
+// process is in a slow loop and we give up (emit `host-crash`) instead of
+// restarting again. 20 minutes is deliberately wider than the burst guard's
+// effective reach (~15-min cadence — at wider spacing the 30-min/3 window can no
+// longer hold three entries) so this strictly extends detection to the slow
+// loops the burst guard misses, while still covering the reported 6-11 min band.
+//
+// Intentionally NOT part of the `crashGuardAlignment.test.ts` triad — it tracks
+// a distinct concept (inter-crash cadence, not a fixed window) and is named so
+// it cannot be confused with the aligned CRASH_WINDOW_MS/CRASH_THRESHOLD pair.
+const OOM_LOOP_INTERVAL_MS = 20 * 60 * 1000;
+const OOM_LOOP_THRESHOLD = 2;
+
 export class WorkspaceHostProcess extends EventEmitter {
   private child: UtilityProcess | null = null;
   private config: Required<WorkspaceClientConfig>;
@@ -60,6 +83,18 @@ export class WorkspaceHostProcess extends EventEmitter {
    * Three crashes within the window trip the cap and emit `host-crash`.
    */
   private crashTimestamps: number[] = [];
+  /**
+   * Timestamp of the previous crash, used by the slow-OOM detector to measure
+   * the interval between consecutive crashes. `null` until the first crash.
+   */
+  private previousCrashAt: number | null = null;
+  /**
+   * Count of consecutive crashes whose interval from the prior crash was under
+   * `OOM_LOOP_INTERVAL_MS`. Reset whenever a crash follows a longer gap. Tripping
+   * `OOM_LOOP_THRESHOLD` signals a slow OOM crash-loop (#10729). In-memory only —
+   * the loop persists within a single session, so it needs no disk backing.
+   */
+  private consecutiveShortCrashIntervals = 0;
   /**
    * Authoritative crash reason captured from `app.on("child-process-gone")`.
    * Consumed by the next `exit` handler via `setImmediate` deferral, since the
@@ -373,6 +408,8 @@ export class WorkspaceHostProcess extends EventEmitter {
     }
 
     this.crashTimestamps = [];
+    this.previousCrashAt = null;
+    this.consecutiveShortCrashIntervals = 0;
 
     console.log(`[WorkspaceHost:${this.serviceName}] Manual restart initiated`);
     this.startHost();
@@ -597,7 +634,10 @@ export class WorkspaceHostProcess extends EventEmitter {
         // Redirect v8.setHeapSnapshotNearHeapLimit dumps (set in
         // workspace-host.ts) into the app's logs directory.
         execArgv: [
-          "--max-old-space-size=256",
+          // 256 MB was marginal for large multi-worktree projects and let the
+          // host OOM-loop (#10729). 512 MB raises the headroom while the slow-OOM
+          // detector above surfaces any genuine leak instead of looping silently.
+          "--max-old-space-size=512",
           `--diagnostic-dir=${app.getPath("logs")}`,
           "--report-exclude-env",
         ],
@@ -711,7 +751,19 @@ export class WorkspaceHostProcess extends EventEmitter {
         this.crashTimestamps = this.crashTimestamps.filter((t) => crashAt - t < CRASH_WINDOW_MS);
         this.crashTimestamps.push(crashAt);
 
-        if (this.crashTimestamps.length < CRASH_THRESHOLD) {
+        // Slow-OOM detector: track consecutive crashes that land close together
+        // even when they never accumulate three inside the burst window. A short
+        // gap from the prior crash increments the counter; a long gap resets it.
+        const interCrashGap = this.previousCrashAt !== null ? crashAt - this.previousCrashAt : null;
+        if (interCrashGap !== null && interCrashGap < OOM_LOOP_INTERVAL_MS) {
+          this.consecutiveShortCrashIntervals++;
+        } else {
+          this.consecutiveShortCrashIntervals = 0;
+        }
+        this.previousCrashAt = crashAt;
+        const slowOomLoop = this.consecutiveShortCrashIntervals >= OOM_LOOP_THRESHOLD;
+
+        if (this.crashTimestamps.length < CRASH_THRESHOLD && !slowOomLoop) {
           const windowAttempt = this.crashTimestamps.length;
           const cap = Math.min(
             RESTART_CAP_BASE_MS * Math.pow(2, windowAttempt),
@@ -734,8 +786,11 @@ export class WorkspaceHostProcess extends EventEmitter {
           }, delay);
           this.restartTimer.unref?.();
         } else {
+          const cause = slowOomLoop
+            ? `slow crash-loop (${this.consecutiveShortCrashIntervals + 1} crashes under ${OOM_LOOP_INTERVAL_MS / 60_000}min apart — likely OOM)`
+            : `${CRASH_THRESHOLD} crashes in ${CRASH_WINDOW_MS / 60_000}min`;
           console.error(
-            `[WorkspaceHost:${this.serviceName}] Max restart attempts reached (${CRASH_THRESHOLD} crashes in ${CRASH_WINDOW_MS}ms), giving up`
+            `[WorkspaceHost:${this.serviceName}] Max restart attempts reached (${cause}), giving up`
           );
           this.emit("host-crash", reportedCode);
         }
