@@ -11,8 +11,19 @@ import {
   type PtyPanelData,
 } from "@shared/types/panel";
 import { projectClient, agentSettingsClient, systemClient, globalRecipesClient } from "@/clients";
-import { getAgentConfig } from "@/config/agents";
-import { generateAgentCommand, buildAgentLaunchFlags } from "@shared/types";
+import { getAgentConfig, getMergedPreset } from "@/config/agents";
+import {
+  generateAgentCommand,
+  buildAgentLaunchFlags,
+  resolveEffectivePresetId,
+} from "@shared/types";
+import {
+  applyPresetBehaviorOverrides,
+  mergeAgentRuntimeEnv,
+  resolveAgentRuntimeSettings,
+} from "@/utils/agentRuntimeSettings";
+import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
 import { sanitizeRecipeTerminals, MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
 import type { ActionSource } from "@shared/types/actions";
@@ -810,11 +821,63 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               : undefined;
             const entry = agentSettings?.agents?.[agentId] ?? {};
             const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
-            const command = generateAgentCommand(baseCommand, entry, agentId, {
+
+            // Resolve the selected preset to parity with manual launches
+            // (useAgentLauncher): the worktree-scoped pick wins over the
+            // agent-level default, and the preset's args/env/behavioral
+            // overrides must fold into the spawn. Without this, recipe
+            // launches silently ignored the chosen preset (#10722).
+            const resolvedPresetId = resolveEffectivePresetId(entry, worktreeId);
+            const ccrPresets = useCcrPresetsStore.getState().ccrPresetsByAgent[agentId];
+            const projectPresets = useProjectPresetsStore.getState().presetsByAgent[agentId];
+            const resolution = resolveAgentRuntimeSettings({
+              agentId,
+              presetId: resolvedPresetId,
+              entry,
+              ccrPresets,
+              projectPresets,
+            });
+            let preset = resolution.preset;
+            let effectiveEntry = resolution.effectiveEntry;
+            // Stale worktree-scoped preset: fall back to the agent-level
+            // default if it still resolves. Unlike useAgentLauncher we never
+            // clear the vanished slot here — recipe launches must not mutate
+            // persisted agent settings (the recipe path deliberately avoids
+            // useAgentSettingsStore).
+            const scopedId =
+              worktreeId && entry.worktreePresets ? entry.worktreePresets[worktreeId] : undefined;
+            if (
+              resolution.presetWasStale &&
+              scopedId &&
+              scopedId === resolvedPresetId &&
+              entry.presetId &&
+              entry.presetId !== scopedId
+            ) {
+              const fallbackPreset = getMergedPreset(
+                agentId,
+                entry.presetId,
+                entry.customPresets,
+                ccrPresets,
+                projectPresets
+              );
+              if (fallbackPreset) {
+                preset = fallbackPreset;
+                effectiveEntry = applyPresetBehaviorOverrides(entry, fallbackPreset);
+              }
+            }
+
+            // Layer env: global env (base) < preset env < recipe-defined env.
+            // The recipe's own `terminal.env` is caller-supplied and must win.
+            const baseEnv = mergeAgentRuntimeEnv(entry, preset);
+            const finalEnv =
+              baseEnv || terminal.env ? { ...baseEnv, ...terminal.env } : terminal.env;
+
+            const command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
               initialPrompt,
               clipboardDirectory,
               modelId: terminal.agentModelId,
               recipeArgs: terminal.args?.trim() || undefined,
+              presetArgs: preset?.args?.join(" "),
               globalSkipPermissions,
             });
             // Persist the process-level launch flags so restart/resume/continue
@@ -828,8 +891,9 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             // raw tokens since the restart command builder applies its own
             // escaping.
             const agentLaunchFlags = terminal.agentLaunchFlags ?? [
-              ...buildAgentLaunchFlags(entry, agentId, {
+              ...buildAgentLaunchFlags(effectiveEntry, agentId, {
                 modelId: terminal.agentModelId,
+                presetArgs: preset?.args,
                 globalSkipPermissions,
               }),
               ...(terminal.args?.trim().split(/\s+/).filter(Boolean) ?? []),
@@ -843,7 +907,9 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               worktreeId: worktreeId,
               agentLaunchFlags,
               agentModelId: terminal.agentModelId,
-              env: terminal.env,
+              agentPresetId: preset?.id,
+              agentPresetColor: preset?.color,
+              env: finalEnv,
               exitBehavior: terminal.exitBehavior,
               spawnedBy,
               focusPolicy,
