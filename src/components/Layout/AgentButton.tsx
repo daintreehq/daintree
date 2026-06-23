@@ -275,7 +275,9 @@ export function AgentButton({
   const activePreset = savedPresetId ? presets.find((p) => p.id === savedPresetId) : undefined;
   // CCR presets carry the routing prefix in their stored name; strip it for
   // display so the tooltip and menu surfaces show the same human label.
-  const activePresetName = activePreset ? activePreset.name.replace(/^CCR:\s*/, "") : null;
+  const activePresetName = activePreset
+    ? (activePreset.displayTitle ?? activePreset.name.replace(/^CCR:\s*/, ""))
+    : null;
   // Group by source. Project presets are identified by membership so that a
   // project preset whose id happens to start with "ccr-" still lands in
   // "Project Shared" rather than being stolen by the CCR group. Everything
@@ -412,7 +414,12 @@ export function AgentButton({
   // single menuitem (no nested interactive element) so the row stays
   // ARIA-valid. Keyboard activation lands on the row itself, which launches.
   // See issue #10720.
-  const renderPresetRow = (preset: { id: string; name: string; color?: string }) => {
+  const renderPresetRow = (preset: {
+    id: string;
+    name: string;
+    color?: string;
+    displayTitle?: string;
+  }) => {
     const isDefault = savedPresetId === preset.id;
     const presetColor = preset.color ?? getBrandColorHex(type);
     return (
@@ -450,7 +457,7 @@ export function AgentButton({
               <config.icon brandColor={presetColor} />
             </BrandMark>
           </span>
-          {preset.name.replace(/^CCR:\s*/, "")}
+          {preset.displayTitle ?? preset.name.replace(/^CCR:\s*/, "")}
         </span>
       </DropdownMenuItem>
     );
@@ -834,7 +841,7 @@ export function AgentButton({
                             );
                           }}
                         >
-                          {preset.name.replace(/^CCR:\s*/, "")}
+                          {preset.displayTitle ?? preset.name.replace(/^CCR:\s*/, "")}
                         </ContextMenuRadioItem>
                       ))}
                     </>

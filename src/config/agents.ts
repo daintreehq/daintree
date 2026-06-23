@@ -96,6 +96,27 @@ export function sanitizeAgentEnv(
   return Object.keys(sanitized).length > 0 ? sanitized : undefined;
 }
 
+/**
+ * Sanitizes a preset's free-form display title: coerces non-strings to
+ * undefined, strips control characters, blocks XSS-relevant angle brackets,
+ * caps length, and treats empty/whitespace-only values as "no custom title".
+ */
+export function sanitizeDisplayTitle(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  // Drop C0 (0x00–0x1f), DEL (0x7f), and C1 (0x80–0x9f) control chars without
+  // a control-char regex literal.
+  const cleaned = Array.from(value)
+    .filter((ch) => {
+      const code = ch.codePointAt(0) ?? 0;
+      return code > 0x1f && code !== 0x7f && !(code >= 0x80 && code <= 0x9f);
+    })
+    .join("")
+    .trim();
+  if (!cleaned) return undefined;
+  if (/[<>]/.test(cleaned)) return undefined;
+  return cleaned.slice(0, 100);
+}
+
 export function getMergedPresets(
   agentId: string,
   customPresets?: AgentPreset[],
@@ -166,6 +187,7 @@ export function getMergedPresets(
         /^#[0-9a-fA-F]{3,4}$|^#[0-9a-fA-F]{6}$|^#[0-9a-fA-F]{8}$/.test(preset.color)
           ? preset.color
           : undefined,
+      displayTitle: sanitizeDisplayTitle(preset.displayTitle),
       fallbacks: sanitizeFallbacks(preset.fallbacks, preset.id),
     };
   };

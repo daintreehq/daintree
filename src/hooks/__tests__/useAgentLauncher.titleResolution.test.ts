@@ -87,3 +87,43 @@ describe("assistant-supplied name → title / titleMode", () => {
     expect(result.titleMode).toBeUndefined();
   });
 });
+
+// ── mirror of the hook's preset-title resolution (issue #10738) ──────────────
+// Mirrors `presetTitle` + the `trimmedName || presetTitle` selection in
+// useAgentLauncher.ts. A preset's optional displayTitle overrides its name,
+// but an explicit caller-supplied name still wins over both.
+function resolveLaunchTitle(
+  computedTitle: string,
+  preset: { name: string; displayTitle?: string } | undefined,
+  name: string | undefined
+): string {
+  const presetTitle = preset ? (preset.displayTitle ?? preset.name) : computedTitle;
+  const trimmedName = name ? sanitizeTerminalName(name) : undefined;
+  return trimmedName || presetTitle;
+}
+
+describe("preset displayTitle → panel title", () => {
+  it("prefers displayTitle over the preset name", () => {
+    expect(
+      resolveLaunchTitle(
+        DEFAULT_TITLE,
+        { name: "Claude", displayTitle: "Claude [Z.ai]" },
+        undefined
+      )
+    ).toBe("Claude [Z.ai]");
+  });
+
+  it("falls back to the preset name when displayTitle is absent", () => {
+    expect(resolveLaunchTitle(DEFAULT_TITLE, { name: "Claude" }, undefined)).toBe("Claude");
+  });
+
+  it("lets an explicit caller-supplied name override displayTitle", () => {
+    expect(
+      resolveLaunchTitle(
+        DEFAULT_TITLE,
+        { name: "Claude", displayTitle: "Claude [Z.ai]" },
+        "auth refactor"
+      )
+    ).toBe("auth refactor");
+  });
+});

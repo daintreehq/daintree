@@ -175,6 +175,8 @@ export interface AgentPreset {
   inlineMode?: boolean;
   /** Optional brand color (CSS hex) used to tint the agent icon for this preset */
   color?: string;
+  /** Optional free-form panel/button title; falls back to `name` when unset */
+  displayTitle?: string;
   /**
    * Ordered list of preset IDs to try when this preset's provider becomes
    * unavailable (connection errors, hard auth failures). Each entry must be

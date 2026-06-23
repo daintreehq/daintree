@@ -297,7 +297,7 @@ function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
                       <row.Icon brandColor={preset.color ?? getBrandColorHex(row.id)} />
                     </BrandMark>
                   </span>
-                  {preset.name.replace(/^CCR:\s*/, "")}
+                  {preset.displayTitle ?? preset.name.replace(/^CCR:\s*/, "")}
                 </DropdownMenuRadioItem>
               ))}
             </>
@@ -320,7 +320,7 @@ function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
                       <row.Icon brandColor={preset.color ?? getBrandColorHex(row.id)} />
                     </BrandMark>
                   </span>
-                  {preset.name}
+                  {preset.displayTitle ?? preset.name}
                 </DropdownMenuRadioItem>
               ))}
             </>
@@ -343,7 +343,7 @@ function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
                       <row.Icon brandColor={preset.color ?? getBrandColorHex(row.id)} />
                     </BrandMark>
                   </span>
-                  {preset.name}
+                  {preset.displayTitle ?? preset.name}
                 </DropdownMenuRadioItem>
               ))}
             </>
