@@ -57,8 +57,9 @@ const { prefetchHydrateMock, useProjectStoreMock, notifyMock, projectState, proj
       locateProject: vi.fn().mockResolvedValue(undefined),
     };
 
-    const useProjectStoreMock = vi.fn((selector: (state: typeof projectState) => unknown) =>
-      selector(projectState)
+    const useProjectStoreMock = Object.assign(
+      vi.fn((selector: (state: typeof projectState) => unknown) => selector(projectState)),
+      { getState: () => projectState }
     );
     const notifyMock = vi.fn().mockReturnValue("");
 
@@ -86,8 +87,16 @@ vi.mock("@/store/projectStore", () => ({
 }));
 
 vi.mock("@/store/projectStatsStore", () => ({
-  useProjectStatsStore: vi.fn((selector: (state: typeof projectStatsState) => unknown) =>
-    selector(projectStatsState)
+  useProjectStatsStore: Object.assign(
+    vi.fn((selector: (state: typeof projectStatsState) => unknown) => selector(projectStatsState)),
+    {
+      getState: () => ({
+        stats: projectStatsState.stats,
+        setStats: (stats: typeof projectStatsState.stats) => {
+          projectStatsState.stats = stats;
+        },
+      }),
+    }
   ),
 }));
 
