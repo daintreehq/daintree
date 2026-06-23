@@ -1024,6 +1024,74 @@ describe("HelpSessionController — handleViewRevealed (switch-back recovery #10
     ctrl.stop();
   });
 
+  it("does not reap a manual (non-auto) launch — the _hasAutoLaunched guard protects it", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    // A manual selectAgent() launch never sets `_hasAutoLaunched`; reaping it
+    // would silently discard the user's explicit pick since the re-drive can't
+    // restart it (auto-launch is disabled). Simulate one stranded in provisioning.
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: null,
+      supportedInstalledAgentIds: ["claude", "codex"],
+      autoLaunchEnabled: false,
+      visibilityEpoch: 0,
+    });
+    ctrl["_patch"]({ phase: "provisioning" });
+    ctrl["_hasAutoLaunched"] = false;
+    const genBefore = ctrl["_launchGen"] as number;
+
+    ctrl.handleViewRevealed();
+
+    expect(ctrl.getSnapshot().phase).toBe("provisioning");
+    expect(ctrl["_launchGen"]).toBe(genBefore);
+    ctrl.stop();
+  });
+
+  it("does not surface a launch error when the original hung IPC rejects after the reap", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    // First getFolderPath (the stranded launch) is rejectable; the re-drive's
+    // call hangs so it stays in version-checking after recovery.
+    let rejectFolder: (err: unknown) => void = () => {};
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(
+        new Promise((_, reject) => {
+          rejectFolder = reject;
+        })
+      )
+      .mockReturnValue(new Promise(() => {}));
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
+      visibilityEpoch: 0,
+    });
+    expect(ctrl.getSnapshot().phase).toBe("version-checking");
+
+    // Switch-back reveal reaps the stall (bumping the gen) and re-drives.
+    ctrl.handleViewRevealed();
+    expect(ctrl.getSnapshot().phase).toBe("version-checking");
+
+    // The original hung IPC now rejects — it belongs to a superseded generation,
+    // so it must NOT paint an error banner over the recovered launch.
+    rejectFolder(new Error("late reject"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    expect(notify).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
   it("does not reap a loading phase when a terminal is already bound (reserved-id guard)", () => {
     const ctrl = new HelpSessionController();
     ctrl.start();

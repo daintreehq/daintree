@@ -855,7 +855,12 @@ export class HelpSessionController {
   handleViewRevealed(): void {
     const phase = this._snapshot.phase;
     const isStuckLaunch = phase !== "idle" && phase !== "live" && phase !== "hibernating";
-    if (isStuckLaunch && (this._lastInputs?.terminalId ?? null) === null) {
+    // Only reap the AUTO-launch path. A manual `selectAgent()` launch doesn't set
+    // `_hasAutoLaunched`, and the re-drive below can't restart it (`_maybeAutoLaunch`
+    // short-circuits on `!autoLaunchEnabled`), so reaping it would silently discard
+    // the user's explicit pick. Leaving it alone lets its own watchdog reap it (with
+    // a retryable error) once the view un-parks, or the thawed IPC complete it.
+    if (isStuckLaunch && this._hasAutoLaunched && (this._lastInputs?.terminalId ?? null) === null) {
       // Supersede the stranded flow so its in-flight awaits bail at their next
       // gen-check (`_abandonInFlightLaunch`); clear the re-entrancy guard so the
       // re-drive below isn't dropped; revoke the minted-but-orphaned bearer; and
@@ -2295,23 +2300,31 @@ export class HelpSessionController {
         logError("Failed to mark help terminal", err);
       });
     } catch (error) {
+      // Revoking the orphaned session token is always safe — it's this flow's
+      // own session regardless of supersession. Everything else mutates shared
+      // launch state and must only run when THIS launch still owns the
+      // generation: a stale rejection (the original hung IPC failing *after* a
+      // reveal-reap, watchdog, or newer launch bumped the gen) would otherwise
+      // clobber the successfully re-driven launch — a false error banner over a
+      // recovered session, or `_hasAutoLaunched` cleared into a duplicate launch.
+      const ownsGen = gen === this._launchGen;
+      revokeHelpSession(session?.sessionId ?? null);
       if (reservedId) {
-        this._pendingNewTerminalId = null;
-        useHelpPanelStore.getState().clearTerminal();
-        revokeHelpSession(session?.sessionId ?? null);
+        if (ownsGen) {
+          this._pendingNewTerminalId = null;
+          useHelpPanelStore.getState().clearTerminal();
+        }
         logError(options.force ? "Help run-anyway failed" : "Help new-session failed", error);
       } else {
-        this._hasAutoLaunched = false;
-        revokeHelpSession(session?.sessionId ?? null);
-        // A late-rejecting dispatch can land here after the watchdog (or a
-        // newer launch) bumped the generation — only clear the guard when the
-        // pending session is still ours, never a newer launch's.
-        if (this._pendingSessionId === session?.sessionId) {
-          this._pendingSessionId = null;
+        if (ownsGen) {
+          this._hasAutoLaunched = false;
+          if (this._pendingSessionId === session?.sessionId) {
+            this._pendingSessionId = null;
+          }
         }
         logError("Help select-agent launch failed", error);
       }
-      this._surfaceLaunchError(launchAgentId, "spawn-failed");
+      if (ownsGen) this._surfaceLaunchError(launchAgentId, "spawn-failed");
     } finally {
       // Release the re-entrancy guard only if THIS launch() still owns it —
       // clearing it unconditionally let a stale unwind drop a newer launch's
