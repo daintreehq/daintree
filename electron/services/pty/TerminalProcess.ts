@@ -204,7 +204,9 @@ export class TerminalProcess {
   private _backgroundDrainIntervalMs = 500;
   // Force a drain if a backgrounded terminal accumulates this much un-parsed
   // output, bounding queue memory for noisy agents that never pause (mirrors the
-  // renderer-side COALESCE_BATCH_CAP_BYTES from #8371).
+  // renderer-side COALESCE_BATCH_CAP_BYTES from #8371). Measured in UTF-16 code
+  // units (string .length), not bytes — multi-byte output can hold up to ~3× the
+  // nominal cap, which is harmless: draining late only delays, never corrupts.
   private readonly COALESCE_MAX_BYTES = 256 * 1024;
   private _restoreBannerStart: IMarker | null = null;
   private _restoreBannerEnd: IMarker | null = null;
@@ -665,6 +667,7 @@ export class TerminalProcess {
     this.identityWatcher.stop();
     this.semanticBufferManager.flush();
     this.flushAgentOutput();
+    this._cancelBackgroundQueue();
 
     if (this.ptyDataDisposable) {
       try {
@@ -1580,16 +1583,6 @@ export class TerminalProcess {
     const recentOutput = this.forensicsBuffer.getRecentOutput();
     this.identityWatcher.dispose();
 
-    // Drop any deferred background output — the terminal is going away, so
-    // running the parse pipeline on teardown would emit against torn-down
-    // consumers (#10744).
-    if (this._backgroundDrainTimer) {
-      clearTimeout(this._backgroundDrainTimer);
-      this._backgroundDrainTimer = null;
-    }
-    this._backgroundChunkQueue = [];
-    this._backgroundQueuedBytes = 0;
-
     // Best-effort flush before teardown disposes the writeQueue and tears down
     // the buffer. Only attempted on the alive→dispose path — if we already
     // passed through kill / natural exit, persistence has already been handled.
@@ -1932,6 +1925,22 @@ export class TerminalProcess {
     this._backgroundChunkQueue = [];
     this._backgroundQueuedBytes = 0;
     this._runPtyPipeline(coalesced);
+  }
+
+  /**
+   * Cancel the background drain timer and discard queued output without running
+   * the pipeline. Called from teardown (kill / natural exit / dispose) so a
+   * timer armed just before teardown can't fire post-teardown and fan deferred
+   * output out to released renderer subscribers / buffers (#10744).
+   */
+  private _cancelBackgroundQueue(): void {
+    if (this._backgroundDrainTimer) {
+      clearTimeout(this._backgroundDrainTimer);
+      this._backgroundDrainTimer = null;
+    }
+    this._backgroundDrainDeadline = 0;
+    this._backgroundChunkQueue = [];
+    this._backgroundQueuedBytes = 0;
   }
 
   private queueAgentOutput(agentId: string, data: string): void {

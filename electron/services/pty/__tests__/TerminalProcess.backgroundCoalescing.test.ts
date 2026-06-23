@@ -8,6 +8,7 @@ vi.mock("node-pty", () => {
 });
 
 let ptyOnDataCallback: ((data: string) => void) | null = null;
+let ptyOnExitCallback: ((e: { exitCode: number; signal?: number }) => void) | null = null;
 
 function createMockPty(): IPty {
   const pty: Partial<IPty> = {
@@ -23,7 +24,10 @@ function createMockPty(): IPty {
       ptyOnDataCallback = cb;
       return { dispose: () => {} };
     },
-    onExit: () => ({ dispose: () => {} }),
+    onExit: (cb: (e: { exitCode: number; signal?: number }) => void) => {
+      ptyOnExitCallback = cb;
+      return { dispose: () => {} };
+    },
   };
   const withDestroy = pty as Partial<IPty> & { destroy: () => void };
   withDestroy.destroy = vi.fn();
@@ -81,6 +85,7 @@ describe("TerminalProcess background output coalescing", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     ptyOnDataCallback = null;
+    ptyOnExitCallback = null;
   });
 
   afterEach(() => {
@@ -176,6 +181,57 @@ describe("TerminalProcess background output coalescing", () => {
     vi.advanceTimersByTime(300);
     expect(emitData).toHaveBeenCalledTimes(1);
     expect(emitData).toHaveBeenCalledWith("t1", "firstsecond");
+
+    terminal.dispose();
+  });
+
+  it("drains while still on the background tier before flipping to active", () => {
+    const seenTierAtDrain: Array<"active" | "background"> = [];
+    let terminal: TerminalProcess;
+    const emitData = vi.fn(() => {
+      seenTierAtDrain.push(terminal.getActivityTier());
+    });
+    terminal = createTerminal(emitData);
+
+    terminal.setActivityMonitorTier("background", 500);
+    ptyOnDataCallback!("queued");
+
+    terminal.setActivityMonitorTier("active", 50);
+
+    // The flush must run with the tier still "background" so a late chunk can't
+    // re-enter the background branch mid-flush; the tier is "active" afterwards.
+    expect(seenTierAtDrain).toEqual(["background"]);
+    expect(terminal.getActivityTier()).toBe("active");
+
+    terminal.dispose();
+  });
+
+  it("cancels the drain timer on kill without firing the deferred pipeline", () => {
+    const emitData = vi.fn();
+    const terminal = createTerminal(emitData);
+
+    terminal.setActivityMonitorTier("background", 500);
+    ptyOnDataCallback!("pre-kill");
+    expect(emitData).not.toHaveBeenCalled();
+
+    terminal.kill("user requested");
+    vi.advanceTimersByTime(1000);
+
+    expect(emitData).not.toHaveBeenCalled();
+  });
+
+  it("cancels the drain timer on natural exit without firing the deferred pipeline", () => {
+    const emitData = vi.fn();
+    const terminal = createTerminal(emitData);
+
+    terminal.setActivityMonitorTier("background", 500);
+    ptyOnDataCallback!("pre-exit");
+    expect(emitData).not.toHaveBeenCalled();
+
+    ptyOnExitCallback!({ exitCode: 0 });
+    vi.advanceTimersByTime(1000);
+
+    expect(emitData).not.toHaveBeenCalled();
 
     terminal.dispose();
   });
