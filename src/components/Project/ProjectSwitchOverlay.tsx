@@ -94,15 +94,11 @@ export function ProjectSwitchOverlay({
       aria-live="polite"
       // Above the toolbar (z-60) so the whole outgoing surface reads as busy,
       // below the panel-transition (z-100) and all-clear (z-200) overlays.
-      // backdrop-blur de-emphasises the outgoing project so the switch reads as
-      // a real transition. The cost is bounded: it samples only this view's own
-      // DOM (the incoming project is a separate WebContentsView the filter can't
-      // reach) and only for the brief switch window. A streaming terminal under
-      // the scrim can still force per-frame re-rasterisation, so this leans on
-      // performance mode — which strips the blur via the global
-      // [class*="backdrop-blur"] rule exactly when the machine is under load —
-      // and the scrim alone still dims when the blur is dropped.
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-scrim-soft/60 backdrop-blur-md"
+      // Opacity-only scrim — deliberately no backdrop-filter. A full-viewport
+      // blur would re-rasterise every frame a streaming terminal repaints
+      // beneath it, and a switch is exactly when the machine is already under
+      // load, so we favour switch performance over the blur's visual polish.
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-scrim-soft/60"
     >
       <div className="flex max-w-[80vw] items-center gap-2 text-sm text-text-secondary">
         <Spinner size="md" />
