@@ -110,6 +110,7 @@ export const AgentPresetSchema = z.object({
   customFlags: z.string().optional(),
   inlineMode: z.boolean().optional(),
   color: z.string().optional(),
+  displayTitle: z.string().optional(),
   fallbacks: z.array(z.string()).optional(),
 });
 

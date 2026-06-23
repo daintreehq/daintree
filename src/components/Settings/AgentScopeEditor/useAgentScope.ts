@@ -154,7 +154,9 @@ export function useAgentScope({
     const id = `user-${crypto.randomUUID()}`;
     const updated = [
       ...(activeEntry.customPresets ?? []),
-      { ...preset, id, name: `${preset.name} (copy)` },
+      // Drop the display title on copy so the duplicate doesn't share an
+      // identical custom label with its source — it falls back to the new name.
+      { ...preset, id, name: `${preset.name} (copy)`, displayTitle: undefined },
     ];
     void (async () => {
       await updateAgent(agentId, {

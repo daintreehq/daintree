@@ -414,7 +414,12 @@ export function AgentButton({
   // single menuitem (no nested interactive element) so the row stays
   // ARIA-valid. Keyboard activation lands on the row itself, which launches.
   // See issue #10720.
-  const renderPresetRow = (preset: { id: string; name: string; color?: string }) => {
+  const renderPresetRow = (preset: {
+    id: string;
+    name: string;
+    color?: string;
+    displayTitle?: string;
+  }) => {
     const isDefault = savedPresetId === preset.id;
     const presetColor = preset.color ?? getBrandColorHex(type);
     return (

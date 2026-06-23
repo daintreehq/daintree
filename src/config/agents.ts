@@ -103,11 +103,12 @@ export function sanitizeAgentEnv(
  */
 export function sanitizeDisplayTitle(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
-  // Drop C0/C1 control chars (incl. DEL) without a control-char regex literal.
+  // Drop C0 (0x00–0x1f), DEL (0x7f), and C1 (0x80–0x9f) control chars without
+  // a control-char regex literal.
   const cleaned = Array.from(value)
     .filter((ch) => {
       const code = ch.codePointAt(0) ?? 0;
-      return code > 0x1f && code !== 0x7f;
+      return code > 0x1f && code !== 0x7f && !(code >= 0x80 && code <= 0x9f);
     })
     .join("")
     .trim();

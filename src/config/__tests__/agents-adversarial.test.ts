@@ -601,6 +601,12 @@ describe("sanitizeDisplayTitle", () => {
   it("rejects titles containing angle brackets", () => {
     expect(sanitizeDisplayTitle("<script>")).toBeUndefined();
     expect(sanitizeDisplayTitle("a > b")).toBeUndefined();
+    expect(sanitizeDisplayTitle("<only-lt")).toBeUndefined();
+    expect(sanitizeDisplayTitle("only-gt>")).toBeUndefined();
+  });
+
+  it("strips C1 control characters (e.g. NEL U+0085)", () => {
+    expect(sanitizeDisplayTitle("Claude")).toBe("Claude");
   });
 
   it("caps length at 100 characters", () => {
