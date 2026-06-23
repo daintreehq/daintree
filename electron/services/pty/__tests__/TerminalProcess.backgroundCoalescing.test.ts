@@ -187,11 +187,12 @@ describe("TerminalProcess background output coalescing", () => {
 
   it("drains while still on the background tier before flipping to active", () => {
     const seenTierAtDrain: Array<"active" | "background"> = [];
-    let terminal: TerminalProcess;
+    // emitData reads `terminal` lazily — only when the pipeline drains, well
+    // after construction — so the const reference is safe.
     const emitData = vi.fn(() => {
       seenTierAtDrain.push(terminal.getActivityTier());
     });
-    terminal = createTerminal(emitData);
+    const terminal = createTerminal(emitData);
 
     terminal.setActivityMonitorTier("background", 500);
     ptyOnDataCallback!("queued");
