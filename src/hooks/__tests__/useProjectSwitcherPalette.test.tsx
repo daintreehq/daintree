@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   getBulkStatsMock,
+  setStatsMock,
   useProjectStoreMock,
+  useProjectStatsStoreMock,
   notifyMock,
   copyMock,
   projectState,
@@ -19,6 +21,10 @@ const {
       { activeAgentCount: number; waitingAgentCount: number; processCount: number }
     >,
   };
+
+  const setStatsMock = vi.fn((stats: typeof projectStatsState.stats) => {
+    projectStatsState.stats = stats;
+  });
 
   const projectState = {
     projects: [
@@ -48,11 +54,17 @@ const {
     vi.fn((selector: (state: typeof projectState) => unknown) => selector(projectState)),
     { getState: () => projectState }
   );
+  const useProjectStatsStoreMock = Object.assign(
+    vi.fn((selector: (state: typeof projectStatsState) => unknown) => selector(projectStatsState)),
+    { getState: () => ({ stats: projectStatsState.stats, setStats: setStatsMock }) }
+  );
   const notifyMock = vi.fn().mockReturnValue("");
 
   return {
     getBulkStatsMock,
+    setStatsMock,
     useProjectStoreMock,
+    useProjectStatsStoreMock,
     notifyMock,
     copyMock,
     projectState,
@@ -71,9 +83,7 @@ vi.mock("@/store/projectStore", () => ({
 }));
 
 vi.mock("@/store/projectStatsStore", () => ({
-  useProjectStatsStore: vi.fn((selector: (state: typeof projectStatsState) => unknown) =>
-    selector(projectStatsState)
-  ),
+  useProjectStatsStore: useProjectStatsStoreMock,
 }));
 
 vi.mock("@/lib/notify", () => ({
@@ -119,6 +129,10 @@ describe("useProjectSwitcherPalette", () => {
     vi.clearAllMocks();
     projectState.currentProject = null;
     projectStatsState.stats = {};
+    getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1"]));
+    setStatsMock.mockImplementation((stats: typeof projectStatsState.stats) => {
+      projectStatsState.stats = stats;
+    });
     usePaletteStore.setState({ activePaletteId: null });
   });
 
@@ -1012,6 +1026,105 @@ describe("useProjectSwitcherPalette", () => {
 
       expect(copyMock).toHaveBeenCalledWith("/repo/one");
       expect(notifyMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("stats refresh on open", () => {
+    let savedProjects: typeof projectState.projects;
+
+    beforeEach(() => {
+      savedProjects = projectState.projects;
+      projectState.projects = [
+        {
+          id: "project-1",
+          name: "Project One",
+          path: "/repo/one",
+          emoji: "🌲",
+          color: "#00aa00",
+          lastOpened: 123,
+          frecencyScore: 3.0,
+          status: "active" as const,
+        },
+      ];
+    });
+
+    afterEach(() => {
+      projectState.projects = savedProjects;
+    });
+
+    it("pulls fresh bulk stats for loaded project IDs when opened", async () => {
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(getBulkStatsMock).toHaveBeenCalledWith(["project-1"]);
+      });
+    });
+
+    it("updates the stats store with mapped agent counts from the bulk response", async () => {
+      getBulkStatsMock.mockResolvedValue({
+        "project-1": {
+          processCount: 2,
+          terminalCount: 2,
+          estimatedMemoryMB: 10,
+          terminalTypes: {},
+          processIds: [1, 2],
+          activeAgentCount: 1,
+          waitingAgentCount: 3,
+        },
+      });
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(setStatsMock).toHaveBeenCalledWith({
+          "project-1": { activeAgentCount: 1, waitingAgentCount: 3, processCount: 2 },
+        });
+      });
+    });
+
+    it("does not request stats when no projects are loaded", async () => {
+      const originalProjects = projectState.projects;
+      projectState.projects = [];
+
+      try {
+        const { result } = renderHook(() => useProjectSwitcherPalette());
+
+        act(() => {
+          result.current.open();
+        });
+
+        await waitFor(() => {
+          expect(result.current.isOpen).toBe(true);
+        });
+        expect(getBulkStatsMock).not.toHaveBeenCalled();
+        expect(setStatsMock).not.toHaveBeenCalled();
+      } finally {
+        projectState.projects = originalProjects;
+      }
+    });
+
+    it("tolerates a bulk stats fetch rejection without throwing", async () => {
+      getBulkStatsMock.mockRejectedValueOnce(new Error("stats failed"));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(result.current.isOpen).toBe(true);
+        expect(getBulkStatsMock).toHaveBeenCalledWith(["project-1"]);
+      });
+      expect(setStatsMock).not.toHaveBeenCalled();
     });
   });
 });
