@@ -259,6 +259,24 @@ describe("WorkspaceClient multi-process manager", () => {
 
       expect(h(0).send).not.toHaveBeenCalledWith({ type: "background" });
     });
+
+    it("foregrounds a warm host when a window re-attaches after switch-away (#10743)", async () => {
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
+
+      // Switch away: project-a is demoted to background (refCount 0).
+      const load2 = client.loadProject("/project-b", 1);
+      await readyAndResolveLoad(1);
+      await load2;
+      expect(h(0).send).toHaveBeenCalledWith({ type: "background" });
+
+      // Re-attach to the still-warm project-a — the pool must resume it so it
+      // doesn't stay paused (covers menu open / reopen / switch-back paths).
+      const load3 = client.loadProject("/project-a", 1);
+      await load3;
+      expect(h(0).send).toHaveBeenCalledWith({ type: "foreground" });
+    });
   });
 
   describe("getAllStatesAsync", () => {

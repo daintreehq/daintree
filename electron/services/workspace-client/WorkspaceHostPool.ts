@@ -213,6 +213,13 @@ export class WorkspaceHostPool {
           clearTimeout(existingEntry.cleanupTimeout);
           existingEntry.cleanupTimeout = null;
         }
+        // Resume a warm host that may have been demoted to background by an
+        // earlier switch-away (#10743). Symmetric with the `background` send in
+        // `releaseOldProject`: the pool pauses on release, so it resumes on
+        // re-attach — covering every caller (menu open, IPC switch/reopen)
+        // without each having to remember to foreground first. `resume()` is
+        // idempotent, so this is harmless when the host was never paused.
+        existingEntry.host.send({ type: "foreground" });
         this.windowToProject.set(windowId, normalizedPath);
 
         if (isSwitching) {
