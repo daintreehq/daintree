@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { getMergedPresets, getMergedPreset, sanitizeAgentEnv } from "@/config/agents";
+import {
+  getMergedPresets,
+  getMergedPreset,
+  sanitizeAgentEnv,
+  sanitizeDisplayTitle,
+} from "@/config/agents";
 
 // Adversarial unit tests for preset merging logic
 describe("Adversarial: Preset Merging", () => {
@@ -570,5 +575,57 @@ describe("Preset fallback chain sanitization", () => {
       },
     ];
     expect(() => getMergedPresets("claude", bad)).not.toThrow();
+  });
+});
+
+describe("sanitizeDisplayTitle", () => {
+  it("preserves a valid free-form title", () => {
+    expect(sanitizeDisplayTitle("Claude [Z.ai]")).toBe("Claude [Z.ai]");
+  });
+
+  it("coerces non-string input to undefined", () => {
+    expect(sanitizeDisplayTitle(undefined)).toBeUndefined();
+    expect(sanitizeDisplayTitle(42 as unknown)).toBeUndefined();
+    expect(sanitizeDisplayTitle({} as unknown)).toBeUndefined();
+  });
+
+  it("treats empty / whitespace-only values as no custom title", () => {
+    expect(sanitizeDisplayTitle("")).toBeUndefined();
+    expect(sanitizeDisplayTitle("   ")).toBeUndefined();
+  });
+
+  it("strips control characters", () => {
+    expect(sanitizeDisplayTitle("Cla\tude\n")).toBe("Claude");
+  });
+
+  it("rejects titles containing angle brackets", () => {
+    expect(sanitizeDisplayTitle("<script>")).toBeUndefined();
+    expect(sanitizeDisplayTitle("a > b")).toBeUndefined();
+  });
+
+  it("caps length at 100 characters", () => {
+    const long = "x".repeat(150);
+    expect(sanitizeDisplayTitle(long)).toHaveLength(100);
+  });
+});
+
+describe("getMergedPresets — displayTitle", () => {
+  it("forwards a valid displayTitle through validation", () => {
+    const result = getMergedPresets("claude", [
+      { id: "z", name: "Claude", displayTitle: "Claude [Z.ai]" },
+    ]);
+    expect(result.find((f) => f.id === "z")?.displayTitle).toBe("Claude [Z.ai]");
+  });
+
+  it("strips an invalid displayTitle without dropping the preset", () => {
+    const result = getMergedPresets("claude", [{ id: "z", name: "Claude", displayTitle: "<bad>" }]);
+    const preset = result.find((f) => f.id === "z");
+    expect(preset).toBeDefined();
+    expect(preset?.displayTitle).toBeUndefined();
+  });
+
+  it("leaves displayTitle undefined when absent", () => {
+    const result = getMergedPresets("claude", [{ id: "z", name: "Claude" }]);
+    expect(result.find((f) => f.id === "z")?.displayTitle).toBeUndefined();
   });
 });

@@ -506,7 +506,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           return null;
         }
 
-        const presetTitle = isAgent && preset ? preset.name : title;
+        const presetTitle = isAgent && preset ? (preset.displayTitle ?? preset.name) : title;
         // A caller-supplied name overrides the computed title and pins it so
         // agent detection can't rewrite it. Strip control characters (an LLM
         // assistant could emit newlines/ANSI/tabs) and collapse whitespace so

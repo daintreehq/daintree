@@ -275,7 +275,9 @@ export function AgentButton({
   const activePreset = savedPresetId ? presets.find((p) => p.id === savedPresetId) : undefined;
   // CCR presets carry the routing prefix in their stored name; strip it for
   // display so the tooltip and menu surfaces show the same human label.
-  const activePresetName = activePreset ? activePreset.name.replace(/^CCR:\s*/, "") : null;
+  const activePresetName = activePreset
+    ? (activePreset.displayTitle ?? activePreset.name.replace(/^CCR:\s*/, ""))
+    : null;
   // Group by source. Project presets are identified by membership so that a
   // project preset whose id happens to start with "ccr-" still lands in
   // "Project Shared" rather than being stolen by the CCR group. Everything
@@ -450,7 +452,7 @@ export function AgentButton({
               <config.icon brandColor={presetColor} />
             </BrandMark>
           </span>
-          {preset.name.replace(/^CCR:\s*/, "")}
+          {preset.displayTitle ?? preset.name.replace(/^CCR:\s*/, "")}
         </span>
       </DropdownMenuItem>
     );
@@ -834,7 +836,7 @@ export function AgentButton({
                             );
                           }}
                         >
-                          {preset.name.replace(/^CCR:\s*/, "")}
+                          {preset.displayTitle ?? preset.name.replace(/^CCR:\s*/, "")}
                         </ContextMenuRadioItem>
                       ))}
                     </>

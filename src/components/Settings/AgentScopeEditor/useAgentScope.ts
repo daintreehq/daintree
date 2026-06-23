@@ -59,8 +59,9 @@ export function useAgentScope({
 
   const scopeLabel = useMemo(() => {
     if (scopeKind === "default") return "Default";
-    if (scopeKind === "ccr" && selectedPreset) return stripCcrPrefix(selectedPreset.name);
-    return selectedPreset?.name ?? "Default";
+    if (scopeKind === "ccr" && selectedPreset)
+      return selectedPreset.displayTitle ?? stripCcrPrefix(selectedPreset.name);
+    return selectedPreset?.displayTitle ?? selectedPreset?.name ?? "Default";
   }, [scopeKind, selectedPreset]);
 
   const agentCfg = getAgentConfig(agentId);
@@ -251,6 +252,13 @@ export function useAgentScope({
     }
   };
 
+  const handleDisplayTitleChange = (value: string) => {
+    if (scopeKind === "custom" && selectedPreset) {
+      // Store empty/whitespace as undefined so the title falls back to `name`.
+      handleUpdatePreset(selectedPreset.id, { displayTitle: value.trim() ? value : undefined });
+    }
+  };
+
   const handleInlineOverrideReset = () => {
     if (scopeKind === "custom" && selectedPreset) {
       handleUpdatePreset(selectedPreset.id, { inlineMode: undefined });
@@ -303,6 +311,7 @@ export function useAgentScope({
     handleDangerousModeChange,
     handleInlineModeChange,
     handleCustomFlagsChange,
+    handleDisplayTitleChange,
     handleInlineOverrideReset,
     handleCustomFlagsOverrideReset,
   };
