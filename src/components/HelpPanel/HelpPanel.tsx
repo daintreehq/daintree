@@ -378,6 +378,22 @@ export function HelpPanel({
     };
   }, []);
 
+  // Recover a launch stranded by a project switch-back (#10739). When a launch
+  // is interrupted mid-flight, the view is parked in the LRU cache where the
+  // watchdog timer can't fire, leaving the loading skeleton stuck with no
+  // terminal bound. Key off the explicit `app:view-revealed` signal (reliable
+  // for cached-view reveal, unlike DOM `visibilitychange`) so the controller can
+  // reap the stall and re-drive. Gated only on `isOpen` — crucially NOT on
+  // `terminalId`, since the stuck-launch case has no terminal yet, nor on
+  // `isVisible`, so the subscription is live the moment the cached view reveals.
+  useEffect(() => {
+    if (!isOpen) return;
+    const off = window.electron?.app?.onViewRevealed?.(() => {
+      controller.handleViewRevealed();
+    });
+    return () => off?.();
+  }, [controller, isOpen]);
+
   // Revoke the bound help session if the underlying PTY panel disappears
   // from the panel store. The controller's `_pendingNewTerminalId` guard
   // keeps the reservation alive across the brief addPanel/setTerminal gap.

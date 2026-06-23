@@ -928,6 +928,130 @@ describe("HelpSessionController — launch phase FSM", () => {
   });
 });
 
+describe("HelpSessionController — handleViewRevealed (switch-back recovery #10739)", () => {
+  // Drives a preferred-agent auto-launch that hangs on the first bridge await,
+  // leaving the FSM stranded in `version-checking` — the parked-view stall the
+  // watchdog can't reap because its setTimeout is frozen in the LRU cache.
+  function startStuckLaunch(ctrl: HelpSessionController): void {
+    helpPanelState.preferredAgentId = "claude";
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise(() => {})
+    );
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
+      visibilityEpoch: 0,
+    });
+  }
+
+  it("silently reaps a stranded loading-phase launch and re-drives it (no error surfaced)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    startStuckLaunch(ctrl);
+    expect(ctrl.getSnapshot().phase).toBe("version-checking");
+    const genBefore = ctrl["_launchGen"] as number;
+    const folderCallsBefore = (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mock
+      .calls.length;
+
+    ctrl.handleViewRevealed();
+
+    // Re-driven, not left stranded: a fresh launch synchronously re-enters the
+    // loading phase, the auto-launch path ran again, and the generation advanced
+    // (reap + re-drive each bump it).
+    expect(ctrl.getSnapshot().phase).toBe("version-checking");
+    expect(
+      (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mock.calls.length
+    ).toBeGreaterThan(folderCallsBefore);
+    expect(ctrl["_launchGen"]).toBeGreaterThan(genBefore);
+    // Recovery is silent — the user must see the resume, not a failure.
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    expect(notify).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("revokes the minted-but-orphaned pending session token when reaping", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    startStuckLaunch(ctrl);
+    ctrl["_pendingSessionId"] = "sess-orphan";
+
+    ctrl.handleViewRevealed();
+
+    expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-orphan");
+    ctrl.stop();
+  });
+
+  it("is a no-op when a session is already live (no reap, no re-drive)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_patch"]({ phase: "live" });
+    const genBefore = ctrl["_launchGen"] as number;
+
+    ctrl.handleViewRevealed();
+
+    expect(ctrl.getSnapshot().phase).toBe("live");
+    expect(ctrl["_launchGen"]).toBe(genBefore);
+    ctrl.stop();
+  });
+
+  it("is a no-op while idle", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    const genBefore = ctrl["_launchGen"] as number;
+
+    ctrl.handleViewRevealed();
+
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    expect(ctrl["_launchGen"]).toBe(genBefore);
+    ctrl.stop();
+  });
+
+  it("does not reap a hibernating phase (it owns a live terminal mid-shutdown)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_patch"]({ phase: "hibernating" });
+    const genBefore = ctrl["_launchGen"] as number;
+
+    ctrl.handleViewRevealed();
+
+    expect(ctrl.getSnapshot().phase).toBe("hibernating");
+    expect(ctrl["_launchGen"]).toBe(genBefore);
+    ctrl.stop();
+  });
+
+  it("does not reap a loading phase when a terminal is already bound (reserved-id guard)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    // A newSession/runAnyway launch reserves its terminal slot synchronously, so
+    // _lastInputs.terminalId is non-null even while the FSM is provisioning —
+    // that is not a stranded auto-launch and must not be reaped.
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: "term-live",
+      preferredAgentId: null,
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
+      visibilityEpoch: 0,
+    });
+    ctrl["_patch"]({ phase: "provisioning" });
+    const genBefore = ctrl["_launchGen"] as number;
+
+    ctrl.handleViewRevealed();
+
+    expect(ctrl.getSnapshot().phase).toBe("provisioning");
+    expect(ctrl["_launchGen"]).toBe(genBefore);
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    ctrl.stop();
+  });
+});
+
 describe("HelpSessionController — tier-mismatch handlers", () => {
   it("approveTierOnce() calls issueGrant (per-tool) and clears banner on success", async () => {
     const ctrl = new HelpSessionController();

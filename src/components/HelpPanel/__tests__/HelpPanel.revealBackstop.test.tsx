@@ -55,6 +55,7 @@ vi.mock("@/controllers/HelpSessionController", () => ({
     getSnapshot = () => snapshot;
     syncInputs = vi.fn();
     handleTerminalPanelMissing = vi.fn();
+    handleViewRevealed = vi.fn();
     maybeRunPreflightSnapshot = vi.fn(() => undefined);
     selectAgent = vi.fn();
     newSession = vi.fn();
@@ -194,7 +195,10 @@ function flushFrame(): void {
   for (const cb of pending) cb(0);
 }
 
-let viewRevealedCb: (() => void) | null = null;
+// The real `onViewRevealed` supports multiple listeners; HelpPanel registers two
+// (the launch-recovery effect and this repaint effect), so the mock must fan out
+// to all of them rather than keep only the last-registered slot.
+let viewRevealedCbs: Array<() => void> = [];
 
 function setVisibilityState(state: DocumentVisibilityState): void {
   Object.defineProperty(document, "visibilityState", {
@@ -218,7 +222,7 @@ beforeEach(() => {
   rafQueue.clear();
   rafIdCounter = 0;
   repaintForRevealMock.mockClear();
-  viewRevealedCb = null;
+  viewRevealedCbs = [];
 
   globalThis.requestAnimationFrame = ((cb: FrameRequestCallback): number => {
     const id = ++rafIdCounter;
@@ -249,9 +253,9 @@ beforeEach(() => {
         help: { getPinnedActionContext: vi.fn().mockResolvedValue({}) },
         app: {
           onViewRevealed: (cb: () => void) => {
-            viewRevealedCb = cb;
+            viewRevealedCbs.push(cb);
             return () => {
-              viewRevealedCb = null;
+              viewRevealedCbs = viewRevealedCbs.filter((c) => c !== cb);
             };
           },
         },
@@ -275,14 +279,16 @@ afterEach(() => {
 // The reveal poll's tick runs on a frame; flush one frame to let the width-gated
 // repaint land.
 function fireReveal(): void {
-  act(() => viewRevealedCb?.());
+  act(() => {
+    for (const cb of viewRevealedCbs) cb();
+  });
   act(() => flushFrame());
 }
 
 describe("HelpPanel — Daintree Assistant reveal redraw backstop", () => {
   it("repaints immediately on reveal, then re-runs on the 1s and 3s backstops", () => {
     render(<HelpPanel width={380} />);
-    expect(viewRevealedCb).not.toBeNull();
+    expect(viewRevealedCbs.length).toBeGreaterThan(0);
     repaintForRevealMock.mockClear();
 
     fireReveal();
