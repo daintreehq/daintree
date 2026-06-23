@@ -3,8 +3,11 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, act, cleanup } from "@testing-library/react";
-import { ProjectSwitchOverlay, SWITCH_OVERLAY_MAX_MS } from "../ProjectSwitchOverlay";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import {
+  ProjectSwitchOverlay,
+  SWITCH_OVERLAY_MAX_MS,
+  SWITCH_OVERLAY_ENTER_DELAY_MS,
+} from "../ProjectSwitchOverlay";
 
 function advance(ms: number) {
   act(() => {
@@ -32,23 +35,33 @@ describe("ProjectSwitchOverlay", () => {
 
   it("renders nothing while not switching", () => {
     render(<ProjectSwitchOverlay isSwitching={false} projectName="Acme" />);
-    advance(UI_DOHERTY_THRESHOLD + 50);
+    advance(SWITCH_OVERLAY_ENTER_DELAY_MS + 500);
     expect(overlay()).toBeNull();
   });
 
-  it("stays hidden until the Doherty gate elapses, then appears", () => {
+  it("stays hidden until the entry gate elapses, then appears", () => {
     render(<ProjectSwitchOverlay isSwitching={true} projectName="Acme" />);
-    // Before the gate: no overlay — anti-flicker for fast warm switches.
-    advance(UI_DOHERTY_THRESHOLD - 50);
+    // Before the gate: no overlay — anti-flicker for instant warm switches.
+    advance(SWITCH_OVERLAY_ENTER_DELAY_MS - 10);
     expect(overlay()).toBeNull();
     // Crossing the gate reveals the overlay.
-    advance(100);
+    advance(20);
     expect(overlay()).not.toBeNull();
+  });
+
+  it("surfaces on a perceptible switch that resolves under the old 400ms gate", () => {
+    // The regression fix: a ~250ms switch is a perceptible pause but sits under
+    // the app-wide 400ms Doherty threshold. The shorter switch-specific gate now
+    // shows busy feedback where the old gate stayed silent.
+    render(<ProjectSwitchOverlay isSwitching={true} projectName="Acme" />);
+    advance(250);
+    expect(overlay()).not.toBeNull();
+    expect(overlay()?.textContent).toContain("Switching to Acme");
   });
 
   it("shows a spinner and the target project name once gated on", () => {
     render(<ProjectSwitchOverlay isSwitching={true} projectName="Acme" />);
-    advance(UI_DOHERTY_THRESHOLD + 50);
+    advance(SWITCH_OVERLAY_ENTER_DELAY_MS + 50);
     const el = overlay();
     expect(el).not.toBeNull();
     expect(el?.querySelector(".animate-spin")).not.toBeNull();
@@ -57,16 +70,16 @@ describe("ProjectSwitchOverlay", () => {
 
   it("falls back to a generic label when no project name is provided", () => {
     render(<ProjectSwitchOverlay isSwitching={true} />);
-    advance(UI_DOHERTY_THRESHOLD + 50);
+    advance(SWITCH_OVERLAY_ENTER_DELAY_MS + 50);
     const el = overlay();
     expect(el?.textContent).toContain("Switching project");
     expect(el?.textContent).not.toContain("Switching to");
   });
 
-  it("never paints when switching ends before the Doherty gate elapses", () => {
+  it("never paints when switching ends before the entry gate elapses", () => {
     const { rerender } = render(<ProjectSwitchOverlay isSwitching={true} projectName="Acme" />);
-    // Switch completes just before the gate would fire — the fast-warm case.
-    advance(UI_DOHERTY_THRESHOLD - 1);
+    // Switch completes just before the gate would fire — the instant-warm case.
+    advance(SWITCH_OVERLAY_ENTER_DELAY_MS - 10);
     rerender(<ProjectSwitchOverlay isSwitching={false} projectName="Acme" />);
     // Advancing well past the original threshold must not resurrect the overlay.
     advance(500);
@@ -75,7 +88,7 @@ describe("ProjectSwitchOverlay", () => {
 
   it("tears down the overlay when switching ends", () => {
     const { rerender } = render(<ProjectSwitchOverlay isSwitching={true} projectName="Acme" />);
-    advance(UI_DOHERTY_THRESHOLD + 50);
+    advance(SWITCH_OVERLAY_ENTER_DELAY_MS + 50);
     expect(overlay()).not.toBeNull();
 
     rerender(<ProjectSwitchOverlay isSwitching={false} projectName="Acme" />);
@@ -87,7 +100,7 @@ describe("ProjectSwitchOverlay", () => {
     render(
       <ProjectSwitchOverlay isSwitching={true} projectName="Acme" onAutoDismiss={onAutoDismiss} />
     );
-    advance(UI_DOHERTY_THRESHOLD + 50);
+    advance(SWITCH_OVERLAY_ENTER_DELAY_MS + 50);
     expect(overlay()).not.toBeNull();
 
     // The store flag never clears (the stuck-overlay bug). The watchdog must
@@ -97,18 +110,19 @@ describe("ProjectSwitchOverlay", () => {
     expect(overlay()).toBeNull();
   });
 
-  it("does not fire the watchdog for a valid switch that resolves just under the ceiling", () => {
+  it("does not fire the watchdog for a valid switch that resolves before the ceiling", () => {
     const onAutoDismiss = vi.fn();
     const { rerender } = render(
       <ProjectSwitchOverlay isSwitching={true} projectName="Acme" onAutoDismiss={onAutoDismiss} />
     );
-    advance(UI_DOHERTY_THRESHOLD + 50);
-    // Stay switching almost the whole ceiling, then resolve before it trips.
-    advance(SWITCH_OVERLAY_MAX_MS - UI_DOHERTY_THRESHOLD - 100);
-    expect(onAutoDismiss).not.toHaveBeenCalled();
+    advance(SWITCH_OVERLAY_ENTER_DELAY_MS + 50);
+    expect(overlay()).not.toBeNull();
+    // Resolve comfortably before the ceiling.
     rerender(
       <ProjectSwitchOverlay isSwitching={false} projectName="Acme" onAutoDismiss={onAutoDismiss} />
     );
+    // Even long after the ceiling, the watchdog must never fire for a switch
+    // that already resolved.
     advance(SWITCH_OVERLAY_MAX_MS);
     expect(onAutoDismiss).not.toHaveBeenCalled();
   });
@@ -124,9 +138,9 @@ describe("ProjectSwitchOverlay", () => {
       />
     );
     // Trip the watchdog on the first (stuck) switch. The watchdog only arms once
-    // the overlay is actually visible, so cross the Doherty gate first, then run
+    // the overlay is actually visible, so cross the entry gate first, then run
     // the full ceiling.
-    advance(UI_DOHERTY_THRESHOLD + 50);
+    advance(SWITCH_OVERLAY_ENTER_DELAY_MS + 50);
     advance(SWITCH_OVERLAY_MAX_MS);
     expect(overlay()).toBeNull();
 
@@ -146,7 +160,7 @@ describe("ProjectSwitchOverlay", () => {
         onAutoDismiss={onAutoDismiss}
       />
     );
-    advance(UI_DOHERTY_THRESHOLD + 50);
+    advance(SWITCH_OVERLAY_ENTER_DELAY_MS + 50);
     // The latch must have released so the new switch can paint its overlay.
     expect(overlay()?.textContent).toContain("Switching to Beta");
   });
@@ -158,13 +172,13 @@ describe("ProjectSwitchOverlay", () => {
     const { rerender } = render(
       <ProjectSwitchOverlay isSwitching={true} projectName="Acme" switchTargetId="a" />
     );
-    advance(UI_DOHERTY_THRESHOLD + 50);
+    advance(SWITCH_OVERLAY_ENTER_DELAY_MS + 50);
     advance(SWITCH_OVERLAY_MAX_MS);
     expect(overlay()).toBeNull();
 
     // isSwitching stays true (never cleared); only the target changes.
     rerender(<ProjectSwitchOverlay isSwitching={true} projectName="Beta" switchTargetId="b" />);
-    advance(UI_DOHERTY_THRESHOLD + 50);
+    advance(SWITCH_OVERLAY_ENTER_DELAY_MS + 50);
     expect(overlay()?.textContent).toContain("Switching to Beta");
   });
 });

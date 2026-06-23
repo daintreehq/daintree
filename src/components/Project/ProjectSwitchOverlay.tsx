@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { Spinner } from "@/components/ui/Spinner";
-import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 
 export interface ProjectSwitchOverlayProps {
   isSwitching: boolean;
@@ -33,6 +33,17 @@ export interface ProjectSwitchOverlayProps {
 export const SWITCH_OVERLAY_MAX_MS = 20_000;
 
 /**
+ * Entry gate for the switch overlay — deliberately shorter than the app-wide
+ * 400ms Doherty threshold. A project switch is a user-initiated, full-context
+ * navigation, so a perceptible (>~150ms) freeze warrants busy feedback rather
+ * than the silent dead time the 400ms gate would impose; warm cached switches
+ * that resolve under 150ms still show nothing, so this never flickers on the
+ * fast path. Scoped to this overlay only — a deliberate exception to the
+ * loading-indicator rule in CLAUDE.md, not a global change to the gate.
+ */
+export const SWITCH_OVERLAY_ENTER_DELAY_MS = 150;
+
+/**
  * Busy indication shown over the main content area while a project switch is in
  * flight (#10736). During a switch the outgoing project's `WebContentsView`
  * stays composited on top until the incoming view paints (or the main-process
@@ -40,10 +51,11 @@ export const SWITCH_OVERLAY_MAX_MS = 20_000;
  * feedback for up to several seconds on a cold switch. This portal scrim sits
  * above that frozen content and signals the transition.
  *
- * Gated through the 400ms Doherty threshold so it never flashes on fast warm
- * switches (cached view reactivation resolves in ~16-500ms). A centered
- * `Spinner` — not a skeleton — because the incoming project's layout shape is
- * unknown to this renderer.
+ * Gated through {@link SWITCH_OVERLAY_ENTER_DELAY_MS} (150ms) so it never
+ * flashes on instant warm switches (cached view reactivation can resolve in
+ * ~16ms) while still surfacing on any switch with a perceptible pause. A
+ * centered `Spinner` — not a skeleton — because the incoming project's layout
+ * shape is unknown to this renderer.
  *
  * Two independent hard stops keep it from getting stuck (a state where it
  * blocks the whole app): the store clears the flag when a cached view returns
@@ -56,7 +68,9 @@ export function ProjectSwitchOverlay({
   switchTargetId,
   onAutoDismiss,
 }: ProjectSwitchOverlayProps) {
-  const showOverlay = useDohertyGate(isSwitching);
+  // Entry gate (150ms) keeps instant warm switches silent while still surfacing
+  // any switch with a perceptible pause.
+  const showOverlay = useDeferredLoading(isSwitching, SWITCH_OVERLAY_ENTER_DELAY_MS);
   // Latches once the watchdog fires so the overlay stops rendering even if the
   // store flag somehow doesn't clear — the true "never trap input" guarantee.
   const [timedOut, setTimedOut] = useState(false);
@@ -71,7 +85,7 @@ export function ProjectSwitchOverlay({
   }, [isSwitching, switchTargetId]);
 
   // Watchdog: arm only while the overlay is actually visible, so a slow switch
-  // that resolves before the Doherty gate never starts the clock. Keyed on the
+  // that resolves before the entry gate never starts the clock. Keyed on the
   // target so each switch episode gets its own ceiling — without that a second
   // episode that re-shows on a stuck flag (above) would inherit the spent timer
   // and never be force-dismissed.

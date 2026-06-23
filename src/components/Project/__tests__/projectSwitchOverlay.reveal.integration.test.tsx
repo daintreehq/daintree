@@ -36,8 +36,7 @@ vi.mock("../../../store/persistence/panelPersistence", () => ({
 
 import { useProjectStore } from "@/store/projectStore";
 import { useResetSwitchOverlayOnReveal } from "@/hooks/app/useResetSwitchOverlayOnReveal";
-import { ProjectSwitchOverlay } from "../ProjectSwitchOverlay";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { ProjectSwitchOverlay, SWITCH_OVERLAY_ENTER_DELAY_MS } from "../ProjectSwitchOverlay";
 
 let revealCallback: (() => void) | null = null;
 const onViewRevealedMock = vi.fn((cb: () => void) => {
@@ -98,7 +97,7 @@ describe("ProjectSwitchOverlay reveal integration (#10736)", () => {
         isLoading: true,
       });
     });
-    advance(UI_DOHERTY_THRESHOLD + 50);
+    advance(SWITCH_OVERLAY_ENTER_DELAY_MS + 50);
     expect(overlay()).not.toBeNull();
 
     // Main reveals this cached view as the foreground again.
