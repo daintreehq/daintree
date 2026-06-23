@@ -44,9 +44,15 @@ describe("SidebarContent reconnecting indicator — issue #8074", () => {
   it("keeps the reconnecting badge on one line and moves the relative time into a tooltip — issue #10727", () => {
     // The escalated string "Reconnecting… last updated X ago" used to render
     // inline with no width constraint, wrapping and breaking the header layout.
-    // The badge spans must now stay single-line.
-    expect(source).toMatch(/whitespace-nowrap/);
-    expect(source).toMatch(/shrink-0/);
+    // Both badge branches must now stay single-line (whitespace-nowrap) and the
+    // text size must match across them (text-xs parity), scoped to the badge so
+    // an unrelated element keeping these classes can't mask a regression.
+    expect(source).toMatch(
+      /inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-status-warning text-xs/
+    );
+    expect(source).toMatch(
+      /inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-daintree-text\/60 text-xs/
+    );
     // The relative-time detail moved off the visible badge into hover tooltip
     // content; the old inline combined template literal must be gone (the
     // explanatory comment at the tick may still mention the phrasing).

@@ -1551,6 +1551,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           {showReconnecting && (
             <span
               aria-hidden="true"
+              className="shrink-0"
               data-reconnect-escalated={showReconnectingEscalated ? "true" : undefined}
             >
               {showReconnectingEscalated && reconnectingAt !== null ? (
