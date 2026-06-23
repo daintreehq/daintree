@@ -44,7 +44,14 @@ import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
 import { runScratchCleanup } from "../services/ScratchCleanupService.js";
 import { runAssistantScratchCleanup } from "../services/AssistantScratchService.js";
 import { getPeriodicCleanupService } from "../services/PeriodicCleanupService.js";
-import { pruneOldLogs, pruneOldLogsAsync, logError } from "../utils/logger.js";
+import {
+  pruneOldLogs,
+  pruneOldLogsAsync,
+  pruneHeapSnapshots,
+  pruneHeapSnapshotsAsync,
+  MAX_HEAP_SNAPSHOTS,
+  logError,
+} from "../utils/logger.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -317,6 +324,7 @@ export async function initGlobalServices(
                 if (retentionDays > 0) {
                   pruneOldLogs(app.getPath("userData"), retentionDays);
                 }
+                pruneHeapSnapshots(app.getPath("logs"), MAX_HEAP_SNAPSHOTS);
               } catch (err) {
                 logError("[DiskSpaceMonitor] log prune threw", err);
               }
@@ -875,6 +883,9 @@ export async function initGlobalServices(
       // because its files are appended-to, not truncated.
       const retentionDays = store.get("privacy")?.logRetentionDays ?? 30;
       await pruneOldLogsAsync(app.getPath("userData"), retentionDays);
+      // Heap snapshots land in app.getPath("logs") (a separate dir from
+      // userData/logs) and are bounded by count, not age — see pruneHeapSnapshots.
+      await pruneHeapSnapshotsAsync(app.getPath("logs"), MAX_HEAP_SNAPSHOTS);
     },
   });
 

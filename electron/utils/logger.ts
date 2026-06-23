@@ -289,6 +289,101 @@ export async function pruneOldLogsAsync(
   }
 }
 
+/**
+ * Cap on retained `*.heapsnapshot` files in `app.getPath("logs")`. V8's
+ * `setHeapSnapshotNearHeapLimit` (main, pty-host, workspace-host, watchdog) dumps
+ * 55–60 MB snapshots there on near-OOM; with frequent OOM restarts they accumulate
+ * unbounded (#10728). 10 ≈ 600 MB and leaves room for all processes to each emit a
+ * full set without dropping the freshest diagnostics.
+ */
+export const MAX_HEAP_SNAPSHOTS = 10;
+
+const HEAP_SNAPSHOT_EXT = ".heapsnapshot";
+
+/**
+ * Count-based prune of V8 heap snapshots in `logsDir` (= `app.getPath("logs")`).
+ * Keeps the `maxCount` newest `*.heapsnapshot` files by mtime and deletes the
+ * rest. Time-based pruning (like {@link pruneOldLogs}) is the wrong model here —
+ * each snapshot is ~55 MB and old dumps have no diagnostic value once superseded.
+ * Strictly filters by extension so sibling logs (daintree.log, crash reports) are
+ * never touched. Missing/unreadable dir and per-file unlink failures are no-ops.
+ */
+export function pruneHeapSnapshots(logsDir: string, maxCount: number): void {
+  if (maxCount < 0) return;
+  if (!existsSync(logsDir)) return;
+
+  try {
+    const snapshots: { path: string; mtimeMs: number }[] = [];
+    for (const file of readdirSync(logsDir)) {
+      if (!file.endsWith(HEAP_SNAPSHOT_EXT)) continue;
+      try {
+        const filePath = join(logsDir, file);
+        const stats = statSync(filePath);
+        if (stats.isFile()) {
+          snapshots.push({ path: filePath, mtimeMs: stats.mtimeMs });
+        }
+      } catch {
+        // Skip locked or inaccessible files
+      }
+    }
+
+    if (snapshots.length <= maxCount) return;
+
+    snapshots.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    for (const { path } of snapshots.slice(maxCount)) {
+      try {
+        unlinkSync(path);
+      } catch {
+        // Skip locked or inaccessible files
+      }
+    }
+  } catch {
+    // Directory read failed — non-fatal
+  }
+}
+
+/**
+ * Async twin of {@link pruneHeapSnapshots}. Uses `fs/promises` so the scan/delete
+ * pass yields to the event loop instead of blocking it. Use this from async
+ * contexts (deferred-init queue, periodic cleanup); keep the sync version for the
+ * synchronous DiskSpaceMonitor critical-edge handler.
+ */
+export async function pruneHeapSnapshotsAsync(logsDir: string, maxCount: number): Promise<void> {
+  if (maxCount < 0) return;
+
+  const snapshots: { path: string; mtimeMs: number }[] = [];
+  try {
+    const handle = await fsp.opendir(logsDir);
+    for await (const dirent of handle) {
+      // dirent.isFile() does not follow symlinks; the logs dir never contains
+      // symlinks, so this matches the sync twin while avoiding an extra stat.
+      if (!dirent.isFile()) continue;
+      if (!dirent.name.endsWith(HEAP_SNAPSHOT_EXT)) continue;
+      try {
+        const filePath = join(logsDir, dirent.name);
+        const stats = await fsp.stat(filePath);
+        snapshots.push({ path: filePath, mtimeMs: stats.mtimeMs });
+      } catch {
+        // Skip locked or inaccessible files
+      }
+    }
+  } catch {
+    // Directory read failed or doesn't exist — non-fatal
+    return;
+  }
+
+  if (snapshots.length <= maxCount) return;
+
+  snapshots.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  for (const { path } of snapshots.slice(maxCount)) {
+    try {
+      await fsp.unlink(path);
+    } catch {
+      // Skip locked or inaccessible files
+    }
+  }
+}
+
 export function getLogDirectory(): string {
   // Priority 1: Environment variable (Utility Processes)
   if (process.env.DAINTREE_USER_DATA) {
