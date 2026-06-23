@@ -1551,13 +1551,26 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           {showReconnecting && (
             <span
               aria-hidden="true"
-              className="flex items-center gap-1 text-daintree-text/60 text-xs"
               data-reconnect-escalated={showReconnectingEscalated ? "true" : undefined}
             >
-              <RefreshCw className="w-3 h-3 animate-spin" aria-hidden="true" />
-              {showReconnectingEscalated && reconnectingAt !== null
-                ? `Reconnecting… last updated ${formatRelativeTime(reconnectingAt)}`
-                : "Reconnecting…"}
+              {showReconnectingEscalated && reconnectingAt !== null ? (
+                <Tooltip autoDismiss={false}>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-status-warning text-xs">
+                      <RefreshCw className="w-3 h-3 animate-spin" aria-hidden="true" />
+                      Reconnecting…
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    Last updated {formatRelativeTime(reconnectingAt)}
+                  </TooltipContent>
+                </Tooltip>
+              ) : (
+                <span className="inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-daintree-text/60 text-xs">
+                  <RefreshCw className="w-3 h-3 animate-spin" aria-hidden="true" />
+                  Reconnecting…
+                </span>
+              )}
             </span>
           )}
         </div>
