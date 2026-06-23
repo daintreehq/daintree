@@ -110,7 +110,12 @@ describe("WorkspaceHostProcess", () => {
     host.waitForReady().catch(() => {});
 
     const execArgv: string[] = forkMock.mock.calls[0][2].execArgv;
-    expect(execArgv.some((arg) => /^--max-old-space-size=\d+$/.test(arg))).toBe(true);
+    const heapCapArg = execArgv.find((arg) => /^--max-old-space-size=\d+$/.test(arg));
+    expect(heapCapArg).toBeDefined();
+    // The cap must stay at or above the OOM-mitigation floor (#10729) — 256 MB
+    // was too tight for large multi-worktree projects and let the host OOM-loop.
+    const heapCapMb = Number(heapCapArg!.split("=")[1]);
+    expect(heapCapMb).toBeGreaterThanOrEqual(512);
     expect(execArgv.some((arg) => arg.startsWith("--diagnostic-dir="))).toBe(true);
     expect(execArgv).toContain("--report-exclude-env");
 
@@ -771,6 +776,153 @@ describe("WorkspaceHostProcess crash window", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect((host as any).crashTimestamps).toHaveLength(3);
     expect(crashSpy).toHaveBeenCalledWith(1);
+
+    host.dispose();
+  });
+
+  it("slow OOM loop trips host-crash even when the burst window never holds 3 crashes (#10729)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const crashSpy = vi.fn();
+    host.on("host-crash", crashSpy);
+
+    // Crash 1 at t=0
+    const child1 = mockChildren[0] as MockUtilityChild;
+    child1.emit("message", { type: "ready" });
+    child1.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Crash 2 at t=12min (gap 12min < 20min interval → consecutive short #1)
+    await vi.advanceTimersByTimeAsync(12 * 60_000);
+    const child2 = mockChildren[1] as MockUtilityChild;
+    host.waitForReady().catch(() => {});
+    child2.emit("message", { type: "ready" });
+    child2.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(crashSpy).not.toHaveBeenCalled();
+
+    // Crash 3 at t=30min (gap 18min < 20min → consecutive short #2 → trips).
+    // The burst window has decayed crash 1 out (30min ≥ 30min window) so it
+    // holds only 2 timestamps and would NOT trip — the interval detector does.
+    await vi.advanceTimersByTimeAsync(18 * 60_000);
+    const child3 = mockChildren[2] as MockUtilityChild;
+    host.waitForReady().catch(() => {});
+    child3.emit("message", { type: "ready" });
+    child3.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect((host as any).crashTimestamps).toHaveLength(2); // burst guard alone would not trip
+    expect((host as any).consecutiveShortCrashIntervals).toBeGreaterThanOrEqual(2);
+    expect(crashSpy).toHaveBeenCalledWith(1);
+
+    host.dispose();
+  });
+
+  it("a long gap between crashes resets the slow-OOM interval counter", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const crashSpy = vi.fn();
+    host.on("host-crash", crashSpy);
+
+    // Crash 1 at t=0
+    const child1 = mockChildren[0] as MockUtilityChild;
+    child1.emit("message", { type: "ready" });
+    child1.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Crash 2 at t=12min (gap 12min < 20min → counter goes to 1)
+    await vi.advanceTimersByTimeAsync(12 * 60_000);
+    const child2 = mockChildren[1] as MockUtilityChild;
+    host.waitForReady().catch(() => {});
+    child2.emit("message", { type: "ready" });
+    child2.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((host as any).consecutiveShortCrashIntervals).toBe(1);
+
+    // Crash 3 at t=37min (gap 25min > 20min → counter resets to 0, no trip)
+    await vi.advanceTimersByTimeAsync(25 * 60_000);
+    const child3 = mockChildren[2] as MockUtilityChild;
+    host.waitForReady().catch(() => {});
+    child3.emit("message", { type: "ready" });
+    child3.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect((host as any).consecutiveShortCrashIntervals).toBe(0);
+    expect(crashSpy).not.toHaveBeenCalled();
+
+    host.dispose();
+  });
+
+  it("ready does NOT reset the slow-OOM interval state", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    // Crash 1 at t=0
+    const child1 = mockChildren[0] as MockUtilityChild;
+    child1.emit("message", { type: "ready" });
+    child1.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Crash 2 at t=6min (gap 6min < 20min → counter goes to 1)
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    const child2 = mockChildren[1] as MockUtilityChild;
+    host.waitForReady().catch(() => {});
+    child2.emit("message", { type: "ready" });
+    child2.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((host as any).consecutiveShortCrashIntervals).toBe(1);
+
+    // Restart comes up clean — `ready` must NOT wipe the interval state, or a
+    // crash-ready-crash-ready loop would never accumulate (mirrors #8553).
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    const child3 = mockChildren[2] as MockUtilityChild;
+    child3.emit("message", { type: "ready" });
+
+    expect((host as any).consecutiveShortCrashIntervals).toBe(1);
+    expect((host as any).previousCrashAt).not.toBeNull();
+
+    host.dispose();
+  });
+
+  it("manualRestart clears the slow-OOM interval state", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    // Two short-interval crashes → counter at 1, child null (restart pending)
+    const child1 = mockChildren[0] as MockUtilityChild;
+    child1.emit("message", { type: "ready" });
+    child1.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2_001);
+    const child2 = mockChildren[1] as MockUtilityChild;
+    host.waitForReady().catch(() => {});
+    child2.emit("message", { type: "ready" });
+    child2.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((host as any).consecutiveShortCrashIntervals).toBe(1);
+    expect((host as any).child).toBeNull();
+
+    host.manualRestart();
+    expect((host as any).consecutiveShortCrashIntervals).toBe(0);
+    expect((host as any).previousCrashAt).toBeNull();
 
     host.dispose();
   });
