@@ -74,7 +74,12 @@ let wcQueue: MockWc[] = [];
 vi.mock("electron", () => {
   function MockWebContentsView() {
     const wc = wcQueue.shift();
-    return { webContents: wc, setBounds: vi.fn(), setBackgroundColor: vi.fn() };
+    return {
+      webContents: wc,
+      setBounds: vi.fn(),
+      setBackgroundColor: vi.fn(),
+      setVisible: vi.fn(),
+    };
   }
   return {
     app: {
