@@ -446,7 +446,7 @@ export function AgentButton({
         </span>
         <span data-zone="label" className="flex min-w-0 flex-1 items-center py-1.5">
           <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-            <BrandMark brandColor={presetColor}>
+            <BrandMark brandColor={presetColor} userChosen={!!preset.color}>
               <config.icon brandColor={presetColor} />
             </BrandMark>
           </span>

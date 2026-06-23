@@ -5,6 +5,9 @@ import { useActiveAppScheme } from "@/hooks/useActiveAppScheme";
 
 interface BrandMarkProps {
   brandColor?: string;
+  /** Marks `brandColor` as a deliberate user choice (e.g. a preset color),
+   * which bypasses the dark-theme white-tile fallback. */
+  userChosen?: boolean;
   size?: number;
   className?: string;
   children: ReactElement<{ className?: string; brandColor?: string }>;
@@ -20,9 +23,9 @@ const SIZE_CLASS_REGEX = /\b(?:size-|w-|h-)/;
 // recoloring the mark. On LIGHT themes the mark itself is darkened to a
 // contrast-clearing tint of the same hue — a dark tile on pale chrome reads
 // as a black box, not a brand.
-export function BrandMark({ brandColor, size, className, children }: BrandMarkProps) {
+export function BrandMark({ brandColor, userChosen, size, className, children }: BrandMarkProps) {
   const scheme = useActiveAppScheme();
-  const chip = resolveBrandChip(brandColor, scheme);
+  const chip = resolveBrandChip(brandColor, scheme, userChosen);
 
   if (!chip || chip.tint) {
     const tintProps = chip?.tint ? { brandColor: chip.tint } : null;

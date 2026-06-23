@@ -290,7 +290,10 @@ function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
                   onSelect={() => onLaunch(row.id, preset.id)}
                 >
                   <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                    <BrandMark brandColor={preset.color ?? getBrandColorHex(row.id)}>
+                    <BrandMark
+                      brandColor={preset.color ?? getBrandColorHex(row.id)}
+                      userChosen={!!preset.color}
+                    >
                       <row.Icon brandColor={preset.color ?? getBrandColorHex(row.id)} />
                     </BrandMark>
                   </span>
@@ -310,7 +313,10 @@ function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
                   onSelect={() => onLaunch(row.id, preset.id)}
                 >
                   <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                    <BrandMark brandColor={preset.color ?? getBrandColorHex(row.id)}>
+                    <BrandMark
+                      brandColor={preset.color ?? getBrandColorHex(row.id)}
+                      userChosen={!!preset.color}
+                    >
                       <row.Icon brandColor={preset.color ?? getBrandColorHex(row.id)} />
                     </BrandMark>
                   </span>
@@ -330,7 +336,10 @@ function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
                   onSelect={() => onLaunch(row.id, preset.id)}
                 >
                   <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                    <BrandMark brandColor={preset.color ?? getBrandColorHex(row.id)}>
+                    <BrandMark
+                      brandColor={preset.color ?? getBrandColorHex(row.id)}
+                      userChosen={!!preset.color}
+                    >
                       <row.Icon brandColor={preset.color ?? getBrandColorHex(row.id)} />
                     </BrandMark>
                   </span>

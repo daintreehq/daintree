@@ -20,7 +20,8 @@ function mixTowardBlack(hex: string, amount: number): string {
 
 export function resolveBrandChip(
   brandColor: string | undefined,
-  scheme: AppColorScheme
+  scheme: AppColorScheme,
+  userChosen?: boolean
 ): BrandChip | null {
   if (!brandColor || !isHexColor(brandColor)) {
     return null;
@@ -35,7 +36,12 @@ export function resolveBrandChip(
   if (scheme.type === "dark") {
     // Mono brands like Goose and Open Interpreter render their official
     // silhouette against a near-white tile — preserving brand fidelity
-    // rather than recoloring the mark.
+    // rather than recoloring the mark. A user-chosen preset color is a
+    // deliberate choice; render it as-is rather than stamping a white tile
+    // that overrides their intent.
+    if (userChosen) {
+      return null;
+    }
     if (contrastRatio(brandColor, CHIP_LIGHT) < NON_TEXT_CONTRAST_THRESHOLD) {
       return null;
     }
