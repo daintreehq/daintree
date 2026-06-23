@@ -395,4 +395,14 @@ describe("resolveEffectivePresetId helper", () => {
   it("returns undefined when the entry itself is null", () => {
     expect(resolveEffectivePresetId(null, "wt-A")).toBeUndefined();
   });
+
+  // Regression for #10723: creating a custom preset only appends it to
+  // customPresets and must NOT set the agent-level default. An entry that has
+  // customPresets but no presetId must still resolve to undefined (built-in
+  // default) for every worktree.
+  it("returns undefined when customPresets are present but no presetId is set", () => {
+    const entry: AgentSettingsEntry = { customPresets: [CUSTOM_PRESET] };
+    expect(resolveEffectivePresetId(entry, null)).toBeUndefined();
+    expect(resolveEffectivePresetId(entry, "wt-A")).toBeUndefined();
+  });
 });
