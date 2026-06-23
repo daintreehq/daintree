@@ -366,7 +366,17 @@ vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 import { HelpPanel } from "../HelpPanel";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 
+// The real `app:view-revealed` bridge fans out to every registered listener;
+// HelpPanel registers the switch-back recovery effect against it (#10739).
+let viewRevealedCbs: Array<() => void> = [];
+function fireViewRevealed(): void {
+  act(() => {
+    for (const cb of viewRevealedCbs) cb();
+  });
+}
+
 function resetState() {
+  viewRevealedCbs = [];
   helpPanelState.isOpen = true;
   helpPanelState.width = 380;
   helpPanelState.terminalId = null;
@@ -533,6 +543,14 @@ beforeEach(() => {
         project: {
           getSettings: vi.fn().mockResolvedValue({}),
           saveSettings: vi.fn().mockResolvedValue(undefined),
+        },
+        app: {
+          onViewRevealed: (cb: () => void) => {
+            viewRevealedCbs.push(cb);
+            return () => {
+              viewRevealedCbs = viewRevealedCbs.filter((c) => c !== cb);
+            };
+          },
         },
       },
     },
@@ -2489,6 +2507,41 @@ describe("HelpPanel — assistant survives visibility-hidden (project switch per
       { source: "user" }
     );
     expect(mockProvisionSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-drives a launch stranded by a switch-back via app:view-revealed with no terminal bound (#10739)", async () => {
+    // No bound terminal — the stuck-loader case. The existing reveal-repaint
+    // effect is gated on `terminalId`, so it never registers a listener here;
+    // only the new recovery effect (gated on `isOpen`) can re-drive.
+    helpPanelState.terminalId = null;
+    helpPanelState.agentId = null;
+    helpPanelState.preferredAgentId = "claude";
+    helpPanelState.sessionId = null;
+
+    // getFolderPath never resolves, so the launch parks in `version-checking` —
+    // exactly the stranded loading phase a parked view's frozen watchdog can't
+    // reap.
+    mockGetFolderPath.mockReturnValue(new Promise(() => {}));
+
+    await act(async () => {
+      render(<HelpPanel width={380} isReadyToLaunch />);
+    });
+    await flushAsync();
+
+    // The initial auto-launch fired and hung before reaching dispatch.
+    const folderCallsBefore = mockGetFolderPath.mock.calls.length;
+    expect(folderCallsBefore).toBeGreaterThan(0);
+    expect(mockDispatch).not.toHaveBeenCalled();
+
+    // Switch-back reveal reaps the stall and re-drives, even though terminalId
+    // is still null (the terminalId-gated repaint listener never registered).
+    fireViewRevealed();
+    await flushAsync();
+
+    expect(mockGetFolderPath.mock.calls.length).toBeGreaterThan(folderCallsBefore);
+    // Recovery is silent — no launch-error banner, no toast.
+    expect(screen.queryByTestId("help-launch-error-banner")).toBeNull();
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 });
 

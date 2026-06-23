@@ -829,6 +829,59 @@ export class HelpSessionController {
   }
 
   /**
+   * Recover a launch stranded by a project switch-back (#10739). Each project
+   * runs in its own `WebContentsView`; switching away parks it in the LRU cache,
+   * where Chromium throttles/freezes timers and microtasks. A launch caught
+   * mid-flight leaves the FSM in a loading phase, but the dead-man watchdog
+   * (`_armLaunchWatchdog`) is a `setTimeout` that doesn't fire while parked, so
+   * it can't reap the stall — and auto-launch is short-circuited while hidden,
+   * so switching *back* never re-drives it. The loading skeleton then sticks
+   * forever. We key off the same explicit `app:view-revealed` main-process
+   * signal `useResetSwitchOverlayOnReveal` uses (a bare DOM `visibilitychange`
+   * is unreliable for a cached-view reveal).
+   *
+   * On reveal, silently reap a stuck loading-phase launch exactly as the
+   * watchdog would — minus `_surfaceLaunchError`, since we re-drive immediately
+   * and the user should see recovery, not a failure — then re-evaluate
+   * auto-launch. The empty-state launch resumes the hibernated session via the
+   * resume command, so this reconnects and re-drives the existing session
+   * rather than starting a fresh one.
+   *
+   * `hibernating` is excluded: that phase owns a live terminal with a graceful
+   * shutdown in flight, not a stuck loader. A non-null bound `terminalId` is
+   * also excluded — a live terminal (or a synchronously-reserved `newSession`/
+   * `runAnyway` slot) is not a stranded auto-launch and must not be reaped.
+   */
+  handleViewRevealed(): void {
+    const phase = this._snapshot.phase;
+    const isStuckLaunch = phase !== "idle" && phase !== "live" && phase !== "hibernating";
+    // Only reap the AUTO-launch path. A manual `selectAgent()` launch doesn't set
+    // `_hasAutoLaunched`, and the re-drive below can't restart it (`_maybeAutoLaunch`
+    // short-circuits on `!autoLaunchEnabled`), so reaping it would silently discard
+    // the user's explicit pick. Leaving it alone lets its own watchdog reap it (with
+    // a retryable error) once the view un-parks, or the thawed IPC complete it.
+    if (isStuckLaunch && this._hasAutoLaunched && (this._lastInputs?.terminalId ?? null) === null) {
+      // Supersede the stranded flow so its in-flight awaits bail at their next
+      // gen-check (`_abandonInFlightLaunch`); clear the re-entrancy guard so the
+      // re-drive below isn't dropped; revoke the minted-but-orphaned bearer; and
+      // drop the phase to idle so the loading skeleton clears.
+      this._launchGen++;
+      this._isLaunching = false;
+      this._hasAutoLaunched = false;
+      this._clearLaunchWatchdog();
+      this._revokePendingSession();
+      this._resetPhase();
+    }
+    // Re-drive: auto-launch short-circuits while hidden, so a launch interrupted
+    // by the switch is never restarted on return. Now that the view is the
+    // foreground again, re-evaluate from the last synced inputs. `_maybeAutoLaunch`
+    // guards on `document.hidden`/`isOpen`/`terminalId`/`_hasAutoLaunched`, so a
+    // live or already-bound session is a no-op.
+    const inputs = this._lastInputs;
+    if (inputs) this._maybeAutoLaunch({ ...inputs });
+  }
+
+  /**
    * Auto-snapshot pre-flight: when the project's MCP tier is `system`, take
    * a pre-flight snapshot once per session and surface a Tier-1 ambient
    * banner. The guard is set synchronously to survive React 19 StrictMode
@@ -2247,23 +2300,31 @@ export class HelpSessionController {
         logError("Failed to mark help terminal", err);
       });
     } catch (error) {
+      // Revoking the orphaned session token is always safe — it's this flow's
+      // own session regardless of supersession. Everything else mutates shared
+      // launch state and must only run when THIS launch still owns the
+      // generation: a stale rejection (the original hung IPC failing *after* a
+      // reveal-reap, watchdog, or newer launch bumped the gen) would otherwise
+      // clobber the successfully re-driven launch — a false error banner over a
+      // recovered session, or `_hasAutoLaunched` cleared into a duplicate launch.
+      const ownsGen = gen === this._launchGen;
+      revokeHelpSession(session?.sessionId ?? null);
       if (reservedId) {
-        this._pendingNewTerminalId = null;
-        useHelpPanelStore.getState().clearTerminal();
-        revokeHelpSession(session?.sessionId ?? null);
+        if (ownsGen) {
+          this._pendingNewTerminalId = null;
+          useHelpPanelStore.getState().clearTerminal();
+        }
         logError(options.force ? "Help run-anyway failed" : "Help new-session failed", error);
       } else {
-        this._hasAutoLaunched = false;
-        revokeHelpSession(session?.sessionId ?? null);
-        // A late-rejecting dispatch can land here after the watchdog (or a
-        // newer launch) bumped the generation — only clear the guard when the
-        // pending session is still ours, never a newer launch's.
-        if (this._pendingSessionId === session?.sessionId) {
-          this._pendingSessionId = null;
+        if (ownsGen) {
+          this._hasAutoLaunched = false;
+          if (this._pendingSessionId === session?.sessionId) {
+            this._pendingSessionId = null;
+          }
         }
         logError("Help select-agent launch failed", error);
       }
-      this._surfaceLaunchError(launchAgentId, "spawn-failed");
+      if (ownsGen) this._surfaceLaunchError(launchAgentId, "spawn-failed");
     } finally {
       // Release the re-entrancy guard only if THIS launch() still owns it —
       // clearing it unconditionally let a stale unwind drop a newer launch's
