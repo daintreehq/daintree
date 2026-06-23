@@ -40,4 +40,34 @@ describe("SidebarContent reconnecting indicator — issue #8074", () => {
     // The old ungated reconnect interval must be gone.
     expect(source).not.toMatch(/setInterval\(\(\) => setReconnectTick/);
   });
+
+  it("keeps the reconnecting badge on one line and moves the relative time into a tooltip — issue #10727", () => {
+    // The escalated string "Reconnecting… last updated X ago" used to render
+    // inline with no width constraint, wrapping and breaking the header layout.
+    // Both badge branches must now stay single-line (whitespace-nowrap) and the
+    // text size must match across them (text-xs parity), scoped to the badge so
+    // an unrelated element keeping these classes can't mask a regression.
+    expect(source).toMatch(
+      /inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-status-warning text-xs/
+    );
+    expect(source).toMatch(
+      /inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-daintree-text\/60 text-xs/
+    );
+    // The relative-time detail moved off the visible badge into hover tooltip
+    // content; the old inline combined template literal must be gone (the
+    // explanatory comment at the tick may still mention the phrasing).
+    expect(source).not.toMatch(/`Reconnecting… last updated \$\{/);
+    expect(source).toMatch(
+      /<TooltipContent[\s\S]*?Last updated \{formatRelativeTime\(reconnectingAt\)\}/
+    );
+    // The tooltip must not auto-dismiss — the relative time is the substance and
+    // has to stay readable while the user hovers.
+    expect(source).toMatch(/<Tooltip autoDismiss=\{false\}>/);
+  });
+
+  it("renders the stalled (escalated) state with the warning status color — issue #10727", () => {
+    // Past 10s the reconnect reads as "action needed", not a perpetual ambient
+    // spinner — driven by the theme-aware warning token, not the muted default.
+    expect(source).toMatch(/text-status-warning/);
+  });
 });
