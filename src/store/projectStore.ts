@@ -749,7 +749,13 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     const currentProjectId = get().currentProject?.id;
     const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
 
-    set({ isLoading: true, error: null, worktreeLoadError: null });
+    set({
+      isLoading: true,
+      isSwitching: true,
+      switchingToProjectId: projectId,
+      error: null,
+      worktreeLoadError: null,
+    });
     projectClient.reopen(projectId, outgoingState).catch((error) => {
       if (requestId !== projectTransitionRequestId) {
         return;
@@ -774,7 +780,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
           },
         ],
       });
-      set({ error: message, isLoading: false });
+      // The reopen failed before the view swap, so this outgoing renderer stays
+      // visible — clear the busy flag (mirrors switchProject). Guarded by the
+      // requestId check above so a superseded reopen never clobbers a newer
+      // transition's state.
+      set({ error: message, isLoading: false, isSwitching: false, switchingToProjectId: null });
     });
   },
 

@@ -63,6 +63,16 @@ describe("ProjectSwitchOverlay", () => {
     expect(el?.textContent).not.toContain("Switching to");
   });
 
+  it("never paints when switching ends before the Doherty gate elapses", () => {
+    const { rerender } = render(<ProjectSwitchOverlay isSwitching={true} projectName="Acme" />);
+    // Switch completes just before the gate would fire — the fast-warm case.
+    advance(UI_DOHERTY_THRESHOLD - 1);
+    rerender(<ProjectSwitchOverlay isSwitching={false} projectName="Acme" />);
+    // Advancing well past the original threshold must not resurrect the overlay.
+    advance(500);
+    expect(overlay()).toBeNull();
+  });
+
   it("tears down the overlay when switching ends", () => {
     const { rerender } = render(<ProjectSwitchOverlay isSwitching={true} projectName="Acme" />);
     advance(UI_DOHERTY_THRESHOLD + 50);

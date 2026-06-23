@@ -660,4 +660,45 @@ describe("switch busy indication (#10736)", () => {
     expect(useProjectStore.getState().isSwitching).toBe(false);
     expect(useProjectStore.getState().switchingToProjectId).toBeNull();
   });
+
+  it("flags isSwitching for reopenProject (background-project switch path)", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().reopenProject(projectB.id);
+
+    expect(useProjectStore.getState().isSwitching).toBe(true);
+    expect(useProjectStore.getState().switchingToProjectId).toBe(projectB.id);
+  });
+
+  it("clears isSwitching when the reopen IPC rejects", async () => {
+    projectClientMock.reopen.mockRejectedValueOnce(new Error("boom"));
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().reopenProject(projectB.id);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useProjectStore.getState().isSwitching).toBe(false);
+    expect(useProjectStore.getState().switchingToProjectId).toBeNull();
+  });
+
+  it("a superseded switch's rejection does not clobber the newer transition's busy state", async () => {
+    // Switch A→B (requestId N), then A→C supersedes it (requestId N+1). When B's
+    // IPC later rejects, the staleness guard must keep C's busy state intact so
+    // the overlay keeps tracking the live switch rather than clearing early.
+    projectClientMock.switch.mockRejectedValueOnce(new Error("B failed")); // first call (B)
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await useProjectStore.getState().switchProject("project-c");
+    // Let B's rejected promise's .catch() run (it should short-circuit).
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useProjectStore.getState().isSwitching).toBe(true);
+    expect(useProjectStore.getState().switchingToProjectId).toBe("project-c");
+  });
 });

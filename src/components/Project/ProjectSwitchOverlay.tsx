@@ -38,9 +38,11 @@ export function ProjectSwitchOverlay({ isSwitching, projectName }: ProjectSwitch
       // every frame while the incoming WebContentsView is painting beneath.
       className="fixed inset-0 z-[80] flex items-center justify-center bg-scrim-soft/60"
     >
-      <div className="flex items-center gap-2 text-sm text-text-secondary">
+      <div className="flex max-w-[80vw] items-center gap-2 text-sm text-text-secondary">
         <Spinner size="md" />
-        <span>{projectName ? `Switching to ${projectName}…` : "Switching project…"}</span>
+        <span className="truncate">
+          {projectName ? `Switching to ${projectName}…` : "Switching project…"}
+        </span>
       </div>
     </div>,
     document.body
