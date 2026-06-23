@@ -17,7 +17,7 @@
  *    choices and warrants the picker.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, screen } from "@testing-library/react";
+import { render, fireEvent, screen, act } from "@testing-library/react";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import { MenuActionSourceContext } from "@/components/ui/menu-source";
 
@@ -26,6 +26,11 @@ const updateWorktreePresetMock = vi.fn();
 const updateAgentMock = vi.fn().mockResolvedValue(undefined);
 let dropdownCloseAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
 let dropdownPointerDownOutsideSpy: (() => void) | null = null;
+// Track the chevron dropdown's controlled-open contract (issue #10720): the
+// mock forwards the live `open` prop and `onOpenChange` so tests can open the
+// menu, then assert a gutter click keeps it open while a label click closes it.
+let dropdownOpenState: boolean | undefined;
+let dropdownOnOpenChange: ((open: boolean) => void) | null = null;
 
 let mockSettings: AgentSettings | null = null;
 let mockActiveWorktreeId: string | null = null;
@@ -36,6 +41,7 @@ const WithMenuSource = ({ children }: { children: React.ReactNode }) => (
   </MenuActionSourceContext.Provider>
 );
 let mockCcrPresetsByAgent: Record<string, Array<{ id: string; name: string }>> = {};
+let mockProjectPresetsByAgent: Record<string, Array<{ id: string; name: string }>> = {};
 let mockMergedPresetsFn: (
   agentId: string
 ) => Array<{ id: string; name: string; color?: string }> = () => [];
@@ -78,7 +84,7 @@ vi.mock("@/store/cliAvailabilityStore", () => ({
 vi.mock("@/store/projectPresetsStore", () => ({
   useProjectPresetsStore: (
     selector: (s: { presetsByAgent: Record<string, unknown[]> }) => unknown
-  ) => selector({ presetsByAgent: {} }),
+  ) => selector({ presetsByAgent: mockProjectPresetsByAgent }),
 }));
 
 let mockPanelsById: Record<string, unknown> = {};
@@ -176,7 +182,19 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 vi.mock("@/components/ui/dropdown-menu", () => ({
-  DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenu: ({
+    children,
+    open,
+    onOpenChange,
+  }: {
+    children: React.ReactNode;
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
+  }) => {
+    dropdownOpenState = open;
+    dropdownOnOpenChange = onOpenChange ?? null;
+    return <>{children}</>;
+  },
   DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   DropdownMenuContent: ({
     children,
@@ -191,46 +209,31 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     dropdownPointerDownOutsideSpy = onPointerDownOutside ?? null;
     return <div data-testid="preset-dropdown">{children}</div>;
   },
+  // Mirrors real Radix: a click fires both onSelect (the row preventDefaults
+  // it to block auto-dismiss) and the native onClick (zone delegation). The
+  // synthetic event's target is the actual clicked node, so a click on the
+  // gutter span vs the label span routes correctly through the closest()
+  // check. The footer "Manage Presets" item uses onSelect only — onClick is
+  // undefined there and harmlessly skipped.
   DropdownMenuItem: ({
     children,
     onSelect,
+    onClick,
     className,
   }: {
     children: React.ReactNode;
     onSelect?: (e: Event) => void;
+    onClick?: (e: React.MouseEvent) => void;
     className?: string;
   }) => (
     <div
       role="menuitem"
       data-testid="preset-item"
       className={className}
-      onClick={(e) => onSelect?.(e as unknown as Event)}
-    >
-      {children}
-    </div>
-  ),
-  DropdownMenuRadioGroup: ({ children, value }: { children: React.ReactNode; value?: string }) => (
-    <div data-testid="preset-radio-group" data-value={value ?? ""}>
-      {children}
-    </div>
-  ),
-  DropdownMenuRadioItem: ({
-    children,
-    onSelect,
-    value,
-    className,
-  }: {
-    children: React.ReactNode;
-    onSelect?: (e: Event) => void;
-    value: string;
-    className?: string;
-  }) => (
-    <div
-      role="menuitemradio"
-      data-testid="preset-item"
-      data-value={value}
-      className={className}
-      onClick={(e) => onSelect?.(e as unknown as Event)}
+      onClick={(e) => {
+        onSelect?.(e as unknown as Event);
+        onClick?.(e);
+      }}
     >
       {children}
     </div>
@@ -361,11 +364,13 @@ vi.mock("lucide-react", () => ({
   ExternalLink: () => <span data-testid="external-link-icon" />,
   PanelBottom: () => <span data-testid="panel-bottom-icon" />,
   Unplug: () => <span data-testid="unplug-icon" />,
-  // terminalStateConfig.tsx (imported transitively for STATE_LABELS — #9823)
-  // needs Circle and CheckCircle2 to satisfy its import graph. The icon
-  // components themselves are not exercised in these tests, so a stub is
-  // sufficient.
-  Circle: () => null,
+  // Check / Circle render the preset-row gutter affordance (issue #10720):
+  // Check marks the active default, Circle is the hover hint on other rows.
+  // Queryable spans let the gutter-indicator tests assert which row is armed.
+  Check: () => <span data-testid="check-icon" />,
+  Circle: () => <span data-testid="circle-icon" />,
+  // CheckCircle2 is pulled in transitively by terminalStateConfig.tsx for
+  // STATE_LABELS (#9823); a stub satisfies its import graph.
   CheckCircle2: () => null,
 }));
 
@@ -394,6 +399,9 @@ describe("AgentButton preset UX", () => {
     mockExternalLinks = undefined;
     dropdownCloseAutoFocusSpy = null;
     dropdownPointerDownOutsideSpy = null;
+    dropdownOpenState = undefined;
+    dropdownOnOpenChange = null;
+    mockProjectPresetsByAgent = {};
   });
 
   describe("split threshold", () => {
@@ -608,7 +616,25 @@ describe("AgentButton preset UX", () => {
       expect(container.textContent).toContain("Start Claude · Global");
     });
 
-    it("dropdown preset selection persists the pick without launching the agent", () => {
+    // Each preset row is now split into two click zones (issue #10720): the
+    // left gutter sets the worktree default without launching, the label area
+    // launches with that preset. These helpers click a named row's specific
+    // zone — clicking the row element itself (e.target === the row) routes to
+    // the label/launch path, since only the gutter span carries data-zone.
+    function rowByText(getAllByTestId: (id: string) => HTMLElement[], text: string): HTMLElement {
+      const items = getAllByTestId("preset-item") as HTMLElement[];
+      return items.find((el) => el.textContent?.includes(text))!;
+    }
+    function clickGutter(row: HTMLElement) {
+      const gutter = row.querySelector('[data-zone="gutter"]') as HTMLElement;
+      fireEvent.click(gutter);
+    }
+    function clickLabel(row: HTMLElement) {
+      const label = row.querySelector('[data-zone="label"]') as HTMLElement;
+      fireEvent.click(label);
+    }
+
+    it("gutter zone persists the worktree default without launching", () => {
       mockActiveWorktreeId = "wt-A";
       mockSettings = settingsWith({ claude: {} });
       mockMergedPresetsFn = () => [
@@ -619,19 +645,38 @@ describe("AgentButton preset UX", () => {
       const { getAllByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      const items = getAllByTestId("preset-item") as HTMLElement[];
-      const alphaItem = items.find((el) => el.textContent?.includes("Alpha"))!;
-      fireEvent.click(alphaItem);
+      clickGutter(rowByText(getAllByTestId, "Alpha"));
 
       expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", "user-alpha");
-      // Chevron dropdown is a pure configurer — selecting a preset must not
-      // launch. The primary button is the only launch surface.
+      // The gutter is a pure configurer — it must not launch.
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
-    it("dropdown Agent default clears the worktree override without launching", () => {
+    it("label zone launches with the row's explicit preset without changing the default", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [
+        { id: "user-alpha", name: "Alpha" },
+        { id: "user-beta", name: "Beta" },
+      ];
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      clickLabel(rowByText(getAllByTestId, "Alpha"));
+
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "agent.launch",
+        { agentId: "claude", presetId: "user-alpha" },
+        { source: "user" }
+      );
+      // Launching from the label must not touch the persisted default.
+      expect(updateWorktreePresetMock).not.toHaveBeenCalled();
+    });
+
+    it("Agent default gutter clears both the worktree override and the agent-level pick without launching", () => {
       // Seed an agent-level presetId so the updateAgent assertion proves the
-      // fix actually clears it — without a stale agent-level value to fall
+      // gutter actually clears it — without a stale agent-level value to fall
       // through to, the original #6358 bug couldn't manifest.
       mockActiveWorktreeId = "wt-A";
       mockSettings = settingsWith({
@@ -645,16 +690,33 @@ describe("AgentButton preset UX", () => {
       const { getAllByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      const items = getAllByTestId("preset-item") as HTMLElement[];
-      const defaultItem = items.find((el) => el.textContent?.includes("Agent default"))!;
-      fireEvent.click(defaultItem);
+      clickGutter(rowByText(getAllByTestId, "Agent default"));
 
       expect(updateAgentMock).toHaveBeenCalledWith("claude", { presetId: undefined });
       expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", undefined);
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
-    it("no-ops both persist and launch when no active worktree is set", () => {
+    it("Agent default label launches with a null preset (no row preset)", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      clickLabel(rowByText(getAllByTestId, "Agent default"));
+
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "agent.launch",
+        { agentId: "claude", presetId: null },
+        { source: "user" }
+      );
+      expect(updateAgentMock).not.toHaveBeenCalled();
+      expect(updateWorktreePresetMock).not.toHaveBeenCalled();
+    });
+
+    it("gutter zone no-ops persistence when no active worktree is set", () => {
       mockActiveWorktreeId = null;
       mockSettings = settingsWith({ claude: {} });
       mockMergedPresetsFn = () => [
@@ -665,18 +727,37 @@ describe("AgentButton preset UX", () => {
       const { getAllByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      const items = getAllByTestId("preset-item") as HTMLElement[];
-      const alphaItem = items.find((el) => el.textContent?.includes("Alpha"))!;
-      fireEvent.click(alphaItem);
+      clickGutter(rowByText(getAllByTestId, "Alpha"));
 
       expect(updateWorktreePresetMock).not.toHaveBeenCalled();
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
-    it("dropdown CCR preset selection persists without launching (separate code path)", () => {
-      // The chevron renders CCR, project-shared, and custom presets in three
-      // independent onSelect closures. Cover the CCR path explicitly so a
-      // regression that reintroduces launch in only one group is caught.
+    it("gutter zone persists idempotently for the already-default row", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({
+        claude: { worktreePresets: { "wt-A": "user-alpha" } },
+      });
+      mockMergedPresetsFn = () => [
+        { id: "user-alpha", name: "Alpha" },
+        { id: "user-beta", name: "Beta" },
+      ];
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      clickGutter(rowByText(getAllByTestId, "Alpha"));
+
+      // Re-setting the current default is a harmless idempotent write, not a
+      // special-cased no-op — keeps the handler simple.
+      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", "user-alpha");
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("CCR group gutter persists without launching (separate render path)", () => {
+      // The chevron renders CCR, project-shared, and custom presets through
+      // independent group blocks. Cover the CCR gutter explicitly so a
+      // regression in one group's wiring is caught.
       mockActiveWorktreeId = "wt-A";
       mockSettings = settingsWith({ claude: {} });
       mockMergedPresetsFn = () => [{ id: "ccr-sonnet", name: "CCR: Sonnet 4.5" }];
@@ -684,11 +765,100 @@ describe("AgentButton preset UX", () => {
       const { getAllByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      const items = getAllByTestId("preset-item") as HTMLElement[];
-      const ccrItem = items.find((el) => el.textContent?.includes("Sonnet 4.5"))!;
-      fireEvent.click(ccrItem);
+      clickGutter(rowByText(getAllByTestId, "Sonnet 4.5"));
 
       expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", "ccr-sonnet");
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("CCR group label launches with the stripped-name preset id", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [{ id: "ccr-sonnet", name: "CCR: Sonnet 4.5" }];
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      clickLabel(rowByText(getAllByTestId, "Sonnet 4.5"));
+
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "agent.launch",
+        { agentId: "claude", presetId: "ccr-sonnet" },
+        { source: "user" }
+      );
+      expect(updateWorktreePresetMock).not.toHaveBeenCalled();
+    });
+
+    it("gutter click keeps the dropdown open", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      // Open the controlled menu, then click the gutter: it must stay open so
+      // the user can arm a default without the menu collapsing under them.
+      act(() => dropdownOnOpenChange!(true));
+      expect(dropdownOpenState).toBe(true);
+      clickGutter(rowByText(getAllByTestId, "Alpha"));
+      expect(dropdownOpenState).toBe(true);
+    });
+
+    it("label click closes the dropdown", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      act(() => dropdownOnOpenChange!(true));
+      expect(dropdownOpenState).toBe(true);
+      clickLabel(rowByText(getAllByTestId, "Alpha"));
+      // Launching closes the menu via the controlled setOpen(false) path.
+      expect(dropdownOpenState).toBe(false);
+    });
+
+    it("Project Shared group gutter persists and label launches (separate render path)", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({ claude: {} });
+      mockProjectPresetsByAgent = { claude: [{ id: "proj-x", name: "Project X" }] };
+      mockMergedPresetsFn = () => [{ id: "proj-x", name: "Project X" }];
+
+      const { getAllByTestId, rerender } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      clickGutter(rowByText(getAllByTestId, "Project X"));
+      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", "proj-x");
+      expect(dispatchMock).not.toHaveBeenCalled();
+
+      rerender(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      clickLabel(rowByText(getAllByTestId, "Project X"));
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "agent.launch",
+        { agentId: "claude", presetId: "proj-x" },
+        { source: "user" }
+      );
+    });
+
+    it("Agent default gutter clears the agent-level pick even with no active worktree", () => {
+      // persistWorktreePick guards on activeWorktreeId, but updateAgent does
+      // not — clearing the global default must still fire so the next launch
+      // doesn't resolve to the stale agent-level preset.
+      mockActiveWorktreeId = null;
+      mockSettings = settingsWith({ claude: { presetId: "user-alpha" } });
+      mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      clickGutter(rowByText(getAllByTestId, "Agent default"));
+
+      expect(updateAgentMock).toHaveBeenCalledWith("claude", { presetId: undefined });
+      expect(updateWorktreePresetMock).not.toHaveBeenCalled();
       expect(dispatchMock).not.toHaveBeenCalled();
     });
   });
@@ -781,30 +951,42 @@ describe("AgentButton preset UX", () => {
     });
   });
 
-  describe("radio indicator", () => {
-    it("dropdown radio group reflects the saved preset id", () => {
+  describe("default indicator", () => {
+    function rowByText(getAllByTestId: (id: string) => HTMLElement[], text: string): HTMLElement {
+      const items = getAllByTestId("preset-item") as HTMLElement[];
+      return items.find((el) => el.textContent?.includes(text))!;
+    }
+
+    it("marks the saved preset row with a check and others with the hover circle", () => {
       mockSettings = settingsWith({ claude: { presetId: "user-blue" } });
       mockMergedPresetsFn = () => [
         { id: "user-blue", name: "Blue" },
         { id: "user-red", name: "Red" },
       ];
 
-      const { getByTestId } = render(
+      const { getAllByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      expect(getByTestId("preset-radio-group").getAttribute("data-value")).toBe("user-blue");
+      const blueRow = rowByText(getAllByTestId, "Blue");
+      const redRow = rowByText(getAllByTestId, "Red");
+      // The armed row shows the check; the rest fall back to the dim circle.
+      expect(blueRow.querySelector('[data-testid="check-icon"]')).not.toBeNull();
+      expect(blueRow.querySelector('[data-testid="circle-icon"]')).toBeNull();
+      expect(redRow.querySelector('[data-testid="check-icon"]')).toBeNull();
+      expect(redRow.querySelector('[data-testid="circle-icon"]')).not.toBeNull();
     });
 
-    it("dropdown radio group falls back to empty string when no preset is saved", () => {
+    it("checks the Agent default row when no preset is saved", () => {
       mockSettings = settingsWith({ claude: {} });
       mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
 
-      const { getByTestId } = render(
+      const { getAllByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      // The Agent default radio item is rendered with value="" so the group
-      // resolves to that item when nothing is saved.
-      expect(getByTestId("preset-radio-group").getAttribute("data-value")).toBe("");
+      const defaultRow = rowByText(getAllByTestId, "Agent default");
+      const blueRow = rowByText(getAllByTestId, "Blue");
+      expect(defaultRow.querySelector('[data-testid="check-icon"]')).not.toBeNull();
+      expect(blueRow.querySelector('[data-testid="check-icon"]')).toBeNull();
     });
 
     it("context-menu radio group reflects the saved preset id", () => {
@@ -820,7 +1002,7 @@ describe("AgentButton preset UX", () => {
       expect(getByTestId("context-radio-group").getAttribute("data-value")).toBe("user-blue");
     });
 
-    it("context-menu preset selection dispatches with source 'context-menu'", () => {
+    it("context-menu preset selection persists and launches (source falls back to 'user' without a menu-source provider)", () => {
       mockActiveWorktreeId = "wt-A";
       mockSettings = settingsWith({ claude: {} });
       mockMergedPresetsFn = () => [
