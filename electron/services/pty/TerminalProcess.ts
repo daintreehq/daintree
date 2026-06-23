@@ -190,6 +190,22 @@ export class TerminalProcess {
   }
   private forensicsBuffer = new TerminalForensicsBuffer();
   private _activityTier: "active" | "background" = "active";
+  // Background-tier output coalescing (#10744). When a project is backgrounded
+  // the per-chunk parse pipeline (activityMonitor.onData regex bank, headless
+  // xterm VT write, forensics/semantic buffers, renderer fan-out) stops running
+  // per-chunk and instead drains a coalesced batch on a single self-rearming
+  // timer, so backgrounded terminals stop competing with the foreground project
+  // for CPU. OSC 9;4 + timestamps still run per-chunk in handlePtyData so the
+  // agent-state heartbeat stays accurate (#8753).
+  private _backgroundChunkQueue: string[] = [];
+  private _backgroundQueuedBytes = 0;
+  private _backgroundDrainTimer: NodeJS.Timeout | null = null;
+  private _backgroundDrainDeadline = 0;
+  private _backgroundDrainIntervalMs = 500;
+  // Force a drain if a backgrounded terminal accumulates this much un-parsed
+  // output, bounding queue memory for noisy agents that never pause (mirrors the
+  // renderer-side COALESCE_BATCH_CAP_BYTES from #8371).
+  private readonly COALESCE_MAX_BYTES = 256 * 1024;
   private _restoreBannerStart: IMarker | null = null;
   private _restoreBannerEnd: IMarker | null = null;
   private readonly textDecoder = new TextDecoder();
@@ -1508,6 +1524,18 @@ export class TerminalProcess {
   setActivityMonitorTier(tier: "active" | "background", pollingIntervalMs: number): void {
     // The tier is authoritative; the polling interval is only a cadence hint
     // (issue #8596 — VISIBLE-unfocused panes are "active" at 200ms).
+    if (tier === "background") {
+      // Reuse the polling cadence as the coalescing drain interval so a future
+      // tier never needs a separate constant wired through PtyManager (#10744).
+      this._backgroundDrainIntervalMs = pollingIntervalMs;
+    } else if (this._activityTier === "background") {
+      // Foreground activation: flush any deferred output synchronously so the
+      // headless terminal is current before the renderer's wake/snapshot request
+      // reads getSerializedState() (#10744). Drain before flipping the tier so a
+      // late chunk can't re-enter the background branch mid-flush.
+      this._drainBackgroundQueue();
+    }
+
     this._activityTier = tier;
 
     if (this.activityMonitor) {
@@ -1551,6 +1579,16 @@ export class TerminalProcess {
   dispose(): void {
     const recentOutput = this.forensicsBuffer.getRecentOutput();
     this.identityWatcher.dispose();
+
+    // Drop any deferred background output — the terminal is going away, so
+    // running the parse pipeline on teardown would emit against torn-down
+    // consumers (#10744).
+    if (this._backgroundDrainTimer) {
+      clearTimeout(this._backgroundDrainTimer);
+      this._backgroundDrainTimer = null;
+    }
+    this._backgroundChunkQueue = [];
+    this._backgroundQueuedBytes = 0;
 
     // Best-effort flush before teardown disposes the writeQueue and tears down
     // the buffer. Only attempted on the alive→dispose path — if we already
@@ -1734,6 +1772,45 @@ export class TerminalProcess {
       terminal.firstByteAt = now;
     }
     terminal.lastOutputTime = now;
+
+    // Tap OSC 9;4 progress sequences upstream of the rest of the pipeline so
+    // the agent-state signal is viewport-independent (#8701). The parser is
+    // a read-only side channel; `IdleSequenceFilter.stripIdleTerminalSequences`
+    // still removes the sequence from the ActivityMonitor byte-volume /
+    // activity-gate path, so those detectors stay clean (the renderer keeps
+    // the raw bytes — see TerminalProcess.osc.test.ts). This runs per-chunk for
+    // backgrounded terminals too so the heartbeat never lags (#8753, #10744).
+    this.osc94Parser.feed(data, now);
+
+    // Background tier (#10744): defer the heavy parse pipeline. Coalesce raw
+    // chunks and run the pipeline once per drain cadence so backgrounded
+    // terminals stop competing with the foreground project for CPU. The xterm
+    // VT parser is stateful and chunk-boundary-safe, so feeding the concatenated
+    // batch yields identical headless grid state.
+    if (this._activityTier === "background") {
+      this._backgroundChunkQueue.push(data);
+      this._backgroundQueuedBytes += data.length;
+      if (this._backgroundQueuedBytes >= this.COALESCE_MAX_BYTES) {
+        this._drainBackgroundQueue();
+      } else {
+        this._armBackgroundDrain();
+      }
+      return;
+    }
+
+    this._runPtyPipeline(data);
+  }
+
+  /**
+   * The per-chunk parse pipeline downstream of the OSC 9;4 tap and timestamp
+   * bookkeeping. Runs immediately for foreground terminals and once per drain on
+   * the coalesced batch for backgrounded ones (#10744). `data` is the raw PTY
+   * string (or the joined background batch); the renderer-bound copy is derived
+   * here after OSC color queries are answered.
+   */
+  private _runPtyPipeline(data: string): void {
+    const terminal = this.terminalInfo;
+
     // noteAgentOutputActivity only acts on waiting/idle/completed — skip the
     // full-viewport extraction in other states (it would be computed and
     // discarded on every chunk during "working", the heaviest output phase).
@@ -1745,14 +1822,6 @@ export class TerminalProcess {
       (agentState === "waiting" || agentState === "idle" || agentState === "completed")
         ? this.getAgentOutputContentSnapshot()
         : undefined;
-
-    // Tap OSC 9;4 progress sequences upstream of the rest of the pipeline so
-    // the agent-state signal is viewport-independent (#8701). The parser is
-    // a read-only side channel; `IdleSequenceFilter.stripIdleTerminalSequences`
-    // still removes the sequence from the ActivityMonitor byte-volume /
-    // activity-gate path, so those detectors stay clean (the renderer keeps
-    // the raw bytes — see TerminalProcess.osc.test.ts).
-    this.osc94Parser.feed(data, now);
 
     if (this.activityMonitor) {
       this.activityMonitor.onData(data);
@@ -1810,6 +1879,59 @@ export class TerminalProcess {
         this.queueAgentOutput(liveId, data);
       }
     }
+  }
+
+  /**
+   * Single self-rearming background drain timer (deadline-timestamp pattern from
+   * #8150 — avoids O(N) clear/set churn per chunk). Each incoming chunk pushes
+   * the deadline forward; the timer reschedules itself until output settles, so
+   * a sustained burst drains once it quiets rather than mid-burst. The
+   * COALESCE_MAX_BYTES cap in handlePtyData bounds memory for output that never
+   * pauses.
+   */
+  private _armBackgroundDrain(): void {
+    this._backgroundDrainDeadline = Date.now() + this._backgroundDrainIntervalMs;
+    if (this._backgroundDrainTimer) {
+      return;
+    }
+    this._backgroundDrainTimer = setTimeout(
+      () => this._onBackgroundDrainTimer(),
+      this._backgroundDrainIntervalMs
+    );
+  }
+
+  private _onBackgroundDrainTimer(): void {
+    const remaining = this._backgroundDrainDeadline - Date.now();
+    if (remaining > 0) {
+      // A chunk arrived after this timer was armed and pushed the deadline out;
+      // reschedule for the remaining window so the burst batches optimally.
+      this._backgroundDrainTimer = setTimeout(() => this._onBackgroundDrainTimer(), remaining);
+      return;
+    }
+    this._backgroundDrainTimer = null;
+    this._drainBackgroundQueue();
+  }
+
+  /**
+   * Flush the coalesced background queue through the parse pipeline once. Safe to
+   * call with an empty queue (no-op). Invoked by the drain timer, the
+   * COALESCE_MAX_BYTES cap, and synchronously on foreground activation so the
+   * headless terminal is current before the renderer wakes (#10744).
+   */
+  private _drainBackgroundQueue(): void {
+    if (this._backgroundDrainTimer) {
+      clearTimeout(this._backgroundDrainTimer);
+      this._backgroundDrainTimer = null;
+    }
+    this._backgroundDrainDeadline = 0;
+    if (this._backgroundChunkQueue.length === 0) {
+      this._backgroundQueuedBytes = 0;
+      return;
+    }
+    const coalesced = this._backgroundChunkQueue.join("");
+    this._backgroundChunkQueue = [];
+    this._backgroundQueuedBytes = 0;
+    this._runPtyPipeline(coalesced);
   }
 
   private queueAgentOutput(agentId: string, data: string): void {
