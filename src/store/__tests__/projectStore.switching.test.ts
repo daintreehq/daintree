@@ -609,3 +609,96 @@ describe("worktreeLoadError surfacing (#8400)", () => {
     expect(useProjectStore.getState().worktreeLoadError).toBeNull();
   });
 });
+
+describe("switch busy indication (#10736)", () => {
+  it("flags isSwitching and the target project id when a switch starts", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    expect(useProjectStore.getState().isSwitching).toBe(false);
+    expect(useProjectStore.getState().switchingToProjectId).toBeNull();
+
+    await useProjectStore.getState().switchProject(projectB.id);
+
+    expect(useProjectStore.getState().isSwitching).toBe(true);
+    expect(useProjectStore.getState().switchingToProjectId).toBe(projectB.id);
+  });
+
+  it("keeps isSwitching set after the fire-and-forget IPC resolves (view is replaced)", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The happy path never re-enters this renderer, so the flag is not cleared.
+    expect(useProjectStore.getState().isSwitching).toBe(true);
+  });
+
+  it("clears isSwitching when the switch IPC rejects (outgoing view stays visible)", async () => {
+    projectClientMock.switch.mockRejectedValueOnce(new Error("boom"));
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    // Let the rejected promise's .catch() run.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useProjectStore.getState().isSwitching).toBe(false);
+    expect(useProjectStore.getState().switchingToProjectId).toBeNull();
+    expect(useProjectStore.getState().isLoading).toBe(false);
+  });
+
+  it("does not flag isSwitching when switching to the current project (early return)", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectA.id);
+
+    expect(useProjectStore.getState().isSwitching).toBe(false);
+    expect(useProjectStore.getState().switchingToProjectId).toBeNull();
+  });
+
+  it("flags isSwitching for reopenProject (background-project switch path)", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().reopenProject(projectB.id);
+
+    expect(useProjectStore.getState().isSwitching).toBe(true);
+    expect(useProjectStore.getState().switchingToProjectId).toBe(projectB.id);
+  });
+
+  it("clears isSwitching when the reopen IPC rejects", async () => {
+    projectClientMock.reopen.mockRejectedValueOnce(new Error("boom"));
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().reopenProject(projectB.id);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useProjectStore.getState().isSwitching).toBe(false);
+    expect(useProjectStore.getState().switchingToProjectId).toBeNull();
+  });
+
+  it("a superseded switch's rejection does not clobber the newer transition's busy state", async () => {
+    // Switch A→B (requestId N), then A→C supersedes it (requestId N+1). When B's
+    // IPC later rejects, the staleness guard must keep C's busy state intact so
+    // the overlay keeps tracking the live switch rather than clearing early.
+    projectClientMock.switch.mockRejectedValueOnce(new Error("B failed")); // first call (B)
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await useProjectStore.getState().switchProject("project-c");
+    // Let B's rejected promise's .catch() run (it should short-circuit).
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useProjectStore.getState().isSwitching).toBe(true);
+    expect(useProjectStore.getState().switchingToProjectId).toBe("project-c");
+  });
+});
