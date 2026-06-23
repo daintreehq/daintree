@@ -668,10 +668,10 @@ describe("BrowserToolbar viewport presets", () => {
     it("has aria-label matching preset label", () => {
       renderWithViewport();
       const iphoneRadio = document.querySelector('[data-viewport-preset-id="iphone"]');
-      expect(iphoneRadio!.getAttribute("aria-label")).toBe("iPhone 16");
+      expect(iphoneRadio!.getAttribute("aria-label")).toBe("iPhone 17");
 
       const galaxyRadio = document.querySelector('[data-viewport-preset-id="galaxy"]');
-      expect(galaxyRadio!.getAttribute("aria-label")).toBe("Galaxy S25");
+      expect(galaxyRadio!.getAttribute("aria-label")).toBe("Galaxy S26");
     });
   });
 

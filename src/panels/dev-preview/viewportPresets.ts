@@ -11,35 +11,35 @@ export interface ViewportPreset {
 export const VIEWPORT_PRESETS: Record<ViewportPresetId, ViewportPreset> = {
   galaxy: {
     id: "galaxy",
-    label: "Galaxy S25",
+    label: "Galaxy S26",
     width: 360,
     height: 780,
     userAgent:
-      "Mozilla/5.0 (Linux; Android 15; SM-S931U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36",
+      "Mozilla/5.0 (Linux; Android 16; SM-S941U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Mobile Safari/537.36",
   },
   iphone: {
     id: "iphone",
-    label: "iPhone 16",
+    label: "iPhone 17",
     width: 393,
     height: 852,
     userAgent:
-      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 19_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.4 Mobile/15E148 Safari/604.1",
   },
   pixel: {
     id: "pixel",
-    label: "Pixel 9",
+    label: "Pixel 10",
     width: 412,
     height: 923,
     userAgent:
-      "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36",
+      "Mozilla/5.0 (Linux; Android 16; Pixel 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Mobile Safari/537.36",
   },
   ipad: {
     id: "ipad",
-    label: "iPad Air M3",
+    label: 'iPad Air 11"',
     width: 820,
     height: 1180,
     userAgent:
-      "Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+      "Mozilla/5.0 (iPad; CPU OS 19_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.4 Mobile/15E148 Safari/604.1",
   },
 };
 
