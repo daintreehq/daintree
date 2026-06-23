@@ -195,17 +195,23 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     void loadProjects().then(() => {
       const ids = useProjectStore.getState().projects.map((p) => p.id);
       if (ids.length === 0) return;
-      void projectClient.getBulkStats(ids).then((bulk) => {
-        const map: ProjectStatusMap = {};
-        for (const [id, entry] of Object.entries(bulk)) {
-          map[id] = {
-            activeAgentCount: entry.activeAgentCount,
-            waitingAgentCount: entry.waitingAgentCount,
-            processCount: entry.processCount,
-          };
-        }
-        useProjectStatsStore.getState().setStats(map);
-      });
+      void projectClient
+        .getBulkStats(ids)
+        .then((bulk) => {
+          const map: ProjectStatusMap = {};
+          for (const [id, entry] of Object.entries(bulk)) {
+            map[id] = {
+              activeAgentCount: entry.activeAgentCount,
+              waitingAgentCount: entry.waitingAgentCount,
+              processCount: entry.processCount,
+            };
+          }
+          useProjectStatsStore.getState().setStats(map);
+        })
+        .catch(() => {
+          // Stats refresh failed; rows fall back to the relative timestamp.
+          // A background freshness pull should never surface an error.
+        });
     });
   }, [isOpen, loadProjects, loadScratches]);
 

@@ -1111,20 +1111,31 @@ describe("useProjectSwitcherPalette", () => {
       }
     });
 
-    it("tolerates a bulk stats fetch rejection without throwing", async () => {
+    it("tolerates a bulk stats fetch rejection without throwing or leaking", async () => {
+      const unhandled = vi.fn();
+      window.addEventListener("unhandledrejection", unhandled);
       getBulkStatsMock.mockRejectedValueOnce(new Error("stats failed"));
 
-      const { result } = renderHook(() => useProjectSwitcherPalette());
+      try {
+        const { result } = renderHook(() => useProjectSwitcherPalette());
 
-      act(() => {
-        result.current.open();
-      });
+        act(() => {
+          result.current.open();
+        });
 
-      await waitFor(() => {
-        expect(result.current.isOpen).toBe(true);
-        expect(getBulkStatsMock).toHaveBeenCalledWith(["project-1"]);
-      });
-      expect(setStatsMock).not.toHaveBeenCalled();
+        await waitFor(() => {
+          expect(result.current.isOpen).toBe(true);
+          expect(getBulkStatsMock).toHaveBeenCalledWith(["project-1"]);
+        });
+        // Let any pending microtask rejection settle.
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expect(setStatsMock).not.toHaveBeenCalled();
+        expect(unhandled).not.toHaveBeenCalled();
+      } finally {
+        window.removeEventListener("unhandledrejection", unhandled);
+      }
     });
   });
 });
