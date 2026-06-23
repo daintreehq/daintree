@@ -1143,6 +1143,15 @@ export class TerminalProcess {
     const terminal = this.terminalInfo;
     const exitReason: ExitReason = reason === "graceful-shutdown" ? "graceful-shutdown" : "kill";
 
+    // Drain any coalesced background output through the parse pipeline BEFORE
+    // teardown — and before the snapshot flush below — so a backgrounded
+    // terminal's final chunk reaches the headless model, forensics buffer,
+    // semantic buffer, and the session snapshot. teardown's
+    // _cancelBackgroundQueue() would otherwise discard it, dropping the
+    // pre-exit tail a user inspects when foregrounding a finished hidden
+    // project (#10744). emitData fan-out is still live at this call site.
+    this._drainBackgroundQueue();
+
     // Flush session snapshot synchronously BEFORE teardown.
     // Once teardown disposes the writeQueue and processTreeKiller.abort() fires,
     // debounced writes are lost — so this is the last chance.
@@ -1931,7 +1940,11 @@ export class TerminalProcess {
    * Cancel the background drain timer and discard queued output without running
    * the pipeline. Called from teardown (kill / natural exit / dispose) so a
    * timer armed just before teardown can't fire post-teardown and fan deferred
-   * output out to released renderer subscribers / buffers (#10744).
+   * output out to released renderer subscribers / buffers (#10744). On the
+   * kill() and natural-exit paths this is a no-op cleanup: those call sites run
+   * _drainBackgroundQueue() first so the queue is already empty here and the
+   * final chunk reached forensics / snapshot. dispose() (LRU eviction) has no
+   * live exit consumer, so it relies on this to discard.
    */
   private _cancelBackgroundQueue(): void {
     if (this._backgroundDrainTimer) {
@@ -2003,6 +2016,14 @@ export class TerminalProcess {
       }
 
       this.identityWatcher.stop();
+
+      // Drain any coalesced background output through the parse pipeline BEFORE
+      // reading the forensic tail / running teardown, so a backgrounded
+      // terminal's final chunk lands in the forensics buffer and the headless
+      // model rather than being discarded by teardown's _cancelBackgroundQueue().
+      // This keeps the terminal:exited forensic tail complete (#10744).
+      // emitData fan-out is still live here (teardown releases subscribers below).
+      this._drainBackgroundQueue();
 
       // Capture forensic tail before disposeHeadless() clears the buffer.
       // The terminal:exited subscriber reads this via the payload — once

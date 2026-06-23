@@ -207,7 +207,7 @@ describe("TerminalProcess background output coalescing", () => {
     terminal.dispose();
   });
 
-  it("cancels the drain timer on kill without firing the deferred pipeline", () => {
+  it("drains the queued output on kill before teardown so the pre-exit tail survives", () => {
     const emitData = vi.fn();
     const terminal = createTerminal(emitData);
 
@@ -215,13 +215,21 @@ describe("TerminalProcess background output coalescing", () => {
     ptyOnDataCallback!("pre-kill");
     expect(emitData).not.toHaveBeenCalled();
 
+    // kill() must flush the coalesced queue through the pipeline BEFORE teardown
+    // releases subscribers, so the final backgrounded chunk reaches forensics /
+    // snapshot and the terminal:exited forensic tail stays complete (#10744).
+    // The drain runs synchronously inside kill() — not on the deferred timer —
+    // and clears the queue, so advancing timers fans nothing else out.
     terminal.kill("user requested");
-    vi.advanceTimersByTime(1000);
 
-    expect(emitData).not.toHaveBeenCalled();
+    expect(emitData).toHaveBeenCalledTimes(1);
+    expect(emitData).toHaveBeenCalledWith("t1", "pre-kill");
+
+    vi.advanceTimersByTime(1000);
+    expect(emitData).toHaveBeenCalledTimes(1);
   });
 
-  it("cancels the drain timer on natural exit without firing the deferred pipeline", () => {
+  it("drains the queued output on natural exit before the forensic read", () => {
     const emitData = vi.fn();
     const terminal = createTerminal(emitData);
 
@@ -229,10 +237,17 @@ describe("TerminalProcess background output coalescing", () => {
     ptyOnDataCallback!("pre-exit");
     expect(emitData).not.toHaveBeenCalled();
 
+    // The onExit handler must drain the coalesced queue BEFORE reading the
+    // forensic tail, so a backgrounded terminal's final chunk lands in the
+    // forensics buffer rather than being discarded by teardown (#10744). The
+    // drain is synchronous inside the exit handler and empties the queue.
     ptyOnExitCallback!({ exitCode: 0 });
-    vi.advanceTimersByTime(1000);
 
-    expect(emitData).not.toHaveBeenCalled();
+    expect(emitData).toHaveBeenCalledTimes(1);
+    expect(emitData).toHaveBeenCalledWith("t1", "pre-exit");
+
+    vi.advanceTimersByTime(1000);
+    expect(emitData).toHaveBeenCalledTimes(1);
 
     terminal.dispose();
   });
