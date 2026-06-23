@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { getMergedPresets, getMergedPreset } from "@/config/agents";
+import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 
 // Adversarial unit tests targeting logic vulnerabilities in the preset system
 describe("Adversarial Unit Tests: Logic Vulnerabilities", () => {
@@ -102,13 +103,32 @@ describe("Adversarial Unit Tests: Logic Vulnerabilities", () => {
       expect(result).toBeUndefined();
     });
 
-    it("returns first preset when presetId is undefined and no defaultPresetId", () => {
+    it("returns undefined when presetId is undefined and no defaultPresetId (bare-agent default)", () => {
       const presets = [
         { id: "first", name: "First" },
         { id: "second", name: "Second" },
       ];
+      // "Agent default" — no requested preset, no agent-declared default —
+      // must resolve to no preset, not silently promote the first one.
       const result = getMergedPreset("claude", undefined, presets, []);
-      expect(result?.id).toBe("first");
+      expect(result).toBeUndefined();
+    });
+
+    it("returns the declared default preset when presetId is undefined and defaultPresetId is set", () => {
+      const presets = [
+        { id: "first", name: "First" },
+        { id: "second", name: "Second" },
+      ];
+      // The other half of the undefined branch: an agent that declares a
+      // default preset must still resolve to it (not the first, not nothing).
+      const config = getEffectiveAgentConfig("claude");
+      config!.defaultPresetId = "second";
+      try {
+        const result = getMergedPreset("claude", undefined, presets, []);
+        expect(result?.id).toBe("second");
+      } finally {
+        delete config!.defaultPresetId;
+      }
     });
 
     it("returns undefined for unknown presetId", () => {

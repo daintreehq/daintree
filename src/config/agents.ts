@@ -218,7 +218,13 @@ export function getMergedPreset(
   if (presetId === undefined) {
     const defaultId = config?.defaultPresetId;
     if (defaultId) return merged.find((f) => f.id === defaultId);
-    return merged[0];
+    // No requested preset and no agent-declared default means the bare agent
+    // CLI is the default — "Agent default" in the launch dropdown. Returning
+    // merged[0] here silently promoted whichever user preset happened to sort
+    // first (e.g. a custom Z.AI route) into the primary button's launch, even
+    // though the dropdown checkmark sat on "Agent default". Resolve to no
+    // preset so the button matches the checkmark.
+    return undefined;
   }
   return merged.find((f) => f.id === presetId);
 }
