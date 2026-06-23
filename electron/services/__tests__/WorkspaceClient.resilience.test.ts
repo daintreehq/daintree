@@ -228,6 +228,55 @@ describe("WorkspaceClient multi-process manager", () => {
       await readyAndResolveLoad(1);
       await load2;
     });
+
+    it("demotes the old host to background when the last window switches away (#10743)", async () => {
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
+
+      const load2 = client.loadProject("/project-b", 1);
+      await readyAndResolveLoad(1);
+      await load2;
+
+      // refCount on project-a dropped to 0 — its host should be paused so it
+      // stops full-rate polling while dormant.
+      expect(h(0).send).toHaveBeenCalledWith({ type: "background" });
+    });
+
+    it("does NOT background the old host while another window still holds it (#10743)", async () => {
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
+
+      // A second window also holds project-a (refCount = 2).
+      const load1b = client.loadProject("/project-a", 2);
+      await load1b;
+
+      // Window 1 switches to project-b; project-a still has window 2.
+      const load2 = client.loadProject("/project-b", 1);
+      await readyAndResolveLoad(1);
+      await load2;
+
+      expect(h(0).send).not.toHaveBeenCalledWith({ type: "background" });
+    });
+
+    it("foregrounds a warm host when a window re-attaches after switch-away (#10743)", async () => {
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
+
+      // Switch away: project-a is demoted to background (refCount 0).
+      const load2 = client.loadProject("/project-b", 1);
+      await readyAndResolveLoad(1);
+      await load2;
+      expect(h(0).send).toHaveBeenCalledWith({ type: "background" });
+
+      // Re-attach to the still-warm project-a — the pool must resume it so it
+      // doesn't stay paused (covers menu open / reopen / switch-back paths).
+      const load3 = client.loadProject("/project-a", 1);
+      await load3;
+      expect(h(0).send).toHaveBeenCalledWith({ type: "foreground" });
+    });
   });
 
   describe("getAllStatesAsync", () => {
