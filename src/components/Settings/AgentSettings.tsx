@@ -253,7 +253,7 @@ export function AgentSettings({
     const id = `user-${crypto.randomUUID()}`;
     const updated = [...existing, { ...presetData, id }];
     try {
-      await updateAgent(addDialogAgentId, { customPresets: updated, presetId: id });
+      await updateAgent(addDialogAgentId, { customPresets: updated });
       onSettingsChange?.();
       lastAddTimeRef.current = Date.now();
       setIsAddDialogOpen(false);
