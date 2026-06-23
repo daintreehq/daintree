@@ -173,7 +173,8 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): {
       getHibernationService: () => hibernation as unknown as HibernationService,
       getAllProjectViewManagers: () => [],
       getProjectStatsService: () => stats as unknown as ProjectStatsService,
-      getUserCachedViewLimit: () => 1,
+      // Models the RAM-tier default (effectiveCachedProjectViews never returns 1).
+      getUserCachedViewLimit: () => 2,
       ...overrides,
     },
     workspace,
