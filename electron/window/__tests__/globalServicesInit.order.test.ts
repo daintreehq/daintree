@@ -11,10 +11,14 @@ const setMcpRegistry = vi.hoisted(() => vi.fn());
 let migrationCurrentVersion = 1;
 let migrationShouldThrow = false;
 let mockLogRetentionDays: number | undefined = 30;
-const { pruneOldLogs, pruneOldLogsAsync } = vi.hoisted(() => ({
-  pruneOldLogs: vi.fn(),
-  pruneOldLogsAsync: vi.fn(),
-}));
+const { pruneOldLogs, pruneOldLogsAsync, pruneHeapSnapshots, pruneHeapSnapshotsAsync } = vi.hoisted(
+  () => ({
+    pruneOldLogs: vi.fn(),
+    pruneOldLogsAsync: vi.fn(),
+    pruneHeapSnapshots: vi.fn(),
+    pruneHeapSnapshotsAsync: vi.fn(),
+  })
+);
 const {
   pluginMcpHydrate,
   getPluginMcpAuditService,
@@ -79,6 +83,9 @@ vi.mock("../../store.js", () => ({
 vi.mock("../../utils/logger.js", () => ({
   pruneOldLogs,
   pruneOldLogsAsync,
+  pruneHeapSnapshots,
+  pruneHeapSnapshotsAsync,
+  MAX_HEAP_SNAPSHOTS: 10,
   logError: vi.fn(),
   logWarn: vi.fn(),
   logInfo: vi.fn(),
@@ -264,7 +271,7 @@ vi.mock("../deferredInitQueue.js", () => ({
 }));
 
 vi.mock("electron", () => ({
-  app: { exit: vi.fn(), getPath: vi.fn(() => "/tmp/userData") },
+  app: { exit: vi.fn(), getPath: vi.fn((name: string) => `/tmp/${name}`) },
   dialog: { showErrorBox: vi.fn() },
   session: { defaultSession: { clearCache: vi.fn(), clearStorageData: vi.fn() } },
 }));
@@ -283,6 +290,8 @@ describe("initGlobalServices task ordering", () => {
     setMcpRegistry.mockReset();
     pruneOldLogs.mockReset();
     pruneOldLogsAsync.mockReset();
+    pruneHeapSnapshots.mockReset();
+    pruneHeapSnapshotsAsync.mockReset();
     pluginMcpHydrate.mockClear();
     getPluginMcpAuditService.mockClear();
     getPluginMcpConsentService.mockClear();
@@ -650,6 +659,9 @@ describe("initGlobalServices task ordering", () => {
     // The async twin replaces the sync version in the deferred drain so the
     // fs scan no longer blocks the main-process event loop (#10325).
     expect(pruneOldLogs).not.toHaveBeenCalled();
+    // Heap snapshots live in app.getPath("logs"), a different dir from
+    // userData/logs, and are bounded by count (#10728).
+    expect(pruneHeapSnapshotsAsync).toHaveBeenCalledWith("/tmp/logs", 10);
   });
 
   it("prune-old-logs task delegates retentionDays 0 to pruneOldLogsAsync (which skips internally)", async () => {
