@@ -407,7 +407,12 @@ describe("ResourceProfileService", () => {
     service.stop();
   });
 
-  it("clamps cached project views to 1 when transitioning to efficiency", () => {
+  it("freezes but never destroys cached views on memory-pressure efficiency entry", () => {
+    // Even under HIGH memory pressure, efficiency entry must NOT clamp cached
+    // views to 1 — destruction is owned solely by PVM's evictStaleViews()
+    // lowMemoryFreeThresholdMb floor (genuine low free RAM). Entry only freezes
+    // (CPU/timer suppression) so the user's working set stays warm and rapid
+    // project switching doesn't trigger cold-start storms (#10742).
     const deps = createDeps();
     const service = new ResourceProfileService(deps);
     mockIsOnBatteryPower.mockReturnValue(true);
@@ -419,8 +424,7 @@ describe("ResourceProfileService", () => {
     expect(service.getProfile()).toBe("efficiency");
 
     const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
-    expect(pvm.setCachedViewLimit).toHaveBeenCalledWith(1);
-    expect(pvm.setCachedViewLimit).toHaveBeenCalledTimes(1);
+    expect(pvm.setCachedViewLimit).not.toHaveBeenCalled();
     expect(pvm.setEfficiencyFreeze).toHaveBeenCalledWith(true);
 
     service.stop();
@@ -428,10 +432,9 @@ describe("ResourceProfileService", () => {
 
   it("does not clamp cached view limit when efficiency is triggered by non-memory signals", () => {
     // Battery (+1) + thermal critical (+2) + zero memory = score 3 → efficiency.
-    // No memory contribution, so setCachedViewLimit(1) MUST NOT fire — it would
-    // destroy cached WebContentsViews (each 100–500 MB) for no memory benefit.
-    // setEfficiencyFreeze(true) still fires because freeze suppresses CPU/timer
-    // wake-ups, which IS what the thermal+battery trigger needs.
+    // setCachedViewLimit(1) MUST NOT fire — it would destroy cached
+    // WebContentsViews (each 100–500 MB). setEfficiencyFreeze(true) still fires
+    // because freeze suppresses CPU/timer wake-ups.
     const deps = createDeps();
     const service = new ResourceProfileService(deps);
     mockIsOnBatteryPower.mockReturnValue(true);
@@ -450,9 +453,10 @@ describe("ResourceProfileService", () => {
     service.stop();
   });
 
-  it("clamps cached view limit when efficiency is triggered with LOW memory pressure", () => {
+  it("does not clamp cached view limit even when memory contributes to efficiency entry", () => {
     // Battery (+1) + thermal serious (+1) + LOW memory (+1) = score 3 → efficiency.
-    // Memory contributed (+1), so the clamp DOES fire even at LOW tier.
+    // Memory contributed, but the clamp is gone regardless of the memory score —
+    // only setEfficiencyFreeze(true) fires on entry.
     const deps = createDeps();
     const service = new ResourceProfileService(deps);
     mockIsOnBatteryPower.mockReturnValue(true);
@@ -465,16 +469,16 @@ describe("ResourceProfileService", () => {
     expect(service.getProfile()).toBe("efficiency");
 
     const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
-    expect(pvm.setCachedViewLimit).toHaveBeenCalledWith(1);
+    expect(pvm.setCachedViewLimit).not.toHaveBeenCalled();
+    expect(pvm.setEfficiencyFreeze).toHaveBeenCalledWith(true);
 
     service.stop();
   });
 
-  it("still restores user cached view limit on exit after a non-memory efficiency entry", () => {
-    // Enter efficiency via battery + thermal critical (no memory), so entry does
-    // NOT clamp. On exit, the restore call must still fire — the user-configured
-    // limit might have changed mid-efficiency, and PVM's own evictStaleViews
-    // floor could have clamped while we were inside.
+  it("still restores user cached view limit on exit from efficiency", () => {
+    // Entry never clamps. On exit, the restore call must still fire — the
+    // user-configured limit might have changed mid-efficiency, and PVM's own
+    // evictStaleViews floor could have clamped while we were inside.
     const deps = createDeps({ getUserCachedViewLimit: () => 3 });
     const service = new ResourceProfileService(deps);
     mockIsOnBatteryPower.mockReturnValue(true);
@@ -531,30 +535,6 @@ describe("ResourceProfileService", () => {
     expect(service.getProfile()).toBe("balanced");
     expect(pvm.setEfficiencyFreeze).toHaveBeenLastCalledWith(false);
     expect(pvm.setEfficiencyFreeze).toHaveBeenCalledTimes(2);
-
-    service.stop();
-  });
-
-  it("still freezes when setCachedViewLimit throws on the entry path", () => {
-    // Split try/catch on entry mirrors the exit path: a throw from
-    // setCachedViewLimit(1) (e.g. an onViewEvicted callback failing inside
-    // evictStaleViews) must not block setEfficiencyFreeze(true) — leaving
-    // efficiency unfrozen defeats the CPU/timer-wake suppression that
-    // efficiency is supposed to provide.
-    const deps = createDeps();
-    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
-    const service = new ResourceProfileService(deps);
-    mockIsOnBatteryPower.mockReturnValue(true);
-    service.start();
-
-    pvm.setCachedViewLimit.mockImplementationOnce(() => {
-      throw new Error("simulated eviction failure");
-    });
-
-    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
-    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
-    expect(service.getProfile()).toBe("efficiency");
-    expect(pvm.setEfficiencyFreeze).toHaveBeenCalledWith(true);
 
     service.stop();
   });
@@ -624,7 +604,8 @@ describe("ResourceProfileService", () => {
     expect(service.getProfile()).toBe("efficiency");
 
     const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
-    expect(pvm.setCachedViewLimit).toHaveBeenLastCalledWith(1);
+    // Entry no longer clamps cached views.
+    expect(pvm.setCachedViewLimit).not.toHaveBeenCalled();
 
     // Relieve to moderate pressure (score 1 = balanced)
     mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 700)]);
@@ -637,8 +618,9 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(30_000);
 
     expect(service.getProfile()).toBe("balanced");
+    // Only the exit restore touches the limit now.
     expect(pvm.setCachedViewLimit).toHaveBeenLastCalledWith(3);
-    expect(pvm.setCachedViewLimit).toHaveBeenCalledTimes(2);
+    expect(pvm.setCachedViewLimit).toHaveBeenCalledTimes(1);
 
     service.stop();
   });
@@ -670,8 +652,9 @@ describe("ResourceProfileService", () => {
 
     expect(service.getProfile()).toBe("performance");
     const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
+    // Entry never clamped, so only the exit restore touches the limit.
     expect(pvm.setCachedViewLimit).toHaveBeenLastCalledWith(2);
-    expect(pvm.setCachedViewLimit).toHaveBeenCalledTimes(2);
+    expect(pvm.setCachedViewLimit).toHaveBeenCalledTimes(1);
 
     service.stop();
   });
@@ -730,8 +713,7 @@ describe("ResourceProfileService", () => {
       expect(latePvm.setWarmPaintGateHardTimeoutMs).toHaveBeenCalledWith(
         RESOURCE_PROFILE_CONFIGS.efficiency.warmPaintGateHardTimeoutMs
       );
-      // Forced transition carries no memory score — the cached-view clamp
-      // must stay off, matching applyProfile's gating.
+      // Efficiency entry never clamps cached views — it only freezes them.
       expect(latePvm.setCachedViewLimit).not.toHaveBeenCalled();
 
       service.stop();
@@ -1764,9 +1746,9 @@ describe("ResourceProfileService", () => {
     service.stop();
   });
 
-  it("efficiency transition fans out setCachedViewLimit and setEfficiencyFreeze to every PVM", () => {
+  it("efficiency transition fans out setEfficiencyFreeze to every PVM", () => {
     // Regression for #8605: profile transitions must reach every open window's
-    // PVM so the memory controls aren't silently scoped to one window.
+    // PVM so the controls aren't silently scoped to one window.
     const pvmA = makeMockPvm();
     const pvmB = makeMockPvm();
     const deps = createDeps({
@@ -1783,12 +1765,13 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("efficiency");
 
-    expect(pvmA.setCachedViewLimit).toHaveBeenCalledWith(1);
+    // Entry freezes both windows' cached views but destroys neither.
+    expect(pvmA.setCachedViewLimit).not.toHaveBeenCalled();
     expect(pvmA.setEfficiencyFreeze).toHaveBeenCalledWith(true);
     expect(pvmA.setLowMemoryFreeThresholdMb).toHaveBeenLastCalledWith(
       RESOURCE_PROFILE_CONFIGS.efficiency.lowMemoryFreeThresholdMb
     );
-    expect(pvmB.setCachedViewLimit).toHaveBeenCalledWith(1);
+    expect(pvmB.setCachedViewLimit).not.toHaveBeenCalled();
     expect(pvmB.setEfficiencyFreeze).toHaveBeenCalledWith(true);
     expect(pvmB.setLowMemoryFreeThresholdMb).toHaveBeenLastCalledWith(
       RESOURCE_PROFILE_CONFIGS.efficiency.lowMemoryFreeThresholdMb
@@ -1799,10 +1782,10 @@ describe("ResourceProfileService", () => {
 
   it("one failing PVM does not block the remaining PVMs", () => {
     // Per-operation try/catch isolation must extend across PVMs: a throw on
-    // one window's setCachedViewLimit must not skip the next window's calls.
+    // one window's setEfficiencyFreeze must not skip the next window's calls.
     const pvmA = makeMockPvm();
     const pvmB = makeMockPvm();
-    pvmA.setCachedViewLimit.mockImplementation(() => {
+    pvmA.setEfficiencyFreeze.mockImplementation(() => {
       throw new Error("simulated PVM A failure");
     });
     const deps = createDeps({
@@ -1819,11 +1802,9 @@ describe("ResourceProfileService", () => {
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("efficiency");
 
-    // PVM A's setEfficiencyFreeze must still run even though
-    // setCachedViewLimit threw — split try/catch per call.
+    // PVM A's setEfficiencyFreeze threw, but PVM B must receive the full
+    // sequence, unblocked by A's failure — split try/catch per call/per PVM.
     expect(pvmA.setEfficiencyFreeze).toHaveBeenCalledWith(true);
-    // And PVM B must receive the full sequence, unblocked by A's failure.
-    expect(pvmB.setCachedViewLimit).toHaveBeenCalledWith(1);
     expect(pvmB.setEfficiencyFreeze).toHaveBeenCalledWith(true);
     expect(pvmB.setLowMemoryFreeThresholdMb).toHaveBeenLastCalledWith(
       RESOURCE_PROFILE_CONFIGS.efficiency.lowMemoryFreeThresholdMb

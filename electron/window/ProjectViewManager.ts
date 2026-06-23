@@ -695,6 +695,14 @@ export class ProjectViewManager {
         // to the still-visible previous project view instead of falling
         // through to the bare BrowserWindow's webContents.
         registerAppView(this.win, previousEntry.view);
+        // If the failure landed after the outgoing view was already
+        // deactivated (which now marks it invisible), restore its visibility
+        // so the rolled-back active view is composited again.
+        try {
+          previousEntry.view.setVisible(true);
+        } catch {
+          // non-critical
+        }
         previousEntry.state = "active";
         previousEntry.lastUsed = Date.now();
       } else if (unboundOutgoingView && !unboundOutgoingView.webContents.isDestroyed()) {
@@ -1157,6 +1165,16 @@ export class ProjectViewManager {
     } catch {
       // View may not be attached
     }
+    // Mark the parked view invisible so Chromium's compositor releases its GPU
+    // tile textures (VRAM) and macOS WindowServer stops compositing it. Removal
+    // from the hierarchy alone leaves stacked offscreen views being composited;
+    // setVisible(false) is what actually makes a frozen-but-alive cached view
+    // cheap to retain. Reactivation restores visibility in activateView().
+    try {
+      current.view.setVisible(false);
+    } catch {
+      // non-critical
+    }
     current.state = "cached";
     current.lastUsed = Date.now();
 
@@ -1247,6 +1265,17 @@ export class ProjectViewManager {
 
   private activateView(entry: ViewEntry, insertBehind = false): void {
     registerAppView(this.win, entry.view);
+
+    // Restore visibility BEFORE unfreezing: deactivateEntry() called
+    // setVisible(false) to release this view's GPU tile textures while cached.
+    // The compositor must know the view is visible again before the "active"
+    // CDP lifecycle command lands, so first paint after wake targets a live
+    // layer rather than a discarded one.
+    try {
+      entry.view.setVisible(true);
+    } catch {
+      // non-critical
+    }
 
     if (!entry.view.webContents.isDestroyed()) {
       unregisterCachedViewWebContents(entry.view.webContents.id);

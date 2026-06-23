@@ -52,6 +52,7 @@ import {
   MAX_HEAP_SNAPSHOTS,
   logError,
 } from "../utils/logger.js";
+import { effectiveCachedProjectViews } from "../utils/cachedProjectViews.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -64,7 +65,7 @@ import { getProjectStatsService } from "../ipc/handlers/projectCrud/index.js";
 import { registerDeferredTask } from "./deferredInitQueue.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { setPluginDirResolver } from "../setup/protocols.js";
-import { isE2EFaultMode, isE2EMode } from "../setup/runtimeFlags.js";
+import { isE2EFaultMode } from "../setup/runtimeFlags.js";
 import { activateOpenFileInstaller } from "../setup/openFileInstall.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { registerCommands } from "../services/commands/index.js";
@@ -674,7 +675,7 @@ export async function initGlobalServices(
             .filter((pvm): pvm is ProjectViewManager => pvm !== undefined) ?? [],
         getProjectStatsService: () => getProjectStatsService(),
         getUserCachedViewLimit: () =>
-          store.get("terminalConfig")?.cachedProjectViews ?? (isE2EMode ? 4 : 1),
+          effectiveCachedProjectViews(store.get("terminalConfig")?.cachedProjectViews),
         hasSustainedRendererSaturation: () => hasSustainedRendererSaturation(),
       });
       setResourceProfileService(svc);

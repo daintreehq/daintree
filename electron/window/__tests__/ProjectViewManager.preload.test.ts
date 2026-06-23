@@ -51,7 +51,12 @@ const mockGetAppMetrics = vi.fn<() => Electron.ProcessMetric[]>(() => []);
 vi.mock("electron", () => {
   function MockWebContentsView() {
     const wc = createMockWebContents();
-    return { webContents: wc, setBounds: vi.fn(), setBackgroundColor: vi.fn() };
+    return {
+      webContents: wc,
+      setBounds: vi.fn(),
+      setBackgroundColor: vi.fn(),
+      setVisible: vi.fn(),
+    };
   }
   return {
     app: {
