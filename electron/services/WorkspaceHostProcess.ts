@@ -787,8 +787,8 @@ export class WorkspaceHostProcess extends EventEmitter {
           this.restartTimer.unref?.();
         } else {
           const cause = slowOomLoop
-            ? `slow crash-loop (${this.consecutiveShortCrashIntervals + 1} crashes under ${OOM_LOOP_INTERVAL_MS}ms apart — likely OOM)`
-            : `${CRASH_THRESHOLD} crashes in ${CRASH_WINDOW_MS}ms`;
+            ? `slow crash-loop (${this.consecutiveShortCrashIntervals + 1} crashes under ${OOM_LOOP_INTERVAL_MS / 60_000}min apart — likely OOM)`
+            : `${CRASH_THRESHOLD} crashes in ${CRASH_WINDOW_MS / 60_000}min`;
           console.error(
             `[WorkspaceHost:${this.serviceName}] Max restart attempts reached (${cause}), giving up`
           );

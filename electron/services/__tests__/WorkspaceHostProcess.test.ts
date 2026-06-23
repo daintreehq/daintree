@@ -820,6 +820,43 @@ describe("WorkspaceHostProcess crash window", () => {
     expect((host as any).consecutiveShortCrashIntervals).toBeGreaterThanOrEqual(2);
     expect(crashSpy).toHaveBeenCalledWith(1);
 
+    // Behavioral guard: once the slow loop trips host-crash, the host must give
+    // up — no further auto-restart fork is scheduled (otherwise it would keep
+    // looping in "Reconnecting…", the exact #10729 symptom).
+    const forksAtTrip = forkMock.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(11_000); // past RESTART_CAP_MAX_MS
+    expect(forkMock.mock.calls.length).toBe(forksAtTrip);
+
+    host.dispose();
+  });
+
+  it("exactly OOM_LOOP_INTERVAL_MS apart does not increment the counter (boundary contract)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    // Crash 1 at t=0
+    const child1 = mockChildren[0] as MockUtilityChild;
+    child1.emit("message", { type: "ready" });
+    child1.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Crash 2 exactly 20min later. The detector uses strict `<`, so a gap equal
+    // to the interval is treated as "not a short interval" and resets the
+    // counter. Documenting the boundary so a future `<`→`<=` change is a
+    // deliberate, test-visible decision rather than a silent surprise.
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
+    const child2 = mockChildren[1] as MockUtilityChild;
+    host.waitForReady().catch(() => {});
+    child2.emit("message", { type: "ready" });
+    child2.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect((host as any).consecutiveShortCrashIntervals).toBe(0);
+
     host.dispose();
   });
 
