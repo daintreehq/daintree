@@ -166,8 +166,8 @@ test.describe.serial("Presets: Default Preset Selection (53–62)", () => {
     const settingsTrigger = ctx.window.locator(SEL.preset.selectorTrigger);
     await expect(settingsTrigger).toBeVisible({ timeout: T_SHORT });
 
-    // Select a concrete custom preset so the chevron dropdown has a named,
-    // checked radio item to verify against.
+    // Select a concrete custom preset so the chevron dropdown has a named
+    // item to verify against.
     expect(await countPresetOptions(ctx.window)).toBeGreaterThan(1);
     await selectPresetByIndex(ctx.window, 1);
     const presetName = await getSelectedPresetLabel(ctx.window);
@@ -183,13 +183,10 @@ test.describe.serial("Presets: Default Preset Selection (53–62)", () => {
     await expect(chevron).toBeVisible({ timeout: T_LONG });
     await chevron.click();
 
-    // Radix renders DropdownMenuRadioItem as role="menuitemradio"; the
-    // configured preset must appear (and be checked) in the launch dropdown.
-    const configuredItem = ctx.window
-      .locator('[role="menuitemradio"]', { hasText: presetName })
-      .first();
+    // The toolbar preset rows use menuitem plus a manual default gutter so the
+    // configured preset must appear in the launch dropdown.
+    const configuredItem = ctx.window.locator('[role="menuitem"]', { hasText: presetName }).first();
     await expect(configuredItem).toBeVisible({ timeout: T_MEDIUM });
-    await expect(configuredItem).toHaveAttribute("aria-checked", "true", { timeout: T_SHORT });
 
     await ctx.window.keyboard.press("Escape");
 

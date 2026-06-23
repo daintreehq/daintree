@@ -19,6 +19,13 @@ const ROOT = path.resolve(import.meta.dirname, "../..");
 
 const fallbackGraceMs = 1_500;
 const INITIAL_PROJECT_ID_EXPRESSION = "window.__DAINTREE_INITIAL_PROJECT__?.id ?? null";
+const E2E_MODE_ARG = "--daintree-e2e-mode";
+const E2E_SKIP_FIRST_RUN_DIALOGS_ARG = "--daintree-e2e-skip-first-run-dialogs";
+const E2E_FAULT_MODE_ARG = "--daintree-e2e-fault-mode";
+const E2E_DEFER_RENDERER_LOAD_ARG = "--daintree-e2e-defer-renderer-load";
+const E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE_ARG = "--daintree-e2e-disable-cached-view-cpu-throttle";
+const E2E_CRASH_DUMPS_DIR_ARG = "--daintree-e2e-crash-dumps-dir=";
+const E2E_SIDELOAD_PLUGIN_DIR_ARG = "--daintree-e2e-sideload-plugin-dir=";
 
 export interface AppContext {
   app: ElectronApplication;
@@ -249,6 +256,22 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
     beginAttempt(attempt, maxAttempts);
     const userDataDir = options.userDataDir ?? mkdtempSync(path.join(tmpdir(), "daintree-e2e-"));
     const args = [`--user-data-dir=${userDataDir}`, ROOT];
+    args.unshift(E2E_MODE_ARG);
+    if (options.env?.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS !== "0") {
+      args.unshift(E2E_SKIP_FIRST_RUN_DIALOGS_ARG);
+    }
+    if (options.env?.DAINTREE_E2E_FAULT_MODE === "1") {
+      args.unshift(E2E_FAULT_MODE_ARG);
+    }
+    if (options.env?.DAINTREE_E2E_SIDELOAD_PLUGIN_DIR) {
+      args.unshift(`${E2E_SIDELOAD_PLUGIN_DIR_ARG}${options.env.DAINTREE_E2E_SIDELOAD_PLUGIN_DIR}`);
+    }
+    if (isCI) {
+      args.unshift(E2E_DEFER_RENDERER_LOAD_ARG);
+    }
+    if (isWindowsCI) {
+      args.unshift(E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE_ARG);
+    }
 
     if (process.env.CI) {
       // CI runners lack real GPUs — disable GPU to prevent hangs.
@@ -355,6 +378,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
       mkdirSync(crashDumpsDir, { recursive: true });
       mkdirSync(logsDir, { recursive: true });
       launchEnv.DAINTREE_E2E_CRASH_DUMPS_DIR = crashDumpsDir;
+      args.unshift(`${E2E_CRASH_DUMPS_DIR_ARG}${crashDumpsDir}`);
       args.push("--enable-logging=file", `--log-file=${logFile}`);
 
       // Do not pass executablePath here. Playwright only injects its Electron

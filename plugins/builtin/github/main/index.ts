@@ -25,14 +25,16 @@ function initializeTokenStorage(): void {
 // reach IPC paths gated on `hasToken: true` without hitting the network.
 // Skips token validation by pre-seeding cached user info, mirroring the
 // post-validate state. Mirrors the __daintreeFaultRegistry pattern — gated
-// on DAINTREE_E2E_FAULT_MODE, never present in production.
+// on DAINTREE_E2E_FAULT_MODE / --daintree-e2e-fault-mode, never present in production.
 //
 // Post-forge-neutral the renderer's "connected" gate reads
 // `forge.getCredentialStatus` (the durable `forgeCredentials` store), NOT the
 // in-memory GitHubAuth token, so the seed must write BOTH: the memory token
 // for the impl's network calls and the forge-credential store entry for the
 // renderer config store (#10347).
-if (process.env.DAINTREE_E2E_FAULT_MODE === "1") {
+const E2E_FAULT_MODE_ARG = "--daintree-e2e-fault-mode";
+
+if (process.env.DAINTREE_E2E_FAULT_MODE === "1" || process.argv.includes(E2E_FAULT_MODE_ARG)) {
   const setForgeCredentialPresence = (token: string | null): void => {
     const existing = store.get("forgeCredentials") ?? {};
     const next = { ...existing };

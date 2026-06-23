@@ -13,7 +13,7 @@ import { app, BrowserWindow, crashReporter, protocol } from "electron";
 nodeV8.setHeapSnapshotNearHeapLimit(2);
 import { registerGlobalErrorHandlers } from "./setup/globalErrorHandlers.js";
 import { startDevDiagnostics } from "./setup/devDiagnostics.js";
-import { isE2EMode } from "./setup/runtimeFlags.js";
+import { isE2EFaultMode, isE2EMode } from "./setup/runtimeFlags.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import { PERF_MARKS } from "../shared/perf/marks.js";
@@ -401,7 +401,7 @@ if (!gotTheLock) {
     // nightly evicted-view leak spec can read main-process state and
     // dump a v8 snapshot from app.evaluate(). Mirrors the
     // __daintreeResetRateLimits / __daintreeFaultRegistry pattern.
-    if (process.env.DAINTREE_E2E_MODE === "1") {
+    if (isE2EMode) {
       (globalThis as Record<string, unknown>).__daintreeGetPvm = getProjectViewManager;
       (globalThis as Record<string, unknown>).__daintreeWriteHeapSnapshot = (filePath: string) =>
         nodeV8.writeHeapSnapshot(filePath);
@@ -412,7 +412,7 @@ if (!gotTheLock) {
     // (#9599). Resolved lazily so the workspace client need not exist at
     // registration time. Gated on DAINTREE_E2E_FAULT_MODE — stricter than the
     // PVM accessor above — so this crash seam never ships in production.
-    if (process.env.DAINTREE_E2E_FAULT_MODE === "1") {
+    if (isE2EFaultMode) {
       (globalThis as Record<string, unknown>).__daintreeCrashWorkspaceHostForWindow = (
         windowId: number
       ): boolean => {

@@ -19,17 +19,20 @@ describe("resolveE2EPreloadArgs", () => {
   const originalMode = process.env.DAINTREE_E2E_MODE;
   const originalSkip = process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS;
   const originalFault = process.env.DAINTREE_E2E_FAULT_MODE;
+  const originalArgv = process.argv;
 
   beforeEach(() => {
     delete process.env.DAINTREE_E2E_MODE;
     delete process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS;
     delete process.env.DAINTREE_E2E_FAULT_MODE;
+    process.argv = originalArgv.slice(0, 2);
   });
 
   afterEach(() => {
     restoreEnv("DAINTREE_E2E_MODE", originalMode);
     restoreEnv("DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS", originalSkip);
     restoreEnv("DAINTREE_E2E_FAULT_MODE", originalFault);
+    process.argv = originalArgv;
   });
 
   it("omits all flags outside E2E", () => {
@@ -40,6 +43,20 @@ describe("resolveE2EPreloadArgs", () => {
     process.env.DAINTREE_E2E_MODE = "1";
     process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS = "1";
     process.env.DAINTREE_E2E_FAULT_MODE = "1";
+
+    expect(resolveE2EPreloadArgs()).toEqual([
+      "--daintree-e2e-mode",
+      "--daintree-e2e-skip-first-run-dialogs",
+      "--daintree-e2e-fault-mode",
+    ]);
+  });
+
+  it("preserves E2E argv switches when production build strips env reads", () => {
+    process.argv.push(
+      "--daintree-e2e-mode",
+      "--daintree-e2e-skip-first-run-dialogs",
+      "--daintree-e2e-fault-mode"
+    );
 
     expect(resolveE2EPreloadArgs()).toEqual([
       "--daintree-e2e-mode",

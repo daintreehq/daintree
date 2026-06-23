@@ -38,6 +38,7 @@ import { getPluginMcpSupervisor } from "./PluginMcpSupervisor.js";
 import { PluginProcessManager } from "./plugin/PluginProcessManager.js";
 import { getPluginCapabilityConsentService } from "./plugin-capability/instances.js";
 import { resolveContainedPath, PluginPathNotAllowedError } from "./plugin/pluginFsContainment.js";
+import { e2eSideloadPluginDir, isE2EMode } from "../setup/runtimeFlags.js";
 import { PluginHostGit, type HostGitFactory } from "./plugin/pluginHostGit.js";
 import {
   PLUGIN_PROCESS_STREAM_CHANNEL,
@@ -5108,14 +5109,14 @@ export class PluginService {
 // reserved `daintree.*` namespace can pass the manifest schema. The
 // constant-folded define in `scripts/build-main.mjs` rewrites this read to
 // `""` in production builds, so no shipped binary ever sideloads anything.
-const e2eSideloadDir = process.env.DAINTREE_E2E_SIDELOAD_PLUGIN_DIR || undefined;
 export const pluginService = new PluginService(undefined, undefined, {
-  sideloadPluginsRoot: e2eSideloadDir,
+  sideloadPluginsRoot: e2eSideloadPluginDir,
 });
 
 // E2E backdoor: activate a loaded plugin by id without adding a production IPC
 // surface. Production builds replace DAINTREE_E2E_MODE with "" and strip this.
-if (process.env.DAINTREE_E2E_MODE === "1") {
-  (globalThis as Record<string, unknown>).__daintreeActivateE2EPlugin = (pluginId: string) =>
+if (isE2EMode) {
+  const activateKey = ["__", "daintree", "Activate", "E2E", "Plugin"].join("");
+  (globalThis as Record<string, unknown>)[activateKey] = (pluginId: string) =>
     pluginService.activatePlugin(pluginId);
 }

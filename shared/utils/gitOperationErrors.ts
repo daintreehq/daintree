@@ -98,7 +98,7 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
   ],
   [
     "push-rejected-outdated",
-    /(?:! \[rejected\].*\((?:non-fast-forward|fetch first)\)|^!\s+\S+\s+\[rejected\]\s+\((?:non-fast-forward|fetch first)\)|Updates were rejected because the tip of your current branch is behind)/im,
+    /(?:! \[rejected\].*\((?:non-fast-forward|fetch first)\)|^\s*!\s+\S+(?:\s+\S+)?\s+\[rejected\]\s+\((?:non-fast-forward|fetch first)\)|Updates were rejected because the tip of your current branch is behind)/im,
   ],
   [
     "conflict-unresolved",

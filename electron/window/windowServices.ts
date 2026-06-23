@@ -28,6 +28,7 @@ import {
   kickOffEarlyPathRefresh,
 } from "../setup/environment.js";
 import { shouldDeferRendererLoadForE2E } from "./earlyRenderer.js";
+import { isE2EFaultMode } from "../setup/runtimeFlags.js";
 import {
   extractCliPath,
   getPendingCliPath,
@@ -383,7 +384,7 @@ export async function setupWindowServices(
           );
           console.log(`[MAIN] Re-brokered ${wcIds.length} worktree port(s) after host restart`);
         }
-        if (process.env.DAINTREE_E2E_FAULT_MODE === "1") {
+        if (isE2EFaultMode) {
           const g = globalThis as Record<string, unknown>;
           const current =
             typeof g.__daintreeWorkspaceHostRestartCount === "number"

@@ -49,6 +49,21 @@ import { GitOperationError } from "../../utils/errorTypes.js";
 
 const execFileAsync = promisify(execFile);
 
+function classifyGitFailure(error: unknown, formattedMessage: string) {
+  const reason = classifyGitError(error);
+  return reason === "unknown" ? classifyGitError(formattedMessage) : reason;
+}
+
+function encodeGitOperationErrorMessage(
+  reason: ReturnType<typeof classifyGitFailure>,
+  message: string,
+  fields: { leaseSha?: string; branchName?: string } = {}
+): string {
+  const leaseSha = fields.leaseSha ? encodeURIComponent(fields.leaseSha) : "";
+  const branchName = fields.branchName ? encodeURIComponent(fields.branchName) : "";
+  return `[GitError|${reason}|${leaseSha}|${branchName}] ${message}`;
+}
+
 interface StagingFileEntry {
   path: string;
   status: GitStatus;
@@ -285,7 +300,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
         playSoundFireAndForget("git-push-error");
       }
       const errorMessage = formatErrorMessage(error, "git push failed");
-      const gitReason = classifyGitError(error);
+      const gitReason = classifyGitFailure(error, errorMessage);
       // Capture the lease SHA at rejection time, not at click time. A
       // background fetch advancing `refs/remotes/origin/<branch>` between
       // here and the user's force-push click would silently degrade
@@ -301,13 +316,18 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
           leaseSha = undefined;
         }
       }
-      throw new GitOperationError(gitReason, errorMessage, {
-        cwd: payload.cwd,
-        op: "push",
-        cause: error instanceof Error ? error : undefined,
-        leaseSha,
-        branchName,
-      });
+      throw new GitOperationError(
+        gitReason,
+        encodeGitOperationErrorMessage(gitReason, errorMessage, { leaseSha, branchName }),
+        {
+          cwd: payload.cwd,
+          op: "push",
+          cause: error instanceof Error ? error : undefined,
+          rawMessage: errorMessage,
+          leaseSha,
+          branchName,
+        }
+      );
     } finally {
       pushingCwds.delete(payload.cwd);
     }
@@ -332,12 +352,17 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
         playSoundFireAndForget("git-push-error");
       }
       const errorMessage = formatErrorMessage(error, "git pull --rebase failed");
-      const gitReason = classifyGitError(error);
-      throw new GitOperationError(gitReason, errorMessage, {
-        cwd: payload.cwd,
-        op: "pull-rebase",
-        cause: error instanceof Error ? error : undefined,
-      });
+      const gitReason = classifyGitFailure(error, errorMessage);
+      throw new GitOperationError(
+        gitReason,
+        encodeGitOperationErrorMessage(gitReason, errorMessage),
+        {
+          cwd: payload.cwd,
+          op: "pull-rebase",
+          cause: error instanceof Error ? error : undefined,
+          rawMessage: errorMessage,
+        }
+      );
     }
   };
   handlers.push(typedHandle(CHANNELS.GIT_PULL_REBASE, handlePullRebase));
@@ -374,12 +399,22 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
         playSoundFireAndForget("git-push-error");
       }
       const errorMessage = formatErrorMessage(error, "git push --force-with-lease failed");
-      const gitReason = classifyGitError(error);
-      throw new GitOperationError(gitReason, errorMessage, {
-        cwd: payload.cwd,
-        op: "force-push-with-lease",
-        cause: error instanceof Error ? error : undefined,
-      });
+      const gitReason = classifyGitFailure(error, errorMessage);
+      throw new GitOperationError(
+        gitReason,
+        encodeGitOperationErrorMessage(gitReason, errorMessage, {
+          leaseSha: payload.leaseSha,
+          branchName,
+        }),
+        {
+          cwd: payload.cwd,
+          op: "force-push-with-lease",
+          cause: error instanceof Error ? error : undefined,
+          rawMessage: errorMessage,
+          leaseSha: payload.leaseSha,
+          branchName,
+        }
+      );
     }
   };
   handlers.push(typedHandle(CHANNELS.GIT_FORCE_PUSH_WITH_LEASE, handleForcePushWithLease));
@@ -415,12 +450,18 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       }));
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "git log failed");
-      const gitReason = classifyGitError(error);
-      throw new GitOperationError(gitReason, errorMessage, {
-        cwd: payload.cwd,
-        op: "list-remote-commits",
-        cause: error instanceof Error ? error : undefined,
-      });
+      const gitReason = classifyGitFailure(error, errorMessage);
+      throw new GitOperationError(
+        gitReason,
+        encodeGitOperationErrorMessage(gitReason, errorMessage, { branchName }),
+        {
+          cwd: payload.cwd,
+          op: "list-remote-commits",
+          cause: error instanceof Error ? error : undefined,
+          rawMessage: errorMessage,
+          branchName,
+        }
+      );
     }
   };
   handlers.push(typedHandle(CHANNELS.GIT_LIST_REMOTE_COMMITS, handleListRemoteCommits));

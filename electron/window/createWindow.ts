@@ -41,6 +41,7 @@ import { attachRendererConsoleCapture } from "./rendererConsoleCapture.js";
 import { markPerformance } from "../utils/performance.js";
 import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js";
 import { isDemoMode, isSmokeTest } from "../setup/environment.js";
+import { isE2EDeferRendererLoad, isE2EMode } from "../setup/runtimeFlags.js";
 import { SMOKE_BOOT_TIMEOUT_MS } from "../services/smokeTest.js";
 import {
   beginWindowRecreating,
@@ -240,11 +241,11 @@ export function setupBrowserWindow(
   // electron.launch() receives a CDP 'page' target and resolves.
   // Without this, the BW stays at about:blank (no Target.targetCreated event)
   // and electron.launch() times out after the WebContentsView migration.
-  if (process.env.DAINTREE_E2E_MODE) {
+  if (isE2EMode) {
     win.loadURL("data:text/html,<!doctype html><html><body></body></html>").catch((err) => {
       console.warn("[MAIN] Failed to load E2E BrowserWindow sentinel:", err);
     });
-    if (process.env.DAINTREE_E2E_DEFER_RENDERER_LOAD === "1" && !win.isDestroyed()) {
+    if (isE2EDeferRendererLoad && !win.isDestroyed()) {
       win.show();
     }
   }

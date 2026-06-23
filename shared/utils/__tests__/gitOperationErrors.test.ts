@@ -71,6 +71,7 @@ describe("classifyGitError — table-driven", () => {
     ["push-rejected-policy", "remote: pack exceeds maximum allowed size"],
     ["push-rejected-outdated", " ! [rejected]        main -> main (non-fast-forward)"],
     ["push-rejected-outdated", "!\trefs/heads/main:refs/heads/main\t[rejected] (non-fast-forward)"],
+    ["push-rejected-outdated", " ! refs/heads/main:refs/heads/main [rejected] (non-fast-forward)"],
     ["push-rejected-outdated", " ! [rejected]        main -> main (fetch first)"],
     [
       "push-rejected-outdated",

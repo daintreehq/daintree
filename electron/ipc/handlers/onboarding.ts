@@ -9,6 +9,7 @@ import type {
   ChecklistState,
   OnboardingState,
 } from "../../../shared/types/ipc/maps.js";
+import { isE2ESkipFirstRunDialogs } from "../../setup/runtimeFlags.js";
 
 type StoredOnboardingState = StoreSchema["onboarding"];
 
@@ -23,7 +24,7 @@ const DEFAULT_CHECKLIST: ChecklistState = {
   },
 };
 
-const SKIP_E2E = process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1";
+const SKIP_E2E = isE2ESkipFirstRunDialogs;
 
 function normalizeAvailabilityFirstSeen(raw: unknown): Record<string, number> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};

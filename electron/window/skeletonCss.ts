@@ -77,11 +77,18 @@ export function resolveInstanceRole(): InstanceRole {
 
 export function resolveE2EPreloadArgs(): string[] {
   const args: string[] = [];
-  if (process.env.DAINTREE_E2E_MODE === "1") args.push(E2E_MODE_ARG);
-  if (process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1") {
+  if (process.env.DAINTREE_E2E_MODE === "1" || process.argv.includes(E2E_MODE_ARG)) {
+    args.push(E2E_MODE_ARG);
+  }
+  if (
+    process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1" ||
+    process.argv.includes(E2E_SKIP_FIRST_RUN_DIALOGS_ARG)
+  ) {
     args.push(E2E_SKIP_FIRST_RUN_DIALOGS_ARG);
   }
-  if (process.env.DAINTREE_E2E_FAULT_MODE === "1") args.push(E2E_FAULT_MODE_ARG);
+  if (process.env.DAINTREE_E2E_FAULT_MODE === "1" || process.argv.includes(E2E_FAULT_MODE_ARG)) {
+    args.push(E2E_FAULT_MODE_ARG);
+  }
   return args;
 }
 

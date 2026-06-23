@@ -1,4 +1,5 @@
 import os from "node:os";
+import { getIsE2EMode } from "../setup/runtimeFlags.js";
 
 const GIB = 1024 ** 3;
 
@@ -23,7 +24,7 @@ export function effectiveCachedProjectViews(
   opts: EffectiveCachedProjectViewsOptions = {}
 ): number {
   if (isValidCachedProjectViews(stored)) return stored;
-  const isE2E = opts.isE2E ?? process.env.DAINTREE_E2E_MODE === "1";
+  const isE2E = opts.isE2E ?? getIsE2EMode();
   if (isE2E) return 4;
   const totalMemBytes = opts.totalMemBytes ?? os.totalmem();
   return computeDefaultCachedViews(totalMemBytes);

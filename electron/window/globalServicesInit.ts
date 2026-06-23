@@ -64,6 +64,7 @@ import { getProjectStatsService } from "../ipc/handlers/projectCrud/index.js";
 import { registerDeferredTask } from "./deferredInitQueue.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { setPluginDirResolver } from "../setup/protocols.js";
+import { isE2EFaultMode, isE2EMode } from "../setup/runtimeFlags.js";
 import { activateOpenFileInstaller } from "../setup/openFileInstall.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { registerCommands } from "../services/commands/index.js";
@@ -187,7 +188,7 @@ export async function initGlobalServices(
   // `watchdog:disabled` broadcast) without real memory pressure or three
   // genuine watchdog crashes. (The GitHub token seams moved into the
   // daintree.github plugin's main module alongside its token storage.)
-  if (process.env.DAINTREE_E2E_FAULT_MODE === "1") {
+  if (isE2EFaultMode) {
     const VALID_RESOURCE_PROFILES = new Set<ResourceProfile>([
       "performance",
       "balanced",
@@ -673,8 +674,7 @@ export async function initGlobalServices(
             .filter((pvm): pvm is ProjectViewManager => pvm !== undefined) ?? [],
         getProjectStatsService: () => getProjectStatsService(),
         getUserCachedViewLimit: () =>
-          store.get("terminalConfig")?.cachedProjectViews ??
-          (process.env.DAINTREE_E2E_MODE ? 4 : 1),
+          store.get("terminalConfig")?.cachedProjectViews ?? (isE2EMode ? 4 : 1),
         hasSustainedRendererSaturation: () => hasSustainedRendererSaturation(),
       });
       setResourceProfileService(svc);
