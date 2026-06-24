@@ -94,6 +94,7 @@ import { AccessibilityAnnouncer } from "./components/Accessibility/Accessibility
 import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { TooltipProvider } from "./components/ui/tooltip";
+import { primeRadix } from "./components/ui/radix-loader";
 import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "./lib/animationUtils";
 
 // Module-scope loaders: raw import() expressions inside component effects bail
@@ -823,6 +824,7 @@ function AppInner() {
       void preloadNewWorktreeDialog();
       void preloadActionPalette();
       void preloadQuickSwitcher();
+      void preloadProjectSwitcherPalette();
       void preloadWorktreePalette();
       void preloadNewTerminalPalette();
       void preloadPanelPalette();
@@ -841,6 +843,12 @@ function AppInner() {
       // `Worktree/FileDiffModal.tsx`, so an explicit post-paint prefetch keeps
       // it snappy on first use.
       preloadFileViewerModal().catch(() => {});
+      // Warm the shared Radix overlay primitives chunk (`radix-deferred`) so the
+      // ProjectSwitcherPalette popover and context menus are ready on first
+      // interaction in a freshly loaded project view. Otherwise this chunk is
+      // only demand-loaded on the first pointer/focus gesture (#10752). Each
+      // WebContentsView has its own module cache, so this fires per view.
+      primeRadix().catch(() => {});
     };
 
     if (typeof scheduler !== "undefined" && typeof scheduler.postTask === "function") {
