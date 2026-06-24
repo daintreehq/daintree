@@ -232,7 +232,6 @@ export const BINDING_STALE = "BINDING_STALE";
 export const SESSION_BINDING_GONE = "SESSION_BINDING_GONE";
 export const MCP_DEDUP_KEY_COLLISION_CODE = "MCP_DEDUP_KEY_COLLISION";
 export const PRE_AUTH_FAILED_CODE = "PRE_AUTH_FAILED";
-export const MCP_RATE_LIMITED_CODE = "MCP_RATE_LIMITED";
 export const INVALID_URL_CODE = "INVALID_URL";
 
 /**
@@ -245,7 +244,6 @@ export const INVALID_URL_CODE = "INVALID_URL";
 export const RETRIABLE_ERROR_CODES: ReadonlySet<string> = new Set([
   EXECUTION_ERROR_CODE,
   CONFIRMATION_TIMEOUT_CODE,
-  MCP_RATE_LIMITED_CODE,
 ]);
 
 export interface McpErrorPayload {
@@ -542,90 +540,6 @@ export const MCP_DEDUP_TTL_MS = 120_000;
  * insertion above this cap so memory stays bounded at session lifetime.
  */
 export const MCP_DEDUP_MAX_ENTRIES_PER_SESSION = 256;
-
-/**
- * Token-bucket configuration for the per-`(session, toolId)` rate limiter
- * that bounds runaway agent loops on the MCP CallTool path (#8468).
- *
- * - `capacity`: maximum burst — tokens available when the bucket is full.
- * - `refillPerMs`: tokens regenerated per millisecond. Expressed per-ms so
- *   the bucket can be recomputed lazily from elapsed wall-clock on each call
- *   without a background timer.
- */
-export interface RateLimitConfig {
-  capacity: number;
-  refillPerMs: number;
-}
-
-/**
- * Rate-limit tiers. Intentionally conservative placeholders sized so that no
- * legitimate agent workflow trips them — a runaway loop hits the burst cap,
- * then `retryAfter` forces a minimum gap. Tuned post-ship from audit data.
- *
- * - `highFreqRead` (60/min): cheap read-only polling tools. The
- *   `triage_terminals` recipe explicitly tells agents not to busy-loop;
- *   60/min is generous for legitimate fleet-polling cadences.
- * - `standard` (30/min): the default for any tool not in
- *   {@link RATE_LIMIT_TOOL_MAP}.
- * - `mutation` (10/min): side-effecting tools where a tight loop produces
- *   duplicate resources (commits, pushes, issues, PRs).
- */
-export const RATE_LIMIT_TIERS = {
-  highFreqRead: { capacity: 60, refillPerMs: 60 / 60_000 },
-  standard: { capacity: 30, refillPerMs: 30 / 60_000 },
-  mutation: { capacity: 10, refillPerMs: 10 / 60_000 },
-} as const satisfies Record<string, RateLimitConfig>;
-
-/**
- * Per-tool tier overrides. Tools absent from this map fall back to
- * {@link RATE_LIMIT_TIERS.standard}. Keep the mutation cohort aligned with
- * {@link MCP_DEDUP_ALLOWLIST}'s destructive mutation entries.
- */
-export const RATE_LIMIT_TOOL_MAP: ReadonlyMap<string, RateLimitConfig> = new Map([
-  ["terminal.getOutput", RATE_LIMIT_TIERS.highFreqRead],
-  ["terminal.getStatus", RATE_LIMIT_TIERS.highFreqRead],
-  ["actions.getContext", RATE_LIMIT_TIERS.highFreqRead],
-  ["browser.getConsoleMessages", RATE_LIMIT_TIERS.highFreqRead],
-  ["git.commit", RATE_LIMIT_TIERS.mutation],
-  ["git.push", RATE_LIMIT_TIERS.mutation],
-  ["forge.openIssue", RATE_LIMIT_TIERS.mutation],
-  ["forge.openPR", RATE_LIMIT_TIERS.mutation],
-  ["worktree.delete", RATE_LIMIT_TIERS.mutation],
-  ["worktree.resource.provision", RATE_LIMIT_TIERS.mutation],
-  // Destructive (D2): a tear-down loop against a re-provisioned resource could
-  // destroy the fresh instance. Mutation-tier even though it's not deduped —
-  // each teardown is intentionally re-runnable, but not at 30/min.
-  ["worktree.resource.teardown", RATE_LIMIT_TIERS.mutation],
-  ["git.snapshotRevert", RATE_LIMIT_TIERS.mutation],
-  ["git.snapshotDelete", RATE_LIMIT_TIERS.mutation],
-  ["forge.assignIssue", RATE_LIMIT_TIERS.mutation],
-  ["forge.createPR", RATE_LIMIT_TIERS.mutation],
-  ["forge.closePR", RATE_LIMIT_TIERS.mutation],
-  ["forge.reopenPR", RATE_LIMIT_TIERS.mutation],
-  ["forge.mergePR", RATE_LIMIT_TIERS.mutation],
-  ["forge.convertPRToDraft", RATE_LIMIT_TIERS.mutation],
-  ["forge.markPRReadyForReview", RATE_LIMIT_TIERS.mutation],
-  ["forge.commentOnPR", RATE_LIMIT_TIERS.mutation],
-  ["forge.editPR", RATE_LIMIT_TIERS.mutation],
-  // Not a git mutation, but capped at the mutation tier (10/min) so a runaway
-  // model can't flood the assistant panel's figure rail with images (#9828).
-  ["help.displayImage", RATE_LIMIT_TIERS.mutation],
-  // Fleet-arming mutations (#10695): churning the broadcast set reroutes the
-  // human's keystrokes, so cap at mutation tier rather than 30/min standard.
-  // None carry a per-call confirm gate (all classified danger:"safe"); the
-  // mutation-tier rate limit is the cohort's shared throttle.
-  ["terminal.arm", RATE_LIMIT_TIERS.mutation],
-  ["terminal.disarm", RATE_LIMIT_TIERS.mutation],
-  ["terminal.disarmAll", RATE_LIMIT_TIERS.mutation],
-] as Array<[string, RateLimitConfig]>);
-
-/**
- * Resolve the rate-limit config for a tool — its explicit override or the
- * `standard` fallback.
- */
-export function rateLimitConfigForTool(toolId: string): RateLimitConfig {
-  return RATE_LIMIT_TOOL_MAP.get(toolId) ?? RATE_LIMIT_TIERS.standard;
-}
 
 /**
  * Compute the minimum non-external tier that permits the given tool. Used to

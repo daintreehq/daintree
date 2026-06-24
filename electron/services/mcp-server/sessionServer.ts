@@ -46,7 +46,6 @@ import {
   MCP_DEDUP_TTL_MS,
   MCP_DEDUP_MAX_ENTRIES_PER_SESSION,
   MCP_DEDUP_KEY_COLLISION_CODE,
-  MCP_RATE_LIMITED_CODE,
   minimumPermittingTier,
   EXECUTION_ERROR_CODE,
   SESSION_BINDING_GONE,
@@ -421,8 +420,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // overrides the static tier floor only because the user explicitly
         // approved this tool's scope — the grant's allowlist gates which tools
         // `peekNativeGrant` authorizes. The use is NOT charged here: it is
-        // consumed only after the rate-limit gate below, so a rate-limited
-        // call (which never dispatches) can't burn a use.
+        // consumed only once the call is committed to dispatching (below), so
+        // an unauthorized call can't burn a use.
         nativeGrantId = native.grantId;
       } else {
         // Increment first, then ask the cache whether to suppress. The
@@ -483,39 +482,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       }
     }
 
-    // Runaway-loop guard (#8468): charge one token against the
-    // per-`(session, toolId)` bucket before dedup or dispatch. Placed
-    // after the tier/grant check (an unauthorized call shouldn't consume
-    // tokens) and before dedup (a tight loop replaying the same dedup key
-    // must still be bounded — dedup is an idempotency guard, not a
-    // rate-limit bypass). Rejection is an explicit retriable tool-error
-    // with a `retryAfter` hint, never a silent skip.
-    const rateLimit = sessionStore.consumeRateLimitToken(sessionId, actionId);
-    if (!rateLimit.allowed) {
-      try {
-        appendAuditRecord({
-          toolId: actionId,
-          sessionId,
-          tier,
-          args,
-          durationMs: Date.now() - startedAt,
-          outcome: { kind: "rate_limited", retryAfter: rateLimit.retryAfter },
-          capturedTurnId,
-        });
-      } catch (err) {
-        console.error("[MCP] Failed to append audit record:", err);
-      }
-      return buildToolError({
-        code: MCP_RATE_LIMITED_CODE,
-        message: `Rate limit exceeded for '${actionId}'. Retry after ${rateLimit.retryAfter}s.`,
-        details: { retryAfter: rateLimit.retryAfter },
-      });
-    }
-
     // Charge the native automation grant's use now that the call has cleared
-    // the rate limiter and is committed to proceeding (#10648). Doing it here —
-    // not at the peek above — means a rate-limited call never burns a use. The
-    // peek→rate-limit→consume path is synchronous (no `await`), so the grant
+    // the tier/grant check and is committed to proceeding (#10648). Doing it
+    // here — not at the peek above — means an unauthorized call never burns a
+    // use. The peek→consume path is synchronous (no `await`), so the grant
     // can't be revoked between peek and consume; a `false` return is purely
     // defensive and fails closed.
     if (nativeGrantId !== undefined) {
