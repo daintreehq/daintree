@@ -1609,7 +1609,12 @@ export class ProjectViewManager {
       wc.once("dom-ready", () => {
         if (wc.isDestroyed()) return;
         const project = projectStore.getProjectById(projectId);
-        injectSkeletonCss(wc, project);
+        // instantReveal drops index.html's 400ms Doherty entry delay: a cold
+        // switch reveals on APP_SKELETON_PARSED (~150ms), which lands inside
+        // that delay, so without this the revealed view shows a blank themed
+        // canvas instead of the skeleton until ~480ms. The gate stays in place
+        // for the initial app launch (createWindow.ts), where it belongs.
+        injectSkeletonCss(wc, project, { instantReveal: true });
         injectSkeletonProjectIdentity(wc, project);
       });
 

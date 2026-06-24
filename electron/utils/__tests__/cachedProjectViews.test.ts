@@ -9,27 +9,28 @@ import {
 const GIB = 1024 ** 3;
 
 describe("computeDefaultCachedViews", () => {
-  it("returns 2 for machines with 16 GiB or less", () => {
+  it("returns 2 for machines below 16 GiB", () => {
     expect(computeDefaultCachedViews(4 * GIB)).toBe(2);
     expect(computeDefaultCachedViews(8 * GIB)).toBe(2);
-    expect(computeDefaultCachedViews(16 * GIB)).toBe(2);
+    expect(computeDefaultCachedViews(16 * GIB - 1)).toBe(2);
   });
 
-  it("returns 2 for machines between 16 and 32 GiB", () => {
-    expect(computeDefaultCachedViews(24 * GIB)).toBe(2);
-    expect(computeDefaultCachedViews(32 * GIB - 1)).toBe(2);
+  it("returns 3 from the 16 GiB threshold up to just below 32 GiB", () => {
+    expect(computeDefaultCachedViews(16 * GIB)).toBe(3);
+    expect(computeDefaultCachedViews(24 * GIB)).toBe(3);
+    expect(computeDefaultCachedViews(32 * GIB - 1)).toBe(3);
   });
 
-  it("returns 3 at the 32 GiB threshold and up to just below 64 GiB", () => {
-    expect(computeDefaultCachedViews(32 * GIB)).toBe(3);
-    expect(computeDefaultCachedViews(48 * GIB)).toBe(3);
-    expect(computeDefaultCachedViews(64 * GIB - 1)).toBe(3);
+  it("returns 4 from the 32 GiB threshold up to just below 64 GiB", () => {
+    expect(computeDefaultCachedViews(32 * GIB)).toBe(4);
+    expect(computeDefaultCachedViews(48 * GIB)).toBe(4);
+    expect(computeDefaultCachedViews(64 * GIB - 1)).toBe(4);
   });
 
-  it("returns 4 at the 64 GiB threshold and above", () => {
-    expect(computeDefaultCachedViews(64 * GIB)).toBe(4);
-    expect(computeDefaultCachedViews(96 * GIB)).toBe(4);
-    expect(computeDefaultCachedViews(128 * GIB)).toBe(4);
+  it("returns 5 (the cache ceiling) at the 64 GiB threshold and above", () => {
+    expect(computeDefaultCachedViews(64 * GIB)).toBe(5);
+    expect(computeDefaultCachedViews(96 * GIB)).toBe(5);
+    expect(computeDefaultCachedViews(128 * GIB)).toBe(5);
   });
 
   it("falls back to 2 for invalid or non-positive inputs", () => {
@@ -88,22 +89,22 @@ describe("effectiveCachedProjectViews", () => {
   it("derives from RAM when no preference and not in E2E mode", () => {
     expect(effectiveCachedProjectViews(undefined, { totalMemBytes: mem(8), isE2E: false })).toBe(2);
     expect(effectiveCachedProjectViews(undefined, { totalMemBytes: mem(32), isE2E: false })).toBe(
-      3
+      4
     );
     expect(effectiveCachedProjectViews(undefined, { totalMemBytes: mem(64), isE2E: false })).toBe(
-      4
+      5
     );
   });
 
   it("treats corrupted stored values as absent and falls back", () => {
     const ramDefault64 = { totalMemBytes: mem(64), isE2E: false };
-    expect(effectiveCachedProjectViews("bogus", ramDefault64)).toBe(4);
-    expect(effectiveCachedProjectViews(99, ramDefault64)).toBe(4);
-    expect(effectiveCachedProjectViews(0, ramDefault64)).toBe(4);
-    expect(effectiveCachedProjectViews(-1, ramDefault64)).toBe(4);
-    expect(effectiveCachedProjectViews(2.5, ramDefault64)).toBe(4);
-    expect(effectiveCachedProjectViews(Number.NaN, ramDefault64)).toBe(4);
-    expect(effectiveCachedProjectViews({ v: 2 }, ramDefault64)).toBe(4);
+    expect(effectiveCachedProjectViews("bogus", ramDefault64)).toBe(5);
+    expect(effectiveCachedProjectViews(99, ramDefault64)).toBe(5);
+    expect(effectiveCachedProjectViews(0, ramDefault64)).toBe(5);
+    expect(effectiveCachedProjectViews(-1, ramDefault64)).toBe(5);
+    expect(effectiveCachedProjectViews(2.5, ramDefault64)).toBe(5);
+    expect(effectiveCachedProjectViews(Number.NaN, ramDefault64)).toBe(5);
+    expect(effectiveCachedProjectViews({ v: 2 }, ramDefault64)).toBe(5);
   });
 
   it("honors the E2E override when stored value is invalid", () => {
