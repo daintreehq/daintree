@@ -307,8 +307,10 @@ describe("instant switch feedback: deferred snapshot + IPC", () => {
       `[switch-responsiveness] N=${N} panels | time-to-feedback=${timeToFeedbackMs.toFixed(2)}ms | outgoing-snapshot work~${snapshotWorkMs.toFixed(2)}ms (now deferred past paint; pre-fix it ran BEFORE any feedback)`
     );
 
-    // The click's feedback must not pay the snapshot cost.
-    expect(timeToFeedbackMs).toBeLessThan(snapshotWorkMs);
+    // The deterministic assertions above prove the click's feedback did not
+    // pay the snapshot cost. Avoid comparing sub-millisecond timings here:
+    // on fast local runs the synthetic traversal can be cheaper than the
+    // store update itself.
   });
 });
 

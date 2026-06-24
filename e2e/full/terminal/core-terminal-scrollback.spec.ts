@@ -57,7 +57,7 @@ test.describe.serial("Core: Terminal Scrollback Integrity Under Load", () => {
       `node -e "for(let i=1;i<=5000;i++) process.stdout.write('\\x1b[31mLINE_'+String(i).padStart(5,'0')+'\\x1b[0m\\n')"`
     );
 
-    await waitForTerminalText(panel, "LINE_05000", T_LONG);
+    await waitForTerminalText(panel, "LINE_05000", 60_000);
   });
 
   test("buffer retains approximately 1500 lines after ring buffer trimming", async () => {

@@ -161,6 +161,7 @@ jobs:
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           DEBUG: electron-builder,electron-notarize*,electron-osx-sign*
+          NODE_OPTIONS: "--max-old-space-size=6144"
         run: |
           npm run build
           # Hard security gate (#9148) — fail before packaging if any E2E

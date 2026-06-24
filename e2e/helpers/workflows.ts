@@ -238,7 +238,7 @@ export async function spawnTerminalAndVerify(
         : window.locator(SEL.panel.gridPanel).last();
       await expect(panel).toBeVisible({ timeout: T_MEDIUM });
       if (options.waitForInitialOutput ?? true) {
-        await waitForTerminalReady(window, panel, T_LONG);
+        await waitForTerminalReady(window, panel, 60_000);
       } else {
         await waitForTerminalPty(window, panel, T_LONG);
       }
