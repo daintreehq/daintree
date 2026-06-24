@@ -244,6 +244,72 @@ describe("instant switch feedback: deferred snapshot + IPC", () => {
       undefined
     );
   });
+
+  it("keeps feedback instant even when the outgoing project is huge (snapshot deferred, not blocking)", async () => {
+    const { setPanelStoreAccessor, getPanelStoreSnapshot } = await import("../storeAccessors");
+
+    // Simulate a heavy project: a large panel graph so the outgoing-state
+    // snapshot (buildOutgoingState maps/filters/serializes every panel) does
+    // real, measurable work — the work that, before this change, ran on the
+    // click BEFORE the busy flag was ever set.
+    const N = 8000;
+    const panelsById: Record<string, unknown> = {};
+    const panelIds: string[] = [];
+    for (let i = 0; i < N; i++) {
+      const id = `panel-${i}`;
+      panelsById[id] = {
+        id,
+        kind: "browser",
+        location: "grid",
+        browserUrl: `https://example.com/${i}`,
+      };
+      panelIds.push(id);
+    }
+    let snapshotCalls = 0;
+    setPanelStoreAccessor(() => {
+      snapshotCalls++;
+      return { panelsById: panelsById as never, panelIds, tabGroups: new Map() };
+    });
+
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    // Click → time to the busy flag that mounts the switch overlay.
+    const t0 = performance.now();
+    const pending = useProjectStore.getState().switchProject(projectB.id);
+    const timeToFeedbackMs = performance.now() - t0;
+
+    // PROOF (deterministic): the busy flag is up, but the heavy snapshot and the
+    // IPC have NOT run yet — both are deferred past the paint yield.
+    expect(useProjectStore.getState().isSwitching).toBe(true);
+    expect(snapshotCalls).toBe(0);
+    expect(projectClientMock.switch).not.toHaveBeenCalled();
+
+    await pending;
+
+    // The heavy snapshot ran (deferred) and produced the full payload.
+    expect(snapshotCalls).toBeGreaterThan(0);
+    expect(projectClientMock.switch).toHaveBeenCalledTimes(1);
+    expect(projectClientMock.switch.mock.calls[0]![1].terminals).toHaveLength(N);
+
+    // Quantify the traversal cost that no longer blocks first feedback.
+    const snap = getPanelStoreSnapshot()!;
+    const t1 = performance.now();
+    const rebuilt = snap.panelIds
+      .map((id) => snap.panelsById[id as keyof typeof snap.panelsById])
+      .filter(Boolean)
+      .map((p) => ({ id: (p as { id: string }).id, kind: (p as { kind: string }).kind }));
+    const snapshotWorkMs = performance.now() - t1;
+    expect(rebuilt).toHaveLength(N);
+
+    // eslint-disable-next-line no-console -- intentional demonstration metric
+    console.log(
+      `[switch-responsiveness] N=${N} panels | time-to-feedback=${timeToFeedbackMs.toFixed(2)}ms | outgoing-snapshot work~${snapshotWorkMs.toFixed(2)}ms (now deferred past paint; pre-fix it ran BEFORE any feedback)`
+    );
+
+    // The click's feedback must not pay the snapshot cost.
+    expect(timeToFeedbackMs).toBeLessThan(snapshotWorkMs);
+  });
 });
 
 describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
