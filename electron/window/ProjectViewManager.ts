@@ -119,14 +119,19 @@ type PaintGateOutcome = "signal" | "hard-timeout" | "cancelled";
 interface PaintGate {
   webContentsId: number;
   /**
-   * Which renderer signal releases this gate. Cold-start gates wait on the
-   * one-shot `APP_VIEW_PAINTED` (`"painted"`); warm-reactivation gates wait on
-   * the re-fireable `APP_VIEW_WARM_PAINTED` (`"warm-painted"`), because a cached
+   * Which renderer signal releases this gate. Cold-start gates normally wait on
+   * the one-shot `APP_VIEW_PAINTED` (`"painted"`); fast cold switches instead
+   * wait on the earlier one-shot `APP_SKELETON_PARSED` (`"skeleton-painted"`)
+   * so the themed first-paint skeleton reveals in hundreds of ms rather than
+   * after the full React cold boot. Warm-reactivation gates wait on the
+   * re-fireable `APP_VIEW_WARM_PAINTED` (`"warm-painted"`), because a cached
    * view's V8 context already fired its one-shot painted signal on first load
    * and will never re-emit it (#9679). The discriminator keeps a stray signal of
-   * the wrong kind from releasing the bridge early.
+   * the wrong kind from releasing the bridge early; `signalViewPainted` also
+   * releases a `"skeleton-painted"` gate as a fallback (a committed React frame
+   * is a strict superset of the skeleton having parsed).
    */
-  releaseChannel: "painted" | "warm-painted";
+  releaseChannel: "painted" | "warm-painted" | "skeleton-painted";
   /**
    * The view that was visible when the gate opened — still attached during the
    * wait. This may be a registered project view or the unbound welcome view on
@@ -600,6 +605,38 @@ export class ProjectViewManager {
     // a profile push between gate creation and log emission.
     const softMs = this.paintGateTimeoutMs;
     const hardMs = Math.max(this.paintGateHardTimeoutMs, softMs);
+
+    // Reveal the incoming view as soon as its themed first-paint skeleton
+    // (`#startup-skeleton`, injected in createView) is parsed into the DOM —
+    // signalled early by `public/skeleton-ready.js` via APP_SKELETON_PARSED,
+    // well before React mounts — rather than holding the outgoing project on
+    // screen for the entire React cold boot. The skeleton is an opaque themed
+    // cover over the view's themed canvas background (setBackgroundColor in
+    // createView, #9573), so this preserves the anti-flash guarantee while
+    // cutting perceived cold-switch latency from ~1.5–4s to a few hundred ms.
+    //
+    // EXCEPTION: when a focus intent is pending we must keep waiting for the
+    // real React paint. The focus-intent IPC listener isn't mounted until React
+    // commits, so delivering it into a bare pre-React skeleton would be dropped
+    // (#4670). Those (rare) switches keep the legacy `"painted"` gating verbatim.
+    const hasPendingFocusIntent = this.pendingFocusIntent?.projectId === projectId;
+    const coldReleaseChannel: "painted" | "skeleton-painted" = hasPendingFocusIntent
+      ? "painted"
+      : "skeleton-painted";
+    if (coldReleaseChannel === "skeleton-painted") {
+      // Scoped, one-shot receiver for THIS view's skeleton-parsed send. Mirrors
+      // createWindow's initial-window skeleton gate, whose listener is bound to
+      // the main app webContents and never sees a project-switch view. Optional-
+      // chained because the unit-test WebContents mock has no `.ipc`; those
+      // tests drive `signalSkeletonPainted()` directly instead. A superseding
+      // switch cancels the gate, after which this fire is a harmless no-op
+      // (signalSkeletonPainted matches on the pending gate's webContentsId).
+      const skeletonWcId = view.webContents.id;
+      view.webContents.ipc?.once(CHANNELS.APP_SKELETON_PARSED, () => {
+        this.signalSkeletonPainted(skeletonWcId);
+      });
+    }
+
     const paintGatePromise = this.waitForPaint(
       view.webContents.id,
       outgoingView,
@@ -610,8 +647,10 @@ export class ProjectViewManager {
         logWarn("projectview.paintgate.softtimeout", {
           projectId,
           waitedMs: softMs,
+          releaseChannel: coldReleaseChannel,
         });
-      }
+      },
+      { releaseChannel: coldReleaseChannel }
     );
 
     let visibleAt: number;
@@ -633,9 +672,12 @@ export class ProjectViewManager {
       // the CDP session on an uninitialised frame host (Chromium 146).
       void unfreezeWebContents(view.webContents);
 
-      // Wait for the renderer to confirm React has committed its first
-      // structural paint (sent via `APP_VIEW_PAINTED` after a double-rAF in
-      // `notifyViewPainted`). Two-phase: the soft timeout above is observable
+      // Wait for the incoming view to signal readiness. On the fast path that
+      // is APP_SKELETON_PARSED (themed skeleton parsed, channel
+      // `"skeleton-painted"`); on the focus-intent path it is APP_VIEW_PAINTED
+      // (React committed its first structural paint after a double-rAF in
+      // `notifyViewPainted`, channel `"painted"`), and `signalViewPainted` is
+      // the fallback for both. Two-phase: the soft timeout above is observable
       // but never user-visible; only the hard timeout below detaches the
       // outgoing view as a last resort when the renderer is stuck or crashed.
       const gateResult = await paintGatePromise;
@@ -663,19 +705,34 @@ export class ProjectViewManager {
         visibleMs: Math.round(visibleAt - coldStartAt),
         loadToPaintMs: Math.round(visibleAt - loadFinishedAt),
         paintGateOutcome: gateResult,
+        // Which paint-gate channel this cold switch was armed with:
+        // `skeleton-painted` (fast path — revealed on the themed skeleton) vs
+        // `painted` (focus-intent path — held for the full React paint). Lets
+        // telemetry separate fast-path switches from the focus-intent path and
+        // measure each one's `visibleMs` independently. A `skeleton-painted`
+        // gate may still be released by the `signalViewPainted` fallback when
+        // the skeleton signal is missed; this reflects the strategy chosen, not
+        // which signal ultimately fired.
+        gateChannel: coldReleaseChannel,
       });
 
-      // Deliver pending focus intent only when the renderer has confirmed
-      // first paint. On hard timeout the renderer may be stuck or
-      // unresponsive — dropping the intent is safer than firing into a
-      // partially-mounted view (the subscriber is registered before
-      // `notifyViewPainted`, but a hard timeout means we have no positive
-      // evidence of that). The intent is always consumed (cleared)
-      // regardless of outcome to prevent a later unrelated switch from
-      // picking up a stale focus.
-      const coldIntent = this.consumePendingFocusIntent(projectId);
-      if (coldIntent && gateResult === "signal") {
-        this.deliverFocusIntent(view, coldIntent);
+      // Focus intent is delivered ONLY on the `"painted"` path — the focus-
+      // intent switches that armed for the real React paint, where the
+      // renderer's focus-on-activate listener is guaranteed mounted. On the fast
+      // skeleton path we never armed for an intent; if one was set mid-flight
+      // (a repeated focusNextWaitingGlobal landing during the switch) we must
+      // NOT consume it here — delivering into a bare pre-React skeleton would
+      // drop it (#4670), and consuming-without-delivering would lose it
+      // entirely. Leaving it pending lets the queued/next same-project switch
+      // deliver it once React is mounted (intents are project-keyed, so an
+      // unrelated switch can't pick it up). On the painted path the intent is
+      // still consumed on every outcome (incl. hard timeout) so a stale focus
+      // can't leak forward.
+      if (coldReleaseChannel === "painted") {
+        const coldIntent = this.consumePendingFocusIntent(projectId);
+        if (coldIntent && gateResult === "signal") {
+          this.deliverFocusIntent(view, coldIntent);
+        }
       }
     } catch (loadError) {
       // Cold-start failed before the swap happened — outgoing view is still
@@ -759,7 +816,7 @@ export class ProjectViewManager {
     outgoingProjectId: string | null,
     onSoftTimeout?: () => void,
     options?: {
-      releaseChannel?: "painted" | "warm-painted";
+      releaseChannel?: "painted" | "warm-painted" | "skeleton-painted";
       softMs?: number;
       hardMs?: number;
     }
@@ -819,14 +876,41 @@ export class ProjectViewManager {
 
   /**
    * Renderer-driven gate release. Called from the `APP_VIEW_PAINTED` IPC
-   * handler with the webContentsId of the renderer that just painted. A
-   * mismatch (e.g. signal arriving after a superseding switch already moved
-   * on) is silently ignored.
+   * handler with the webContentsId of the renderer that just painted. Releases
+   * a cold `"painted"` gate and ALSO a `"skeleton-painted"` early-reveal gate:
+   * React having committed its first frame is a strict superset of the skeleton
+   * having parsed, so this is the fallback that still detaches the bridge if the
+   * one-shot `APP_SKELETON_PARSED` was somehow missed (degrading to today's
+   * behaviour, never worse). Warm gates own a distinct re-fireable channel and
+   * are left for `signalWarmViewPainted`. A mismatch (e.g. a signal arriving
+   * after a superseding switch already moved on) is silently ignored.
    */
   signalViewPainted(webContentsId: number): void {
     const gate = this.pendingPaintGate;
     if (!gate) return;
-    if (gate.releaseChannel !== "painted") return;
+    if (gate.releaseChannel === "warm-painted") return;
+    if (gate.webContentsId !== webContentsId) return;
+    gate.resolve("signal");
+  }
+
+  /**
+   * Early-reveal gate release. Called when an incoming cold-start view's
+   * `APP_SKELETON_PARSED` fires — i.e. its themed first-paint skeleton
+   * (`#startup-skeleton`, injected in `createView`) is in the DOM, well before
+   * React mounts. Releasing here lets the outgoing view detach and the branded
+   * skeleton show in hundreds of ms instead of holding the old project on
+   * screen for the full ~1.5–4s React cold boot. The skeleton is an opaque
+   * themed cover over the view's themed canvas background, so the anti-flash
+   * guarantee (no blank-canvas frame) is preserved. Only releases a gate
+   * explicitly armed for the skeleton channel; a stray signal arriving with a
+   * cold `"painted"` or warm gate pending (or no gate) is ignored, so the
+   * scoped renderer fire is a safe no-op when main isn't bridging an early
+   * reveal.
+   */
+  signalSkeletonPainted(webContentsId: number): void {
+    const gate = this.pendingPaintGate;
+    if (!gate) return;
+    if (gate.releaseChannel !== "skeleton-painted") return;
     if (gate.webContentsId !== webContentsId) return;
     gate.resolve("signal");
   }
