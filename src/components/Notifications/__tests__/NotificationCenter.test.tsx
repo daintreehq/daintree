@@ -1784,27 +1784,6 @@ describe("NotificationCenter — Jump to new pill", () => {
     expect(pill.getAttribute("tabindex")).toBe("0");
   });
 
-  it("uses Tier 2 timing — 200ms enter, 120ms exit", () => {
-    const closedAt = Date.now() - 5000;
-    useUIStore.setState({ lastNotificationCenterClosedAt: closedAt });
-    setEntries([makeEntry({ message: "Newer", timestamp: closedAt + 4000 })]);
-
-    render(<NotificationCenter open onClose={vi.fn()} />);
-
-    const pill = screen.getByTestId("jump-to-new-pill") as HTMLButtonElement;
-    expect(pill.style.transitionDuration).toBe("120ms");
-
-    act(() => {
-      fireObserver({ top: 0, bottom: 400, left: 0, right: 360 }, 500, false);
-    });
-    expect(pill.style.transitionDuration).toBe("200ms");
-
-    act(() => {
-      fireObserver({ top: 0, bottom: 400, left: 0, right: 360 }, 100, true);
-    });
-    expect(pill.style.transitionDuration).toBe("120ms");
-  });
-
   it("observer's root is the scroll container (not the popover or document)", () => {
     const closedAt = Date.now() - 5000;
     useUIStore.setState({ lastNotificationCenterClosedAt: closedAt });

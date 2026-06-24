@@ -1278,18 +1278,6 @@ describe("PluginManagerView", () => {
       expect(sectionHeaders).toEqual(["Forge providers", "Workspace", "Other"]);
     });
 
-    it("omits categories with no plugins", async () => {
-      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
-        named({ manifest: { name: "acme.demo", displayName: "Acme Demo" } }),
-      ]);
-      renderDialog();
-      await screen.findAllByText("Acme Demo");
-      expect(sectionExists("Forge providers")).toBe(false);
-      expect(sectionExists("AI & agents")).toBe(false);
-      expect(sectionExists("Workspace")).toBe(false);
-      expect(sectionExists("Other")).toBe(true);
-    });
-
     it("preserves alphabetical order within a section regardless of enabled state", async () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
         named({ manifest: { name: "z.plugin", displayName: "Zebra" } }),

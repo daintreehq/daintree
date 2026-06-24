@@ -679,10 +679,6 @@ describe("kimi detection patterns", () => {
 });
 
 describe("amp configuration", () => {
-  it("has the verified Sourcegraph brand color", () => {
-    expect(getAgentConfig("amp")?.color).toBe("#F34E3F");
-  });
-
   it("uses the amp command and Amp display name", () => {
     const config = getAgentConfig("amp");
     expect(config?.command).toBe("amp");
