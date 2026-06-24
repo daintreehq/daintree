@@ -716,14 +716,6 @@ export class ProjectViewManager {
         gateChannel: coldReleaseChannel,
       });
 
-      // Deliver pending focus intent only when the renderer has confirmed
-      // first paint. On hard timeout the renderer may be stuck or
-      // unresponsive — dropping the intent is safer than firing into a
-      // partially-mounted view (the subscriber is registered before
-      // `notifyViewPainted`, but a hard timeout means we have no positive
-      // evidence of that). The intent is always consumed (cleared)
-      // regardless of outcome to prevent a later unrelated switch from
-      // picking up a stale focus.
       // Focus intent is delivered ONLY on the `"painted"` path — the focus-
       // intent switches that armed for the real React paint, where the
       // renderer's focus-on-activate listener is guaranteed mounted. On the fast
