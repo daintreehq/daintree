@@ -29,10 +29,14 @@ import {
   USER_REJECTED_CODE,
   CONFIRMATION_TIMEOUT_CODE,
   MCP_DEDUP_KEY_COLLISION_CODE,
-  MCP_RATE_LIMITED_CODE,
   minimumPermittingTier,
   PRE_AUTH_FAILED_CODE,
 } from "./shared.js";
+
+// Legacy error code, read-only. The CallTool rate limiter was removed (#10764),
+// so nothing emits this anymore — it survives only to classify `rate_limited`
+// outcomes deserialized from historical on-disk audit records.
+const MCP_RATE_LIMITED_CODE = "MCP_RATE_LIMITED";
 
 const ANOMALY_MIN_RECORDS = 50;
 const LATENCY_SIGMA_THRESHOLD = 3;

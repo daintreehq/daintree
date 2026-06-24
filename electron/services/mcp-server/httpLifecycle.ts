@@ -1026,7 +1026,6 @@ export class HttpLifecycle {
         this.deps.sessionStore.clearFigureCounter(sessionId);
         this.deps.sessionStore.sessionHelpIdMap.delete(sessionId);
         this.deps.sessionStore.clearDedupState(sessionId);
-        this.deps.sessionStore.clearRateLimitState(sessionId);
         this.deps.sessionStore.clearClientMetadata(sessionId);
         this.deps.abusePolicy.dropSession(sessionId);
         this.detachBearerSession(sessionId);
@@ -1049,7 +1048,6 @@ export class HttpLifecycle {
         this.deps.sessionStore.clearFigureCounter(sessionId);
         this.deps.sessionStore.sessionHelpIdMap.delete(sessionId);
         this.deps.sessionStore.clearDedupState(sessionId);
-        this.deps.sessionStore.clearRateLimitState(sessionId);
         this.deps.sessionStore.clearClientMetadata(sessionId);
         this.deps.abusePolicy.dropSession(sessionId);
         this.detachBearerSession(sessionId);
@@ -1182,7 +1180,6 @@ export class HttpLifecycle {
       this.deps.sessionStore.clearFigureCounter(id);
       this.deps.sessionStore.sessionHelpIdMap.delete(id);
       this.deps.sessionStore.clearDedupState(id);
-      this.deps.sessionStore.clearRateLimitState(id);
       this.deps.sessionStore.clearClientMetadata(id);
       this.deps.abusePolicy.dropSession(id);
       this.detachBearerSession(id);
@@ -1210,7 +1207,6 @@ export class HttpLifecycle {
         this.deps.sessionStore.clearFigureCounter(id);
         this.deps.sessionStore.sessionHelpIdMap.delete(id);
         this.deps.sessionStore.clearDedupState(id);
-        this.deps.sessionStore.clearRateLimitState(id);
         this.deps.sessionStore.clearClientMetadata(id);
         this.deps.abusePolicy.dropSession(id);
         this.detachBearerSession(id);
@@ -1225,7 +1221,6 @@ export class HttpLifecycle {
         this.deps.sessionStore.clearFigureCounter(newSessionId);
         this.deps.sessionStore.sessionHelpIdMap.delete(newSessionId);
         this.deps.sessionStore.clearDedupState(newSessionId);
-        this.deps.sessionStore.clearRateLimitState(newSessionId);
         this.deps.sessionStore.clearClientMetadata(newSessionId);
         this.deps.abusePolicy.dropSession(newSessionId);
         this.detachBearerSession(newSessionId);
