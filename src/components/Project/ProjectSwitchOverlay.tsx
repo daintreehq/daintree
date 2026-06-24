@@ -35,13 +35,16 @@ export const SWITCH_OVERLAY_MAX_MS = 20_000;
 /**
  * Entry gate for the switch overlay — deliberately shorter than the app-wide
  * 400ms Doherty threshold. A project switch is a user-initiated, full-context
- * navigation, so a perceptible (>~150ms) freeze warrants busy feedback rather
- * than the silent dead time the 400ms gate would impose; warm cached switches
- * that resolve under 150ms still show nothing, so this never flickers on the
- * fast path. Scoped to this overlay only — a deliberate exception to the
- * loading-indicator rule in CLAUDE.md, not a global change to the gate.
+ * navigation, so a perceptible freeze warrants busy feedback rather than the
+ * silent dead time the 400ms gate would impose. 100ms is the classic
+ * instant-perception threshold and sits just above the warm-swap reveal ceiling
+ * (cached reactivation resolves in ~50–99ms per `projectview.warm-swap`
+ * telemetry), so warm switches still finish before the gate fires and never
+ * flash the scrim, while a cold/slow switch surfaces feedback ~50ms sooner than
+ * the previous 150ms. Scoped to this overlay only — a deliberate exception to
+ * the loading-indicator rule in CLAUDE.md, not a global change to the gate.
  */
-export const SWITCH_OVERLAY_ENTER_DELAY_MS = 150;
+export const SWITCH_OVERLAY_ENTER_DELAY_MS = 100;
 
 /**
  * Busy indication shown over the main content area while a project switch is in

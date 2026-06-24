@@ -772,4 +772,14 @@ export interface WorkspaceClientConfig {
   healthCheckIntervalMs?: number;
   /** Whether to show dialog on crash */
   showCrashDialog?: boolean;
+  /**
+   * Max dormant (backgrounded, refCount=0) workspace hosts kept warm before the
+   * oldest is evicted. Hosts demoted on switch-away poll at a reduced cadence
+   * and still expire after the 180s idle grace, so a larger pool just avoids
+   * respawning a host when the user cycles back to a recent project — it does
+   * not add steady-state work. Defaults to a RAM-scaled value aligned with the
+   * project-view cache so a warm project view keeps its host warm too; pinning
+   * it (e.g. in tests) keeps eviction deterministic.
+   */
+  maxWarmEntries?: number;
 }

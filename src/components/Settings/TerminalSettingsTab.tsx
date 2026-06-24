@@ -86,7 +86,7 @@ const SCROLLBACK_OPTIONS = [
 ] as const;
 
 const CACHED_VIEWS_OPTIONS = [
-  { value: 1, label: "1 project", description: "Default" },
+  { value: 1, label: "1 project", description: "Minimal" },
   { value: 2, label: "2 projects", description: "Balanced" },
   { value: 3, label: "3 projects", description: "Balanced" },
   { value: 4, label: "4 projects", description: "More cache" },
@@ -531,7 +531,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
           icon={Layers}
           title="Cached project views"
           id="terminal-cached-project-views"
-          description="Number of project views to keep loaded in memory. Lower values save memory; switching to an evicted project takes ~500ms to reload."
+          description="Number of project views to keep loaded in memory. Higher values keep more projects warm so switching back is near-instant; lower values save memory. The default scales with your RAM."
         >
           <div
             className="grid grid-cols-5 gap-3"
