@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -349,13 +349,15 @@ describe("scaffoldPlugin", () => {
   });
 
   describe("runNew non-interactive (--yes)", () => {
-    let cwd: string;
+    // runNew resolves the scaffold target from process.cwd(); stub it rather
+    // than process.chdir(tmpDir), since chdir is unsupported under the threads
+    // pool (worker_threads) and is process-global — unsafe with parallel files.
+    let cwdSpy: ReturnType<typeof vi.spyOn>;
     beforeEach(() => {
-      cwd = process.cwd();
-      process.chdir(tmpDir);
+      cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(tmpDir);
     });
     afterEach(() => {
-      process.chdir(cwd);
+      cwdSpy.mockRestore();
     });
 
     it("scaffolds from flags with a title-cased display name", async () => {
