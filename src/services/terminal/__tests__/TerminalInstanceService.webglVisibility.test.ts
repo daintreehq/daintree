@@ -695,4 +695,29 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
       expect(callShouldHaveActive(managed)).toBe(true);
     });
   });
+
+  describe("shouldRestoreWebGL — trust DOM visibility on reveal (W1)", () => {
+    function callShouldRestore(managed: unknown, opts?: { trustDomVisibility?: boolean }): boolean {
+      return (
+        service as unknown as {
+          shouldRestoreWebGL: (m: unknown, o?: { trustDomVisibility?: boolean }) => boolean;
+        }
+      ).shouldRestoreWebGL(managed, opts);
+    }
+
+    it("withholds restore for a stale isVisible=false pane by default", () => {
+      const managed = makeMockManaged({ id: "t1", isVisible: false });
+      expect(callShouldRestore(managed)).toBe(false);
+    });
+
+    it("restores a stale isVisible=false pane when DOM truth is trusted (reveal path)", () => {
+      const managed = makeMockManaged({ id: "t1", isVisible: false });
+      // repaintForReveal proves the pane on-screen from DOM truth before it
+      // reattaches WebGL, so a stale reactive isVisible=false must not veto the
+      // want — otherwise non-focused agent panes sit on the DOM renderer (mangled
+      // block glyphs) until the watchdog heals (#10632 item 4 / W1). The guard is
+      // threaded through wantsWebGLAtTier, which gates on isVisible too.
+      expect(callShouldRestore(managed, { trustDomVisibility: true })).toBe(true);
+    });
+  });
 });

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TerminalRefreshTier } from "../../../../shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -105,6 +106,8 @@ type FullWakeTestService = {
   webGLManager: {
     repairAtlasForReactivation: (id: string) => boolean;
     isActive: (id: string) => boolean;
+    getMode: () => "webgl" | "dom";
+    ensureContext: (id: string, managed: ManagedTerminalMock) => void;
   };
   handlePostWake: (id: string) => void;
   setVisible: (id: string, isVisible: boolean, expectedGeneration?: number) => void;
@@ -114,7 +117,7 @@ type FullWakeTestService = {
   ensureDeferredAddons: (id: string, managed: ManagedTerminalMock) => void;
   wantsWebGLAtTier: (managed: ManagedTerminalMock, tier: number | undefined) => boolean;
   fullWakeForVisibilityRestore: (id: string) => Promise<void>;
-  repaintForReveal: (id: string) => boolean;
+  repaintForReveal: (id: string, opts?: { trustDomVisibility?: boolean }) => boolean;
   revealTerminal: (id: string) => Promise<boolean>;
   notifyAttachSettledWaiters: (id: string) => void;
 };
@@ -775,7 +778,7 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
 
     await expect(service.revealTerminal(id)).resolves.toBe(true);
 
-    expect(repaint).toHaveBeenCalledWith(id);
+    expect(repaint).toHaveBeenCalledWith(id, { trustDomVisibility: true });
     expect(fullWake).not.toHaveBeenCalled();
   });
 
@@ -909,6 +912,52 @@ describe("TerminalInstanceService.repaintForReveal grid reconcile", () => {
     // that fixes garbled wrapping and that the old handlePostWake path could not
     // perform under the project-switch resize lock.
     expect(reconcile).toHaveBeenCalledWith(id);
+  });
+
+  function staleVisibleAgentInstance(): ManagedTerminalMock {
+    const element = document.createElement("div");
+    document.body.appendChild(element);
+    return makeInstance({
+      isOpened: true,
+      isHibernated: false,
+      isVisible: false, // stale on a warm WebContentsView resume (#10632 item 4)
+      lastAppliedTier: TerminalRefreshTier.FOCUSED,
+      hostElement: renderableHost(), // DOM truth: the pane IS on-screen
+      terminal: { cols: 80, rows: 24, element, refresh: vi.fn() },
+    });
+  }
+
+  it("reattaches a dropped WebGL context on a warm reveal even when isVisible is stale-false (W1)", () => {
+    const id = "repaint-w1";
+    service.instances.set(id, staleVisibleAgentInstance());
+
+    vi.spyOn(service.webGLManager, "isActive").mockReturnValue(false); // context dropped on freeze
+    vi.spyOn(service.webGLManager, "getMode").mockReturnValue("webgl");
+    const ensure = vi.spyOn(service.webGLManager, "ensureContext").mockImplementation(() => {});
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
+    vi.spyOn(service.resizeController, "reconcileGeometryFresh").mockReturnValue(true);
+
+    // The warm reveal path trusts DOM truth → reattaches despite the stale flag,
+    // instead of stranding the pane on the DOM renderer until the watchdog.
+    expect(service.repaintForReveal(id, { trustDomVisibility: true })).toBe(true);
+    expect(ensure).toHaveBeenCalledWith(id, service.instances.get(id));
+  });
+
+  it("does NOT reattach WebGL on a non-reveal repaint with a stale isVisible=false (assistant transition)", () => {
+    const id = "repaint-noassist";
+    service.instances.set(id, staleVisibleAgentInstance());
+
+    vi.spyOn(service.webGLManager, "isActive").mockReturnValue(false);
+    vi.spyOn(service.webGLManager, "getMode").mockReturnValue("webgl");
+    const ensure = vi.spyOn(service.webGLManager, "ensureContext").mockImplementation(() => {});
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
+    vi.spyOn(service.resizeController, "reconcileGeometryFresh").mockReturnValue(true);
+
+    // No trust (the assistant show/hide-transition callers): the isVisible gate
+    // holds, so a transform-hidden pane can't accumulate a fleet-wide WebGL want
+    // and trip the count-based DOM flip (#10671 / Codex review of W1).
+    expect(service.repaintForReveal(id)).toBe(true);
+    expect(ensure).not.toHaveBeenCalled();
   });
 
   it("reports not-paintable (retry) when the fresh reconcile finds no measurable box", () => {
