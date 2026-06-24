@@ -628,7 +628,10 @@ class PullRequestService {
    */
   public start(startupDelayMs?: number): Promise<void> {
     if (this.isPolling) {
-      logWarn("PullRequestService already polling");
+      // Benign no-op (resume/focus-restore re-entrancy) — fires repeatedly on
+      // the project-switch hot path, where each sync log write adds main-thread
+      // I/O. Diagnostic only, so keep it at debug.
+      logDebug("PullRequestService already polling");
       return Promise.resolve();
     }
 
@@ -643,7 +646,11 @@ class PullRequestService {
 
     const delay = startupDelayMs ?? randomBetween(STARTUP_JITTER_MIN_MS, STARTUP_JITTER_MAX_MS);
 
-    logInfo("PullRequestService started", {
+    // start()/stop() fire on every project switch (each project's PR poller is
+    // torn down and re-armed). At INFO each pair is two synchronous log writes
+    // on the switch hot path; they're lifecycle diagnostics, not user signals,
+    // so keep them at debug.
+    logDebug("PullRequestService started", {
       intervalMs: this.pollIntervalMs,
       startupDelayMs: Math.round(delay),
     });
@@ -703,7 +710,7 @@ class PullRequestService {
     this.boostExpiresAt = null;
     this.clearStagnantPollCounts();
     this.isPolling = false;
-    logInfo("PullRequestService stopped");
+    logDebug("PullRequestService stopped");
   }
 
   public async refresh(): Promise<void> {
