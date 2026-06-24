@@ -5,6 +5,7 @@ const fullWakeMock = vi.fn();
 const repaintForRevealMock = vi.fn();
 const revealTerminalMock = vi.fn();
 const isFocusedMock = vi.fn();
+const setFocusedMock = vi.fn();
 const logWarnMock = vi.fn();
 const notifyWarmReactivationCompleteMock = vi.fn();
 
@@ -14,6 +15,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     repaintForReveal: repaintForRevealMock,
     revealTerminal: revealTerminalMock,
     isFocused: isFocusedMock,
+    setFocused: setFocusedMock,
   },
 }));
 
@@ -28,6 +30,7 @@ vi.mock("@/utils/warmReactivationGate", () => ({
 let mockActiveWorktreeId: string | null = null;
 let mockPanelIds: string[] = [];
 let mockPanelsById: Record<string, PanelInstance> = {};
+let mockFocusedId: string | null = null;
 let mockHelpTerminalId: string | null = null;
 
 vi.mock("@/store/worktreeStore", () => ({
@@ -38,7 +41,11 @@ vi.mock("@/store/worktreeStore", () => ({
 
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
-    getState: () => ({ panelIds: mockPanelIds, panelsById: mockPanelsById }),
+    getState: () => ({
+      panelIds: mockPanelIds,
+      panelsById: mockPanelsById,
+      focusedId: mockFocusedId,
+    }),
   },
 }));
 
@@ -66,6 +73,7 @@ beforeEach(() => {
   fullWakeMock.mockResolvedValue(undefined);
   repaintForRevealMock.mockReset();
   revealTerminalMock.mockReset();
+  setFocusedMock.mockReset();
   // Default: terminals are paintable on the first attempt.
   revealTerminalMock.mockResolvedValue(true);
   isFocusedMock.mockReset();
@@ -75,6 +83,7 @@ beforeEach(() => {
   mockActiveWorktreeId = null;
   mockPanelIds = [];
   mockPanelsById = {};
+  mockFocusedId = null;
   mockHelpTerminalId = null;
 });
 
@@ -499,6 +508,46 @@ describe("repaintActiveWorktreeTerminals (#10362)", () => {
 
     expect(callOrder[0]).toBe("c");
     expect(revealedIds().sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("reasserts the focused terminal's service focus before reveal so DOM-mode WebGL can pin it", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    const b = panel("b", { worktreeId: "wt-1" });
+    mockPanelIds = ["a", "b"];
+    mockPanelsById = { a, b };
+    mockFocusedId = "b";
+    isFocusedMock.mockImplementation((id: string) => id === "b");
+
+    const callOrder: string[] = [];
+    setFocusedMock.mockImplementation((id: string, isFocused: boolean) => {
+      callOrder.push(`focus:${id}:${isFocused}`);
+    });
+    revealTerminalMock.mockImplementation((id: string) => {
+      callOrder.push(`reveal:${id}`);
+      return Promise.resolve(true);
+    });
+
+    await repaintActiveWorktreeTerminals();
+
+    expect(setFocusedMock).toHaveBeenCalledTimes(1);
+    expect(setFocusedMock).toHaveBeenCalledWith("b", true);
+    expect(callOrder[0]).toBe("focus:b:true");
+    expect(callOrder[1]).toBe("reveal:b");
+  });
+
+  it("does not reassert service focus for a focused id outside the reveal target set", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    const other = panel("other", { worktreeId: "wt-2" });
+    mockPanelIds = ["a", "other"];
+    mockPanelsById = { a, other };
+    mockFocusedId = "other";
+
+    await repaintActiveWorktreeTerminals();
+
+    expect(setFocusedMock).not.toHaveBeenCalled();
+    expect(revealedIds()).toEqual(["a"]);
   });
 
   it("retries a terminal that isn't paintable yet, then settles once it is", async () => {

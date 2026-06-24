@@ -109,6 +109,18 @@ function prioritizeFocusedFirst(targets: string[]): void {
   }
 }
 
+/**
+ * Re-assert the service-level focus bit for the store-focused terminal without
+ * moving DOM focus. In DOM-mode WebGL fallback, `TerminalInstanceService.setFocused`
+ * is the path that restores the single focused WebGL pin; a warm project reveal
+ * can otherwise leave the pane on the DOM renderer until the user clicks it.
+ */
+function reassertFocusedWebGLPin(targets: string[]): void {
+  const focusedId = usePanelStore.getState().focusedId;
+  if (!focusedId || !targets.includes(focusedId)) return;
+  terminalInstanceService.setFocused(focusedId, true);
+}
+
 async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
   const targets = collectActiveWorktreeTerminalTargets();
 
@@ -221,6 +233,10 @@ async function revealUntilStable(id: string): Promise<void> {
 export async function repaintActiveWorktreeTerminals(): Promise<void> {
   const targets = collectActiveWorktreeTerminalTargets();
   if (targets.length === 0) return;
+
+  // A click fixes DOM-mode WebGL fallback because focus pins a single context.
+  // Re-establish that pin on reveal without stealing DOM focus from the user.
+  reassertFocusedWebGLPin(targets);
 
   // Reveal the pane the user is reading first — the rest stagger in behind it.
   prioritizeFocusedFirst(targets);
