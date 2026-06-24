@@ -43,6 +43,30 @@ const RATE_LIMIT_RESUME_BUFFER_MS = 2_000;
 export const FRESH_THRESHOLD_MS = 90_000;
 export const AGING_THRESHOLD_MS = 300_000;
 
+// Switch-back reuse cache (issue #10761). Keyed by project path, this holds the
+// last genuinely-fresh stats result per project so a rapid switch back to a
+// recently-loaded project restores its counts immediately instead of clearing
+// to a skeleton and forcing a full refetch. Module-level so it survives the
+// hook's per-switch state resets while staying scoped to this `WebContentsView`'s
+// isolated V8 context. Entries are evicted once they age past
+// `AGING_THRESHOLD_MS` (no longer reusable) and capped to bound growth across a
+// session that opens many projects. Only fresh successful results are stored —
+// stale/errored polls and disk bootstrap snapshots are never cached here, so a
+// switch-back never resurrects a previous error.
+interface SwitchBackCacheEntry {
+  stats: ForgeRepositoryStats;
+  lastUpdated: number;
+  providerId: string | null;
+}
+
+const MAX_SWITCHBACK_CACHE_SIZE = 20;
+const switchBackStatsCache = new Map<string, SwitchBackCacheEntry>();
+
+/** Test-only: clear the module-level switch-back cache between cases. */
+export function _resetSwitchBackCacheForTests(): void {
+  switchBackStatsCache.clear();
+}
+
 /**
  * Per-pill freshness tier driving the toolbar's visual encoding. Replaces the
  * old binary `isStale` so a 30-second-old poll, a disk-cache cold start, and a
@@ -131,6 +155,14 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   const mountedRef = useRef(true);
   const lastErrorRef = useRef<string | null>(null);
 
+  // Monotonic fetch epoch (issue #10761). Incremented on every project switch
+  // so an in-flight fetch started before the switch can be detected and
+  // discarded after it resolves — including the A→B→A cyclic case where the
+  // project path alone repeats and a path-based guard would wrongly let the
+  // earlier epoch's result through. Captured locally before the first `await`
+  // in `fetchFn` and re-checked after each await.
+  const fetchGenerationRef = useRef(0);
+
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -211,6 +243,40 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       lastUpdatedRef.current = nextLastUpdated;
       setLastUpdated(nextLastUpdated);
 
+      // Seed the switch-back reuse cache on genuine fresh success only
+      // (issue #10761). `shouldPreserve` covers stale/errored results, and a
+      // missing `lastUpdated` means there's no fetch time to age against — both
+      // are excluded so a switch-back never restores an error or an undatable
+      // snapshot. Evict aged-out entries on write and cap the map size to keep
+      // it bounded across a session that visits many projects.
+      if (!shouldPreserve && nextLastUpdated !== null) {
+        const now = Date.now();
+        for (const [key, entry] of switchBackStatsCache) {
+          if (now - entry.lastUpdated >= AGING_THRESHOLD_MS) {
+            switchBackStatsCache.delete(key);
+          }
+        }
+        if (
+          switchBackStatsCache.size >= MAX_SWITCHBACK_CACHE_SIZE &&
+          !switchBackStatsCache.has(opts.projectPath)
+        ) {
+          let oldestKey: string | null = null;
+          let oldestTs = Infinity;
+          for (const [key, entry] of switchBackStatsCache) {
+            if (entry.lastUpdated < oldestTs) {
+              oldestTs = entry.lastUpdated;
+              oldestKey = key;
+            }
+          }
+          if (oldestKey !== null) switchBackStatsCache.delete(oldestKey);
+        }
+        switchBackStatsCache.set(opts.projectPath, {
+          stats: preservedStats,
+          lastUpdated: nextLastUpdated,
+          providerId: providerIdRef.current,
+        });
+      }
+
       // Carry the probe-derived cadence forward only on successful reads — a
       // stale/errored result has no fresh cadence to offer, so the existing
       // value keeps driving the schedule. On a success that reports no cadence
@@ -259,8 +325,12 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   const polling = usePollingLifecycle({
     enabled: !isWorkerInstance && currentProjectId !== null && !providerLoading,
     fetchFn: async ({ force, isInvalidated }) => {
+      // Capture the fetch epoch before the first await so a project switch that
+      // fires mid-flight can be detected after each await (issue #10761).
+      const myGeneration = fetchGenerationRef.current;
       try {
         const project = await projectClient.getCurrent();
+        if (fetchGenerationRef.current !== myGeneration) return;
         if (!project) {
           if (mountedRef.current) {
             setStats(null);
@@ -271,6 +341,24 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
             lastErrorRef.current = null;
           }
           return;
+        }
+
+        // Switch-back reuse (issue #10761): if this project's stats were loaded
+        // recently, restore them synchronously before the skeleton would show.
+        // `applyStatsResult` sets `hasAppliedResultRef`, so the `setLoading`
+        // gate below stays off and the poll below revalidates in the
+        // background. Gated on the resolved provider matching the cached one so
+        // a project that now resolves to a different provider doesn't reuse
+        // stale counts. Errors are never cached, so this can't resurrect one.
+        if (mountedRef.current && !hasAppliedResultRef.current) {
+          const cached = switchBackStatsCache.get(project.path);
+          if (
+            cached &&
+            cached.providerId === providerIdRef.current &&
+            Date.now() - cached.lastUpdated < FRESH_THRESHOLD_MS
+          ) {
+            applyStatsResult(cached.stats, { projectPath: project.path });
+          }
         }
 
         if (mountedRef.current) {
@@ -289,13 +377,12 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         if (!mountedRef.current) return;
         if (isInvalidated()) return;
 
-        // Ignore results from previous project (race condition protection)
-        if (
-          lastKnownCountsRef.current.projectPath !== null &&
-          lastKnownCountsRef.current.projectPath !== project.path
-        ) {
-          return;
-        }
+        // Ignore results from a previous project (issue #10761). The fetch
+        // epoch advances on every switch, so a mismatch means this result was
+        // requested before a switch fired — discard it rather than applying the
+        // old project's stats/error to the new one. This supersedes the old
+        // path-based guard, which let A→B→A cyclic switches leak through.
+        if (fetchGenerationRef.current !== myGeneration) return;
 
         applyStatsResult(repoStats, { projectPath: project.path });
       } catch (err) {
@@ -303,6 +390,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         // error to the new project's state would surface a stale error and
         // push `calculateNextInterval` into ERROR_BACKOFF_INTERVAL.
         if (isInvalidated()) return;
+        if (fetchGenerationRef.current !== myGeneration) return;
         if (mountedRef.current) {
           const errorMessage = formatErrorMessage(err, "Failed to fetch repository stats");
           setError(errorMessage);
@@ -342,6 +430,11 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       return IDLE_POLL_INTERVAL * multiplier;
     },
     onProjectSwitch: () => {
+      // Advance the fetch epoch unconditionally (even while unmounted) so any
+      // in-flight fetch from the previous project is discarded when it resolves
+      // instead of applying its stats/error to the newly-switched project
+      // (issue #10761). This must precede the mounted-guard early return.
+      fetchGenerationRef.current += 1;
       if (!mountedRef.current) return;
       // Clear preserved counts on project switch to prevent cross-contamination
       lastKnownCountsRef.current = { issueCount: null, prCount: null, projectPath: null };
