@@ -185,6 +185,70 @@ describe("TerminalProcess background output coalescing", () => {
     terminal.dispose();
   });
 
+  it("forces a drain within the latency ceiling during sustained background output, every cycle (#10744)", () => {
+    const emitData = vi.fn();
+    const terminal = createTerminal(emitData);
+
+    terminal.setActivityMonitorTier("background", 500);
+
+    // Cycle 1 — chunks every 200ms, faster than the 500ms soft drain interval, so
+    // each chunk pushes the self-rearming deadline forward and the queue would
+    // never drain while output flows. That starved activityMonitor.onData and the
+    // headless VT write, freezing the ActivityMonitor's lastActivityTimestamp
+    // until its 8s idle gate flipped a working backgrounded agent to "waiting"
+    // (#10744 regression). COALESCE_MAX_DEFER_MS (1000ms) must force a drain.
+    ptyOnDataCallback!("c0");
+    for (let i = 1; i <= 4; i++) {
+      vi.advanceTimersByTime(200);
+      ptyOnDataCallback!(`c${i}`);
+    }
+    // ~800ms in, still under the ceiling: no forced drain yet.
+    expect(emitData).not.toHaveBeenCalled();
+
+    // Crossing the 1000ms ceiling must drain MID-BURST — pre-fix "drain only once
+    // output quiets" would never fire while chunks keep arriving sub-interval.
+    vi.advanceTimersByTime(200);
+    expect(emitData).toHaveBeenCalledTimes(1);
+    expect(emitData).toHaveBeenLastCalledWith("t1", "c0c1c2c3c4");
+
+    // Cycle 2 — the window must RESET after the drain (_backgroundOldestQueuedAt
+    // back to 0, timer re-armed), so a fresh sustained burst drains within its OWN
+    // ceiling rather than riding the previous window or never re-arming.
+    ptyOnDataCallback!("c5");
+    for (let i = 6; i <= 9; i++) {
+      vi.advanceTimersByTime(200);
+      ptyOnDataCallback!(`c${i}`);
+    }
+    expect(emitData).toHaveBeenCalledTimes(1); // still only cycle 1's drain
+
+    vi.advanceTimersByTime(200);
+    expect(emitData).toHaveBeenCalledTimes(2);
+    expect(emitData).toHaveBeenLastCalledWith("t1", "c5c6c7c8c9");
+
+    terminal.dispose();
+  });
+
+  it("keeps the latency ceiling hard when the background poll interval exceeds it", () => {
+    const emitData = vi.fn();
+    const terminal = createTerminal(emitData);
+
+    // A future tier could pass a drain interval larger than the 1000ms ceiling.
+    // The min(interval, cap) on both the initial arm and the reschedule must still
+    // force a drain by ~1000ms instead of waiting out the 2500ms soft interval.
+    terminal.setActivityMonitorTier("background", 2500);
+
+    ptyOnDataCallback!("a");
+    vi.advanceTimersByTime(400);
+    ptyOnDataCallback!("b"); // output still flowing; soft deadline pushed to ~2900ms
+    expect(emitData).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(700); // reach ~1100ms, past the 1000ms ceiling
+    expect(emitData).toHaveBeenCalledTimes(1);
+    expect(emitData).toHaveBeenCalledWith("t1", "ab");
+
+    terminal.dispose();
+  });
+
   it("drains while still on the background tier before flipping to active", () => {
     const seenTierAtDrain: Array<"active" | "background"> = [];
     // emitData reads `terminal` lazily — only when the pipeline drains, well
