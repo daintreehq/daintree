@@ -1310,6 +1310,83 @@ describe("HelpSessionService", () => {
       expect(hibernationStore.clear).not.toHaveBeenCalled();
     });
 
+    it("peekPendingHibernation reads the entry WITHOUT clearing it", async () => {
+      hibernationStore.get.mockReturnValue({
+        agentId: "claude",
+        agentSessionId: "pulled-id",
+        cwd: "/help/dir",
+        capturedAt: Date.now(),
+      });
+
+      const peeked = service.peekPendingHibernation("proj-A");
+
+      expect(peeked).toEqual({
+        agentId: "claude",
+        agentSessionId: "pulled-id",
+        cwd: "/help/dir",
+      });
+      // The whole point of peek vs take: the entry survives so the launch
+      // flow can still consume it via takePendingHibernation.
+      expect(hibernationStore.clear).not.toHaveBeenCalled();
+    });
+
+    it("peekPendingHibernation returns null when no entry exists", () => {
+      hibernationStore.get.mockReturnValueOnce(null);
+
+      expect(service.peekPendingHibernation("proj-empty")).toBeNull();
+      expect(hibernationStore.clear).not.toHaveBeenCalled();
+    });
+
+    it("peekPendingHibernation mid-capture neither consumes the entry nor blocks the real resume-id write", async () => {
+      // A switch-back can peek (to render the Resume CTA) while main's
+      // gracefulKill is still resolving. Peek must be a pure read: it must NOT
+      // clear the entry or release the in-flight capture owner, or the
+      // post-gracefulKill finalize would skip writing the agent's real resume
+      // id (#9639 ownership guard) and the user would resume nothing.
+      let resolveGraceful: (value: string | null) => void = () => {};
+      mockPtyGracefulKill.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveGraceful = resolve;
+          })
+      );
+      // Surface the #9639 empty-sentinel placeholder the eviction path wrote
+      // synchronously before awaiting gracefulKill.
+      hibernationStore.get.mockReturnValueOnce({
+        agentId: "claude",
+        agentSessionId: "",
+        cwd: "/help/peek-race",
+        capturedAt: Date.now(),
+      });
+
+      const sess = await service.provisionSession({
+        ...provisionInput(),
+        projectViewWebContentsId: 60,
+        projectId: "proj-peek-race",
+      });
+      if (!sess) throw new Error("expected provision");
+      expect(service.markTerminalForToken(sess.token, "term-peek")).toBe(true);
+
+      // Eviction-revoke kicks off and hangs on gracefulKill.
+      const revokePromise = service.revokeByWebContentsId(60);
+
+      // Renderer peeks mid-flight — pure read, no consumption.
+      const peeked = service.peekPendingHibernation("proj-peek-race");
+      expect(peeked).toEqual({ agentId: "claude", agentSessionId: "", cwd: "/help/peek-race" });
+      expect(hibernationStore.clear).not.toHaveBeenCalledWith("proj-peek-race");
+
+      // gracefulKill resolves with the real resume id; because peek left the
+      // capture owner intact, finalize still overwrites the placeholder.
+      resolveGraceful("real-resume-id");
+      await revokePromise;
+      await Promise.resolve();
+
+      expect(hibernationStore.set).toHaveBeenCalledWith(
+        "proj-peek-race",
+        expect.objectContaining({ agentSessionId: "real-resume-id" })
+      );
+    });
+
     it("skips pending-hibernation write when a same-project provision displaces the record during gracefulKill", async () => {
       // Race we want to defend against:
       //   1. Eviction triggers revokeByWebContentsId for the old session.

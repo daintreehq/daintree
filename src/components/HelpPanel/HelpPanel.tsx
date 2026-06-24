@@ -45,6 +45,7 @@ import {
 } from "@/store";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
+import { buildResumeLatestCommand } from "@shared/types/agentSettings";
 import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import { actionService } from "@/services/ActionService";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
@@ -321,6 +322,75 @@ export function HelpPanel({
     return getAssistantSupportedAgentIds().filter((id) => isAgentInstalled(cliAvailability[id]));
   }, [cliHasRealData, cliAvailability]);
   const supportedInstalledAgentIdsKey = supportedInstalledAgentIds.join(",");
+
+  // A conversation the eviction/crash path captured for this project but never
+  // resumed. On LRU eviction (or renderer crash) main kills the assistant PTY
+  // via HelpSessionService.revokeByWebContentsId — grid PTYs survive in the
+  // pty-host, the assistant doesn't — and stashes a resume token in its
+  // pending-hibernation store. When the idle empty state is about to show, peek
+  // that store so we can offer "Resume assistant" instead of a fresh "Start
+  // assistant", making a project switch-back read as a recoverable pause rather
+  // than a crash. The peek is non-consuming: the launch flow still consumes the
+  // entry via takePendingHibernation. We stamp the entry with its projectId so a
+  // mid-flight A→B switch can't show project A's Resume CTA over project B.
+  const [resumablePending, setResumablePending] = useState<{
+    projectId: string;
+    agentId: string;
+  } | null>(null);
+  const currentProjectId = currentProject?.id ?? null;
+  useEffect(() => {
+    if (!isOpen || terminalId || !currentProjectId) {
+      setResumablePending(null);
+      return;
+    }
+    // Optional-chained like the `onViewRevealed` subscription below: a missing
+    // binding degrades to the normal "Start assistant" CTA rather than throwing.
+    const peek = window.electron.help.peekPendingHibernation?.(currentProjectId);
+    if (!peek) {
+      setResumablePending(null);
+      return;
+    }
+    let cancelled = false;
+    void peek
+      .then((pending) => {
+        if (cancelled) return;
+        const pendingAgentId = pending?.agentId ?? null;
+        // Offer Resume only for an agent that is BOTH still installed AND
+        // actually resume-capable. A captured-but-non-resumable agent (e.g. the
+        // built-in assistant — no `resume` config) would dead-end in
+        // `_spawnResumed` and silently start fresh, so "Resume" would lie.
+        // `buildResumeLatestCommand` is the same capability probe the controller
+        // uses for live agents.
+        const canResume =
+          pendingAgentId != null &&
+          supportedInstalledAgentIds.includes(pendingAgentId) &&
+          buildResumeLatestCommand(pendingAgentId) !== undefined;
+        setResumablePending(
+          canResume ? { projectId: currentProjectId, agentId: pendingAgentId } : null
+        );
+      })
+      .catch((err) => {
+        logWarn("HelpPanel: failed to peek pending hibernation", err);
+        if (!cancelled) setResumablePending(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isOpen,
+    terminalId,
+    currentProjectId,
+    supportedInstalledAgentIdsKey,
+    supportedInstalledAgentIds,
+  ]);
+
+  // Cross-project bleed guard: an A→B switch re-runs the peek effect, but B's
+  // peek resolves asynchronously, so only trust a pending entry whose projectId
+  // matches the project currently in view.
+  const resumableAgentId =
+    resumablePending && resumablePending.projectId === currentProjectId
+      ? resumablePending.agentId
+      : null;
 
   // Lifecycle — arms IPC subscriptions on mount, clears all timers on
   // unmount. `start()` is idempotent across StrictMode's double-mount.
@@ -841,6 +911,22 @@ export function HelpPanel({
     [controller, launchableAgentId, setAutoLaunchEnabled]
   );
 
+  // Recovery resume after the eviction/crash path killed the assistant PTY on a
+  // project switch-away. Unlike "Start assistant", this deliberately does NOT
+  // record auto-launch consent (#10699): resuming a stranded session is a
+  // one-time, user-initiated recovery, not an opt-in to billed auto-launch on
+  // every future open. The launch flow seeds the captured entry from main and
+  // spawns a `--resume` process (HelpSessionController._executeLaunch). Launched
+  // with the captured agent id (not the CTA agent) so the resume branch — gated
+  // on `hibernated.agentId === launchAgentId` — actually fires.
+  const handleResumeAssistant = useCallback(() => {
+    if (!resumableAgentId) return;
+    controller.launch({
+      agentId: resumableAgentId,
+      replaceExisting: true,
+    });
+  }, [controller, resumableAgentId]);
+
   const dismissResume = useCallback(() => controller.dismissResumeBanner(), [controller]);
   const dismissSnapshot = useCallback(() => controller.dismissPreflightSnapshot(), [controller]);
   const dismissTierMismatch = useCallback(() => controller.dismissTierMismatch(), [controller]);
@@ -1096,9 +1182,27 @@ export function HelpPanel({
             )}
             <div className="flex-1 flex flex-col items-center justify-center gap-6 p-8 text-center">
               <p className="text-sm text-daintree-text/70 max-w-[30ch]">
-                Use Daintree Assistant to configure and navigate Daintree.
+                {resumableAgentId
+                  ? "Your last assistant session is paused"
+                  : "Use Daintree Assistant to configure and navigate Daintree."}
               </p>
-              {launchableAgentId ? (
+              {resumableAgentId ? (
+                <div className="flex flex-col items-center gap-4 w-full max-w-[34ch]">
+                  {/* Recovery resume — the eviction/crash path killed the PTY on
+                      switch-away, but the conversation can be picked back up.
+                      Does not record auto-launch consent (#10699), unlike "Start
+                      assistant". This is the single load-bearing accent here.
+                      Starting a fresh session is the header's "+ New session". */}
+                  <Button
+                    type="button"
+                    onClick={handleResumeAssistant}
+                    data-testid="help-resume-assistant"
+                  >
+                    <Sparkles />
+                    Resume assistant
+                  </Button>
+                </div>
+              ) : launchableAgentId ? (
                 <div className="flex flex-col items-center gap-4 w-full max-w-[34ch]">
                   {/* Explicit start — opening the panel no longer auto-bills a
                       session (#10699); the user kicks it off here. This is the

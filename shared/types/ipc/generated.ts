@@ -560,6 +560,10 @@ export interface GeneratedIpcInvokeMap {
     args: [terminalId: string];
     result: void;
   };
+  "help:peek-pending-hibernation": {
+    args: [projectId: string];
+    result: { agentId: string; agentSessionId: string; cwd: string } | null;
+  };
   "help:provision-session": {
     args: [
       input: {

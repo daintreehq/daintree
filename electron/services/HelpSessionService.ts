@@ -1039,6 +1039,29 @@ export class HelpSessionService {
   }
 
   /**
+   * Non-consuming read of the eviction-captured resume entry for a project.
+   * Unlike `takePendingHibernation`, this does NOT clear the entry or touch
+   * the in-flight capture owner — it's a pure lookup so the renderer's idle
+   * empty state can decide whether to offer a "Resume assistant" affordance
+   * before the user commits to a launch. The actual resume still goes through
+   * `takePendingHibernation` (atomic take) inside the launch flow.
+   */
+  peekPendingHibernation(projectId: string): {
+    agentId: string;
+    agentSessionId: string;
+    cwd: string;
+  } | null {
+    if (!this.pendingHibernationStore) return null;
+    const entry = this.pendingHibernationStore.get(projectId);
+    if (!entry) return null;
+    return {
+      agentId: entry.agentId,
+      agentSessionId: entry.agentSessionId,
+      cwd: entry.cwd,
+    };
+  }
+
+  /**
    * Reads and clears the main-captured pending hibernation entry for a
    * project. Called by the renderer at launch time to seed
    * `helpPanelStore.hibernateSessions[projectId]` from the entry main
