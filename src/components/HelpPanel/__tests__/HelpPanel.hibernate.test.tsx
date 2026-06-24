@@ -8,6 +8,7 @@ const {
   mockLogError,
   mockGetFolderPath,
   mockMarkTerminal,
+  mockPeekPendingHibernation,
   mockProvisionSession,
   mockRevokeSession,
   mockGracefulKill,
@@ -35,6 +36,7 @@ const {
   mockLogError: vi.fn(),
   mockGetFolderPath: vi.fn(),
   mockMarkTerminal: vi.fn().mockResolvedValue(undefined),
+  mockPeekPendingHibernation: vi.fn().mockResolvedValue(null),
   mockProvisionSession: vi.fn().mockResolvedValue(null),
   mockRevokeSession: vi.fn().mockResolvedValue(undefined),
   mockGracefulKill: vi.fn().mockResolvedValue(null),
@@ -363,6 +365,8 @@ function resetState() {
   mockTerminalSubmit.mockResolvedValue(undefined);
   mockTerminalSendKey.mockReset();
   mockNotifyUserInput.mockReset();
+  mockPeekPendingHibernation.mockReset();
+  mockPeekPendingHibernation.mockResolvedValue(null);
   mockProvisionSession.mockReset();
   mockProvisionSession.mockResolvedValue(null);
   mockRevokeSession.mockReset();
@@ -371,6 +375,9 @@ function resetState() {
   mockGracefulKill.mockResolvedValue(null);
   mockBuildResumeCommand.mockReset();
   mockBuildResumeCommand.mockReturnValue("claude --resume abc-123");
+  // Default undefined (no resume support) so tests 635/665 keep exercising the
+  // buildResumeCommand-undefined fallthrough; resume-capable cases opt in below.
+  mockBuildResumeLatestCommand.mockReset();
   mockGetAssistantSupportedAgentIds.mockReset();
   mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
   mockGetHelpAssistantSettings.mockReset();
@@ -421,6 +428,7 @@ beforeEach(() => {
         help: {
           getFolderPath: mockGetFolderPath,
           markTerminal: mockMarkTerminal,
+          peekPendingHibernation: mockPeekPendingHibernation,
           provisionSession: mockProvisionSession,
           revokeSession: mockRevokeSession,
           getPinnedActionContext: vi.fn().mockResolvedValue({}),
@@ -689,6 +697,133 @@ describe("HelpPanel — resume from hibernated session", () => {
       expect.objectContaining({ agentId: "claude" }),
       { source: "user" }
     );
+  });
+});
+
+describe("HelpPanel — Resume affordance for eviction-captured sessions", () => {
+  // The eviction/crash path kills the assistant PTY and stashes a resume token
+  // in main's pending-hibernation store. A default user (consent off) gets no
+  // passive recovery, so the idle empty state peeks that store and offers
+  // "Resume assistant" instead of a fresh "Start assistant".
+  it("renders Resume assistant for an installed, resume-capable captured agent", async () => {
+    helpPanelState.autoLaunchEnabled = false; // default user — empty state stays visible
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockBuildResumeLatestCommand.mockReturnValue("claude resume --last"); // claude is resume-capable
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+    });
+
+    const { findByTestId, queryByTestId } = await act(async () =>
+      render(<HelpPanel width={380} />)
+    );
+
+    expect(await findByTestId("help-resume-assistant")).toBeTruthy();
+    // The Resume CTA replaces the fresh-start primary in the empty state.
+    expect(queryByTestId("help-start-assistant")).toBeNull();
+    expect(mockPeekPendingHibernation).toHaveBeenCalledWith("proj-1");
+  });
+
+  it("clicking Resume resumes the captured session WITHOUT recording consent (#10699)", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    // The captured entry is also seeded into the renderer store the launch flow
+    // reads (setHibernateSession is mocked, so we pre-seed what _seedHibernateFromMain
+    // would have written) — this proves the click actually resumes, not just launches.
+    helpPanelState.hibernateSessions = {
+      "proj-1": { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+    };
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "fresh-session",
+      sessionPath: "/tmp/help/proj-1",
+      token: "tok",
+      mcpUrl: "http://localhost:1234",
+      windowId: 1,
+    });
+    mockBuildResumeLatestCommand.mockReturnValue("claude resume --last");
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("resumed-term-1");
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+    });
+
+    const { findByTestId } = await act(async () => render(<HelpPanel width={380} />));
+    const resumeButton = await findByTestId("help-resume-assistant");
+
+    await act(async () => {
+      fireEvent.click(resumeButton);
+    });
+
+    // Resumes the captured session via the agent's --resume command...
+    expect(mockBuildResumeCommand).toHaveBeenCalledWith("claude", "abc-123", undefined);
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        launchAgentId: "claude",
+        command: "claude --resume abc-123",
+        removeOnExit: true,
+      })
+    );
+    // ...but resuming is a one-time recovery, NOT an opt-in to billed
+    // auto-launch on every future open — unlike "Start assistant".
+    expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
+  });
+
+  it("does not offer Resume when the captured agent is no longer installed", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockBuildResumeLatestCommand.mockReturnValue("gemini resume --last");
+    // claude is the only installed/supported agent in this suite, so a gemini
+    // capture is filtered by the installed guard even though it can resume.
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "gemini",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+    });
+
+    const { findByTestId, queryByTestId } = await act(async () =>
+      render(<HelpPanel width={380} />)
+    );
+
+    expect(await findByTestId("help-start-assistant")).toBeTruthy();
+    expect(queryByTestId("help-resume-assistant")).toBeNull();
+  });
+
+  it("does not offer Resume when the captured agent has no resume support", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    // claude is installed/supported here, but buildResumeLatestCommand undefined
+    // models a non-resumable agent (e.g. the built-in assistant). Resuming would
+    // dead-end and silently start fresh, so the CTA must NOT promise a resume.
+    mockBuildResumeLatestCommand.mockReturnValue(undefined);
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+    });
+
+    const { findByTestId, queryByTestId } = await act(async () =>
+      render(<HelpPanel width={380} />)
+    );
+
+    expect(await findByTestId("help-start-assistant")).toBeTruthy();
+    expect(queryByTestId("help-resume-assistant")).toBeNull();
+  });
+
+  it("does not offer Resume when main has no pending hibernation", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockBuildResumeLatestCommand.mockReturnValue("claude resume --last");
+    mockPeekPendingHibernation.mockResolvedValue(null);
+
+    const { findByTestId, queryByTestId } = await act(async () =>
+      render(<HelpPanel width={380} />)
+    );
+
+    expect(await findByTestId("help-start-assistant")).toBeTruthy();
+    expect(queryByTestId("help-resume-assistant")).toBeNull();
   });
 });
 

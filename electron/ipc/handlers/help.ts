@@ -119,6 +119,29 @@ async function handleRevokeSession(sessionId: string): Promise<void> {
   await helpSessionService.revokeSession(sessionId);
 }
 
+async function handlePeekPendingHibernation(
+  ctx: import("../types.js").IpcContext,
+  projectId: string
+): Promise<{
+  agentId: string;
+  agentSessionId: string;
+  cwd: string;
+} | null> {
+  if (typeof projectId !== "string" || !projectId) return null;
+  // Same cross-project guard as the take handler below: a pending entry holds
+  // an agent's resume token, so refuse reads for any project other than the
+  // one bound to this renderer's webContents.
+  if (!ctx.projectId || ctx.projectId !== projectId) {
+    console.warn(
+      "[help] peekPendingHibernation: projectId mismatch — refusing cross-project read",
+      { requested: projectId, fromView: ctx.projectId, webContentsId: ctx.webContentsId }
+    );
+    return null;
+  }
+  const { helpSessionService } = await getHelpSessionService();
+  return helpSessionService.peekPendingHibernation(projectId);
+}
+
 async function handleTakePendingHibernation(
   ctx: import("../types.js").IpcContext,
   projectId: string
@@ -158,6 +181,11 @@ export const helpNamespace = defineIpcNamespace({
     getPinnedActionContext: op(
       HELP_METHOD_CHANNELS.getPinnedActionContext,
       handleGetPinnedActionContext,
+      { withContext: true }
+    ),
+    peekPendingHibernation: op(
+      HELP_METHOD_CHANNELS.peekPendingHibernation,
+      handlePeekPendingHibernation,
       { withContext: true }
     ),
     takePendingHibernation: op(

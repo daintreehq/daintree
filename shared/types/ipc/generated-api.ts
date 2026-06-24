@@ -192,6 +192,9 @@ export interface GeneratedElectronAPI {
     markTerminal(
       ...args: IpcInvokeMap["help:mark-terminal"]["args"]
     ): Promise<IpcInvokeMap["help:mark-terminal"]["result"]>;
+    peekPendingHibernation(
+      ...args: IpcInvokeMap["help:peek-pending-hibernation"]["args"]
+    ): Promise<IpcInvokeMap["help:peek-pending-hibernation"]["result"]>;
     provisionSession(
       ...args: IpcInvokeMap["help:provision-session"]["args"]
     ): Promise<IpcInvokeMap["help:provision-session"]["result"]>;
