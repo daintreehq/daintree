@@ -562,7 +562,6 @@ describe("useRepositoryStats", () => {
       const sequence = ["/repo/b", "/repo/a", "/repo/b", "/repo/a", "/repo/b", "/repo/a"];
       for (const path of sequence) {
         currentProject = { id: path, path };
-        // eslint-disable-next-line no-await-in-loop -- sequential switches model rapid user toggling
         await act(async () => {
           switchHandler?.();
           document.dispatchEvent(new Event("visibilitychange"));
