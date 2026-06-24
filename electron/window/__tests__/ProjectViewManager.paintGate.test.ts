@@ -847,5 +847,4 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     // cancel any in-flight wake/repaint rAFs before being throttled/frozen.
     expect(initialWc.send).toHaveBeenCalledWith(CHANNELS.APP_VIEW_CACHED);
   });
-
 });
