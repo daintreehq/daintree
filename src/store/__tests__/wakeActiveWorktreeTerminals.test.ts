@@ -570,6 +570,74 @@ describe("repaintActiveWorktreeTerminals (#10362)", () => {
     expect(revealedIds()).toEqual(["a"]);
   });
 
+  it("aborts the whole reveal sweep when the view is switched away (hidden) mid-sweep", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    const b = panel("b", { worktreeId: "wt-1" });
+    const c = panel("c", { worktreeId: "wt-1" });
+    const d = panel("d", { worktreeId: "wt-1" });
+    mockPanelIds = ["a", "b", "c", "d"];
+    mockPanelsById = { a, b, c, d };
+
+    let visibility: "visible" | "hidden" = "visible";
+    let visibilityHandler: (() => void) | null = null;
+    vi.stubGlobal("document", {
+      get visibilityState() {
+        return visibility;
+      },
+      addEventListener: (evt: string, h: () => void) => {
+        if (evt === "visibilitychange") visibilityHandler = h;
+      },
+      removeEventListener: () => {},
+    });
+    // rAF fires synchronously; the timeout fallback is a no-op for this test.
+    vi.stubGlobal("requestAnimationFrame", (cb: (time: number) => void) => {
+      cb(0);
+      return 1;
+    });
+    vi.stubGlobal("setTimeout", () => 1);
+
+    revealTerminalMock.mockImplementation((id: string) => {
+      // The project is switched away during the first terminal's first attempt.
+      if (id === "a") {
+        visibility = "hidden";
+        visibilityHandler?.();
+      }
+      return Promise.resolve(false); // never paintable → would otherwise retry
+    });
+
+    await repaintActiveWorktreeTerminals();
+
+    // The hidden event latches sweep-wide: the next worker sees it before taking
+    // another target, so the rest of the grid ("b"/"c"/"d") is skipped entirely
+    // rather than each getting one hidden reveal.
+    expect(revealedIds()).toEqual(["a"]);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("does not hang the sweep when requestAnimationFrame never fires (paused view)", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    mockPanelIds = ["a"];
+    mockPanelsById = { a };
+
+    // Paused rAF: registered but its callback is never invoked (backgrounded
+    // WebContentsView). Without the timeout fallback the worker would hang here.
+    vi.stubGlobal("requestAnimationFrame", () => 1);
+    // The timeout fallback (fired synchronously for the test) unblocks the frame.
+    vi.stubGlobal("setTimeout", (cb: () => void) => {
+      cb();
+      return 1;
+    });
+    revealTerminalMock.mockResolvedValue(true);
+
+    await expect(repaintActiveWorktreeTerminals()).resolves.toBeUndefined();
+    expect(revealTerminalMock).toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+  });
+
   it("isolates a per-terminal reveal rejection so the sweep continues", async () => {
     mockActiveWorktreeId = "wt-1";
     const a = panel("a", { worktreeId: "wt-1" });
