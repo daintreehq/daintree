@@ -15,6 +15,7 @@ vi.mock("@/store/wakeActiveWorktreeTerminals", () => ({
 }));
 
 let viewRevealedCb: (() => void) | null = null;
+let viewCachedCb: (() => void) | null = null;
 
 vi.mock("@/lib/notify", () => ({ notify: vi.fn(() => "notif-id") }));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() } }));
@@ -41,6 +42,7 @@ beforeEach(() => {
   wakeMock.mockClear();
   repaintMock.mockClear();
   viewRevealedCb = null;
+  viewCachedCb = null;
   globalThis.requestAnimationFrame = ((cb: FrameRequestCallback): number => {
     const id = ++rafIdCounter;
     rafQueue.set(id, cb);
@@ -72,6 +74,12 @@ beforeEach(() => {
         viewRevealedCb = cb;
         return () => {
           viewRevealedCb = null;
+        };
+      },
+      onViewCached: (cb: () => void) => {
+        viewCachedCb = cb;
+        return () => {
+          viewCachedCb = null;
         };
       },
     },
@@ -152,6 +160,27 @@ describe("WorktreeStoreProvider — wake fan-out scheduling (#10362)", () => {
     act(() => viewRevealedCb?.());
     act(() => flushFrame());
     setVisibilityState("hidden");
+    act(() => flushFrame());
+
+    expect(repaintMock).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending post-reveal repaint when the view is cached (switched away)", async () => {
+    await renderProvider();
+    act(() => flushFrame());
+    act(() => flushFrame());
+    repaintMock.mockClear();
+    expect(viewCachedCb).not.toBeNull();
+
+    // Schedule a repaint; it parks on the gate's second frame.
+    act(() => viewRevealedCb?.());
+    act(() => flushFrame());
+    expect(repaintMock).not.toHaveBeenCalled();
+
+    // The view is cached (project switched away) before the second frame — the
+    // pending repaint rAF must be cancelled so it can't fire against the now
+    // occluded/about-to-freeze view.
+    act(() => viewCachedCb?.());
     act(() => flushFrame());
 
     expect(repaintMock).not.toHaveBeenCalled();

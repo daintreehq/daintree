@@ -840,6 +840,21 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     });
     if (offViewRevealed) cleanups.push(offViewRevealed);
 
+    const offViewCached = window.electron?.app?.onViewCached?.(() => {
+      clearRevealBackstops();
+      if (wakeRafId !== null) {
+        cancelAnimationFrame(wakeRafId);
+        wakeRafId = null;
+        wakePending = false;
+      }
+      if (repaintRafId !== null) {
+        cancelAnimationFrame(repaintRafId);
+        repaintRafId = null;
+        repaintPending = false;
+      }
+    });
+    if (offViewCached) cleanups.push(offViewCached);
+
     // Missed-event guard: if the view is already visible by the time this
     // listener installs (fast cached reactivation), the visibilitychange
     // event has already fired (#4935). Worktree state is fetched via the

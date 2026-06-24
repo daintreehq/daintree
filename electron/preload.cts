@@ -1441,6 +1441,7 @@ function buildElectronApi(): ElectronAPI {
       onConfigReloaded: (callback: () => void) => _typedOn(CHANNELS.APP_CONFIG_RELOADED, callback),
 
       onViewRevealed: (callback: () => void) => _typedOn(CHANNELS.APP_VIEW_REVEALED, callback),
+      onViewCached: (callback: () => void) => _typedOn(CHANNELS.APP_VIEW_CACHED, callback),
     },
 
     menu: buildMenuPreloadBindings(_unwrappingInvoke),

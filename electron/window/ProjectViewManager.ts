@@ -705,6 +705,10 @@ export class ProjectViewManager {
         }
         previousEntry.state = "active";
         previousEntry.lastUsed = Date.now();
+        // Re-fire the view-ready hook so per-view IPC helpers re-bind to the
+        // rolled-back active view, matching the load/reload path that normally
+        // fires it for the active view.
+        this.onViewReady?.(previousEntry.view.webContents);
       } else if (unboundOutgoingView && !unboundOutgoingView.webContents.isDestroyed()) {
         // Same rollback requirement for first-run/unbound windows: the visible
         // welcome view is not a project entry, but IPC helpers still need
@@ -1184,6 +1188,16 @@ export class ProjectViewManager {
       // Mark cached so visible-only broadcasts (log batches) skip this
       // renderer — pushed messages have no backpressure once throttled/frozen.
       registerCachedViewWebContents(current.view.webContents);
+      // Tell the renderer it's being cached so it cancels any in-flight wake/
+      // repaint rAFs and reveal backstops scheduled for the view it's leaving —
+      // otherwise those fire against a now-occluded/frozen view, or survive to
+      // run stale work on the next reactivation. Sent before the CPU throttle so
+      // the renderer can still process it.
+      try {
+        current.view.webContents.send(CHANNELS.APP_VIEW_CACHED);
+      } catch {
+        // ignore — a destroyed/closing renderer has nothing to cancel
+      }
       // Close live producer ports BEFORE applying CPU throttle. Once throttled,
       // Chromium can freeze the renderer after ~5 min hidden or under memory
       // pressure; any messages still posted by main/utility processes
