@@ -386,6 +386,7 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "terminal.new",
   "terminal.rename",
   "terminal.waitUntilIdle",
+  "terminal.waitUntilIdleBatch",
   "terminal.arm",
   "terminal.disarm",
   "terminal.disarmAll",

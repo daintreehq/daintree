@@ -469,4 +469,34 @@ describe("tailCapturedOutput", () => {
   it("clamps a non-positive maxLines to one line (no slice(-0) blowup)", () => {
     expect(tailCapturedOutput("a\nb\nc", 0, true).content).toBe("c");
   });
+
+  // The serializer encodes inter-glyph gaps a TUI painted by cursor movement as
+  // cursor-forward escapes (CSI Ps C), not literal spaces. Stripping ANSI must
+  // expand them back to spaces, or interior spacing collapses. The invariant: a
+  // CUF-gapped line and the same content written with literal spaces must read
+  // back identically — so the test can't drift to a copied literal.
+  it("expands cursor-forward gaps so cursor-positioned text matches literal spaces", () => {
+    const cufGapped = "SPLIT:\x1b[1CI\x1b[1Ctake\x1b[1C5";
+    const literalSpaces = "SPLIT: I take 5";
+    const fromCuf = tailCapturedOutput(cufGapped, 10, true).content;
+    expect(fromCuf).toBe(tailCapturedOutput(literalSpaces, 10, true).content);
+    expect(fromCuf).toBe(literalSpaces);
+  });
+
+  it("expands a multi-column cursor-forward to the matching run of spaces", () => {
+    // CSI 3 C advances three columns; bare CSI C defaults to one.
+    const out = tailCapturedOutput("a\x1b[3Cb\x1b[Cc", 10, true).content;
+    expect(out).toBe("a   b c");
+  });
+
+  it("does not expand cursor-forward when stripAnsi is false (raw fidelity)", () => {
+    const raw = "a\x1b[3Cb";
+    expect(tailCapturedOutput(raw, 10, false).content).toBe(raw);
+  });
+
+  it("does not leave trailing spaces when a cursor-forward sits at the line end", () => {
+    // A trailing CUF expands to spaces the pre-expansion right-trim couldn't see;
+    // the post-expansion trim must remove them so the line isn't padded.
+    expect(tailCapturedOutput("abc\x1b[3C", 10, true).content).toBe("abc");
+  });
 });

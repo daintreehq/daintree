@@ -75,6 +75,7 @@ function fakeDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
     requestManifest: vi.fn().mockResolvedValue([]),
     dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result: null } }),
     handleWaitUntilIdle: vi.fn(),
+    handleWaitUntilIdleBatch: vi.fn(),
     appendAuditRecord: vi.fn(),
     getCachedManifest: vi.fn(() => null),
     getFullToolSurface: vi.fn(() => false),

@@ -95,6 +95,11 @@ export interface HttpLifecycleDeps {
     signal: AbortSignal,
     options?: { maxTimeoutMs?: number }
   ) => Promise<import("./shared.js").WaitUntilIdleResult>;
+  handleWaitUntilIdleBatch: (
+    rawArgs: unknown,
+    signal: AbortSignal,
+    options?: { maxTimeoutMs?: number }
+  ) => Promise<import("../../../shared/types/terminalWaitUntilIdle.js").WaitUntilIdleBatchResult>;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   // Per-WebContents manifest cache read for pinned help sessions (#9887). Lets
   // the pinned `getCachedManifest` closure return the session's own window's
@@ -1443,6 +1448,7 @@ export class HttpLifecycle {
       requestManifest,
       dispatchAction,
       handleWaitUntilIdle: this.deps.handleWaitUntilIdle,
+      handleWaitUntilIdleBatch: this.deps.handleWaitUntilIdleBatch,
       appendAuditRecord: (input) => {
         // Scrub structural secrets BEFORE the truncation step inside
         // `summarizeMcpArgs` — running the scrubber after truncation would

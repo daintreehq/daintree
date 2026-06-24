@@ -28,6 +28,8 @@ import {
   WAIT_UNTIL_IDLE_DESCRIPTION,
   WAIT_UNTIL_IDLE_INPUT_SCHEMA,
   WAIT_UNTIL_IDLE_OUTPUT_SCHEMA,
+  WAIT_UNTIL_IDLE_BATCH_DESCRIPTION,
+  WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA,
 } from "../../../shared/types/terminalWaitUntilIdle.js";
 
 const waitUntilIdleManifestEntry = (): ActionManifestEntry => ({
@@ -40,6 +42,34 @@ const waitUntilIdleManifestEntry = (): ActionManifestEntry => ({
   danger: "safe" as ActionDanger,
   inputSchema: WAIT_UNTIL_IDLE_INPUT_SCHEMA,
   outputSchema: WAIT_UNTIL_IDLE_OUTPUT_SCHEMA,
+  enabled: true,
+  requiresArgs: true,
+  mcpAnnotations: {
+    readOnlyHint: true,
+    idempotentHint: false,
+    destructiveHint: false,
+  },
+});
+
+const waitUntilIdleBatchManifestEntry = (): ActionManifestEntry => ({
+  id: "terminal.waitUntilIdleBatch" as ActionId,
+  name: "terminal.waitUntilIdleBatch",
+  title: "Wait until terminals idle (batch)",
+  description: WAIT_UNTIL_IDLE_BATCH_DESCRIPTION,
+  category: "terminal",
+  kind: "query" as ActionKind,
+  danger: "safe" as ActionDanger,
+  inputSchema: {
+    type: "object",
+    properties: {
+      terminalIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 256 },
+      mode: { type: "string", enum: ["first", "all"] },
+      timeoutMs: { type: "integer", minimum: 0 },
+    },
+    required: ["terminalIds"],
+    additionalProperties: false,
+  },
+  outputSchema: WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA,
   enabled: true,
   requiresArgs: true,
   mcpAnnotations: {
@@ -2772,6 +2802,7 @@ describe("McpServerService", () => {
           "Rename a terminal. Accepts an optional terminalId (defaults to the focused terminal) and a name; omitting the name opens the rename dialog.",
       }),
       waitUntilIdleManifestEntry(),
+      waitUntilIdleBatchManifestEntry(),
       createManifestEntry({
         id: "recipe.list" as ActionId,
         title: "List Recipes",

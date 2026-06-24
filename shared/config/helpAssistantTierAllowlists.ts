@@ -93,6 +93,7 @@ export const ACTION_TIER_ADDONS = [
   "terminal.toggleDock",
   "terminal.rename",
   TERMINAL_WAIT_UNTIL_IDLE_TOOL,
+  "terminal.waitUntilIdleBatch",
 
   "recipe.list",
   "recipe.run",

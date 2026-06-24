@@ -27,7 +27,7 @@ import { SessionStore } from "./mcp-server/sessionStore.js";
 import { AuditService } from "./mcp-server/auditLog.js";
 import { TurnOutcomeService } from "./mcp-server/turnOutcomeLog.js";
 import { createRendererBridge } from "./mcp-server/rendererBridge.js";
-import { handleWaitUntilIdle } from "./mcp-server/waitUntilIdle.js";
+import { handleWaitUntilIdle, handleWaitUntilIdleBatch } from "./mcp-server/waitUntilIdle.js";
 import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
 import { HttpLifecycle } from "./mcp-server/httpLifecycle.js";
 import { AbusePolicy } from "./mcp-server/abusePolicy.js";
@@ -201,6 +201,8 @@ export class McpServerService {
         this.bridge.dispatchActionForWebContents(id, actionId, args, confirmed, contextOverride),
       handleWaitUntilIdle: (rawArgs, signal, options) =>
         handleWaitUntilIdle(rawArgs, signal, options),
+      handleWaitUntilIdleBatch: (rawArgs, signal, options) =>
+        handleWaitUntilIdleBatch(rawArgs, signal, options),
       getCachedManifest: () => this.bridge.getCachedManifest(),
       getCachedManifestForWebContents: (id) => this.bridge.getCachedManifestForWebContents(id),
       clearCachedManifest: () => this.bridge.clearCache(),

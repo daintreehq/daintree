@@ -76,6 +76,7 @@ import {
 } from "./tierAuth.js";
 
 const TERMINAL_WAIT_UNTIL_IDLE_TOOL = "terminal.waitUntilIdle";
+const TERMINAL_WAIT_UNTIL_IDLE_BATCH_TOOL = "terminal.waitUntilIdleBatch";
 const HELP_DISPLAY_IMAGE_TOOL = "help.displayImage";
 const BROWSER_CAPTURE_SCREENSHOT_TOOL = "browser.captureScreenshot";
 
@@ -162,6 +163,11 @@ export interface SessionServerDeps {
     signal: AbortSignal,
     options?: { maxTimeoutMs?: number }
   ) => Promise<import("./shared.js").WaitUntilIdleResult>;
+  handleWaitUntilIdleBatch: (
+    rawArgs: unknown,
+    signal: AbortSignal,
+    options?: { maxTimeoutMs?: number }
+  ) => Promise<import("../../../shared/types/terminalWaitUntilIdle.js").WaitUntilIdleBatchResult>;
   appendAuditRecord: (input: {
     toolId: string;
     sessionId: string;
@@ -291,6 +297,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     requestManifest,
     dispatchAction,
     handleWaitUntilIdle: waitUntilIdle,
+    handleWaitUntilIdleBatch: waitUntilIdleBatch,
     appendAuditRecord,
     getCachedManifest,
     getFullToolSurface,
@@ -706,6 +713,47 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({
               code: EXECUTION_ERROR_CODE,
               message: formatErrorMessage(err, "waitUntilIdle failed"),
+            });
+          }
+        }
+
+        // Short-circuit: terminal.waitUntilIdleBatch is the batched sibling of
+        // waitUntilIdle (watch N terminals, resolve on first/all idle). Same
+        // main-process rationale and tier clamp; same grant-refresh-on-long-wait.
+        if (actionId === TERMINAL_WAIT_UNTIL_IDLE_BATCH_TOOL) {
+          emitToolCallStarted(false);
+          try {
+            const maxTimeoutMs =
+              tier === "external"
+                ? MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS
+                : INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS;
+            const result = await waitUntilIdleBatch(args, extra.signal, { maxTimeoutMs });
+            outcome = { kind: "result", value: { ok: true, result } };
+            if (grantIssuedAt !== undefined || nativeGrantId !== undefined) {
+              if (grantIssuedAt !== undefined) {
+                sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
+              }
+              if (nativeGrantId !== undefined) {
+                sessionStore.grantCache.refreshNativeGrant(nativeGrantId);
+              }
+              if (sessionStore.sessions.has(sessionId)) {
+                sessionStore.resetIdleTimer(sessionId);
+              } else if (sessionStore.httpSessions.has(sessionId)) {
+                sessionStore.resetHttpIdleTimer(sessionId);
+              }
+            }
+            return {
+              content: [{ type: "text" as const, text: safeSerializeToolResult(result) }],
+              structuredContent: result as unknown as Record<string, unknown>,
+            };
+          } catch (err) {
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) {
+              throw err;
+            }
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, "waitUntilIdleBatch failed"),
             });
           }
         }

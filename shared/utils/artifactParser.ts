@@ -239,6 +239,35 @@ const TRAILING_WHITESPACE_REGEX = /[ \t\r\f\v]+$/;
 // eslint-disable-next-line no-control-regex -- intentional control-char class, matches stripAnsiAndOscCodes
 const CONTAINS_ESCAPE_REGEX = /[\x1b\x90\x98\x9b\x9d\x9e\x9f]/;
 
+// Cursor-forward (CUF, `CSI Ps C`). `@xterm/addon-serialize` encodes a run of
+// empty/erased cells as a CUF move rather than literal spaces — and TUI agents
+// (Claude Code pervasively) paint inter-word gaps by advancing the cursor
+// instead of writing `0x20`. The default param is 1 (`CSI C` === `CSI 1 C`).
+// eslint-disable-next-line no-control-regex -- intentional control-char (ESC), matches the CSI form
+const CURSOR_FORWARD_REGEX = /\x1b\[(\d*)C/g;
+
+// serialize never emits a CUF beyond the terminal width; cap the expansion so a
+// corrupt/garbage count can't balloon a line into megabytes of spaces.
+const MAX_CURSOR_FORWARD_EXPANSION = 1000;
+
+// Expand cursor-forward escapes to their visual width in spaces. Run this on the
+// captured-output read path BEFORE `stripAnsiCodes`, which would otherwise delete
+// the CUF with no replacement and collapse the gap (`I take 5` -> `Itake5`).
+// Read-path only: the persistence/restore serialize must stay byte-faithful and
+// never passes through here.
+function expandCursorForward(text: string): string {
+  if (!text.includes("\x1b[")) return text;
+  return text.replace(CURSOR_FORWARD_REGEX, (_match, digits: string) => {
+    // CUF advances one column for an omitted parameter, and ANSI treats an
+    // explicit `0` the same as `1` (the serializer normalizes `ESC[0C` to
+    // `ESC[1C` anyway, so the `<= 0` branch is purely defensive).
+    const parsed = digits === "" ? 1 : Number.parseInt(digits, 10);
+    if (!Number.isFinite(parsed)) return "";
+    const count = parsed <= 0 ? 1 : parsed;
+    return " ".repeat(Math.min(count, MAX_CURSOR_FORWARD_EXPANSION));
+  });
+}
+
 // A line is "blank" if nothing visible remains after right-trimming. The cheap
 // path is the right-trim alone; only lines carrying escape bytes get the
 // ANSI-stripping probe, so a styled/painted padding row (e.g. a themed TUI that
@@ -304,6 +333,12 @@ export function normalizeCapturedOutput(text: string): string {
  * trim-then-tail behaviour cannot drift. `truncated`/`lineCount` are measured
  * against the *normalized* content, so trailing padding never makes a consumer
  * think real output was omitted.
+ *
+ * When `stripAnsi` is set, cursor-forward escapes (`CSI Ps C`) are expanded to
+ * spaces first: the serializer emits a CUF for any run of empty/erased cells, and
+ * TUI agents paint inter-word gaps by advancing the cursor rather than writing
+ * spaces, so a naive strip would collapse interior spaces (`I take 5` ->
+ * `Itake5`). Expanding first preserves the visual spacing.
  */
 export function tailCapturedOutput(
   serialized: string,
@@ -322,6 +357,19 @@ export function tailCapturedOutput(
   const truncated = allLines.length > limit;
   const selected = allLines.slice(-limit);
   let content = selected.join("\n");
-  if (stripAnsi) content = stripAnsiCodes(content);
+  // Expand cursor-forward runs to spaces before stripping ANSI — otherwise the
+  // strip deletes the CUF that a TUI used to paint inter-word gaps, collapsing
+  // interior spaces (#field-report read-back landmine). When stripAnsi is false
+  // the caller wants raw fidelity, so the CUF is left intact.
+  if (stripAnsi) {
+    content = stripAnsiCodes(expandCursorForward(content));
+    // A CUF at a line's end expands to trailing spaces that the earlier
+    // normalizeCapturedOutput right-trim (run before expansion) couldn't see —
+    // re-trim per line so a trailing cursor move doesn't read as padding.
+    content = content
+      .split("\n")
+      .map((line) => line.replace(TRAILING_WHITESPACE_REGEX, ""))
+      .join("\n");
+  }
   return { content, lineCount: selected.length, truncated };
 }

@@ -12,6 +12,7 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.getStatus",
   "terminal.sendCommand",
   "terminal.waitUntilIdle",
+  "terminal.waitUntilIdleBatch",
 
   // -- panelActions --
   "panel.list",

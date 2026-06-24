@@ -497,6 +497,7 @@ describe("help-session tier policy (#10640)", () => {
     "terminal.getOutput",
     "terminal.getStatus",
     "terminal.waitUntilIdle",
+    "terminal.waitUntilIdleBatch",
     "recipe.run",
     "worktree.createWithRecipe",
     "worktree.setActive",
