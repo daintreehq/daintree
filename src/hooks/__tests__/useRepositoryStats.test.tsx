@@ -546,6 +546,57 @@ describe("useRepositoryStats", () => {
         expect(result.current.error).toBeNull();
       });
     });
+
+    it("evicts the oldest cache entry once the cap is exceeded", async () => {
+      // Cap is 20 entries. Loading 21 distinct projects evicts the oldest
+      // (smallest lastUpdated), so switching back to it can no longer restore
+      // from cache and must refetch with a skeleton.
+      let currentProject = { id: "p0", path: "/repo/p0" };
+      getCurrentMock.mockImplementation(async () => currentProject);
+      let switchHandler: (() => void) | undefined;
+      onSwitchMock.mockImplementation((cb: () => void) => {
+        switchHandler = cb;
+        return () => {};
+      });
+
+      const base = Date.now();
+      let tick = 0;
+      getRepoStatsMock.mockImplementation(async () => {
+        tick += 1;
+        return freshStats({ commitCount: tick, lastUpdated: base + tick });
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(1));
+
+      // Load 20 more distinct projects (p1..p20) → 21 total, evicting p0.
+      for (let i = 1; i <= 20; i++) {
+        currentProject = { id: `p${i}`, path: `/repo/p${i}` };
+        act(() => {
+          switchHandler?.();
+        });
+        await waitFor(() => expect(result.current.stats?.commitCount).toBe(i + 1));
+      }
+
+      // Switch back to p0 — its entry was evicted, so it refetches with a
+      // skeleton instead of restoring instantly.
+      const slowP0 = createDeferred<ForgeRepositoryStats>();
+      getRepoStatsMock.mockImplementationOnce(() => slowP0.promise);
+      currentProject = { id: "p0", path: "/repo/p0" };
+      act(() => {
+        switchHandler?.();
+      });
+      await waitFor(() => {
+        expect(result.current.stats).toBeNull();
+        expect(result.current.loading).toBe(true);
+      });
+
+      await act(async () => {
+        slowP0.resolve(freshStats({ commitCount: 999 }));
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(999));
+    });
   });
 
   describe("onRepoCountsUpdated push (issue #10122)", () => {

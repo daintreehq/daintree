@@ -149,8 +149,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   const lastKnownCountsRef = useRef<{
     issueCount: number | null;
     prCount: number | null;
-    projectPath: string | null;
-  }>({ issueCount: null, prCount: null, projectPath: null });
+  }>({ issueCount: null, prCount: null });
 
   const mountedRef = useRef(true);
   const lastErrorRef = useRef<string | null>(null);
@@ -179,10 +178,6 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       if (!mountedRef.current) return;
 
       hasAppliedResultRef.current = true;
-
-      // Track current project so a stale callback from a previous project
-      // can be detected by `fetchStats`'s cross-project guard.
-      lastKnownCountsRef.current.projectPath = opts.projectPath;
 
       // Only preserve counts when data is stale or errored (not on successful fresh fetch)
       const shouldPreserve = repoStats.stale === true || repoStats.error !== undefined;
@@ -331,6 +326,10 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       try {
         const project = await projectClient.getCurrent();
         if (fetchGenerationRef.current !== myGeneration) return;
+        // Lifecycle contract: re-check invalidation after every await. A
+        // same-project refresh queued while `getCurrent()` was pending
+        // supersedes this fetch — bail before spending a `getRepoStats` call.
+        if (isInvalidated()) return;
         if (!project) {
           if (mountedRef.current) {
             setStats(null);
@@ -437,7 +436,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       fetchGenerationRef.current += 1;
       if (!mountedRef.current) return;
       // Clear preserved counts on project switch to prevent cross-contamination
-      lastKnownCountsRef.current = { issueCount: null, prCount: null, projectPath: null };
+      lastKnownCountsRef.current = { issueCount: null, prCount: null };
       hasAppliedResultRef.current = false;
 
       setStats(null);
