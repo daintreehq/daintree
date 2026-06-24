@@ -226,13 +226,26 @@ describe("usePluginContextMenuItems", () => {
     expect(result.current.map((e) => e.item.label)).toEqual(["ForB"]);
   });
 
-  it("cleans up the push subscription on unmount", async () => {
+  it("shares one pull and one subscription across multiple mounted instances", async () => {
+    const { usePluginContextMenuItems } = await import("../usePluginContextMenuItems");
+    renderHook(() => usePluginContextMenuItems("terminal"));
+    renderHook(() => usePluginContextMenuItems("worktree"));
+    renderHook(() => usePluginContextMenuItems("file"));
+
+    await waitFor(() => expect(onContextMenuItemsChangedMock).toHaveBeenCalledTimes(1));
+    expect(contextMenuItemsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not tear down the shared subscription when an instance unmounts", async () => {
     const cleanupMock = vi.fn();
     onContextMenuItemsChangedMock.mockReturnValue(cleanupMock);
     const { usePluginContextMenuItems } = await import("../usePluginContextMenuItems");
-    const { unmount } = renderHook(() => usePluginContextMenuItems("terminal"));
+    const a = renderHook(() => usePluginContextMenuItems("terminal"));
+    renderHook(() => usePluginContextMenuItems("worktree"));
 
-    unmount();
-    expect(cleanupMock).toHaveBeenCalled();
+    a.unmount();
+    // The store owns the subscription for the renderer's lifetime — unmounting a
+    // consumer must not unsubscribe, or remaining/future consumers go stale.
+    expect(cleanupMock).not.toHaveBeenCalled();
   });
 });
