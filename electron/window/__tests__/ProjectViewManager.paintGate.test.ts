@@ -194,6 +194,7 @@ import { ProjectViewManager } from "../ProjectViewManager.js";
 import { logInfo, logWarn } from "../../utils/logger.js";
 import { registerAppView } from "../webContentsRegistry.js";
 import { unfreezeWebContents } from "../../utils/webContentsLifecycle.js";
+import { CHANNELS } from "../../ipc/channels.js";
 
 function createMockWindow() {
   const children: unknown[] = [];
@@ -830,5 +831,20 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     });
     expect(typeof payload.loadToPaintMs).toBe("number");
     expect(payload.loadToPaintMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("notifies a view it is being cached so the renderer can cancel reveal work", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+
+    const switchPromise = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+    manager.signalViewPainted(incomingWc.id);
+    await switchPromise;
+
+    // The outgoing project-a view was cached → its renderer is told so it can
+    // cancel any in-flight wake/repaint rAFs before being throttled/frozen.
+    expect(initialWc.send).toHaveBeenCalledWith(CHANNELS.APP_VIEW_CACHED);
   });
 });

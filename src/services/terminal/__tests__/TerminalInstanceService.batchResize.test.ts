@@ -95,6 +95,7 @@ function makeManaged(fixture: ManagedFixture): ManagedTerminal {
   }
 
   return {
+    id: fixture.id,
     terminal: {
       element: termEl,
       modes: { synchronizedOutputMode: false },

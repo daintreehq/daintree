@@ -346,7 +346,7 @@ class TerminalInstanceService {
       hasInFlightWake: (id) => this.wakeManager.hasInFlightWake(id),
       hasPendingWake: (id) => this.wakeManager.hasPendingWake(id),
       isWebGLActive: (id) => this.webGLManager.isActive(id),
-      shouldHaveWebGL: (managed) => this.shouldRestoreWebGL(managed),
+      shouldHaveWebGL: (managed) => this.shouldHaveActiveWebGL(managed),
       ensureWebGL: (id, managed) => this.webGLManager.ensureContext(id, managed),
       unhibernate: (id) => this.unhibernate(id),
       forceReflow: (element) => forceXtermReflow(element),
@@ -535,7 +535,8 @@ class TerminalInstanceService {
    */
   private wantsWebGLAtTier(
     managed: ManagedTerminal,
-    tier: TerminalRefreshTier | undefined
+    tier: TerminalRefreshTier | undefined,
+    opts?: { trustDomVisibility?: boolean }
   ): boolean {
     if (!isWebGLEligibleTier(tier)) return false;
     // Visibility gates every case: an off-screen pane never wants WebGL, even
@@ -543,8 +544,11 @@ class TerminalInstanceService {
     // so hidden streaming agents would otherwise accumulate wants and trip the
     // count-based mode switch, dropping the whole visible fleet to DOM
     // (#10671). The reveal path (setVisible(true) → debounced shouldRestoreWebGL
-    // → ensureContext) re-acquires the want once the pane is on-screen again.
-    if (!managed.isVisible) return false;
+    // → ensureContext) re-acquires the want once the pane is on-screen again —
+    // and on a warm WebContentsView resume it passes trustDomVisibility because
+    // it has already proven the pane on-screen from DOM truth, so the stale
+    // reactive isVisible flag must not veto the want there.
+    if (!opts?.trustDomVisibility && !managed.isVisible) return false;
     if (managed.runtimeAgentId) return true;
     return (
       tier === TerminalRefreshTier.FOCUSED ||
@@ -558,12 +562,45 @@ class TerminalInstanceService {
    * (opened, not attaching, not hibernated). Used by the debounced timer in
    * setVisible() before re-acquiring a context.
    */
-  private shouldRestoreWebGL(managed: ManagedTerminal): boolean {
+  private shouldRestoreWebGL(
+    managed: ManagedTerminal,
+    opts?: { trustDomVisibility?: boolean }
+  ): boolean {
     if (!managed.isOpened) return false;
-    if (!managed.isVisible) return false;
+    // The reveal path proves visibility from DOM ground truth (isConnected +
+    // checkVisibility + box) before calling, because the reactive isVisible flag
+    // can be stale-false on a warm WebContentsView resume (#10632 item 4). Trust
+    // that here so a dropped WebGL context is reattached on reveal instead of
+    // leaving the pane on the DOM renderer until the ~3s watchdog (which is
+    // itself suppressed for the first ~5s by the project-switch resize lock).
+    if (!opts?.trustDomVisibility && !managed.isVisible) return false;
     if (managed.isAttaching) return false;
     if (managed.isHibernated) return false;
-    return this.wantsWebGLAtTier(managed, managed.lastAppliedTier ?? managed.getRefreshTier?.());
+    return this.wantsWebGLAtTier(
+      managed,
+      managed.lastAppliedTier ?? managed.getRefreshTier?.(),
+      opts
+    );
+  }
+
+  /**
+   * Watchdog-only WebGL eligibility. Identical to {@link shouldRestoreWebGL} but
+   * additionally false for a non-pinned pane in DOM-mode fallback: in DOM mode
+   * the manager only ever attaches the single focus-pinned context, so a
+   * non-pinned pane's context can never become active. Without this the
+   * watchdog's `shouldHaveWebGL && !isWebGLActive` stays permanently true for
+   * every non-pinned agent pane and burns a heavy-repair slot every tick (plus a
+   * spurious "context missing" warning). The reveal / visibility restore paths
+   * deliberately keep using {@link shouldRestoreWebGL} so they still call
+   * `ensureContext` and keep the pane in the manager's `wants` set — which is
+   * what lets a later focus change pin and attach it immediately.
+   */
+  private shouldHaveActiveWebGL(managed: ManagedTerminal): boolean {
+    if (!this.shouldRestoreWebGL(managed)) return false;
+    if (this.webGLManager.getMode() === "dom" && managed.id !== this.webGLManager.getPinnedId()) {
+      return false;
+    }
+    return true;
   }
 
   private onUserInput(id: string, data: string): void {
@@ -899,7 +936,7 @@ class TerminalInstanceService {
 
       instance.isResizeSuppressed = true;
       instance.resizeSuppressionEndTime = Date.now() + durationMs;
-      this.resizeController.lockResize(id, true);
+      this.resizeController.lockResize(id, true, durationMs);
 
       instance.resizeSuppressionTimer = window.setTimeout(() => {
         // Re-fetch: the instance can be disposed/replaced between arming and
@@ -1172,7 +1209,7 @@ class TerminalInstanceService {
    * mirror sync already ran behind the bridge (IPC data is not culled like a
    * paint is), so only the repaint needs replaying.
    */
-  repaintForReveal(id: string): boolean {
+  repaintForReveal(id: string, opts?: { trustDomVisibility?: boolean }): boolean {
     const managed = this.instances.get(id);
     if (!managed || managed.isHibernated) return false;
     // Health-check on DOM ground truth (isConnected + checkVisibility + size),
@@ -1214,8 +1251,13 @@ class TerminalInstanceService {
     if (managed.terminal.modes?.synchronizedOutputMode === true) return false;
 
     // Re-attach a WebGL context the freeze/thaw cycle may have dropped before
-    // repairing the local model. Same idiom as the post-reparent restore.
-    if (!this.webGLManager.isActive(id) && this.shouldRestoreWebGL(managed)) {
+    // repairing the local model. The warm view-reveal caller (revealTerminal)
+    // passes trustDomVisibility so a stale reactive isVisible=false on warm
+    // WebContentsView resume doesn't skip the reattach and strand non-focused
+    // agent panes on the DOM renderer. Assistant show/hide-transition callers
+    // pass nothing, so they keep the isVisible gate — a transform-hidden pane
+    // must not accumulate a fleet-wide WebGL want (#10671).
+    if (!this.webGLManager.isActive(id) && this.shouldRestoreWebGL(managed, opts)) {
       this.webGLManager.ensureContext(id, managed);
     }
 
@@ -1365,7 +1407,11 @@ class TerminalInstanceService {
           after.pendingVisibilityWake !== true)
       );
     }
-    return this.repaintForReveal(id);
+    // The warm view-reveal sweep has confirmed the foreground view is presented,
+    // so trust DOM-truth visibility for the WebGL reattach — the reactive
+    // isVisible flag is stale-false on a warm resume. Assistant-transition
+    // callers of repaintForReveal deliberately do NOT trust it.
+    return this.repaintForReveal(id, { trustDomVisibility: true });
   }
 
   /**
@@ -1505,6 +1551,7 @@ class TerminalInstanceService {
     const kind = "terminal" as const;
 
     const managed: ManagedTerminal = {
+      id,
       terminal,
       kind,
       launchAgentId,

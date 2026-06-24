@@ -437,6 +437,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * visibilitychange/resume ran while the view was still occluded.
      */
     onViewRevealed(callback: () => void): () => void;
+    onViewCached(callback: () => void): () => void;
   };
   // menu is generated — see GeneratedElectronAPI.
   logs: {

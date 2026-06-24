@@ -175,9 +175,29 @@ const REVEAL_CONCURRENCY = 2;
 // intermittent reveal into a reliable one.
 const REVEAL_CONFIRM_PAINTS = 2;
 
+// rAF is paused for a backgrounded/occluded WebContentsView, so its callback can
+// never fire there. Race it against a timeout so a worker awaiting a frame can't
+// hang the reveal sweep forever (and later resume stale to interleave with the
+// next reveal). In the normal foreground case the real frame (~16ms) always wins
+// well before the fallback.
+const NEXT_FRAME_FALLBACK_MS = 250;
+
 function nextFrame(): Promise<void> {
   if (typeof requestAnimationFrame !== "function") return Promise.resolve();
-  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (): void => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    requestAnimationFrame(done);
+    if (typeof setTimeout === "function") setTimeout(done, NEXT_FRAME_FALLBACK_MS);
+  });
+}
+
+function isDocumentHidden(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
 }
 
 /**
@@ -186,9 +206,15 @@ function nextFrame(): Promise<void> {
  * across separate frames to defeat the compositor/observer present-race that
  * otherwise leaves the first paint un-stuck. Bounded by {@link MAX_REVEAL_FRAMES}.
  */
-async function revealUntilStable(id: string): Promise<void> {
+async function revealUntilStable(id: string, isAborted: () => boolean): Promise<void> {
   let painted = 0;
   for (let frame = 0; frame < MAX_REVEAL_FRAMES && painted < REVEAL_CONFIRM_PAINTS; frame++) {
+    // The view may have been switched away (detached → hidden) since the sweep
+    // started or during a frame yield. Stop before touching a hidden view — the
+    // switch-back starts a fresh sweep. The caller latches the same flag for the
+    // worker pool, so a single hidden event abandons the WHOLE sweep, not just
+    // this terminal.
+    if (isAborted()) return;
     let paintable: boolean;
     try {
       paintable = await terminalInstanceService.revealTerminal(id);
@@ -241,17 +267,35 @@ export async function repaintActiveWorktreeTerminals(): Promise<void> {
   // Reveal the pane the user is reading first — the rest stagger in behind it.
   prioritizeFocusedFirst(targets);
 
-  let cursor = 0;
-  const worker = async (): Promise<void> => {
-    while (cursor < targets.length) {
-      const id = targets[cursor++];
-      if (id) await revealUntilStable(id);
-    }
+  // Abort the whole sweep if the view is switched away (detached → hidden) at any
+  // point: continuing would repaint a now-hidden view, and the switch-back starts
+  // a fresh sweep. Latched on the first hidden event, so a rapid hidden→visible
+  // flip still abandons this (now superseded) sweep rather than letting a
+  // post-await visibility sample miss the transition.
+  let aborted = isDocumentHidden();
+  const onVisibilityChange = (): void => {
+    if (isDocumentHidden()) aborted = true;
   };
-  const workerCount = Math.min(REVEAL_CONCURRENCY, targets.length);
-  const workers: Promise<void>[] = [];
-  for (let i = 0; i < workerCount; i++) {
-    workers.push(worker());
+  const canListen =
+    typeof document !== "undefined" && typeof document.addEventListener === "function";
+  if (canListen) document.addEventListener("visibilitychange", onVisibilityChange);
+
+  try {
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (cursor < targets.length) {
+        if (aborted) return;
+        const id = targets[cursor++];
+        if (id) await revealUntilStable(id, () => aborted);
+      }
+    };
+    const workerCount = Math.min(REVEAL_CONCURRENCY, targets.length);
+    const workers: Promise<void>[] = [];
+    for (let i = 0; i < workerCount; i++) {
+      workers.push(worker());
+    }
+    await Promise.all(workers);
+  } finally {
+    if (canListen) document.removeEventListener("visibilitychange", onVisibilityChange);
   }
-  await Promise.all(workers);
 }

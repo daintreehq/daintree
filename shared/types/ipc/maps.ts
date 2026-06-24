@@ -1804,6 +1804,7 @@ export interface IpcEventMap {
   // visibilitychange/resume ran while the view was still occluded, where
   // Chromium culls the paint, so it can fail to stick until the user clicks.
   "app:view-revealed": void;
+  "app:view-cached": void;
 
   // Privacy events
   "privacy:telemetry-consent-changed": {
