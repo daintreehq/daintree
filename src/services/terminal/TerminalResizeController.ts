@@ -80,6 +80,12 @@ export class TerminalResizeController {
       this.resizeLocks.set(id, Date.now() + ttl);
     } else {
       this.resizeLocks.delete(id);
+      const managed = this.deps.getInstance(id);
+      if (managed && managed.pendingBackgroundResize) {
+        const { width, height } = managed.pendingBackgroundResize;
+        managed.pendingBackgroundResize = undefined;
+        this.resizePtyOnly(id, width, height);
+      }
     }
   }
 
@@ -264,7 +270,10 @@ export class TerminalResizeController {
     }
     const managed = this.deps.getInstance(id);
     if (!managed) return null;
-    if (this.isResizeLocked(id)) return null;
+    if (this.isResizeLocked(id)) {
+      managed.pendingBackgroundResize = { width, height };
+      return null;
+    }
     if (Math.abs(managed.lastWidth - width) < 1 && Math.abs(managed.lastHeight - height) < 1) {
       return null;
     }

@@ -899,7 +899,7 @@ class TerminalInstanceService {
 
       instance.isResizeSuppressed = true;
       instance.resizeSuppressionEndTime = Date.now() + durationMs;
-      this.resizeController.lockResize(id, true);
+      this.resizeController.lockResize(id, true, durationMs);
 
       instance.resizeSuppressionTimer = window.setTimeout(() => {
         // Re-fetch: the instance can be disposed/replaced between arming and

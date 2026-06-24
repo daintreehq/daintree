@@ -92,6 +92,10 @@ export interface ManagedTerminal {
   resizeSuppressionTimer?: number;
   isResizeSuppressed?: boolean;
   resizeSuppressionEndTime?: number;
+  // A background resize that arrived while the resize lock was held (e.g. during
+  // the project-switch suppression window). Stashed here and replayed when the
+  // lock releases, so a window resize that lands mid-suppression isn't dropped.
+  pendingBackgroundResize?: { width: number; height: number };
   // Reveal-pending guaranteed redraw (#10632). Set true when the project-switch
   // resize-suppression window clears while the host is NOT foreground-renderable
   // (still detached/occluded behind the warm anti-flash bridge on a long dwell):
