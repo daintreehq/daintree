@@ -319,7 +319,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
 
   const polling = usePollingLifecycle({
     enabled: !isWorkerInstance && currentProjectId !== null && !providerLoading,
-    fetchFn: async ({ force, isInvalidated }) => {
+    fetchFn: async ({ force, isInvalidated, reason }) => {
       // Capture the fetch epoch before the first await so a project switch that
       // fires mid-flight can be detected after each await (issue #10761).
       const myGeneration = fetchGenerationRef.current;
@@ -358,6 +358,29 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
           ) {
             applyStatsResult(cached.stats, { projectPath: project.path });
           }
+        }
+
+        // Skip the network revalidation on a cheap reactivation (tab focus /
+        // project switch back) when fresh data is already in hand (issue
+        // #10765). Each project runs in its own WebContentsView, so a single
+        // reactivation fires both `onVisibilityVisible` and `onProjectSwitch`
+        // — two `getRepoStats` calls per switch. Rapid switching bursts past
+        // the IPC rate limiter (10 calls / 10s), which throws `RATE_LIMITED`
+        // and paints the toolbar's red error line until a manual refresh. A
+        // reactivation never needs to revalidate when the switch-back cache (or
+        // a prior poll) left `lastUpdatedRef` within the freshness window;
+        // scheduled polls, manual refresh, and cold starts (`lastUpdatedRef`
+        // still null) all fall through to the network. Placed after the
+        // switch-back restore (which repopulates `lastUpdatedRef`) and before
+        // `setIsValidating(true)` so a skipped reactivation never flashes a
+        // validating affordance.
+        if (
+          reason === "reactivate" &&
+          !force &&
+          lastUpdatedRef.current !== null &&
+          Date.now() - lastUpdatedRef.current < FRESH_THRESHOLD_MS
+        ) {
+          return;
         }
 
         if (mountedRef.current) {
