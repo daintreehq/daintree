@@ -90,7 +90,20 @@ function pct(arr: number[], p: number): number {
   return sorted[idx];
 }
 
-test.describe.serial("Resilience: heavy project-switch stress", () => {
+// Opt-in only. This is a heavy perf/reliability harness (launches many Electron
+// renderers + workspace hosts + terminals, deliberately exercises cold-switch
+// churn) — too costly and too machine-variable to gate nightly/release runs,
+// especially on the auto-sharded Windows release legs. It rides a known
+// pre-existing FD leak, so on a constrained CI runner it could fail for reasons
+// unrelated to the change under test. So it's SKIPPED everywhere by default and
+// run on demand for A/B perf checks:
+//   RUN_PERF_STRESS=1 STRESS_PROJECTS=5 STRESS_ROUNDS=8 \
+//     npx playwright test --project=full-resilience e2e/full/resilience/project-switch-stress.spec.ts
+// Skipping at the describe level keeps the heavy beforeAll (app launch + repo
+// fixtures) from running in CI too.
+const stressDescribe = process.env.RUN_PERF_STRESS ? test.describe.serial : test.describe.skip;
+
+stressDescribe("Resilience: heavy project-switch stress", () => {
   test.beforeAll(async () => {
     const fixtures = createFixtureRepos(PROJECT_COUNT);
     cleanups = fixtures.map((f) => f.cleanup);
