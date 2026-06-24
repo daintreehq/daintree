@@ -105,6 +105,19 @@ describe("pluginContextMenuItemsStore", () => {
     });
   });
 
+  it("a failed initial pull does not block later pushes", async () => {
+    contextMenuItemsMock.mockRejectedValue(new Error("ipc down"));
+    const mod = await load();
+    await vi.waitFor(() => expect(onChangedMock).toHaveBeenCalledTimes(1));
+    expect(mod.usePluginContextMenuItemsStore.getState().entries).toEqual([]);
+
+    // The permanent listener rescues the empty set on the next broadcast.
+    changedCb!({ items: [entry("Rescued", "terminal")], complete: true });
+    expect(mod.usePluginContextMenuItemsStore.getState().entries.map((e) => e.item.label)).toEqual([
+      "Rescued",
+    ]);
+  });
+
   it("tolerates an absent bridge and stays retryable once a real bridge appears", async () => {
     const win = globalThis as unknown as {
       window: { electron: { plugin: Record<string, unknown> } };

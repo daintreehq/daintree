@@ -54,7 +54,6 @@ export const usePluginContextMenuItemsStore = create<PluginContextMenuItemsState
     ) {
       return;
     }
-    initialized = true;
 
     // Capture the pull's sequence and start it BEFORE registering the listener:
     // a push that arrives while the pull is in flight bumps `pullSeq`, so the
@@ -67,6 +66,8 @@ export const usePluginContextMenuItemsStore = create<PluginContextMenuItemsState
         set({ entries: items });
       })
       .catch((err: unknown) => {
+        // A transient pull failure leaves entries empty; the permanent push
+        // listener below corrects the set on the next plugin load/unload.
         logWarn("[pluginContextMenuItemsStore] Failed to fetch initial plugin context menu items", {
           error: err,
         });
@@ -76,6 +77,11 @@ export const usePluginContextMenuItemsStore = create<PluginContextMenuItemsState
       pullSeq++;
       set({ entries: payload.items });
     });
+
+    // Latch only after the pull is dispatched and the listener is registered, so
+    // a throw from either path leaves the store retryable rather than wedged
+    // with no subscription. A retry's fresh `pullSeq` voids any earlier pull.
+    initialized = true;
   },
 }));
 
