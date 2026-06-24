@@ -201,6 +201,10 @@ export class TerminalProcess {
   private _backgroundQueuedBytes = 0;
   private _backgroundDrainTimer: NodeJS.Timeout | null = null;
   private _backgroundDrainDeadline = 0;
+  // Wall-clock time the current batch started accumulating (queue empty→nonempty);
+  // 0 while the queue is empty. Drives the COALESCE_MAX_DEFER_MS hard ceiling,
+  // independent of the self-rearming soft deadline above.
+  private _backgroundOldestQueuedAt = 0;
   private _backgroundDrainIntervalMs = 500;
   // Force a drain if a backgrounded terminal accumulates this much un-parsed
   // output, bounding queue memory for noisy agents that never pause (mirrors the
@@ -208,6 +212,19 @@ export class TerminalProcess {
   // units (string .length), not bytes — multi-byte output can hold up to ~3× the
   // nominal cap, which is harmless: draining late only delays, never corrupts.
   private readonly COALESCE_MAX_BYTES = 256 * 1024;
+  // Hard ceiling on how long output may sit un-parsed during SUSTAINED background
+  // output. The soft drain deadline (_armBackgroundDrain) is pushed forward by
+  // every chunk, so an agent emitting faster than the drain interval would never
+  // drain — starving activityMonitor.onData and the headless VT write. That
+  // freezes the ActivityMonitor's lastActivityTimestamp (refreshed only when the
+  // polled headless viewport changes) and trips its 8s idle gate, misclassifying
+  // a working backgrounded agent as "waiting" (#10744 regression). This bound
+  // forces a drain every ≤1s so the same change-detection path that keeps
+  // foreground agents "working" keeps running for backgrounded ones — well under
+  // the 8s gate, while still cutting parse frequency ~20× vs the 50ms foreground
+  // cadence. It bounds demotion starvation; it is not meant to preserve every
+  // sub-second idle→busy recovery nuance (recovery runs on the drain itself).
+  private readonly COALESCE_MAX_DEFER_MS = 1000;
   private _restoreBannerStart: IMarker | null = null;
   private _restoreBannerEnd: IMarker | null = null;
   private readonly textDecoder = new TextDecoder();
@@ -1790,6 +1807,9 @@ export class TerminalProcess {
     // VT parser is stateful and chunk-boundary-safe, so feeding the concatenated
     // batch yields identical headless grid state.
     if (this._activityTier === "background") {
+      if (this._backgroundChunkQueue.length === 0) {
+        this._backgroundOldestQueuedAt = now;
+      }
       this._backgroundChunkQueue.push(data);
       this._backgroundQueuedBytes += data.length;
       if (this._backgroundQueuedBytes >= this.COALESCE_MAX_BYTES) {
@@ -1886,28 +1906,34 @@ export class TerminalProcess {
   /**
    * Single self-rearming background drain timer (deadline-timestamp pattern from
    * #8150 — avoids O(N) clear/set churn per chunk). Each incoming chunk pushes
-   * the deadline forward; the timer reschedules itself until output settles, so
-   * a sustained burst drains once it quiets rather than mid-burst. The
-   * COALESCE_MAX_BYTES cap in handlePtyData bounds memory for output that never
-   * pauses.
+   * the soft deadline forward; the timer reschedules itself until output settles,
+   * so a sustained burst drains once it quiets rather than mid-burst. Two caps
+   * bound that deferral: COALESCE_MAX_BYTES (memory) in handlePtyData, and
+   * COALESCE_MAX_DEFER_MS (latency) in _onBackgroundDrainTimer, so output that
+   * never pauses still drains — keeping the agent-state clock fresh (#10744).
    */
   private _armBackgroundDrain(): void {
     this._backgroundDrainDeadline = Date.now() + this._backgroundDrainIntervalMs;
     if (this._backgroundDrainTimer) {
       return;
     }
-    this._backgroundDrainTimer = setTimeout(
-      () => this._onBackgroundDrainTimer(),
-      this._backgroundDrainIntervalMs
-    );
+    // Never let the first fire wait past the hard ceiling, so the cap holds even
+    // if a future tier sets a drain interval larger than COALESCE_MAX_DEFER_MS.
+    const wait = Math.min(this._backgroundDrainIntervalMs, this.COALESCE_MAX_DEFER_MS);
+    this._backgroundDrainTimer = setTimeout(() => this._onBackgroundDrainTimer(), wait);
   }
 
   private _onBackgroundDrainTimer(): void {
-    const remaining = this._backgroundDrainDeadline - Date.now();
-    if (remaining > 0) {
-      // A chunk arrived after this timer was armed and pushed the deadline out;
-      // reschedule for the remaining window so the burst batches optimally.
-      this._backgroundDrainTimer = setTimeout(() => this._onBackgroundDrainTimer(), remaining);
+    const now = Date.now();
+    const remaining = this._backgroundDrainDeadline - now;
+    const deferredFor = now - this._backgroundOldestQueuedAt;
+    if (remaining > 0 && deferredFor < this.COALESCE_MAX_DEFER_MS) {
+      // A chunk arrived after this timer was armed and pushed the soft deadline
+      // out; reschedule for the remaining window so the burst batches optimally —
+      // but never wait past the hard ceiling, so sustained output can't starve
+      // the parse pipeline (and the agent-state clock riding on it) (#10744).
+      const wait = Math.min(remaining, this.COALESCE_MAX_DEFER_MS - deferredFor);
+      this._backgroundDrainTimer = setTimeout(() => this._onBackgroundDrainTimer(), wait);
       return;
     }
     this._backgroundDrainTimer = null;
@@ -1926,6 +1952,7 @@ export class TerminalProcess {
       this._backgroundDrainTimer = null;
     }
     this._backgroundDrainDeadline = 0;
+    this._backgroundOldestQueuedAt = 0;
     if (this._backgroundChunkQueue.length === 0) {
       this._backgroundQueuedBytes = 0;
       return;
@@ -1952,6 +1979,7 @@ export class TerminalProcess {
       this._backgroundDrainTimer = null;
     }
     this._backgroundDrainDeadline = 0;
+    this._backgroundOldestQueuedAt = 0;
     this._backgroundChunkQueue = [];
     this._backgroundQueuedBytes = 0;
   }
