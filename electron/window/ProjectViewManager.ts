@@ -2001,12 +2001,21 @@ export class ProjectViewManager {
 
     const onSpawnResult = () => void seed();
     const onHostCrash = () => void seed();
+    // Drop a terminal from the freeze-seed maps when it exits, so a dead
+    // terminal can't leave a stale project/agent-state entry that keeps
+    // hasActiveAgent() reporting a phantom active agent for its project.
+    const onTerminalExit = (id: string) => {
+      this.projectByTerminal.delete(id);
+      this.agentStateByTerminal.delete(id);
+    };
     ptyClient.on("spawn-result", onSpawnResult);
     ptyClient.on("host-crash", onHostCrash);
+    ptyClient.on("exit", onTerminalExit);
 
     this.agentCacheCleanup.push(offStateChanged);
     this.agentCacheCleanup.push(() => ptyClient.off("spawn-result", onSpawnResult));
     this.agentCacheCleanup.push(() => ptyClient.off("host-crash", onHostCrash));
+    this.agentCacheCleanup.push(() => ptyClient.off("exit", onTerminalExit));
 
     return seed();
   }

@@ -517,6 +517,37 @@ describe("ProjectViewManager — efficiency freeze", () => {
     expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(initialWc);
     manager.dispose();
   });
+
+  it("drops a terminal from the freeze-seed maps when it exits", async () => {
+    const captured: Record<string, (...a: unknown[]) => void> = {};
+    const ptyClient = {
+      getAllTerminalsAsync: vi.fn(async () => [
+        { id: "t1", projectId: "proj-a", agentState: "working" },
+      ]),
+      on: vi.fn((evt: string, h: (...a: unknown[]) => void) => {
+        captured[evt] = h;
+      }),
+      off: vi.fn(),
+    };
+    await manager.initAgentStateCache(ptyClient as never);
+
+    const priv = manager as unknown as {
+      projectByTerminal: Map<string, string>;
+      agentStateByTerminal: Map<string, string>;
+    };
+    // Seed populates projectByTerminal; set the agent-state entry explicitly so
+    // the test pins the exit handler's cleanup of BOTH maps.
+    priv.agentStateByTerminal.set("t1", "working");
+    expect(priv.projectByTerminal.has("t1")).toBe(true);
+
+    // The terminal exits → its now-stale entries must be dropped so a dead
+    // terminal can't keep hasActiveAgent() reporting a phantom active agent.
+    captured["exit"]?.("t1", 0);
+
+    expect(priv.projectByTerminal.has("t1")).toBe(false);
+    expect(priv.agentStateByTerminal.has("t1")).toBe(false);
+    manager.dispose();
+  });
 });
 
 describe("ProjectViewManager — memory sampler jitter", () => {

@@ -64,7 +64,7 @@ type PanelStoreModule = {
   };
 };
 
-function makeManaged(visible = true): ManagedTerminal {
+function makeManaged(visible = true, id = "term"): ManagedTerminal {
   const hostElement = document.createElement("div");
   const termEl = document.createElement("div");
   hostElement.appendChild(termEl);
@@ -84,6 +84,7 @@ function makeManaged(visible = true): ManagedTerminal {
   document.body.appendChild(hostElement);
 
   return {
+    id,
     terminal: {
       element: termEl,
       modes: { synchronizedOutputMode: false },

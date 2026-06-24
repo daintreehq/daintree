@@ -346,7 +346,7 @@ class TerminalInstanceService {
       hasInFlightWake: (id) => this.wakeManager.hasInFlightWake(id),
       hasPendingWake: (id) => this.wakeManager.hasPendingWake(id),
       isWebGLActive: (id) => this.webGLManager.isActive(id),
-      shouldHaveWebGL: (managed) => this.shouldRestoreWebGL(managed),
+      shouldHaveWebGL: (managed) => this.shouldHaveActiveWebGL(managed),
       ensureWebGL: (id, managed) => this.webGLManager.ensureContext(id, managed),
       unhibernate: (id) => this.unhibernate(id),
       forceReflow: (element) => forceXtermReflow(element),
@@ -564,6 +564,26 @@ class TerminalInstanceService {
     if (managed.isAttaching) return false;
     if (managed.isHibernated) return false;
     return this.wantsWebGLAtTier(managed, managed.lastAppliedTier ?? managed.getRefreshTier?.());
+  }
+
+  /**
+   * Watchdog-only WebGL eligibility. Identical to {@link shouldRestoreWebGL} but
+   * additionally false for a non-pinned pane in DOM-mode fallback: in DOM mode
+   * the manager only ever attaches the single focus-pinned context, so a
+   * non-pinned pane's context can never become active. Without this the
+   * watchdog's `shouldHaveWebGL && !isWebGLActive` stays permanently true for
+   * every non-pinned agent pane and burns a heavy-repair slot every tick (plus a
+   * spurious "context missing" warning). The reveal / visibility restore paths
+   * deliberately keep using {@link shouldRestoreWebGL} so they still call
+   * `ensureContext` and keep the pane in the manager's `wants` set — which is
+   * what lets a later focus change pin and attach it immediately.
+   */
+  private shouldHaveActiveWebGL(managed: ManagedTerminal): boolean {
+    if (!this.shouldRestoreWebGL(managed)) return false;
+    if (this.webGLManager.getMode() === "dom" && managed.id !== this.webGLManager.getPinnedId()) {
+      return false;
+    }
+    return true;
   }
 
   private onUserInput(id: string, data: string): void {
@@ -1505,6 +1525,7 @@ class TerminalInstanceService {
     const kind = "terminal" as const;
 
     const managed: ManagedTerminal = {
+      id,
       terminal,
       kind,
       launchAgentId,

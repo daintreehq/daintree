@@ -61,6 +61,7 @@ type WebGLVisibilityService = {
     ensureContext: (id: string, managed: unknown) => void;
     releaseContext: (id: string) => void;
     getMode: () => "webgl" | "dom";
+    getPinnedId: () => string | null;
     getWantsSize: () => number;
   };
 };
@@ -643,5 +644,55 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
     service.setVisible("t1", true);
     vi.advanceTimersByTime(100);
     expect(service.webGLManager.isActive("t1")).toBe(true);
+  });
+
+  describe("WebGL DOM-mode fallback eligibility (W3)", () => {
+    function callShouldRestore(managed: unknown): boolean {
+      return (
+        service as unknown as { shouldRestoreWebGL: (m: unknown) => boolean }
+      ).shouldRestoreWebGL(managed);
+    }
+    function callShouldHaveActive(managed: unknown): boolean {
+      return (
+        service as unknown as { shouldHaveActiveWebGL: (m: unknown) => boolean }
+      ).shouldHaveActiveWebGL(managed);
+    }
+
+    it("keeps a non-pinned DOM pane RESTORE-eligible so it stays in the manager's wants set", () => {
+      vi.spyOn(service.webGLManager, "getMode").mockReturnValue("dom");
+      vi.spyOn(service.webGLManager, "getPinnedId").mockReturnValue("pinned-other");
+      const managed = makeMockManaged({ id: "t1" });
+
+      // The reveal/visibility restore path must still call ensureContext for this
+      // pane — that keeps it in `wants`, so a later focus change can pin+attach it
+      // immediately instead of waiting on the watchdog.
+      expect(callShouldRestore(managed)).toBe(true);
+    });
+
+    it("withholds WATCHDOG repair for a non-pinned pane while in DOM-mode fallback", () => {
+      vi.spyOn(service.webGLManager, "getMode").mockReturnValue("dom");
+      vi.spyOn(service.webGLManager, "getPinnedId").mockReturnValue("pinned-other");
+      const managed = makeMockManaged({ id: "t1" });
+
+      // In DOM mode the manager only ever attaches the pinned pane; the watchdog
+      // must not burn a heavy-repair slot retrying a context it will never get.
+      expect(callShouldHaveActive(managed)).toBe(false);
+    });
+
+    it("still repairs the focus-pinned pane while in DOM-mode fallback", () => {
+      vi.spyOn(service.webGLManager, "getMode").mockReturnValue("dom");
+      vi.spyOn(service.webGLManager, "getPinnedId").mockReturnValue("t1");
+      const managed = makeMockManaged({ id: "t1" });
+
+      expect(callShouldHaveActive(managed)).toBe(true);
+    });
+
+    it("does not withhold watchdog repair outside DOM-mode fallback", () => {
+      vi.spyOn(service.webGLManager, "getMode").mockReturnValue("webgl");
+      vi.spyOn(service.webGLManager, "getPinnedId").mockReturnValue("pinned-other");
+      const managed = makeMockManaged({ id: "t1" });
+
+      expect(callShouldHaveActive(managed)).toBe(true);
+    });
   });
 });

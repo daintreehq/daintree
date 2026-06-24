@@ -15,6 +15,8 @@ export type AgentStateCallback = (state: AgentState) => void;
 export type PostCompleteHook = (output: string) => void | Promise<void>;
 
 export interface ManagedTerminal {
+  /** Stable terminal id — the key this instance is registered under. */
+  id: string;
   terminal: Terminal;
   kind?: PanelKind;
   /** Launch hint — agent this terminal was launched to run. Not identity. */
