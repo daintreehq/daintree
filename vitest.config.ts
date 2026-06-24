@@ -14,14 +14,14 @@ export default defineConfig({
     globalSetup: "./vitest.global-setup.ts",
     setupFiles: ["./vitest.setup.ts"],
     onConsoleLog: () => false,
-    // Threads pool: lower per-file spawn overhead than forks on the 2-core CI
-    // runners, where the unit suite is sharded across jobs. Safe because the
-    // global shims in vitest.setup.ts use vi.stubGlobal (restored per-file) and
-    // Vitest groups files by environment before distributing them to workers,
-    // so the node→jsdom rAF leak (vitest #6392) cannot reproduce. isolate stays
-    // at the default (true) — ProjectStore's load-time app.getPath() side effect
-    // makes isolate:false unsafe (see projectstore-eager-import-footgun).
-    pool: "threads",
+    // Pool stays at the default (forks). The threads pool was tried for lower
+    // per-file overhead, but @parcel/watcher's native addon (pulled in
+    // transitively by the file-watching services) is not context-aware and
+    // fails with "Module did not self-register" when loaded into a second
+    // worker_thread on Linux. Forks give each worker its own process, sidestep
+    // that, and the headline speedup is the 4-way sharding in ci.yml — not the
+    // pool. minWorkers is left unset so workers track CPU count (the old
+    // minWorkers:3 forced 3 workers even on the 2-core CI runners).
     maxConcurrency: 10,
     include: [
       "electron/**/*.{test,spec}.{js,ts}",
