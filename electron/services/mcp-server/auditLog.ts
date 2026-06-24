@@ -650,6 +650,9 @@ export type AuditOutcome =
   | { kind: "unauthorized" }
   | { kind: "dedup" }
   | { kind: "collision" }
+  // Legacy, dead for writers: nothing constructs this since the CallTool rate
+  // limiter was removed (#10764). Retained so `classifyMcpDispatchResult` can
+  // still map the `rate_limited` outcome carried by historical on-disk records.
   | { kind: "rate_limited"; retryAfter: number };
 
 /**

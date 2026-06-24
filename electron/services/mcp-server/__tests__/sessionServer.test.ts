@@ -2265,6 +2265,29 @@ describe("MCP_DEDUP_ALLOWLIST widening (#9156)", () => {
   );
 });
 
+describe("CallTool rate limiter removal (#10764)", () => {
+  it("dispatches a burst of mutation calls without ever rejecting with MCP_RATE_LIMITED", async () => {
+    // The mutation tier used to cap git.commit at 10/min — a burst past the
+    // cap returned MCP_RATE_LIMITED before dispatch. With the limiter gone,
+    // every call must reach dispatch. Distinct args sidestep dedup so each is
+    // a genuine dispatch, not a cached hit.
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+    const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
+    const server = createSessionServer("rl-removed", deps);
+
+    const BURST = 15; // comfortably past the old mutation cap of 10
+    for (let i = 0; i < BURST; i++) {
+      const result = (await callTool(server, {
+        name: "git.commit",
+        arguments: { message: `commit-${i}` },
+      })) as { isError?: boolean };
+      expect(result.isError).not.toBe(true);
+    }
+
+    expect(dispatchAction).toHaveBeenCalledTimes(BURST);
+  });
+});
+
 describe("validateDisplayImageUrl (#9828)", () => {
   it("accepts an https://daintree.org apex image URL", () => {
     expect(validateDisplayImageUrl("https://daintree.org/docs/img/panel.png")).toEqual({

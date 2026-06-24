@@ -14,9 +14,10 @@
  * - `dedup`: a duplicate creation-tool call was suppressed by the
  *   per-session idempotency guard and the cached or in-flight result was
  *   returned. No second dispatch was performed.
- * - `rate_limited`: the per-`(session, toolId)` token bucket was exhausted
- *   and the call was rejected before dispatch with a `retryAfter` hint. No
- *   dispatch was performed — this is a runaway-loop guard, not a failure.
+ * - `rate_limited`: legacy value, no longer emitted. The per-`(session,
+ *   toolId)` token-bucket rate limiter was removed in #10764; this value is
+ *   retained only so historical on-disk audit records (which carry it, with
+ *   the wait in `resultMeta.retryAfter`) still render and classify.
  */
 export type McpAuditResult =
   | "success"
