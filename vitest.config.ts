@@ -14,7 +14,14 @@ export default defineConfig({
     globalSetup: "./vitest.global-setup.ts",
     setupFiles: ["./vitest.setup.ts"],
     onConsoleLog: () => false,
-    minWorkers: 3,
+    // Threads pool: lower per-file spawn overhead than forks on the 2-core CI
+    // runners, where the unit suite is sharded across jobs. Safe because the
+    // global shims in vitest.setup.ts use vi.stubGlobal (restored per-file) and
+    // Vitest groups files by environment before distributing them to workers,
+    // so the node→jsdom rAF leak (vitest #6392) cannot reproduce. isolate stays
+    // at the default (true) — ProjectStore's load-time app.getPath() side effect
+    // makes isolate:false unsafe (see projectstore-eager-import-footgun).
+    pool: "threads",
     maxConcurrency: 10,
     include: [
       "electron/**/*.{test,spec}.{js,ts}",

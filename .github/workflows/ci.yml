@@ -35,10 +35,10 @@ env:
   ONNXRUNTIME_NODE_INSTALL: "skip"
 
 jobs:
-  # Typecheck + lint + format + unit tests, all in one job. The suite was once
-  # split into a sharded `test` matrix to parallelise wall-clock, but that's no
-  # longer necessary — the tests run inline here alongside check, sharing the
-  # single `npm ci` setup.
+  # Typecheck + lint + format. The unit suite runs separately in the sharded
+  # `test` job below (gated on this job passing) so the ~1.7k-file suite
+  # parallelises across runners instead of serialising behind check on a single
+  # 2-core runner.
   check:
     # Push/PR runs ubuntu only. Manual dispatch can opt into windows or both
     # via `gh workflow run CI --ref <branch> -f os=windows` (or `os=both`).
@@ -71,8 +71,53 @@ jobs:
       - name: Check (typecheck + lint + format)
         run: npm run check
 
-      - name: Test (vitest unit)
-        run: npm run test
+  # Unit suite, sharded 4 ways across ubuntu runners. Gated on `check` so a
+  # typecheck/lint failure skips all shards instead of burning 4 runners.
+  # Ubuntu-only by design — Windows unit coverage runs in nightly, and adding
+  # it here would quadruple cost for no branch-protection benefit.
+  test:
+    needs: [check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Vite transform cache — transforms are content-addressed, so all shards
+      # can safely share one cache. Keyed on the lockfile + vitest/vite config so
+      # a dependency or config change invalidates it; the restore-key fallback
+      # tolerates a partial hit (stale entries are regenerated, not trusted).
+      - name: Cache Vite transforms
+        uses: actions/cache@v5
+        with:
+          path: |
+            node_modules/.vite
+            node_modules/.cache
+          key: ${{ runner.os }}-vite-${{ hashFiles('package-lock.json', 'vitest.config.ts', 'vite.config.ts') }}
+          restore-keys: |
+            ${{ runner.os }}-vite-
+
+      - name: Test (vitest unit, shard ${{ matrix.shard }}/4)
+        run: npx vitest run --shard=${{ matrix.shard }}/4
 
   build:
     runs-on: ubuntu-latest
@@ -147,7 +192,7 @@ jobs:
   # Insulates against matrix/job name changes breaking required checks.
   ci-ok:
     if: always()
-    needs: [check, build]
+    needs: [check, test, build]
     runs-on: ubuntu-latest
     timeout-minutes: 2
 
