@@ -396,7 +396,7 @@ describe("useRepositoryStats", () => {
       expect(result.current.stats?.issueCount).toBe(2);
     });
 
-    it("restores cached stats without a skeleton when switching back within FRESH_THRESHOLD_MS", async () => {
+    it("restores cached stats and skips the network revalidation when switching back within FRESH_THRESHOLD_MS (#10765)", async () => {
       let currentProject = { id: "a", path: "/repo/a" };
       getCurrentMock.mockImplementation(async () => currentProject);
       let switchHandler: (() => void) | undefined;
@@ -408,20 +408,8 @@ describe("useRepositoryStats", () => {
       const now = Date.now();
       const statsA = freshStats({ commitCount: 7, issueCount: 4, prCount: 3, lastUpdated: now });
       const statsB = freshStats({ commitCount: 12, issueCount: 1, prCount: 1, lastUpdated: now });
-      const statsARevalidated = freshStats({
-        commitCount: 8,
-        issueCount: 5,
-        prCount: 3,
-        lastUpdated: now + 1,
-      });
-      // Hold the switch-back revalidation so the restored cache value is
-      // observable before fresh data lands over it.
-      const slowRevalidate = createDeferred<ForgeRepositoryStats>();
 
-      getRepoStatsMock
-        .mockResolvedValueOnce(statsA)
-        .mockResolvedValueOnce(statsB)
-        .mockImplementationOnce(() => slowRevalidate.promise);
+      getRepoStatsMock.mockResolvedValueOnce(statsA).mockResolvedValueOnce(statsB);
 
       const { result } = renderHook(() => useRepositoryStats());
       await waitFor(() => expect(result.current.stats?.commitCount).toBe(7));
@@ -433,8 +421,11 @@ describe("useRepositoryStats", () => {
       await waitFor(() => expect(result.current.stats?.commitCount).toBe(12));
 
       // Switch back to A within the freshness window — cached counts restore
-      // immediately, the skeleton never shows, and a background revalidation
-      // still fires.
+      // immediately, the skeleton never shows. Before #10765 a reactivation
+      // here fired a third getRepoStats call (the redundant revalidation that,
+      // under rapid switching, bursts past the IPC rate limiter and paints the
+      // red toolbar error). Now the fresh cache short-circuits the network:
+      // getRepoStats stays at 2 total.
       currentProject = { id: "a", path: "/repo/a" };
       act(() => {
         switchHandler?.();
@@ -443,14 +434,193 @@ describe("useRepositoryStats", () => {
         expect(result.current.stats?.commitCount).toBe(7);
         expect(result.current.loading).toBe(false);
       });
-      expect(getRepoStatsMock).toHaveBeenCalledTimes(3);
-
-      // The background revalidation converges to fresh data.
+      // Flush any queued/drained reactivation fetch to prove none fires.
       await act(async () => {
-        slowRevalidate.resolve(statsARevalidated);
         await Promise.resolve();
       });
-      await waitFor(() => expect(result.current.stats?.commitCount).toBe(8));
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("skips the network even when both project-switch and visibility reactivations fire (#10765)", async () => {
+      // Production per-view reality: reactivating a backgrounded WebContentsView
+      // fires BOTH onProjectSwitch and visibilitychange, each a reactivation
+      // fetch. With fresh cached data neither should hit the network — this is
+      // the exact double-trigger that bursts the rate limiter on rapid switching.
+      let currentProject = { id: "a", path: "/repo/a" };
+      getCurrentMock.mockImplementation(async () => currentProject);
+      let switchHandler: (() => void) | undefined;
+      onSwitchMock.mockImplementation((cb: () => void) => {
+        switchHandler = cb;
+        return () => {};
+      });
+
+      const now = Date.now();
+      const statsA = freshStats({ commitCount: 7, issueCount: 4, prCount: 3, lastUpdated: now });
+      const statsB = freshStats({ commitCount: 12, issueCount: 1, prCount: 1, lastUpdated: now });
+      getRepoStatsMock.mockResolvedValueOnce(statsA).mockResolvedValueOnce(statsB);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(7));
+
+      currentProject = { id: "b", path: "/repo/b" };
+      act(() => {
+        switchHandler?.();
+      });
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(12));
+
+      // Switch back to A and fire both reactivation triggers in one tick.
+      currentProject = { id: "a", path: "/repo/a" };
+      Object.defineProperty(document, "hidden", { value: false, configurable: true });
+      await act(async () => {
+        switchHandler?.();
+        document.dispatchEvent(new Event("visibilitychange"));
+        await Promise.resolve();
+      });
+
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(7));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("still force-fetches on a manual refresh after a fresh reactivation (#10765)", async () => {
+      let currentProject = { id: "a", path: "/repo/a" };
+      getCurrentMock.mockImplementation(async () => currentProject);
+      let switchHandler: (() => void) | undefined;
+      onSwitchMock.mockImplementation((cb: () => void) => {
+        switchHandler = cb;
+        return () => {};
+      });
+
+      const now = Date.now();
+      const statsA = freshStats({ commitCount: 7, issueCount: 4, prCount: 3, lastUpdated: now });
+      const statsB = freshStats({ commitCount: 12, issueCount: 1, prCount: 1, lastUpdated: now });
+      const statsARefreshed = freshStats({
+        commitCount: 9,
+        issueCount: 6,
+        prCount: 4,
+        lastUpdated: now + 1,
+      });
+      getRepoStatsMock
+        .mockResolvedValueOnce(statsA)
+        .mockResolvedValueOnce(statsB)
+        .mockResolvedValueOnce(statsARefreshed);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(7));
+
+      currentProject = { id: "b", path: "/repo/b" };
+      act(() => {
+        switchHandler?.();
+      });
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(12));
+
+      // Fresh reactivation back to A — restores cache, no network.
+      currentProject = { id: "a", path: "/repo/a" };
+      act(() => {
+        switchHandler?.();
+      });
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(7));
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+
+      // A manual refresh is forced and reason 'manual' — it must always hit the
+      // network, never short-circuit on freshness.
+      await act(async () => {
+        await result.current.refresh({ force: true });
+      });
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(9));
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(3);
+      expect(getRepoStatsMock.mock.calls[2]?.[1]).toBe(true);
+    });
+
+    it("never paints an error under rapid dual-trigger switching once data is cached (#10765)", async () => {
+      // Closest reproduction of the production failure: each switch fires both
+      // onProjectSwitch and visibilitychange, and the IPC layer rejects once a
+      // burst exceeds the 10-calls/10s limiter. With freshness short-circuiting,
+      // only the two cold loads reach the network, so the burst never trips it.
+      let currentProject = { id: "a", path: "/repo/a" };
+      getCurrentMock.mockImplementation(async () => currentProject);
+      let switchHandler: (() => void) | undefined;
+      onSwitchMock.mockImplementation((cb: () => void) => {
+        switchHandler = cb;
+        return () => {};
+      });
+
+      const now = Date.now();
+      let callCount = 0;
+      getRepoStatsMock.mockImplementation(async (path: string) => {
+        callCount += 1;
+        if (callCount > 10) throw new Error("RATE_LIMITED: too many requests");
+        return freshStats({ commitCount: path === "/repo/a" ? 7 : 12, lastUpdated: now });
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(7));
+
+      Object.defineProperty(document, "hidden", { value: false, configurable: true });
+      const sequence = ["/repo/b", "/repo/a", "/repo/b", "/repo/a", "/repo/b", "/repo/a"];
+      for (const path of sequence) {
+        currentProject = { id: path, path };
+        await act(async () => {
+          switchHandler?.();
+          document.dispatchEvent(new Event("visibilitychange"));
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+      }
+
+      await waitFor(() => expect(result.current.stats).not.toBeNull());
+      // Only the two cold loads (A, then B) hit the network; every subsequent
+      // reactivation restores fresh cache and short-circuits.
+      expect(callCount).toBeLessThanOrEqual(3);
+      expect(result.current.error).toBeNull();
+      expect(result.current.freshnessLevel).not.toBe("errored");
+    });
+
+    it("skips the network when reactivation triggers arrive in separate ticks (#10765)", async () => {
+      // The same-tick dual-trigger test guarantees queue coalescing; this one
+      // proves the short-circuit also holds when onProjectSwitch and
+      // visibilitychange land in distinct macrotasks (no coalescing).
+      let currentProject = { id: "a", path: "/repo/a" };
+      getCurrentMock.mockImplementation(async () => currentProject);
+      let switchHandler: (() => void) | undefined;
+      onSwitchMock.mockImplementation((cb: () => void) => {
+        switchHandler = cb;
+        return () => {};
+      });
+
+      const now = Date.now();
+      const statsA = freshStats({ commitCount: 7, issueCount: 4, prCount: 3, lastUpdated: now });
+      const statsB = freshStats({ commitCount: 12, issueCount: 1, prCount: 1, lastUpdated: now });
+      getRepoStatsMock.mockResolvedValueOnce(statsA).mockResolvedValueOnce(statsB);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(7));
+
+      currentProject = { id: "b", path: "/repo/b" };
+      act(() => {
+        switchHandler?.();
+      });
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(12));
+
+      // Switch back to A — fire the two triggers in separate act() ticks.
+      currentProject = { id: "a", path: "/repo/a" };
+      await act(async () => {
+        switchHandler?.();
+        await Promise.resolve();
+      });
+      Object.defineProperty(document, "hidden", { value: false, configurable: true });
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+        await Promise.resolve();
+      });
+
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(7));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
     });
 
     it("does not reuse cached stats when switching back after FRESH_THRESHOLD_MS", async () => {

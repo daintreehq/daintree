@@ -1,10 +1,37 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { projectClient } from "@/clients";
 
+/**
+ * Why a fetch fired. Lets a consumer treat a cheap reactivation (tab focus /
+ * project switch back) differently from a scheduled poll, manual refresh, or
+ * cold start — e.g. skip a redundant network revalidation when cached data is
+ * still fresh. Strength ordering (weakest→strongest):
+ * `initial < reactivate < scheduled < manual` — see `REASON_RANK`.
+ */
+export type PollingLifecycleFetchReason = "initial" | "reactivate" | "scheduled" | "manual";
+
 export interface PollingLifecycleFetchContext {
   force: boolean;
   fetchId: number;
   isInvalidated: () => boolean;
+  reason: PollingLifecycleFetchReason;
+}
+
+// Strongest-wins coalescing rank. When a second trigger arrives while a fetch
+// is in flight, the queued reason is promoted to the stronger of the two so a
+// pending `manual`/`scheduled` is never downgraded by a later `reactivate`.
+const REASON_RANK: Record<PollingLifecycleFetchReason, number> = {
+  initial: 0,
+  reactivate: 1,
+  scheduled: 2,
+  manual: 3,
+};
+
+function strongerReason(
+  a: PollingLifecycleFetchReason,
+  b: PollingLifecycleFetchReason
+): PollingLifecycleFetchReason {
+  return REASON_RANK[b] > REASON_RANK[a] ? b : a;
 }
 
 export interface PollingLifecycleConfig {
@@ -163,9 +190,14 @@ export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLife
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isVisibleRef = useRef(!document.hidden);
   const inFlightRef = useRef(false);
-  const queuedFetchRef = useRef<{ pending: boolean; force: boolean }>({
+  const queuedFetchRef = useRef<{
+    pending: boolean;
+    force: boolean;
+    reason: PollingLifecycleFetchReason;
+  }>({
     pending: false,
     force: false,
+    reason: "initial",
   });
   const activeFetchIdRef = useRef(0);
   const invalidatedFetchIdRef = useRef<number | null>(null);
@@ -185,10 +217,14 @@ export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLife
     configRef.current = config;
   });
 
-  const callFetchFn = useCallback(async function callFetchFnImpl(force: boolean): Promise<void> {
+  const callFetchFn = useCallback(async function callFetchFnImpl(
+    force: boolean,
+    reason: PollingLifecycleFetchReason
+  ): Promise<void> {
     if (inFlightRef.current) {
       queuedFetchRef.current.pending = true;
       queuedFetchRef.current.force = queuedFetchRef.current.force || force;
+      queuedFetchRef.current.reason = strongerReason(queuedFetchRef.current.reason, reason);
       invalidatedFetchIdRef.current = activeFetchIdRef.current;
       return;
     }
@@ -199,7 +235,7 @@ export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLife
       const fetchId = activeFetchIdRef.current;
       const isInvalidated = () => invalidatedFetchIdRef.current === fetchId;
       try {
-        await configRef.current.fetchFn({ force, fetchId, isInvalidated });
+        await configRef.current.fetchFn({ force, fetchId, isInvalidated, reason });
       } catch (err) {
         // The consumer's fetchFn is responsible for surfacing its own errors
         // (setError, lastErrorRef). The primitive catches here so a throw —
@@ -214,11 +250,12 @@ export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLife
       inFlightRef.current = false;
       if (aliveRef.current && queuedFetchRef.current.pending) {
         const queuedForce = queuedFetchRef.current.force;
-        queuedFetchRef.current = { pending: false, force: false };
+        const queuedReason = queuedFetchRef.current.reason;
+        queuedFetchRef.current = { pending: false, force: false, reason: "initial" };
         // Named-function self-recursion — avoids referencing the outer
         // `callFetchFn` variable, which would close over a potentially
         // stale binding before useCallback returns.
-        void callFetchFnImpl(queuedForce);
+        void callFetchFnImpl(queuedForce, queuedReason);
       }
     }
   }, []);
@@ -237,7 +274,7 @@ export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLife
         isVisible: isVisibleRef.current,
       });
       pollTimerRef.current = setTimeout(() => {
-        void callFetchFn(false).then(() => {
+        void callFetchFn(false, "scheduled").then(() => {
           if (aliveRef.current) scheduleNextPollImpl();
         });
       }, interval);
@@ -252,7 +289,7 @@ export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLife
         clearTimeout(pollTimerRef.current);
         pollTimerRef.current = null;
       }
-      await callFetchFn(options?.force ?? false);
+      await callFetchFn(options?.force ?? false, "manual");
       if (aliveRef.current) scheduleNextPoll();
     },
     [callFetchFn, scheduleNextPoll]
@@ -287,7 +324,7 @@ export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLife
           clearTimeout(pollTimerRef.current);
           pollTimerRef.current = null;
         }
-        void callFetchFn(false).then(() => {
+        void callFetchFn(false, "reactivate").then(() => {
           if (aliveRef.current) scheduleNextPoll();
         });
       },
@@ -308,7 +345,7 @@ export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLife
           pollTimerRef.current = null;
         }
         configRef.current.onProjectSwitch?.();
-        void callFetchFn(false).then(() => {
+        void callFetchFn(false, "reactivate").then(() => {
           if (aliveRef.current) scheduleNextPoll();
         });
       },
@@ -317,14 +354,14 @@ export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLife
     subscribers.add(subscriber);
     ensureGlobalListenersInstalled();
 
-    void callFetchFn(false).then(() => {
+    void callFetchFn(false, "initial").then(() => {
       if (aliveRef.current) scheduleNextPoll();
     });
 
     return () => {
       aliveRef.current = false;
       subscribers.delete(subscriber);
-      queuedFetchRef.current = { pending: false, force: false };
+      queuedFetchRef.current = { pending: false, force: false, reason: "initial" };
       invalidatedFetchIdRef.current = null;
       if (pollTimerRef.current) {
         clearTimeout(pollTimerRef.current);

@@ -12,7 +12,18 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-import { usePollingLifecycle, _resetPollingLifecycleForTests } from "../usePollingLifecycle";
+import {
+  usePollingLifecycle,
+  _resetPollingLifecycleForTests,
+  type PollingLifecycleFetchReason,
+} from "../usePollingLifecycle";
+
+type TestFetchContext = {
+  force: boolean;
+  fetchId: number;
+  isInvalidated: () => boolean;
+  reason: PollingLifecycleFetchReason;
+};
 
 function createDeferred<T>() {
   let resolve: (value: T) => void;
@@ -25,11 +36,7 @@ function createDeferred<T>() {
 }
 
 function setupHook(opts: {
-  fetchFn?: (ctx: {
-    force: boolean;
-    fetchId: number;
-    isInvalidated: () => boolean;
-  }) => Promise<void>;
+  fetchFn?: (ctx: TestFetchContext) => Promise<void>;
   calculateNextInterval?: (ctx: { isVisible: boolean }) => number;
   onProjectSwitch?: () => void;
 }) {
@@ -324,6 +331,191 @@ describe("usePollingLifecycle", () => {
     });
   });
 
+  describe("fetch reason (#10765)", () => {
+    it("tags the initial mount fetch with reason 'initial'", async () => {
+      const fetchFn = vi.fn().mockResolvedValue(undefined);
+      setupHook({ fetchFn });
+
+      await waitFor(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(1);
+      });
+      expect(fetchFn.mock.calls[0]?.[0]?.reason).toBe("initial");
+    });
+
+    it("tags a visibilitychange-visible reactivation with reason 'reactivate'", async () => {
+      const fetchFn = vi.fn().mockResolvedValue(undefined);
+      setupHook({ fetchFn });
+
+      await waitFor(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(1);
+      });
+
+      Object.defineProperty(document, "hidden", { value: false, configurable: true });
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(2);
+      });
+      expect(fetchFn.mock.calls[1]?.[0]?.reason).toBe("reactivate");
+    });
+
+    it("tags a project switch with reason 'reactivate'", async () => {
+      let captured: (() => void) | undefined;
+      onSwitchMock.mockImplementation((cb) => {
+        captured = cb;
+        return () => {};
+      });
+
+      const fetchFn = vi.fn().mockResolvedValue(undefined);
+      setupHook({ fetchFn });
+
+      await waitFor(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(1);
+      });
+
+      await act(async () => {
+        captured?.();
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(2);
+      });
+      expect(fetchFn.mock.calls[1]?.[0]?.reason).toBe("reactivate");
+    });
+
+    it("tags a sidebar refresh with reason 'manual'", async () => {
+      const fetchFn = vi.fn().mockResolvedValue(undefined);
+      setupHook({ fetchFn });
+
+      await waitFor(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(1);
+      });
+
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent("daintree:refresh-sidebar"));
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(2);
+      });
+      expect(fetchFn.mock.calls[1]?.[0]?.reason).toBe("manual");
+    });
+
+    it("tags an explicit refresh() with reason 'manual'", async () => {
+      const fetchFn = vi.fn().mockResolvedValue(undefined);
+      const { hook } = setupHook({ fetchFn });
+
+      await waitFor(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(1);
+      });
+
+      await act(async () => {
+        await hook.result.current.refresh();
+      });
+
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+      expect(fetchFn.mock.calls[1]?.[0]?.reason).toBe("manual");
+    });
+
+    it("tags a scheduled poll with reason 'scheduled'", async () => {
+      const fetchFn = vi.fn().mockResolvedValue(undefined);
+      // First reschedule fires quickly (one scheduled poll); the second pushes
+      // the next poll far out so the count settles at 2 under real timers
+      // instead of looping a tight interval.
+      let intervalCalls = 0;
+      setupHook({
+        fetchFn,
+        calculateNextInterval: () => (intervalCalls++ === 0 ? 5 : 10_000_000),
+      });
+
+      await waitFor(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(2);
+      });
+      expect(fetchFn.mock.calls[1]?.[0]?.reason).toBe("scheduled");
+    });
+
+    it("coalesces a queued reactivate up to a stronger manual when both arrive in flight", async () => {
+      const deferred = createDeferred<void>();
+      let callCount = 0;
+      const fetchFn = vi.fn().mockImplementation(async () => {
+        callCount += 1;
+        if (callCount === 1) await deferred.promise;
+      });
+
+      const { hook } = setupHook({ fetchFn });
+
+      await waitFor(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(1);
+      });
+
+      // While the initial fetch is in flight, queue a manual (sidebar) then a
+      // reactivate (visibility). The reactivate must NOT downgrade the queued
+      // reason — strongest-wins keeps it 'manual'.
+      Object.defineProperty(document, "hidden", { value: false, configurable: true });
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent("daintree:refresh-sidebar"));
+        document.dispatchEvent(new Event("visibilitychange"));
+        await Promise.resolve();
+      });
+
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        deferred.resolve();
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(2);
+      });
+      // Single coalesced drain, tagged with the strongest queued reason.
+      expect(fetchFn.mock.calls[1]?.[0]?.reason).toBe("manual");
+      expect(fetchFn.mock.calls[1]?.[0]?.force).toBe(true);
+
+      hook.unmount();
+    });
+
+    it("keeps a queued manual when a later reactivate arrives (order-independent)", async () => {
+      const deferred = createDeferred<void>();
+      let callCount = 0;
+      const fetchFn = vi.fn().mockImplementation(async () => {
+        callCount += 1;
+        if (callCount === 1) await deferred.promise;
+      });
+
+      const { hook } = setupHook({ fetchFn });
+
+      await waitFor(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(1);
+      });
+
+      // Reverse order vs the previous test: reactivate first, then manual.
+      Object.defineProperty(document, "hidden", { value: false, configurable: true });
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+        window.dispatchEvent(new CustomEvent("daintree:refresh-sidebar"));
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        deferred.resolve();
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(2);
+      });
+      expect(fetchFn.mock.calls[1]?.[0]?.reason).toBe("manual");
+
+      hook.unmount();
+    });
+  });
+
   describe("control object", () => {
     it("returns a stable scheduleNextPoll / refresh control across renders", () => {
       const { hook } = setupHook({});
@@ -427,11 +619,7 @@ describe("usePollingLifecycle", () => {
   describe("enabled gate (#10123)", () => {
     function setupGatedHook(opts: {
       enabled: boolean;
-      fetchFn?: (ctx: {
-        force: boolean;
-        fetchId: number;
-        isInvalidated: () => boolean;
-      }) => Promise<void>;
+      fetchFn?: (ctx: TestFetchContext) => Promise<void>;
       calculateNextInterval?: (ctx: { isVisible: boolean }) => number;
     }) {
       const fetchFn = opts.fetchFn ?? vi.fn().mockResolvedValue(undefined);
