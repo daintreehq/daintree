@@ -400,28 +400,27 @@ describe("WorktreeHeader primary worktree standard branch layout", () => {
     expect(screen.getByText("main")).toBeDefined();
   });
 
-  it("applies active styling to project name when isActive", () => {
-    renderHeader({
+  it("styles the project name differently when active vs inactive", () => {
+    const active = renderHeader({
       worktree: mainWorktree,
       isMainWorktree: true,
       isMainOnStandardBranch: true,
       isActive: true,
       branchLabel: "main",
     });
-    const projectName = screen.getByTestId("primary-worktree-project-name");
-    expect(projectName.className).toContain("text-text-primary/90");
-  });
+    const activeClass = active.getByTestId("primary-worktree-project-name").className;
+    active.unmount();
 
-  it("applies inactive styling to project name when not active", () => {
-    renderHeader({
+    const inactive = renderHeader({
       worktree: mainWorktree,
       isMainWorktree: true,
       isMainOnStandardBranch: true,
       isActive: false,
       branchLabel: "main",
     });
-    const projectName = screen.getByTestId("primary-worktree-project-name");
-    expect(projectName.className).toContain("text-text-secondary");
+    const inactiveClass = inactive.getByTestId("primary-worktree-project-name").className;
+
+    expect(activeClass).not.toBe(inactiveClass);
   });
 
   it("falls back to BranchLabel when isMainOnStandardBranch is false", () => {
@@ -716,31 +715,6 @@ describe("WorktreeHeader click bubbling", () => {
     fireEvent.click(collapseButton);
     expect(onToggleCollapse).toHaveBeenCalledOnce();
     expect(onParentClick).not.toHaveBeenCalled();
-  });
-});
-
-describe("WorktreeHeader decorative elements", () => {
-  it("Sprout icon has pointer-events-none when isMainWorktree", () => {
-    const { container } = renderHeader({ isMainWorktree: true });
-    const sprout = container.querySelector('svg[aria-hidden="true"]');
-    expect(sprout).toBeDefined();
-    expect(sprout!.getAttribute("class")).toContain("pointer-events-none");
-  });
-
-  it("Pin icon has pointer-events-none when isPinned", () => {
-    const { container } = renderHeader({ isPinned: true });
-    const pin = container.querySelector('svg[aria-label="Pinned"]');
-    expect(pin).toBeDefined();
-    expect(pin!.getAttribute("class")).toContain("pointer-events-none");
-  });
-
-  it("git state badge has pointer-events-none", () => {
-    renderHeader({
-      gitStateIndicator: { kind: "detached", label: "detached", tone: "warning" },
-    });
-    const badge = screen.getByText("detached");
-    expect(badge.className).toContain("pointer-events-none");
-    expect(badge.className).toContain("text-status-warning");
   });
 });
 

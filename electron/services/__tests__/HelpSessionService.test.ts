@@ -1813,25 +1813,27 @@ describe("HelpSessionService", () => {
       expect(args).toEqual(["--approval-mode=plan"]);
     });
 
-    it("getGeminiLaunchArgs returns null for a Claude session (cross-agent defense)", async () => {
-      const result = await service.provisionSession(provisionInput());
+    it.each([
+      {
+        name: "getGeminiLaunchArgs returns null for a Claude session",
+        provision: () => provisionInput(),
+        call: (token: string) => service.getGeminiLaunchArgs(token),
+      },
+      {
+        name: "getGeminiLaunchArgs returns null for a Codex session",
+        provision: () => ({ ...provisionInput(), agentId: "codex" as const }),
+        call: (token: string) => service.getGeminiLaunchArgs(token),
+      },
+      {
+        name: "getCodexLaunchArgs returns null for a Gemini session",
+        provision: () => geminiInput(),
+        call: (token: string) => service.getCodexLaunchArgs(token),
+      },
+    ])("$name (cross-agent defense)", async ({ provision, call }) => {
+      const result = await service.provisionSession(provision());
       if (!result) throw new Error("expected result");
 
-      expect(service.getGeminiLaunchArgs(result.token)).toBeNull();
-    });
-
-    it("getGeminiLaunchArgs returns null for a Codex session (cross-agent defense)", async () => {
-      const result = await service.provisionSession({ ...provisionInput(), agentId: "codex" });
-      if (!result) throw new Error("expected result");
-
-      expect(service.getGeminiLaunchArgs(result.token)).toBeNull();
-    });
-
-    it("getCodexLaunchArgs returns null for a Gemini session (cross-agent defense)", async () => {
-      const result = await service.provisionSession(geminiInput());
-      if (!result) throw new Error("expected result");
-
-      expect(service.getCodexLaunchArgs(result.token)).toBeNull();
+      expect(call(result.token)).toBeNull();
     });
 
     it("getGeminiLaunchArgs returns null for unknown / revoked tokens", async () => {
@@ -2081,19 +2083,21 @@ describe("HelpSessionService", () => {
       expect(service.getCopilotLaunchArgs(result.token)).toEqual(["--plan"]);
     });
 
-    it("getCopilotLaunchArgs returns null for a Claude session (cross-agent defense)", async () => {
-      const result = await service.provisionSession(provisionInput());
-      if (!result) throw new Error("expected result");
+    it.each([
+      { name: "a Claude session", provision: () => provisionInput() },
+      {
+        name: "a Gemini session",
+        provision: () => ({ ...provisionInput(), agentId: "gemini" as const }),
+      },
+    ])(
+      "getCopilotLaunchArgs returns null for $name (cross-agent defense)",
+      async ({ provision }) => {
+        const result = await service.provisionSession(provision());
+        if (!result) throw new Error("expected result");
 
-      expect(service.getCopilotLaunchArgs(result.token)).toBeNull();
-    });
-
-    it("getCopilotLaunchArgs returns null for a Gemini session (cross-agent defense)", async () => {
-      const result = await service.provisionSession({ ...provisionInput(), agentId: "gemini" });
-      if (!result) throw new Error("expected result");
-
-      expect(service.getCopilotLaunchArgs(result.token)).toBeNull();
-    });
+        expect(service.getCopilotLaunchArgs(result.token)).toBeNull();
+      }
+    );
 
     it("getCopilotLaunchArgs returns null for unknown / revoked tokens", async () => {
       const result = await service.provisionSession(copilotInput());
