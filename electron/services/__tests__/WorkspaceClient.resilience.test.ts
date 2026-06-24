@@ -157,6 +157,9 @@ describe("WorkspaceClient multi-process manager", () => {
       maxRestartAttempts: 3,
       showCrashDialog: false,
       healthCheckIntervalMs: 1000,
+      // Pin the dormant warm-pool cap so eviction assertions stay deterministic
+      // regardless of the host machine's RAM (the default is now RAM-scaled).
+      maxWarmEntries: 3,
     });
   });
 

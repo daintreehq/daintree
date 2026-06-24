@@ -1,8 +1,10 @@
 // eager-import-allow: reads workspace-host config via store.get synchronously during pool setup
+import os from "node:os";
 import { type WebContents } from "electron";
 import path from "path";
 import { WorkspaceHostProcess } from "../WorkspaceHostProcess.js";
 import { store } from "../../store.js";
+import { computeDefaultCachedViews } from "../../utils/cachedProjectViews.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { isValidLogOverrideLevel } from "../../utils/logger.js";
 import { type ProcessEntry, sendToEntryWindows } from "./types.js";
@@ -13,12 +15,21 @@ import { generateProjectId } from "../projectStorePaths.js";
 import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 
 const CLEANUP_GRACE_MS = 180_000;
-const MAX_WARM_ENTRIES = 3;
 
+// Dormant workspace-host warm pool, RAM-scaled to match the project-view cache
+// default (computeDefaultCachedViews: 2/3/4/5 across <16/16/32/64 GiB). The old
+// fixed 3 meant cycling 5+ projects evicted/respawned a host on nearly every
+// switch (utility-process fork + a full git rescan each time) — churn that
+// shows up as workspace-host spawn storms. Switch-away hosts are paused
+// (background: polling/PR/fetch timers stopped) and every dormant host still
+// expires after CLEANUP_GRACE_MS, so a larger pool mainly avoids respawns on
+// switch-back. The cost is bounded-resident (a few more paused utility
+// processes + their health checks), not steady-state polling.
 const DEFAULT_CONFIG: Required<WorkspaceClientConfig> = {
   maxRestartAttempts: 3,
   healthCheckIntervalMs: 10000,
   showCrashDialog: true,
+  maxWarmEntries: computeDefaultCachedViews(os.totalmem()),
 };
 
 async function readForgeSettingsForProject(projectPath: string): Promise<{
@@ -99,6 +110,15 @@ export class WorkspaceHostPool {
 
   constructor(deps: WorkspaceHostPoolDeps) {
     this.config = { ...DEFAULT_CONFIG, ...deps.config };
+    // Normalize the warm-pool cap: the spread above lets a caller passing
+    // `{ maxWarmEntries: undefined }` (or a NaN/negative/Infinity) override the
+    // default, and a negative cap would spin `enforceDormantCap()` forever
+    // (dormantCount can never drop below 0). Coerce to a finite non-negative
+    // integer, falling back to the RAM-scaled default. 0 is valid (evict all
+    // dormant hosts immediately).
+    const cap = this.config.maxWarmEntries;
+    this.config.maxWarmEntries =
+      Number.isFinite(cap) && cap >= 0 ? Math.floor(cap) : DEFAULT_CONFIG.maxWarmEntries;
     this.emit = deps.emit;
     this.onProjectSwitch = deps.onProjectSwitch;
   }
@@ -411,7 +431,7 @@ export class WorkspaceHostPool {
       }
     }
 
-    while (dormantCount > MAX_WARM_ENTRIES) {
+    while (dormantCount > this.config.maxWarmEntries) {
       for (const [path, entry] of this.entries) {
         if (entry.refCount <= 0 && entry.cleanupTimeout !== null) {
           this.evictEntry(path, entry);
