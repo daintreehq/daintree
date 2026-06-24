@@ -824,7 +824,7 @@ function AppInner() {
       void preloadNewWorktreeDialog();
       void preloadActionPalette();
       void preloadQuickSwitcher();
-      void preloadProjectSwitcherPalette();
+      preloadProjectSwitcherPalette().catch(() => {});
       void preloadWorktreePalette();
       void preloadNewTerminalPalette();
       void preloadPanelPalette();
