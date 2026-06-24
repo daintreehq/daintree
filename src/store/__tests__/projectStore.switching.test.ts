@@ -195,6 +195,57 @@ describe("buildOutgoingState draft propagation (#4985)", () => {
   });
 });
 
+describe("instant switch feedback: deferred snapshot + IPC", () => {
+  const projectC = {
+    id: "project-c",
+    name: "Project C",
+    path: "/tmp/project-c",
+    emoji: "folder",
+    lastOpened: Date.now(),
+  };
+
+  it("flips isSwitching synchronously but defers the snapshot + IPC to a later task", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    // Call without awaiting: the busy flag must be set synchronously (so the
+    // overlay can mount immediately) while buildOutgoingState + the switch IPC
+    // are deferred past the paint yield — the whole point of the reorder.
+    const pending = useProjectStore.getState().switchProject(projectB.id);
+    expect(useProjectStore.getState().isSwitching).toBe(true);
+    expect(useProjectStore.getState().switchingToProjectId).toBe(projectB.id);
+    expect(projectClientMock.switch).not.toHaveBeenCalled();
+
+    await pending;
+    expect(projectClientMock.switch).toHaveBeenCalledWith(
+      projectB.id,
+      expect.any(Object),
+      undefined
+    );
+  });
+
+  it("fires the IPC only for the last of two rapid non-awaited switches", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({
+      projects: [projectA, projectB, projectC],
+      currentProject: projectA,
+    });
+
+    // Both start before either resumes from the yield; the first must supersede
+    // out at the post-yield requestId guard without firing a stale IPC.
+    void useProjectStore.getState().switchProject(projectB.id);
+    await useProjectStore.getState().switchProject(projectC.id);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(projectClientMock.switch).toHaveBeenCalledTimes(1);
+    expect(projectClientMock.switch).toHaveBeenCalledWith(
+      projectC.id,
+      expect.any(Object),
+      undefined
+    );
+  });
+});
+
 describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
   it("includes browser panel snapshots in outgoing terminals", async () => {
     const { setPanelStoreAccessor } = await import("../storeAccessors");

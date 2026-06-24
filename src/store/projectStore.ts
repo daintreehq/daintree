@@ -89,6 +89,20 @@ function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   };
 }
 
+/**
+ * Yield one macrotask so a pending React commit can paint before the caller
+ * resumes. A project switch flips `isSwitching` (which mounts the busy overlay)
+ * and then must run the heavy synchronous `buildOutgoingState()` snapshot and
+ * fire the switch IPC; doing all of it in one task blocks the event loop so the
+ * overlay can't reach the screen until they finish, and the click reads as
+ * unresponsive. Awaiting this between the flag flip and the heavy work lets the
+ * overlay paint first. `setTimeout` (a macrotask), not `queueMicrotask`,
+ * because the browser paints between macrotasks, never between microtasks.
+ */
+function yieldToPaint(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 interface ProjectState {
   projects: Project[];
   currentProject: Project | null;
@@ -544,13 +558,16 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     // from the LRU cache.
     clearFleetArmingThroughAccessor();
 
-    // Capture outgoing state before the renderer gets detached
+    // Capture the outgoing project id now, while it's still the active project.
     const currentProjectId = get().currentProject?.id;
-    const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
 
-    // Clear any stale worktree-load banner atomically with the switch start so
-    // the previous project's failure never coexists with the new project (#8400,
-    // mirrors the #4451 atomic-swap fix).
+    // Flip the busy/switch flags FIRST and clear any stale worktree-load banner
+    // atomically with the switch start (#8400, mirrors the #4451 atomic-swap
+    // fix), THEN yield so the switch overlay paints before we run the heavy
+    // outgoing-state snapshot and fire the IPC. buildOutgoingState() walks the
+    // whole panel graph synchronously; running it inline here blocked the event
+    // loop so the overlay couldn't reach the screen, and the click felt
+    // unresponsive for the duration of the snapshot.
     set({
       isLoading: true,
       isSwitching: true,
@@ -558,6 +575,17 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       error: null,
       worktreeLoadError: null,
     });
+
+    await yieldToPaint();
+    // A newer transition started while we yielded — let it own the switch so a
+    // stale snapshot/IPC can't clobber it.
+    if (requestId !== projectTransitionRequestId) return;
+
+    // Capture outgoing state just before firing, after the paint. The outgoing
+    // view is not detached until the main process handles the IPC, so the panel
+    // store still reflects the outgoing project here.
+    const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
+
     // Fire-and-forget: the main process swaps WebContentsViews, so this
     // renderer gets detached. Don't write the response into stores — the
     // new view handles its own state independently.
@@ -769,8 +797,9 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   reopenProject: async (projectId) => {
     const requestId = ++projectTransitionRequestId;
     const currentProjectId = get().currentProject?.id;
-    const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
 
+    // Flip the busy/switch flags first, then yield so the overlay paints before
+    // the heavy outgoing-state snapshot + IPC (see switchProject for the why).
     set({
       isLoading: true,
       isSwitching: true,
@@ -778,6 +807,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       error: null,
       worktreeLoadError: null,
     });
+
+    await yieldToPaint();
+    if (requestId !== projectTransitionRequestId) return;
+
+    const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
     projectClient.reopen(projectId, outgoingState).catch((error) => {
       if (requestId !== projectTransitionRequestId) {
         return;
