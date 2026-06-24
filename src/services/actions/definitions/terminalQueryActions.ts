@@ -1,7 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { TerminalSummarySchema, TerminalStatusEntrySchema } from "./schemas";
-import { stripAnsiCodes } from "@shared/utils/artifactParser";
+import { tailCapturedOutput } from "@shared/utils/artifactParser";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalClient } from "@/clients";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
@@ -156,22 +156,20 @@ export function registerTerminalQueryActions(
         };
       }
 
-      // Split into lines and extract last N
-      const allLines = serializedState.split("\n");
-      const totalLines = allLines.length;
-      const truncated = totalLines > effectiveMaxLines;
-      const selectedLines = allLines.slice(-effectiveMaxLines);
-
-      // Optionally strip ANSI codes
-      let content = selectedLines.join("\n");
-      if (stripAnsi) {
-        content = stripAnsiCodes(content);
-      }
+      // Collapse blank padding BEFORE tailing so the last N lines are real
+      // content, not the blank region bottom-padding TUIs (e.g. Codex) leave
+      // below their composer (#10763). truncated/lineCount track normalized
+      // content, so trailing padding never reads as "output omitted".
+      const { content, lineCount, truncated } = tailCapturedOutput(
+        serializedState,
+        effectiveMaxLines,
+        stripAnsi
+      );
 
       return {
         terminalId,
         content,
-        lineCount: selectedLines.length,
+        lineCount,
         truncated,
       };
     },
@@ -367,10 +365,14 @@ export function registerTerminalQueryActions(
             if (serialized === null) {
               entry.recentOutput = null;
             } else {
-              const lines = serialized.split("\n").slice(-effectiveLines);
-              let content = lines.join("\n");
-              if (stripAnsi) content = stripAnsiCodes(content);
-              entry.recentOutput = content;
+              // Normalize before tailing (#10763) — see terminal.getOutput.
+              // Without this, a bottom-padding TUI's blank rows fill the small
+              // last-N window and recentOutput reads as empty even when idle.
+              entry.recentOutput = tailCapturedOutput(
+                serialized,
+                effectiveLines,
+                stripAnsi
+              ).content;
             }
           }
         }

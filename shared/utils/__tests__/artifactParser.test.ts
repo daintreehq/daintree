@@ -3,8 +3,10 @@ import {
   extractCodeBlocks,
   extractPatchFilename,
   extractPatches,
+  normalizeCapturedOutput,
   stripAnsiCodes,
   suggestFilename,
+  tailCapturedOutput,
 } from "../artifactParser.js";
 
 describe("artifactParser", () => {
@@ -354,5 +356,117 @@ describe("artifactParser", () => {
   it("strips 8-bit CSI sequences (C1 introducer 0x9B)", () => {
     const cleaned = stripAnsiCodes("\x9b31mError:\x9b0m failed");
     expect(cleaned).toBe("Error: failed");
+  });
+});
+
+describe("normalizeCapturedOutput", () => {
+  it("strips a trailing blank-padding run entirely", () => {
+    // The Codex bottom-padding shape: real content, then many bare-CR rows.
+    const padded = "answer line one\nanswer line two\r\n\r\n\r\n\r\n\r\n\r\n";
+    expect(normalizeCapturedOutput(padded)).toBe("answer line one\nanswer line two");
+  });
+
+  it("collapses interior blank runs and strips the trailing run", () => {
+    // header -> content -> footer/composer with blank gaps between regions
+    // (the structure the agent leaves behind): each interior run of 2+ blanks
+    // collapses to one, and the trailing run is dropped wholesale.
+    const buffer = ["header", "", "", "", "content", "", "", "footer", "", "", ""].join("\n");
+    expect(normalizeCapturedOutput(buffer)).toBe(
+      ["header", "", "content", "", "footer"].join("\n")
+    );
+  });
+
+  it("keeps single interior blank lines (paragraph structure survives)", () => {
+    const buffer = "para one\n\npara two\n\npara three";
+    expect(normalizeCapturedOutput(buffer)).toBe("para one\n\npara two\n\npara three");
+  });
+
+  it("right-trims each line but preserves leading indentation", () => {
+    const buffer = "  indented   \ntrailing tabs\t\t\nplain";
+    expect(normalizeCapturedOutput(buffer)).toBe("  indented\ntrailing tabs\nplain");
+  });
+
+  it("treats whitespace-only and bare-CR lines as blank", () => {
+    const buffer = "real\n   \n\r\n\t\nmore";
+    expect(normalizeCapturedOutput(buffer)).toBe("real\n\nmore");
+  });
+
+  it("treats SGR-painted / ANSI-only rows as blank padding", () => {
+    // A themed TUI paints its empty region with a background colour; raw
+    // right-trim leaves the SGR, so blank detection must be ANSI-aware.
+    const padded =
+      "the answer\n" + "\x1b[48;5;235m   \x1b[0m\r\n".repeat(3) + "\x1b[0m\r\n\x1b[0m\r\n";
+    expect(normalizeCapturedOutput(padded)).toBe("the answer");
+  });
+
+  it("preserves ANSI on non-blank content lines", () => {
+    const buffer = "\x1b[32mgreen\x1b[0m\n\n\n\x1b[31mred\x1b[0m\r\n\r\n";
+    expect(normalizeCapturedOutput(buffer)).toBe("\x1b[32mgreen\x1b[0m\n\n\x1b[31mred\x1b[0m");
+  });
+
+  it("strips a leading blank-padding run entirely", () => {
+    expect(normalizeCapturedOutput("\n\n\n\nfirst real line")).toBe("first real line");
+  });
+
+  it("makes the last line real content after tailing a padded buffer (N=1 boundary)", () => {
+    // The lower-bound version of #10763: even a one-line tail must skip padding.
+    const padded = "prompt> done\r\n" + "\r\n".repeat(40);
+    const tail = normalizeCapturedOutput(padded).split("\n").slice(-1).join("\n");
+    expect(tail).toBe("prompt> done");
+  });
+
+  it("collapses an all-blank buffer to an empty string", () => {
+    expect(normalizeCapturedOutput("\r\n\r\n\r\n\r\n")).toBe("");
+  });
+
+  it("returns an empty string unchanged", () => {
+    expect(normalizeCapturedOutput("")).toBe("");
+  });
+
+  it("leaves blank-free output untouched", () => {
+    const buffer = "line1\nline2\nline3";
+    expect(normalizeCapturedOutput(buffer)).toBe(buffer);
+  });
+});
+
+describe("tailCapturedOutput", () => {
+  it("returns the last N normalized lines with truncated/lineCount over real content", () => {
+    const padded = "a\nb\nc\nd\ne\r\n\r\n\r\n\r\n";
+    const r = tailCapturedOutput(padded, 3, true);
+    expect(r.content).toBe("c\nd\ne");
+    expect(r.lineCount).toBe(3);
+    // 5 real lines > 3 requested -> truncated; the 4 padding rows don't count.
+    expect(r.truncated).toBe(true);
+  });
+
+  it("does not report truncated when only padding pushed the raw line count up", () => {
+    const padded = "only line\r\n" + "\r\n".repeat(40);
+    const r = tailCapturedOutput(padded, 10, true);
+    expect(r.content).toBe("only line");
+    expect(r.lineCount).toBe(1);
+    expect(r.truncated).toBe(false);
+  });
+
+  it("strips ANSI by default and preserves it when stripAnsi is false", () => {
+    const buffer = "\x1b[32mgreen\x1b[0m\r\n\r\n";
+    expect(tailCapturedOutput(buffer, 10, true).content).toBe("green");
+    expect(tailCapturedOutput(buffer, 10, false).content).toBe("\x1b[32mgreen\x1b[0m");
+  });
+
+  it("reports zero lines for an empty or all-blank buffer", () => {
+    expect(tailCapturedOutput("", 10, true)).toEqual({
+      content: "",
+      lineCount: 0,
+      truncated: false,
+    });
+    expect(tailCapturedOutput("\r\n\r\n\r\n", 10, true)).toEqual({
+      content: "",
+      lineCount: 0,
+      truncated: false,
+    });
+  });
+
+  it("clamps a non-positive maxLines to one line (no slice(-0) blowup)", () => {
+    expect(tailCapturedOutput("a\nb\nc", 0, true).content).toBe("c");
   });
 });

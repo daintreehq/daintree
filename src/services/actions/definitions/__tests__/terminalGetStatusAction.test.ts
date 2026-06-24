@@ -400,6 +400,27 @@ describe("terminal.getStatus", () => {
     expect(terminals.find((t) => t.terminalId === "t3")?.recentOutput).toBeNull();
   });
 
+  it("surfaces real content past a bottom-padding tail (issue #10763)", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["t1"],
+      panelsById: {
+        t1: { id: "t1", kind: "terminal", location: "grid", agentState: "waiting" },
+      },
+    });
+    // Codex-shaped buffer: answer + idle composer, then bottom blank padding
+    // that would otherwise fill the small recentOutput window entirely.
+    getSerializedStatesMock.mockResolvedValue({
+      t1: "agent answer\nidle composer\r\n" + "\r\n".repeat(40),
+    });
+
+    const { terminals } = await callGetStatus(setupActions(), {
+      includeOutput: { lines: 10 },
+    });
+    const out = terminals.find((t) => t.terminalId === "t1")?.recentOutput as string;
+    // The 40-row blank padding is gone; recentOutput is exactly the real tail.
+    expect(out).toBe("agent answer\nidle composer");
+  });
+
   it("caps includeOutput.lines at 50", async () => {
     const lines = Array.from({ length: 200 }, (_, i) => `line-${i}`).join("\n");
     panelStoreMock.getState.mockReturnValue({

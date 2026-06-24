@@ -221,7 +221,7 @@ describe("terminal.getOutput action", () => {
     const result = (await action.run({ terminalId: "empty-terminal" }, {})) as TerminalOutputResult;
 
     expect(result.content).toBe("");
-    expect(result.lineCount).toBe(1); // Empty string splits into one empty line
+    expect(result.lineCount).toBe(0); // No real lines — not the phantom split line
     expect(result.truncated).toBe(false);
   });
 
@@ -259,6 +259,78 @@ describe("terminal.getOutput action", () => {
     )) as TerminalOutputResult;
 
     // Should get at least 1 line
+    expect(result.lineCount).toBe(1);
+  });
+
+  it("surfaces real content past a bottom-padding tail (issue #10763)", async () => {
+    // A bottom-padding TUI (e.g. Codex) leaves its answer high in the viewport
+    // and pads the bottom with bare-CR rows. A tail-before-normalize read of the
+    // last 5 lines would return only blanks; normalize-then-tail must not.
+    const mockBuffer = "agent answer line\nidle composer\r\n" + "\r\n".repeat(40);
+    mockGetSerializedState.mockResolvedValue(mockBuffer);
+
+    const actions = await createRegistry();
+    const action = actions.get("terminal.getOutput")!();
+
+    const result = (await action.run(
+      { terminalId: "codex-terminal", maxLines: 5 },
+      {}
+    )) as TerminalOutputResult;
+
+    // The 40-row blank padding is gone entirely; only real content remains.
+    expect(result.content).toBe("agent answer line\nidle composer");
+    expect(result.lineCount).toBe(2);
+    expect(result.truncated).toBe(false);
+  });
+
+  it("returns real content even for a single-line tail of a padded buffer", async () => {
+    // N=1 boundary: padding must not occupy the only returned line.
+    const mockBuffer = "the answer\r\n" + "\r\n".repeat(20);
+    mockGetSerializedState.mockResolvedValue(mockBuffer);
+
+    const actions = await createRegistry();
+    const action = actions.get("terminal.getOutput")!();
+
+    const result = (await action.run(
+      { terminalId: "codex-terminal", maxLines: 1 },
+      {}
+    )) as TerminalOutputResult;
+
+    expect(result.content).toBe("the answer");
+    expect(result.lineCount).toBe(1);
+  });
+
+  it("collapses interior blank runs and right-trims lines", async () => {
+    const mockBuffer = "header   \n\n\n\nbody\t\n\n\nfooter";
+    mockGetSerializedState.mockResolvedValue(mockBuffer);
+
+    const actions = await createRegistry();
+    const action = actions.get("terminal.getOutput")!();
+
+    const result = (await action.run(
+      { terminalId: "test-terminal", maxLines: 100 },
+      {}
+    )) as TerminalOutputResult;
+
+    expect(result.content).toBe("header\n\nbody\n\nfooter");
+    expect(result.lineCount).toBe(5);
+    expect(result.truncated).toBe(false);
+  });
+
+  it("normalizes whitespace even when stripAnsi is false (padding still removed)", async () => {
+    const mockBuffer = "\x1b[32mgreen\x1b[0m  \r\n\r\n\r\n\r\n";
+    mockGetSerializedState.mockResolvedValue(mockBuffer);
+
+    const actions = await createRegistry();
+    const action = actions.get("terminal.getOutput")!();
+
+    const result = (await action.run(
+      { terminalId: "test-terminal", stripAnsi: false },
+      {}
+    )) as TerminalOutputResult;
+
+    // ANSI preserved on the content line; trailing padding + cell-pad spaces gone.
+    expect(result.content).toBe("\x1b[32mgreen\x1b[0m");
     expect(result.lineCount).toBe(1);
   });
 });
