@@ -46,7 +46,9 @@ describe("terminalSerialization guards", () => {
       throw new Error("serialize boom");
     });
     const info = makeTerminalInfo({
-      headlessTerminal: { buffer: { active: { length: 10 } } } as unknown as TerminalInfo["headlessTerminal"],
+      headlessTerminal: {
+        buffer: { active: { length: 10 } },
+      } as unknown as TerminalInfo["headlessTerminal"],
       serializeAddon: addon as unknown as TerminalInfo["serializeAddon"],
       preservedSnapshot: undefined,
     });
