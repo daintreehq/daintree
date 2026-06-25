@@ -525,7 +525,7 @@ describe("IdleTerminalNotificationService", () => {
       const killed = await service.closeProject("proj-1");
 
       expect(killed).toBe(2);
-      expect(hibernateProjectOnDemandMock).toHaveBeenCalledWith("proj-1", "Old", "scheduled");
+      expect(hibernateProjectOnDemandMock).toHaveBeenCalledWith("proj-1", "Old", "user-initiated");
       const dismissals = storeBacking.idleTerminalDismissals as Record<string, number>;
       expect(dismissals["proj-1"]).toBeGreaterThan(0);
     });
@@ -540,7 +540,7 @@ describe("IdleTerminalNotificationService", () => {
       expect(hibernateProjectOnDemandMock).toHaveBeenCalledWith(
         "ghost-proj",
         "ghost-proj",
-        "scheduled"
+        "user-initiated"
       );
     });
 

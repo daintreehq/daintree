@@ -232,9 +232,10 @@ export class IdleTerminalNotificationService {
 
   /**
    * "Close Them" action handler. Delegates to HibernationService so that
-   * project-scoped cleanup callbacks (e.g. DevPreview session teardown) run
-   * and the renderer sees the standard hibernation event — same as if the
-   * scheduled hibernation timer had closed the project itself.
+   * project-scoped cleanup callbacks (e.g. DevPreview session teardown) run and
+   * the renderer sees the standard hibernation event. Passes `"user-initiated"`
+   * so this explicit action also evicts the project's cached renderer (#10668) —
+   * unlike the silent scheduled/memory-pressure paths, which leave it warm.
    */
   async closeProject(projectId: string): Promise<number> {
     if (!projectId) return 0;
@@ -247,7 +248,7 @@ export class IdleTerminalNotificationService {
       const terminalsKilled = await getHibernationService().hibernateProjectOnDemand(
         projectId,
         projectName,
-        "scheduled"
+        "user-initiated"
       );
 
       // Only burn a cooldown slot if we actually acted on something — otherwise

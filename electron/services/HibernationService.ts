@@ -10,6 +10,7 @@ import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { writeHibernatedMarker } from "./pty/terminalSessionPersistence.js";
 import type { PtyClient } from "./PtyClient.js";
+import type { ProjectViewManager } from "../window/ProjectViewManager.js";
 import { getPtyClient } from "../window/serviceRefs.js";
 
 export interface HibernationConfig {
@@ -65,6 +66,7 @@ export class HibernationService {
   private readonly hibernationCallbacks: Array<(projectId: string) => void | Promise<void>> = [];
   private memoryPressureInactiveMs = DEFAULT_MEMORY_PRESSURE_INACTIVE_MS;
   private ptyClient: PtyClient | null = null;
+  private projectViewManagersProvider: (() => ProjectViewManager[]) | null = null;
 
   /**
    * Inject the live PtyClient so hibernation reads the real terminal registry
@@ -74,6 +76,20 @@ export class HibernationService {
    */
   setPtyClient(client: PtyClient | null): void {
     this.ptyClient = client;
+  }
+
+  /**
+   * Inject a lazy provider over every open window's ProjectViewManager so
+   * user-initiated hibernation can evict the hibernated project's cached
+   * `WebContentsView` renderer (#10668) — the bulk of per-project memory that
+   * killing PTYs alone leaves resident. Mirrors the `getAllProjectViewManagers`
+   * lambda `ResourceProfileService` uses. Must stay lazy: windows open/close
+   * after wiring. NOT cleared in stop(): it's a stateless closure over the
+   * window registry (no stale object pinned), and the user-initiated close path
+   * stays reachable even when scheduled hibernation is toggled off.
+   */
+  setProjectViewManagersProvider(provider: (() => ProjectViewManager[]) | null): void {
+    this.projectViewManagersProvider = provider;
   }
 
   setMemoryPressureThresholdMs(ms: number): void {
@@ -352,11 +368,15 @@ export class HibernationService {
    * and runs the same flow as scheduled hibernation so DevPreview callbacks
    * fire and the renderer sees the standard `hibernation:project-hibernated`
    * event. No-op if the PtyClient has not been injected yet.
+   *
+   * Defaults to `"user-initiated"` — this entry point is only reached through
+   * explicit user actions, which (unlike scheduled/memory-pressure hibernation)
+   * also evict the project's cached renderer (#10668).
    */
   async hibernateProjectOnDemand(
     projectId: string,
     projectName: string,
-    reason: "scheduled" | "memory-pressure" = "scheduled"
+    reason: "scheduled" | "memory-pressure" | "user-initiated" = "user-initiated"
   ): Promise<number> {
     if (!this.ptyClient) return 0;
     return this.hibernateProject(projectId, projectName, reason, this.ptyClient);
@@ -365,7 +385,7 @@ export class HibernationService {
   private async hibernateProject(
     projectId: string,
     projectName: string,
-    reason: "scheduled" | "memory-pressure",
+    reason: "scheduled" | "memory-pressure" | "user-initiated",
     ptyClient: PtyClient
   ): Promise<number> {
     const results = await ptyClient.gracefulKillByProject(projectId, { preserveSession: true });
@@ -393,7 +413,51 @@ export class HibernationService {
       // Window may be closing
     }
 
+    // Only explicit/user-initiated hibernation evicts the cached project
+    // renderer (#10668). Scheduled and memory-pressure hibernation stay
+    // conservative — they silently turn a warm project cold, and renderer
+    // reclaim under pressure is already owned by ResourceProfileService's
+    // setCachedViewLimit(1) path. Killing PTYs alone leaves ~240 MB of
+    // Chromium renderer resident per project, so without this hibernation
+    // appears to free almost nothing.
+    if (reason === "user-initiated") {
+      this.evictCachedRenderer(projectId);
+    }
+
     return terminalsKilled;
+  }
+
+  /**
+   * Tear down the hibernated project's cached `WebContentsView` across every
+   * open window, skipping the window where the project is the active/foreground
+   * view (each window tracks its own active project). `destroyView` runs the
+   * full `cleanupEntry` teardown — detach, listener removal, port cleanup,
+   * `webContents.close()` — and is a no-op when the project has no cached view.
+   * No-op if the provider has not been wired yet.
+   */
+  private evictCachedRenderer(projectId: string): void {
+    const provider = this.projectViewManagersProvider;
+    if (!provider) return;
+
+    let evictedViewCount = 0;
+    for (const manager of provider()) {
+      // Never destroy the foreground view — that would blank the window the
+      // user is looking at. The guard is per-manager because each window has
+      // its own active project.
+      if (manager.getActiveProjectId() === projectId) continue;
+      try {
+        manager.destroyView(projectId);
+        evictedViewCount++;
+      } catch (error) {
+        // A disposing/closing ProjectViewManager can throw inside cleanupEntry.
+        // Isolate per window so one failure doesn't skip the rest (#8607).
+        logError("user-initiated-hibernate-evict-failed", error, { projectId });
+      }
+    }
+
+    if (evictedViewCount > 0) {
+      logInfo("user-initiated-hibernate-renderer-evicted", { projectId, evictedViewCount });
+    }
   }
 
   getConfig(): HibernationConfig {

@@ -9,7 +9,7 @@ export interface HibernationConfig {
 export interface HibernationProjectHibernatedPayload {
   projectId: string;
   projectName: string;
-  reason: "scheduled" | "memory-pressure";
+  reason: "scheduled" | "memory-pressure" | "user-initiated";
   terminalsKilled: number;
   timestamp: number;
 }

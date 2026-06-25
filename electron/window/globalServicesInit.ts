@@ -245,7 +245,18 @@ export async function initGlobalServices(
   registerDeferredTask({
     name: "hibernation-service",
     run: () => {
-      initializeHibernationService();
+      const svc = initializeHibernationService();
+      // Let user-initiated hibernation reach every window's cached project
+      // renderers so it can evict them (#10668). Lazy lambda — windows open and
+      // close after this wires, so re-read the registry on each call. Same
+      // pattern ResourceProfileService uses below.
+      svc.setProjectViewManagersProvider(
+        () =>
+          windowRegistry
+            ?.all()
+            .map((wCtx) => wCtx.services.projectViewManager)
+            .filter((pvm): pvm is ProjectViewManager => pvm !== undefined) ?? []
+      );
     },
   });
 
