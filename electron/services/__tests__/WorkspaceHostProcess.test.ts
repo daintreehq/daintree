@@ -276,6 +276,134 @@ describe("WorkspaceHostProcess", () => {
 
     host.dispose();
   });
+
+  it("routes worktree-activated as host-event with payload intact (#10778)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const onHostEvent = vi.fn();
+    host.on("host-event", onHostEvent);
+
+    const event = {
+      type: "worktree-activated",
+      worktreeId: "wt-1",
+      epoch: "epoch-1",
+      seq: 7,
+      silent: false,
+    };
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", event);
+
+    expect(onHostEvent).toHaveBeenCalledWith(event);
+
+    host.dispose();
+  });
+
+  it("relays worktree-activated verbatim when silent — suppression is the router's job (#10778)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const onHostEvent = vi.fn();
+    host.on("host-event", onHostEvent);
+
+    const event = {
+      type: "worktree-activated",
+      worktreeId: "wt-2",
+      epoch: "epoch-2",
+      seq: 8,
+      silent: true,
+    };
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", event);
+
+    // The relay must not interpret or strip `silent`; it passes through so the
+    // WorkspaceHostEventRouter can decide suppression downstream.
+    expect(onHostEvent).toHaveBeenCalledWith(event);
+    expect(onHostEvent.mock.calls[0][0].silent).toBe(true);
+
+    host.dispose();
+  });
+
+  it("routes lifecycle-setup-error as host-event with details (#10778)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const onHostEvent = vi.fn();
+    host.on("host-event", onHostEvent);
+
+    const event = {
+      type: "lifecycle-setup-error",
+      worktreeId: "wt-3",
+      message: "Setup failed",
+      details: "ENOENT: missing hook script",
+    };
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", event);
+
+    expect(onHostEvent).toHaveBeenCalledWith(event);
+
+    host.dispose();
+  });
+
+  it("routes lifecycle-setup-error as host-event with details omitted (#10778)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const onHostEvent = vi.fn();
+    host.on("host-event", onHostEvent);
+
+    const event = {
+      type: "lifecycle-setup-error",
+      worktreeId: "wt-4",
+      message: "Setup failed",
+    };
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", event);
+
+    expect(onHostEvent).toHaveBeenCalledWith(event);
+
+    host.dispose();
+  });
+
+  it("swallows fetch-auth-failure-confirmed — no host-event, no Unknown-event warn (#10778)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const onHostEvent = vi.fn();
+    host.on("host-event", onHostEvent);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", { type: "fetch-auth-failure-confirmed", reason: "fetch" });
+
+    // Renderer-only event (delivered via DIRECT_RENDERER_EVENTS): it must not be
+    // relayed as host-event, and must not trip the default "Unknown event" warn.
+    expect(onHostEvent).not.toHaveBeenCalled();
+    const unknownWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("Unknown event"));
+    expect(unknownWarns).toHaveLength(0);
+
+    host.dispose();
+  });
 });
 
 // ── BrokerError contract tests ──
