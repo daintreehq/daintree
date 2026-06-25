@@ -1010,4 +1010,31 @@ describe("buildContinueEnv", () => {
     const env = buildContinueEnv("linux");
     expect(env.GIT_MERGE_AUTOEDIT).toBe("no");
   });
+
+  it("strips every blocked inherited key the editor path could ride in on", async () => {
+    const blocked = {
+      GIT_SEQUENCE_EDITOR: "code --wait",
+      GIT_CONFIG_GLOBAL: "/tmp/evil/.gitconfig",
+      GIT_EXTERNAL_DIFF: "/tmp/evil/diff",
+      PAGER: "less",
+      SSH_ASKPASS: "/tmp/evil/askpass",
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "core.editor",
+      GIT_CONFIG_VALUE_0: "/tmp/evil/editor",
+    };
+    Object.assign(process.env, blocked);
+    const env = buildContinueEnv("linux");
+    for (const key of Object.keys(blocked)) {
+      expect(env[key]).toBeUndefined();
+    }
+    // Cleanup beyond the describe-level saved keys.
+    for (const key of Object.keys(blocked)) delete process.env[key];
+  });
+
+  it("does not set GIT_ASKPASS on win32 but still suppresses the editor", async () => {
+    const env = buildContinueEnv("win32");
+    expect(env.GIT_ASKPASS).toBeUndefined();
+    expect(env.GIT_EDITOR).toBe("true");
+    expect(env.GIT_MERGE_AUTOEDIT).toBe("no");
+  });
 });

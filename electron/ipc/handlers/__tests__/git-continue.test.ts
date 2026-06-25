@@ -125,12 +125,14 @@ describe("git:continue-repository-operation handler", () => {
     expect(git.rebase).toHaveBeenCalledWith(["--continue"]);
   });
 
-  it("continues a merge with --continue --no-edit", async () => {
+  it("continues a merge with bare --continue (git rejects extra args)", async () => {
     const { git, handler } = setup("MERGING");
 
     await handler(null, "/tmp/repo");
 
-    expect(git.merge).toHaveBeenCalledWith(["--continue", "--no-edit"]);
+    // `git merge --continue` errors on any extra argument ("--continue expects
+    // no arguments", exit 129); the env overlay handles editor suppression.
+    expect(git.merge).toHaveBeenCalledWith(["--continue"]);
   });
 
   it("continues a cherry-pick with --continue --no-edit", async () => {
@@ -147,6 +149,20 @@ describe("git:continue-repository-operation handler", () => {
     await handler(null, "/tmp/repo");
 
     expect(git.raw).toHaveBeenCalledWith(["revert", "--continue", "--no-edit"]);
+  });
+
+  it("propagates a rebase failure instead of swallowing it", async () => {
+    const { git, handler } = setup("REBASING");
+    git.rebase.mockRejectedValueOnce(new Error("could not apply abc123"));
+
+    await expect(handler(null, "/tmp/repo")).rejects.toThrow(/could not apply abc123/);
+  });
+
+  it("propagates a cherry-pick failure instead of swallowing it", async () => {
+    const { git, handler } = setup("CHERRY_PICKING");
+    git.raw.mockRejectedValueOnce(new Error("cherry-pick failed"));
+
+    await expect(handler(null, "/tmp/repo")).rejects.toThrow(/cherry-pick failed/);
   });
 
   it("throws when no operation is in progress", async () => {
