@@ -15,6 +15,7 @@ import {
   ROTATION_MAX_SIZE,
   ROTATION_MAX_FILES,
   resetLoggerStateForTesting,
+  flushLogFileWritesForTesting,
   createLogger,
   setLogLevelOverrides,
   getLogLevelOverrides,
@@ -48,7 +49,10 @@ beforeEach(() => {
   process.env.DAINTREE_USER_DATA = TEST_LOG_DIR;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Drain any buffered async writes to the test dir before tearing it down so a
+  // deferred flush can't race the cleanup and write to a fallback path.
+  await flushLogFileWritesForTesting();
   resetLoggerStateForTesting();
   resetWritesSuppressedForTesting();
   delete process.env.DAINTREE_USER_DATA;
@@ -141,16 +145,17 @@ describe("logger", () => {
   });
 
   describe("rotateLogsIfNeeded", () => {
-    it("does not rotate when file size is below threshold", () => {
+    it("does not rotate when file size is below threshold", async () => {
       initializeLogger(TEST_LOG_DIR);
       logInfo("Small log entry");
+      await flushLogFileWritesForTesting();
 
       const logFile = getLogFilePath();
       expect(existsSync(logFile)).toBe(true);
       expect(existsSync(join(TEST_LOG_DIR, "logs", "daintree.log.1"))).toBe(false);
     });
 
-    it("rotates log file when size exceeds threshold", () => {
+    it("rotates log file when size exceeds threshold", async () => {
       const logFile = join(TEST_LOG_DIR, "logs", "daintree.log");
       mkdirSync(join(TEST_LOG_DIR, "logs"), { recursive: true });
       const largeLine = `[2026-01-01T00:00:00.000Z] [INFO] ${"x".repeat(1024)}`;
@@ -161,6 +166,7 @@ describe("logger", () => {
 
       initializeLogger(TEST_LOG_DIR);
       logInfo("This should trigger rotation");
+      await flushLogFileWritesForTesting();
 
       expect(existsSync(logFile)).toBe(true);
       const rotatedFile = join(TEST_LOG_DIR, "logs", "daintree.log.1");
@@ -173,7 +179,7 @@ describe("logger", () => {
       expect(currentContent).toContain("This should trigger rotation");
     });
 
-    it("shuffles rotated files correctly", () => {
+    it("shuffles rotated files correctly", async () => {
       const logFile = join(TEST_LOG_DIR, "logs", "daintree.log");
       mkdirSync(join(TEST_LOG_DIR, "logs"), { recursive: true });
       const largeLine = `[2026-01-01T00:00:00.000Z] [INFO] ${"x".repeat(1024)}`;
@@ -188,6 +194,7 @@ describe("logger", () => {
 
       initializeLogger(TEST_LOG_DIR);
       logInfo("Trigger rotation");
+      await flushLogFileWritesForTesting();
 
       expect(existsSync(join(TEST_LOG_DIR, "logs", "daintree.log.1"))).toBe(true);
       expect(existsSync(join(TEST_LOG_DIR, "logs", "daintree.log.2"))).toBe(true);
@@ -201,7 +208,7 @@ describe("logger", () => {
       expect(file3Content).toContain("Rotated file 2");
     });
 
-    it("deletes oldest rotated file when max files exceeded", () => {
+    it("deletes oldest rotated file when max files exceeded", async () => {
       const logFile = join(TEST_LOG_DIR, "logs", "daintree.log");
       mkdirSync(join(TEST_LOG_DIR, "logs"), { recursive: true });
       const largeLine = `[2026-01-01T00:00:00.000Z] [INFO] ${"x".repeat(1024)}`;
@@ -216,6 +223,7 @@ describe("logger", () => {
 
       initializeLogger(TEST_LOG_DIR);
       logInfo("Trigger rotation");
+      await flushLogFileWritesForTesting();
 
       expect(existsSync(join(TEST_LOG_DIR, "logs", `daintree.log.${ROTATION_MAX_FILES + 1}`))).toBe(
         false
@@ -233,17 +241,19 @@ describe("logger", () => {
   });
 
   describe("disk pressure suppression", () => {
-    it("does not append to the log file when writes are suppressed", () => {
+    it("does not append to the log file when writes are suppressed", async () => {
       initializeLogger(TEST_LOG_DIR);
       const logFile = getLogFilePath();
 
       logInfo("baseline write before suppression");
+      await flushLogFileWritesForTesting();
       const beforeSize = existsSync(logFile) ? readFileSync(logFile, "utf8").length : 0;
       expect(beforeSize).toBeGreaterThan(0);
 
       setWritesSuppressed(true);
       logInfo("suppressed entry should not reach disk");
       logWarn("another suppressed entry");
+      await flushLogFileWritesForTesting();
 
       const afterSize = readFileSync(logFile, "utf8").length;
       expect(afterSize).toBe(beforeSize);
@@ -252,7 +262,7 @@ describe("logger", () => {
       expect(content).not.toContain("another suppressed entry");
     });
 
-    it("resumes writing once disk pressure clears", () => {
+    it("resumes writing once disk pressure clears", async () => {
       initializeLogger(TEST_LOG_DIR);
       const logFile = getLogFilePath();
 
@@ -261,10 +271,82 @@ describe("logger", () => {
 
       setWritesSuppressed(false);
       logInfo("written after recovery");
+      await flushLogFileWritesForTesting();
 
       const content = readFileSync(logFile, "utf8");
       expect(content).not.toContain("dropped during suppression");
       expect(content).toContain("written after recovery");
+    });
+  });
+
+  describe("async batched file writes (#10769)", () => {
+    it("buffers non-error lines until flushed", async () => {
+      initializeLogger(TEST_LOG_DIR);
+      const logFile = getLogFilePath();
+
+      logInfo("buffered line");
+      // Not yet on disk — the write is deferred off the synchronous hot path.
+      const beforeFlush = existsSync(logFile) ? readFileSync(logFile, "utf8") : "";
+      expect(beforeFlush).not.toContain("buffered line");
+
+      await flushLogFileWritesForTesting();
+      expect(readFileSync(logFile, "utf8")).toContain("buffered line");
+    });
+
+    it("writes error lines synchronously without a flush (crash safety)", () => {
+      initializeLogger(TEST_LOG_DIR);
+      const logFile = getLogFilePath();
+
+      logError("immediate error", new Error("boom"));
+      // Readable right away — errors bypass the async buffer.
+      expect(readFileSync(logFile, "utf8")).toContain("immediate error");
+    });
+
+    it("flushes buffered lines ahead of a synchronous error so on-disk order matches emit order", () => {
+      initializeLogger(TEST_LOG_DIR);
+      const logFile = getLogFilePath();
+
+      logInfo("first buffered");
+      logError("then error", new Error("boom"));
+      // The error path drains the buffer before its own sync write.
+      const content = readFileSync(logFile, "utf8");
+      expect(content).toContain("first buffered");
+      expect(content).toContain("then error");
+      expect(content.indexOf("first buffered")).toBeLessThan(content.indexOf("then error"));
+    });
+
+    it("flushes buffered lines via the scheduled setImmediate (not just the test helper)", async () => {
+      initializeLogger(TEST_LOG_DIR);
+      const logFile = getLogFilePath();
+
+      logInfo("scheduled line");
+      // Poll for the write to land without calling the test-only drain — proves
+      // the production setImmediate→drain scheduling path actually writes. The
+      // async appendFile completes off the threadpool, so its arrival isn't
+      // bounded by a fixed number of ticks; poll until it shows up.
+      const deadline = Date.now() + 2000;
+      let content = "";
+      while (Date.now() < deadline) {
+        content = existsSync(logFile) ? readFileSync(logFile, "utf8") : "";
+        if (content.includes("scheduled line")) break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      expect(content).toContain("scheduled line");
+    });
+
+    it("coalesces a burst of lines into the file after a single flush", async () => {
+      initializeLogger(TEST_LOG_DIR);
+      const logFile = getLogFilePath();
+
+      for (let i = 0; i < 50; i++) {
+        logInfo(`burst line ${i}`);
+      }
+      await flushLogFileWritesForTesting();
+
+      const content = readFileSync(logFile, "utf8");
+      expect(content).toContain("burst line 0");
+      expect(content).toContain("burst line 49");
     });
   });
 
@@ -371,19 +453,21 @@ describe("logger", () => {
     const GITHUB_PAT = `ghp_${"A".repeat(40)}`;
     const ANTHROPIC_KEY = `sk-ant-${"a".repeat(95)}`;
 
-    it("scrubs secrets in the message before writing to the log file", () => {
+    it("scrubs secrets in the message before writing to the log file", async () => {
       initializeLogger(TEST_LOG_DIR);
       logInfo(`auth header set with token ${GITHUB_PAT}`);
+      await flushLogFileWritesForTesting();
 
       const content = readFileSync(getLogFilePath(), "utf8");
       expect(content).toContain("[REDACTED]");
       expect(content).not.toContain(GITHUB_PAT);
     });
 
-    it("scrubs secrets that appear in the context payload", () => {
+    it("scrubs secrets that appear in the context payload", async () => {
       initializeLogger(TEST_LOG_DIR);
       // SENSITIVE_KEYS doesn't catch arbitrary string fields — pattern scrub is the safety net
       logInfo("request received", { traceLine: `Bearer ${"x".repeat(40)}` });
+      await flushLogFileWritesForTesting();
 
       const content = readFileSync(getLogFilePath(), "utf8");
       expect(content).toContain("Bearer [REDACTED]");
@@ -392,6 +476,7 @@ describe("logger", () => {
 
     it("scrubs secrets from error.message when logging via logError", () => {
       initializeLogger(TEST_LOG_DIR);
+      // Errors are written synchronously (crash-safety path) — no flush needed.
       logError("auth failure", new Error(`bad key ${ANTHROPIC_KEY}`));
 
       const content = readFileSync(getLogFilePath(), "utf8");

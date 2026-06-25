@@ -681,6 +681,7 @@ export class WorkspaceClient extends EventEmitter {
     if (this.isDisposed) return;
     this.isDisposed = true;
 
+    this.eventRouter.dispose();
     this.copyTree.dispose();
     this.pool.dispose();
     this._statesInflight.clear();

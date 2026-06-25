@@ -6,7 +6,7 @@ import { notifyError } from "../../ipc/errorHandlers.js";
 import { clearWslGitEntry } from "../../store.js";
 import { gitServiceCache } from "../GitServiceCache.js";
 import { type ProcessEntry, type CopyTreeProgressCallback, sendToEntryWindows } from "./types.js";
-import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
+import type { WorkspaceHostEvent, WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 
 export type EmitFn = (event: string | symbol, ...args: unknown[]) => boolean;
 
@@ -19,6 +19,21 @@ export interface WorkspaceHostEventRouterDeps {
 export class WorkspaceHostEventRouter {
   private static readonly RATE_LIMIT_TOKEN_CHANGE_GUARD_MS = 5_000;
 
+  // Coalesce the in-process `sys:worktree:update` bus (#10769). Under
+  // multi-agent load the host streams worktree-update snapshots at 10–50/s;
+  // each synchronously drives `PullRequestService.handleWorktreeUpdate` (branch
+  // diffing, PR-state clears, more log writes) and the MCP session listener,
+  // stalling the main thread and lagging keystroke echo. A 50ms coalescing
+  // window keyed per worktree collapses bursts (rapid same-worktree snapshots →
+  // one emit with the latest state) while staying imperceptible for these
+  // consumers. The window is bounded from the first pending update (fixed, not
+  // re-armed per update) so an update is delayed at most 50ms and sustained
+  // churn can never starve the flush. The direct per-view MessagePort fan-out
+  // (DIRECT_RENDERER_EVENTS) and the `worktree-update` plugin-bus emit are
+  // intentionally NOT debounced — they drive UI store updates and the
+  // PluginService contract.
+  private static readonly SYS_WORKTREE_UPDATE_DEBOUNCE_MS = 50;
+
   private emit: EmitFn;
   private worktreePathToProject: Map<string, string>;
   private copyTreeProgressCallbacks: Map<string, CopyTreeProgressCallback>;
@@ -27,6 +42,10 @@ export class WorkspaceHostEventRouter {
   private inotifyLimitToastSent = false;
   private emfileLimitToastSent = false;
   private cloudTeardownFailureToastKeys = new Set<string>();
+
+  private pendingSysWorktreeUpdates = new Map<string, WorktreeSnapshot>();
+  private sysWorktreeUpdateTimer: ReturnType<typeof setTimeout> | null = null;
+  private disposed = false;
 
   constructor(deps: WorkspaceHostEventRouterDeps) {
     this.emit = deps.emit;
@@ -61,7 +80,7 @@ export class WorkspaceHostEventRouter {
           worktree,
           projectPath: entry.projectPath,
         });
-        events.emit("sys:worktree:update", worktree);
+        this.queueSysWorktreeUpdate(worktree);
 
         // Cloud-side teardown failure: when `phase: "resource-teardown"` ends in
         // `failed` or `timed-out`, the user's cloud resource may still be running
@@ -113,6 +132,12 @@ export class WorkspaceHostEventRouter {
           worktreeId: event.worktreeId,
           timestamp: Date.now(),
         });
+        // Drop any debounced `sys:worktree:update` still queued for this
+        // worktree so a delayed update can't fire after the removal (#10769).
+        // The update key is `worktreeId || path.resolve(path)`; delete both
+        // possible forms to cover the path-fallback key.
+        this.pendingSysWorktreeUpdates.delete(event.worktreeId);
+        this.pendingSysWorktreeUpdates.delete(path.resolve(event.worktreeId));
         // The resolved worktree path is the map key (set on `worktree-update`).
         // Prune it here so removed paths don't accumulate until `dispose()`.
         this.worktreePathToProject.delete(path.resolve(event.worktreeId));
@@ -345,5 +370,46 @@ export class WorkspaceHostEventRouter {
         break;
       }
     }
+  }
+
+  /**
+   * Buffer a `sys:worktree:update` for the coalescing window. Keyed per worktree
+   * so rapid snapshots of the same worktree collapse to a single emit carrying
+   * the latest state. Arms a single shared timer if none is pending (#7469: a
+   * pending entry without an armed drain timer would strand until the next
+   * event).
+   */
+  private queueSysWorktreeUpdate(worktree: WorktreeSnapshot): void {
+    if (this.disposed) return;
+    const key = worktree.worktreeId || path.resolve(worktree.path ?? "");
+    this.pendingSysWorktreeUpdates.set(key, worktree);
+    if (this.sysWorktreeUpdateTimer === null) {
+      this.sysWorktreeUpdateTimer = setTimeout(
+        () => this.flushSysWorktreeUpdates(),
+        WorkspaceHostEventRouter.SYS_WORKTREE_UPDATE_DEBOUNCE_MS
+      );
+    }
+  }
+
+  private flushSysWorktreeUpdates(): void {
+    this.sysWorktreeUpdateTimer = null;
+    if (this.pendingSysWorktreeUpdates.size === 0) return;
+    const updates = Array.from(this.pendingSysWorktreeUpdates.values());
+    this.pendingSysWorktreeUpdates.clear();
+    // Emit synchronously per worktree so listener ordering (PullRequestService
+    // relies on synchronous reentrancy handling) is preserved.
+    for (const worktree of updates) {
+      events.emit("sys:worktree:update", worktree);
+    }
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.sysWorktreeUpdateTimer !== null) {
+      clearTimeout(this.sysWorktreeUpdateTimer);
+      this.sysWorktreeUpdateTimer = null;
+    }
+    this.pendingSysWorktreeUpdates.clear();
   }
 }
