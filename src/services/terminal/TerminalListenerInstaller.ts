@@ -24,6 +24,67 @@ const OBSERVED_TITLE_DEBOUNCE_MS = 150;
 const WAITING_TITLE_HYSTERESIS_MS = 250;
 
 /**
+ * Snap xterm DOM-renderer row heights to integer pixels that sum exactly to the
+ * canvas height, eliminating HiDPI "zebra" banding (#10768).
+ *
+ * At fractional device-pixel-ratios xterm's DOM renderer stamps every row with
+ * `css.canvas.height / rows` — a fractional CSS px height (DomRenderer
+ * `_updateDimensions`). Chromium then snaps adjacent row boundaries to device
+ * pixels inconsistently and the near-black terminal background bleeds through
+ * the seams as horizontal stripes. The WebGL renderer has no such seam, so the
+ * caller gates this on `!isWebGLActive(id)` — it only runs for DOM panes.
+ *
+ * Rows stack in normal flow, so the snapped heights MUST sum to the original
+ * canvas height; otherwise the rows drift past (or short of) the fixed-height
+ * screen element. A Bresenham distribution gives each row `base` or `base + 1`
+ * px spread evenly, summing exactly to the canvas height: coinciding integer
+ * boundaries snap to the same device pixel (no seam) with zero cumulative
+ * drift. The reconciliation watchdog reads container `getBoundingClientRect`,
+ * not row inline styles, so this does not perturb it.
+ *
+ * Idempotent: xterm only re-stamps fractional heights from `_updateDimensions`
+ * (resize / DPR / font / option change), each followed by a render; once
+ * snapped the first row reads as an integer and this early-returns. Cheap on
+ * the steady-state render path — one inline-style read, no layout flush.
+ */
+function snapDomRowHeightsToIntegerPixels(terminal: Terminal): void {
+  const rowContainer = terminal.element?.querySelector(".xterm-rows");
+  if (!rowContainer) return;
+  const rowEls = rowContainer.children;
+  const count = rowEls.length;
+  if (count === 0) return;
+
+  const cellHeight = parseFloat((rowEls[0] as HTMLElement).style.height);
+  // Nothing stamped yet, a zero-size grid, or already integer — leave it.
+  if (!Number.isFinite(cellHeight) || cellHeight <= 0 || Number.isInteger(cellHeight)) {
+    return;
+  }
+
+  // cellHeight === css.canvas.height / count, so cellHeight * count recovers the
+  // integer canvas height the rows must sum back to.
+  const target = Math.round(cellHeight * count);
+  const base = Math.floor(target / count);
+  const extra = target - base * count; // count of rows that get one extra pixel
+
+  // Midpoint-start Bresenham so the `extra` taller rows are spread evenly across
+  // the viewport rather than bunched at the bottom; the sum is unchanged
+  // (exactly `extra` rows receive base+1 regardless of the start offset).
+  let acc = Math.floor(count / 2);
+  for (let i = 0; i < count; i++) {
+    acc += extra;
+    let h = base;
+    if (acc >= count) {
+      acc -= count;
+      h = base + 1;
+    }
+    const px = `${h}px`;
+    const row = rowEls[i] as HTMLElement;
+    row.style.height = px;
+    row.style.lineHeight = px;
+  }
+}
+
+/**
  * Callback surface needed by `installTerminalBoundListeners`. Both
  * `TerminalInstanceService.getOrCreate()` (create path) and
  * `TerminalHibernationManager.unhibernate()` (wake path) satisfy this
@@ -33,6 +94,13 @@ const WAITING_TITLE_HYSTERESIS_MS = 250;
 export interface TerminalListenerInstallDeps {
   // Buffer / scroll / selection scrollback
   onBufferModeChange: (id: string, isAltBuffer: boolean) => void;
+  /**
+   * Whether the terminal is currently on the WebGL renderer. Gates the DOM
+   * integer row-height snap (#10768) so it only runs for DOM-rendered panes.
+   * Routed through deps to keep this module import-cycle-free relative to
+   * `TerminalWebGLManager` (same pattern as the reconciliation watchdog).
+   */
+  isWebGLActive: (id: string) => boolean;
   notifyParsed: (id: string) => void;
   scrollToBottomSafe: (managed: ManagedTerminal) => void;
   updateScrollState: (id: string, isScrolledBack: boolean) => void;
@@ -97,6 +165,17 @@ export function installTerminalBoundListeners(
   if (initialIsAltBuffer) {
     deps.onBufferModeChange(id, true);
   }
+
+  // DOM-renderer zebra-banding fix (#10768): after each render on a DOM-rendered
+  // pane, snap fractional row heights to integer pixels. onRender (not onResize)
+  // is the trigger because it also fires when a pane swaps WebGL→DOM on a fleet
+  // mode flip and on DPR changes that re-stamp heights without a cols/rows
+  // resize. The snap is idempotent and bails immediately for WebGL panes.
+  const renderDisposable = terminal.onRender(() => {
+    if (deps.isWebGLActive(id)) return;
+    snapDomRowHeightsToIntegerPixels(terminal);
+  });
+  managed.listeners.push(() => renderDisposable.dispose());
 
   // Suppress xterm's wheel→arrow-key translation for agent terminals that
   // are in the alt-screen buffer with no mouse tracking active. Without

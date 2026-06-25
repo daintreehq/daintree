@@ -1531,6 +1531,273 @@ describe("TerminalWebGLManager", () => {
     });
   });
 
+  describe("alt-buffer pin (keeps alt-screen TUIs on WebGL — #10768)", () => {
+    beforeEach(async () => {
+      const mod = await import("../TerminalWebGLManager");
+      mod.TerminalWebGLManager.setWebglThresholds(3, 2);
+    });
+
+    function fillToDomMode(): ManagedTerminal[] {
+      const terms = Array.from({ length: 4 }, () => makeManagedTerminal());
+      terms.forEach((t, i) => manager.ensureContext(`t${i}`, t));
+      expect(manager.getMode()).toBe("dom");
+      return terms;
+    }
+
+    it("keeps an alt-buffer-pinned terminal's context through a flip to dom mode", () => {
+      const alt = makeManagedTerminal();
+      manager.ensureContext("alt", alt);
+      manager.pinAltBuffer("alt", alt);
+      manager.ensureContext("a", makeManagedTerminal());
+      manager.ensureContext("b", makeManagedTerminal());
+      expect(manager.isActive("alt")).toBe(true);
+
+      // Fourth want crosses upper (3) → dom mode; alt-buffer pin survives.
+      manager.ensureContext("c", makeManagedTerminal());
+      expect(manager.getMode()).toBe("dom");
+      expect(manager.isActive("alt")).toBe(true);
+      expect(manager.isActive("a")).toBe(false);
+      expect(manager.isActive("b")).toBe(false);
+      expect(manager.isAltBufferPinned("alt")).toBe(true);
+    });
+
+    it("attaches a context for a terminal pinned while already in dom mode", () => {
+      const terms = fillToDomMode();
+      expect(manager.isActive("t1")).toBe(false);
+
+      manager.pinAltBuffer("t1", terms[1]!);
+
+      expect(manager.isActive("t1")).toBe(true);
+      expect(manager.getMode()).toBe("dom");
+    });
+
+    it("supports multiple simultaneous alt-buffer pins (unlike the single focus pin)", () => {
+      const terms = fillToDomMode();
+
+      manager.pinAltBuffer("t1", terms[1]!);
+      manager.pinAltBuffer("t2", terms[2]!);
+
+      expect(manager.isActive("t1")).toBe(true);
+      expect(manager.isActive("t2")).toBe(true);
+      expect(manager.isAltBufferPinned("t1")).toBe(true);
+      expect(manager.isAltBufferPinned("t2")).toBe(true);
+    });
+
+    it("unpinAltBuffer releases the context when the terminal returns to its normal buffer", () => {
+      const terms = fillToDomMode();
+      manager.pinAltBuffer("t1", terms[1]!);
+      expect(manager.isActive("t1")).toBe(true);
+
+      manager.unpinAltBuffer("t1");
+
+      expect(manager.isActive("t1")).toBe(false);
+      expect(manager.isAltBufferPinned("t1")).toBe(false);
+    });
+
+    it("unpinAltBuffer keeps the context when the terminal is also the focus pin", () => {
+      const terms = fillToDomMode();
+      manager.pinAltBuffer("t1", terms[1]!);
+      manager.pinFocus("t1", terms[1]!);
+      expect(manager.isActive("t1")).toBe(true);
+
+      manager.unpinAltBuffer("t1");
+
+      // Focus pin still holds the single dom-mode context.
+      expect(manager.isActive("t1")).toBe(true);
+      expect(manager.getPinnedId()).toBe("t1");
+    });
+
+    it("pinning does not change the wants count or trigger a mode flip", () => {
+      const terms = fillToDomMode();
+      const before = manager.getWantsSize();
+
+      manager.pinAltBuffer("t0", terms[0]!);
+      manager.pinAltBuffer("t1", terms[1]!);
+
+      expect(manager.getWantsSize()).toBe(before);
+      expect(manager.getMode()).toBe("dom");
+    });
+
+    it("is idempotent — re-pinning an already-pinned terminal constructs no second addon", () => {
+      const terms = fillToDomMode();
+      manager.pinAltBuffer("t1", terms[1]!);
+      const addonsAfterFirst = WebglAddonMock.mock.calls.length;
+
+      manager.pinAltBuffer("t1", terms[1]!);
+
+      expect(WebglAddonMock.mock.calls.length).toBe(addonsAfterFirst);
+      expect(manager.isActive("t1")).toBe(true);
+    });
+
+    it("alt-buffer pin survives a hide/show cycle so the revealed pane returns to WebGL", () => {
+      const terms = fillToDomMode();
+      manager.pinAltBuffer("t1", terms[1]!);
+      expect(manager.isActive("t1")).toBe(true);
+
+      // Hiding the pane (releaseContext) drops its want + context but must KEEP
+      // the pin: no buffer-mode transition re-fires on reveal, so the pin is the
+      // only thing that lets ensureContext re-attach it in dom mode. 4→3 wants
+      // stays above the lower threshold (2), so the fleet stays in dom mode.
+      manager.releaseContext("t1");
+      expect(manager.isActive("t1")).toBe(false);
+      expect(manager.isAltBufferPinned("t1")).toBe(true);
+      expect(manager.getMode()).toBe("dom");
+
+      // Revealing the pane re-ensures WebGL — the intact pin gets it a context.
+      manager.ensureContext("t1", terms[1]!);
+      expect(manager.isActive("t1")).toBe(true);
+    });
+
+    it("unpinAltBuffer is the only visibility-independent way the pin is cleared", () => {
+      const terms = fillToDomMode();
+      manager.pinAltBuffer("t1", terms[1]!);
+
+      manager.releaseContext("t1"); // hide — pin survives
+      expect(manager.isAltBufferPinned("t1")).toBe(true);
+
+      manager.unpinAltBuffer("t1"); // buffer → normal — pin cleared
+      expect(manager.isAltBufferPinned("t1")).toBe(false);
+    });
+
+    it("onTerminalDestroyed clears the alt-buffer pin", () => {
+      const terms = fillToDomMode();
+      manager.pinAltBuffer("t1", terms[1]!);
+
+      manager.onTerminalDestroyed("t1");
+
+      expect(manager.isAltBufferPinned("t1")).toBe(false);
+      expect(manager.isActive("t1")).toBe(false);
+    });
+
+    it("ignores the pin (and records nothing) when hardware is unavailable", () => {
+      const terms = fillToDomMode();
+      manager.setHardwareAvailable(false);
+
+      manager.pinAltBuffer("t1", terms[1]!);
+
+      expect(manager.isActive("t1")).toBe(false);
+      // The breaker is a one-way session trip; tracking a pin that can never
+      // attach would only churn the watchdog. Nothing is recorded.
+      expect(manager.isAltBufferPinned("t1")).toBe(false);
+    });
+
+    it("releases the context when the focus pin moves away after the alt-buffer pin was cleared", () => {
+      const terms = fillToDomMode();
+      // t1 is both focus-pinned and alt-buffer-pinned.
+      manager.pinAltBuffer("t1", terms[1]!);
+      manager.pinFocus("t1", terms[1]!);
+      expect(manager.isActive("t1")).toBe(true);
+
+      // Buffer → normal clears the alt pin, but the focus pin still holds it.
+      manager.unpinAltBuffer("t1");
+      expect(manager.isActive("t1")).toBe(true);
+
+      // Focus moves to t2 — t1 now has neither pin, so its context is released.
+      manager.pinFocus("t2", terms[2]!);
+      expect(manager.isActive("t1")).toBe(false);
+      expect(manager.isActive("t2")).toBe(true);
+    });
+
+    it("survives a mode-switch teardown then a hide/show cycle", () => {
+      // Pin before the flip so the alt pane keeps WebGL through the paced
+      // release drain, then hide (releaseContext) and re-reveal (ensureContext).
+      const alt = makeManagedTerminal();
+      manager.ensureContext("alt", alt);
+      manager.pinAltBuffer("alt", alt);
+      manager.ensureContext("a", makeManagedTerminal());
+      manager.ensureContext("b", makeManagedTerminal());
+      manager.ensureContext("c", makeManagedTerminal());
+      expect(manager.getMode()).toBe("dom");
+      expect(manager.isActive("alt")).toBe(true);
+
+      manager.releaseContext("alt"); // hide
+      expect(manager.isActive("alt")).toBe(false);
+      expect(manager.isAltBufferPinned("alt")).toBe(true);
+
+      manager.ensureContext("alt", alt); // reveal
+      expect(manager.isActive("alt")).toBe(true);
+    });
+
+    it("handles a rapid alt→normal→alt toggle without leaking the pin", () => {
+      const terms = fillToDomMode();
+
+      manager.pinAltBuffer("t1", terms[1]!);
+      expect(manager.isAltBufferPinned("t1")).toBe(true);
+      manager.unpinAltBuffer("t1");
+      expect(manager.isAltBufferPinned("t1")).toBe(false);
+      manager.pinAltBuffer("t1", terms[1]!);
+
+      expect(manager.isAltBufferPinned("t1")).toBe(true);
+      expect(manager.isActive("t1")).toBe(true);
+    });
+
+    it("hardware loss drops every alt-buffer-pinned context — no exemption survives the breaker", () => {
+      const terms = fillToDomMode();
+      manager.pinAltBuffer("t1", terms[1]!);
+      manager.pinAltBuffer("t2", terms[2]!);
+      expect(manager.isActive("t1")).toBe(true);
+      expect(manager.isActive("t2")).toBe(true);
+
+      manager.setHardwareAvailable(false);
+
+      expect(manager.isActive("t1")).toBe(false);
+      expect(manager.isActive("t2")).toBe(false);
+      expect(manager.isAltBufferPinned("t1")).toBe(false);
+      expect(manager.isAltBufferPinned("t2")).toBe(false);
+    });
+
+    it("flip back to webgl reattaches every want including alt-buffer pins exactly once", () => {
+      const terms = fillToDomMode();
+      manager.pinAltBuffer("t1", terms[1]!);
+      expect(manager.isActive("t1")).toBe(true);
+
+      manager.releaseContext("t0");
+      manager.releaseContext("t3");
+      expect(manager.getMode()).toBe("webgl");
+
+      expect(manager.isActive("t1")).toBe(true);
+      expect(manager.isActive("t2")).toBe(true);
+    });
+
+    it("alt-buffer pin set before the flip stays out of the paced release queue", () => {
+      const alt = makeManagedTerminal();
+      manager.ensureContext("alt", alt);
+      manager.pinAltBuffer("alt", alt);
+      manager.ensureContext("a", makeManagedTerminal());
+      manager.ensureContext("b", makeManagedTerminal());
+
+      rafMode = "queued";
+      manager.ensureContext("c", makeManagedTerminal());
+      expect(manager.getMode()).toBe("dom");
+
+      // Drain every queued release frame — the alt-buffer pin survives all.
+      while (flushRafFrame()) {
+        // drain
+      }
+      expect(manager.isActive("alt")).toBe(true);
+      expect(manager.isActive("a")).toBe(false);
+      expect(manager.isActive("b")).toBe(false);
+    });
+
+    it("a focus pin and an alt-buffer pin on different terminals both survive dom mode", () => {
+      const focus = makeManagedTerminal();
+      const alt = makeManagedTerminal();
+      manager.ensureContext("focus", focus);
+      manager.ensureContext("alt", alt);
+      manager.pinFocus("focus", focus);
+      manager.pinAltBuffer("alt", alt);
+      manager.ensureContext("a", makeManagedTerminal());
+
+      // Cross the upper threshold (3) → dom mode.
+      manager.ensureContext("b", makeManagedTerminal());
+      expect(manager.getMode()).toBe("dom");
+
+      expect(manager.isActive("focus")).toBe(true);
+      expect(manager.isActive("alt")).toBe(true);
+      expect(manager.isActive("a")).toBe(false);
+    });
+  });
+
   describe("lazy WebglAddon loading", () => {
     // These tests exercise the dynamic-import path. They reset loader state in
     // beforeEach so the queue behavior runs against a real (mocked) import().

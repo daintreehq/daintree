@@ -63,6 +63,9 @@ type WebGLVisibilityService = {
     getMode: () => "webgl" | "dom";
     getPinnedId: () => string | null;
     getWantsSize: () => number;
+    pinAltBuffer: (id: string, managed: unknown) => void;
+    unpinAltBuffer: (id: string) => void;
+    isAltBufferPinned: (id: string) => boolean;
   };
 };
 
@@ -687,12 +690,56 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
       expect(callShouldHaveActive(managed)).toBe(true);
     });
 
+    it("still repairs an alt-buffer-pinned pane while in DOM-mode fallback (#10768)", () => {
+      vi.spyOn(service.webGLManager, "getMode").mockReturnValue("dom");
+      vi.spyOn(service.webGLManager, "getPinnedId").mockReturnValue("pinned-other");
+      vi.spyOn(service.webGLManager, "isAltBufferPinned").mockReturnValue(true);
+      const managed = makeMockManaged({ id: "t1" });
+
+      // Alt-buffer pins keep a context in DOM mode just like the focus pin, so
+      // the watchdog must treat a missing context as a real fault to repair.
+      expect(callShouldHaveActive(managed)).toBe(true);
+    });
+
     it("does not withhold watchdog repair outside DOM-mode fallback", () => {
       vi.spyOn(service.webGLManager, "getMode").mockReturnValue("webgl");
       vi.spyOn(service.webGLManager, "getPinnedId").mockReturnValue("pinned-other");
       const managed = makeMockManaged({ id: "t1" });
 
       expect(callShouldHaveActive(managed)).toBe(true);
+    });
+  });
+
+  describe("alt-buffer pin wiring (#10768)", () => {
+    function handleBufferModeChange(id: string, isAltBuffer: boolean): void {
+      (
+        service as unknown as {
+          handleBufferModeChange: (id: string, isAltBuffer: boolean) => void;
+        }
+      ).handleBufferModeChange(id, isAltBuffer);
+    }
+
+    it("entering the alt-buffer pins the terminal in the WebGL manager", () => {
+      const managed = makeMockManaged({ id: "t1" });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+      const pinSpy = vi.spyOn(service.webGLManager, "pinAltBuffer");
+
+      handleBufferModeChange("t1", true);
+
+      expect(pinSpy).toHaveBeenCalledWith("t1", managed);
+      expect(service.webGLManager.isAltBufferPinned("t1")).toBe(true);
+    });
+
+    it("returning to the normal buffer unpins the terminal", () => {
+      const managed = makeMockManaged({ id: "t1" });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+      const unpinSpy = vi.spyOn(service.webGLManager, "unpinAltBuffer");
+
+      handleBufferModeChange("t1", true);
+      handleBufferModeChange("t1", false);
+
+      expect(unpinSpy).toHaveBeenCalledWith("t1");
+      expect(service.webGLManager.isAltBufferPinned("t1")).toBe(false);
     });
   });
 
