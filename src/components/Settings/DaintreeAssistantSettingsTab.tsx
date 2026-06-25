@@ -175,6 +175,7 @@ export function DaintreeAssistantSettingsTab() {
   // Recording stays on by default — the audit trail is a privacy/safety feature.
   // The authoritative value loads from getAuditConfig in the audit fetch effect.
   const [auditEnabled, setAuditEnabled] = useState(true);
+  const [isTogglingAudit, setIsTogglingAudit] = useState(false);
   // Diagnostics (audit viewer, latency table, turn outcomes) collapse by default
   // so the Privacy section doesn't surface telemetry on load. Local-only state —
   // no persistence precedent for section collapse in Settings.
@@ -452,14 +453,22 @@ export function DaintreeAssistantSettingsTab() {
 
   // Proxies the same mcpServer.setAuditEnabled endpoint as the MCP Server tab's
   // "Capture audit log" toggle. Server response is authoritative — no optimistic
-  // flip. On failure, leave the last known-good value (the IPC error is logged).
+  // flip. The in-flight guard prevents a double-click from computing `next` twice
+  // off the same pre-await state. On failure, surface the error and leave the
+  // last known-good value (matches McpServerSettingsTab's toggle).
   const handleAuditEnabledToggle = async () => {
+    if (isTogglingAudit) return;
+    setIsTogglingAudit(true);
     try {
+      setError(null);
       const next = !auditEnabled;
       const cfg = await window.electron.mcpServer.setAuditEnabled(next);
       setAuditEnabled(cfg.enabled);
     } catch (err) {
+      setError(formatErrorMessage(err, "Couldn't update audit recording"));
       logError("Failed to toggle MCP audit log from assistant tab", err);
+    } finally {
+      setIsTogglingAudit(false);
     }
   };
 
@@ -933,7 +942,10 @@ export function DaintreeAssistantSettingsTab() {
           isEnabled={auditEnabled}
           onChange={handleAuditEnabledToggle}
           ariaLabel="Capture audit log"
-          disabled={loading}
+          // Gate on auditLoading too: until getAuditConfig resolves, auditEnabled
+          // is still the optimistic default and a late fulfillment would clobber
+          // a user toggle made in that window.
+          disabled={loading || auditLoading || isTogglingAudit}
         />
         <SettingsSelect
           label="Audit log retention"

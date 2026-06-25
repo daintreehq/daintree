@@ -1048,7 +1048,12 @@ describe("DaintreeAssistantSettingsTab", () => {
     );
     await waitForContent(container, "Capture audit log");
 
+    // The toggle is disabled until getAuditConfig resolves (auditLoading) so the
+    // late config fulfillment can't clobber a user toggle — wait for it to enable.
     const toggle = screen.getByLabelText("Capture audit log");
+    await waitFor(() => {
+      expect(toggle.hasAttribute("disabled")).toBe(false);
+    });
     fireEvent.click(toggle);
 
     await waitFor(() => {
@@ -1056,6 +1061,32 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
     await waitForContent(container, "New dispatches will not be recorded");
     expect(screen.getByLabelText("Capture audit log").getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("surfaces an inline error when setAuditEnabled rejects, leaving recording on", async () => {
+    installApi(
+      {},
+      {
+        setAuditEnabled: vi.fn().mockRejectedValue(new Error("audit ipc failed")),
+      }
+    );
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Capture audit log");
+
+    const toggle = screen.getByLabelText("Capture audit log");
+    await waitFor(() => {
+      expect(toggle.hasAttribute("disabled")).toBe(false);
+    });
+    fireEvent.click(toggle);
+
+    await waitForContent(container, "audit ipc failed");
+    // Recording state holds at the last known-good value on failure.
+    expect(screen.getByLabelText("Capture audit log").getAttribute("aria-checked")).toBe("true");
   });
 
   it("reflects recording-off state loaded from getAuditConfig", async () => {
