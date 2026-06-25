@@ -38,7 +38,12 @@ export async function serializeTerminalAsync(
     const serializerService = getTerminalSerializerService();
 
     if (serializerService.shouldUseAsync(lineCount)) {
-      return await serializerService.serializeAsync(id, () => addon.serialize());
+      // The serialize callback runs on a later tick; disposeHeadless() may clear
+      // the addon in between. Re-check identity so a disposed terminal yields
+      // null instead of throwing (which would re-log a spurious failure).
+      return await serializerService.serializeAsync(id, () =>
+        terminalInfo.serializeAddon === addon ? addon.serialize() : null
+      );
     }
 
     return addon.serialize();
