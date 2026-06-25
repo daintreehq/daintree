@@ -1207,6 +1207,28 @@ describe("TerminalFocusSlice - setFocused ping gating", () => {
     state.setFocused("term-2", false);
     expect(pingSpy).not.toHaveBeenCalled();
   });
+
+  it("wakes the terminal when focus moves to it", () => {
+    state.setFocused("term-1");
+    expect(terminalInstanceService.wake).toHaveBeenCalledWith("term-1");
+
+    vi.mocked(terminalInstanceService.wake).mockClear();
+    state.setFocused("term-2");
+    expect(terminalInstanceService.wake).toHaveBeenCalledWith("term-2");
+  });
+
+  it("does NOT re-wake when re-focusing the already-focused terminal", () => {
+    // A wake reset()+replays the serialized buffer. Re-focusing a live
+    // foreground terminal (clicking the xterm while the pane hybrid input held
+    // focus) must not trigger that, or the redundant replay clobbers the live
+    // buffer and collapses an alt-screen TUI like OpenCode.
+    state.setFocused("term-1");
+    vi.mocked(terminalInstanceService.wake).mockClear();
+
+    state.setFocused("term-1");
+
+    expect(terminalInstanceService.wake).not.toHaveBeenCalled();
+  });
 });
 
 describe("TerminalFocusSlice - focusAlternate (last-pane toggle)", () => {
