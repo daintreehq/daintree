@@ -319,6 +319,18 @@ describe("routeHostEvent", () => {
     expect(callbacks.terminalPidCalls).toEqual([{ id: "t1", pid: 777 }]);
   });
 
+  it("retains a stored valid PID when later invalid events arrive (#10787)", () => {
+    const { deps, state, callbacks } = makeDeps();
+
+    routeHostEvent({ type: "terminal-pid", id: "t1", pid: 555 }, deps);
+    for (const pid of [0, -1, NaN, Infinity]) {
+      routeHostEvent({ type: "terminal-pid", id: "t1", pid }, deps);
+    }
+
+    expect(state.terminalPids.get("t1")).toBe(555);
+    expect(callbacks.terminalPidCalls).toEqual([{ id: "t1", pid: 555 }]);
+  });
+
   it("invokes onTerminalPid with id and pid after updating the state map (#7526)", () => {
     const { deps, state, callbacks } = makeDeps();
     routeHostEvent({ type: "terminal-pid", id: "t1", pid: 4242 }, deps);

@@ -1398,7 +1398,7 @@ export class TerminalProcess {
 
   private getPtyDescendantCount(): number | undefined {
     const ptyPid = this.terminalInfo.ptyProcess.pid;
-    if (ptyPid === undefined || !this.deps.processTreeCache) {
+    if (!Number.isInteger(ptyPid) || ptyPid <= 0 || !this.deps.processTreeCache) {
       return undefined;
     }
     return this.deps.processTreeCache.getDescendantPids(ptyPid).length;

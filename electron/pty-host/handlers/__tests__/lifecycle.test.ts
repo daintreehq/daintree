@@ -332,6 +332,11 @@ describe("lifecycle spawn — terminal-pid gating and deferred retry (#10787)", 
     expect(ctx.sendEvent).toHaveBeenCalledWith({ type: "terminal-pid", id: "t1", pid: 4321 });
     expect(ctx.ptyManager.startProcessDetectorForTerminal).toHaveBeenCalledTimes(1);
     expect(ctx.ptyManager.startProcessDetectorForTerminal).toHaveBeenCalledWith("t1");
+    // The transient 0 must never have been emitted at any point.
+    const pidEvents = (ctx.sendEvent as ReturnType<typeof vi.fn>).mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.type === "terminal-pid");
+    expect(pidEvents).toEqual([{ type: "terminal-pid", id: "t1", pid: 4321 }]);
   });
 
   it("abandons the retry if the terminal disappears before the PID resolves", async () => {
