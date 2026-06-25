@@ -9,6 +9,7 @@ import {
   PointerSensor,
   TouchSensor,
   type DragEndEvent,
+  type DraggableSyntheticListeners,
   type UniqueIdentifier,
 } from "@dnd-kit/core";
 import {
@@ -78,12 +79,22 @@ interface DockedTabGroupProps {
 }
 
 export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
-  // Consume the drag listeners SortableDockItem publishes via DragHandleProvider
-  // so the group chip button is a real drag source (pointer reorder + keyboard
-  // drag). setActivatorNodeRef must land on the focusable button itself or
-  // KeyboardSensor's Space/Enter activation silently fails. Called before the
-  // early return below to satisfy the Rules of Hooks.
+  // Forward only the pointer/touch drag listeners SortableDockItem publishes via
+  // DragHandleProvider, so the group chip becomes a real drag source instead of
+  // just grab-cursor styling. The KeyboardSensor's onKeyDown is dropped on
+  // purpose: the chip is its own preview trigger, and dnd-kit's Space/Enter
+  // handler calls preventDefault() to start a keyboard drag, which would
+  // suppress this native <button>'s activation click — the sole keyboard path to
+  // the chip's primary action. (Grid PanelHeader has no such conflict: its drag
+  // surface is a non-interactive <div>.) Keyboard-driven reordering of dock
+  // chips is intentionally out of scope. Computed before the early return below
+  // to satisfy the Rules of Hooks.
   const dragHandle = useDragHandle();
+  const dragPointerListeners: DraggableSyntheticListeners = dragHandle?.listeners
+    ? Object.fromEntries(
+        Object.entries(dragHandle.listeners).filter(([name]) => name !== "onKeyDown")
+      )
+    : undefined;
   const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
   const openDockTerminal = usePanelStore((s) => s.openDockTerminal);
   const closeDockTerminal = usePanelStore((s) => s.closeDockTerminal);
@@ -549,8 +560,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         <TerminalContextMenu terminalId={activePanel.id} forceLocation="dock">
           <PopoverTrigger asChild>
             <button
-              ref={dragHandle?.setActivatorNodeRef}
-              {...dragHandle?.listeners}
+              {...dragPointerListeners}
               data-dock-item=""
               className={cn(
                 "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px]",

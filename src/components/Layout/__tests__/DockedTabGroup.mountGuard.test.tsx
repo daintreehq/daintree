@@ -781,9 +781,10 @@ describe("DockedTabGroup add-tab orphan cleanup (#10441)", () => {
 
 // #10797 — the group chip showed grab-cursor styling but never consumed the
 // drag listeners SortableDockItem publishes via DragHandleProvider, so it
-// wasn't a functional drag source. These tests verify the chip now registers
-// the activator node (KeyboardSensor's focusable surface) and forwards pointer
-// drag events.
+// wasn't a functional drag source. The fix forwards the pointer/touch listeners
+// but deliberately drops the KeyboardSensor's onKeyDown: the chip is its own
+// preview trigger, so Space/Enter must keep opening the preview rather than
+// being hijacked into a keyboard drag pickup.
 describe("DockedTabGroup drag wiring (#10797)", () => {
   beforeEach(() => {
     mockActiveDockTerminalId = null;
@@ -803,29 +804,36 @@ describe("DockedTabGroup drag wiring (#10797)", () => {
     );
   }
 
-  it("registers the group chip button as the drag activator node", () => {
-    const setActivatorNodeRef = vi.fn();
-    const { container } = renderInProvider({ listeners: {}, setActivatorNodeRef });
-
-    const chip = container.querySelector(
-      'button[aria-label*="drag to reorder"]'
-    ) as HTMLButtonElement | null;
-    expect(chip).not.toBeNull();
-    expect(setActivatorNodeRef).toHaveBeenCalledWith(chip);
-  });
-
   it("forwards pointer drag events from the group chip to the dnd listeners", () => {
-    const onPointerDown = vi.fn();
+    const onMouseDown = vi.fn();
     const { container } = renderInProvider({
-      listeners: { onPointerDown },
+      listeners: { onMouseDown },
       setActivatorNodeRef: vi.fn(),
     });
 
     const chip = container.querySelector(
       'button[aria-label*="drag to reorder"]'
     ) as HTMLButtonElement;
-    fireEvent.pointerDown(chip);
-    expect(onPointerDown).toHaveBeenCalledTimes(1);
+    fireEvent.mouseDown(chip);
+    expect(onMouseDown).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not wire the keyboard-drag listener onto the group chip (Space/Enter stays for preview)", () => {
+    const onKeyDown = vi.fn();
+    const { container } = renderInProvider({
+      listeners: { onKeyDown },
+      setActivatorNodeRef: vi.fn(),
+    });
+
+    const chip = container.querySelector(
+      'button[aria-label*="drag to reorder"]'
+    ) as HTMLButtonElement;
+    fireEvent.keyDown(chip, { key: "Enter" });
+    fireEvent.keyDown(chip, { key: " " });
+    // The KeyboardSensor's onKeyDown would call preventDefault() and start a drag
+    // pickup, suppressing the native button click that opens the preview. It must
+    // not be forwarded onto the chip.
+    expect(onKeyDown).not.toHaveBeenCalled();
   });
 
   it("renders without a drag-handle provider (no listeners) without throwing", () => {

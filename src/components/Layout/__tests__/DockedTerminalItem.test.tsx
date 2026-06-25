@@ -191,38 +191,44 @@ describe("DockedTerminalItem move-to-grid gesture", () => {
 
 // #10797 — the chip showed grab-cursor styling but never consumed the drag
 // listeners SortableDockItem publishes via DragHandleProvider, so it wasn't a
-// functional drag source. These tests verify the chip now registers the
-// activator node (KeyboardSensor's focusable surface) and forwards pointer
-// drag events.
+// functional drag source. The fix forwards the pointer/touch listeners but
+// deliberately drops the KeyboardSensor's onKeyDown: the chip is its own preview
+// trigger, so Space/Enter must keep opening the preview rather than being
+// hijacked into a keyboard drag pickup.
 describe("DockedTerminalItem drag wiring", () => {
   beforeEach(() => {
     mockActiveDockTerminalId = null;
     mockDockAgentState = undefined;
   });
 
-  it("registers the chip button as the drag activator node", () => {
-    const setActivatorNodeRef = vi.fn();
+  it("forwards pointer drag events from the chip to the dnd listeners", () => {
+    const onMouseDown = vi.fn();
     render(
-      <DragHandleProvider value={{ listeners: {}, setActivatorNodeRef }}>
+      <DragHandleProvider value={{ listeners: { onMouseDown }, setActivatorNodeRef: vi.fn() }}>
         <DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />
       </DragHandleProvider>
     );
 
     const chip = screen.getByRole("button", { name: /drag to reorder/i });
-    expect(setActivatorNodeRef).toHaveBeenCalledWith(chip);
+    fireEvent.mouseDown(chip);
+    expect(onMouseDown).toHaveBeenCalledTimes(1);
   });
 
-  it("forwards pointer drag events from the chip to the dnd listeners", () => {
-    const onPointerDown = vi.fn();
+  it("does not wire the keyboard-drag listener onto the chip (Space/Enter stays for preview)", () => {
+    const onKeyDown = vi.fn();
     render(
-      <DragHandleProvider value={{ listeners: { onPointerDown }, setActivatorNodeRef: vi.fn() }}>
+      <DragHandleProvider value={{ listeners: { onKeyDown }, setActivatorNodeRef: vi.fn() }}>
         <DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />
       </DragHandleProvider>
     );
 
     const chip = screen.getByRole("button", { name: /drag to reorder/i });
-    fireEvent.pointerDown(chip);
-    expect(onPointerDown).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(chip, { key: "Enter" });
+    fireEvent.keyDown(chip, { key: " " });
+    // The KeyboardSensor's onKeyDown would call preventDefault() and start a drag
+    // pickup, suppressing the native button click that opens the preview. It must
+    // not be forwarded onto the chip.
+    expect(onKeyDown).not.toHaveBeenCalled();
   });
 
   it("renders without a drag-handle provider (no listeners) without throwing", () => {
