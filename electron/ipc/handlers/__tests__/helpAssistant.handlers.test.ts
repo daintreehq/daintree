@@ -52,6 +52,7 @@ vi.mock("../../utils.js", () => utilsMock);
 
 const mcpServiceMock = vi.hoisted(() => ({
   getHelpSessionLiveStatus: vi.fn(),
+  pruneAuditByRetention: vi.fn(),
 }));
 
 vi.mock("../../../services/McpServerService.js", () => ({ mcpServerService: mcpServiceMock }));
@@ -256,6 +257,49 @@ describe("registerHelpAssistantHandlers", () => {
     expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.auditRetention", 0);
     expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.auditRetention", 7);
     expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.auditRetention", 30);
+  });
+
+  it("applies the new retention window to the MCP audit rings on a valid write (#10776)", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { auditRetention: 30 });
+    // Pruning is fired-and-forgotten after the await-import resolves — drain
+    // the microtask/timer queue before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mcpServiceMock.pruneAuditByRetention).toHaveBeenCalledWith(30);
+  });
+
+  it("forwards the Off value (0) to the audit rings so pruning is disabled (#10776)", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { auditRetention: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mcpServiceMock.pruneAuditByRetention).toHaveBeenCalledWith(0);
+  });
+
+  it("does not prune when the auditRetention value is rejected (#10776)", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { auditRetention: 90 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+    expect(mcpServiceMock.pruneAuditByRetention).not.toHaveBeenCalled();
+  });
+
+  it("does not prune when auditRetention is absent from the patch (#10776)", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { docSearch: false });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mcpServiceMock.pruneAuditByRetention).not.toHaveBeenCalled();
   });
 
   it("rejects boolean fields that are not actually booleans", async () => {

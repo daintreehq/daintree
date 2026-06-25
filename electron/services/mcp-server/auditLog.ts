@@ -642,6 +642,39 @@ export class AuditService {
     this.flushNow();
     return this.getAuditConfig();
   }
+
+  /**
+   * Drop audit records older than `retentionDays`, then flush if anything was
+   * removed. `retentionDays <= 0` is the "Off" setting — keep everything,
+   * bounded only by the count cap. Filters on each record's own `.timestamp`
+   * (event time, `Date.now()` at append), NOT the SQLite `created_at` column:
+   * `writeAll` re-stamps `created_at` to the flush time on every flush, so it
+   * cannot distinguish record ages. Records whose `timestamp` is not a finite
+   * number are retained rather than dropped — a corrupt timestamp shouldn't
+   * silently evict privacy-sensitive history.
+   */
+  pruneByAge(retentionDays: number): void {
+    if (!Number.isFinite(retentionDays) || retentionDays <= 0) return;
+    this.hydrate();
+    const cutoff = Date.now() - retentionDays * 86_400_000;
+    const before = this.records.length;
+    this.records = this.records.filter(
+      (r) => !(Number.isFinite(r.timestamp) && r.timestamp < cutoff)
+    );
+    if (this.records.length !== before) {
+      // If the pre-auth coalesce target was pruned, reset the coalesce state so
+      // the next 401 writes a fresh record rather than mutating a vanished one —
+      // mirrors the eviction reset in `enqueueAndTrim`.
+      if (
+        this.lastPreAuthRecordId !== null &&
+        !this.records.some((r) => r.id === this.lastPreAuthRecordId)
+      ) {
+        this.lastPreAuthRecordId = null;
+        this.lastPreAuthRecordAt = 0;
+      }
+      this.flushNow();
+    }
+  }
 }
 
 export type AuditOutcome =

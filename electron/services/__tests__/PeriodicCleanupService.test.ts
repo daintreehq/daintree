@@ -12,7 +12,16 @@ const mockRunScratchCleanup = vi.hoisted(() => vi.fn().mockResolvedValue(undefin
 const mockRunAssistantScratchCleanup = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockPruneOldLogs = vi.hoisted(() => vi.fn());
 const mockPruneHeapSnapshotsAsync = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-const mockStoreGet = vi.hoisted(() => vi.fn().mockReturnValue({ logRetentionDays: 30 }));
+const mockPruneAuditByRetention = vi.hoisted(() => vi.fn());
+
+// store.get is key-aware: the log-prune routine reads "privacy", the audit-prune
+// routine reads "helpAssistant". A single flat return value would feed the wrong
+// shape to whichever routine didn't expect it.
+function storeGetByKey(key: string): unknown {
+  if (key === "helpAssistant") return { auditRetention: 7 };
+  return { logRetentionDays: 30 };
+}
+const mockStoreGet = vi.hoisted(() => vi.fn());
 
 vi.mock("electron", () => ({
   app: mockApp,
@@ -38,6 +47,10 @@ vi.mock("../../store.js", () => ({
   store: { get: mockStoreGet },
 }));
 
+vi.mock("../McpServerService.js", () => ({
+  mcpServerService: { pruneAuditByRetention: mockPruneAuditByRetention },
+}));
+
 import { PeriodicCleanupService } from "../PeriodicCleanupService.js";
 
 describe("PeriodicCleanupService", () => {
@@ -51,7 +64,7 @@ describe("PeriodicCleanupService", () => {
     mockRunScratchCleanup.mockResolvedValue(undefined);
     mockRunAssistantScratchCleanup.mockResolvedValue(undefined);
     mockPruneHeapSnapshotsAsync.mockResolvedValue(undefined);
-    mockStoreGet.mockReturnValue({ logRetentionDays: 30 });
+    mockStoreGet.mockImplementation(storeGetByKey);
   });
 
   afterEach(() => {
@@ -194,5 +207,65 @@ describe("PeriodicCleanupService", () => {
     // A direct tick after dispose is also a no-op.
     await service.tick();
     expectNoRoutinesRan();
+  });
+
+  it("prunes assistant audit logs using the configured retention (#10776)", async () => {
+    mockStoreGet.mockImplementation((key: string) =>
+      key === "helpAssistant" ? { auditRetention: 30 } : { logRetentionDays: 30 }
+    );
+    const service = new PeriodicCleanupService();
+    await service.tick();
+
+    expect(mockPruneAuditByRetention).toHaveBeenCalledWith(30);
+    service.dispose();
+  });
+
+  it("defaults to a 7-day audit retention when the setting is absent (#10776)", async () => {
+    mockStoreGet.mockImplementation((key: string) =>
+      key === "helpAssistant" ? {} : { logRetentionDays: 30 }
+    );
+    const service = new PeriodicCleanupService();
+    await service.tick();
+
+    expect(mockPruneAuditByRetention).toHaveBeenCalledWith(7);
+    service.dispose();
+  });
+
+  it("skips audit pruning when retention is Off (0) (#10776)", async () => {
+    mockStoreGet.mockImplementation((key: string) =>
+      key === "helpAssistant" ? { auditRetention: 0 } : { logRetentionDays: 30 }
+    );
+    const service = new PeriodicCleanupService();
+    await service.tick();
+
+    expect(mockPruneAuditByRetention).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
+  it("skips audit pruning when the stored retention is a corrupt non-number (#10776)", async () => {
+    mockStoreGet.mockImplementation((key: string) =>
+      key === "helpAssistant"
+        ? ({ auditRetention: "7" } as unknown as { auditRetention: number })
+        : { logRetentionDays: 30 }
+    );
+    const service = new PeriodicCleanupService();
+    await service.tick();
+
+    // A stringly-typed value coerces to `"7" > 0 === true`, so guard on the
+    // type, not just the comparison — otherwise prune is a silent no-op.
+    expect(mockPruneAuditByRetention).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
+  it("isolates an audit-prune failure so the other routines still run (#10776)", async () => {
+    mockPruneAuditByRetention.mockImplementation(() => {
+      throw new Error("prune boom");
+    });
+    const service = new PeriodicCleanupService();
+    await service.tick();
+
+    // The throwing audit prune does not prevent the earlier routines.
+    expectAllRoutinesRan();
+    service.dispose();
   });
 });

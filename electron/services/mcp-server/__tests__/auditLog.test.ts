@@ -1139,3 +1139,112 @@ describe("AuditService.getLogRecords — union preservation (#10027)", () => {
     expect(isAuditRecord(log[1]!)).toBe(true);
   });
 });
+
+describe("AuditService.pruneByAge (#10776)", () => {
+  const DAY = 86_400_000;
+
+  function seedRecord(timestamp: unknown): Record<string, unknown> {
+    return {
+      id: `r-${String(timestamp)}`,
+      timestamp,
+      toolId: "files.search",
+      sessionId: "sess-1",
+      tier: "action",
+      argsSummary: "{}",
+      result: "success" as McpAuditResult,
+      durationMs: 1,
+    };
+  }
+
+  it("drops records older than the retention window and keeps newer ones", () => {
+    const now = Date.now();
+    const { service, logStore } = makeFixture({}, [
+      seedRecord(now - 8 * DAY),
+      seedRecord(now - 6 * DAY),
+      seedRecord(now - 1 * DAY),
+    ]);
+    service.pruneByAge(7);
+    const ids = service.getRecords().map((r) => r.id);
+    // getRecords is newest-first; the 8-day-old record is gone.
+    expect(ids).toEqual([`r-${now - 1 * DAY}`, `r-${now - 6 * DAY}`]);
+    expect(logStore.write).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a record exactly at the cutoff boundary (>= cutoff retained)", () => {
+    vi.useFakeTimers();
+    try {
+      const now = 1_000_000_000_000;
+      vi.setSystemTime(now);
+      const cutoff = now - 7 * DAY;
+      const { service } = makeFixture({}, [seedRecord(cutoff), seedRecord(cutoff - 1)]);
+      service.pruneByAge(7);
+      const ids = service.getRecords().map((r) => r.id);
+      // The record at exactly the cutoff survives; the one 1ms older is dropped.
+      expect(ids).toEqual([`r-${cutoff}`]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is a no-op when retentionDays <= 0 (Off keeps everything)", () => {
+    const now = Date.now();
+    const { service, logStore } = makeFixture({}, [
+      seedRecord(now - 90 * DAY),
+      seedRecord(now - 1 * DAY),
+    ]);
+    service.pruneByAge(0);
+    expect(service.getRecords()).toHaveLength(2);
+    expect(logStore.write).not.toHaveBeenCalled();
+  });
+
+  it("does not flush when nothing falls outside the window", () => {
+    const now = Date.now();
+    const { service, logStore } = makeFixture({}, [
+      seedRecord(now - 2 * DAY),
+      seedRecord(now - 1 * DAY),
+    ]);
+    service.pruneByAge(7);
+    expect(service.getRecords()).toHaveLength(2);
+    expect(logStore.write).not.toHaveBeenCalled();
+  });
+
+  it("no-ops silently on an empty ring", () => {
+    const { service, logStore } = makeFixture({}, []);
+    service.pruneByAge(7);
+    expect(service.getRecords()).toHaveLength(0);
+    expect(logStore.write).not.toHaveBeenCalled();
+  });
+
+  it("retains records with a non-finite timestamp rather than dropping them", () => {
+    const now = Date.now();
+    const { service } = makeFixture({}, [
+      seedRecord(undefined),
+      seedRecord(-Infinity),
+      seedRecord(NaN),
+      seedRecord(now - 30 * DAY),
+      seedRecord(now - 1 * DAY),
+    ]);
+    service.pruneByAge(7);
+    const ids = service.getRecords().map((r) => r.id);
+    // Malformed-timestamp records are kept (even -Infinity, which is typeof
+    // "number" but not finite); only the genuinely-old one drops.
+    expect(ids).toContain("r-undefined");
+    expect(ids).toContain("r--Infinity"); // seedRecord(-Infinity) → `r-${String(-Infinity)}`
+    expect(ids).toContain("r-NaN");
+    expect(ids).toContain(`r-${now - 1 * DAY}`);
+    expect(ids).not.toContain(`r-${now - 30 * DAY}`);
+  });
+
+  it("flushes the pruned ring to the log store, not just the in-memory view", () => {
+    const now = Date.now();
+    const { service, getPersistedLog } = makeFixture({}, [
+      seedRecord(now - 40 * DAY),
+      seedRecord(now - 1 * DAY),
+    ]);
+    service.pruneByAge(7);
+    const persistedIds = getPersistedLog().map((r) => (r as { id: string }).id);
+    // The flushed payload reflects the prune, so a reload won't resurrect the
+    // dropped record.
+    expect(persistedIds).toEqual([`r-${now - 1 * DAY}`]);
+  });
+});
