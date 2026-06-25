@@ -218,6 +218,11 @@ export function resetLoggerStateForTesting(): void {
   trackedLogFile = null;
   trackedLogSize = -1;
   bytesSinceSizeRefresh = 0;
+  // Drop any buffered async writes so a deferred flush can't bleed into the
+  // next test (an already-scheduled setImmediate finds an empty buffer).
+  pendingLogLines = [];
+  pendingLogBytes = 0;
+  asyncFlushScheduled = false;
   loggerRegistry.clear();
   levelOverrides.clear();
   defaultLevel = IS_DEBUG_BOOT ? "debug" : "info";
@@ -655,6 +660,22 @@ let trackedLogFile: string | null = null;
 let trackedLogSize = -1;
 let bytesSinceSizeRefresh = 0;
 
+// Async batched file logging (#10769). A per-line `appendFileSync` on the main
+// thread is the dominant event-loop stall under multi-agent load: a single
+// workspace-host `worktree-update` fans out to several sync writes through the
+// event bus, and a busy session issues hundreds of log lines per second — each
+// 0.2–20ms incl. the periodic rotation `statSync`. Non-error lines are buffered
+// and flushed once per event-loop turn with a single async `appendFile`,
+// collapsing N syscalls into 1 and keeping the write off the synchronous hot
+// path. ERROR lines stay synchronous (see `writeToLogFile`) so they survive a
+// crash, matching the eager-import sync-fs rationale at the top of this file.
+const ASYNC_FLUSH_MAX_PENDING_BYTES = 256 * 1024;
+let pendingLogLines: string[] = [];
+let pendingLogBytes = 0;
+let asyncFlushScheduled = false;
+let asyncFlushInFlight: Promise<void> | null = null;
+let exitFlushRegistered = false;
+
 function rotateIfNeededTracked(logFile: string): boolean {
   if (
     trackedLogSize < 0 ||
@@ -671,33 +692,142 @@ function rotateIfNeededTracked(logFile: string): boolean {
   return true;
 }
 
+/** Ensure the log directory exists; re-stat on the next write if the path moved. */
+function ensureLogDir(logFile: string): void {
+  if (logFile !== trackedLogFile) {
+    mkdirSync(getLogDirectory(), { recursive: true });
+    trackedLogFile = logFile;
+    trackedLogSize = -1;
+  }
+}
+
+function recordWrittenBytes(bytes: number): void {
+  trackedLogSize += bytes;
+  bytesSinceSizeRefresh += bytes;
+}
+
+/** Synchronously append `data` to the active log file, honoring rotation. */
+function appendSync(data: string, bytes: number): void {
+  const logFile = getLogFilePath();
+  ensureLogDir(logFile);
+  if (!rotateIfNeededTracked(logFile)) return;
+  appendFileSync(logFile, data, "utf8");
+  recordWrittenBytes(bytes);
+}
+
+/**
+ * Drain buffered lines synchronously. Used as a memory safety valve when a
+ * synchronous burst never yields to the flush timer, and on process exit for
+ * best-effort durability of buffered non-error lines.
+ */
+function flushPendingLogsSync(): void {
+  if (pendingLogLines.length === 0) return;
+  const data = pendingLogLines.join("");
+  const bytes = pendingLogBytes;
+  pendingLogLines = [];
+  pendingLogBytes = 0;
+  try {
+    appendSync(data, bytes);
+  } catch {
+    trackedLogFile = null;
+  }
+}
+
+function scheduleAsyncFlush(): void {
+  if (!exitFlushRegistered) {
+    exitFlushRegistered = true;
+    process.once("exit", () => {
+      try {
+        flushPendingLogsSync();
+      } catch {
+        // Process is exiting — nothing more we can do.
+      }
+    });
+  }
+  if (asyncFlushScheduled) return;
+  asyncFlushScheduled = true;
+  setImmediate(runAsyncFlush);
+}
+
+function runAsyncFlush(): void {
+  asyncFlushScheduled = false;
+  if (asyncFlushInFlight) return; // the in-flight drain loops until empty
+  asyncFlushInFlight = drainPendingLogs().finally(() => {
+    asyncFlushInFlight = null;
+    // A line buffered after the loop's last check still needs a flush.
+    if (pendingLogLines.length > 0) scheduleAsyncFlush();
+  });
+}
+
+async function drainPendingLogs(): Promise<void> {
+  while (pendingLogLines.length > 0) {
+    const data = pendingLogLines.join("");
+    const bytes = pendingLogBytes;
+    pendingLogLines = [];
+    pendingLogBytes = 0;
+    try {
+      const logFile = getLogFilePath();
+      ensureLogDir(logFile);
+      if (!rotateIfNeededTracked(logFile)) continue;
+      await fsp.appendFile(logFile, data, "utf8");
+      recordWrittenBytes(bytes);
+    } catch {
+      // Re-ensure the directory and re-stat on the next write.
+      trackedLogFile = null;
+    }
+  }
+}
+
+/** Test-only: resolve once all buffered log lines have been written to disk. */
+export async function flushLogFileWritesForTesting(): Promise<void> {
+  if (!asyncFlushInFlight && pendingLogLines.length > 0) {
+    asyncFlushScheduled = false;
+    asyncFlushInFlight = drainPendingLogs().finally(() => {
+      asyncFlushInFlight = null;
+    });
+  }
+  while (asyncFlushInFlight) {
+    await asyncFlushInFlight;
+    if (pendingLogLines.length > 0 && !asyncFlushInFlight) {
+      asyncFlushInFlight = drainPendingLogs().finally(() => {
+        asyncFlushInFlight = null;
+      });
+    }
+  }
+}
+
 function writeToLogFile(level: string, message: string, contextStr: string): void {
   if (!ENABLE_FILE_LOGGING) return;
   if (getWritesSuppressed()) return;
 
-  try {
-    const logFile = getLogFilePath();
-    const timestamp = new Date().toISOString();
-    const logLine = scrubSecrets(
-      `[${timestamp}] [${level}] ${message}${contextStr ? ` ${contextStr}` : ""}\n`
-    );
+  const timestamp = new Date().toISOString();
+  const logLine = scrubSecrets(
+    `[${timestamp}] [${level}] ${message}${contextStr ? ` ${contextStr}` : ""}\n`
+  );
+  const bytes = Buffer.byteLength(logLine, "utf8");
 
-    if (logFile !== trackedLogFile) {
-      mkdirSync(getLogDirectory(), { recursive: true });
-      trackedLogFile = logFile;
-      trackedLogSize = -1;
+  if (level === "ERROR") {
+    // Errors are written synchronously so they survive a crash. Flush any
+    // buffered lines first so the on-disk order matches emit order.
+    try {
+      const data = pendingLogLines.length > 0 ? pendingLogLines.join("") + logLine : logLine;
+      const total = pendingLogBytes + bytes;
+      pendingLogLines = [];
+      pendingLogBytes = 0;
+      appendSync(data, total);
+    } catch {
+      trackedLogFile = null;
     }
+    return;
+  }
 
-    if (!rotateIfNeededTracked(logFile)) {
-      return;
-    }
-    appendFileSync(logFile, logLine, "utf8");
-    const bytes = Buffer.byteLength(logLine, "utf8");
-    trackedLogSize += bytes;
-    bytesSinceSizeRefresh += bytes;
-  } catch (_error) {
-    // Re-ensure the directory and re-stat on the next write.
-    trackedLogFile = null;
+  pendingLogLines.push(logLine);
+  pendingLogBytes += bytes;
+  // Bound memory if a synchronous burst never yields to the flush timer.
+  if (pendingLogBytes >= ASYNC_FLUSH_MAX_PENDING_BYTES) {
+    flushPendingLogsSync();
+  } else {
+    scheduleAsyncFlush();
   }
 }
 

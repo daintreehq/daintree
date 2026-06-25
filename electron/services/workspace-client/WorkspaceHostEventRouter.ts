@@ -7,6 +7,7 @@ import { clearWslGitEntry } from "../../store.js";
 import { gitServiceCache } from "../GitServiceCache.js";
 import { type ProcessEntry, type CopyTreeProgressCallback, sendToEntryWindows } from "./types.js";
 import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
+import type { WorktreeState } from "../../../shared/types/worktree.js";
 
 export type EmitFn = (event: string | symbol, ...args: unknown[]) => boolean;
 
@@ -19,6 +20,18 @@ export interface WorkspaceHostEventRouterDeps {
 export class WorkspaceHostEventRouter {
   private static readonly RATE_LIMIT_TOKEN_CHANGE_GUARD_MS = 5_000;
 
+  // Coalesce the in-process `sys:worktree:update` bus (#10769). Under
+  // multi-agent load the host streams worktree-update snapshots at 10–50/s;
+  // each synchronously drives `PullRequestService.handleWorktreeUpdate` (branch
+  // diffing, PR-state clears, more log writes) and the MCP session listener,
+  // stalling the main thread and lagging keystroke echo. A 50ms trailing-edge
+  // debounce keyed per worktree collapses bursts (rapid same-worktree snapshots
+  // → one emit with the latest state) while staying imperceptible for these
+  // consumers. The direct per-view MessagePort fan-out (DIRECT_RENDERER_EVENTS)
+  // and the `worktree-update` plugin-bus emit are intentionally NOT debounced —
+  // they drive UI store updates and the PluginService contract.
+  private static readonly SYS_WORKTREE_UPDATE_DEBOUNCE_MS = 50;
+
   private emit: EmitFn;
   private worktreePathToProject: Map<string, string>;
   private copyTreeProgressCallbacks: Map<string, CopyTreeProgressCallback>;
@@ -27,6 +40,10 @@ export class WorkspaceHostEventRouter {
   private inotifyLimitToastSent = false;
   private emfileLimitToastSent = false;
   private cloudTeardownFailureToastKeys = new Set<string>();
+
+  private pendingSysWorktreeUpdates = new Map<string, WorktreeState>();
+  private sysWorktreeUpdateTimer: ReturnType<typeof setTimeout> | null = null;
+  private disposed = false;
 
   constructor(deps: WorkspaceHostEventRouterDeps) {
     this.emit = deps.emit;
@@ -61,7 +78,7 @@ export class WorkspaceHostEventRouter {
           worktree,
           projectPath: entry.projectPath,
         });
-        events.emit("sys:worktree:update", worktree);
+        this.queueSysWorktreeUpdate(worktree);
 
         // Cloud-side teardown failure: when `phase: "resource-teardown"` ends in
         // `failed` or `timed-out`, the user's cloud resource may still be running
@@ -345,5 +362,46 @@ export class WorkspaceHostEventRouter {
         break;
       }
     }
+  }
+
+  /**
+   * Buffer a `sys:worktree:update` for the trailing-edge debounce window. Keyed
+   * per worktree so rapid snapshots of the same worktree collapse to a single
+   * emit carrying the latest state. Re-arms a single shared timer (#7469: a
+   * pending entry without an armed drain timer would strand until the next
+   * event).
+   */
+  private queueSysWorktreeUpdate(worktree: WorktreeState): void {
+    if (this.disposed) return;
+    const key = worktree.worktreeId || path.resolve(worktree.path ?? "");
+    this.pendingSysWorktreeUpdates.set(key, worktree);
+    if (this.sysWorktreeUpdateTimer === null) {
+      this.sysWorktreeUpdateTimer = setTimeout(
+        () => this.flushSysWorktreeUpdates(),
+        WorkspaceHostEventRouter.SYS_WORKTREE_UPDATE_DEBOUNCE_MS
+      );
+    }
+  }
+
+  private flushSysWorktreeUpdates(): void {
+    this.sysWorktreeUpdateTimer = null;
+    if (this.pendingSysWorktreeUpdates.size === 0) return;
+    const updates = Array.from(this.pendingSysWorktreeUpdates.values());
+    this.pendingSysWorktreeUpdates.clear();
+    // Emit synchronously per worktree so listener ordering (PullRequestService
+    // relies on synchronous reentrancy handling) is preserved.
+    for (const worktree of updates) {
+      events.emit("sys:worktree:update", worktree);
+    }
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.sysWorktreeUpdateTimer !== null) {
+      clearTimeout(this.sysWorktreeUpdateTimer);
+      this.sysWorktreeUpdateTimer = null;
+    }
+    this.pendingSysWorktreeUpdates.clear();
   }
 }
