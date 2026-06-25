@@ -486,15 +486,28 @@ describe("logger", () => {
 
     it("does not leak a secret straddling the context string-length cap", async () => {
       initializeLogger(TEST_LOG_DIR);
-      // A token body that begins past the 2000-char clamp boundary: truncation
-      // drops the high-entropy tail, so the full secret can never reach disk.
-      const tokenBody = "A".repeat(60);
-      logInfo("long trace", { traceLine: `${"x".repeat(1993)}Bearer ${tokenBody}` });
+      // Place a recognizable GitHub PAT so its BODY straddles the 2000-char
+      // clamp boundary: 1979 filler chars + a space (the `\b` the pattern's
+      // leading anchor needs) put `ghp_` at char 1980, so the 40-char body
+      // occupies chars 1984–2023 and the cut at char 2000 lands ~16 chars into
+      // the token. If the clamp ran before content-scrubbing, truncation would
+      // sever the high-entropy tail and leave a `ghp_AAA…` prefix too short for
+      // the scrubber to match — leaking the secret's leading bytes. Scrub-
+      // before-clamp must redact the whole token first, so neither the full
+      // token nor any recognizable prefix survives.
+      const token = `ghp_${"A".repeat(40)}`;
+      logInfo("long trace", { traceLine: `${"x".repeat(1979)} ${token}` });
       await flushLogFileWritesForTesting();
 
       const content = readFileSync(getLogFilePath(), "utf8");
-      // The full token body must never appear on disk.
-      expect(content).not.toContain(tokenBody);
+      // The full token must never appear on disk.
+      expect(content).not.toContain(token);
+      // Nor may any leading prefix of the secret survive the clamp: the
+      // `ghp_` sigil and the body bytes preceding the cut must be gone, not
+      // merely the dropped tail. A surviving `ghp_AAA…` prefix is the leak.
+      expect(content).not.toMatch(/ghp_A+/);
+      // The scrubber ran on the value before truncation, redacting the secret.
+      expect(content).toContain("[REDACTED]");
     });
 
     it("preserves merged context fields while redacting sensitive keys in logError", () => {

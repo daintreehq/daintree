@@ -647,9 +647,17 @@ const MAX_REDACT_DEPTH = 5;
 const MAX_REDACT_STRING_CHARS = 2000;
 const MAX_REDACT_ARRAY_ITEMS = 20;
 
+// Scrub content-based secrets BEFORE clamping. The downstream `scrubSecrets`
+// in `writeToLogFile` runs on the already-clamped value, so a secret straddling
+// the `MAX_REDACT_STRING_CHARS` boundary would have its high-entropy tail sliced
+// off here first, leaving a surviving prefix too short for the scrubber to match
+// — leaking the leading bytes to disk. Scrubbing first is exactly the upstream
+// ordering `shared/utils/secretScrubber.ts` documents as mandatory (it applies
+// no pre-truncation itself for this reason). Only then do we length-clamp.
 function clampLogString(value: string): string {
-  if (value.length <= MAX_REDACT_STRING_CHARS) return value;
-  return `${value.slice(0, MAX_REDACT_STRING_CHARS)}[…+${value.length - MAX_REDACT_STRING_CHARS}]`;
+  const scrubbed = scrubSecrets(value);
+  if (scrubbed.length <= MAX_REDACT_STRING_CHARS) return scrubbed;
+  return `${scrubbed.slice(0, MAX_REDACT_STRING_CHARS)}[…+${scrubbed.length - MAX_REDACT_STRING_CHARS}]`;
 }
 
 function safeStringify(value: unknown): string {
