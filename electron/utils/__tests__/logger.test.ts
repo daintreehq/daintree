@@ -483,6 +483,169 @@ describe("logger", () => {
       expect(content).toContain("[REDACTED]");
       expect(content).not.toContain(ANTHROPIC_KEY);
     });
+
+    it("does not leak a secret straddling the context string-length cap", async () => {
+      initializeLogger(TEST_LOG_DIR);
+      // Place a recognizable GitHub PAT so its BODY straddles the 2000-char
+      // clamp boundary: 1979 filler chars + a space (the `\b` the pattern's
+      // leading anchor needs) put `ghp_` at char 1980, so the 40-char body
+      // occupies chars 1984–2023 and the cut at char 2000 lands ~16 chars into
+      // the token. If the clamp ran before content-scrubbing, truncation would
+      // sever the high-entropy tail and leave a `ghp_AAA…` prefix too short for
+      // the scrubber to match — leaking the secret's leading bytes. Scrub-
+      // before-clamp must redact the whole token first, so neither the full
+      // token nor any recognizable prefix survives.
+      const token = `ghp_${"A".repeat(40)}`;
+      logInfo("long trace", { traceLine: `${"x".repeat(1979)} ${token}` });
+      await flushLogFileWritesForTesting();
+
+      const content = readFileSync(getLogFilePath(), "utf8");
+      // The full token must never appear on disk.
+      expect(content).not.toContain(token);
+      // Nor may any leading prefix of the secret survive the clamp: the
+      // `ghp_` sigil and the body bytes preceding the cut must be gone, not
+      // merely the dropped tail. A surviving `ghp_AAA…` prefix is the leak.
+      expect(content).not.toMatch(/ghp_A+/);
+      // The scrubber ran on the value before truncation, redacting the secret.
+      expect(content).toContain("[REDACTED]");
+    });
+
+    it("preserves merged context fields while redacting sensitive keys in logError", () => {
+      initializeLogger(TEST_LOG_DIR);
+      logError("request failed", new Error("boom"), { requestId: "r1", token: "secret123" });
+
+      const content = readFileSync(getLogFilePath(), "utf8");
+      // Legitimate context survives the emitError dedup...
+      expect(content).toContain("r1");
+      expect(content).toContain("boom");
+      // ...and the sensitive key is still redacted, never raw.
+      expect(content).not.toContain("secret123");
+      expect(content).toContain("[redacted]");
+    });
+  });
+
+  describe("redactSensitiveData bounds", () => {
+    beforeEach(() => {
+      logBuffer.clear();
+    });
+
+    function lastContext(): Record<string, unknown> | undefined {
+      const entries = logBuffer.getAll();
+      return entries[entries.length - 1]?.context as Record<string, unknown> | undefined;
+    }
+
+    it("truncates long string values and the dropped count accounts for the whole string", () => {
+      const original = "a".repeat(5000);
+      logInfo("trace captured", { stack: original });
+
+      const stack = lastContext()?.stack as string;
+      const match = stack.match(/^(a+)\[…\+(\d+)\]$/);
+      expect(match).not.toBeNull();
+      const keptLength = match![1].length;
+      const dropped = Number(match![2]);
+      // Invariant: kept prefix + reported dropped count === original length.
+      expect(keptLength + dropped).toBe(original.length);
+      expect(stack.length).toBeLessThan(original.length);
+    });
+
+    it("leaves short string values untouched", () => {
+      logInfo("ok", { note: "short value" });
+      expect(lastContext()?.note).toBe("short value");
+    });
+
+    it("replaces objects nested beyond the depth limit with a sentinel", () => {
+      let node: Record<string, unknown> = { leaf: "value" };
+      for (let i = 0; i < 12; i++) {
+        node = { child: node };
+      }
+      logInfo("deep", node);
+
+      // Walk down until the recursion was cut; the sentinel must appear before
+      // we reach the original 12-deep leaf.
+      let current: unknown = lastContext();
+      let walked = 0;
+      while (
+        current !== null &&
+        typeof current === "object" &&
+        "child" in (current as Record<string, unknown>)
+      ) {
+        current = (current as Record<string, unknown>).child;
+        walked++;
+        if (walked > 20) break;
+      }
+      expect(current).toBe("[MaxDepth]");
+      expect(walked).toBeLessThan(12);
+    });
+
+    it("caps long arrays and the remaining-count marker matches what was dropped", () => {
+      const items = Array.from({ length: 50 }, (_, i) => `item-${i}`);
+      logInfo("list", { items });
+
+      const capped = lastContext()?.items as unknown[];
+      const marker = capped[capped.length - 1] as string;
+      const match = marker.match(/^\[\.\.\.(\d+) more\]$/);
+      expect(match).not.toBeNull();
+      const dropped = Number(match![1]);
+      const kept = capped.length - 1;
+      // Invariant: kept items + reported dropped count === original length.
+      expect(kept + dropped).toBe(items.length);
+      expect(capped.length).toBeLessThan(items.length);
+    });
+
+    it("truncates long string values inside arrays", () => {
+      const original = "b".repeat(5000);
+      logInfo("array strings", { lines: [original] });
+
+      const lines = lastContext()?.lines as string[];
+      expect(lines[0]).toMatch(/^b+\[…\+\d+\]$/);
+      expect(lines[0].length).toBeLessThan(original.length);
+    });
+
+    it("still redacts sensitive keys even when their value is long", () => {
+      logInfo("auth", { token: "x".repeat(5000) });
+      expect(lastContext()?.token).toBe("[redacted]");
+    });
+
+    it("stops recursion through deeply nested arrays without overflowing", () => {
+      let value: unknown = "leaf";
+      for (let i = 0; i < 20; i++) {
+        value = [value];
+      }
+      expect(() => logInfo("nested arrays", { value })).not.toThrow();
+
+      // Walk down the nested arrays; the sentinel must appear before the leaf.
+      let current: unknown = lastContext()?.value;
+      let walked = 0;
+      while (Array.isArray(current) && current[0] !== "[MaxDepth]") {
+        current = current[0];
+        walked++;
+        if (walked > 30) break;
+      }
+      expect(Array.isArray(current) ? current[0] : current).toBe("[MaxDepth]");
+      expect(walked).toBeLessThan(20);
+    });
+
+    it("keeps an array at the exact cap whole but marks one beyond it", () => {
+      logInfo("at cap", { items: Array.from({ length: 20 }, (_, i) => i) });
+      const atCap = lastContext()?.items as unknown[];
+      expect(atCap).toHaveLength(20);
+      expect(atCap[atCap.length - 1]).toBe(19);
+
+      logBuffer.clear();
+      logInfo("over cap", { items: Array.from({ length: 21 }, (_, i) => i) });
+      const overCap = lastContext()?.items as unknown[];
+      expect(overCap).toHaveLength(21);
+      expect(overCap[overCap.length - 1]).toBe("[...1 more]");
+    });
+
+    it("keeps a string at the exact char cap but marks one beyond it", () => {
+      logInfo("at cap", { note: "a".repeat(2000) });
+      expect(lastContext()?.note).toBe("a".repeat(2000));
+
+      logBuffer.clear();
+      logInfo("over cap", { note: "a".repeat(2001) });
+      expect(lastContext()?.note).toBe(`${"a".repeat(2000)}[…+1]`);
+    });
   });
 
   describe("pruneOldLogsAsync", () => {
