@@ -960,6 +960,17 @@ export class ProjectViewManager {
     return this.activeProjectId;
   }
 
+  /**
+   * Project whose view is the still-visible anti-flash bridge of an open paint
+   * gate. During a cold switch `activeProjectId` is already the incoming
+   * project, but the outgoing project's view stays on-screen until the gate
+   * settles — so it is non-evictable for the same reason as the active view.
+   * Eviction paths must skip both (mirrors the LRU guard in `evictStaleViews`).
+   */
+  getOutgoingBridgeProjectId(): string | null {
+    return this.pendingPaintGate?.outgoingProjectId ?? null;
+  }
+
   getActiveView(): WebContentsView | null {
     if (!this.activeProjectId) return null;
     return this.views.get(this.activeProjectId)?.view ?? null;
@@ -1188,15 +1199,17 @@ export class ProjectViewManager {
     }
   }
 
-  destroyView(projectId: string): void {
+  /** Returns true if a cached view existed for the project and was torn down. */
+  destroyView(projectId: string): boolean {
     const entry = this.views.get(projectId);
-    if (!entry) return;
+    if (!entry) return false;
 
     if (this.activeProjectId === projectId) {
       this.activeProjectId = null;
     }
 
     this.cleanupEntry(projectId);
+    return true;
   }
 
   dispose(): void {

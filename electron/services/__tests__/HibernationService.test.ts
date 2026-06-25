@@ -1101,13 +1101,18 @@ describe("HibernationService", () => {
   describe("user-initiated renderer eviction (#10668)", () => {
     type ProjectViewManagerMock = {
       getActiveProjectId: Mock<() => string | null>;
-      destroyView: Mock<(projectId: string) => void>;
+      getOutgoingBridgeProjectId: Mock<() => string | null>;
+      destroyView: Mock<(projectId: string) => boolean>;
     };
 
-    function makeManager(activeProjectId: string | null = null): ProjectViewManagerMock {
+    function makeManager(
+      activeProjectId: string | null = null,
+      outgoingBridgeProjectId: string | null = null
+    ): ProjectViewManagerMock {
       return {
         getActiveProjectId: vi.fn(() => activeProjectId),
-        destroyView: vi.fn(),
+        getOutgoingBridgeProjectId: vi.fn(() => outgoingBridgeProjectId),
+        destroyView: vi.fn(() => true),
       };
     }
 
@@ -1141,6 +1146,18 @@ describe("HibernationService", () => {
 
       expect(foreground.destroyView).not.toHaveBeenCalled();
       expect(background.destroyView).toHaveBeenCalledWith("proj-1");
+    });
+
+    it("skips the window where the project is the outgoing paint-gate bridge", async () => {
+      // Mid cold-switch: activeProjectId is already the incoming project, but
+      // proj-1 is still painted as the anti-flash bridge. Destroying it would
+      // expose a blank frame — it must be skipped like the active view.
+      const switching = makeManager("incoming-proj", "proj-1");
+      const service = makeServiceWithManagers([switching]);
+
+      await service.hibernateProjectOnDemand("proj-1", "Proj One", "user-initiated");
+
+      expect(switching.destroyView).not.toHaveBeenCalled();
     });
 
     it("does not evict renderers for scheduled hibernation", async () => {
@@ -1191,6 +1208,51 @@ describe("HibernationService", () => {
         expect.any(Error),
         { projectId: "proj-1" }
       );
+    });
+
+    it("continues to the next window when a guard accessor throws", async () => {
+      const failing = makeManager(null);
+      failing.getActiveProjectId.mockImplementation(() => {
+        throw new Error("registry torn down");
+      });
+      const healthy = makeManager(null);
+      const service = makeServiceWithManagers([failing, healthy]);
+
+      await service.hibernateProjectOnDemand("proj-1", "Proj One", "user-initiated");
+
+      expect(failing.destroyView).not.toHaveBeenCalled();
+      expect(healthy.destroyView).toHaveBeenCalledWith("proj-1");
+    });
+
+    it("does not reject and still kills terminals when the provider throws", async () => {
+      ptyManagerMock.gracefulKillByProject.mockResolvedValue([
+        { id: "t1", agentSessionId: null },
+        { id: "t2", agentSessionId: null },
+      ]);
+      const service = makeService();
+      service.setProjectViewManagersProvider(() => {
+        throw new Error("windowRegistry tearing down");
+      });
+
+      const killed = await service.hibernateProjectOnDemand("proj-1", "Proj One", "user-initiated");
+
+      expect(killed).toBe(2);
+      expect(broadcastToRendererMock).toHaveBeenCalled();
+    });
+
+    it("counts only windows that actually had a cached view", async () => {
+      const withView = makeManager(null);
+      withView.destroyView.mockReturnValue(true);
+      const withoutView = makeManager(null);
+      withoutView.destroyView.mockReturnValue(false);
+      const service = makeServiceWithManagers([withView, withoutView]);
+
+      await service.hibernateProjectOnDemand("proj-1", "Proj One", "user-initiated");
+
+      expect(logInfo).toHaveBeenCalledWith("user-initiated-hibernate-renderer-evicted", {
+        projectId: "proj-1",
+        evictedViewCount: 1,
+      });
     });
 
     it("returns the killed-terminal count and does not throw when no provider is wired", async () => {

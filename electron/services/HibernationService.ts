@@ -429,25 +429,43 @@ export class HibernationService {
 
   /**
    * Tear down the hibernated project's cached `WebContentsView` across every
-   * open window, skipping the window where the project is the active/foreground
-   * view (each window tracks its own active project). `destroyView` runs the
-   * full `cleanupEntry` teardown — detach, listener removal, port cleanup,
-   * `webContents.close()` — and is a no-op when the project has no cached view.
-   * No-op if the provider has not been wired yet.
+   * open window. `destroyView` runs the full `cleanupEntry` teardown — detach,
+   * listener removal, port cleanup, `webContents.close()` — and is a no-op when
+   * the project has no cached view in that window. No-op if the provider has not
+   * been wired yet.
+   *
+   * Skips any window where the project is on-screen: the active/foreground view,
+   * or the still-visible anti-flash bridge of an open paint gate (during a cold
+   * switch the outgoing project stays painted until the gate settles, even
+   * though `activeProjectId` already points at the incoming project). Destroying
+   * either would expose a blank/unpainted frame. Both guards are per-manager —
+   * each window tracks its own active and outgoing project.
    */
   private evictCachedRenderer(projectId: string): void {
     const provider = this.projectViewManagersProvider;
     if (!provider) return;
 
+    let managers: ProjectViewManager[];
+    try {
+      managers = provider();
+    } catch (error) {
+      // windowRegistry may be tearing down — eviction is best-effort.
+      logError("user-initiated-hibernate-evict-provider-failed", error, { projectId });
+      return;
+    }
+
     let evictedViewCount = 0;
-    for (const manager of provider()) {
-      // Never destroy the foreground view — that would blank the window the
-      // user is looking at. The guard is per-manager because each window has
-      // its own active project.
-      if (manager.getActiveProjectId() === projectId) continue;
+    for (const manager of managers) {
       try {
-        manager.destroyView(projectId);
-        evictedViewCount++;
+        if (
+          manager.getActiveProjectId() === projectId ||
+          manager.getOutgoingBridgeProjectId() === projectId
+        ) {
+          continue;
+        }
+        if (manager.destroyView(projectId)) {
+          evictedViewCount++;
+        }
       } catch (error) {
         // A disposing/closing ProjectViewManager can throw inside cleanupEntry.
         // Isolate per window so one failure doesn't skip the rest (#8607).
