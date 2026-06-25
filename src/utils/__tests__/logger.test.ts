@@ -36,6 +36,26 @@ function removeElectron(): void {
   delete (globalThis as unknown as { window?: unknown }).window;
 }
 
+interface SentEntry {
+  level: string;
+  message: string;
+  context?: Record<string, unknown>;
+}
+
+/** The entries array passed to the Nth writeBatch invoke, guarded for tsc. */
+function sentBatch(callIndex = 0): SentEntry[] {
+  const call = logsApi.writeBatch.mock.calls[callIndex];
+  if (!call) throw new Error(`expected a writeBatch call at index ${callIndex}`);
+  return call[0] as SentEntry[];
+}
+
+/** A single entry from a writeBatch invoke, guarded for tsc. */
+function sentEntry(callIndex = 0, entryIndex = 0): SentEntry {
+  const entry = sentBatch(callIndex)[entryIndex];
+  if (!entry) throw new Error(`expected entry ${entryIndex} in writeBatch call ${callIndex}`);
+  return entry;
+}
+
 /** Let the init's getLevelOverrides().then() microtask settle. */
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
@@ -170,8 +190,7 @@ describe("renderer logger batching", () => {
 
     vi.advanceTimersByTime(LOG_BATCH_MS);
     expect(logsApi.writeBatch).toHaveBeenCalledTimes(1);
-    const entries = logsApi.writeBatch.mock.calls[0][0];
-    expect(entries.map((e: { message: string }) => e.message)).toEqual(["a", "b", "c"]);
+    expect(sentBatch().map((e) => e.message)).toEqual(["a", "b", "c"]);
   });
 
   it("only opens one timer window per burst", () => {
@@ -202,9 +221,9 @@ describe("renderer logger warn/error bypass", () => {
   it("flushes error synchronously and serializes the Error", () => {
     logError("boom", new Error("kaboom"));
     expect(logsApi.writeBatch).toHaveBeenCalledTimes(1);
-    const entry = logsApi.writeBatch.mock.calls[0][0][0];
+    const entry = sentEntry();
     expect(entry.level).toBe("error");
-    expect(entry.context.error).toMatchObject({ name: "Error", message: "kaboom" });
+    expect(entry.context?.error).toMatchObject({ name: "Error", message: "kaboom" });
   });
 
   it("flushes pending info ahead of an error, preserving order, in one batch", () => {
@@ -213,9 +232,8 @@ describe("renderer logger warn/error bypass", () => {
 
     logError("after");
     expect(logsApi.writeBatch).toHaveBeenCalledTimes(1);
-    const entries = logsApi.writeBatch.mock.calls[0][0];
-    expect(entries.map((e: { message: string }) => e.message)).toEqual(["before", "after"]);
-    expect(entries.map((e: { level: string }) => e.level)).toEqual(["info", "error"]);
+    expect(sentBatch().map((e) => e.message)).toEqual(["before", "after"]);
+    expect(sentBatch().map((e) => e.level)).toEqual(["info", "error"]);
   });
 
   it("does not re-send the flushed entries when the timer later fires", () => {
