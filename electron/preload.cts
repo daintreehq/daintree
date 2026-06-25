@@ -1487,6 +1487,8 @@ function buildElectronApi(): ElectronAPI {
         }>
       ) => _unwrappingInvoke(CHANNELS.LOGS_WRITE_BATCH, entries),
 
+      getDefaultLevel: () => _unwrappingInvoke(CHANNELS.LOGS_GET_DEFAULT_LEVEL),
+
       getLevelOverrides: () => _unwrappingInvoke(CHANNELS.LOGS_GET_LEVEL_OVERRIDES),
 
       setLevelOverrides: (overrides: Record<string, string>) =>

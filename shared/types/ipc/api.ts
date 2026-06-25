@@ -461,6 +461,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         context?: Record<string, unknown>;
       }>
     ): Promise<void>;
+    getDefaultLevel(): Promise<string>;
     getLevelOverrides(): Promise<Record<string, string>>;
     setLevelOverrides(overrides: Record<string, string>): Promise<{ success: boolean }>;
     clearLevelOverrides(): Promise<{ success: boolean }>;

@@ -11,6 +11,7 @@ import {
   getLogFilePath,
   getPreviousSessionTail,
   getLogLevelOverrides,
+  getDefaultLogLevel,
   setLogLevelOverrides,
   getRegisteredLoggerNames,
   isValidLogOverrideLevel,
@@ -203,10 +204,22 @@ export function registerLogsHandlers(
   ) => {
     if (!Array.isArray(entries)) return;
     for (const entry of entries) {
-      dispatchRendererLog(entry);
+      // Isolate each entry: a malformed one must not abort dispatch of the
+      // entries that follow it (e.g. a trailing error-level log).
+      if (!entry || typeof entry !== "object") continue;
+      try {
+        dispatchRendererLog(entry);
+      } catch {
+        // Drop the bad entry; keep draining the batch.
+      }
     }
   };
   handlers.push(typedHandle(CHANNELS.LOGS_WRITE_BATCH, handleLogsWriteBatch));
+
+  const handleGetDefaultLevel = async (): Promise<string> => {
+    return getDefaultLogLevel();
+  };
+  handlers.push(typedHandle(CHANNELS.LOGS_GET_DEFAULT_LEVEL, handleGetDefaultLevel));
 
   const handleGetLevelOverrides = async (): Promise<Record<string, string>> => {
     // Return the in-memory sanitized map (not the raw store value) so the UI

@@ -9,6 +9,7 @@ const loggerMock = vi.hoisted(() => ({
   getLogFilePath: vi.fn(() => "/tmp/daintree.log"),
   getPreviousSessionTail: vi.fn(() => null),
   getLogLevelOverrides: vi.fn(() => ({ "*": "warn" })),
+  getDefaultLogLevel: vi.fn(() => "info"),
   setLogLevelOverrides: vi.fn(),
   getRegisteredLoggerNames: vi.fn(() => []),
   isValidLogOverrideLevel: vi.fn(
@@ -119,6 +120,29 @@ describe("logs:write-batch handler", () => {
     const handler = getHandler(CHANNELS.LOGS_WRITE_BATCH);
     await handler([]);
     expect(loggerMock.logDebug).not.toHaveBeenCalled();
+  });
+
+  it("skips a malformed entry without aborting later entries", async () => {
+    const handler = getHandler(CHANNELS.LOGS_WRITE_BATCH);
+    await handler([
+      { level: "info", message: "ok" },
+      null,
+      { level: "error", message: "must land" },
+    ]);
+
+    expect(loggerMock.logInfo).toHaveBeenCalledWith("ok", { source: "Renderer" });
+    expect(loggerMock.logError).toHaveBeenCalledWith("must land", undefined, {
+      source: "Renderer",
+    });
+  });
+});
+
+describe("logs:get-default-level handler", () => {
+  it("returns the main-process effective default level", async () => {
+    const handler = getHandler(CHANNELS.LOGS_GET_DEFAULT_LEVEL);
+    const result = await handler();
+    expect(result).toBe("info");
+    expect(loggerMock.getDefaultLogLevel).toHaveBeenCalled();
   });
 });
 

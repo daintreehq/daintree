@@ -35,22 +35,31 @@ const LOG_BATCH_MS = 16;
 const MAX_BATCH_ENTRIES = 60;
 
 /**
- * Effective floor the renderer gates against before touching IPC. The renderer
- * logger has no named loggers — every call funnels through the bare
- * `logDebug`/`logInfo`/`logWarn`/`logError` exports — so only the global `"*"`
- * wildcard override is relevant (no per-name or process-wildcard resolution).
- * Defaults to `info` synchronously; refreshed once the async override fetch and
- * the push subscription land. The main-process `shouldLog` remains the
- * authoritative gate, so a stale floor only ever lets a below-threshold call
- * cross the wire (it is then dropped in main) — it never drops a log that
- * should be delivered.
+ * The renderer gate mirrors main's `resolveEffectiveLevel` for an unmatched
+ * logger: a global `"*"` override if one is set, otherwise main's process
+ * default (`"debug"` under debug-boot, else `"info"`). The renderer logger has
+ * no named loggers — every call funnels through the bare
+ * `logDebug`/`logInfo`/`logWarn`/`logError` exports — so per-name and
+ * process-wildcard keys never apply, only `"*"`.
+ *
+ * Both inputs start at the conservative `info` default and are refreshed
+ * asynchronously (a one-time default fetch + the override fetch/subscription).
+ * Until they resolve, a stale floor only ever lets a below-threshold call cross
+ * the wire (main then drops it) — it never drops a log main would deliver. The
+ * one window where the renderer could under-send is debug-boot before the
+ * default fetch lands; those few early `debug` calls are gated, which is
+ * acceptable for a startup-only race.
  */
-const DEFAULT_FLOOR = LEVELS.info;
-let rendererFloor: number = DEFAULT_FLOOR;
+const FALLBACK_FLOOR = LEVELS.info;
+let defaultFloor: number = FALLBACK_FLOOR;
+let wildcardFloor: number | null = null;
+let mirrorInitialized = false;
+// Once an override push lands, the initial (possibly slower) override fetch is
+// stale and must not overwrite it.
+let overridePushReceived = false;
 
 let batchQueue: BatchEntry[] = [];
 let batchTimer: ReturnType<typeof setTimeout> | null = null;
-let mirrorInitialized = false;
 
 function isElectronAvailable(): boolean {
   return typeof window !== "undefined" && !!window.electron?.logs?.writeBatch;
@@ -66,26 +75,42 @@ function isValidFloorLevel(value: unknown): value is LogLevel | "off" {
   return typeof value === "string" && value in LEVELS;
 }
 
+function setDefaultFloor(level: string | undefined): void {
+  defaultFloor = isValidFloorLevel(level) ? LEVELS[level] : FALLBACK_FLOOR;
+}
+
 function applyOverrides(overrides: Record<string, string> | undefined): void {
   const wildcard = overrides?.["*"];
-  rendererFloor = isValidFloorLevel(wildcard) ? LEVELS[wildcard] : DEFAULT_FLOOR;
+  wildcardFloor = isValidFloorLevel(wildcard) ? LEVELS[wildcard] : null;
 }
 
 function initLevelMirror(): void {
   if (mirrorInitialized) return;
   if (typeof window === "undefined" || !window.electron?.logs) return;
   mirrorInitialized = true;
-  // First few calls may fire before this resolves; they default to the `info`
-  // floor, and main re-gates anyway, so no log that should appear is lost.
-  window.electron.logs
-    .getLevelOverrides()
-    .then(applyOverrides)
+  const logs = window.electron.logs;
+  // The default is static per process (set at boot), so a one-time fetch is
+  // enough — no push channel needed for it.
+  logs
+    .getDefaultLevel?.()
+    ?.then(setDefaultFloor)
     .catch(() => {});
-  window.electron.logs.onLevelOverridesChanged(applyOverrides);
+  logs
+    .getLevelOverrides?.()
+    ?.then((overrides) => {
+      // A push that arrived first reflects newer state than this fetch.
+      if (!overridePushReceived) applyOverrides(overrides);
+    })
+    .catch(() => {});
+  logs.onLevelOverridesChanged?.((overrides) => {
+    overridePushReceived = true;
+    applyOverrides(overrides);
+  });
 }
 
 function shouldRendererLog(level: LogLevel): boolean {
-  return LEVELS[level] >= rendererFloor;
+  const floor = wildcardFloor ?? defaultFloor;
+  return LEVELS[level] >= floor;
 }
 
 function flushBatch(): void {
@@ -181,6 +206,8 @@ export function _resetRendererLoggerForTesting(): void {
     batchTimer = null;
   }
   batchQueue = [];
-  rendererFloor = DEFAULT_FLOOR;
+  defaultFloor = FALLBACK_FLOOR;
+  wildcardFloor = null;
   mirrorInitialized = false;
+  overridePushReceived = false;
 }

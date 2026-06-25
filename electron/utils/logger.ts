@@ -504,6 +504,16 @@ export function getLogLevelOverrides(): Record<string, LogOverrideLevel> {
   return Object.fromEntries(levelOverrides.entries());
 }
 
+/**
+ * The effective floor applied when no override matches — `"debug"` under
+ * debug-boot (`NODE_ENV=development` / `DAINTREE_DEBUG`), else `"info"`. The
+ * renderer mirrors this so its pre-IPC gate matches what main would accept for
+ * an unmatched logger (`resolveEffectiveLevel`'s final fallback).
+ */
+export function getDefaultLogLevel(): LogOverrideLevel {
+  return defaultLevel;
+}
+
 export function isValidLogOverrideLevel(value: unknown): value is LogOverrideLevel {
   return (
     value === "debug" ||

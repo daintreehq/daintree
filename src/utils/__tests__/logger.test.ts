@@ -7,6 +7,7 @@ type LevelOverridesCallback = (overrides: Record<string, string>) => void;
 
 interface MockLogsApi {
   writeBatch: ReturnType<typeof vi.fn>;
+  getDefaultLevel: ReturnType<typeof vi.fn>;
   getLevelOverrides: ReturnType<typeof vi.fn>;
   onLevelOverridesChanged: ReturnType<typeof vi.fn>;
 }
@@ -14,10 +15,14 @@ interface MockLogsApi {
 let logsApi: MockLogsApi;
 let overridesCallback: LevelOverridesCallback | null;
 
-function installElectron(initialOverrides: Record<string, string> = {}): void {
+function installElectron(
+  initialOverrides: Record<string, string> = {},
+  defaultLevel = "info"
+): void {
   overridesCallback = null;
   logsApi = {
     writeBatch: vi.fn().mockResolvedValue(undefined),
+    getDefaultLevel: vi.fn().mockResolvedValue(defaultLevel),
     getLevelOverrides: vi.fn().mockResolvedValue(initialOverrides),
     onLevelOverridesChanged: vi.fn((cb: LevelOverridesCallback) => {
       overridesCallback = cb;
@@ -98,6 +103,60 @@ describe("renderer logger gating", () => {
 
     logDebug("now allowed");
     vi.advanceTimersByTime(LOG_BATCH_MS);
+    expect(logsApi.writeBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("mirrors main's debug-boot default so renderer debug crosses when main would accept it", async () => {
+    removeElectron();
+    installElectron({}, "debug"); // no '*' override, but main's default is debug
+    _resetRendererLoggerForTesting();
+
+    await triggerInitAndDrain();
+
+    logDebug("dev debug");
+    vi.advanceTimersByTime(LOG_BATCH_MS);
+    expect(logsApi.writeBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the newer pushed override when the initial fetch resolves afterward (stale-fetch race)", async () => {
+    removeElectron();
+    let resolveFetch: (v: Record<string, string>) => void = () => {};
+    const fetchPromise = new Promise<Record<string, string>>((r) => {
+      resolveFetch = r;
+    });
+    installElectron();
+    logsApi.getLevelOverrides.mockReturnValue(fetchPromise);
+    _resetRendererLoggerForTesting();
+
+    logInfo("trigger init"); // starts the (still-pending) fetch + wires the push
+    await flushMicrotasks();
+
+    // A push raises the floor to warn before the fetch resolves.
+    overridesCallback?.({ "*": "warn" });
+    // The stale fetch now resolves with the older (empty) state.
+    resolveFetch({});
+    await flushMicrotasks();
+    // Drain the "trigger init" entry (queued while the floor was still info).
+    vi.advanceTimersByTime(LOG_BATCH_MS);
+    logsApi.writeBatch.mockClear();
+
+    logInfo("should be gated by the pushed warn floor");
+    vi.advanceTimersByTime(LOG_BATCH_MS);
+    expect(logsApi.writeBatch).not.toHaveBeenCalled();
+  });
+
+  it("does not throw when the preload lacks onLevelOverridesChanged (version skew)", () => {
+    removeElectron();
+    logsApi = {
+      writeBatch: vi.fn().mockResolvedValue(undefined),
+      getDefaultLevel: vi.fn().mockResolvedValue("info"),
+      getLevelOverrides: vi.fn().mockResolvedValue({}),
+      onLevelOverridesChanged: undefined as unknown as ReturnType<typeof vi.fn>,
+    };
+    (globalThis as unknown as { window: unknown }).window = { electron: { logs: logsApi } };
+    _resetRendererLoggerForTesting();
+
+    expect(() => logWarn("urgent")).not.toThrow();
     expect(logsApi.writeBatch).toHaveBeenCalledTimes(1);
   });
 });
