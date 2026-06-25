@@ -76,9 +76,9 @@ export function TurnOutcomeDiagnostics({
   const [internalLoading, setInternalLoading] = useState(true);
   const records = isControlled ? controlledRecords : internalRecords;
   const loading = isControlled ? false : internalLoading;
-  const [outcomeSectionOpen, setOutcomeSectionOpen] = useState(true);
-  const [toolErrorOpen, setToolErrorOpen] = useState(true);
-  const [tierRejectedOpen, setTierRejectedOpen] = useState(true);
+  const [outcomeSectionOpen, setOutcomeSectionOpen] = useState(false);
+  const [toolErrorOpen, setToolErrorOpen] = useState(false);
+  const [tierRejectedOpen, setTierRejectedOpen] = useState(false);
   const [agentStuckOpen, setAgentStuckOpen] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
