@@ -1618,6 +1618,7 @@ export interface IpcEventMap {
   // Log events
   "logs:entry": LogEntry;
   "logs:batch": LogEntry[];
+  "logs:level-overrides-changed": Record<string, string>;
 
   // Event inspector events
   "event-inspector:event-batch": EventRecord[];
