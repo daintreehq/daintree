@@ -266,8 +266,17 @@ describe("TerminalProcess — snapshot and dispose preserved exited terminals", 
       expect(terminal.getInfo().headlessTerminal).toBeUndefined();
     });
     expect(terminal.getInfo().preservedSnapshot).toBeUndefined();
-    expect(terminal.getSerializedState()).toBeNull();
-    await expect(terminal.getSerializedStateAsync()).resolves.toBeNull();
+
+    // Serializing a disposed non-preserved terminal must return null silently —
+    // not throw, get caught, and log a spurious "Failed to serialize" error.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(terminal.getSerializedState()).toBeNull();
+      await expect(terminal.getSerializedStateAsync()).resolves.toBeNull();
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   it("keeps the live headless terminal when serialization fails", async () => {
