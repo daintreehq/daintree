@@ -171,47 +171,51 @@ export function WorktreeSidebarSearchBar({
         variant === "sidebar" && "worktree-filter-bar"
       )}
     >
-      <div
-        role="search"
-        className={cn(
-          "flex items-center gap-1.5 px-2 py-1.5 rounded-[var(--radius-md)]",
-          // Fallback keeps themes without --worktree-search-input-bg byte-identical.
-          "bg-[var(--worktree-search-input-bg,var(--color-daintree-bg))] border border-daintree-border",
-          "focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
-        )}
-      >
-        <Search
-          className="w-3.5 h-3.5 shrink-0 text-daintree-text/40 pointer-events-none"
-          aria-hidden="true"
-        />
-        <input
-          ref={setRefs}
-          type="text"
-          value={liveQuery}
-          onChange={(e) => handleQueryChange(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Search worktrees..."
-          aria-label="Search worktrees"
-          className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder-daintree-text/40 focus:outline-hidden"
-        />
-        <div className="flex shrink-0 items-center gap-0.5">
+      <div className="flex items-stretch gap-1.5">
+        <div
+          role="search"
+          className={cn(
+            "flex flex-1 min-w-0 items-center gap-1.5 px-2.5 py-2 rounded-[var(--radius-md)]",
+            // Fallback keeps themes without --worktree-search-input-bg byte-identical.
+            "bg-[var(--worktree-search-input-bg,var(--color-daintree-bg))] border border-daintree-border",
+            "focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
+          )}
+        >
+          <Search
+            className="w-3.5 h-3.5 shrink-0 text-daintree-text/40 pointer-events-none"
+            aria-hidden="true"
+          />
+          <input
+            ref={setRefs}
+            type="text"
+            value={liveQuery}
+            onChange={(e) => handleQueryChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Search worktrees..."
+            aria-label="Search worktrees"
+            className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder-daintree-text/40 focus:outline-hidden"
+          />
           {showClear && (
             <button
               type="button"
               onClick={handleClearSearch}
-              className="flex items-center justify-center w-5 h-5 rounded text-daintree-text/40 hover:text-daintree-text"
+              className="flex shrink-0 items-center justify-center w-5 h-5 rounded text-daintree-text/40 hover:text-daintree-text"
               aria-label="Clear search"
             >
               <X className="w-3 h-3" />
             </button>
           )}
-          <WorktreeFilterPopover
-            hideSearchInput
-            chipCounts={chipCounts}
-            open={isPopoverOpen}
-            onOpenChange={setIsPopoverOpen}
-          />
         </div>
+        {/* Filter/sort lives as its own adjacent control, not buried inside the
+            field — matching the app's other search rails (Logs, Keyboard
+            Shortcuts, Command Overrides). */}
+        <WorktreeFilterPopover
+          appearance="field"
+          hideSearchInput
+          chipCounts={chipCounts}
+          open={isPopoverOpen}
+          onOpenChange={setIsPopoverOpen}
+        />
       </div>
       {showClearAll && (
         <div className="flex justify-end pt-1">

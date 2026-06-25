@@ -182,6 +182,13 @@ interface WorktreeFilterPopoverProps {
   chipCounts?: ChipCounts;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /**
+   * `field` frames the trigger as a sibling of an adjacent search input
+   * (matched border + surface, stretches to the input height) — the sidebar
+   * rail. `ghost` (default) is the borderless icon button used standalone in
+   * toolbars like the overview-modal header.
+   */
+  appearance?: "ghost" | "field";
 }
 
 export function WorktreeFilterPopover({
@@ -189,6 +196,7 @@ export function WorktreeFilterPopover({
   chipCounts,
   open,
   onOpenChange,
+  appearance = "ghost",
 }: WorktreeFilterPopoverProps) {
   const [internalOpen, setInternalOpen] = useState(false);
   const isOpen = open ?? internalOpen;
@@ -300,22 +308,33 @@ export function WorktreeFilterPopover({
     clearAll();
   }, [clearAll]);
 
+  const isField = appearance === "field";
+  const filtersActive = hasActiveFilters();
+
   return (
     <Popover open={isOpen} onOpenChange={setIsOpen}>
       <PopoverTrigger asChild>
         <button
           className={cn(
-            "relative flex items-center justify-center w-5 h-5 rounded",
-            "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]",
-            "transition-colors",
-            hasActiveFilters() && "text-status-info"
+            "flex shrink-0 items-center justify-center gap-1 rounded-[var(--radius-md)] transition-colors",
+            isField ? "self-stretch border border-daintree-border px-2" : "h-6 min-w-6 px-1.5",
+            // Active state is a neutral fill + count, never a saturated colour or a
+            // floating notification dot. A dot reads as "something new"; what matters
+            // here is "how many filters", so we surface the number instead.
+            filtersActive
+              ? isField
+                ? "bg-overlay-soft text-daintree-text"
+                : "bg-tint/[0.08] text-daintree-text"
+              : isField
+                ? "bg-[var(--worktree-search-input-bg,var(--color-daintree-bg))] text-daintree-text/60 hover:bg-overlay-soft hover:text-daintree-text"
+                : "text-daintree-text/60 hover:bg-tint/[0.06] hover:text-daintree-text"
           )}
           aria-label="Filter and sort worktrees"
           aria-haspopup="dialog"
         >
-          <Filter className="w-3.5 h-3.5" />
+          <Filter className="w-3.5 h-3.5 shrink-0" />
           {showBadge && (
-            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-status-info" />
+            <span className="text-[10px] font-medium leading-none tabular-nums">{filterCount}</span>
           )}
         </button>
       </PopoverTrigger>
