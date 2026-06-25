@@ -57,8 +57,14 @@ interface CapturedCallbacks {
   wheelHandler?: (event: WheelEvent) => boolean;
 }
 
+// xterm exposes `element` as readonly; the mock keeps it writable and wide-typed
+// (via a function boundary, so it isn't narrowed to `undefined`) so DOM-snap
+// tests can assign a real rows container without a type assertion.
+const emptyMockElement = (): HTMLElement | undefined => undefined;
+
 function makeMockTerminal(captured: CapturedCallbacks) {
   return {
+    element: emptyMockElement(),
     options: { scrollback: 5000 },
     rows: 24,
     cols: 80,
@@ -665,13 +671,9 @@ describe("installTerminalBoundListeners", () => {
       deps: TerminalListenerInstallDeps
     ) {
       const managed = makeMockManaged();
-      managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
-      installTerminalBoundListeners(
-        terminal as unknown as Parameters<typeof installTerminalBoundListeners>[0],
-        managed,
-        "t1",
-        deps
-      );
+      const asXterm = terminal as unknown as ManagedTerminal["terminal"];
+      managed.terminal = asXterm;
+      installTerminalBoundListeners(asXterm, managed, "t1", deps);
     }
 
     it("snaps fractional row heights to integers that sum exactly to the canvas height", () => {
@@ -679,7 +681,7 @@ describe("installTerminalBoundListeners", () => {
       const terminal = makeMockTerminal(captured);
       // 691px canvas / 40 rows = 17.275px fractional cell height.
       const element = makeRowsElement("17.275px", 40);
-      (terminal as unknown as { element: HTMLElement }).element = element;
+      terminal.element = element;
       const deps = makeDeps();
 
       install(terminal, deps);
@@ -704,7 +706,7 @@ describe("installTerminalBoundListeners", () => {
       const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
       const terminal = makeMockTerminal(captured);
       const element = makeRowsElement("17.275px", 40);
-      (terminal as unknown as { element: HTMLElement }).element = element;
+      terminal.element = element;
       const deps = makeDeps({ isWebGLActive: vi.fn(() => true) });
 
       install(terminal, deps);
@@ -717,7 +719,7 @@ describe("installTerminalBoundListeners", () => {
       const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
       const terminal = makeMockTerminal(captured);
       const element = makeRowsElement("18px", 40);
-      (terminal as unknown as { element: HTMLElement }).element = element;
+      terminal.element = element;
       const deps = makeDeps();
 
       install(terminal, deps);
@@ -730,7 +732,7 @@ describe("installTerminalBoundListeners", () => {
       const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
       const terminal = makeMockTerminal(captured);
       const element = makeRowsElement("17.275px", 40);
-      (terminal as unknown as { element: HTMLElement }).element = element;
+      terminal.element = element;
       const deps = makeDeps();
 
       install(terminal, deps);
@@ -755,7 +757,7 @@ describe("installTerminalBoundListeners", () => {
     it("no-ops on an empty row list", () => {
       const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
       const terminal = makeMockTerminal(captured);
-      (terminal as unknown as { element: HTMLElement }).element = makeRowsElement("17.275px", 0);
+      terminal.element = makeRowsElement("17.275px", 0);
       const deps = makeDeps();
 
       install(terminal, deps);
@@ -766,7 +768,7 @@ describe("installTerminalBoundListeners", () => {
       const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
       const terminal = makeMockTerminal(captured);
       const element = makeRowsElement("17.275px", 40);
-      (terminal as unknown as { element: HTMLElement }).element = element;
+      terminal.element = element;
       // WebGL active at install + first render → no snap (the production state
       // before a fleet DOM-mode flip / breaker trip).
       const isWebGLActive = vi.fn(() => true);
@@ -788,7 +790,7 @@ describe("installTerminalBoundListeners", () => {
       // 17.99px * 40 = 719.6 → round 720 = 18 * 40, so base 18, extra 0: every
       // row gets the same integer height, with no Bresenham distribution.
       const element = makeRowsElement("17.99px", 40);
-      (terminal as unknown as { element: HTMLElement }).element = element;
+      terminal.element = element;
       const deps = makeDeps();
 
       install(terminal, deps);
@@ -804,7 +806,7 @@ describe("installTerminalBoundListeners", () => {
       const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
       const terminal = makeMockTerminal(captured);
       const element = makeRowsElement("auto", 40);
-      (terminal as unknown as { element: HTMLElement }).element = element;
+      terminal.element = element;
       const deps = makeDeps();
 
       install(terminal, deps);
