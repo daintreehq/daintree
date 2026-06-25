@@ -33,6 +33,15 @@ vi.mock("../forgeResolution.js", () => ({
   resolveForCwd: resolveForCwdMock,
 }));
 
+// Default to "exists" so the existing stats tests reach the resolution path;
+// the #10663 missing-directory guard test flips this to false explicitly.
+const existsSyncMock = vi.hoisted(() => vi.fn().mockReturnValue(true));
+
+vi.mock("fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("fs")>()),
+  existsSync: existsSyncMock,
+}));
+
 // The handlers transitively import the forge audit singleton, which imports
 // the electron-store. Mock it so the singleton's read/write callbacks hit an
 // in-memory map rather than constructing a real store under a mocked electron.
@@ -239,6 +248,24 @@ describe("registerForgeDataHandlers", () => {
 
     expect(fakeImpl.getRepoMetadata).toHaveBeenCalledWith(repoRef);
     expect(result).toEqual(meta);
+  });
+
+  it("getRepoStats short-circuits to a zero snapshot when the project directory is gone (#10663)", async () => {
+    // The project directory was deleted/moved externally; the renderer keeps
+    // polling this handler. The guard must return a commits-only zero snapshot
+    // without ever touching git resolution — otherwise each poll spams WARN.
+    existsSyncMock.mockReturnValueOnce(false);
+    registerForgeDataHandlers();
+
+    const result = await findHandler("forge:get-repo-stats")(null, { cwd: "/missing/path" });
+
+    expect(resolveForCwdMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      commitCount: 0,
+      issueCount: null,
+      prCount: null,
+      loading: false,
+    });
   });
 
   it("getCurrentUser returns the identity projection when the impl exposes one", async () => {
