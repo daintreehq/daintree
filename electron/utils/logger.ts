@@ -897,6 +897,9 @@ function redactArrayWithCycleDetection(
   visited: WeakSet<object>,
   depth: number
 ): unknown[] {
+  if (depth >= MAX_REDACT_DEPTH) {
+    return ["[MaxDepth]"];
+  }
   if (visited.has(arr)) {
     return "[Circular]" as unknown as unknown[];
   }

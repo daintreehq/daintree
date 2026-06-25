@@ -483,6 +483,32 @@ describe("logger", () => {
       expect(content).toContain("[REDACTED]");
       expect(content).not.toContain(ANTHROPIC_KEY);
     });
+
+    it("does not leak a secret straddling the context string-length cap", async () => {
+      initializeLogger(TEST_LOG_DIR);
+      // A token body that begins past the 2000-char clamp boundary: truncation
+      // drops the high-entropy tail, so the full secret can never reach disk.
+      const tokenBody = "A".repeat(60);
+      logInfo("long trace", { traceLine: `${"x".repeat(1993)}Bearer ${tokenBody}` });
+      await flushLogFileWritesForTesting();
+
+      const content = readFileSync(getLogFilePath(), "utf8");
+      // The full token body must never appear on disk.
+      expect(content).not.toContain(tokenBody);
+    });
+
+    it("preserves merged context fields while redacting sensitive keys in logError", () => {
+      initializeLogger(TEST_LOG_DIR);
+      logError("request failed", new Error("boom"), { requestId: "r1", token: "secret123" });
+
+      const content = readFileSync(getLogFilePath(), "utf8");
+      // Legitimate context survives the emitError dedup...
+      expect(content).toContain("r1");
+      expect(content).toContain("boom");
+      // ...and the sensitive key is still redacted, never raw.
+      expect(content).not.toContain("secret123");
+      expect(content).toContain("[redacted]");
+    });
   });
 
   describe("redactSensitiveData bounds", () => {
@@ -565,6 +591,47 @@ describe("logger", () => {
     it("still redacts sensitive keys even when their value is long", () => {
       logInfo("auth", { token: "x".repeat(5000) });
       expect(lastContext()?.token).toBe("[redacted]");
+    });
+
+    it("stops recursion through deeply nested arrays without overflowing", () => {
+      let value: unknown = "leaf";
+      for (let i = 0; i < 20; i++) {
+        value = [value];
+      }
+      expect(() => logInfo("nested arrays", { value })).not.toThrow();
+
+      // Walk down the nested arrays; the sentinel must appear before the leaf.
+      let current: unknown = lastContext()?.value;
+      let walked = 0;
+      while (Array.isArray(current) && current[0] !== "[MaxDepth]") {
+        current = current[0];
+        walked++;
+        if (walked > 30) break;
+      }
+      expect(Array.isArray(current) ? current[0] : current).toBe("[MaxDepth]");
+      expect(walked).toBeLessThan(20);
+    });
+
+    it("keeps an array at the exact cap whole but marks one beyond it", () => {
+      logInfo("at cap", { items: Array.from({ length: 20 }, (_, i) => i) });
+      const atCap = lastContext()?.items as unknown[];
+      expect(atCap).toHaveLength(20);
+      expect(atCap[atCap.length - 1]).toBe(19);
+
+      logBuffer.clear();
+      logInfo("over cap", { items: Array.from({ length: 21 }, (_, i) => i) });
+      const overCap = lastContext()?.items as unknown[];
+      expect(overCap).toHaveLength(21);
+      expect(overCap[overCap.length - 1]).toBe("[...1 more]");
+    });
+
+    it("keeps a string at the exact char cap but marks one beyond it", () => {
+      logInfo("at cap", { note: "a".repeat(2000) });
+      expect(lastContext()?.note).toBe("a".repeat(2000));
+
+      logBuffer.clear();
+      logInfo("over cap", { note: "a".repeat(2001) });
+      expect(lastContext()?.note).toBe(`${"a".repeat(2000)}[…+1]`);
     });
   });
 
