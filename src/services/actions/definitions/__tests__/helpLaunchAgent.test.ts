@@ -140,6 +140,37 @@ describe("help.launchAgent", () => {
     expect(mockNotify).not.toHaveBeenCalled();
   });
 
+  it("runs the Daintree Assistant in the project root, not the provisioned session dir", async () => {
+    // The assistant is env-only and ships its own skills, so it reads nothing
+    // from cwd — it should operate on the actual project files. Same mock setup
+    // as the non-assistant case below; only the cwd differs.
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+
+    await action.run({ agentId: "daintree-assistant" }, stubCtx);
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "daintree-assistant", cwd: "/repo" }),
+      { source: "user" }
+    );
+  });
+
+  it("keeps a non-assistant help agent in the provisioned session dir", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+
+    await action.run({ agentId: "codex" }, stubCtx);
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "codex", cwd: "/mock/help" }),
+      { source: "user" }
+    );
+  });
+
   it("uses the user's preferred default agent when available", async () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"

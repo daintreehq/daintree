@@ -81,7 +81,10 @@ const {
 
 vi.mock("@/config/agents", () => ({
   getAgentConfig: (id: string) =>
-    ({ claude: { name: "Claude", assistantMinVersion: "1.0.0" } })[id],
+    ({
+      claude: { name: "Claude", assistantMinVersion: "1.0.0" },
+      "daintree-assistant": { name: "Daintree Assistant", assistantMinVersion: "1.0.0" },
+    })[id],
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -249,6 +252,7 @@ beforeEach(() => {
           markTerminal: vi.fn().mockResolvedValue(undefined),
           provisionSession: vi.fn().mockResolvedValue(null),
           revokeSession: vi.fn().mockResolvedValue(undefined),
+          takePendingHibernation: vi.fn().mockResolvedValue(null),
         },
         helpAssistant: {
           getSettings: vi.fn().mockResolvedValue({ idleHibernateMinutes: 30 }),
@@ -657,6 +661,103 @@ describe("HelpSessionController — launch phase FSM", () => {
     // it can never fire 90s later and tear down a healthy live session.
     expect(ctrl["_launchWatchdogTimer"]).toBeNull();
     expect(ctrl.getSnapshot().launchError).toBeNull();
+    // Non-assistant agents read their .mcp.json / settings from cwd, so they
+    // run in the provisioned session dir, not the project root.
+    expect(vi.mocked(actionService.dispatch)).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ cwd: "/help" }),
+      expect.anything()
+    );
+    ctrl.stop();
+  });
+
+  it("launches the Daintree Assistant in the project root, not the session dir", async () => {
+    // The assistant is env-only (MCP via env, ships its own skills) so it reads
+    // nothing from cwd — it runs in the actual project. Same provision (session
+    // dir "/help") and project ("/repo") as the Claude case above; only the
+    // resolved cwd differs by agent.
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "daintree-assistant";
+    (window.electron.help.provisionSession as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sessionId: "sess-asst",
+      sessionPath: "/help",
+      token: "tok-asst",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    vi.mocked(actionService.dispatch).mockResolvedValue({
+      ok: true,
+      result: { terminalId: "term-asst" },
+    } as never);
+
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "daintree-assistant",
+      supportedInstalledAgentIds: ["daintree-assistant"],
+      autoLaunchEnabled: true,
+      visibilityEpoch: 0,
+    });
+
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().phase).toBe("live");
+    });
+    expect(vi.mocked(actionService.dispatch)).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "daintree-assistant", cwd: "/repo" }),
+      expect.anything()
+    );
+    ctrl.stop();
+  });
+
+  it("binds a resumed session's DAINTREE_PROJECT_ID to the launch project, not live store state", async () => {
+    // Resume path (_spawnResumed): the project identity must come from the
+    // project captured at launch, never live store state — otherwise a project
+    // switch mid-resume makes cwd and DAINTREE_PROJECT_ID disagree. Drive it
+    // with claude (which has a resume config; the assistant has none and always
+    // fresh-launches) and deliberately drift the store's currentProject.
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    helpPanelState.hibernateSessions = {
+      proj: { sessionId: "old-sess", agentId: "claude", cwd: "/help" },
+    };
+    // Store currentProject drifts away from the launch project after capture.
+    projectStoreState.currentProject = { id: "other", path: "/other" };
+    (window.electron.help.provisionSession as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sessionId: "new-sess",
+      sessionPath: "/help",
+      token: "tok-resume",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("term-resumed");
+
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
+      visibilityEpoch: 0,
+    });
+
+    await vi.waitFor(() => {
+      expect(panelStoreState.addPanel).toHaveBeenCalled();
+    });
+    const addPanelArg = (panelStoreState.addPanel as ReturnType<typeof vi.fn>).mock.calls[0][0] as {
+      cwd?: string;
+      env?: Record<string, string>;
+    };
+    // Claude resumes in the session dir (it owns its .mcp.json there)…
+    expect(addPanelArg.cwd).toBe("/help");
+    // …but its project identity is the launch project, not the drifted store.
+    expect(addPanelArg.env?.DAINTREE_PROJECT_ID).toBe("proj");
     ctrl.stop();
   });
 

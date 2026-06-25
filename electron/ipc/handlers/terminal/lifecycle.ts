@@ -234,6 +234,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // gated on the session's snapshotted `bypassPermissions` (independent
     // of `tier`), so an `action`-tier session can still skip permission
     // prompts and a `system`-tier session can still respect them.
+    //
+    // The Daintree Assistant is the exception to the session-dir cwd: it is
+    // env-only (MCP via DAINTREE_MCP_* env vars, reads no cwd config) so the
+    // renderer points it at the project root instead — see the assistant cwd
+    // branches in HelpSessionController/`helpActions`. Nothing here depends on
+    // the assistant's cwd; we just honor whatever cwd the renderer supplied.
     const helpToken = spawnEnv?.DAINTREE_MCP_TOKEN ?? "";
     const helpTier = helpToken ? helpSessionService.validateToken(helpToken) : false;
     const isAssistantAgent =

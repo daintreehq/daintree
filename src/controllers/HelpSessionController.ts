@@ -22,6 +22,7 @@ import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
 import { buildResumeCommand, buildResumeLatestCommand } from "@shared/types/agentSettings";
 import { resolveDaintreeMcpTier } from "@shared/types/project";
 import type { SnapshotInfo } from "@shared/types/ipc/git";
+import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 
 const HIBERNATE_VALID_MINUTES: readonly number[] = [0, 15, 30, 60, 120];
 const DEFAULT_HIBERNATE_MINUTES = 30;
@@ -1996,7 +1997,8 @@ export class HelpSessionController {
     launchAgentId: string,
     hibernated: { sessionId: string; cwd: string },
     session: HelpSessionRef | null,
-    folderPath: string
+    folderPath: string,
+    launchProject: HelpProjectRef
   ): Promise<ResumeSpawnResult | null> {
     const customLaunchFlags = await loadCustomLaunchFlags();
     const flags = customLaunchFlags.length > 0 ? customLaunchFlags : undefined;
@@ -2007,9 +2009,18 @@ export class HelpSessionController {
       : buildResumeLatestCommand(launchAgentId, flags);
     if (!command) return null;
 
-    const cwd = session?.sessionPath ?? hibernated.cwd ?? folderPath;
-    const projectId = useProjectStore.getState().currentProject?.id ?? null;
-    const env = buildHelpEnv(session, projectId, launchAgentId);
+    // The Daintree Assistant runs in the project root (env-only MCP, ships its
+    // own skills, reads nothing from cwd) — never the session dir or the
+    // captured hibernation cwd. Other help agents resume in the session dir
+    // that owns their config files.
+    const cwd = isAssistantOnlyAgentId(launchAgentId)
+      ? launchProject.path
+      : (session?.sessionPath ?? hibernated.cwd ?? folderPath);
+    // Bind the resumed session's project identity to the project captured at
+    // launch, not live store state — otherwise a project switch mid-resume
+    // could make cwd (the captured project) and DAINTREE_PROJECT_ID disagree.
+    // Mirrors the fresh-launch path, which passes `launchProject.id`.
+    const env = buildHelpEnv(session, launchProject.id, launchAgentId);
 
     const newId = await usePanelStore.getState().addPanel({
       kind: "terminal",
@@ -2136,7 +2147,14 @@ export class HelpSessionController {
         this._pendingSessionId = session.sessionId;
       }
       this._patch({ phase: "launching" });
-      const cwd = session.sessionPath;
+      // The Daintree Assistant is env-only (MCP via DAINTREE_MCP_* env vars)
+      // and ships its own skills, so it reads nothing from cwd. Run it in the
+      // project root so its file tools and the terminal's file-link resolution
+      // operate on the actual project; other help agents stay in the session
+      // dir that owns their .mcp.json / settings. `launchProject` is the exact
+      // project this session was provisioned for, so cwd can't drift to a
+      // different project the user switched to mid-launch.
+      const cwd = isAssistantOnlyAgentId(launchAgentId) ? launchProject.path : session.sessionPath;
       const helpEnv = buildHelpEnv(session, launchProject.id, launchAgentId);
       const env: Record<string, string> | undefined =
         helpEnv || presetEnv ? { ...(presetEnv ?? {}), ...(helpEnv ?? {}) } : undefined;
@@ -2155,7 +2173,13 @@ export class HelpSessionController {
         }
         const hibernated = useHelpPanelStore.getState().hibernateSessions[launchProject.id];
         if (hibernated && hibernated.agentId === launchAgentId && folderPath) {
-          const resumed = await this._spawnResumed(launchAgentId, hibernated, session, folderPath);
+          const resumed = await this._spawnResumed(
+            launchAgentId,
+            hibernated,
+            session,
+            folderPath,
+            launchProject
+          );
           if (gen !== this._launchGen) {
             if (resumed) usePanelStore.getState().removePanel(resumed.panelId);
             this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });

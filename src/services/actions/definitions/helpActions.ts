@@ -12,6 +12,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { logError } from "@/utils/logger";
 import { getDefaultAgentId } from "@/lib/resolveAgentId";
+import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 
 export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("help.shortcuts", () => ({
@@ -205,7 +206,13 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
         return;
       }
 
-      const cwd = session.sessionPath;
+      // The Daintree Assistant is env-only (MCP via DAINTREE_MCP_* env vars)
+      // and ships its own skills, so it reads nothing from cwd. Run it in the
+      // project root so its file tools (read/list/grep/edit) and the terminal's
+      // file-link resolution operate on the actual project; other help agents
+      // stay in the session dir that owns their .mcp.json / settings. The
+      // session token still scopes the assistant's MCP surface to this project.
+      const cwd = isAssistantOnlyAgentId(agentId) ? project.path : session.sessionPath;
       const env: Record<string, string> = {
         DAINTREE_MCP_TOKEN: session.token,
         DAINTREE_WINDOW_ID: String(session.windowId),
