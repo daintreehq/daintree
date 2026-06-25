@@ -3380,6 +3380,26 @@ describe("McpServerService", () => {
       return (svc as unknown as { getAuditRecords: () => AuditRecord[] }).getAuditRecords();
     }
 
+    it("pruneAuditByRetention delegates to both audit and turn-outcome services (#10776)", () => {
+      const auditSpy = vi.spyOn(service._auditService, "pruneByAge");
+      const turnSpy = vi.spyOn(service._turnOutcomeService, "pruneByAge");
+
+      service.pruneAuditByRetention(30);
+
+      expect(auditSpy).toHaveBeenCalledWith(30);
+      expect(turnSpy).toHaveBeenCalledWith(30);
+    });
+
+    it("pruneAuditByRetention forwards the Off value (0) to both rings (#10776)", () => {
+      const auditSpy = vi.spyOn(service._auditService, "pruneByAge");
+      const turnSpy = vi.spyOn(service._turnOutcomeService, "pruneByAge");
+
+      service.pruneAuditByRetention(0);
+
+      expect(auditSpy).toHaveBeenCalledWith(0);
+      expect(turnSpy).toHaveBeenCalledWith(0);
+    });
+
     it("records a successful dispatch with redacted args and a non-empty session id", async () => {
       const dispatchMock = vi.fn(
         (): ActionDispatchResult => ({

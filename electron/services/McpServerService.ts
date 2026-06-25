@@ -488,6 +488,17 @@ export class McpServerService {
   }
 
   /**
+   * Apply the assistant audit-log retention setting (`helpAssistant.auditRetention`,
+   * in days; 0 = Off) to both assistant audit rings — the MCP dispatch log and
+   * the turn-outcome log. Called when the setting changes and on the periodic
+   * cleanup tick. Synchronous; both sub-services prune in-memory and flush.
+   */
+  pruneAuditByRetention(retentionDays: number): void {
+    this.auditService.pruneByAge(retentionDays);
+    this.turnOutcomeService.pruneByAge(retentionDays);
+  }
+
+  /**
    * Wires the help-session terminal↔session resolver. Called by
    * `HelpSessionService.ensureMcpServerReady()` (and equivalent sites) so
    * the turn-outcome classifier can correlate FSM transitions with the

@@ -121,6 +121,19 @@ class PeriodicCleanupService {
     } catch (err) {
       logError("[PeriodicCleanup] heap snapshot prune threw", err);
     }
+    try {
+      // Age out assistant audit-log records past the configured retention
+      // window (helpAssistant.auditRetention, in days; 0 = Off → keep). Re-read
+      // each pass — the user may change it mid-session. Lazy-import the MCP
+      // singleton so this maintenance file never forces it to construct early.
+      const retentionDays = store.get("helpAssistant")?.auditRetention ?? 7;
+      if (retentionDays > 0) {
+        const { mcpServerService } = await import("./McpServerService.js");
+        mcpServerService.pruneAuditByRetention(retentionDays);
+      }
+    } catch (err) {
+      logError("[PeriodicCleanup] audit retention prune threw", err);
+    }
   }
 }
 

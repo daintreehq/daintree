@@ -160,6 +160,7 @@ export const helpAssistantNamespace = defineIpcNamespace({
       async (patch: Partial<HelpAssistantSettings>): Promise<void> => {
         if (!patch || typeof patch !== "object") return;
         let daintreeControlTurnedOn = false;
+        let auditRetentionWritten: HelpAssistantAuditRetention | null = null;
         for (const [field, value] of Object.entries(patch)) {
           if (value === undefined) continue;
           if (!KNOWN_KEYS.has(field)) continue;
@@ -190,7 +191,25 @@ export const helpAssistantNamespace = defineIpcNamespace({
             const previous = store.get("helpAssistant")?.daintreeControl ?? true;
             if (previous !== true) daintreeControlTurnedOn = true;
           }
+          if (field === "auditRetention") {
+            auditRetentionWritten = storedValue as HelpAssistantAuditRetention;
+          }
           store.set(`helpAssistant.${field}`, storedValue);
+        }
+
+        // Apply the new retention window to the assistant audit rings
+        // immediately so a shortened (or "Off"→on) setting takes effect now,
+        // not only on the next periodic-cleanup tick. Fire-and-forget with a
+        // logged catch — pruning failures must not block the settings write;
+        // the periodic sweep retries on its own cadence. Mirrors the
+        // daintreeControl auto-couple below.
+        if (auditRetentionWritten !== null) {
+          const days = auditRetentionWritten;
+          void getMcpServerService()
+            .then((svc) => svc.pruneAuditByRetention(days))
+            .catch((err) => {
+              console.warn("[HelpAssistant] auditRetention prune failed:", err);
+            });
         }
 
         // Auto-couple: turning on Daintree control implies the in-process MCP

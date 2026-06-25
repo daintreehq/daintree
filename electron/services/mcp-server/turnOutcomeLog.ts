@@ -533,4 +533,24 @@ export class TurnOutcomeService {
     this.records = [];
     this.flushNow();
   }
+
+  /**
+   * Drop turn-outcome records older than `retentionDays`, then flush if
+   * anything was removed. Mirrors {@link AuditService.pruneByAge}:
+   * `retentionDays <= 0` is "Off" (keep everything, count cap only), filtering
+   * is on each record's own `.timestamp` (event time) not SQLite `created_at`,
+   * and records with a non-finite timestamp are retained rather than dropped.
+   */
+  pruneByAge(retentionDays: number): void {
+    if (!Number.isFinite(retentionDays) || retentionDays <= 0) return;
+    this.hydrate();
+    const cutoff = Date.now() - retentionDays * 86_400_000;
+    const before = this.records.length;
+    this.records = this.records.filter(
+      (r) => !(typeof r.timestamp === "number" && r.timestamp < cutoff)
+    );
+    if (this.records.length !== before) {
+      this.flushNow();
+    }
+  }
 }

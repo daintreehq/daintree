@@ -834,3 +834,65 @@ describe("TurnOutcomeService turnId lifecycle", () => {
     expect(f.service.getCurrentTurnIdForSession("session-1")).toBeNull();
   });
 });
+
+describe("TurnOutcomeService.pruneByAge (#10776)", () => {
+  const DAY = 86_400_000;
+
+  function seedRecord(timestamp: unknown): Record<string, unknown> {
+    return {
+      id: `r-${String(timestamp)}`,
+      timestamp,
+      terminalId: "term-1",
+      sessionId: "session-1",
+      outcome: "answered",
+    };
+  }
+
+  it("drops records older than the retention window and keeps newer ones", () => {
+    const now = Date.now();
+    const f = makeFixture({
+      initialLog: [
+        seedRecord(now - 40 * DAY),
+        seedRecord(now - 20 * DAY),
+        seedRecord(now - 1 * DAY),
+      ],
+    });
+    f.service.pruneByAge(30);
+    const ids = f.service.getRecords().map((r) => r.id);
+    // getRecords is newest-first; the 40-day-old record is gone.
+    expect(ids).toEqual([`r-${now - 1 * DAY}`, `r-${now - 20 * DAY}`]);
+    expect(f.logStore.write).toHaveBeenCalledTimes(1);
+  });
+
+  it("is a no-op when retentionDays <= 0 (Off keeps everything)", () => {
+    const now = Date.now();
+    const f = makeFixture({
+      initialLog: [seedRecord(now - 365 * DAY), seedRecord(now - 1 * DAY)],
+    });
+    f.service.pruneByAge(0);
+    expect(f.service.getRecords()).toHaveLength(2);
+    expect(f.logStore.write).not.toHaveBeenCalled();
+  });
+
+  it("does not flush when nothing falls outside the window", () => {
+    const now = Date.now();
+    const f = makeFixture({
+      initialLog: [seedRecord(now - 2 * DAY), seedRecord(now - 1 * DAY)],
+    });
+    f.service.pruneByAge(30);
+    expect(f.service.getRecords()).toHaveLength(2);
+    expect(f.logStore.write).not.toHaveBeenCalled();
+  });
+
+  it("retains records with a non-numeric timestamp rather than dropping them", () => {
+    const now = Date.now();
+    const f = makeFixture({
+      initialLog: [seedRecord(undefined), seedRecord(now - 90 * DAY), seedRecord(now - 1 * DAY)],
+    });
+    f.service.pruneByAge(30);
+    const ids = f.service.getRecords().map((r) => r.id);
+    expect(ids).toContain("r-undefined");
+    expect(ids).toContain(`r-${now - 1 * DAY}`);
+    expect(ids).not.toContain(`r-${now - 90 * DAY}`);
+  });
+});
