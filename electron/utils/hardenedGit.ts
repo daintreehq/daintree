@@ -57,6 +57,12 @@ const UNSAFE_FLAGS = {
   allowUnsafeSshCommand: true,
   allowUnsafeGitProxy: true,
   allowUnsafeHooksPath: true,
+  // simple-git 3.36.0 scans the spawn env and rejects any EDITOR / GIT_EDITOR /
+  // GIT_SEQUENCE_EDITOR key unless this flag is set, even when the value is the
+  // non-interactive `true` we set ourselves to suppress the editor on
+  // `git rebase --continue` (see buildContinueEnv). The scanner fires on the
+  // presence of the key, not its origin, so the flag is required.
+  allowUnsafeEditor: true,
 } as const;
 
 const BLOCKED_INHERITED_GIT_ENV_KEYS = new Set([
@@ -69,6 +75,9 @@ const BLOCKED_INHERITED_GIT_ENV_KEYS = new Set([
   "GIT_EDITOR",
   "GIT_EXEC_PATH",
   "GIT_EXTERNAL_DIFF",
+  // Inherited GIT_MERGE_AUTOEDIT=yes would re-open the editor on
+  // `git merge --continue`; strip it so buildContinueEnv's explicit "no" wins.
+  "GIT_MERGE_AUTOEDIT",
   "GIT_PAGER",
   "GIT_PROXY_COMMAND",
   "GIT_SEQUENCE_EDITOR",
@@ -156,6 +165,28 @@ export function buildHardenedGitEnv(
     // dialogs in background processes where no user can interact. No effect
     // on POSIX or on local read operations.
     GCM_INTERACTIVE: "Never",
+  };
+}
+
+/**
+ * Hardened env for continue-style operations (`git rebase/merge/cherry-pick/
+ * revert --continue`). Builds on `buildHardenedGitEnv` and adds the editor
+ * suppression those commands need to run non-interactively — `git rebase
+ * --continue` has no `--no-edit` flag, so `GIT_EDITOR=true` is the only way to
+ * keep it from spawning an editor in the Electron main process.
+ *
+ * Returns a single env object meant to be passed in one `.env()` call:
+ * simple-git's `.env()` replaces the spawn env wholesale, so layering a second
+ * `.env()` over `createHardenedGit` would silently drop all the hardening above
+ * (issue #7058). Set the editor keys AFTER the spread — `buildHardenedGitEnv`
+ * strips inherited `GIT_EDITOR`/`EDITOR` via the block list, and we re-add the
+ * intentional non-interactive value here.
+ */
+export function buildContinueEnv(platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
+  return {
+    ...buildHardenedGitEnv(platform),
+    GIT_EDITOR: "true",
+    GIT_MERGE_AUTOEDIT: "no",
   };
 }
 

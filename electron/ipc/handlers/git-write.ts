@@ -4,7 +4,6 @@ import fs from "node:fs";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { SimpleGit } from "simple-git";
 import { CHANNELS } from "../channels.js";
 import { checkRateLimit, typedHandle, typedHandleWithContext, sendToRenderer } from "../utils.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
@@ -16,7 +15,12 @@ import type {
   RepoState,
   StagingStatus,
 } from "../../../shared/types/git.js";
-import { validateCwd, createHardenedGit, createAuthenticatedGit } from "../../utils/hardenedGit.js";
+import {
+  validateCwd,
+  createHardenedGit,
+  createAuthenticatedGit,
+  buildContinueEnv,
+} from "../../utils/hardenedGit.js";
 import { getPerFileDiffStats, invalidateStagingDiffStatCache } from "../../utils/git.js";
 import { store } from "../../store.js";
 import { getSoundService } from "../../services/getSoundService.js";
@@ -639,16 +643,6 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
   };
   handlers.push(typedHandle(CHANNELS.GIT_GET_STAGING_STATUS, handleGetStagingStatus));
 
-  const withNonInteractiveEnv = (git: SimpleGit): SimpleGit =>
-    git.env({
-      ...process.env,
-      LC_MESSAGES: "C",
-      LANGUAGE: "",
-      GIT_EDITOR: "true",
-      GIT_MERGE_AUTOEDIT: "no",
-      GIT_TERMINAL_PROMPT: "0",
-    });
-
   const handleAbortRepositoryOperation = async (cwd: string): Promise<void> => {
     checkRateLimit(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION, 5, 10_000);
     validateCwd(cwd);
@@ -682,7 +676,11 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     checkRateLimit(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION, 5, 10_000);
     validateCwd(cwd);
 
-    const git = withNonInteractiveEnv(await createHardenedGit(cwd));
+    // One .env() call only: simple-git's .env() replaces the spawn env
+    // wholesale, so re-stating the full hardened env (plus editor suppression)
+    // via buildContinueEnv is the only way to keep createHardenedGit's
+    // hardening intact on the continue path (#7058, #10786).
+    const git = (await createHardenedGit(cwd)).env(buildContinueEnv());
     const gitDir = await resolveGitDir(git, cwd);
     const { state } = await detectRepoOperationState(gitDir, false);
 

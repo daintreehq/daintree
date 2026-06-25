@@ -22,6 +22,7 @@ import {
   createWslHardenedGit,
   getGitLocaleEnv,
   buildHardenedGitEnv,
+  buildContinueEnv,
   HARDENED_GIT_CONFIG,
   AUTHENTICATED_GIT_CONFIG,
 } from "../hardenedGit.js";
@@ -126,6 +127,7 @@ describe("createHardenedGit", () => {
       allowUnsafeSshCommand: true,
       allowUnsafeGitProxy: true,
       allowUnsafeHooksPath: true,
+      allowUnsafeEditor: true,
     });
   });
 
@@ -511,6 +513,7 @@ describe("createAuthenticatedGit", () => {
       allowUnsafeSshCommand: true,
       allowUnsafeGitProxy: true,
       allowUnsafeHooksPath: true,
+      allowUnsafeEditor: true,
     });
   });
 
@@ -856,6 +859,7 @@ describe("createWslHardenedGit", () => {
       allowUnsafeSshCommand: true,
       allowUnsafeGitProxy: true,
       allowUnsafeHooksPath: true,
+      allowUnsafeEditor: true,
     });
   });
 });
@@ -950,5 +954,60 @@ describe("buildHardenedGitEnv", () => {
   it("uses the platform arg instead of process.platform when supplied", async () => {
     const env = buildHardenedGitEnv("darwin");
     expect(env.LC_CTYPE).toBe("en_US.UTF-8");
+  });
+});
+
+describe("buildContinueEnv", () => {
+  const saved = {
+    EDITOR: process.env.EDITOR,
+    GIT_EDITOR: process.env.GIT_EDITOR,
+    GIT_MERGE_AUTOEDIT: process.env.GIT_MERGE_AUTOEDIT,
+  };
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it("suppresses the editor so continue operations run non-interactively", async () => {
+    const env = buildContinueEnv("linux");
+    expect(env.GIT_EDITOR).toBe("true");
+    expect(env.GIT_MERGE_AUTOEDIT).toBe("no");
+  });
+
+  it("preserves the hardening vars from buildHardenedGitEnv", async () => {
+    const env = buildContinueEnv("linux");
+    expect(env).toEqual(
+      expect.objectContaining({
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_OPTIONAL_LOCKS: "0",
+        GCM_INTERACTIVE: "Never",
+        GIT_ASKPASS: "true",
+        LC_ALL: "",
+        LC_MESSAGES: "C",
+      })
+    );
+  });
+
+  it("strips an inherited EDITOR instead of leaking it into the spawn env", async () => {
+    process.env.EDITOR = "vim";
+    const env = buildContinueEnv("linux");
+    expect(env.EDITOR).toBeUndefined();
+    // The intentional non-interactive value still wins.
+    expect(env.GIT_EDITOR).toBe("true");
+  });
+
+  it("overrides an inherited GIT_EDITOR with the non-interactive value", async () => {
+    process.env.GIT_EDITOR = "code --wait";
+    const env = buildContinueEnv("linux");
+    expect(env.GIT_EDITOR).toBe("true");
+  });
+
+  it("overrides an inherited GIT_MERGE_AUTOEDIT with 'no'", async () => {
+    process.env.GIT_MERGE_AUTOEDIT = "yes";
+    const env = buildContinueEnv("linux");
+    expect(env.GIT_MERGE_AUTOEDIT).toBe("no");
   });
 });
