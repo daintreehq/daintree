@@ -87,6 +87,11 @@ const DIRECT_RENDERER_EVENTS = new Set([
   // the renderer (the get-all-states handshake only covers mount-time state).
   "topology-watcher-dark",
   "topology-watcher-recovered",
+  // Confirmed fetch-auth failure — delivered direct so the per-view
+  // `WorktreeStoreContext` listener (`fetch-auth-failure-confirmed`) fires.
+  // Renderer-only: there is no WorkspaceHostEventRouter case for this event,
+  // so the main-process relay never carries it (#10778).
+  "fetch-auth-failure-confirmed",
 ]);
 
 function sendToWorktreePorts(event: WorkspaceHostEvent): void {

@@ -1034,10 +1034,19 @@ export class WorkspaceHostProcess extends EventEmitter {
       // Spontaneous events - re-emit for the manager to route
       case "worktree-update":
       case "worktree-removed":
+      // Host-originated active-worktree change. The relay is dumb — it must
+      // pass `event` through verbatim (including the `silent` flag); the
+      // WorkspaceHostEventRouter case owns suppression (`if (event.silent)`)
+      // and the plugin-bus emit. Without this case the router never sees the
+      // event and plugin consumers go deaf (#10778).
+      case "worktree-activated":
       case "pr-detected":
       case "pr-cleared":
       case "issue-detected":
       case "issue-not-found":
+      // Host-originated lifecycle setup failure — routed to `notifyError` by
+      // the WorkspaceHostEventRouter case. Dropped here before #10778.
+      case "lifecycle-setup-error":
       case "copytree:progress":
       case "inotify-limit-reached":
       case "emfile-limit-reached":
