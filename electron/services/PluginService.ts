@@ -2064,17 +2064,20 @@ export class PluginService {
       const serialized = safeStringify(fields);
       rendered = serialized ? `${rendered} ${serialized}` : rendered;
     }
+    // Scrub before truncation: scrubSecrets replaces each secret with the
+    // shorter "[REDACTED]" sentinel, so the codepoint cap below still bounds the
+    // line — and a secret straddling that boundary is fully redacted instead of
+    // being bisected into a fragment too short for the scrubber to match. Both
+    // sinks below — the log buffer that feeds shareable bug reports and the
+    // console mirror — consume this scrubbed value.
+    rendered = scrubSecrets(rendered);
     // Codepoint-aware cap: spreading splits at codepoint (not UTF-16 code-unit)
-    // boundaries, so the slice can never bisect a surrogate pair.
+    // boundaries, so the slice can never bisect a surrogate pair. (It may clip a
+    // trailing "[REDACTED]" sentinel, which is harmless.)
     const codepoints = Array.from(rendered);
     if (codepoints.length > PLUGIN_LOG_LINE_MAX_CHARS) {
       rendered = `${codepoints.slice(0, PLUGIN_LOG_LINE_MAX_CHARS - 1).join("")}…`;
     }
-    // Scrub after truncation so the codepoint cap stays a cap on plugin input,
-    // and so a secret sigil near the boundary isn't bisected (a fragment would
-    // slip past the scrubber). Both sinks below — the log buffer that feeds
-    // shareable bug reports and the console mirror — consume this scrubbed value.
-    rendered = scrubSecrets(rendered);
 
     let buffer = this.logBuffers.get(pluginId);
     if (!buffer) {
