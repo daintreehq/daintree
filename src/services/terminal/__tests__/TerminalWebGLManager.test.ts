@@ -318,6 +318,35 @@ describe("TerminalWebGLManager", () => {
     expect(managed.terminal.refresh).toHaveBeenCalledWith(0, 23);
   });
 
+  it("does not re-arm itself when the reset re-fires the atlas event (no 60fps loop)", () => {
+    const managed = makeManagedTerminal();
+    manager.ensureContext("t1", managed);
+    const addon = addonAt(0);
+
+    // Real xterm: the resync's resetLocalWebGLRenderer → handleResize re-runs
+    // _refreshCharAtlas, which synchronously re-fires the atlas-change event.
+    // Without the re-entrancy guard that would schedule another resync every
+    // frame forever (here, under the synchronous rAF shim, it would recurse until
+    // the stack overflows). The guard must drop the self-induced re-fire.
+    let resetCount = 0;
+    addon._renderer.handleResize.mockImplementation(() => {
+      resetCount += 1;
+      addon.__fireChangeTextureAtlas();
+    });
+
+    addon.__fireChangeTextureAtlas();
+
+    // Exactly one reset — the re-fire during the reset was suppressed, not looped.
+    expect(resetCount).toBe(1);
+    expect(addon._renderer.handleResize).toHaveBeenCalledTimes(1);
+
+    // The guard clears after the resync settles, so a genuine later page-merge
+    // still resyncs (it is not permanently disabled).
+    addon.__fireChangeTextureAtlas();
+    expect(resetCount).toBe(2);
+    expect(addon._renderer.handleResize).toHaveBeenCalledTimes(2);
+  });
+
   it("falls back to local model clear when resize-like reset is unavailable", () => {
     const managed = makeManagedTerminal();
     manager.ensureContext("t1", managed);
