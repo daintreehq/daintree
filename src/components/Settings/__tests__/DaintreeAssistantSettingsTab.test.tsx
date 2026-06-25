@@ -178,6 +178,8 @@ interface McpServerApi {
   getLogRecords: ReturnType<typeof vi.fn>;
   getAuditStats: ReturnType<typeof vi.fn>;
   getTurnOutcomeRecords: ReturnType<typeof vi.fn>;
+  getAuditConfig: ReturnType<typeof vi.fn>;
+  setAuditEnabled: ReturnType<typeof vi.fn>;
   clearAuditLog: ReturnType<typeof vi.fn>;
 }
 
@@ -231,6 +233,10 @@ function installApi(
     getLogRecords: vi.fn().mockResolvedValue([]),
     getAuditStats: vi.fn().mockResolvedValue({ auth401Count: 0 }),
     getTurnOutcomeRecords: vi.fn().mockResolvedValue([]),
+    getAuditConfig: vi.fn().mockResolvedValue({ enabled: true, maxRecords: 500 }),
+    setAuditEnabled: vi
+      .fn()
+      .mockImplementation((next: boolean) => Promise.resolve({ enabled: next, maxRecords: 500 })),
     clearAuditLog: vi.fn().mockResolvedValue(undefined),
   };
   const systemDefaults: SystemApi = {
@@ -1003,13 +1009,103 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(container.textContent).toContain("recorded separately");
   });
 
-  it("renders turn-outcome diagnostics in the privacy section", async () => {
+  it("renders turn-outcome diagnostics in the privacy section after expanding advanced diagnostics", async () => {
     const { container } = render(
       <SettingsValidationProvider>
         <DaintreeAssistantSettingsTab />
       </SettingsValidationProvider>
     );
+    await waitForContent(container, "Advanced diagnostics");
+
+    // Diagnostics are collapsed by default — the turn-outcome block is unmounted
+    // until the disclosure is opened.
+    expect(container.textContent).not.toContain("Turn outcomes by class");
+
+    fireEvent.click(screen.getByRole("button", { name: "Advanced diagnostics" }));
+
     await waitForContent(container, "Turn outcomes by class");
+  });
+
+  it("renders the recording toggle in the privacy section, on by default", async () => {
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Capture audit log");
+
+    expect(window.electron.mcpServer.getAuditConfig).toHaveBeenCalledTimes(1);
+    const toggle = screen.getByLabelText("Capture audit log");
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(container.textContent).toContain("Recording every dispatch");
+  });
+
+  it("toggling the recording switch off calls setAuditEnabled(false) and updates the subtitle", async () => {
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Capture audit log");
+
+    // The toggle is disabled until getAuditConfig resolves (auditLoading) so the
+    // late config fulfillment can't clobber a user toggle — wait for it to enable.
+    const toggle = screen.getByLabelText("Capture audit log");
+    await waitFor(() => {
+      expect(toggle.hasAttribute("disabled")).toBe(false);
+    });
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(window.electron.mcpServer.setAuditEnabled).toHaveBeenCalledWith(false);
+    });
+    await waitForContent(container, "New dispatches will not be recorded");
+    expect(screen.getByLabelText("Capture audit log").getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("surfaces an inline error when setAuditEnabled rejects, leaving recording on", async () => {
+    installApi(
+      {},
+      {
+        setAuditEnabled: vi.fn().mockRejectedValue(new Error("audit ipc failed")),
+      }
+    );
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Capture audit log");
+
+    const toggle = screen.getByLabelText("Capture audit log");
+    await waitFor(() => {
+      expect(toggle.hasAttribute("disabled")).toBe(false);
+    });
+    fireEvent.click(toggle);
+
+    await waitForContent(container, "audit ipc failed");
+    // Recording state holds at the last known-good value on failure.
+    expect(screen.getByLabelText("Capture audit log").getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("reflects recording-off state loaded from getAuditConfig", async () => {
+    installApi(
+      {},
+      {
+        getAuditConfig: vi.fn().mockResolvedValue({ enabled: false, maxRecords: 500 }),
+      }
+    );
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Capture audit log");
+
+    await waitForContent(container, "New dispatches will not be recorded");
+    expect(screen.getByLabelText("Capture audit log").getAttribute("aria-checked")).toBe("false");
   });
 
   it("loads customArgs from the IPC settings into the input", async () => {

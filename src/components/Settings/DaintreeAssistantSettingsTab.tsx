@@ -172,6 +172,14 @@ export function DaintreeAssistantSettingsTab() {
   const [isExportingAudit, setIsExportingAudit] = useState(false);
   const [showClearAuditConfirm, setShowClearAuditConfirm] = useState(false);
   const [isClearingAudit, setIsClearingAudit] = useState(false);
+  // Recording stays on by default — the audit trail is a privacy/safety feature.
+  // The authoritative value loads from getAuditConfig in the audit fetch effect.
+  const [auditEnabled, setAuditEnabled] = useState(true);
+  const [isTogglingAudit, setIsTogglingAudit] = useState(false);
+  // Diagnostics (audit viewer, latency table, turn outcomes) collapse by default
+  // so the Privacy section doesn't surface telemetry on load. Local-only state —
+  // no persistence precedent for section collapse in Settings.
+  const [advancedDiagnosticsOpen, setAdvancedDiagnosticsOpen] = useState(false);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const auditCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const auditExportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -358,8 +366,9 @@ export function DaintreeAssistantSettingsTab() {
         window.electron.mcpServer.getLogRecords(),
         window.electron.mcpServer.getAuditStats(),
         window.electron.mcpServer.getTurnOutcomeRecords(),
+        window.electron.mcpServer.getAuditConfig(),
       ])
-        .then(([recordsResult, statsResult, turnsResult]) => {
+        .then(([recordsResult, statsResult, turnsResult, configResult]) => {
           if (cancelled) return;
           if (recordsResult.status === "fulfilled") {
             setAuditRecords(recordsResult.value);
@@ -375,6 +384,11 @@ export function DaintreeAssistantSettingsTab() {
             setTurnRecords(turnsResult.value);
           } else {
             logError("Failed initial turn outcomes load for assistant tab", turnsResult.reason);
+          }
+          if (configResult.status === "fulfilled") {
+            setAuditEnabled(configResult.value.enabled);
+          } else {
+            logError("Failed initial audit config load for assistant tab", configResult.reason);
           }
         })
         .finally(() => {
@@ -436,6 +450,27 @@ export function DaintreeAssistantSettingsTab() {
       cancelled = true;
     };
   }, [preferredAgentId]);
+
+  // Proxies the same mcpServer.setAuditEnabled endpoint as the MCP Server tab's
+  // "Capture audit log" toggle. Server response is authoritative — no optimistic
+  // flip. The in-flight guard prevents a double-click from computing `next` twice
+  // off the same pre-await state. On failure, surface the error and leave the
+  // last known-good value (matches McpServerSettingsTab's toggle).
+  const handleAuditEnabledToggle = async () => {
+    if (isTogglingAudit) return;
+    setIsTogglingAudit(true);
+    try {
+      setError(null);
+      const next = !auditEnabled;
+      const cfg = await window.electron.mcpServer.setAuditEnabled(next);
+      setAuditEnabled(cfg.enabled);
+    } catch (err) {
+      setError(formatErrorMessage(err, "Couldn't update audit recording"));
+      logError("Failed to toggle MCP audit log from assistant tab", err);
+    } finally {
+      setIsTogglingAudit(false);
+    }
+  };
 
   const handleCopyAuditAsJson = async (records: McpLogRecord[]) => {
     try {
@@ -898,6 +933,20 @@ export function DaintreeAssistantSettingsTab() {
         title="Privacy"
         description="Help-session activity is logged locally so you can review what the assistant did."
       >
+        <SettingsSwitchCard
+          variant="compact"
+          title="Capture audit log"
+          subtitle={
+            auditEnabled ? "Recording every dispatch" : "New dispatches will not be recorded"
+          }
+          isEnabled={auditEnabled}
+          onChange={handleAuditEnabledToggle}
+          ariaLabel="Capture audit log"
+          // Gate on auditLoading too: until getAuditConfig resolves, auditEnabled
+          // is still the optimistic default and a late fulfillment would clobber
+          // a user toggle made in that window.
+          disabled={loading || auditLoading || isTogglingAudit}
+        />
         <SettingsSelect
           label="Audit log retention"
           description="How long MCP audit records are kept on this machine. Turn-outcome diagnostics are recorded separately and aren't affected by this setting."
@@ -906,37 +955,61 @@ export function DaintreeAssistantSettingsTab() {
           options={RETENTION_OPTIONS}
           disabled={loading}
         />
-        <McpAuditLogViewer
-          records={auditRecords}
-          turnRecords={turnRecords}
-          loading={auditLoading}
-          onRefresh={refreshAuditRecords}
-          onCopy={handleCopyAuditAsJson}
-          onClear={() => setShowClearAuditConfirm(true)}
-          copyFlashActive={auditCopied}
-          // Privacy section hides external MCP traffic. Grant-lifecycle
-          // events stay visible — they're tied to this Daintree's own
-          // help-session bearers, not external API-key clients.
-          includeRecord={(record) => !isAuditRecord(record) || record.tier !== "external"}
-          onExport={handleExportAuditAsNdjson}
-          exportFlashActive={auditExported}
-        />
-        <McpAuditLatencyTable
-          records={auditRecords}
-          includeRecord={(record) => !isAuditRecord(record) || record.tier !== "external"}
-        />
-        <TurnOutcomeDiagnostics
-          auditRecords={auditRecords}
-          records={turnRecords}
-          onRefresh={refreshAuditRecords}
-        />
-        {auditStats && auditStats.auth401Count > 0 && (
-          <p className="text-xs text-daintree-text/60 select-text">
-            <span className="font-mono text-daintree-text/80">{auditStats.auth401Count}</span>{" "}
-            bearer rejection{auditStats.auth401Count === 1 ? "" : "s"} since last launch — an
-            external client is connecting with a stale or missing API key.
-          </p>
-        )}
+        <div className="rounded-[var(--radius-md)] border border-daintree-border bg-overlay-subtle/40">
+          <button
+            type="button"
+            onClick={() => setAdvancedDiagnosticsOpen((v) => !v)}
+            aria-expanded={advancedDiagnosticsOpen}
+            className={cn(
+              "w-full flex items-center gap-2 px-3 py-2 text-xs",
+              "text-daintree-text/80 hover:text-daintree-text transition-colors"
+            )}
+          >
+            <ChevronRight
+              data-animated-chevron
+              className={cn(
+                "w-3.5 h-3.5 transition-transform duration-150",
+                advancedDiagnosticsOpen ? "rotate-90" : "rotate-0"
+              )}
+            />
+            Advanced diagnostics
+          </button>
+          {advancedDiagnosticsOpen && (
+            <div className="flex flex-col gap-4 px-3 pb-3 pt-1">
+              <McpAuditLogViewer
+                records={auditRecords}
+                turnRecords={turnRecords}
+                loading={auditLoading}
+                onRefresh={refreshAuditRecords}
+                onCopy={handleCopyAuditAsJson}
+                onClear={() => setShowClearAuditConfirm(true)}
+                copyFlashActive={auditCopied}
+                // Privacy section hides external MCP traffic. Grant-lifecycle
+                // events stay visible — they're tied to this Daintree's own
+                // help-session bearers, not external API-key clients.
+                includeRecord={(record) => !isAuditRecord(record) || record.tier !== "external"}
+                onExport={handleExportAuditAsNdjson}
+                exportFlashActive={auditExported}
+              />
+              <McpAuditLatencyTable
+                records={auditRecords}
+                includeRecord={(record) => !isAuditRecord(record) || record.tier !== "external"}
+              />
+              <TurnOutcomeDiagnostics
+                auditRecords={auditRecords}
+                records={turnRecords}
+                onRefresh={refreshAuditRecords}
+              />
+              {auditStats && auditStats.auth401Count > 0 && (
+                <p className="text-xs text-daintree-text/60 select-text">
+                  <span className="font-mono text-daintree-text/80">{auditStats.auth401Count}</span>{" "}
+                  bearer rejection{auditStats.auth401Count === 1 ? "" : "s"} since last launch — an
+                  external client is connecting with a stale or missing API key.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
       </SettingsSection>
 
       {/* Connection */}
