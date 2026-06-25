@@ -380,6 +380,30 @@ describe("WorkspaceHostProcess", () => {
 
     host.dispose();
   });
+
+  it("swallows fetch-auth-failure-confirmed — no host-event, no Unknown-event warn (#10778)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const onHostEvent = vi.fn();
+    host.on("host-event", onHostEvent);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", { type: "fetch-auth-failure-confirmed", reason: "fetch" });
+
+    // Renderer-only event (delivered via DIRECT_RENDERER_EVENTS): it must not be
+    // relayed as host-event, and must not trip the default "Unknown event" warn.
+    expect(onHostEvent).not.toHaveBeenCalled();
+    const unknownWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("Unknown event"));
+    expect(unknownWarns).toHaveLength(0);
+
+    host.dispose();
+  });
 });
 
 // ── BrokerError contract tests ──

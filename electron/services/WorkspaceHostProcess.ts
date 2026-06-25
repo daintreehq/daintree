@@ -1058,6 +1058,16 @@ export class WorkspaceHostProcess extends EventEmitter {
         this.emit("host-event", event);
         break;
 
+      // Renderer-only event: the utility process forwards every event to this
+      // parent port, but `fetch-auth-failure-confirmed` is consumed solely via
+      // the DIRECT_RENDERER_EVENTS MessagePort fan-out (WorktreeStoreContext).
+      // There is no WorkspaceHostEventRouter case for it, so it is intentionally
+      // not relayed as `host-event`. Swallow it here so it does not trip the
+      // `default` "Unknown event" warn — that warn historically flagged a real
+      // dropped event and would cause false-alarm triage (#10778).
+      case "fetch-auth-failure-confirmed":
+        break;
+
       default:
         console.warn(
           `[WorkspaceHost:${this.serviceName}] Unknown event:`,
