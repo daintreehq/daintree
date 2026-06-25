@@ -260,6 +260,8 @@ describe("registerForgeDataHandlers", () => {
     const result = await findHandler("forge:get-repo-stats")(null, { cwd: "/missing/path" });
 
     expect(resolveForCwdMock).not.toHaveBeenCalled();
+    // The guard must check the cwd itself, not a parent or derived path.
+    expect(existsSyncMock).toHaveBeenCalledWith("/missing/path");
     expect(result).toMatchObject({
       commitCount: 0,
       issueCount: null,
