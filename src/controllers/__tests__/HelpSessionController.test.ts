@@ -750,7 +750,8 @@ describe("HelpSessionController — launch phase FSM", () => {
     await vi.waitFor(() => {
       expect(panelStoreState.addPanel).toHaveBeenCalled();
     });
-    const addPanelArg = (panelStoreState.addPanel as ReturnType<typeof vi.fn>).mock.calls[0][0] as {
+    const addPanelArg = (panelStoreState.addPanel as ReturnType<typeof vi.fn>).mock
+      .calls[0]![0] as {
       cwd?: string;
       env?: Record<string, string>;
     };
