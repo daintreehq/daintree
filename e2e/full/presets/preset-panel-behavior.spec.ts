@@ -199,9 +199,9 @@ test.describe.serial("Presets: Panel Behavior (107–112)", () => {
     const { id, panel } = await launchPresetPanel(ctx.window);
     presetPanelId = id;
 
-    // The panel header shows the agent's display name ("Claude"), not the preset
-    // name — the preset's load-bearing signal is the icon color, which mirrors
-    // core-agent-preset-icon-color.spec.ts.
+    // The panel is titled "Claude [<Preset>]" (verified via the dock chip in
+    // 111) and the preset's load-bearing signal is the icon color, which
+    // mirrors core-agent-preset-icon-color.spec.ts.
     await expect(panel).toHaveAttribute("data-chrome-agent-id", "claude", { timeout: T_LONG });
     const icon = panel.locator('[data-terminal-icon-id="claude"]').first();
     await expect(icon).toHaveAttribute("data-terminal-icon-color", PRESET_COLOR, {
@@ -264,7 +264,7 @@ test.describe.serial("Presets: Panel Behavior (107–112)", () => {
     expect(result.ok, result.error?.message).toBe(true);
 
     // The moved panel leaves the grid tab list and surfaces as a dock chip
-    // titled with the agent name ("Claude").
+    // titled "Claude [<Preset>]".
     await expect(tabFor(ctx.window, presetPanelId)).toHaveCount(0, { timeout: T_MEDIUM });
 
     const dock = ctx.window.locator(SEL.dock.container);
@@ -274,10 +274,14 @@ test.describe.serial("Presets: Panel Behavior (107–112)", () => {
     });
   });
 
-  test("111. Dock chip for the paneled panel carries the preset color", async () => {
+  test("111. Dock chip for the paneled panel carries the preset title and color", async () => {
     const dock = ctx.window.locator(SEL.dock.container);
     const chip = dock.locator(SEL.dock.chipByTitle("Claude")).first();
     await expect(chip).toBeVisible({ timeout: T_MEDIUM });
+
+    // The preset name is composed into the title ("Claude [<Preset>]") and
+    // survives agent detection via the titleMode pin — the #10738 regression.
+    await expect(chip).toContainText(PRESET_NAME, { timeout: T_MEDIUM });
 
     const icon = chip.locator('[data-terminal-icon-id="claude"]').first();
     await expect(icon).toHaveAttribute("data-terminal-icon-color", PRESET_COLOR, {
