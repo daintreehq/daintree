@@ -1890,6 +1890,34 @@ describe("PluginService integration — diagnostic logger", () => {
       .plugins.find((p) => p.pluginId === "acme.logger-unload");
     expect(entry).toBeUndefined();
   });
+
+  it("scrubs secrets from buffered lines and the console mirror (#10775)", async () => {
+    // ghp_ + 36 sigil chars trips the github-pat pattern in secretScrubber.
+    const token = `ghp_${"0123456789abcdefghijklmnopqrstuvwxyz"}`;
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const service = await loadWithLoggerActivate(
+        "acme.logger-secret",
+        "__loggerHost7",
+        `host.logger.info("auth " + ${JSON.stringify(token)});`
+      );
+
+      const entry = service
+        .getDiagnosticsSnapshot()
+        .plugins.find((p) => p.pluginId === "acme.logger-secret");
+      const message = entry?.logLines[0]?.message ?? "";
+      // The buffer feeds shareable bug reports, so the raw token must be gone.
+      expect(message).toContain("[REDACTED]");
+      expect(message).not.toContain(token);
+
+      // The console mirror consumes the same rendered string — also scrubbed.
+      const mirrored = infoSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(mirrored).toContain("[REDACTED]");
+      expect(mirrored).not.toContain(token);
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
 });
 
 describe("PluginService integration — stale temp dir sweep", () => {

@@ -141,6 +141,7 @@ import {
 } from "./forgeProviderRegistry.js";
 import { buildStoredCredentials } from "./forge/forgeCredentialUtils.js";
 import { makeForgeProviderId } from "../../shared/utils/forgeProviderIds.js";
+import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import {
   registerFileDecorationProviderImpl,
   registerFileDecorationProviders,
@@ -591,9 +592,10 @@ export class PluginService {
    * Per-plugin diagnostic log ring buffer, keyed by `pluginId` (= manifest
    * name). Written by `host.logger.*`, capped at {@link PLUGIN_LOG_BUFFER_MAX}
    * lines (FIFO eviction), and cleared in {@link unloadPlugin} so a reload of
-   * the same plugin starts clean. Lines are stored raw — secret/path scrubbing
-   * happens only at the report-export boundary, never here (mirrors the
-   * action-breadcrumb ring's raw-capture convention).
+   * the same plugin starts clean. Lines are stored scrubbed — this buffer is
+   * itself an outbound boundary (it feeds {@link getDiagnosticsSnapshot} →
+   * shareable bug reports), and the same scrubbed line mirrors to the console,
+   * so {@link recordPluginLog} runs `scrubSecrets` once before either sink.
    */
   private logBuffers = new Map<string, PluginDiagnosticsLogLine[]>();
   /**
@@ -2068,6 +2070,11 @@ export class PluginService {
     if (codepoints.length > PLUGIN_LOG_LINE_MAX_CHARS) {
       rendered = `${codepoints.slice(0, PLUGIN_LOG_LINE_MAX_CHARS - 1).join("")}…`;
     }
+    // Scrub after truncation so the codepoint cap stays a cap on plugin input,
+    // and so a secret sigil near the boundary isn't bisected (a fragment would
+    // slip past the scrubber). Both sinks below — the log buffer that feeds
+    // shareable bug reports and the console mirror — consume this scrubbed value.
+    rendered = scrubSecrets(rendered);
 
     let buffer = this.logBuffers.get(pluginId);
     if (!buffer) {
