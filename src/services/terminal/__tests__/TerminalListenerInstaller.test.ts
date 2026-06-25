@@ -679,7 +679,7 @@ describe("installTerminalBoundListeners", () => {
       const terminal = makeMockTerminal(captured);
       // 691px canvas / 40 rows = 17.275px fractional cell height.
       const element = makeRowsElement("17.275px", 40);
-      (terminal as { element: HTMLElement }).element = element;
+      (terminal as unknown as { element: HTMLElement }).element = element;
       const deps = makeDeps();
 
       install(terminal, deps);
@@ -704,7 +704,7 @@ describe("installTerminalBoundListeners", () => {
       const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
       const terminal = makeMockTerminal(captured);
       const element = makeRowsElement("17.275px", 40);
-      (terminal as { element: HTMLElement }).element = element;
+      (terminal as unknown as { element: HTMLElement }).element = element;
       const deps = makeDeps({ isWebGLActive: vi.fn(() => true) });
 
       install(terminal, deps);
@@ -717,7 +717,7 @@ describe("installTerminalBoundListeners", () => {
       const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
       const terminal = makeMockTerminal(captured);
       const element = makeRowsElement("18px", 40);
-      (terminal as { element: HTMLElement }).element = element;
+      (terminal as unknown as { element: HTMLElement }).element = element;
       const deps = makeDeps();
 
       install(terminal, deps);
@@ -730,7 +730,7 @@ describe("installTerminalBoundListeners", () => {
       const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
       const terminal = makeMockTerminal(captured);
       const element = makeRowsElement("17.275px", 40);
-      (terminal as { element: HTMLElement }).element = element;
+      (terminal as unknown as { element: HTMLElement }).element = element;
       const deps = makeDeps();
 
       install(terminal, deps);
@@ -755,7 +755,7 @@ describe("installTerminalBoundListeners", () => {
     it("no-ops on an empty row list", () => {
       const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
       const terminal = makeMockTerminal(captured);
-      (terminal as { element: HTMLElement }).element = makeRowsElement("17.275px", 0);
+      (terminal as unknown as { element: HTMLElement }).element = makeRowsElement("17.275px", 0);
       const deps = makeDeps();
 
       install(terminal, deps);
@@ -766,7 +766,7 @@ describe("installTerminalBoundListeners", () => {
       const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
       const terminal = makeMockTerminal(captured);
       const element = makeRowsElement("17.275px", 40);
-      (terminal as { element: HTMLElement }).element = element;
+      (terminal as unknown as { element: HTMLElement }).element = element;
       // WebGL active at install + first render → no snap (the production state
       // before a fleet DOM-mode flip / breaker trip).
       const isWebGLActive = vi.fn(() => true);
@@ -788,7 +788,7 @@ describe("installTerminalBoundListeners", () => {
       // 17.99px * 40 = 719.6 → round 720 = 18 * 40, so base 18, extra 0: every
       // row gets the same integer height, with no Bresenham distribution.
       const element = makeRowsElement("17.99px", 40);
-      (terminal as { element: HTMLElement }).element = element;
+      (terminal as unknown as { element: HTMLElement }).element = element;
       const deps = makeDeps();
 
       install(terminal, deps);
@@ -804,7 +804,7 @@ describe("installTerminalBoundListeners", () => {
       const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
       const terminal = makeMockTerminal(captured);
       const element = makeRowsElement("auto", 40);
-      (terminal as { element: HTMLElement }).element = element;
+      (terminal as unknown as { element: HTMLElement }).element = element;
       const deps = makeDeps();
 
       install(terminal, deps);
