@@ -242,6 +242,12 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       return true;
 
     case "terminal-pid":
+      // Defense-in-depth: the pty-host already gates invalid PIDs, but the
+      // router must never store a non-positive PID (Windows ConPTY `pid: 0`).
+      if (!Number.isInteger(event.pid) || event.pid <= 0) {
+        deps.logWarn(`[PtyClient] Ignoring invalid terminal-pid for ${event.id}: ${event.pid}`);
+        return true;
+      }
       state.terminalPids.set(event.id, event.pid);
       if (callbacks.onTerminalPid) {
         try {

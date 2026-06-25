@@ -476,7 +476,11 @@ export class TerminalProcess {
     this.setupPtyHandlers(ptyProcess, dataHandoff);
 
     const ptyPid = ptyProcess.pid;
-    if (ptyPid !== undefined && deps.processTreeCache) {
+    // A PTY PID is usable only once positive — Windows ConPTY reports `pid: 0`
+    // during connect(). Skipping construction here avoids spawning a
+    // ProcessDetector that would spam "Invalid PTY PID" on every refresh tick;
+    // the pty-host re-triggers detection once the real PID resolves.
+    if (Number.isInteger(ptyPid) && ptyPid > 0 && deps.processTreeCache) {
       this.processDetector = new ProcessDetector(
         id,
         spawnedAt,
@@ -1467,7 +1471,12 @@ export class TerminalProcess {
 
   startProcessDetector(): void {
     const ptyPid = this.terminalInfo.ptyProcess.pid;
-    if (ptyPid !== undefined && !this.processDetector && this.deps.processTreeCache) {
+    if (
+      Number.isInteger(ptyPid) &&
+      ptyPid > 0 &&
+      !this.processDetector &&
+      this.deps.processTreeCache
+    ) {
       this.processDetector = new ProcessDetector(
         this.id,
         this.terminalInfo.spawnedAt,

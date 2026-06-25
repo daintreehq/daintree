@@ -39,6 +39,18 @@ describe("createProcessStateValidator", () => {
     expect(createProcessStateValidator(1, null)).toBeUndefined();
   });
 
+  it("returns undefined for a non-positive PID (Windows ConPTY transient, #10787)", () => {
+    const cache = createMockProcessTreeCache(new Map());
+    expect(createProcessStateValidator(0, cache)).toBeUndefined();
+    expect(createProcessStateValidator(-1, cache)).toBeUndefined();
+  });
+
+  it("returns undefined for a non-integer PID (#10787)", () => {
+    const cache = createMockProcessTreeCache(new Map());
+    expect(createProcessStateValidator(NaN, cache)).toBeUndefined();
+    expect(createProcessStateValidator(12.5, cache)).toBeUndefined();
+  });
+
   it("returns true when descendant CPU activity is present", () => {
     const cache = createMockProcessTreeCache(new Map(), true);
     const validator = createProcessStateValidator(42, cache)!;

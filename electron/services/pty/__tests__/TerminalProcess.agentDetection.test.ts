@@ -236,6 +236,46 @@ function createPlainTerminalWithCommand(
   );
 }
 
+function createPlainTerminalWithPid(pid: number, deps?: Partial<TerminalProcessDeps>): TerminalProcess {
+  const options: TerminalProcessOptions = {
+    cwd: process.cwd(),
+    cols: 80,
+    rows: 24,
+    kind: "terminal",
+  } as TerminalProcessOptions;
+  const ctx: SpawnContext = {
+    shell: "/bin/zsh",
+    args: ["-l"],
+    env: {},
+  };
+  const mockPty = createMockPty();
+  (mockPty as { pid: number }).pid = pid;
+  return installNullForegroundSnapshot(
+    new TerminalProcess(
+      `t-pid-${pid}`,
+      options,
+      { emitData: () => {}, onExit: () => {} },
+      {
+        agentStateService: {
+          handleActivityState: () => {},
+          updateAgentState: () => {},
+          emitAgentKilled: () => {},
+          emitAgentCompleted: () => {},
+        } as unknown as TerminalProcessDeps["agentStateService"],
+        ptyPool: null,
+        processTreeCache: createMockProcessTreeCache(),
+        ...deps,
+      } as TerminalProcessDeps,
+      ctx,
+      mockPty
+    )
+  );
+}
+
+function getProcessDetector(terminal: TerminalProcess): unknown {
+  return terminal.getInfo().processDetector;
+}
+
 function getScrollback(terminal: TerminalProcess): number {
   return (terminal as unknown as { _scrollback: number })._scrollback;
 }
@@ -1393,6 +1433,51 @@ describe("TerminalProcess.handleAgentDetection — unknown/ambiguous hold state 
         getSpawnedAt(terminal)
       );
       expect(terminal.getInfo().detectedAgentId).toBe("claude");
+    } finally {
+      terminal.dispose();
+    }
+  });
+});
+
+describe("TerminalProcess — invalid PTY PID gating (#10787)", () => {
+  it("does not construct a ProcessDetector when the PID is 0 (Windows ConPTY transient)", () => {
+    const terminal = createPlainTerminalWithPid(0);
+    try {
+      expect(getProcessDetector(terminal)).toBeUndefined();
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("does not construct a ProcessDetector when the PID is negative", () => {
+    const terminal = createPlainTerminalWithPid(-1);
+    try {
+      expect(getProcessDetector(terminal)).toBeUndefined();
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("constructs a ProcessDetector for a valid positive PID", () => {
+    const terminal = createPlainTerminalWithPid(4321);
+    try {
+      expect(getProcessDetector(terminal)).toBeDefined();
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("startProcessDetector() stays a no-op while the PID is 0, then starts once it resolves", () => {
+    const terminal = createPlainTerminalWithPid(0);
+    try {
+      const pty = getMockPty(terminal);
+      (terminal as unknown as { startProcessDetector: () => void }).startProcessDetector();
+      expect(getProcessDetector(terminal)).toBeUndefined();
+
+      // Simulate ConPTY resolving the real PID, then re-trigger detection.
+      (pty as { pid: number }).pid = 9876;
+      (terminal as unknown as { startProcessDetector: () => void }).startProcessDetector();
+      expect(getProcessDetector(terminal)).toBeDefined();
     } finally {
       terminal.dispose();
     }

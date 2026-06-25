@@ -295,6 +295,30 @@ describe("routeHostEvent", () => {
     expect(state.terminalPids.get("t1")).toBe(12345);
   });
 
+  it("ignores a non-positive terminal-pid without storing or notifying (#10787)", () => {
+    const logWarn = vi.fn();
+    const { deps, state, callbacks } = makeDeps({ logWarn });
+
+    for (const pid of [0, -1]) {
+      const handled = routeHostEvent({ type: "terminal-pid", id: "t1", pid }, deps);
+      expect(handled).toBe(true);
+    }
+
+    expect(state.terminalPids.has("t1")).toBe(false);
+    expect(callbacks.terminalPidCalls).toEqual([]);
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("invalid terminal-pid"));
+  });
+
+  it("stores a valid terminal-pid arriving after a prior invalid one (#10787)", () => {
+    const { deps, state, callbacks } = makeDeps();
+
+    routeHostEvent({ type: "terminal-pid", id: "t1", pid: 0 }, deps);
+    routeHostEvent({ type: "terminal-pid", id: "t1", pid: 777 }, deps);
+
+    expect(state.terminalPids.get("t1")).toBe(777);
+    expect(callbacks.terminalPidCalls).toEqual([{ id: "t1", pid: 777 }]);
+  });
+
   it("invokes onTerminalPid with id and pid after updating the state map (#7526)", () => {
     const { deps, state, callbacks } = makeDeps();
     routeHostEvent({ type: "terminal-pid", id: "t1", pid: 4242 }, deps);
