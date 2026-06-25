@@ -506,7 +506,22 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           return null;
         }
 
-        const presetTitle = isAgent && preset ? (preset.displayTitle ?? preset.name) : title;
+        // Preset title: an explicit `displayTitle` wins verbatim; otherwise
+        // compose the agent name with the preset in brackets ("Claude [Z.ai]")
+        // so the active preset is visible next to the agent name. Pinned as
+        // "custom" below so the agent-detected title sync can't overwrite it
+        // with the bare agent name.
+        let presetTitle = title;
+        let hasPresetTitle = false;
+        if (isAgent && preset) {
+          const presetName = preset.name?.trim();
+          if (presetName) {
+            hasPresetTitle = true;
+            presetTitle = preset.displayTitle?.trim()
+              ? preset.displayTitle
+              : `${title} [${presetName}]`;
+          }
+        }
         // A caller-supplied name overrides the computed title and pins it so
         // agent detection can't rewrite it. Strip control characters (an LLM
         // assistant could emit newlines/ANSI/tabs) and collapse whitespace so
@@ -516,7 +531,9 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         const trimmedName = launchOptions?.name
           ? sanitizeTerminalName(launchOptions.name)
           : undefined;
-        const customTitle = trimmedName ? { titleMode: "custom" as const } : {};
+        // Pin any non-default title (caller name OR preset) as "custom" so the
+        // agent-detected title sync (computeDefaultTitle) can't clobber it.
+        const customTitle = trimmedName || hasPresetTitle ? { titleMode: "custom" as const } : {};
         const spawnedBy = launchOptions?.spawnedBy;
         const focusPolicy =
           launchOptions?.focusPolicy ?? (isMcpSpawnFocusSuppressed() ? "preserve" : undefined);
