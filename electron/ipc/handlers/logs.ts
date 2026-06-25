@@ -127,13 +127,15 @@ export function registerLogsHandlers(
         message: "logs:set-verbose requires a boolean",
       });
     }
-    // Verbose toggle maps to the `"*"` wildcard override so it flows through
-    // the same persistence + utility-process propagation as explicit per-module
-    // overrides. Enabling unconditionally sets `"*": "debug"`; disabling
-    // restores whatever wildcard existed before the user turned verbose on
-    // (tracked in `savedWildcardBeforeVerbose`) so a pre-existing explicit
-    // `"*": "warn"` isn't wiped by a verbose on/off cycle.
-    const current = sanitizeOverrides(store.get("logLevelOverrides") ?? {});
+    // Verbose toggle maps to the `"*"` wildcard override, but is session-only:
+    // it mutates the in-memory override map and propagates to utility processes
+    // without ever writing to disk, so the toggle genuinely "resets on app
+    // restart" (matching its subtitle). Enabling unconditionally sets
+    // `"*": "debug"`; disabling restores whatever wildcard existed before the
+    // user turned verbose on (tracked in `savedWildcardBeforeVerbose`) so a
+    // pre-existing explicit `"*": "warn"` isn't wiped by a verbose on/off cycle.
+    // Explicit per-module overrides (handleSetLevelOverrides) still persist.
+    const current = sanitizeOverrides(getLogLevelOverrides());
     if (enabled) {
       if (current["*"] !== "debug") {
         savedWildcardBeforeVerbose = current["*"] ?? null;
@@ -147,7 +149,6 @@ export function registerLogsHandlers(
       }
       savedWildcardBeforeVerbose = null;
     }
-    store.set("logLevelOverrides", current);
     setLogLevelOverrides(current);
     fanOut(current, deps);
     broadcastToRenderer(CHANNELS.LOGS_LEVEL_OVERRIDES_CHANGED, getLogLevelOverrides());

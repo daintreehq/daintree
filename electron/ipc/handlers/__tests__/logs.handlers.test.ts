@@ -1,19 +1,28 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Stateful logger mock: setLogLevelOverrides mutates `loggerState.overrides`
+// and getLogLevelOverrides reflects it, so the verbose-session-only suite can
+// assert the in-memory override map directly (no disk involved). isVerbose is
+// derived from the same state so a simulated restart (state reset, store never
+// written) reports verbose off.
+const loggerState = vi.hoisted(() => ({ overrides: {} as Record<string, string> }));
+const VALID_LEVELS = ["debug", "info", "warn", "error", "off"];
 const loggerMock = vi.hoisted(() => ({
-  isVerboseLogging: vi.fn(() => false),
+  isVerboseLogging: vi.fn(() => loggerState.overrides["*"] === "debug"),
   logInfo: vi.fn(),
   logDebug: vi.fn(),
   logWarn: vi.fn(),
   logError: vi.fn(),
   getLogFilePath: vi.fn(() => "/tmp/daintree.log"),
   getPreviousSessionTail: vi.fn(() => null),
-  getLogLevelOverrides: vi.fn(() => ({ "*": "warn" })),
+  getLogLevelOverrides: vi.fn(() => ({ ...loggerState.overrides })),
   getDefaultLogLevel: vi.fn(() => "info"),
-  setLogLevelOverrides: vi.fn(),
+  setLogLevelOverrides: vi.fn((o: Record<string, string>) => {
+    loggerState.overrides = { ...o };
+  }),
   getRegisteredLoggerNames: vi.fn(() => []),
   isValidLogOverrideLevel: vi.fn(
-    (v: unknown) => typeof v === "string" && ["debug", "info", "warn", "error", "off"].includes(v)
+    (v: unknown) => typeof v === "string" && VALID_LEVELS.includes(v)
   ),
 }));
 
@@ -55,6 +64,16 @@ vi.mock("../../../services/LogBuffer.js", () => ({
   },
 }));
 
+class FakeAppError extends Error {
+  code: string;
+  constructor(opts: { code: string; message: string }) {
+    super(opts.message);
+    this.code = opts.code;
+  }
+}
+
+vi.mock("../../../utils/errorTypes.js", () => ({ AppError: FakeAppError }));
+
 vi.mock("electron", () => ({ shell: { openPath: vi.fn() } }));
 
 import { CHANNELS } from "../../channels.js";
@@ -68,19 +87,25 @@ function getHandler(channel: string): Handler {
   return match.handler;
 }
 
-let cleanup: () => void;
-
-beforeEach(() => {
+function resetMocks() {
   vi.clearAllMocks();
   utilsMock.registered.length = 0;
-  cleanup = registerLogsHandlers();
-});
-
-afterEach(() => {
-  cleanup();
-});
+  loggerState.overrides = {};
+  storeMock.get.mockReturnValue(undefined as unknown);
+}
 
 describe("logs:write-batch handler", () => {
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    resetMocks();
+    cleanup = registerLogsHandlers();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
   it("registers the batch channel", () => {
     expect(utilsMock.registered.some((r) => r.channel === CHANNELS.LOGS_WRITE_BATCH)).toBe(true);
   });
@@ -138,6 +163,17 @@ describe("logs:write-batch handler", () => {
 });
 
 describe("logs:get-default-level handler", () => {
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    resetMocks();
+    cleanup = registerLogsHandlers();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
   it("returns the main-process effective default level", async () => {
     const handler = getHandler(CHANNELS.LOGS_GET_DEFAULT_LEVEL);
     const result = await handler();
@@ -147,13 +183,26 @@ describe("logs:get-default-level handler", () => {
 });
 
 describe("logs override-change broadcast", () => {
-  it("broadcasts the resolved overrides when set-level-overrides runs", async () => {
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    resetMocks();
+    cleanup = registerLogsHandlers();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("broadcasts the resolved in-memory overrides when set-level-overrides runs", async () => {
     const handler = getHandler(CHANNELS.LOGS_SET_LEVEL_OVERRIDES);
     await handler({ "*": "debug" });
 
+    // Broadcast payload comes from getLogLevelOverrides() — the sanitized
+    // in-memory map after the set, not the raw request.
     expect(utilsMock.broadcastToRenderer).toHaveBeenCalledWith(
       CHANNELS.LOGS_LEVEL_OVERRIDES_CHANGED,
-      { "*": "warn" } // value comes from getLogLevelOverrides() — the sanitized in-memory map
+      { "*": "debug" }
     );
   });
 
@@ -181,5 +230,138 @@ describe("logs override-change broadcast", () => {
     const handler = getHandler(CHANNELS.LOGS_WRITE);
     await handler({ level: "info", message: "hi" });
     expect(utilsMock.broadcastToRenderer).not.toHaveBeenCalled();
+  });
+});
+
+describe("registerLogsHandlers — verbose toggle is session-only", () => {
+  let cleanup: () => void;
+  let ptyClient: { setLogLevelOverrides: ReturnType<typeof vi.fn> };
+  let worktreeService: { setLogLevelOverrides: ReturnType<typeof vi.fn> };
+
+  function register() {
+    cleanup = registerLogsHandlers({
+      ptyClient: ptyClient as never,
+      worktreeService: worktreeService as never,
+    });
+  }
+
+  beforeEach(() => {
+    resetMocks();
+    ptyClient = { setLogLevelOverrides: vi.fn() };
+    worktreeService = { setLogLevelOverrides: vi.fn() };
+  });
+
+  afterEach(() => {
+    cleanup?.();
+  });
+
+  it("enabling verbose updates the in-memory map without writing to the store", async () => {
+    register();
+    storeMock.set.mockClear();
+
+    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(true);
+
+    expect(loggerState.overrides["*"]).toBe("debug");
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("enabling verbose fans out the override to utility processes", async () => {
+    register();
+
+    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(true);
+
+    expect(ptyClient.setLogLevelOverrides).toHaveBeenCalledWith(
+      expect.objectContaining({ "*": "debug" })
+    );
+    expect(worktreeService.setLogLevelOverrides).toHaveBeenCalledWith(
+      expect.objectContaining({ "*": "debug" })
+    );
+  });
+
+  it("disabling verbose updates memory without writing to the store", async () => {
+    register();
+    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(true);
+    storeMock.set.mockClear();
+
+    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(false);
+
+    expect(loggerState.overrides["*"]).toBeUndefined();
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("an on/off cycle preserves a pre-existing explicit wildcard override", async () => {
+    // Persisted explicit "*":"warn" (e.g. from the per-module overrides UI).
+    storeMock.get.mockReturnValue({ "*": "warn" });
+    register();
+    expect(loggerState.overrides["*"]).toBe("warn");
+
+    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(true);
+    expect(loggerState.overrides["*"]).toBe("debug");
+
+    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(false);
+    expect(loggerState.overrides["*"]).toBe("warn");
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("double-enable does not clobber the saved prior wildcard", async () => {
+    storeMock.get.mockReturnValue({ "*": "warn" });
+    register();
+
+    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(true);
+    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(true);
+    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(false);
+
+    // The "warn" stashed on first enable must survive the redundant enable.
+    expect(loggerState.overrides["*"]).toBe("warn");
+  });
+
+  it("preserves non-wildcard per-module overrides through a verbose cycle", async () => {
+    storeMock.get.mockReturnValue({ "main:Foo": "warn" });
+    register();
+
+    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(true);
+    expect(loggerState.overrides).toEqual({ "main:Foo": "warn", "*": "debug" });
+
+    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(false);
+    expect(loggerState.overrides).toEqual({ "main:Foo": "warn" });
+  });
+
+  it("verbose does not survive a simulated restart", async () => {
+    register();
+    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(true);
+    expect(loggerState.overrides["*"]).toBe("debug");
+
+    // Restart: a fresh process re-hydrates from disk, which was never written.
+    cleanup?.();
+    loggerState.overrides = {};
+    utilsMock.registered.length = 0;
+    storeMock.get.mockReturnValue({});
+    register();
+
+    const verbose = await getHandler(CHANNELS.LOGS_GET_VERBOSE)();
+    expect(verbose).toBe(false);
+    expect(loggerState.overrides["*"]).toBeUndefined();
+  });
+
+  it("rejects a non-boolean payload without mutating state or store", async () => {
+    register();
+    storeMock.set.mockClear();
+
+    await expect(getHandler(CHANNELS.LOGS_SET_VERBOSE)("yes")).rejects.toBeInstanceOf(FakeAppError);
+    expect(loggerState.overrides["*"]).toBeUndefined();
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("explicit per-module overrides still persist to the store", async () => {
+    register();
+    storeMock.set.mockClear();
+
+    await getHandler(CHANNELS.LOGS_SET_LEVEL_OVERRIDES)({ "main:Foo": "warn", "*": "debug" });
+
+    expect(storeMock.set).toHaveBeenCalledWith("logLevelOverrides", {
+      "main:Foo": "warn",
+      "*": "debug",
+    });
+    expect(loggerState.overrides).toEqual({ "main:Foo": "warn", "*": "debug" });
   });
 });
