@@ -171,7 +171,9 @@ export class TerminalRegistry {
 
     const processIds = projectTerminals
       .map((t) => t.getPtyProcess().pid)
-      .filter((pid): pid is number => pid !== undefined);
+      // Exclude the transient Windows ConPTY `pid: 0` (#10787) so it never
+      // leaks into project stats consumers.
+      .filter((pid): pid is number => Number.isInteger(pid) && pid > 0);
 
     const terminalTypes = projectTerminals.reduce(
       (acc, t) => {

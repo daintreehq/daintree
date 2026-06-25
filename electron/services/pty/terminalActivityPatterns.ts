@@ -138,7 +138,7 @@ export function createProcessStateValidator(
   ptyPid: number | undefined,
   processTreeCache: ProcessTreeCache | null
 ): ProcessStateValidator | undefined {
-  if (ptyPid === undefined || !processTreeCache) {
+  if (ptyPid === undefined || !Number.isInteger(ptyPid) || ptyPid <= 0 || !processTreeCache) {
     return undefined;
   }
 

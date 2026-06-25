@@ -22,6 +22,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     submit: vi.fn(),
     resize: vi.fn(),
     spawn: vi.fn(),
+    startProcessDetectorForTerminal: vi.fn(),
     kill: vi.fn(),
     trash: vi.fn(),
     restore: vi.fn(),
@@ -134,6 +135,37 @@ describe("lifecycle kill handlers — trackKilledPid", () => {
     expect(ctx.resourceGovernor.trackKilledPid).not.toHaveBeenCalled();
   });
 
+  it("kill does not track when PID is 0 (Windows ConPTY transient, #10787)", () => {
+    const ctx = makeCtx();
+    (ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>).mockReturnValue(termInfo(0));
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "kill", id: "t1", reason: "test" });
+
+    expect(ctx.ptyManager.kill).toHaveBeenCalledWith("t1", "test");
+    expect(ctx.resourceGovernor.trackKilledPid).not.toHaveBeenCalled();
+  });
+
+  it("kill-by-project skips PID 0 and undefined, tracks only valid PIDs (#10787)", () => {
+    const ctx = makeCtx();
+    (ctx.ptyManager.getTerminalsForProject as ReturnType<typeof vi.fn>).mockReturnValue([
+      "t1",
+      "t2",
+      "t3",
+    ]);
+    (ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(termInfo(0)) // transient ConPTY PID
+      .mockReturnValueOnce(termInfo(500))
+      .mockReturnValueOnce(termInfo()); // no PID
+    (ctx.ptyManager.killByProject as ReturnType<typeof vi.fn>).mockReturnValue(3);
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "kill-by-project", projectId: "proj-1", requestId: "r1" });
+
+    expect(ctx.resourceGovernor.trackKilledPid).toHaveBeenCalledTimes(1);
+    expect(ctx.resourceGovernor.trackKilledPid).toHaveBeenCalledWith(500);
+  });
+
   it("kill-by-project tracks all PIDs", () => {
     const ctx = makeCtx();
     (ctx.ptyManager.getTerminalsForProject as ReturnType<typeof vi.fn>).mockReturnValue([
@@ -243,5 +275,101 @@ describe("lifecycle kill handlers — trackKilledPid", () => {
     await dispatch({ type: "graceful-kill-by-project", projectId: "empty", requestId: "r1" });
 
     expect(ctx.resourceGovernor.trackKilledPid).not.toHaveBeenCalled();
+  });
+});
+
+describe("lifecycle spawn — terminal-pid gating and deferred retry (#10787)", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  function getMock(ctx: HostContext) {
+    return ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>;
+  }
+
+  it("emits terminal-pid immediately when the PID is valid (no retry)", () => {
+    const ctx = makeCtx();
+    getMock(ctx).mockReturnValue(termInfo(1234));
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: {} });
+
+    expect(ctx.sendEvent).toHaveBeenCalledWith({ type: "terminal-pid", id: "t1", pid: 1234 });
+    // Detector is started by the spawn path itself, not the deferred retry.
+    expect(ctx.ptyManager.startProcessDetectorForTerminal).not.toHaveBeenCalled();
+  });
+
+  it("does not emit terminal-pid with a transient 0 PID; defers instead", () => {
+    const ctx = makeCtx();
+    getMock(ctx).mockReturnValue(termInfo(0));
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: {} });
+
+    expect(ctx.sendEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "terminal-pid" })
+    );
+  });
+
+  it("recovers the real PID via deferred retry, then emits and starts detection", async () => {
+    vi.useFakeTimers();
+    const ctx = makeCtx();
+    getMock(ctx)
+      .mockReturnValueOnce(termInfo(0)) // synchronous spawn read
+      .mockReturnValueOnce(termInfo(0)) // retry attempt 0 — still resolving
+      .mockReturnValue(termInfo(4321)); // retry attempt 1 — ConPTY resolved
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: {} });
+    await vi.runAllTimersAsync();
+
+    expect(ctx.sendEvent).toHaveBeenCalledWith({ type: "terminal-pid", id: "t1", pid: 4321 });
+    expect(ctx.ptyManager.startProcessDetectorForTerminal).toHaveBeenCalledTimes(1);
+    expect(ctx.ptyManager.startProcessDetectorForTerminal).toHaveBeenCalledWith("t1");
+    // The transient 0 must never have been emitted at any point.
+    const pidEvents = (ctx.sendEvent as ReturnType<typeof vi.fn>).mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.type === "terminal-pid");
+    expect(pidEvents).toEqual([{ type: "terminal-pid", id: "t1", pid: 4321 }]);
+  });
+
+  it("abandons the retry if the terminal disappears before the PID resolves", async () => {
+    vi.useFakeTimers();
+    const ctx = makeCtx();
+    getMock(ctx)
+      .mockReturnValueOnce(termInfo(0)) // synchronous spawn read
+      .mockReturnValue(undefined); // killed/trashed before retry fires
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: {} });
+    await vi.runAllTimersAsync();
+
+    expect(ctx.sendEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "terminal-pid" })
+    );
+    expect(ctx.ptyManager.startProcessDetectorForTerminal).not.toHaveBeenCalled();
+  });
+
+  it("gives up after the retry cap when the PID never resolves", async () => {
+    vi.useFakeTimers();
+    const ctx = makeCtx();
+    getMock(ctx).mockReturnValue(termInfo(0)); // never resolves
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: {} });
+    await vi.runAllTimersAsync();
+
+    expect(ctx.sendEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "terminal-pid" })
+    );
+    expect(ctx.ptyManager.startProcessDetectorForTerminal).not.toHaveBeenCalled();
+    // Bounded: spawn read + at most PID_RETRY_MAX_ATTEMPTS (20) polls.
+    expect(getMock(ctx).mock.calls.length).toBeLessThanOrEqual(21);
   });
 });

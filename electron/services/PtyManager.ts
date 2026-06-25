@@ -899,6 +899,17 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
+   * Start the process detector for a single terminal.
+   * Used by the pty-host deferred-PID retry: on Windows, node-pty reports
+   * `pid: 0` during the ConPTY connect() window, so detection is skipped at
+   * spawn time and re-triggered here once a real PID resolves. Idempotent —
+   * `startProcessDetector()` no-ops if a detector already exists.
+   */
+  startProcessDetectorForTerminal(id: string): void {
+    this.registry.get(id)?.startProcessDetector();
+  }
+
+  /**
    * Set activity monitoring tier (active vs background).
    */
   setActivityMonitorTier(
