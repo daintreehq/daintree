@@ -638,6 +638,20 @@ const loggerStringify = configure({ bigint: false });
 
 const SENSITIVE_KEY_PATTERNS = ["secret", "token", "password", "key"];
 
+// Bounds for `redactSensitiveData`. Context objects are deep-cloned into the
+// 500-entry in-memory ring (LogBuffer); without caps a single stack trace,
+// diff, or worktree snapshot accumulates unbounded. These clamp per-entry cost
+// — depth × array-items × string-chars ≈ 200KB worst case — mirroring the
+// per-field clamping runHistoryLog applies to its persisted records.
+const MAX_REDACT_DEPTH = 5;
+const MAX_REDACT_STRING_CHARS = 2000;
+const MAX_REDACT_ARRAY_ITEMS = 20;
+
+function clampLogString(value: string): string {
+  if (value.length <= MAX_REDACT_STRING_CHARS) return value;
+  return `${value.slice(0, MAX_REDACT_STRING_CHARS)}[…+${value.length - MAX_REDACT_STRING_CHARS}]`;
+}
+
 function safeStringify(value: unknown): string {
   try {
     return loggerStringify(
@@ -846,8 +860,12 @@ function writeToLogFile(level: string, message: string, contextStr: string): voi
 
 function redactSensitiveData(
   obj: Record<string, unknown>,
-  visited = new WeakSet<object>()
+  visited = new WeakSet<object>(),
+  depth = 0
 ): Record<string, unknown> {
+  if (depth >= MAX_REDACT_DEPTH) {
+    return "[MaxDepth]" as unknown as Record<string, unknown>;
+  }
   if (visited.has(obj)) {
     return "[Circular]" as unknown as Record<string, unknown>;
   }
@@ -861,10 +879,12 @@ function redactSensitiveData(
       SENSITIVE_KEY_PATTERNS.some((pattern) => lowerKey.includes(pattern))
     ) {
       result[key] = "[redacted]";
+    } else if (typeof value === "string") {
+      result[key] = clampLogString(value);
     } else if (Array.isArray(value)) {
-      result[key] = redactArrayWithCycleDetection(value, visited);
+      result[key] = redactArrayWithCycleDetection(value, visited, depth + 1);
     } else if (value !== null && typeof value === "object") {
-      result[key] = redactSensitiveData(value as Record<string, unknown>, visited);
+      result[key] = redactSensitiveData(value as Record<string, unknown>, visited, depth + 1);
     } else {
       result[key] = value;
     }
@@ -872,24 +892,37 @@ function redactSensitiveData(
   return result;
 }
 
-function redactArrayWithCycleDetection(arr: unknown[], visited: WeakSet<object>): unknown[] {
+function redactArrayWithCycleDetection(
+  arr: unknown[],
+  visited: WeakSet<object>,
+  depth: number
+): unknown[] {
   if (visited.has(arr)) {
     return "[Circular]" as unknown as unknown[];
   }
   visited.add(arr);
 
-  return arr.map((item) => {
+  const capped = arr.length > MAX_REDACT_ARRAY_ITEMS;
+  const items = capped ? arr.slice(0, MAX_REDACT_ARRAY_ITEMS) : arr;
+  const mapped = items.map((item) => {
     if (item === null) {
       return item;
     }
+    if (typeof item === "string") {
+      return clampLogString(item);
+    }
     if (Array.isArray(item)) {
-      return redactArrayWithCycleDetection(item, visited);
+      return redactArrayWithCycleDetection(item, visited, depth + 1);
     }
     if (typeof item === "object") {
-      return redactSensitiveData(item as Record<string, unknown>, visited);
+      return redactSensitiveData(item as Record<string, unknown>, visited, depth + 1);
     }
     return item;
   });
+  if (capped) {
+    mapped.push(`[...${arr.length - MAX_REDACT_ARRAY_ITEMS} more]`);
+  }
+  return mapped;
 }
 
 function emit(source: string, level: LogLevel, message: string, context?: LogContext): void {
@@ -933,14 +966,15 @@ function emitError(source: string, message: string, error?: unknown, context?: L
   });
 
   sendLogToRenderer(entry);
-  writeToLogFile("ERROR", message, safeStringify(safeContext));
+  // Stringify the merged, redacted context once and share it between the file
+  // and console transports — `safeContext` already folds in `errorDetails`, so
+  // the console path no longer re-serializes/re-scrubs the error and context
+  // separately (and now inherits key-redaction it previously skipped).
+  const contextStr = safeStringify(safeContext);
+  writeToLogFile("ERROR", message, contextStr);
 
   if (!IS_TEST) {
-    console.error(
-      `[ERROR] [${source}] ${scrubSecrets(message)}`,
-      errorDetails ? scrubSecrets(safeStringify(errorDetails)) : "",
-      context ? scrubSecrets(safeStringify(context)) : ""
-    );
+    console.error(`[ERROR] [${source}] ${scrubSecrets(message)}`, scrubSecrets(contextStr));
   }
 }
 

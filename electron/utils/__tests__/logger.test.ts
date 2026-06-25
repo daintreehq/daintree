@@ -485,6 +485,89 @@ describe("logger", () => {
     });
   });
 
+  describe("redactSensitiveData bounds", () => {
+    beforeEach(() => {
+      logBuffer.clear();
+    });
+
+    function lastContext(): Record<string, unknown> | undefined {
+      const entries = logBuffer.getAll();
+      return entries[entries.length - 1]?.context as Record<string, unknown> | undefined;
+    }
+
+    it("truncates long string values and the dropped count accounts for the whole string", () => {
+      const original = "a".repeat(5000);
+      logInfo("trace captured", { stack: original });
+
+      const stack = lastContext()?.stack as string;
+      const match = stack.match(/^(a+)\[…\+(\d+)\]$/);
+      expect(match).not.toBeNull();
+      const keptLength = match![1].length;
+      const dropped = Number(match![2]);
+      // Invariant: kept prefix + reported dropped count === original length.
+      expect(keptLength + dropped).toBe(original.length);
+      expect(stack.length).toBeLessThan(original.length);
+    });
+
+    it("leaves short string values untouched", () => {
+      logInfo("ok", { note: "short value" });
+      expect(lastContext()?.note).toBe("short value");
+    });
+
+    it("replaces objects nested beyond the depth limit with a sentinel", () => {
+      let node: Record<string, unknown> = { leaf: "value" };
+      for (let i = 0; i < 12; i++) {
+        node = { child: node };
+      }
+      logInfo("deep", node);
+
+      // Walk down until the recursion was cut; the sentinel must appear before
+      // we reach the original 12-deep leaf.
+      let current: unknown = lastContext();
+      let walked = 0;
+      while (
+        current !== null &&
+        typeof current === "object" &&
+        "child" in (current as Record<string, unknown>)
+      ) {
+        current = (current as Record<string, unknown>).child;
+        walked++;
+        if (walked > 20) break;
+      }
+      expect(current).toBe("[MaxDepth]");
+      expect(walked).toBeLessThan(12);
+    });
+
+    it("caps long arrays and the remaining-count marker matches what was dropped", () => {
+      const items = Array.from({ length: 50 }, (_, i) => `item-${i}`);
+      logInfo("list", { items });
+
+      const capped = lastContext()?.items as unknown[];
+      const marker = capped[capped.length - 1] as string;
+      const match = marker.match(/^\[\.\.\.(\d+) more\]$/);
+      expect(match).not.toBeNull();
+      const dropped = Number(match![1]);
+      const kept = capped.length - 1;
+      // Invariant: kept items + reported dropped count === original length.
+      expect(kept + dropped).toBe(items.length);
+      expect(capped.length).toBeLessThan(items.length);
+    });
+
+    it("truncates long string values inside arrays", () => {
+      const original = "b".repeat(5000);
+      logInfo("array strings", { lines: [original] });
+
+      const lines = lastContext()?.lines as string[];
+      expect(lines[0]).toMatch(/^b+\[…\+\d+\]$/);
+      expect(lines[0].length).toBeLessThan(original.length);
+    });
+
+    it("still redacts sensitive keys even when their value is long", () => {
+      logInfo("auth", { token: "x".repeat(5000) });
+      expect(lastContext()?.token).toBe("[redacted]");
+    });
+  });
+
   describe("pruneOldLogsAsync", () => {
     const logsDir = join(TEST_LOG_DIR, "logs");
     const debugDir = join(TEST_LOG_DIR, "debug");
