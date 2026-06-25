@@ -2236,13 +2236,16 @@ describe("HelpPanel — + New session destructive reset", () => {
   });
 });
 
-// The footer "pinned terminal dead" danger indicator must track real tool-call
-// reachability — a live grid terminal to dispatch into — not whether the
-// frozen provision-time pinned terminal id still exists (#10431). Tool calls
-// re-resolve their target at dispatch time, so the pinned id going stale is not
-// a failure; only the absence of any live grid terminal is.
-describe("HelpPanel — pinned-terminal danger tracks live grid reachability (#10431)", () => {
+// The footer pinned-context indicator is a quiet, neutral ambient signal — it
+// never paints the row red or parks a destructive "Start new session" button
+// just because no live grid terminal remains (#10792). Closing every grid
+// terminal is a normal action: tool calls re-resolve their target at dispatch
+// time and the dock-hosted chat keeps working, so it's not a failure. Recovery
+// lives on the header's "Start new session" button. These tests defend against
+// reintroducing the old false-alarm danger state (the prior #10431 behavior).
+describe("HelpPanel — pinned-terminal state stays a quiet neutral indicator (#10792)", () => {
   const DANGER_BUTTON_TITLE = "No open terminal to receive tool calls — start a new session";
+  const PINNED_LABEL = "main · main";
 
   function dockAssistantTerminal() {
     // The assistant runs in the dock; it is never a tool-call target, so it must
@@ -2304,7 +2307,7 @@ describe("HelpPanel — pinned-terminal danger tracks live grid reachability (#1
     expect(container.querySelector(".text-status-danger")).toBeNull();
   });
 
-  it("flags danger and offers a new session when no live grid terminal remains", async () => {
+  it("stays neutral — no danger button — when no live grid terminal remains", async () => {
     setupPinnedSession({
       // Only the dock assistant terminal exists — no grid target to reach.
       "assistant-term": dockAssistantTerminal(),
@@ -2312,10 +2315,11 @@ describe("HelpPanel — pinned-terminal danger tracks live grid reachability (#1
 
     const { container } = await renderResolved();
 
-    const button = container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`);
-    expect(button).not.toBeNull();
-    expect(button!.textContent).toContain("Start new session");
-    expect(container.querySelector(".text-status-danger")).not.toBeNull();
+    // The pinned label still renders, but quietly: no danger tint, no footer
+    // "Start new session" button (recovery lives on the header).
+    expect(container.textContent).toContain(PINNED_LABEL);
+    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).toBeNull();
+    expect(container.querySelector(".text-status-danger")).toBeNull();
   });
 
   it("does not flag danger when a dead and a live grid terminal both exist", async () => {
@@ -2347,7 +2351,7 @@ describe("HelpPanel — pinned-terminal danger tracks live grid reachability (#1
     expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).toBeNull();
   });
 
-  it("flags danger when the only grid terminal has exited", async () => {
+  it("stays neutral when the only grid terminal has exited", async () => {
     setupPinnedSession({
       "assistant-term": dockAssistantTerminal(),
       "dead-grid": {
@@ -2363,10 +2367,12 @@ describe("HelpPanel — pinned-terminal danger tracks live grid reachability (#1
 
     const { container } = await renderResolved();
 
-    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).not.toBeNull();
+    expect(container.textContent).toContain(PINNED_LABEL);
+    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).toBeNull();
+    expect(container.querySelector(".text-status-danger")).toBeNull();
   });
 
-  it("flags danger when the only grid terminal is a missing-cli gate (no backing PTY)", async () => {
+  it("stays neutral when the only grid terminal is a missing-cli gate (no backing PTY)", async () => {
     setupPinnedSession({
       "assistant-term": dockAssistantTerminal(),
       // A `missing-cli` gate panel looks otherwise live (no exitCode/runtimeStatus)
@@ -2382,7 +2388,9 @@ describe("HelpPanel — pinned-terminal danger tracks live grid reachability (#1
 
     const { container } = await renderResolved();
 
-    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).not.toBeNull();
+    expect(container.textContent).toContain(PINNED_LABEL);
+    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).toBeNull();
+    expect(container.querySelector(".text-status-danger")).toBeNull();
   });
 
   it("does not flag danger when pinnedContext has no terminal id", async () => {

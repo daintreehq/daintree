@@ -8,13 +8,12 @@ import type { TurnOutcomeAlertClass } from "@shared/types/ipc/mcpServer";
  */
 const OUTCOME_COPY: Record<TurnOutcomeAlertClass, { label: string; title: string }> = {
   "agent-stuck": {
-    label: "Agent stuck",
-    title: "Agent appears stuck — it went idle without resolving its turn. Click to dismiss.",
+    label: "Stopped early",
+    title: "Assistant stopped early without finishing the turn. Click to dismiss.",
   },
   "reasoning-loop": {
-    label: "Reasoning loop",
-    title:
-      "Reasoning loop detected — the agent kept repeating the same tool call. Click to dismiss.",
+    label: "Repeating steps",
+    title: "Assistant kept repeating the same step. Click to dismiss.",
   },
 };
 

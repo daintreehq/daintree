@@ -26,7 +26,6 @@ import { HelpPanelBanners } from "./HelpPanelBanners";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
 import { HelpLaunchingState } from "./HelpLaunchingState";
 import { McpActivityStrip } from "./McpActivityStrip";
-import { McpAnomalyFooterLink } from "./McpAnomalyFooterLink";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { TurnOutcomePip } from "./TurnOutcomePip";
 import { FigureRail } from "./FigureRail";
@@ -52,7 +51,7 @@ import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { TerminalRefreshTier } from "@/types";
 import { CLOSE_CONFIRM_AGENT_STATES } from "@shared/types/agent";
-import { isGridPanelLocation, isPtyPanel } from "@shared/types/panel";
+import { isPtyPanel } from "@shared/types/panel";
 import type { PinnedActionContextSnapshot } from "@shared/types/ipc/help";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
@@ -250,30 +249,11 @@ export function HelpPanel({
   const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);
   // Tool calls re-resolve their target terminal live at dispatch time, so the
   // frozen provision-time `pinnedContext.terminalId` going stale doesn't mean
-  // they can't reach anything. Danger only when a pinned session has no live
-  // grid terminal left to dispatch into; warning when the user has since
-  // focused a different worktree than the one the session is bound to. Danger
-  // wins — nowhere to reach is the more urgent mismatch. The dock-hosted
-  // assistant terminal is excluded — it's never a tool-call target.
-  const hasAnyLiveGridPty = usePanelStore((s) =>
-    s.panelIds.some((id) => {
-      const p = s.panelsById[id];
-      return (
-        p != null &&
-        isPtyPanel(p) &&
-        isGridPanelLocation(p.location) &&
-        // `missing-cli`/`failed` gate panels are UI placeholders with no backing
-        // PTY — they can't receive a dispatched command.
-        p.spawnStatus !== "missing-cli" &&
-        p.spawnStatus !== "failed" &&
-        p.hasPty !== false &&
-        p.exitCode === undefined &&
-        p.runtimeStatus !== "exited" &&
-        p.runtimeStatus !== "error"
-      );
-    })
-  );
-  const isPinnedTerminalDead = pinnedContext?.terminalId != null && !hasAnyLiveGridPty;
+  // they can't reach anything. The only recoverable mismatch worth surfacing in
+  // the footer is divergence: the user focused a different worktree than the one
+  // the session is bound to, fixable in one click. (Closing every grid terminal
+  // is a normal action, not a failure — the dock-hosted chat keeps working — so
+  // it no longer paints the footer red; #10792.)
   const isPinnedWorktreeDiverged =
     pinnedContext?.worktreeId != null &&
     focusedWorktreeId !== null &&
@@ -1269,16 +1249,18 @@ export function HelpPanel({
         <div className="flex items-center justify-between gap-3 border-t border-daintree-border shrink-0 px-3 py-1.5 text-[11px] text-daintree-text/40">
           <span className="flex items-center gap-2 min-w-0">
             <McpActivityStrip sessionId={sessionId} activity={session.mcpActivity} />
-            <McpAnomalyFooterLink />
             <TurnOutcomePip outcome={session.outcomeAlert} onDismiss={dismissOutcomeAlert} />
           </span>
           <span className="flex items-center gap-2 min-w-0 shrink-0 max-w-[70%]">
             {pinnedContext &&
               // A diverged worktree is recoverable in one click — switch focus
-              // back to the worktree the session is pinned to. A dead terminal
-              // can't be fixed by switching, so it stays a passive indicator and
-              // surfaces a "Start new session" button beside it (#10017).
-              (isPinnedWorktreeDiverged && !isPinnedTerminalDead ? (
+              // back to the worktree the session is pinned to. A pinned terminal
+              // with no live grid target is no longer a failure to shout about:
+              // tool calls re-resolve at dispatch time and the dock-hosted chat
+              // keeps working, so it stays a quiet neutral indicator. The
+              // recovery path lives on the header's "Start new session" button
+              // (#10792).
+              (isPinnedWorktreeDiverged ? (
                 <button
                   type="button"
                   onClick={() => {
@@ -1306,22 +1288,12 @@ export function HelpPanel({
                 </button>
               ) : (
                 <span
-                  className={cn(
-                    "flex items-center gap-1.5 min-w-0",
-                    isPinnedTerminalDead ? "text-status-danger" : undefined
-                  )}
-                  title={
-                    isPinnedTerminalDead
-                      ? "No open terminal can receive this assistant's tool calls."
-                      : "Assistant tool calls are pinned to this worktree and terminal."
-                  }
+                  className="flex items-center gap-1.5 min-w-0"
+                  title="Assistant tool calls are pinned to this worktree and terminal."
                 >
                   <span
                     aria-hidden
-                    className={cn(
-                      "w-1.5 h-1.5 rounded-full shrink-0",
-                      isPinnedTerminalDead ? "bg-status-danger" : "bg-daintree-text/30"
-                    )}
+                    className="w-1.5 h-1.5 rounded-full shrink-0 bg-daintree-text/30"
                   />
                   <span className="truncate">
                     {[pinnedContext.worktreeName, pinnedContext.worktreeBranch]
@@ -1330,20 +1302,6 @@ export function HelpPanel({
                   </span>
                 </span>
               ))}
-            {isPinnedTerminalDead && (
-              <button
-                type="button"
-                onClick={handleNewSession}
-                className={cn(
-                  "flex items-center shrink-0 px-1.5 py-0.5 rounded-[var(--radius-sm)] text-[11px] font-medium",
-                  "bg-status-danger/10 text-status-danger hover:bg-status-danger/15 transition-colors duration-150",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
-                )}
-                title="No open terminal to receive tool calls — start a new session"
-              >
-                Start new session
-              </button>
-            )}
             {agentId === "daintree-assistant" ? (
               // The Daintree Assistant is the workspace's own conductor, so the
               // brand mark already says "Daintree" — pairing it with just
