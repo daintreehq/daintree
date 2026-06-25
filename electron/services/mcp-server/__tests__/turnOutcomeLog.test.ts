@@ -884,14 +884,20 @@ describe("TurnOutcomeService.pruneByAge (#10776)", () => {
     expect(f.logStore.write).not.toHaveBeenCalled();
   });
 
-  it("retains records with a non-numeric timestamp rather than dropping them", () => {
+  it("retains records with a non-finite timestamp rather than dropping them", () => {
     const now = Date.now();
     const f = makeFixture({
-      initialLog: [seedRecord(undefined), seedRecord(now - 90 * DAY), seedRecord(now - 1 * DAY)],
+      initialLog: [
+        seedRecord(undefined),
+        seedRecord(-Infinity),
+        seedRecord(now - 90 * DAY),
+        seedRecord(now - 1 * DAY),
+      ],
     });
     f.service.pruneByAge(30);
     const ids = f.service.getRecords().map((r) => r.id);
     expect(ids).toContain("r-undefined");
+    expect(ids).toContain("r--Infinity");
     expect(ids).toContain(`r-${now - 1 * DAY}`);
     expect(ids).not.toContain(`r-${now - 90 * DAY}`);
   });

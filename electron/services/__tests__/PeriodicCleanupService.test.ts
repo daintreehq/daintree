@@ -242,6 +242,21 @@ describe("PeriodicCleanupService", () => {
     service.dispose();
   });
 
+  it("skips audit pruning when the stored retention is a corrupt non-number (#10776)", async () => {
+    mockStoreGet.mockImplementation((key: string) =>
+      key === "helpAssistant"
+        ? ({ auditRetention: "7" } as unknown as { auditRetention: number })
+        : { logRetentionDays: 30 }
+    );
+    const service = new PeriodicCleanupService();
+    await service.tick();
+
+    // A stringly-typed value coerces to `"7" > 0 === true`, so guard on the
+    // type, not just the comparison — otherwise prune is a silent no-op.
+    expect(mockPruneAuditByRetention).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
   it("isolates an audit-prune failure so the other routines still run (#10776)", async () => {
     mockPruneAuditByRetention.mockImplementation(() => {
       throw new Error("prune boom");

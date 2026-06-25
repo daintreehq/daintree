@@ -127,7 +127,11 @@ class PeriodicCleanupService {
       // each pass — the user may change it mid-session. Lazy-import the MCP
       // singleton so this maintenance file never forces it to construct early.
       const retentionDays = store.get("helpAssistant")?.auditRetention ?? 7;
-      if (retentionDays > 0) {
+      if (
+        typeof retentionDays === "number" &&
+        Number.isFinite(retentionDays) &&
+        retentionDays > 0
+      ) {
         const { mcpServerService } = await import("./McpServerService.js");
         mcpServerService.pruneAuditByRetention(retentionDays);
       }

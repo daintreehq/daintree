@@ -547,7 +547,7 @@ export class TurnOutcomeService {
     const cutoff = Date.now() - retentionDays * 86_400_000;
     const before = this.records.length;
     this.records = this.records.filter(
-      (r) => !(typeof r.timestamp === "number" && r.timestamp < cutoff)
+      (r) => !(Number.isFinite(r.timestamp) && r.timestamp < cutoff)
     );
     if (this.records.length !== before) {
       this.flushNow();

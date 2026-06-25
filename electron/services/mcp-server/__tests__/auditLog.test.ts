@@ -1215,18 +1215,36 @@ describe("AuditService.pruneByAge (#10776)", () => {
     expect(logStore.write).not.toHaveBeenCalled();
   });
 
-  it("retains records with a non-numeric timestamp rather than dropping them", () => {
+  it("retains records with a non-finite timestamp rather than dropping them", () => {
     const now = Date.now();
     const { service } = makeFixture({}, [
       seedRecord(undefined),
+      seedRecord(-Infinity),
+      seedRecord(NaN),
       seedRecord(now - 30 * DAY),
       seedRecord(now - 1 * DAY),
     ]);
     service.pruneByAge(7);
     const ids = service.getRecords().map((r) => r.id);
-    // The malformed-timestamp record is kept; only the genuinely-old one drops.
+    // Malformed-timestamp records are kept (even -Infinity, which is typeof
+    // "number" but not finite); only the genuinely-old one drops.
     expect(ids).toContain("r-undefined");
+    expect(ids).toContain("r--Infinity"); // seedRecord(-Infinity) → `r-${String(-Infinity)}`
+    expect(ids).toContain("r-NaN");
     expect(ids).toContain(`r-${now - 1 * DAY}`);
     expect(ids).not.toContain(`r-${now - 30 * DAY}`);
+  });
+
+  it("flushes the pruned ring to the log store, not just the in-memory view", () => {
+    const now = Date.now();
+    const { service, getPersistedLog } = makeFixture({}, [
+      seedRecord(now - 40 * DAY),
+      seedRecord(now - 1 * DAY),
+    ]);
+    service.pruneByAge(7);
+    const persistedIds = getPersistedLog().map((r) => (r as { id: string }).id);
+    // The flushed payload reflects the prune, so a reload won't resurrect the
+    // dropped record.
+    expect(persistedIds).toEqual([`r-${now - 1 * DAY}`]);
   });
 });

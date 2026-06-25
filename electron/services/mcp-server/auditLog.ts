@@ -659,9 +659,19 @@ export class AuditService {
     const cutoff = Date.now() - retentionDays * 86_400_000;
     const before = this.records.length;
     this.records = this.records.filter(
-      (r) => !(typeof r.timestamp === "number" && r.timestamp < cutoff)
+      (r) => !(Number.isFinite(r.timestamp) && r.timestamp < cutoff)
     );
     if (this.records.length !== before) {
+      // If the pre-auth coalesce target was pruned, reset the coalesce state so
+      // the next 401 writes a fresh record rather than mutating a vanished one —
+      // mirrors the eviction reset in `enqueueAndTrim`.
+      if (
+        this.lastPreAuthRecordId !== null &&
+        !this.records.some((r) => r.id === this.lastPreAuthRecordId)
+      ) {
+        this.lastPreAuthRecordId = null;
+        this.lastPreAuthRecordAt = 0;
+      }
       this.flushNow();
     }
   }
