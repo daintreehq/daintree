@@ -6,8 +6,7 @@ import { notifyError } from "../../ipc/errorHandlers.js";
 import { clearWslGitEntry } from "../../store.js";
 import { gitServiceCache } from "../GitServiceCache.js";
 import { type ProcessEntry, type CopyTreeProgressCallback, sendToEntryWindows } from "./types.js";
-import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
-import type { WorktreeState } from "../../../shared/types/worktree.js";
+import type { WorkspaceHostEvent, WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 
 export type EmitFn = (event: string | symbol, ...args: unknown[]) => boolean;
 
@@ -44,7 +43,7 @@ export class WorkspaceHostEventRouter {
   private emfileLimitToastSent = false;
   private cloudTeardownFailureToastKeys = new Set<string>();
 
-  private pendingSysWorktreeUpdates = new Map<string, WorktreeState>();
+  private pendingSysWorktreeUpdates = new Map<string, WorktreeSnapshot>();
   private sysWorktreeUpdateTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
 
@@ -380,7 +379,7 @@ export class WorkspaceHostEventRouter {
    * pending entry without an armed drain timer would strand until the next
    * event).
    */
-  private queueSysWorktreeUpdate(worktree: WorktreeState): void {
+  private queueSysWorktreeUpdate(worktree: WorktreeSnapshot): void {
     if (this.disposed) return;
     const key = worktree.worktreeId || path.resolve(worktree.path ?? "");
     this.pendingSysWorktreeUpdates.set(key, worktree);
