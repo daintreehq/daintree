@@ -17,7 +17,7 @@ import {
   type LogLevel,
 } from "../../utils/logger.js";
 import type { FilterOptions as LogFilterOptions } from "../../services/LogBuffer.js";
-import { typedHandle } from "../utils.js";
+import { typedHandle, broadcastToRenderer } from "../utils.js";
 import { store } from "../../store.js";
 import { AppError } from "../../utils/errorTypes.js";
 import type { HandlerDependencies } from "../types.js";
@@ -148,6 +148,7 @@ export function registerLogsHandlers(
     store.set("logLevelOverrides", current);
     setLogLevelOverrides(current);
     fanOut(current, deps);
+    broadcastToRenderer(CHANNELS.LOGS_LEVEL_OVERRIDES_CHANGED, getLogLevelOverrides());
     logInfo(`Verbose logging ${enabled ? "enabled" : "disabled"} by user`);
   };
   handlers.push(typedHandle(CHANNELS.LOGS_SET_VERBOSE, handleLogsSetVerbose));
@@ -157,12 +158,12 @@ export function registerLogsHandlers(
   };
   handlers.push(typedHandle(CHANNELS.LOGS_GET_VERBOSE, handleLogsGetVerbose));
 
-  const handleLogsWrite = async (payload: {
+  const dispatchRendererLog = (entry: {
     level: LogLevel;
     message: string;
     context?: Record<string, unknown>;
-  }) => {
-    const { level, message, context } = payload;
+  }): void => {
+    const { level, message, context } = entry;
     const contextWithSource = { ...context, source: "Renderer" };
     switch (level) {
       case "debug":
@@ -179,7 +180,33 @@ export function registerLogsHandlers(
         break;
     }
   };
+
+  const handleLogsWrite = async (payload: {
+    level: LogLevel;
+    message: string;
+    context?: Record<string, unknown>;
+  }) => {
+    dispatchRendererLog(payload);
+  };
   handlers.push(typedHandle(CHANNELS.LOGS_WRITE, handleLogsWrite));
+
+  // Renderer coalesces below-warn writes into a single batched invoke (one IPC
+  // round-trip per tick) instead of one invoke per log call. Each entry is
+  // dispatched through the same path as a single write; the main-process
+  // `shouldLog` gate still applies per entry.
+  const handleLogsWriteBatch = async (
+    entries: Array<{
+      level: LogLevel;
+      message: string;
+      context?: Record<string, unknown>;
+    }>
+  ) => {
+    if (!Array.isArray(entries)) return;
+    for (const entry of entries) {
+      dispatchRendererLog(entry);
+    }
+  };
+  handlers.push(typedHandle(CHANNELS.LOGS_WRITE_BATCH, handleLogsWriteBatch));
 
   const handleGetLevelOverrides = async (): Promise<Record<string, string>> => {
     // Return the in-memory sanitized map (not the raw store value) so the UI
@@ -193,6 +220,7 @@ export function registerLogsHandlers(
     store.set("logLevelOverrides", clean);
     setLogLevelOverrides(clean);
     fanOut(clean, deps);
+    broadcastToRenderer(CHANNELS.LOGS_LEVEL_OVERRIDES_CHANGED, getLogLevelOverrides());
     logInfo("Log level overrides updated", { count: Object.keys(clean).length });
     return { success: true };
   };
@@ -207,6 +235,7 @@ export function registerLogsHandlers(
     store.set("logLevelOverrides", {});
     setLogLevelOverrides({});
     fanOut({}, deps);
+    broadcastToRenderer(CHANNELS.LOGS_LEVEL_OVERRIDES_CHANGED, getLogLevelOverrides());
     logInfo("Log level overrides cleared");
     return { success: true };
   };

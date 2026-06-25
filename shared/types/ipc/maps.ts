@@ -539,6 +539,16 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     ];
     result: void;
   };
+  "logs:write-batch": {
+    args: [
+      entries: Array<{
+        level: "debug" | "info" | "warn" | "error";
+        message: string;
+        context?: Record<string, unknown>;
+      }>,
+    ];
+    result: void;
+  };
   "logs:get-level-overrides": {
     args: [];
     result: Record<string, string>;
@@ -1618,6 +1628,7 @@ export interface IpcEventMap {
   // Log events
   "logs:entry": LogEntry;
   "logs:batch": LogEntry[];
+  "logs:level-overrides-changed": Record<string, string>;
 
   // Event inspector events
   "event-inspector:event-batch": EventRecord[];

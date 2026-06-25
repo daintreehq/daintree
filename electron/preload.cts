@@ -1479,12 +1479,23 @@ function buildElectronApi(): ElectronAPI {
         context?: Record<string, unknown>
       ) => _unwrappingInvoke(CHANNELS.LOGS_WRITE, { level, message, context }),
 
+      writeBatch: (
+        entries: Array<{
+          level: "debug" | "info" | "warn" | "error";
+          message: string;
+          context?: Record<string, unknown>;
+        }>
+      ) => _unwrappingInvoke(CHANNELS.LOGS_WRITE_BATCH, entries),
+
       getLevelOverrides: () => _unwrappingInvoke(CHANNELS.LOGS_GET_LEVEL_OVERRIDES),
 
       setLevelOverrides: (overrides: Record<string, string>) =>
         _unwrappingInvoke(CHANNELS.LOGS_SET_LEVEL_OVERRIDES, overrides),
 
       clearLevelOverrides: () => _unwrappingInvoke(CHANNELS.LOGS_CLEAR_LEVEL_OVERRIDES),
+
+      onLevelOverridesChanged: (callback: (overrides: Record<string, string>) => void) =>
+        _typedOn(CHANNELS.LOGS_LEVEL_OVERRIDES_CHANGED, callback),
 
       getRegistry: () => _unwrappingInvoke(CHANNELS.LOGS_GET_REGISTRY),
     },
