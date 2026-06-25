@@ -246,6 +246,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
 }));
 
 import { DockedTabGroup } from "../DockedTabGroup";
+import { DragHandleProvider } from "@/components/DragDrop/DragHandleContext";
 import { handleDockFocusOutside } from "../dockPopoverGuard";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
@@ -775,5 +776,62 @@ describe("DockedTabGroup add-tab orphan cleanup (#10441)", () => {
 
     expect(trashPanelMock).not.toHaveBeenCalled();
     expect(setActiveTabMock).toHaveBeenCalledWith("g-1", "t-new");
+  });
+});
+
+// #10797 — the group chip showed grab-cursor styling but never consumed the
+// drag listeners SortableDockItem publishes via DragHandleProvider, so it
+// wasn't a functional drag source. These tests verify the chip now registers
+// the activator node (KeyboardSensor's focusable surface) and forwards pointer
+// drag events.
+describe("DockedTabGroup drag wiring (#10797)", () => {
+  beforeEach(() => {
+    mockActiveDockTerminalId = null;
+    mockTabGroups = new Map();
+    mockTabGroups.set("g-1", makeGroup(["t-1", "t-2"]));
+  });
+
+  function renderInProvider(value: {
+    listeners: Record<string, unknown>;
+    setActivatorNodeRef: (node: HTMLElement | null) => void;
+  }) {
+    const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
+    return render(
+      <DragHandleProvider value={value}>
+        <DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />
+      </DragHandleProvider>
+    );
+  }
+
+  it("registers the group chip button as the drag activator node", () => {
+    const setActivatorNodeRef = vi.fn();
+    const { container } = renderInProvider({ listeners: {}, setActivatorNodeRef });
+
+    const chip = container.querySelector(
+      'button[aria-label*="drag to reorder"]'
+    ) as HTMLButtonElement | null;
+    expect(chip).not.toBeNull();
+    expect(setActivatorNodeRef).toHaveBeenCalledWith(chip);
+  });
+
+  it("forwards pointer drag events from the group chip to the dnd listeners", () => {
+    const onPointerDown = vi.fn();
+    const { container } = renderInProvider({
+      listeners: { onPointerDown },
+      setActivatorNodeRef: vi.fn(),
+    });
+
+    const chip = container.querySelector(
+      'button[aria-label*="drag to reorder"]'
+    ) as HTMLButtonElement;
+    fireEvent.pointerDown(chip);
+    expect(onPointerDown).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders without a drag-handle provider (no listeners) without throwing", () => {
+    const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
+    expect(() =>
+      render(<DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />)
+    ).not.toThrow();
   });
 });

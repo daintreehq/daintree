@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDndMonitor } from "@dnd-kit/core";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { cn, getBaseTitle } from "@/lib/utils";
 import { useTerminalInputStore, usePanelStore, useFocusStore } from "@/store";
 import type { PtyPanelData } from "@shared/types/panel";
@@ -42,6 +43,11 @@ interface DockedTerminalItemProps {
 }
 
 export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
+  // Consume the drag listeners SortableDockItem publishes via DragHandleProvider
+  // so the chip button is a real drag source (pointer reorder + keyboard drag),
+  // not just grab-cursor styling. setActivatorNodeRef must land on the focusable
+  // button itself or KeyboardSensor's Space/Enter activation silently fails.
+  const dragHandle = useDragHandle();
   const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
   const openDockTerminal = usePanelStore((s) => s.openDockTerminal);
   const closeDockTerminal = usePanelStore((s) => s.closeDockTerminal);
@@ -301,6 +307,8 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
           <TerminalContextMenu terminalId={terminal.id} forceLocation="dock">
             <PopoverTrigger asChild>
               <button
+                ref={dragHandle?.setActivatorNodeRef}
+                {...dragHandle?.listeners}
                 data-dock-item=""
                 className={cn(
                   "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px]",

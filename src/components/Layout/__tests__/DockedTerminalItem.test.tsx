@@ -123,6 +123,7 @@ vi.mock("@dnd-kit/core", () => ({
 }));
 
 import { DockedTerminalItem } from "../DockedTerminalItem";
+import { DragHandleProvider } from "@/components/DragDrop/DragHandleContext";
 
 function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -185,5 +186,49 @@ describe("DockedTerminalItem move-to-grid gesture", () => {
 
     expect(moveTerminalToGridMock).toHaveBeenCalledWith("t-1");
     expect(closeDockTerminalMock).not.toHaveBeenCalled();
+  });
+});
+
+// #10797 — the chip showed grab-cursor styling but never consumed the drag
+// listeners SortableDockItem publishes via DragHandleProvider, so it wasn't a
+// functional drag source. These tests verify the chip now registers the
+// activator node (KeyboardSensor's focusable surface) and forwards pointer
+// drag events.
+describe("DockedTerminalItem drag wiring", () => {
+  beforeEach(() => {
+    mockActiveDockTerminalId = null;
+    mockDockAgentState = undefined;
+  });
+
+  it("registers the chip button as the drag activator node", () => {
+    const setActivatorNodeRef = vi.fn();
+    render(
+      <DragHandleProvider value={{ listeners: {}, setActivatorNodeRef }}>
+        <DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />
+      </DragHandleProvider>
+    );
+
+    const chip = screen.getByRole("button", { name: /drag to reorder/i });
+    expect(setActivatorNodeRef).toHaveBeenCalledWith(chip);
+  });
+
+  it("forwards pointer drag events from the chip to the dnd listeners", () => {
+    const onPointerDown = vi.fn();
+    render(
+      <DragHandleProvider value={{ listeners: { onPointerDown }, setActivatorNodeRef: vi.fn() }}>
+        <DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />
+      </DragHandleProvider>
+    );
+
+    const chip = screen.getByRole("button", { name: /drag to reorder/i });
+    fireEvent.pointerDown(chip);
+    expect(onPointerDown).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders without a drag-handle provider (no listeners) without throwing", () => {
+    expect(() =>
+      render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />)
+    ).not.toThrow();
+    expect(screen.getByRole("button", { name: /drag to reorder/i })).not.toBeNull();
   });
 });

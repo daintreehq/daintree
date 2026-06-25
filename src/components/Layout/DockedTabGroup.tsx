@@ -21,6 +21,7 @@ import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modi
 import { LayoutGroup, AnimatePresence, m } from "framer-motion";
 import { ChevronDown, CopyPlus } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -77,6 +78,12 @@ interface DockedTabGroupProps {
 }
 
 export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
+  // Consume the drag listeners SortableDockItem publishes via DragHandleProvider
+  // so the group chip button is a real drag source (pointer reorder + keyboard
+  // drag). setActivatorNodeRef must land on the focusable button itself or
+  // KeyboardSensor's Space/Enter activation silently fails. Called before the
+  // early return below to satisfy the Rules of Hooks.
+  const dragHandle = useDragHandle();
   const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
   const openDockTerminal = usePanelStore((s) => s.openDockTerminal);
   const closeDockTerminal = usePanelStore((s) => s.closeDockTerminal);
@@ -542,6 +549,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         <TerminalContextMenu terminalId={activePanel.id} forceLocation="dock">
           <PopoverTrigger asChild>
             <button
+              ref={dragHandle?.setActivatorNodeRef}
+              {...dragHandle?.listeners}
               data-dock-item=""
               className={cn(
                 "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px]",
