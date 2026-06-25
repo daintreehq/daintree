@@ -762,6 +762,44 @@ describe("installTerminalBoundListeners", () => {
       expect(() => captured.onRender!()).not.toThrow();
     });
 
+    it("starts snapping only after the pane swaps WebGL → DOM (gate flips live)", () => {
+      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+      const terminal = makeMockTerminal(captured);
+      const element = makeRowsElement("17.275px", 40);
+      (terminal as { element: HTMLElement }).element = element;
+      // WebGL active at install + first render → no snap (the production state
+      // before a fleet DOM-mode flip / breaker trip).
+      const isWebGLActive = vi.fn(() => true);
+      const deps = makeDeps({ isWebGLActive });
+
+      install(terminal, deps);
+      captured.onRender!();
+      expect(rowHeights(element).every((h) => h === 17.275)).toBe(true);
+
+      // Pane swaps to the DOM renderer — the next render snaps.
+      isWebGLActive.mockReturnValue(false);
+      captured.onRender!();
+      expect(rowHeights(element).every((h) => Number.isInteger(h))).toBe(true);
+    });
+
+    it("assigns one uniform integer height when the canvas rounds to an exact multiple (extra=0)", () => {
+      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+      const terminal = makeMockTerminal(captured);
+      // 17.99px * 40 = 719.6 → round 720 = 18 * 40, so base 18, extra 0: every
+      // row gets the same integer height, with no Bresenham distribution.
+      const element = makeRowsElement("17.99px", 40);
+      (terminal as { element: HTMLElement }).element = element;
+      const deps = makeDeps();
+
+      install(terminal, deps);
+      captured.onRender!();
+
+      const heights = rowHeights(element);
+      expect(new Set(heights).size).toBe(1);
+      expect(heights[0]).toBe(18);
+      expect(heights.reduce((a, b) => a + b, 0)).toBe(720);
+    });
+
     it("no-ops when the row height is unparseable", () => {
       const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
       const terminal = makeMockTerminal(captured);

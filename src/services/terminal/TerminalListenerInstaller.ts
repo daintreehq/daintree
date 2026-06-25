@@ -66,7 +66,10 @@ function snapDomRowHeightsToIntegerPixels(terminal: Terminal): void {
   const base = Math.floor(target / count);
   const extra = target - base * count; // count of rows that get one extra pixel
 
-  let acc = 0;
+  // Midpoint-start Bresenham so the `extra` taller rows are spread evenly across
+  // the viewport rather than bunched at the bottom; the sum is unchanged
+  // (exactly `extra` rows receive base+1 regardless of the start offset).
+  let acc = Math.floor(count / 2);
   for (let i = 0; i < count; i++) {
     acc += extra;
     let h = base;

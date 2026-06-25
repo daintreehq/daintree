@@ -383,8 +383,20 @@ export class TerminalWebGLManager {
   // through the same rAF-staggered queue the focus pin uses (#7480). A no-op
   // when hardware is unavailable: queuePinnedAttach bails, mirroring pinFocus.
   pinAltBuffer(id: string, managed: ManagedTerminal): void {
+    // When hardware is unavailable the breaker has tripped for the session —
+    // WebGL never comes back, so tracking the pin would only make the watchdog
+    // burn repair slots (shouldHaveActiveWebGL gates on it) for a context that
+    // can never attach. Skip entirely; the DOM integer-snap handles the seam.
+    if (!this.hardwareAvailable) return;
     if (this.altBufferPinnedIds.has(id)) {
-      if (this.mode === "dom") this.queuePinnedAttach(id, managed);
+      // Cancel any in-flight release symmetrically with the first-pin branch
+      // below — flipToDom never queues a release for an already-pinned id, but
+      // keeping both branches identical avoids a use-after-free trap if a
+      // future path ever schedules one.
+      if (this.mode === "dom") {
+        this.pendingReleases.delete(id);
+        this.queuePinnedAttach(id, managed);
+      }
       return;
     }
     this.altBufferPinnedIds.add(id);

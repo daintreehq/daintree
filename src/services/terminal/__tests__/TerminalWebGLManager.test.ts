@@ -1669,13 +1669,66 @@ describe("TerminalWebGLManager", () => {
       expect(manager.isActive("t1")).toBe(false);
     });
 
-    it("ignores the pin attach when hardware is unavailable", () => {
+    it("ignores the pin (and records nothing) when hardware is unavailable", () => {
       const terms = fillToDomMode();
       manager.setHardwareAvailable(false);
 
       manager.pinAltBuffer("t1", terms[1]!);
 
       expect(manager.isActive("t1")).toBe(false);
+      // The breaker is a one-way session trip; tracking a pin that can never
+      // attach would only churn the watchdog. Nothing is recorded.
+      expect(manager.isAltBufferPinned("t1")).toBe(false);
+    });
+
+    it("releases the context when the focus pin moves away after the alt-buffer pin was cleared", () => {
+      const terms = fillToDomMode();
+      // t1 is both focus-pinned and alt-buffer-pinned.
+      manager.pinAltBuffer("t1", terms[1]!);
+      manager.pinFocus("t1", terms[1]!);
+      expect(manager.isActive("t1")).toBe(true);
+
+      // Buffer → normal clears the alt pin, but the focus pin still holds it.
+      manager.unpinAltBuffer("t1");
+      expect(manager.isActive("t1")).toBe(true);
+
+      // Focus moves to t2 — t1 now has neither pin, so its context is released.
+      manager.pinFocus("t2", terms[2]!);
+      expect(manager.isActive("t1")).toBe(false);
+      expect(manager.isActive("t2")).toBe(true);
+    });
+
+    it("survives a mode-switch teardown then a hide/show cycle", () => {
+      // Pin before the flip so the alt pane keeps WebGL through the paced
+      // release drain, then hide (releaseContext) and re-reveal (ensureContext).
+      const alt = makeManagedTerminal();
+      manager.ensureContext("alt", alt);
+      manager.pinAltBuffer("alt", alt);
+      manager.ensureContext("a", makeManagedTerminal());
+      manager.ensureContext("b", makeManagedTerminal());
+      manager.ensureContext("c", makeManagedTerminal());
+      expect(manager.getMode()).toBe("dom");
+      expect(manager.isActive("alt")).toBe(true);
+
+      manager.releaseContext("alt"); // hide
+      expect(manager.isActive("alt")).toBe(false);
+      expect(manager.isAltBufferPinned("alt")).toBe(true);
+
+      manager.ensureContext("alt", alt); // reveal
+      expect(manager.isActive("alt")).toBe(true);
+    });
+
+    it("handles a rapid alt→normal→alt toggle without leaking the pin", () => {
+      const terms = fillToDomMode();
+
+      manager.pinAltBuffer("t1", terms[1]!);
+      expect(manager.isAltBufferPinned("t1")).toBe(true);
+      manager.unpinAltBuffer("t1");
+      expect(manager.isAltBufferPinned("t1")).toBe(false);
+      manager.pinAltBuffer("t1", terms[1]!);
+
+      expect(manager.isAltBufferPinned("t1")).toBe(true);
+      expect(manager.isActive("t1")).toBe(true);
     });
 
     it("hardware loss drops every alt-buffer-pinned context — no exemption survives the breaker", () => {
