@@ -618,6 +618,20 @@ export interface GeneratedIpcInvokeMap {
     args: [config: Partial<import("./idleTerminals.js").IdleTerminalNotifyConfig>];
     result: import("./idleTerminals.js").IdleTerminalNotifyConfig;
   };
+  "logs:get-default-level": {
+    args: [];
+    result: string;
+  };
+  "logs:write-batch": {
+    args: [
+      entries: {
+        level: "error" | "debug" | "info" | "warn";
+        message: string;
+        context?: Record<string, unknown> | undefined;
+      }[],
+    ];
+    result: void;
+  };
   "mcp-server:clear-audit-log": {
     args: [];
     result: void;

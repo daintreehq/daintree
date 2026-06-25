@@ -539,20 +539,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     ];
     result: void;
   };
-  "logs:write-batch": {
-    args: [
-      entries: Array<{
-        level: "debug" | "info" | "warn" | "error";
-        message: string;
-        context?: Record<string, unknown>;
-      }>,
-    ];
-    result: void;
-  };
-  "logs:get-default-level": {
-    args: [];
-    result: string;
-  };
   "logs:get-level-overrides": {
     args: [];
     result: Record<string, string>;
