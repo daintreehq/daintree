@@ -53,6 +53,7 @@ interface CapturedCallbacks {
   onWriteParsed?: () => void;
   onSelectionChange?: () => void;
   onScroll?: () => void;
+  onRender?: () => void;
   wheelHandler?: (event: WheelEvent) => boolean;
 }
 
@@ -91,6 +92,10 @@ function makeMockTerminal(captured: CapturedCallbacks) {
     }),
     onSelectionChange: vi.fn((cb: () => void) => {
       captured.onSelectionChange = cb;
+      return { dispose: vi.fn() };
+    }),
+    onRender: vi.fn((cb: () => void) => {
+      captured.onRender = cb;
       return { dispose: vi.fn() };
     }),
     onTitleChange: vi.fn((cb: (title: string) => void) => {
@@ -150,6 +155,7 @@ function makeDeps(
 ): TerminalListenerInstallDeps {
   return {
     onBufferModeChange: vi.fn(),
+    isWebGLActive: vi.fn(() => false),
     notifyParsed: vi.fn(),
     scrollToBottomSafe: vi.fn(),
     updateScrollState: vi.fn(),
@@ -632,5 +638,143 @@ describe("installTerminalBoundListeners", () => {
     );
 
     expect(managed2.listeners.length).toBe(firstCount);
+  });
+
+  describe("DOM zebra-banding integer row-height snap (#10768)", () => {
+    function makeRowsElement(cellHeightCss: string, rowCount: number): HTMLElement {
+      const element = document.createElement("div");
+      const rows = document.createElement("div");
+      rows.className = "xterm-rows";
+      for (let i = 0; i < rowCount; i++) {
+        const row = document.createElement("div");
+        row.style.height = cellHeightCss;
+        row.style.lineHeight = cellHeightCss;
+        rows.appendChild(row);
+      }
+      element.appendChild(rows);
+      return element;
+    }
+
+    function rowHeights(element: HTMLElement): number[] {
+      const rows = element.querySelector(".xterm-rows")!.children;
+      return Array.from(rows).map((r) => parseFloat((r as HTMLElement).style.height));
+    }
+
+    function install(
+      terminal: ReturnType<typeof makeMockTerminal>,
+      deps: TerminalListenerInstallDeps
+    ) {
+      const managed = makeMockManaged();
+      managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
+      installTerminalBoundListeners(
+        terminal as unknown as Parameters<typeof installTerminalBoundListeners>[0],
+        managed,
+        "t1",
+        deps
+      );
+    }
+
+    it("snaps fractional row heights to integers that sum exactly to the canvas height", () => {
+      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+      const terminal = makeMockTerminal(captured);
+      // 691px canvas / 40 rows = 17.275px fractional cell height.
+      const element = makeRowsElement("17.275px", 40);
+      (terminal as { element: HTMLElement }).element = element;
+      const deps = makeDeps();
+
+      install(terminal, deps);
+      captured.onRender!();
+
+      const heights = rowHeights(element);
+      // Every row is an integer pixel value.
+      expect(heights.every((h) => Number.isInteger(h))).toBe(true);
+      // No drift: snapped heights sum back to the integer canvas height.
+      expect(heights.reduce((a, b) => a + b, 0)).toBe(Math.round(17.275 * 40));
+      // Distributed, not uniform: a fractional cell needs a mix of two heights.
+      expect(new Set(heights).size).toBe(2);
+      // lineHeight is snapped in lockstep with height.
+      const rows = element.querySelector(".xterm-rows")!.children;
+      for (const r of Array.from(rows)) {
+        const el = r as HTMLElement;
+        expect(el.style.lineHeight).toBe(el.style.height);
+      }
+    });
+
+    it("does not touch row heights when the pane is on the WebGL renderer", () => {
+      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+      const terminal = makeMockTerminal(captured);
+      const element = makeRowsElement("17.275px", 40);
+      (terminal as { element: HTMLElement }).element = element;
+      const deps = makeDeps({ isWebGLActive: vi.fn(() => true) });
+
+      install(terminal, deps);
+      captured.onRender!();
+
+      expect(rowHeights(element).every((h) => h === 17.275)).toBe(true);
+    });
+
+    it("leaves already-integer row heights untouched (idempotent)", () => {
+      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+      const terminal = makeMockTerminal(captured);
+      const element = makeRowsElement("18px", 40);
+      (terminal as { element: HTMLElement }).element = element;
+      const deps = makeDeps();
+
+      install(terminal, deps);
+      captured.onRender!();
+
+      expect(rowHeights(element).every((h) => h === 18)).toBe(true);
+    });
+
+    it("is idempotent across repeated renders", () => {
+      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+      const terminal = makeMockTerminal(captured);
+      const element = makeRowsElement("17.275px", 40);
+      (terminal as { element: HTMLElement }).element = element;
+      const deps = makeDeps();
+
+      install(terminal, deps);
+      captured.onRender!();
+      const first = rowHeights(element);
+      captured.onRender!();
+      const second = rowHeights(element);
+
+      expect(second).toEqual(first);
+    });
+
+    it("no-ops when the terminal element is not yet attached", () => {
+      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+      const terminal = makeMockTerminal(captured);
+      // No `element` set — terminal.open() hasn't run.
+      const deps = makeDeps();
+
+      install(terminal, deps);
+      expect(() => captured.onRender!()).not.toThrow();
+    });
+
+    it("no-ops on an empty row list", () => {
+      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+      const terminal = makeMockTerminal(captured);
+      (terminal as { element: HTMLElement }).element = makeRowsElement("17.275px", 0);
+      const deps = makeDeps();
+
+      install(terminal, deps);
+      expect(() => captured.onRender!()).not.toThrow();
+    });
+
+    it("no-ops when the row height is unparseable", () => {
+      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+      const terminal = makeMockTerminal(captured);
+      const element = makeRowsElement("auto", 40);
+      (terminal as { element: HTMLElement }).element = element;
+      const deps = makeDeps();
+
+      install(terminal, deps);
+      captured.onRender!();
+
+      // "auto" stays as-is (parseFloat → NaN, guarded out).
+      const rows = element.querySelector(".xterm-rows")!.children;
+      expect((rows[0] as HTMLElement).style.height).toBe("auto");
+    });
   });
 });

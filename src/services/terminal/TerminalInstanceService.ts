@@ -410,6 +410,7 @@ class TerminalInstanceService {
   private makeListenerInstallDeps(): TerminalListenerInstallDeps {
     return {
       onBufferModeChange: (id, isAltBuffer) => this.handleBufferModeChange(id, isAltBuffer),
+      isWebGLActive: (id) => this.webGLManager.isActive(id),
       notifyParsed: (id) => this.dataBuffer.notifyParsed(id),
       scrollToBottomSafe: (managed) => this.scrollToBottomSafe(managed),
       updateScrollState: (id, isScrolledBack) =>
@@ -597,7 +598,14 @@ class TerminalInstanceService {
    */
   private shouldHaveActiveWebGL(managed: ManagedTerminal): boolean {
     if (!this.shouldRestoreWebGL(managed)) return false;
-    if (this.webGLManager.getMode() === "dom" && managed.id !== this.webGLManager.getPinnedId()) {
+    // In DOM mode the manager only keeps contexts on pinned panes (the focus
+    // pin and alt-buffer pins). A non-pinned pane can never have an active
+    // context, so the watchdog must not treat its absence as a fault.
+    if (
+      this.webGLManager.getMode() === "dom" &&
+      managed.id !== this.webGLManager.getPinnedId() &&
+      !this.webGLManager.isAltBufferPinned(managed.id)
+    ) {
       return false;
     }
     return true;
@@ -2835,6 +2843,17 @@ class TerminalInstanceService {
   private handleBufferModeChange(id: string, isAltBuffer: boolean): void {
     const managed = this.instances.get(id);
     if (!managed) return;
+
+    // Keep alt-buffer TUIs on WebGL through a fleet DOM-mode flip — WebGL has
+    // no fractional-cell-height seam, so this is the primary fix for the DOM
+    // renderer "zebra" banding on HiDPI displays (#10768). The manager treats
+    // an alt-buffer pin like the focus pin: one retained context in DOM mode,
+    // a no-op in WebGL mode and when GPU hardware is unavailable.
+    if (isAltBuffer) {
+      this.webGLManager.pinAltBuffer(id, managed);
+    } else {
+      this.webGLManager.unpinAltBuffer(id);
+    }
 
     for (const callback of managed.altBufferListeners) {
       try {

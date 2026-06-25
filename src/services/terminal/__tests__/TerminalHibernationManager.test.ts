@@ -32,6 +32,7 @@ vi.mock("@xterm/xterm", () => ({
     this.onScroll = vi.fn(() => ({ dispose: vi.fn() }));
     this.onWriteParsed = freshTerminalOnWriteParsed;
     this.onSelectionChange = vi.fn(() => ({ dispose: vi.fn() }));
+    this.onRender = vi.fn(() => ({ dispose: vi.fn() }));
     this.getSelection = vi.fn(() => "");
     this.hasSelection = vi.fn(() => false);
   }),
@@ -110,6 +111,7 @@ function makeMockTerminal() {
       return { dispose: vi.fn() };
     }),
     onSelectionChange: vi.fn(() => ({ dispose: vi.fn() })),
+    onRender: vi.fn(() => ({ dispose: vi.fn() })),
     getSelection: vi.fn(() => ""),
     hasSelection: vi.fn(() => false),
   };
@@ -176,6 +178,7 @@ function makeMockDeps(managed?: ManagedTerminal): HibernationManagerDeps {
     onHibernationChanged: vi.fn(),
     getIsBackgrounded: vi.fn(() => false),
     onBufferModeChange: vi.fn(),
+    isWebGLActive: vi.fn(() => false),
     notifyParsed: vi.fn(),
     scrollToBottomSafe: vi.fn(),
     clearUnseen: vi.fn(),
