@@ -236,7 +236,10 @@ function createPlainTerminalWithCommand(
   );
 }
 
-function createPlainTerminalWithPid(pid: number, deps?: Partial<TerminalProcessDeps>): TerminalProcess {
+function createPlainTerminalWithPid(
+  pid: number,
+  deps?: Partial<TerminalProcessDeps>
+): TerminalProcess {
   const options: TerminalProcessOptions = {
     cwd: process.cwd(),
     cols: 80,
