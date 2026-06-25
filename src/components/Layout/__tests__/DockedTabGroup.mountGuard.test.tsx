@@ -246,7 +246,10 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
 }));
 
 import { DockedTabGroup } from "../DockedTabGroup";
-import { DragHandleProvider } from "@/components/DragDrop/DragHandleContext";
+import {
+  DragHandleProvider,
+  type DragHandleContextValue,
+} from "@/components/DragDrop/DragHandleContext";
 import { handleDockFocusOutside } from "../dockPopoverGuard";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
@@ -792,10 +795,7 @@ describe("DockedTabGroup drag wiring (#10797)", () => {
     mockTabGroups.set("g-1", makeGroup(["t-1", "t-2"]));
   });
 
-  function renderInProvider(value: {
-    listeners: Record<string, unknown>;
-    setActivatorNodeRef: (node: HTMLElement | null) => void;
-  }) {
+  function renderInProvider(value: DragHandleContextValue) {
     const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
     return render(
       <DragHandleProvider value={value}>
