@@ -5,8 +5,9 @@ import type { PluginInstallSource, PluginLoadError } from "../plugin.js";
  * A single line from a plugin's in-memory log ring buffer, captured via
  * `host.logger.{info,warn,error}`. `message` already folds in any structured
  * `fields` passed to the logger and is capped at the per-line byte budget.
- * Stored raw in the main-process buffer; secret/path scrubbing is applied only
- * at the report-export boundary (`buildReportIssueUrl`), never on this struct.
+ * Stored already scrubbed: `recordPluginLog` runs `scrubSecrets` before the
+ * line enters the buffer, since the buffer is itself an outbound boundary (it
+ * feeds the shareable bug report via `buildReportIssueUrl`).
  */
 export interface PluginDiagnosticsLogLine {
   /** Wall-clock epoch millis the line was logged. */

@@ -141,6 +141,7 @@ import {
 } from "./forgeProviderRegistry.js";
 import { buildStoredCredentials } from "./forge/forgeCredentialUtils.js";
 import { makeForgeProviderId } from "../../shared/utils/forgeProviderIds.js";
+import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import {
   registerFileDecorationProviderImpl,
   registerFileDecorationProviders,
@@ -591,9 +592,10 @@ export class PluginService {
    * Per-plugin diagnostic log ring buffer, keyed by `pluginId` (= manifest
    * name). Written by `host.logger.*`, capped at {@link PLUGIN_LOG_BUFFER_MAX}
    * lines (FIFO eviction), and cleared in {@link unloadPlugin} so a reload of
-   * the same plugin starts clean. Lines are stored raw — secret/path scrubbing
-   * happens only at the report-export boundary, never here (mirrors the
-   * action-breadcrumb ring's raw-capture convention).
+   * the same plugin starts clean. Lines are stored scrubbed — this buffer is
+   * itself an outbound boundary (it feeds {@link getDiagnosticsSnapshot} →
+   * shareable bug reports), and the same scrubbed line mirrors to the console,
+   * so {@link recordPluginLog} runs `scrubSecrets` once before either sink.
    */
   private logBuffers = new Map<string, PluginDiagnosticsLogLine[]>();
   /**
@@ -2062,8 +2064,16 @@ export class PluginService {
       const serialized = safeStringify(fields);
       rendered = serialized ? `${rendered} ${serialized}` : rendered;
     }
+    // Scrub before truncation: scrubSecrets replaces each secret with the
+    // shorter "[REDACTED]" sentinel, so the codepoint cap below still bounds the
+    // line — and a secret straddling that boundary is fully redacted instead of
+    // being bisected into a fragment too short for the scrubber to match. Both
+    // sinks below — the log buffer that feeds shareable bug reports and the
+    // console mirror — consume this scrubbed value.
+    rendered = scrubSecrets(rendered);
     // Codepoint-aware cap: spreading splits at codepoint (not UTF-16 code-unit)
-    // boundaries, so the slice can never bisect a surrogate pair.
+    // boundaries, so the slice can never bisect a surrogate pair. (It may clip a
+    // trailing "[REDACTED]" sentinel, which is harmless.)
     const codepoints = Array.from(rendered);
     if (codepoints.length > PLUGIN_LOG_LINE_MAX_CHARS) {
       rendered = `${codepoints.slice(0, PLUGIN_LOG_LINE_MAX_CHARS - 1).join("")}…`;

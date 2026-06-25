@@ -1890,6 +1890,98 @@ describe("PluginService integration — diagnostic logger", () => {
       .plugins.find((p) => p.pluginId === "acme.logger-unload");
     expect(entry).toBeUndefined();
   });
+
+  it("scrubs secrets from buffered lines and the console mirror (#10775)", async () => {
+    // ghp_ + 36 sigil chars trips the github-pat pattern in secretScrubber.
+    const token = `ghp_${"0123456789abcdefghijklmnopqrstuvwxyz"}`;
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const service = await loadWithLoggerActivate(
+        "acme.logger-secret",
+        "__loggerHost7",
+        `host.logger.info("auth " + ${JSON.stringify(token)});`
+      );
+
+      const entry = service
+        .getDiagnosticsSnapshot()
+        .plugins.find((p) => p.pluginId === "acme.logger-secret");
+      const message = entry?.logLines[0]?.message ?? "";
+      // The buffer feeds shareable bug reports, so the raw token must be gone.
+      expect(message).toContain("[REDACTED]");
+      expect(message).not.toContain(token);
+
+      // The console mirror consumes the same rendered string — also scrubbed.
+      const mirrored = infoSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(mirrored).toContain("[REDACTED]");
+      expect(mirrored).not.toContain(token);
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  it("scrubs a secret straddling the truncation boundary (#10775)", async () => {
+    // The token starts just before the codepoint cap. Scrub-before-truncate
+    // redacts the whole token; truncate-first would leave a "ghp_…" fragment.
+    const token = `ghp_${"0123456789abcdefghijklmnopqrstuvwxyz"}`;
+    const service = await loadWithLoggerActivate(
+      "acme.logger-straddle",
+      "__loggerHost8",
+      `host.logger.info("x".repeat(2040) + " " + ${JSON.stringify(token)});`
+    );
+
+    const entry = service
+      .getDiagnosticsSnapshot()
+      .plugins.find((p) => p.pluginId === "acme.logger-straddle");
+    const message = entry?.logLines[0]?.message ?? "";
+    expect(message).not.toContain(token);
+    // No recognizable sigil fragment survives — not even the "ghp_" prefix.
+    expect(message).not.toMatch(/ghp_[A-Za-z0-9_]/);
+  });
+
+  it("scrubs secrets folded in from structured fields (#10775)", async () => {
+    const token = `ghp_${"0123456789abcdefghijklmnopqrstuvwxyz"}`;
+    const service = await loadWithLoggerActivate(
+      "acme.logger-fields",
+      "__loggerHost9",
+      `host.logger.info("request", { authorization: ${JSON.stringify(token)} });`
+    );
+
+    const entry = service
+      .getDiagnosticsSnapshot()
+      .plugins.find((p) => p.pluginId === "acme.logger-fields");
+    const message = entry?.logLines[0]?.message ?? "";
+    expect(message).toContain("[REDACTED]");
+    expect(message).not.toContain(token);
+  });
+
+  it("scrubs the console mirror across all log levels (#10775)", async () => {
+    const token = `ghp_${"0123456789abcdefghijklmnopqrstuvwxyz"}`;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = await loadWithLoggerActivate(
+        "acme.logger-levels",
+        "__loggerHost10",
+        `host.logger.warn("w " + ${JSON.stringify(token)});
+         host.logger.error("e " + ${JSON.stringify(token)});`
+      );
+
+      const entry = service
+        .getDiagnosticsSnapshot()
+        .plugins.find((p) => p.pluginId === "acme.logger-levels");
+      expect(entry?.logLines.every((l) => !l.message.includes(token))).toBe(true);
+      expect(entry?.logLines.every((l) => l.message.includes("[REDACTED]"))).toBe(true);
+
+      for (const spy of [warnSpy, errorSpy]) {
+        const mirrored = spy.mock.calls.map((c) => String(c[0])).join("\n");
+        expect(mirrored).toContain("[REDACTED]");
+        expect(mirrored).not.toContain(token);
+      }
+    } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
 });
 
 describe("PluginService integration — stale temp dir sweep", () => {
