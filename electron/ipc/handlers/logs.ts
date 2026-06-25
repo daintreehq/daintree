@@ -32,6 +32,15 @@ import type { HandlerDependencies } from "../types.js";
  */
 let savedWildcardBeforeVerbose: string | null = null;
 
+/**
+ * True while the user has verbose logging toggled on this session. The verbose
+ * `"*": "debug"` wildcard lives only in the in-memory override map as a
+ * session-only overlay — it is never persisted. This flag lets the per-module
+ * override handlers strip that overlay before writing to disk (so the palette
+ * can't round-trip it back into the store) while keeping verbose live in memory.
+ */
+let verboseSessionActive = false;
+
 function sanitizeOverrides(raw: unknown): Record<string, string> {
   if (!raw || typeof raw !== "object") return {};
   const clean: Record<string, string> = {};
@@ -149,6 +158,7 @@ export function registerLogsHandlers(
       }
       savedWildcardBeforeVerbose = null;
     }
+    verboseSessionActive = enabled;
     setLogLevelOverrides(current);
     fanOut(current, deps);
     broadcastToRenderer(CHANNELS.LOGS_LEVEL_OVERRIDES_CHANGED, getLogLevelOverrides());
@@ -232,16 +242,40 @@ export function registerLogsHandlers(
 
   const handleGetLevelOverrides = async (): Promise<Record<string, string>> => {
     // Return the in-memory sanitized map (not the raw store value) so the UI
-    // never shows overrides that the logger silently dropped as invalid.
-    return getLogLevelOverrides();
+    // never shows overrides that the logger silently dropped as invalid. While
+    // verbose is active this session, hide the `"*": "debug"` overlay (showing
+    // the user's underlying wildcard instead) so the palette never displays or
+    // round-trips the session-only verbose flag back into the persisted store.
+    const overrides: Record<string, string> = { ...getLogLevelOverrides() };
+    if (verboseSessionActive && overrides["*"] === "debug") {
+      if (savedWildcardBeforeVerbose) {
+        overrides["*"] = savedWildcardBeforeVerbose;
+      } else {
+        delete overrides["*"];
+      }
+    }
+    return overrides;
   };
   handlers.push(typedHandle(CHANNELS.LOGS_GET_LEVEL_OVERRIDES, handleGetLevelOverrides));
 
   const handleSetLevelOverrides = async (overrides: Record<string, string>) => {
     const clean = sanitizeOverrides(overrides);
+    // The session-only verbose overlay maps to `"*": "debug"` and must never be
+    // persisted. While verbose is active, drop a `"*": "debug"` entry before
+    // writing to disk; any other wildcard the user sets is a real override that
+    // persists and is tracked so a later verbose toggle-off restores it. The
+    // overlay is then re-applied to the in-memory map so verbose stays on.
+    if (verboseSessionActive && clean["*"] === "debug") {
+      delete clean["*"];
+    }
     store.set("logLevelOverrides", clean);
-    setLogLevelOverrides(clean);
-    fanOut(clean, deps);
+    const effective = { ...clean };
+    if (verboseSessionActive) {
+      savedWildcardBeforeVerbose = clean["*"] ?? null;
+      effective["*"] = "debug";
+    }
+    setLogLevelOverrides(effective);
+    fanOut(effective, deps);
     broadcastToRenderer(CHANNELS.LOGS_LEVEL_OVERRIDES_CHANGED, getLogLevelOverrides());
     logInfo("Log level overrides updated", { count: Object.keys(clean).length });
     return { success: true };
@@ -253,10 +287,17 @@ export function registerLogsHandlers(
 
   const handleClearLevelOverrides = async () => {
     // electron-store v11: `set(..., undefined)` throws. Clear by writing the
-    // default empty object explicitly.
+    // default empty object explicitly. Preserve the session-only verbose overlay
+    // in memory so clearing persisted per-module overrides doesn't silently turn
+    // verbose off (and drop the saved wildcard, since nothing persists to restore).
     store.set("logLevelOverrides", {});
-    setLogLevelOverrides({});
-    fanOut({}, deps);
+    const effective: Record<string, string> = {};
+    if (verboseSessionActive) {
+      savedWildcardBeforeVerbose = null;
+      effective["*"] = "debug";
+    }
+    setLogLevelOverrides(effective);
+    fanOut(effective, deps);
     broadcastToRenderer(CHANNELS.LOGS_LEVEL_OVERRIDES_CHANGED, getLogLevelOverrides());
     logInfo("Log level overrides cleared");
     return { success: true };

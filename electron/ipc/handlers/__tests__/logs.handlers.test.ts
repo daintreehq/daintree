@@ -6,25 +6,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // derived from the same state so a simulated restart (state reset, store never
 // written) reports verbose off.
 const loggerState = vi.hoisted(() => ({ overrides: {} as Record<string, string> }));
-const VALID_LEVELS = ["debug", "info", "warn", "error", "off"];
-const loggerMock = vi.hoisted(() => ({
-  isVerboseLogging: vi.fn(() => loggerState.overrides["*"] === "debug"),
-  logInfo: vi.fn(),
-  logDebug: vi.fn(),
-  logWarn: vi.fn(),
-  logError: vi.fn(),
-  getLogFilePath: vi.fn(() => "/tmp/daintree.log"),
-  getPreviousSessionTail: vi.fn(() => null),
-  getLogLevelOverrides: vi.fn(() => ({ ...loggerState.overrides })),
-  getDefaultLogLevel: vi.fn(() => "info"),
-  setLogLevelOverrides: vi.fn((o: Record<string, string>) => {
-    loggerState.overrides = { ...o };
-  }),
-  getRegisteredLoggerNames: vi.fn(() => []),
-  isValidLogOverrideLevel: vi.fn(
-    (v: unknown) => typeof v === "string" && VALID_LEVELS.includes(v)
-  ),
-}));
+const loggerMock = vi.hoisted(() => {
+  // Mirrors the real isValidLogOverrideLevel in electron/utils/logger.ts.
+  const VALID_LEVELS = ["error", "warn", "info", "debug", "off"];
+  return {
+    isVerboseLogging: vi.fn(() => loggerState.overrides["*"] === "debug"),
+    logInfo: vi.fn(),
+    logDebug: vi.fn(),
+    logWarn: vi.fn(),
+    logError: vi.fn(),
+    getLogFilePath: vi.fn(() => "/tmp/daintree.log"),
+    getPreviousSessionTail: vi.fn(() => null),
+    getLogLevelOverrides: vi.fn(() => ({ ...loggerState.overrides })),
+    getDefaultLogLevel: vi.fn(() => "info"),
+    setLogLevelOverrides: vi.fn((o: Record<string, string>) => {
+      loggerState.overrides = { ...o };
+    }),
+    getRegisteredLoggerNames: vi.fn(() => []),
+    isValidLogOverrideLevel: vi.fn(
+      (v: unknown) => typeof v === "string" && VALID_LEVELS.includes(v)
+    ),
+  };
+});
 
 vi.mock("../../../utils/logger.js", () => loggerMock);
 
@@ -64,22 +67,30 @@ vi.mock("../../../services/LogBuffer.js", () => ({
   },
 }));
 
-class FakeAppError extends Error {
-  code: string;
-  constructor(opts: { code: string; message: string }) {
-    super(opts.message);
-    this.code = opts.code;
-  }
-}
+const FakeAppError = vi.hoisted(
+  () =>
+    class FakeAppError extends Error {
+      code: string;
+      constructor(opts: { code: string; message: string }) {
+        super(opts.message);
+        this.code = opts.code;
+      }
+    }
+);
 
 vi.mock("../../../utils/errorTypes.js", () => ({ AppError: FakeAppError }));
 
 vi.mock("electron", () => ({ shell: { openPath: vi.fn() } }));
 
 import { CHANNELS } from "../../channels.js";
-import { registerLogsHandlers } from "../logs.js";
 
 type Handler = (...args: unknown[]) => unknown;
+type RegisterLogsHandlers = typeof import("../logs.js").registerLogsHandlers;
+
+// Re-imported per test so the module-scoped verbose session state
+// (`verboseSessionActive` / `savedWildcardBeforeVerbose`) starts fresh and
+// can't leak across cases.
+let registerLogsHandlers: RegisterLogsHandlers;
 
 function getHandler(channel: string): Handler {
   const match = utilsMock.registered.find((r) => r.channel === channel);
@@ -87,18 +98,20 @@ function getHandler(channel: string): Handler {
   return match.handler;
 }
 
-function resetMocks() {
+async function resetMocks() {
   vi.clearAllMocks();
+  vi.resetModules();
   utilsMock.registered.length = 0;
   loggerState.overrides = {};
   storeMock.get.mockReturnValue(undefined as unknown);
+  ({ registerLogsHandlers } = await import("../logs.js"));
 }
 
 describe("logs:write-batch handler", () => {
   let cleanup: () => void;
 
-  beforeEach(() => {
-    resetMocks();
+  beforeEach(async () => {
+    await resetMocks();
     cleanup = registerLogsHandlers();
   });
 
@@ -165,8 +178,8 @@ describe("logs:write-batch handler", () => {
 describe("logs:get-default-level handler", () => {
   let cleanup: () => void;
 
-  beforeEach(() => {
-    resetMocks();
+  beforeEach(async () => {
+    await resetMocks();
     cleanup = registerLogsHandlers();
   });
 
@@ -185,8 +198,8 @@ describe("logs:get-default-level handler", () => {
 describe("logs override-change broadcast", () => {
   let cleanup: () => void;
 
-  beforeEach(() => {
-    resetMocks();
+  beforeEach(async () => {
+    await resetMocks();
     cleanup = registerLogsHandlers();
   });
 
@@ -245,8 +258,8 @@ describe("registerLogsHandlers — verbose toggle is session-only", () => {
     });
   }
 
-  beforeEach(() => {
-    resetMocks();
+  beforeEach(async () => {
+    await resetMocks();
     ptyClient = { setLogLevelOverrides: vi.fn() };
     worktreeService = { setLogLevelOverrides: vi.fn() };
   });
@@ -363,5 +376,92 @@ describe("registerLogsHandlers — verbose toggle is session-only", () => {
       "*": "debug",
     });
     expect(loggerState.overrides).toEqual({ "main:Foo": "warn", "*": "debug" });
+  });
+
+  it("disable fans out a map with no verbose wildcard", async () => {
+    register();
+    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(true);
+    ptyClient.setLogLevelOverrides.mockClear();
+    worktreeService.setLogLevelOverrides.mockClear();
+
+    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(false);
+
+    expect(ptyClient.setLogLevelOverrides).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ "*": "debug" })
+    );
+    expect(worktreeService.setLogLevelOverrides).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ "*": "debug" })
+    );
+  });
+
+  // Critical regression: the LogLevelPalette fetches the override map on open and
+  // writes it back when the user edits any logger. If verbose is active, the
+  // fetched map must not carry "*":"debug", or the round-trip re-persists verbose.
+  it("hides the verbose overlay from get-level-overrides while verbose is active", async () => {
+    register();
+    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(true);
+
+    const result = (await getHandler(CHANNELS.LOGS_GET_LEVEL_OVERRIDES)()) as Record<
+      string,
+      string
+    >;
+
+    expect(result["*"]).toBeUndefined();
+  });
+
+  it("exposes the underlying explicit wildcard (not debug) while verbose is active", async () => {
+    storeMock.get.mockReturnValue({ "*": "warn" });
+    register();
+    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(true);
+
+    const result = (await getHandler(CHANNELS.LOGS_GET_LEVEL_OVERRIDES)()) as Record<
+      string,
+      string
+    >;
+
+    expect(result["*"]).toBe("warn");
+  });
+
+  it("does not persist the verbose wildcard when a per-module override is set while verbose is active", async () => {
+    register();
+    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(true);
+    storeMock.set.mockClear();
+
+    // Simulate the palette writing back the full map it fetched plus a new edit.
+    await getHandler(CHANNELS.LOGS_SET_LEVEL_OVERRIDES)({ "*": "debug", "main:Foo": "warn" });
+
+    // Store must never receive the session-only verbose wildcard.
+    const persisted = storeMock.set.mock.calls.at(-1)?.[1] as Record<string, string>;
+    expect(persisted).toEqual({ "main:Foo": "warn" });
+    // ...but verbose stays live in memory for the rest of the session.
+    expect(loggerState.overrides["*"]).toBe("debug");
+    expect(loggerState.overrides["main:Foo"]).toBe("warn");
+  });
+
+  it("keeps an explicit non-debug wildcard set while verbose is active and restores it on disable", async () => {
+    register();
+    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(true);
+
+    // User explicitly sets "*":"error" via the palette while verbose is on.
+    await getHandler(CHANNELS.LOGS_SET_LEVEL_OVERRIDES)({ "*": "error" });
+    expect(loggerState.overrides["*"]).toBe("debug"); // overlay still active in memory
+
+    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(false);
+    expect(loggerState.overrides["*"]).toBe("error"); // user's wildcard restored
+  });
+
+  it("clearing overrides while verbose is active keeps verbose live and resets the saved wildcard", async () => {
+    storeMock.get.mockReturnValue({ "*": "warn" });
+    register();
+    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(true);
+    storeMock.set.mockClear();
+
+    await getHandler(CHANNELS.LOGS_CLEAR_LEVEL_OVERRIDES)();
+    expect(storeMock.set).toHaveBeenCalledWith("logLevelOverrides", {});
+    expect(loggerState.overrides).toEqual({ "*": "debug" });
+
+    // With nothing persisted to restore, disabling verbose clears the wildcard.
+    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(false);
+    expect(loggerState.overrides["*"]).toBeUndefined();
   });
 });
