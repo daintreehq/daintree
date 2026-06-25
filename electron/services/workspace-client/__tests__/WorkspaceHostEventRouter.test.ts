@@ -293,6 +293,25 @@ describe("WorkspaceHostEventRouter", () => {
 
       expect(events.emit).not.toHaveBeenCalledWith("sys:worktree:update", expect.anything());
     });
+
+    it("drops a pending update when the worktree is removed within the window", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, makeWorktreeUpdateEvent({ id: "wt-1", worktreeId: "wt-1" }));
+      router.routeHostEvent(entry, {
+        type: "worktree-removed",
+        worktreeId: "wt-1",
+        epoch: "550e8400-e29b-41d4-a716-446655440000",
+        seq: 2,
+      });
+      vi.advanceTimersByTime(SYS_WORKTREE_DEBOUNCE_MS);
+
+      // The remove fires synchronously; the queued update must NOT fire after it.
+      expect(events.emit).toHaveBeenCalledWith(
+        "sys:worktree:remove",
+        expect.objectContaining({ worktreeId: "wt-1" })
+      );
+      expect(events.emit).not.toHaveBeenCalledWith("sys:worktree:update", expect.anything());
+    });
   });
 
   describe("sys:worktree:remove (#9084)", () => {

@@ -808,7 +808,10 @@ function writeToLogFile(level: string, message: string, contextStr: string): voi
 
   if (level === "ERROR") {
     // Errors are written synchronously so they survive a crash. Flush any
-    // buffered lines first so the on-disk order matches emit order.
+    // buffered lines first so the on-disk order matches emit order. Ordering is
+    // best-effort: a batch already handed to an in-flight async flush has left
+    // the buffer and may interleave with this sync write — crash safety for the
+    // error line takes priority over strict ordering in that rare window.
     try {
       const data = pendingLogLines.length > 0 ? pendingLogLines.join("") + logLine : logLine;
       const total = pendingLogBytes + bytes;

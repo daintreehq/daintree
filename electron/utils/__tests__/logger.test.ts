@@ -315,6 +315,26 @@ describe("logger", () => {
       expect(content.indexOf("first buffered")).toBeLessThan(content.indexOf("then error"));
     });
 
+    it("flushes buffered lines via the scheduled setImmediate (not just the test helper)", async () => {
+      initializeLogger(TEST_LOG_DIR);
+      const logFile = getLogFilePath();
+
+      logInfo("scheduled line");
+      // Poll for the write to land without calling the test-only drain — proves
+      // the production setImmediate→drain scheduling path actually writes. The
+      // async appendFile completes off the threadpool, so its arrival isn't
+      // bounded by a fixed number of ticks; poll until it shows up.
+      const deadline = Date.now() + 2000;
+      let content = "";
+      while (Date.now() < deadline) {
+        content = existsSync(logFile) ? readFileSync(logFile, "utf8") : "";
+        if (content.includes("scheduled line")) break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      expect(content).toContain("scheduled line");
+    });
+
     it("coalesces a burst of lines into the file after a single flush", async () => {
       initializeLogger(TEST_LOG_DIR);
       const logFile = getLogFilePath();

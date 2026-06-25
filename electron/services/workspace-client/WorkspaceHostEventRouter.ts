@@ -24,12 +24,15 @@ export class WorkspaceHostEventRouter {
   // multi-agent load the host streams worktree-update snapshots at 10–50/s;
   // each synchronously drives `PullRequestService.handleWorktreeUpdate` (branch
   // diffing, PR-state clears, more log writes) and the MCP session listener,
-  // stalling the main thread and lagging keystroke echo. A 50ms trailing-edge
-  // debounce keyed per worktree collapses bursts (rapid same-worktree snapshots
-  // → one emit with the latest state) while staying imperceptible for these
-  // consumers. The direct per-view MessagePort fan-out (DIRECT_RENDERER_EVENTS)
-  // and the `worktree-update` plugin-bus emit are intentionally NOT debounced —
-  // they drive UI store updates and the PluginService contract.
+  // stalling the main thread and lagging keystroke echo. A 50ms coalescing
+  // window keyed per worktree collapses bursts (rapid same-worktree snapshots →
+  // one emit with the latest state) while staying imperceptible for these
+  // consumers. The window is bounded from the first pending update (fixed, not
+  // re-armed per update) so an update is delayed at most 50ms and sustained
+  // churn can never starve the flush. The direct per-view MessagePort fan-out
+  // (DIRECT_RENDERER_EVENTS) and the `worktree-update` plugin-bus emit are
+  // intentionally NOT debounced — they drive UI store updates and the
+  // PluginService contract.
   private static readonly SYS_WORKTREE_UPDATE_DEBOUNCE_MS = 50;
 
   private emit: EmitFn;
@@ -130,6 +133,12 @@ export class WorkspaceHostEventRouter {
           worktreeId: event.worktreeId,
           timestamp: Date.now(),
         });
+        // Drop any debounced `sys:worktree:update` still queued for this
+        // worktree so a delayed update can't fire after the removal (#10769).
+        // The update key is `worktreeId || path.resolve(path)`; delete both
+        // possible forms to cover the path-fallback key.
+        this.pendingSysWorktreeUpdates.delete(event.worktreeId);
+        this.pendingSysWorktreeUpdates.delete(path.resolve(event.worktreeId));
         // The resolved worktree path is the map key (set on `worktree-update`).
         // Prune it here so removed paths don't accumulate until `dispose()`.
         this.worktreePathToProject.delete(path.resolve(event.worktreeId));
@@ -365,9 +374,9 @@ export class WorkspaceHostEventRouter {
   }
 
   /**
-   * Buffer a `sys:worktree:update` for the trailing-edge debounce window. Keyed
-   * per worktree so rapid snapshots of the same worktree collapse to a single
-   * emit carrying the latest state. Re-arms a single shared timer (#7469: a
+   * Buffer a `sys:worktree:update` for the coalescing window. Keyed per worktree
+   * so rapid snapshots of the same worktree collapse to a single emit carrying
+   * the latest state. Arms a single shared timer if none is pending (#7469: a
    * pending entry without an armed drain timer would strand until the next
    * event).
    */
