@@ -14,10 +14,10 @@ describe("TurnOutcomePip", () => {
 
   it("labels agent-stuck distinctly from reasoning-loop", () => {
     const { rerender } = render(<TurnOutcomePip outcome="agent-stuck" onDismiss={vi.fn()} />);
-    expect(screen.getByText("Agent stuck")).toBeTruthy();
+    expect(screen.getByText("Stopped early")).toBeTruthy();
 
     rerender(<TurnOutcomePip outcome="reasoning-loop" onDismiss={vi.fn()} />);
-    expect(screen.getByText("Reasoning loop")).toBeTruthy();
+    expect(screen.getByText("Repeating steps")).toBeTruthy();
   });
 
   it("calls onDismiss when clicked", () => {
@@ -28,8 +28,14 @@ describe("TurnOutcomePip", () => {
   });
 
   it("exposes an accessible label describing the outcome", () => {
-    render(<TurnOutcomePip outcome="reasoning-loop" onDismiss={vi.fn()} />);
-    const button = screen.getByRole("button");
-    expect(button.getAttribute("aria-label")).toMatch(/reasoning loop/i);
+    const { rerender } = render(<TurnOutcomePip outcome="reasoning-loop" onDismiss={vi.fn()} />);
+    expect(screen.getByRole("button").getAttribute("aria-label")).toMatch(
+      /repeating the same step/i
+    );
+
+    rerender(<TurnOutcomePip outcome="agent-stuck" onDismiss={vi.fn()} />);
+    expect(screen.getByRole("button").getAttribute("aria-label")).toMatch(
+      /stopped early without finishing/i
+    );
   });
 });
