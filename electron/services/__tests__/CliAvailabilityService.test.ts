@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { homedir } from "os";
 import { join } from "path";
 import { CliAvailabilityService } from "../CliAvailabilityService.js";
-import { getAgentConfig } from "../../../shared/config/agentRegistry.js";
+import { getAgentConfig, getAgentIds } from "../../../shared/config/agentRegistry.js";
 import { execFile, execFileSync } from "child_process";
 import { refreshPath } from "../../setup/environment.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
@@ -130,17 +130,19 @@ describe("CliAvailabilityService", () => {
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
   // Auth env vars consulted by AgentAuthCheck.envVar across the built-in
   // registry. Clear them so local dev shells (which commonly have these set)
-  // don't cause the "no auth file" assertions to flip to "ready".
+  // don't cause the "no auth file" assertions to flip to "ready". Derived from
+  // the registry rather than hardcoded so the list can't drift as agents are
+  // added — a missing key silently re-introduces the env leak on an
+  // authenticated dev machine while CI (no keys set) stays green.
   const envKeysToClear = [
-    "ANTHROPIC_API_KEY",
-    "OPENAI_API_KEY",
-    "GEMINI_API_KEY",
-    "GOOGLE_API_KEY",
-    "GITHUB_TOKEN",
-    "GH_TOKEN",
-    "COPILOT_GITHUB_TOKEN",
-    "KIMI_API_KEY",
-    "AMP_API_KEY",
+    ...new Set(
+      getAgentIds().flatMap((id) => {
+        const envVar = getAgentConfig(id)?.authCheck?.envVar;
+        if (!envVar) return [];
+        return Array.isArray(envVar) ? envVar : [envVar];
+      })
+    ),
+    // Not an auth env var: alters the probe PATH; cleared for the same isolation.
     "DAINTREE_CLI_PATH_PREPEND",
   ];
 
