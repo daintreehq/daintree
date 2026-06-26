@@ -175,6 +175,11 @@ import { ProjectViewManager } from "../ProjectViewManager.js";
 const flushImmediates = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 function createMockWindow() {
+  // Track children so contentView.children reflects real attach/detach order —
+  // required to assert orphaned-view pruning (#10806). The old no-op mock left
+  // children empty regardless of addChildView/removeChildView, hiding the
+  // double-attach the orphan bug produces.
+  const children: unknown[] = [];
   return {
     id: 1,
     isDestroyed: vi.fn(() => false),
@@ -183,12 +188,28 @@ function createMockWindow() {
     destroy: vi.fn(),
     getContentBounds: vi.fn(() => ({ x: 0, y: 0, width: 800, height: 600 })),
     contentView: {
-      children: [] as unknown[],
-      addChildView: vi.fn(),
-      removeChildView: vi.fn(),
+      children,
+      addChildView: vi.fn((view: unknown, index?: number) => {
+        if (typeof index === "number") {
+          children.splice(index, 0, view);
+        } else {
+          children.push(view);
+        }
+      }),
+      removeChildView: vi.fn((view: unknown) => {
+        const idx = children.indexOf(view);
+        if (idx >= 0) children.splice(idx, 1);
+      }),
     },
     webContents: createMockWebContents(),
   };
+}
+
+function getResizeHandler(win: ReturnType<typeof createMockWindow>): (() => void) | undefined {
+  const call = (win.on as ReturnType<typeof vi.fn>).mock.calls.find(
+    ([event]) => event === "resize"
+  );
+  return call?.[1] as (() => void) | undefined;
 }
 
 describe("ProjectViewManager adversarial", () => {
@@ -379,5 +400,119 @@ describe("ProjectViewManager adversarial", () => {
       setBackgroundColor: ReturnType<typeof vi.fn>;
     };
     expect(replacementView.setBackgroundColor).toHaveBeenCalledWith("#1f1b16");
+  });
+
+  // #10806 — Under rapid switching + backgrounding, a cancelled paint gate or a
+  // destroyView race (HibernationService runs outside switchChain) can skip
+  // deactivateEntry(previousEntry), leaving an outgoing view attached behind the
+  // active one. Two renderers composite at once → the forge toolbar renders
+  // twice. pruneOrphanedChildren on each switch's success path sweeps the leak.
+
+  it("detaches an orphaned outgoing view left attached behind the active view (#10806)", async () => {
+    const win = createMockWindow();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const aWc = createMockWebContents();
+    const aView = { webContents: aWc, setBounds: vi.fn(), setVisible: vi.fn() };
+    win.contentView.addChildView(aView);
+    manager.registerInitialView(aView as never, "proj-a", "/a");
+
+    // A→B deactivates A (cached) and detaches it from contentView.
+    wcQueue.push(createMockWebContents());
+    await manager.switchTo("proj-b", "/b");
+    expect(win.contentView.children).not.toContain(aView);
+
+    // Reproduce the leaked state: the cached A view is attached behind the
+    // active B view, as a cancelled gate / destroyView race would leave it.
+    win.contentView.addChildView(aView);
+    expect(win.contentView.children).toContain(aView);
+
+    // The next switch must sweep the orphan so only the active view remains.
+    wcQueue.push(createMockWebContents());
+    const result = await manager.switchTo("proj-c", "/c");
+
+    expect(win.contentView.children).not.toContain(aView);
+    expect(win.contentView.children).toEqual([result.view]);
+    expect(manager.getActiveProjectId()).toBe("proj-c");
+  });
+
+  it("parks a still-active orphaned view as cached rather than evicting it (#10806)", async () => {
+    const win = createMockWindow();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const aWc = createMockWebContents();
+    const aView = { webContents: aWc, setBounds: vi.fn(), setVisible: vi.fn() };
+    win.contentView.addChildView(aView);
+    manager.registerInitialView(aView as never, "proj-a", "/a");
+
+    wcQueue.push(createMockWebContents());
+    await manager.switchTo("proj-b", "/b");
+
+    // Reproduce the precise race: deactivateEntry(A) was skipped, so A is still
+    // marked active and still attached behind the active B view.
+    const aEntry = manager.getAllViews().find((entry) => entry.projectId === "proj-a");
+    expect(aEntry).toBeDefined();
+    aEntry!.state = "active";
+    win.contentView.addChildView(aView);
+
+    wcQueue.push(createMockWebContents());
+    await manager.switchTo("proj-c", "/c");
+
+    // Orphan detached and parked as cached (setVisible(false)) — never evicted,
+    // so its reusable cached renderer and cleanup handlers survive (#6085).
+    expect(win.contentView.children).not.toContain(aView);
+    expect(aView.setVisible).toHaveBeenCalledWith(false);
+    expect(
+      manager
+        .getAllViews()
+        .map((entry) => entry.projectId)
+        .sort()
+    ).toEqual(["proj-a", "proj-b", "proj-c"]);
+  });
+
+  it("resizes orphaned attached views so a stray duplicate overlaps the active view (#10806)", async () => {
+    const win = createMockWindow();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const aWc = createMockWebContents();
+    const aView = { webContents: aWc, setBounds: vi.fn(), setVisible: vi.fn() };
+    win.contentView.addChildView(aView);
+    manager.registerInitialView(aView as never, "proj-a", "/a");
+
+    wcQueue.push(createMockWebContents());
+    await manager.switchTo("proj-b", "/b");
+
+    // Orphan A attached behind active B with no in-flight paint gate.
+    win.contentView.addChildView(aView);
+
+    const resize = getResizeHandler(win);
+    expect(resize).toBeTypeOf("function");
+    aView.setBounds.mockClear();
+    resize!();
+
+    // The orphan gets the full window bounds, so it overlaps the active view
+    // exactly instead of drifting to a stale x-offset (side-by-side toolbars).
+    expect(aView.setBounds).toHaveBeenCalledWith({ x: 0, y: 0, width: 800, height: 600 });
   });
 });
