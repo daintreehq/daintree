@@ -143,8 +143,12 @@ vi.mock("../../setup/openFileInstall.js", () => ({
   activateOpenFileInstaller,
 }));
 
+const hibernationServiceMock = vi.hoisted(() => ({
+  setProjectViewManagersProvider: vi.fn(),
+}));
+
 vi.mock("../../services/HibernationService.js", () => ({
-  initializeHibernationService: vi.fn(),
+  initializeHibernationService: vi.fn(() => hibernationServiceMock),
   getHibernationService: () => ({ stop: vi.fn(), hibernateUnderMemoryPressure: vi.fn() }),
 }));
 
@@ -384,6 +388,24 @@ describe("initGlobalServices task ordering", () => {
     run!();
 
     expect(registerCommandsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("wires a lazy ProjectViewManager provider into HibernationService (#10668)", async () => {
+    hibernationServiceMock.setProjectViewManagersProvider.mockClear();
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    const run = registeredTaskRuns.get("hibernation-service");
+    expect(run).toBeDefined();
+    expect(hibernationServiceMock.setProjectViewManagersProvider).not.toHaveBeenCalled();
+
+    run!();
+
+    expect(hibernationServiceMock.setProjectViewManagersProvider).toHaveBeenCalledTimes(1);
+    const provider = hibernationServiceMock.setProjectViewManagersProvider.mock.calls[0][0];
+    expect(typeof provider).toBe("function");
+    // Lazy: re-reads the registry on each call rather than capturing a snapshot.
+    expect(provider()).toEqual([]);
   });
 
   it("registers monitor tasks before resource-profile-service so the profile reads ready data", async () => {

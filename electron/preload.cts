@@ -2035,7 +2035,7 @@ function buildElectronApi(): ElectronAPI {
         callback: (payload: {
           projectId: string;
           projectName: string;
-          reason: "scheduled" | "memory-pressure";
+          reason: "scheduled" | "memory-pressure" | "user-initiated";
           terminalsKilled: number;
           timestamp: number;
         }) => void
