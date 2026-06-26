@@ -570,6 +570,16 @@ export class WorkspaceService {
     }
   ): Promise<void> {
     try {
+      // #10663: bail before any state is set if the project root was deleted
+      // or moved externally. Without this guard `createHardenedGit` throws a
+      // GitConstructError on the dead path, but `this.projectRootPath` is
+      // already set — so the renderer's stats/monitor polling loops keep
+      // retrying the dead path and spam WARN logs every tick. Fail fast: the
+      // caller emits a `load-project-result` failure that drives the existing
+      // "Couldn't load worktrees" banner.
+      if (!existsSync(projectRootPath)) {
+        throw new Error(`Project directory does not exist: ${projectRootPath}`);
+      }
       this.projectRootPath = projectRootPath;
       if (wslGitByWorktree && typeof wslGitByWorktree === "object") {
         // Merge instead of replacing: a `set-wsl-opt-in` message arriving
