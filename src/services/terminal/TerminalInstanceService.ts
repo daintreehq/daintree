@@ -3361,6 +3361,13 @@ class TerminalInstanceService {
     return this.instances.get(id)?.isHibernated === true;
   }
 
+  // Whether this terminal currently holds a live WebGL context (vs the DOM
+  // renderer). Reflects the WebGL manager's pool, which changes asynchronously
+  // via the rAF attach/release drains.
+  isWebGLActive(id: string): boolean {
+    return this.webGLManager.isActive(id);
+  }
+
   hibernate(id: string): void {
     this.hibernationManager.hibernate(id);
   }

@@ -265,6 +265,16 @@ export class TerminalWebGLManager {
   // atlasResync (see #8080).
   private atlasResyncPending = new Set<string>();
   private atlasResyncRafId: number | null = null;
+  // Re-entrancy guard for runAtlasResync. resetLocalWebGLRenderer re-runs the
+  // renderer's handleResize → _refreshCharAtlas, which SYNCHRONOUSLY re-fires the
+  // onChangeTextureAtlas / onRemoveTextureAtlasCanvas events whose handler
+  // (scheduleAtlasResync) schedules the next resync. Without this guard each
+  // resync schedules the next on the following frame — a self-sustaining 60fps
+  // reset loop that thrashes the renderer (constant redraw / glyph corruption on
+  // heavy-output alt-buffer TUIs like OpenCode, and a general perf drain). True
+  // only for the duration of the reset loop; the re-fire is synchronous, so the
+  // flag is cleared synchronously (finally) — no rAF/timing window is involved.
+  private suppressAtlasResync = false;
 
   setHardwareAvailable(available: boolean): void {
     const wasAvailable = this.hardwareAvailable;
@@ -773,6 +783,9 @@ export class TerminalWebGLManager {
   // Coalesce a burst of onRemoveTextureAtlasCanvas events (one per merged-away
   // page, per co-owner) into a single resync on the next frame.
   private scheduleAtlasResync(id: string): void {
+    // Drop atlas-change events re-fired synchronously by our own reset (see
+    // suppressAtlasResync) — otherwise the resync re-arms itself every frame.
+    if (this.suppressAtlasResync) return;
     this.atlasResyncPending.add(id);
     if (this.atlasResyncRafId !== null) return;
     const rafId = requestAnimationFrame(this.runAtlasResync);
@@ -790,29 +803,38 @@ export class TerminalWebGLManager {
     this.atlasResyncRafId = null;
     const ids = [...this.atlasResyncPending];
     this.atlasResyncPending.clear();
-    for (const id of ids) {
-      const entry = this.pool.get(id);
-      if (!entry) continue;
-      if (
-        !resetLocalWebGLRenderer(
-          entry.addon,
-          entry.managed.terminal.cols,
-          entry.managed.terminal.rows
-        )
-      ) {
-        this.reacquireContext(id, entry);
-        continue;
-      }
-      try {
-        // Re-check identity after local reset: the addon can synchronously
-        // lose context and release itself before we ask xterm to repaint.
-        if (this.pool.get(id) !== entry) continue;
-        if (entry.managed.isOpened && entry.managed.terminal.rows > 0) {
-          entry.managed.terminal.refresh(0, entry.managed.terminal.rows - 1);
+    // Suppress the synchronous atlas-change events that resetLocalWebGLRenderer
+    // re-fires (see suppressAtlasResync) for the whole reset loop, so the resync
+    // cannot schedule itself again. finally guarantees the flag is cleared even
+    // if a reset throws, so a genuine later page-merge still resyncs.
+    this.suppressAtlasResync = true;
+    try {
+      for (const id of ids) {
+        const entry = this.pool.get(id);
+        if (!entry) continue;
+        if (
+          !resetLocalWebGLRenderer(
+            entry.addon,
+            entry.managed.terminal.cols,
+            entry.managed.terminal.rows
+          )
+        ) {
+          this.reacquireContext(id, entry);
+          continue;
         }
-      } catch {
-        // ignore — DOM-renderer fallback or a later WebGL ensure will repaint
+        try {
+          // Re-check identity after local reset: the addon can synchronously
+          // lose context and release itself before we ask xterm to repaint.
+          if (this.pool.get(id) !== entry) continue;
+          if (entry.managed.isOpened && entry.managed.terminal.rows > 0) {
+            entry.managed.terminal.refresh(0, entry.managed.terminal.rows - 1);
+          }
+        } catch {
+          // ignore — DOM-renderer fallback or a later WebGL ensure will repaint
+        }
       }
+    } finally {
+      this.suppressAtlasResync = false;
     }
   };
 
