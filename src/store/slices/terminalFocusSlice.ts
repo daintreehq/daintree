@@ -224,9 +224,18 @@ export const createTerminalFocusSlice =
           if (terminal) {
             stampLastActive(id);
           }
-          // Wake-on-focus: sync terminal state from backend when focused.
-          // Skip wake for non-PTY panels - they don't have backend PTY processes.
-          if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
+          // Wake-on-focus: sync terminal state from backend when focus MOVES to
+          // this terminal. Skip when re-focusing the already-focused terminal
+          // (e.g. clicking the xterm while the pane's hybrid input held focus):
+          // a foreground terminal's xterm is fed by the live PTY stream and is
+          // already current, so a redundant wake's reset()+serialized-replay
+          // clobbers its live buffer. For an alt-screen TUI (OpenCode) the
+          // host buffer is never "unchanged" (it redraws continuously), so the
+          // replay always fires, carries `?1049` frames, flaps the buffer, and
+          // collapses the layout — the "click a settled OpenCode and it goes
+          // weird" corruption. Background→foreground restores run through the
+          // visibility path, not this focus click. Skip wake for non-PTY panels.
+          if (focusActuallyChanged && terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
             terminalInstanceService.wake(id);
           }
           // Only ping when selection actually changes — re-focusing the already
