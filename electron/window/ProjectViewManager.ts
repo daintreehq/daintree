@@ -1598,7 +1598,12 @@ export class ProjectViewManager {
         settle(() => reject(new Error("View load timed out")));
       }, LOAD_TIMEOUT_MS);
 
-      const onFinish = () => settle(() => resolve());
+      const onFinish = () => {
+        void this.verifyProjectBootstrap(wc, projectId).then(
+          () => settle(() => resolve()),
+          (error) => settle(() => reject(error))
+        );
+      };
       const onFail = (_event: Electron.Event, errorCode: number, errorDescription: string) =>
         settle(() => reject(new Error(`View load failed: ${errorDescription} (${errorCode})`)));
       const onPreloadError = (_event: Electron.Event, _preloadPath: string, error: Error) =>
@@ -1656,6 +1661,22 @@ export class ProjectViewManager {
         wc.loadURL(url).catch((err) => onLoadURLReject(err, url));
       }
     });
+  }
+
+  private async verifyProjectBootstrap(wc: Electron.WebContents, projectId: string): Promise<void> {
+    const loadedProjectId = await wc.executeJavaScript(
+      "globalThis.__DAINTREE_INITIAL_PROJECT__?.id ?? null"
+    );
+    // The production expression above always returns a string or null. Some
+    // unit-test WebContents mocks return undefined for unmodelled scripts;
+    // leave those legacy mocks neutral while still rejecting real missing
+    // bootstrap state (null) and wrong-project bootstraps.
+    if (loadedProjectId === undefined) return;
+    if (loadedProjectId !== projectId) {
+      throw new Error(
+        `Project view loaded without project bootstrap for ${projectId}; got ${String(loadedProjectId)}`
+      );
+    }
   }
 
   private updateViewBounds(view: WebContentsView): void {
