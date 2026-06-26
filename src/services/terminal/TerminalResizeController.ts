@@ -506,6 +506,35 @@ export class TerminalResizeController {
     terminalClient.resize(id, cols, rows);
   }
 
+  /**
+   * Force a backgrounded alt-screen TUI to repaint its full frame on wake
+   * WITHOUT replaying a serialized snapshot (#10807) and WITHOUT reflowing
+   * xterm (the out-of-band alt-frame reflow hazard #10632 / #10805 guard
+   * against — see reconcileGeometryFresh). A full-screen app (OpenCode, vim,
+   * ...) only repaints on a real PTY resize (SIGWINCH), and TerminalProcess
+   * hard no-ops a same-size resize, so re-asserting the current size does
+   * nothing. Send a down-up jiggle: rows-1 fires a SIGWINCH the app redraws
+   * against, then rows restores the true size and triggers the final full
+   * repaint. The resizes go straight to the pty via terminalClient.resize —
+   * NOT sendPtyResize, which debounces/coalesces for settled agents and would
+   * collapse the pair — and xterm is left at its true size so its grid never
+   * reflows. rows-1 (shrink-first) is safer than grow-first: the app never
+   * paints a row xterm lacks; the bottom row is briefly stale until the rows
+   * resize lands one frame later, then self-corrects.
+   */
+  nudgeForAltBufferRepaint(id: string): void {
+    const managed = this.deps.getInstance(id);
+    if (!managed) return;
+    const { cols, rows } = managed.terminal;
+    if (cols <= 1 || rows <= 1) return;
+    // Do NOT clear a pending settled resize here: it carries a real deferred
+    // xterm+PTY size change that must still land. This jiggle only forces a
+    // repaint at the current size; a later settled resize re-fires the SIGWINCH
+    // at the new size, which is the desired final geometry.
+    terminalClient.resize(id, cols, rows - 1);
+    terminalClient.resize(id, cols, rows);
+  }
+
   clearSettledTimer(id: string): void {
     const timer = this.settledResizeTimers.get(id);
     if (timer !== undefined) {

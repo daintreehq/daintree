@@ -201,6 +201,93 @@ describe("TerminalResizeController", () => {
     expect(resizeMock).toHaveBeenCalledTimes(1);
   });
 
+  it("nudgeForAltBufferRepaint fires a down-up PTY resize jiggle to force a SIGWINCH redraw (#10807)", () => {
+    const managed = createManagedTerminal();
+    managed.isAltBuffer = true;
+    // terminal.cols=80, rows=24 from the factory.
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+      } as any,
+    });
+
+    controller.nudgeForAltBufferRepaint("term-1");
+
+    // Two ordered, un-coalesced PTY resizes: rows-1 then rows. The down-up
+    // defeats TerminalProcess's same-size no-op, and xterm is never resized so
+    // its grid never reflows (the alt-frame mangle hazard).
+    expect(resizeMock).toHaveBeenCalledTimes(2);
+    expect(resizeMock).toHaveBeenNthCalledWith(1, "term-1", 80, 23);
+    expect(resizeMock).toHaveBeenNthCalledWith(2, "term-1", 80, 24);
+    expect(managed.terminal.resize).not.toHaveBeenCalled();
+  });
+
+  it("nudgeForAltBufferRepaint bails on a degenerate (<=1 row) terminal", () => {
+    const managed = createManagedTerminal();
+    managed.isAltBuffer = true;
+    managed.terminal.rows = 1;
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+      } as any,
+    });
+
+    controller.nudgeForAltBufferRepaint("term-1");
+
+    expect(resizeMock).not.toHaveBeenCalled();
+  });
+
+  it("nudgeForAltBufferRepaint no-ops when the terminal is gone", () => {
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => undefined),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+      } as any,
+    });
+
+    controller.nudgeForAltBufferRepaint("missing");
+
+    expect(resizeMock).not.toHaveBeenCalled();
+  });
+
+  it("nudgeForAltBufferRepaint preserves a pending settled resize (does not drop a deferred size change)", () => {
+    const managed = createManagedTerminal();
+    managed.isAltBuffer = true;
+    managed.runtimeAgentId = "codex";
+    getEffectiveAgentConfigMock.mockReturnValue({ capabilities: { resizeStrategy: "settled" } });
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+      } as any,
+    });
+
+    // A real size change (100x30) is deferred behind the 500ms settled timer.
+    controller.sendPtyResize("term-1", 100, 30);
+    expect(resizeMock).not.toHaveBeenCalled();
+
+    // The wake nudge fires its PTY-only jiggle at the CURRENT size (80x24)...
+    controller.nudgeForAltBufferRepaint("term-1");
+    expect(resizeMock).toHaveBeenCalledTimes(2);
+    expect(resizeMock).toHaveBeenNthCalledWith(1, "term-1", 80, 23);
+    expect(resizeMock).toHaveBeenNthCalledWith(2, "term-1", 80, 24);
+
+    // ...without dropping the pending settled resize: it still lands at 500ms,
+    // applying the real deferred size change.
+    vi.advanceTimersByTime(500);
+    expect(resizeMock).toHaveBeenCalledTimes(3);
+    expect(resizeMock).toHaveBeenNthCalledWith(3, "term-1", 100, 30);
+  });
+
   it("background-tier settled agents batch the deferred PTY resize", () => {
     const managed = createManagedTerminal();
     managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;

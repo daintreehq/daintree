@@ -207,6 +207,7 @@ class TerminalInstanceService {
         this.restoreController.restoreFromSerializedIncremental(id, state),
       isBackgrounded: (id) => usePanelStore.getState().backgroundedTerminals.has(id),
       onDeclined: (id) => this.injectDataLossMarker(id, 0),
+      resyncAltBufferOnWake: (id) => this.resizeController.nudgeForAltBufferRepaint(id),
     });
 
     this.rendererPolicy = new TerminalRendererPolicy({
@@ -2834,6 +2835,14 @@ class TerminalInstanceService {
     // Wake path can restore a terminal whose persisted agentState is "directing"
     // with no controller-owned timer. Clear before any other post-wake work.
     this.agentStateController.checkStaleDirecting(id);
+
+    // Alt-screen panes resync on wake via the PTY-only SIGWINCH nudge in
+    // wakeAndRestore (#10807), not via geometry re-fit. Skip fit()/sendPtyResize/
+    // maybeReflow here: for an unchanged window they are same-size host no-ops,
+    // and a real reflow of a live alt frame is the out-of-band hazard #10632 /
+    // #10805 guard against. Genuine size changes are handled by the
+    // ResizeObserver-driven applyResize path.
+    if (managed.isAltBuffer) return;
 
     // Settled-strategy agents require atomic xterm+PTY resize (deferred 500ms).
     // fit() would immediately resize xterm.js while PTY lags, breaking atomicity.

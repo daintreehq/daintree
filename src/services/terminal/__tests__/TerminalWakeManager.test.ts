@@ -118,15 +118,18 @@ describe("TerminalWakeManager", () => {
     expect(deps.restoreFromSerialized).toHaveBeenCalledTimes(1);
   });
 
-  it("restores the serialized snapshot for alt-screen terminals (#9894)", async () => {
-    // Before #9894 alt-screen wakes short-circuited with `return true` and
-    // never replayed the snapshot. addon-serialize includes the alt-buffer
-    // frame, so a present snapshot must be replayed — otherwise the pane is
-    // silently treated as resynced while showing stale content.
+  it("does not replay a serialized snapshot into a live alt-screen TUI; resyncs via redraw (#10807)", async () => {
+    // Regression: bdf7d6f01 (#9894) deleted the alt-buffer early-return so
+    // alt-screen wakes replayed the host snapshot via reset()+write, which
+    // mangles the live TUI's absolutely-positioned frame. The snapshot must
+    // never be replayed into a live alt buffer; the pane resyncs through a
+    // forced SIGWINCH redraw (resyncAltBufferOnWake) instead.
     wakeMock.mockResolvedValueOnce({ state: "serialized-state" });
+    const resyncAltBufferOnWake = vi.fn();
+    const refresh = vi.fn();
     const managed: MockManagedTerminal = {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
-      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+      terminal: { rows: 24, refresh, hasSelection: vi.fn(() => false) } as any,
       isAltBuffer: true,
     };
     const deps: WakeManagerDeps = {
@@ -135,31 +138,74 @@ describe("TerminalWakeManager", () => {
       hasInstance: vi.fn(() => true),
       restoreFromSerialized: vi.fn(() => true),
       restoreFromSerializedIncremental: vi.fn(async () => true),
+      resyncAltBufferOnWake,
     };
     const manager = new TerminalWakeManager(deps);
 
     const result = await manager.wakeAndRestore("term-alt");
 
-    // The alt-buffer snapshot is replayed like any main-buffer snapshot
-    // (#9894): replayedMainBuffer is true, so the policy discards the held
-    // bytes (the snapshot already contains them) rather than double-painting.
-    expect(result).toEqual({ ok: true, replayedMainBuffer: true });
-    expect(deps.restoreFromSerialized).toHaveBeenCalledWith("term-alt", "serialized-state");
+    // No reset()+replay; resolve replayedMainBuffer:false so the policy FLUSHES
+    // the held bytes (the forced repaint supersedes them) rather than treating
+    // the snapshot as authoritative and discarding them.
+    expect(result).toEqual({ ok: true, replayedMainBuffer: false });
+    expect(deps.restoreFromSerialized).not.toHaveBeenCalled();
+    expect(deps.restoreFromSerializedIncremental).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(resyncAltBufferOnWake).toHaveBeenCalledTimes(1);
+    expect(resyncAltBufferOnWake).toHaveBeenCalledWith("term-alt");
+    expect(managed.wakeSynced).toBe(true);
+    expect(managed.everWoken).toBe(true);
   });
 
-  it("does not falsely succeed an alt-screen wake with no serialized state (#9894)", async () => {
-    // The dangerous pre-#9894 path: alt-screen + null state returned `true`,
-    // permanently clearing needsWake and suppressing future wakes. It must still
-    // decline (return false) so the pane re-wakes on the next tier transition.
-    // #10309: a fresh terminal (everWoken absent) that has never restored draws
-    // no marker and schedules no retry — a null snapshot here is a clean no-op
-    // wake, not a data-loss event.
+  it("resyncs an alt-screen wake with no serialized state via redraw, not a stale decline (#10807/#9894)", async () => {
+    // With the alt-buffer branch ahead of the !state check, a null snapshot no
+    // longer declines and strands the pane (the old #9894 hazard) — an alt pane
+    // is resynced by a forced redraw whether or not the host had a snapshot.
     wakeMock.mockResolvedValueOnce({ state: null });
     const onDeclined = vi.fn();
+    const resyncAltBufferOnWake = vi.fn();
     const managed: MockManagedTerminal = {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
       terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
       isAltBuffer: true,
+      everWoken: true,
+    };
+    const deps: WakeManagerDeps = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
+      hasInstance: vi.fn(() => true),
+      restoreFromSerialized: vi.fn(() => true),
+      restoreFromSerializedIncremental: vi.fn(async () => true),
+      onDeclined,
+      resyncAltBufferOnWake,
+    };
+    const manager = new TerminalWakeManager(deps);
+
+    const result = await manager.wakeAndRestore("term-alt-null-state");
+
+    expect(result).toEqual({ ok: true, replayedMainBuffer: false });
+    expect(deps.restoreFromSerialized).not.toHaveBeenCalled();
+    expect(deps.restoreFromSerializedIncremental).not.toHaveBeenCalled();
+    expect(resyncAltBufferOnWake).toHaveBeenCalledTimes(1);
+    // No data-loss marker and no decline retry: the redraw resynced the pane.
+    expect(onDeclined).not.toHaveBeenCalled();
+    expect(manager.hasPendingWake("term-alt-null-state")).toBe(false);
+
+    manager.dispose();
+  });
+
+  it("declines a main-buffer wake with no serialized state so it retries (#9894/#10309)", async () => {
+    // Main-buffer panes keep the original anti-stale contract: a previously
+    // woken pane whose snapshot vanished declines (ok:false) and schedules a
+    // retry so it resyncs once the host has a snapshot. Alt panes take the
+    // redraw branch above instead — this locks that divergence.
+    wakeMock.mockResolvedValue({ state: null });
+    const onDeclined = vi.fn();
+    const managed: MockManagedTerminal = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+      isAltBuffer: false,
+      everWoken: true,
     };
     const deps: WakeManagerDeps = {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
@@ -171,16 +217,84 @@ describe("TerminalWakeManager", () => {
     };
     const manager = new TerminalWakeManager(deps);
 
-    const result = await manager.wakeAndRestore("term-alt-null-state");
+    const result = await manager.wakeAndRestore("term-main-null-state");
 
     expect(result).toEqual({ ok: false, replayedMainBuffer: false });
     expect(deps.restoreFromSerialized).not.toHaveBeenCalled();
-    expect(deps.restoreFromSerializedIncremental).not.toHaveBeenCalled();
-    // No marker and no retry for a fresh terminal's null-snapshot wake (#10309).
+    // A previously-woken main-buffer pane schedules a decline retry (no marker
+    // — genuine host drops surface via the OSC 57301 path, not wake-decline).
+    expect(manager.hasPendingWake("term-main-null-state")).toBe(true);
     expect(onDeclined).not.toHaveBeenCalled();
-    expect(manager.hasPendingWake("term-alt-null-state")).toBe(false);
 
     manager.dispose();
+  });
+
+  it("declines an alt-screen wake when a selection starts during the wake await (#10807)", async () => {
+    // hasSelection() is false at entry (clears the pre-await guard) but true
+    // once the host wake resolves. The resize-driven repaint would disrupt the
+    // drag-select, so the alt branch declines + schedules a retry rather than
+    // nudging — mirroring the main-buffer mid-wake selection guard.
+    let selectionActive = false;
+    wakeMock.mockImplementationOnce(async () => {
+      selectionActive = true;
+      return { state: "serialized-state" };
+    });
+    const resyncAltBufferOnWake = vi.fn();
+    const managed: MockManagedTerminal = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => selectionActive) } as any,
+      isAltBuffer: true,
+      everWoken: true,
+    };
+    const deps: WakeManagerDeps = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
+      hasInstance: vi.fn(() => true),
+      restoreFromSerialized: vi.fn(() => true),
+      restoreFromSerializedIncremental: vi.fn(async () => true),
+      resyncAltBufferOnWake,
+    };
+    const manager = new TerminalWakeManager(deps);
+
+    const result = await manager.wakeAndRestore("term-alt-sel");
+
+    expect(result).toEqual({ ok: false, replayedMainBuffer: false });
+    expect(resyncAltBufferOnWake).not.toHaveBeenCalled();
+    expect(deps.restoreFromSerialized).not.toHaveBeenCalled();
+    expect(managed.wakeSynced).toBe(false);
+    expect(manager.hasPendingWake("term-alt-sel")).toBe(true);
+
+    manager.dispose();
+  });
+
+  it("redraws an alt-screen pane even when the host reports no change (alt branch precedes the noChange skip) (#10807)", async () => {
+    // A wakeSynced alt pane can get { noChange: true } from the host. The alt
+    // branch sits BEFORE the noChange skip so the repaint nudge still fires —
+    // otherwise a stale/corrupted alt frame could be silently skipped.
+    wakeMock.mockResolvedValueOnce({ state: null, noChange: true });
+    const resyncAltBufferOnWake = vi.fn();
+    const managed: MockManagedTerminal = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+      isAltBuffer: true,
+      wakeSynced: true,
+      everWoken: true,
+    };
+    const deps: WakeManagerDeps = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
+      hasInstance: vi.fn(() => true),
+      restoreFromSerialized: vi.fn(() => true),
+      restoreFromSerializedIncremental: vi.fn(async () => true),
+      resyncAltBufferOnWake,
+    };
+    const manager = new TerminalWakeManager(deps);
+
+    const result = await manager.wakeAndRestore("term-alt-nochange");
+
+    expect(result).toEqual({ ok: true, replayedMainBuffer: false });
+    expect(resyncAltBufferOnWake).toHaveBeenCalledTimes(1);
+    expect(deps.restoreFromSerialized).not.toHaveBeenCalled();
   });
 
   it("restores serialized state for non-alt-screen terminals", async () => {

@@ -303,6 +303,49 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     expect(resetForTerminal).not.toHaveBeenCalled();
   });
 
+  it("handlePostWake skips geometry re-fit for an alt-screen pane on wake (#10807)", async () => {
+    const id = "fw-alt-postwake";
+    const instance = makeInstance();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (instance as any).isAltBuffer = true;
+    service.instances.set(id, instance);
+
+    vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
+    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue({
+      ok: true,
+      replayedMainBuffer: false,
+    });
+    vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
+
+    // Earlier tests in this file mock service.handlePostWake, and beforeEach
+    // only clears call history (clearAllMocks), not implementations — so restore
+    // the REAL handlePostWake, then spy call-through. Without this the test runs
+    // a leaked no-op mock and would pass even if the alt early-return were
+    // removed.
+    vi.spyOn(service, "handlePostWake").mockRestore();
+    const handlePostWake = vi.spyOn(service, "handlePostWake");
+
+    // For an alt pane the real handlePostWake must early-return after
+    // checkStaleDirecting and skip every geometry op — those would be same-size
+    // host no-ops or an out-of-band alt-frame reflow.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const resize = service.resizeController as any;
+    const fit = vi.spyOn(resize, "fit").mockReturnValue(null);
+    const sendPtyResize = vi.spyOn(resize, "sendPtyResize").mockImplementation(() => {});
+    const forceImmediateResize = vi
+      .spyOn(resize, "forceImmediateResize")
+      .mockImplementation(() => {});
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    // Confirms the real handlePostWake actually ran (not a leaked no-op mock).
+    expect(handlePostWake).toHaveBeenCalledWith(id);
+    expect(fit).not.toHaveBeenCalled();
+    expect(sendPtyResize).not.toHaveBeenCalled();
+    expect(forceImmediateResize).not.toHaveBeenCalled();
+  });
+
   it("repairs the WebGL atlas before the async wakeAndRestore IPC (#9679)", async () => {
     const id = "fw-webgl";
     const instance = makeInstance();

@@ -36,6 +36,14 @@ export interface WakeManagerDeps {
    * untouched while the user drags a selection.
    */
   onDeclined?: (id: string) => void;
+  /**
+   * Force a backgrounded alt-screen pane to repaint its full frame on wake by
+   * driving a real SIGWINCH, instead of replaying a serialized snapshot into
+   * the live TUI (#10807). Must fire an actual resize: a same-size re-assert is
+   * a host no-op (TerminalProcess hard-skips same-size resizes), so the impl
+   * jiggles the pty rows. Optional / no-op in tests.
+   */
+  resyncAltBufferOnWake?: (id: string) => void;
 }
 
 export interface WakeResult {
@@ -46,8 +54,9 @@ export interface WakeResult {
    * incremental succeeded). Selection skips, missing state, failures, and a
    * mid-wake instance swap all resolve with `false` — xterm was not
    * reset+replayed for the live instance, so bytes held while backgrounded
-   * must still be flushed. Alt-buffer wakes replay like any main-buffer
-   * snapshot (#9894) and so resolve `true`. Callers use this to choose between
+   * must still be flushed. Alt-buffer wakes never replay a snapshot (#10807):
+   * they resync via a SIGWINCH redraw and resolve `false` so held bytes flush.
+   * Callers use this to choose between
    * flushing the held ingest queue and discarding it (the snapshot already
    * contains those bytes — flushing would double-paint them, #9910).
    */
@@ -111,6 +120,48 @@ export class TerminalWakeManager {
           canSkipUnchanged: managed.wakeSynced === true,
         });
 
+        // Alt-screen TUIs (OpenCode, vim, lazygit, any agent with blockAltScreen
+        // disabled) paint an absolutely-positioned frame from the live PTY
+        // stream. The host wake snapshot is the raw alt frame (\x1b[?1049h +
+        // cells); replaying it via restoreFromSerialized's reset()+write desyncs
+        // the running app's cursor/scroll-region model, so its live
+        // cursor-relative deltas land at the wrong rows (#10807 — the regression
+        // bdf7d6f01 caused by deleting this guard). Never replay into a live alt
+        // buffer. terminalClient.wake above already resumed the host pty; resync
+        // by forcing a clean SIGWINCH redraw instead. Placed before the noChange
+        // and !state branches so every alt wake redraws: a wakeSynced pane must
+        // not skip the repaint, and a null-state wake redraws rather than
+        // declining as stale.
+        if (managed.isAltBuffer) {
+          // Selection that began during the await: we never reset() on this
+          // path so the drag-select survives, but the resize-driven repaint
+          // would disrupt it. Defer with a retry, mirroring the main-buffer
+          // selection guard below.
+          if (managed.terminal.hasSelection()) {
+            managed.wakeSynced = false;
+            this.noteDecline(id, false);
+            return { ok: false, replayedMainBuffer: false };
+          }
+          this.clearDeclineRetry(id);
+          if (this.deps.getInstance(id) === managed) {
+            // A real redraw is forced, so the wake legitimately succeeds
+            // (ok:true) and the policy/visibility caller clears needsWake —
+            // unlike the stale-leaving early-return bdf7d6f01 removed (#9894).
+            // (triggerWake's bare path only records lastWakeTime; needsWake is
+            // owned by TerminalRendererPolicy.) everWoken gates the null-state
+            // marker (see the !state branch); wakeSynced lets the host skip a
+            // wasted re-serialize next wake (the snapshot is never replayed).
+            managed.everWoken = true;
+            managed.wakeSynced = true;
+            usePanelStore.getState().clearScrollbackRestoreError(id);
+            this.deps.resyncAltBufferOnWake?.(id);
+          }
+          // replayedMainBuffer:false → callers flush (not discard) the held
+          // ingest bytes; the forced repaint supersedes them, so the pane is
+          // never stale-but-reported-live (#9894).
+          return { ok: true, replayedMainBuffer: false };
+        }
+
         // Host proved nothing mutated the buffer since this pane's last
         // faithful sync — the pane is already current, so skip reset+replay
         // (which also means there's no selection to protect). Held bytes are
@@ -153,10 +204,9 @@ export class TerminalWakeManager {
         //    genuine host-side drops surface through the OSC 57301 path (#8375),
         //    not the wake-decline path.
         //
-        // Alternate-screen TUIs fall through here too: addon-serialize includes
-        // the alt-buffer frame (\x1b[?1049h + content), so a present snapshot
-        // correctly repaints the TUI rather than being silently treated as a
-        // no-op resync (#9894).
+        // Alt-screen panes never reach here: they are handled by the
+        // isAltBuffer branch above (redraw, not replay — #10807). This path is
+        // main-buffer only.
         if (!state) {
           managed.wakeSynced = false;
           if (managed.everWoken) {
