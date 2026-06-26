@@ -1028,6 +1028,42 @@ class TerminalInstanceService {
   }
 
   /**
+   * Focus/click-driven wake. The wake-on-focus safety net (51ba86d8d) heals a
+   * frozen/garbled pane on click by running `wakeManager.wake` -> wakeAndRestore
+   * -> restoreFromSerialized = `terminal.reset()` + serialized replay. For a
+   * main-buffer pane that replay is harmless (full-line overwrite) and still
+   * heals background garble. For a LIVE, foreground alt-screen TUI (OpenCode,
+   * any agent with blockAltScreen disabled) it is destructive: reset()+replay
+   * duplicates/collapses the absolutely-positioned frame — the "click a settled
+   * OpenCode and it goes weird" corruption. A co-visible foreground alt-screen
+   * pane is fed by the live PTY stream and is already current, so it needs no
+   * resync at all: leave it untouched. A genuinely stale pane (hibernated,
+   * backgrounded, or armed for wake) still takes the full wake — its replay is
+   * the legitimate background->foreground resync owned by the visibility path.
+   */
+  wakeForFocus(id: string): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+
+    const panelState = usePanelStore.getState();
+    const panel = panelState.panelsById[id];
+    const needsRealRestore =
+      managed.isHibernated ||
+      managed.needsWake === true ||
+      panel?.location === "background" ||
+      panelState.backgroundedTerminals.has(id);
+
+    if (needsRealRestore || managed.isAltBuffer !== true) {
+      this.wake(id);
+      return;
+    }
+    // Live foreground alt-screen TUI: already current from the live PTY stream.
+    // No reset+replay (clobbers the frame) and no geometry reconcile (reflows
+    // it). The reflow controller's focus/heartbeat recovery and the
+    // reconciliation watchdog handle any genuine renderer staleness.
+  }
+
+  /**
    * Run the full click-equivalent wake sequence on a visible terminal whose
    * project view just regained visibility (#8562). This method is the complete
    * path: it runs `applyDeferredResize`, `forceXtermReflow`,
