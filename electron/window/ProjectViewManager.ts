@@ -1678,6 +1678,7 @@ export class ProjectViewManager {
       );
     }
   }
+
   private updateViewBounds(view: WebContentsView): void {
     if (this.win.isDestroyed()) return;
     const { width, height } = this.win.getContentBounds();

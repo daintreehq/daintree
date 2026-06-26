@@ -387,7 +387,6 @@ describe("ProjectViewManager — switch failure rollback", () => {
 
   it("rejects when the renderer finishes on the wrong internal page without project bootstrap", async () => {
     const wrongPageWc = createMockWebContents({ autoFinishLoad: false });
-    wrongPageWc.executeJavaScript.mockResolvedValue(null);
     wcQueue.push(wrongPageWc);
 
     const p = manager.switchTo("proj-b", "/path/b");
@@ -400,6 +399,30 @@ describe("ProjectViewManager — switch failure rollback", () => {
     expect(err.message).toContain("Project view loaded without project bootstrap");
     expect(manager.getActiveProjectId()).toBe("proj-a");
     expect(wrongPageWc.close).toHaveBeenCalled();
+    expect(notifyError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ source: "project-switch" })
+    );
+  });
+
+  it("rejects when the renderer bootstraps a different project than requested", async () => {
+    const wrongProjectWc = createMockWebContents({
+      autoFinishLoad: false,
+      bootstrapProjectId: "proj-c",
+    });
+    wcQueue.push(wrongProjectWc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+
+    await vi.advanceTimersByTimeAsync(0);
+    wrongProjectWc._fireOnce("did-finish-load");
+
+    const err = await errPromise;
+    expect(err.message).toContain("Project view loaded without project bootstrap");
+    expect(err.message).toContain("got proj-c");
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(wrongProjectWc.close).toHaveBeenCalled();
     expect(notifyError).toHaveBeenCalledWith(
       expect.any(Error),
       expect.objectContaining({ source: "project-switch" })
