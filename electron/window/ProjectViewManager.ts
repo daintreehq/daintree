@@ -337,7 +337,13 @@ export class ProjectViewManager {
       // pruneOrphanedChildren detaches it.
       for (const child of win.contentView.children as WebContentsView[]) {
         if (child === view || child === outgoing) continue;
-        if (!child.webContents || child.webContents.isDestroyed()) continue;
+        const childWc = child.webContents;
+        if (!childWc || childWc.isDestroyed()) continue;
+        // Only sync project views. Non-project children (PortalManager parks
+        // hidden portal tabs at OFFSCREEN_BOUNDS while still attached, the
+        // unbound welcome view, devtools) own their own bounds — forcing them
+        // to full-window here would yank a hidden portal onscreen on resize.
+        if (!this.webContentsToProject.has(childWc.id)) continue;
         child.setBounds({ x: 0, y: 0, width, height });
       }
       this.scheduleBackgroundResizeNotify();
@@ -789,6 +795,15 @@ export class ProjectViewManager {
         // welcome view is not a project entry, but IPC helpers still need
         // getAppWebContents() to resolve to it after a failed first switch.
         registerAppView(this.win, unboundOutgoingView);
+      }
+
+      // Sweep any orphan that leaked before this failed switch (#10806). The
+      // rollback above restores the previous view as active; prune removes any
+      // other stray project view still attached behind it. Best-effort.
+      try {
+        this.pruneOrphanedChildren();
+      } catch (pruneError) {
+        console.error("[ProjectViewManager] pruneOrphanedChildren threw:", pruneError);
       }
 
       notifyError(loadError, { source: "project-switch" });

@@ -515,4 +515,34 @@ describe("ProjectViewManager adversarial", () => {
     // exactly instead of drifting to a stale x-offset (side-by-side toolbars).
     expect(aView.setBounds).toHaveBeenCalledWith({ x: 0, y: 0, width: 800, height: 600 });
   });
+
+  it("does not resize non-project children such as parked portal views (#10806)", async () => {
+    const win = createMockWindow();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const aView = { webContents: createMockWebContents(), setBounds: vi.fn(), setVisible: vi.fn() };
+    win.contentView.addChildView(aView);
+    manager.registerInitialView(aView as never, "proj-a", "/a");
+
+    // A hidden portal tab: attached to contentView but never registered as a
+    // project view, parked far offscreen by PortalManager.
+    const portalView = { webContents: createMockWebContents(), setBounds: vi.fn() };
+    win.contentView.addChildView(portalView);
+
+    const resize = getResizeHandler(win);
+    expect(resize).toBeTypeOf("function");
+    portalView.setBounds.mockClear();
+    resize!();
+
+    // The portal view must keep its own (offscreen) bounds — yanking it to the
+    // full window would surface a hidden tab over the active project view.
+    expect(portalView.setBounds).not.toHaveBeenCalled();
+  });
 });
