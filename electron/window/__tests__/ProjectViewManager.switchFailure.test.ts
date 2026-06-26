@@ -23,15 +23,23 @@ interface MockWc {
   _fireOnce: (event: string, ...args: unknown[]) => void;
 }
 
-function createMockWebContents(opts?: { autoFinishLoad?: boolean }): MockWc {
+function createMockWebContents(opts?: {
+  autoFinishLoad?: boolean;
+  bootstrapProjectId?: string | null;
+}): MockWc {
   const id = nextWebContentsId++;
   const handlers = new Map<string, Handler[]>();
   const autoFinish = opts?.autoFinishLoad ?? true;
+  const bootstrapProjectId = opts?.bootstrapProjectId ?? null;
 
   const wc: MockWc = {
     id,
     isDestroyed: vi.fn(() => false),
-    executeJavaScript: vi.fn(() => Promise.resolve()),
+    executeJavaScript: vi.fn((code?: string) =>
+      String(code ?? "").includes("__DAINTREE_INITIAL_PROJECT__")
+        ? Promise.resolve(bootstrapProjectId)
+        : Promise.resolve()
+    ),
     loadURL: vi.fn(() => Promise.resolve()),
     focus: vi.fn(),
     invalidate: vi.fn(),
@@ -336,7 +344,10 @@ describe("ProjectViewManager — switch failure rollback", () => {
 
   it("switchChain continues after rollback — second switch succeeds", async () => {
     const failWc = createMockWebContents({ autoFinishLoad: false });
-    const succeedWc = createMockWebContents({ autoFinishLoad: true });
+    const succeedWc = createMockWebContents({
+      autoFinishLoad: true,
+      bootstrapProjectId: "proj-c",
+    });
     wcQueue.push(failWc, succeedWc);
 
     const first = manager.switchTo("proj-b", "/path/b");
@@ -355,14 +366,15 @@ describe("ProjectViewManager — switch failure rollback", () => {
   });
 
   it("only settles once when multiple events fire", async () => {
-    const wc = createMockWebContents({ autoFinishLoad: false });
+    const wc = createMockWebContents({ autoFinishLoad: false, bootstrapProjectId: "proj-b" });
     wcQueue.push(wc);
 
     const p = manager.switchTo("proj-b", "/path/b");
     await vi.advanceTimersByTimeAsync(0);
 
-    // Fire did-finish-load first (success)
+    // Fire did-finish-load first (success), then let the async bootstrap check settle.
     wc._fireOnce("did-finish-load");
+    await vi.advanceTimersByTimeAsync(0);
 
     // Then fire preload-error (should be ignored by settle guard)
     wc._fireOnce("preload-error", {}, "/test/preload.cjs", new Error("Should be ignored"));
@@ -371,5 +383,26 @@ describe("ProjectViewManager — switch failure rollback", () => {
     await vi.advanceTimersByTimeAsync(1);
     const result = await p;
     expect(result.isNew).toBe(true);
+  });
+
+  it("rejects when the renderer finishes on the wrong internal page without project bootstrap", async () => {
+    const wrongPageWc = createMockWebContents({ autoFinishLoad: false });
+    wrongPageWc.executeJavaScript.mockResolvedValue(null);
+    wcQueue.push(wrongPageWc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+
+    await vi.advanceTimersByTimeAsync(0);
+    wrongPageWc._fireOnce("did-finish-load");
+
+    const err = await errPromise;
+    expect(err.message).toContain("Project view loaded without project bootstrap");
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(wrongPageWc.close).toHaveBeenCalled();
+    expect(notifyError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ source: "project-switch" })
+    );
   });
 });
