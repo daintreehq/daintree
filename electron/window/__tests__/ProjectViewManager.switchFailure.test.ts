@@ -428,4 +428,31 @@ describe("ProjectViewManager — switch failure rollback", () => {
       expect.objectContaining({ source: "project-switch" })
     );
   });
+
+  it("rolls back when the bootstrap check rejects (webContents destroyed mid-verify)", async () => {
+    const destroyedWc = createMockWebContents({ autoFinishLoad: false });
+    // The bootstrap probe rejects rather than resolving — mirrors executeJavaScript
+    // throwing "Object has been destroyed" if the view is torn down mid-check.
+    destroyedWc.executeJavaScript.mockImplementation((code?: string) =>
+      String(code ?? "").includes("__DAINTREE_INITIAL_PROJECT__")
+        ? Promise.reject(new Error("Object has been destroyed"))
+        : Promise.resolve()
+    );
+    wcQueue.push(destroyedWc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+
+    await vi.advanceTimersByTimeAsync(0);
+    destroyedWc._fireOnce("did-finish-load");
+
+    const err = await errPromise;
+    expect(err.message).toBe("Object has been destroyed");
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(destroyedWc.close).toHaveBeenCalled();
+    expect(notifyError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ source: "project-switch" })
+    );
+  });
 });
