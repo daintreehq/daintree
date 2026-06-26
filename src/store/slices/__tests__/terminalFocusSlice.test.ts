@@ -5,6 +5,7 @@ import type { PtyPanelData } from "@shared/types/panel";
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     wake: vi.fn(),
+    wakeForFocus: vi.fn(),
   },
 }));
 
@@ -1208,13 +1209,13 @@ describe("TerminalFocusSlice - setFocused ping gating", () => {
     expect(pingSpy).not.toHaveBeenCalled();
   });
 
-  it("wakes the terminal when focus moves to it", () => {
+  it("routes a focus move through wakeForFocus (never a destructive wake on a live grid pane)", () => {
     state.setFocused("term-1");
-    expect(terminalInstanceService.wake).toHaveBeenCalledWith("term-1");
+    expect(terminalInstanceService.wakeForFocus).toHaveBeenCalledWith("term-1");
 
-    vi.mocked(terminalInstanceService.wake).mockClear();
+    vi.mocked(terminalInstanceService.wakeForFocus).mockClear();
     state.setFocused("term-2");
-    expect(terminalInstanceService.wake).toHaveBeenCalledWith("term-2");
+    expect(terminalInstanceService.wakeForFocus).toHaveBeenCalledWith("term-2");
   });
 
   it("does NOT re-wake when re-focusing the already-focused terminal", () => {
@@ -1223,11 +1224,11 @@ describe("TerminalFocusSlice - setFocused ping gating", () => {
     // focus) must not trigger that, or the redundant replay clobbers the live
     // buffer and collapses an alt-screen TUI like OpenCode.
     state.setFocused("term-1");
-    vi.mocked(terminalInstanceService.wake).mockClear();
+    vi.mocked(terminalInstanceService.wakeForFocus).mockClear();
 
     state.setFocused("term-1");
 
-    expect(terminalInstanceService.wake).not.toHaveBeenCalled();
+    expect(terminalInstanceService.wakeForFocus).not.toHaveBeenCalled();
   });
 });
 

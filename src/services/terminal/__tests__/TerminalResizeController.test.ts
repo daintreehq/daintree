@@ -1276,6 +1276,25 @@ describe("TerminalResizeController", () => {
       expect(managed.fitAddon.fit).not.toHaveBeenCalled();
     });
 
+    it("does NOT reflow a live alt-screen TUI even when the grid drifted (OpenCode clobber regression)", () => {
+      const managed = createManagedTerminal();
+      managed.isAltBuffer = true;
+      // Same stale-grid setup as above (box proposes 100x30, grid is 80x24): a
+      // main-buffer pane gets reflowed, but an alt-screen pane must be left
+      // untouched — an out-of-band xterm resize mangles its absolutely-positioned
+      // frame (the "settled OpenCode goes weird on click" corruption, #10632).
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+
+      const controller = makeController(managed);
+      const ok = controller.reconcileGeometryFresh("term-1");
+
+      // Reports success so the reveal repaint does not retry-loop, but resizes
+      // neither xterm nor the PTY.
+      expect(ok).toBe(true);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+    });
+
     it("ignores an active resize lock without clearing it (the reveal exception)", () => {
       const managed = createManagedTerminal();
       managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));

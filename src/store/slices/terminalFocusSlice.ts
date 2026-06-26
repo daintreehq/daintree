@@ -208,6 +208,12 @@ export const createTerminalFocusSlice =
           const previousFocusedId = get().focusedId;
           const focusActuallyChanged = id !== previousFocusedId;
           const terminal = getTerminals().find((t) => t.id === id);
+          // Snapshot BEFORE the set() below flips activeDockTerminalId to `id`: a
+          // dock pane that was already the active dock terminal is live (popover
+          // open), like a grid re-focus; a dock pane that was NOT active is a
+          // first reveal from the parked/offscreen dock and needs a genuine wake.
+          const wasActiveDockTerminal =
+            terminal?.location === "dock" && get().activeDockTerminalId === id;
           if (terminal?.location === "dock") {
             set({
               focusedId: id,
@@ -224,19 +230,23 @@ export const createTerminalFocusSlice =
           if (terminal) {
             stampLastActive(id);
           }
-          // Wake-on-focus: sync terminal state from backend when focus MOVES to
-          // this terminal. Skip when re-focusing the already-focused terminal
-          // (e.g. clicking the xterm while the pane's hybrid input held focus):
-          // a foreground terminal's xterm is fed by the live PTY stream and is
-          // already current, so a redundant wake's reset()+serialized-replay
-          // clobbers its live buffer. For an alt-screen TUI (OpenCode) the
-          // host buffer is never "unchanged" (it redraws continuously), so the
-          // replay always fires, carries `?1049` frames, flaps the buffer, and
-          // collapses the layout — the "click a settled OpenCode and it goes
-          // weird" corruption. Background→foreground restores run through the
-          // visibility path, not this focus click. Skip wake for non-PTY panels.
+          // Wake-on-focus: recover this pane's renderer when focus MOVES to it.
+          // Skip when re-focusing the already-focused terminal (#10800). Use
+          // `wakeForFocus`, NOT `wake`: a live foreground pane is fed by the live
+          // PTY stream and is already current, so the full wake's reset()+replay
+          // is unnecessary and, for an alt-screen TUI (OpenCode), destructive —
+          // it duplicates/collapses the frame (the "click a settled OpenCode and
+          // it goes weird" corruption; the host noChange skip can't catch it
+          // because the TUI redraws continuously). wakeForFocus still full-wakes
+          // main-buffer and genuinely-stale panes. A first reveal of a parked
+          // dock tab keeps the full wake; an already-open dock tab and any grid
+          // pane take wakeForFocus. Skip non-PTY panels.
           if (focusActuallyChanged && terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
-            terminalInstanceService.wake(id);
+            if (terminal.location === "dock" && !wasActiveDockTerminal) {
+              terminalInstanceService.wake(id);
+            } else {
+              terminalInstanceService.wakeForFocus(id);
+            }
           }
           // Only ping when selection actually changes — re-focusing the already
           // selected terminal should be a no-op visually (no 1.6s ping loop).
@@ -491,7 +501,14 @@ export const createTerminalFocusSlice =
           return;
         }
         if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
-          terminalInstanceService.wake(id);
+          // Re-focusing the already-open dock pane is live (like a grid click) —
+          // wakeForFocus avoids the alt-screen clobber; a first reveal from the
+          // parked/offscreen dock is a genuine wake.
+          if (get().activeDockTerminalId === id) {
+            terminalInstanceService.wakeForFocus(id);
+          } else {
+            terminalInstanceService.wake(id);
+          }
         }
         if (isPtyPanel(terminal) && terminal.agentState === "waiting") {
           window.electron?.notification?.acknowledgeWaiting(id);
@@ -520,10 +537,19 @@ export const createTerminalFocusSlice =
         const terminal = terminals.find((t) => t.id === id);
         if (!terminal) return;
 
-        // Wake-on-focus: sync terminal state from backend when activated.
-        // Skip wake for non-PTY panels - they don't have backend PTY processes.
+        // Wake-on-focus: recover this pane's renderer when activated. A first
+        // reveal of a parked dock pane takes the full wake; a grid pane and an
+        // already-open dock pane (activeDockTerminalId === id) are live, so they
+        // take wakeForFocus — which never reset+replays a live alt-screen TUI.
+        // Skip non-PTY panels (no backend PTY).
         if (panelKindHasPty(terminal.kind ?? "terminal")) {
-          terminalInstanceService.wake(id);
+          const isFirstDockReveal =
+            terminal.location === "dock" && get().activeDockTerminalId !== id;
+          if (isFirstDockReveal) {
+            terminalInstanceService.wake(id);
+          } else {
+            terminalInstanceService.wakeForFocus(id);
+          }
         }
 
         const previousFocusedId = get().focusedId;
