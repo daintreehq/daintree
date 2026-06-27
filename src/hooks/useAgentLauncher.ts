@@ -62,6 +62,32 @@ function sanitizeTerminalName(raw: string): string {
   return out.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Resolve the worktree a launch should target. When a `targetWorktreeId` is
+ * supplied but matches no known worktree (and the worktree map has finished
+ * loading), this throws instead of returning null so the failure surfaces as a
+ * real error to callers — notably the MCP `agent.launch` path, where a silent
+ * null was serialized as a terminal-less success and triggered client retry
+ * loops (#10812). The thrown message lists the available IDs so a model client
+ * can self-correct. Before the map is initialized we cannot assert "not found",
+ * so we fall through and let the caller use its cwd fallbacks.
+ */
+export function resolveLaunchWorktree<T>(
+  targetWorktreeId: string | null | undefined,
+  worktreeMap: Map<string, T>,
+  isInitialized: boolean
+): T | null {
+  const targetWorktree = targetWorktreeId ? worktreeMap.get(targetWorktreeId) : undefined;
+  if (targetWorktreeId && !targetWorktree && isInitialized) {
+    throw new Error(
+      `Worktree '${targetWorktreeId}' not found. Available worktree IDs: ${
+        [...worktreeMap.keys()].join(", ") || "none"
+      }`
+    );
+  }
+  return targetWorktree ?? null;
+}
+
 export interface LaunchAgentOptions {
   location?: AddPanelOptions["location"];
   cwd?: string;
@@ -278,12 +304,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
 
       try {
         const targetWorktreeId = launchOptions?.worktreeId ?? activeWorktreeId;
-        const targetWorktree = targetWorktreeId ? worktreeMap.get(targetWorktreeId) : null;
-
-        if (targetWorktreeId && !targetWorktree && isInitialized) {
-          console.warn(`Worktree ${targetWorktreeId} not found, cannot launch agent`);
-          return null;
-        }
+        const targetWorktree = resolveLaunchWorktree(targetWorktreeId, worktreeMap, isInitialized);
 
         const cwd =
           launchOptions?.cwd ??
