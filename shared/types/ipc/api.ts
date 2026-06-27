@@ -1630,18 +1630,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: import("./mcpServer.js").McpTurnOutcomeAlertPayload) => void
     ): () => void;
   };
-  // Invoke methods (incl. reportPanelOpen) come from GeneratedElectronAPI; the
-  // cold-resume subscription is a renderer-only push listener wired manually in
-  // preload (#10815).
-  help: GeneratedElectronAPI["help"] & {
-    /**
-     * Subscribe to cold-switch-back auto-resume pushes. Fires once when a
-     * project's evicted assistant session is restored on a cold view load and
-     * the panel was open at eviction time, carrying the agent to relaunch. The
-     * renderer auto-reopens the panel and resumes without a manual click.
-     */
-    onColdResume(callback: (payload: { agentId: string }) => void): () => void;
-  };
+  // All help methods (incl. reportPanelOpen + peekPendingHibernation, which
+  // surfaces `panelWasOpen` for cold switch-back auto-resume) come from
+  // GeneratedElectronAPI (#10815).
+  help: GeneratedElectronAPI["help"];
   // helpAssistant is generated — see GeneratedElectronAPI.
   mcpBridge: {
     /** Listen for manifest requests from main process */

@@ -43,7 +43,6 @@ import {
 } from "./window/windowRef.js";
 import { WindowRegistry } from "./window/WindowRegistry.js";
 import { ProjectViewManager } from "./window/ProjectViewManager.js";
-import { CHANNELS } from "./ipc/channels.js";
 import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
 import { distributePortsToView } from "./window/portDistribution.js";
@@ -389,28 +388,11 @@ if (!gotTheLock) {
             console.warn(`[main] run-history pushSnapshotTo failed for wc ${wcId}:`, err);
           });
 
-        // #10815: cold switch-back auto-resume. When this view was evicted (or
-        // crashed) with the assistant panel open, the eviction captured a
-        // resume token stamped `panelWasOpen: true` (in-memory only — tokens
-        // reloaded from disk on app restart lack it, so this never fires for a
-        // prior session). Push the captured agent to the cold-restored renderer
-        // so it auto-reopens the panel and resumes without a manual click. The
-        // renderer guards on `!terminalId` so a DevTools reload over a live
-        // session never double-launches. `peekPendingHibernation` is
-        // non-consuming; the renderer's launch flow does the atomic take.
-        const coldResumeProjectId = getProjectViewManager()?.getProjectIdForWebContents(wc.id);
-        if (coldResumeProjectId) {
-          import("./services/HelpSessionService.js")
-            .then(({ helpSessionService }) => {
-              const pending = helpSessionService.peekPendingHibernation(coldResumeProjectId);
-              if (pending?.panelWasOpen && !wc.isDestroyed()) {
-                wc.send(CHANNELS.HELP_COLD_RESUME, { agentId: pending.agentId });
-              }
-            })
-            .catch((err) => {
-              console.warn(`[main] help cold-resume push failed for wc ${wcId}:`, err);
-            });
-        }
+        // #10815: cold switch-back auto-resume is driven entirely by the
+        // renderer's pull-on-mount `help.peekPendingHibernation` peek (which
+        // surfaces the in-memory `panelWasOpen` flag), not a main→renderer push:
+        // the lazy HelpPanel subscribes long after `did-finish-load` fires, so a
+        // one-shot push was dropped on a true cold restore. No push needed here.
       },
     });
     setProjectViewManager(pvm);

@@ -496,9 +496,6 @@ export const CHANNELS = {
   HELP_TAKE_PENDING_HIBERNATION: "help:take-pending-hibernation",
   HELP_REPORT_PANEL_OPEN: "help:report-panel-open",
   HELP_GET_PINNED_ACTION_CONTEXT: "help:get-pinned-action-context",
-  // #10815: main→renderer push on cold switch-back when the evicted project's
-  // assistant panel was open — drives auto-reopen + auto-resume.
-  HELP_COLD_RESUME: "help:cold-resume",
 
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
   CLIPBOARD_THUMBNAIL_FROM_PATH: "clipboard:thumbnail-from-path",

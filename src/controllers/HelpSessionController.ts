@@ -269,6 +269,16 @@ export interface HelpLaunchOptions {
    * preference set mid-launch never aborts it.
    */
   preferredAgentLaunch?: boolean;
+  /**
+   * Resume-only intent (cold switch-back / cross-window auto-resume, #10815).
+   * The launch must restore a captured session or do nothing — it must NEVER
+   * fall through to a fresh `agent.launch`. If the resume block finds no pending
+   * entry (already taken, agentId mismatch, or another window won the atomic
+   * take), the flow aborts cleanly without spawning a blank session that would
+   * displace a backend another window just resumed. Silent on the
+   * nothing-to-resume case — no user-facing launch error.
+   */
+  resumeOnly?: boolean;
 }
 
 interface HelpSessionRef {
@@ -990,7 +1000,12 @@ export class HelpSessionController {
     const inputs = this._lastInputs;
     const launchAgentId = options.agentId;
     if (!inputs?.isReadyToLaunch || !inputs?.currentProject) {
-      notifyLaunchFailed(launchAgentId, "Project state is still loading. Try again.");
+      // A resume-only auto-resume is silent best-effort recovery — the renderer
+      // re-fires once state is ready (#10815), so dropping it here must not raise
+      // a scary "still loading" error. Every other caller surfaces it.
+      if (!options.resumeOnly) {
+        notifyLaunchFailed(launchAgentId, "Project state is still loading. Try again.");
+      }
       return;
     }
     // Block only while a launch() that is STILL the current generation owns the
@@ -2213,6 +2228,21 @@ export class HelpSessionController {
           }
           useHelpPanelStore.getState().clearHibernateSession(launchProject.id);
         }
+      }
+
+      // #10815: resume-only intent (cold switch-back / cross-window auto-resume).
+      // The resume block above returns on a successful resume; reaching here means
+      // there was nothing to resume — no captured entry, an agentId mismatch, a
+      // missing folder, or another window won the atomic `takePendingHibernation`.
+      // NEVER fall through to a fresh `agent.launch`: that would displace a backend
+      // another window just resumed (single-backend invariant + HelpSessionService
+      // revoke) or replace the user's conversation with a blank session. Release
+      // the provisioned session and bail silently — the finally resets the phase,
+      // and no `_surfaceLaunchError` fires (this is an expected no-op, not a
+      // failure the user should see).
+      if (options.resumeOnly) {
+        this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
+        return;
       }
 
       const customLaunchFlags = await loadCustomLaunchFlags();

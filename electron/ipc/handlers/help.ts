@@ -126,6 +126,10 @@ async function handlePeekPendingHibernation(
   agentId: string;
   agentSessionId: string;
   cwd: string;
+  // #10815: in-memory-only flag stamped on eviction capture. Drives the
+  // renderer's pull-on-mount cold switch-back auto-resume; disk-loaded
+  // prior-session entries lack it (→ false) so app restart never auto-resumes.
+  panelWasOpen: boolean;
 } | null> {
   if (typeof projectId !== "string" || !projectId) return null;
   // Same cross-project guard as the take handler below: a pending entry holds

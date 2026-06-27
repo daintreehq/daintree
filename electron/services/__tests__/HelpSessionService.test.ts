@@ -1342,7 +1342,8 @@ describe("HelpSessionService", () => {
 
     it("peekPendingHibernation surfaces panelWasOpen:true for a this-session capture (#10815)", () => {
       // An in-memory entry stamped by an eviction this session carries the flag
-      // — main reads it to decide whether to push the cold-resume signal.
+      // — the renderer's pull-on-mount peek reads it to decide whether to
+      // auto-reopen and resume on cold switch-back.
       hibernationStore.get.mockReturnValueOnce({
         agentId: "claude",
         agentSessionId: "resume-id",
