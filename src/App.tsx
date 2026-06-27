@@ -430,6 +430,7 @@ import type { BuiltInPanelKind } from "./types";
 import { actionService, installE2EActionDispatchBridge } from "./services/ActionService";
 import { voiceRecordingService } from "./services/VoiceRecordingService";
 import { useRenderProfiler } from "./utils/renderProfiler";
+import { logError } from "./utils/logger";
 
 import { SidebarContent, preloadNewWorktreeDialog, E2EFaultInjector } from "./components/Sidebar";
 import { ensureHydrationBootstrap } from "./utils/stateHydration/bootstrapGuard";
@@ -870,7 +871,15 @@ function AppInner() {
 
   const handleLaunchAgent = useCallback(
     async (type: string) => {
-      await launchAgent(type);
+      // launchAgent now throws on an unresolvable worktreeId (#10812). UI surfaces
+      // pass no explicit worktreeId (they fall back to the active one), so this is
+      // only reachable via a stale activeWorktreeId race — keep it a quiet no-op,
+      // matching the pre-fix silent behavior, rather than an unhandled rejection.
+      try {
+        await launchAgent(type);
+      } catch (error) {
+        logError("Failed to launch agent", error);
+      }
     },
     [launchAgent]
   );
