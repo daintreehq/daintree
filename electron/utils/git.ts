@@ -245,6 +245,34 @@ export interface ListCommitsResult {
   total: number;
 }
 
+const COMMIT_LOG_FORMAT = "--format=%H%x00%h%x00%s%x00%b%x00%an%x00%ae%x00%aI%x00END";
+
+// Matches a 4–40 char hex string (git's minimum abbreviated SHA is 4 chars).
+// Used to decide whether a search query might be a commit-hash prefix.
+const COMMIT_HASH_PREFIX_RE = /^[0-9a-f]{4,40}$/i;
+
+function parseCommitOutput(output: string): CommitInfo[] {
+  const commits: CommitInfo[] = [];
+  const entries = output.split("\x00END").filter((entry) => entry.trim());
+
+  for (const entry of entries) {
+    const parts = entry.trim().split("\x00");
+    if (parts.length >= 7) {
+      const [hash, shortHash, message, body, authorName, authorEmail, date] = parts;
+      commits.push({
+        hash,
+        shortHash,
+        message,
+        body: body?.trim() || undefined,
+        author: { name: authorName, email: authorEmail },
+        date,
+      });
+    }
+  }
+
+  return commits;
+}
+
 export async function listCommits(options: ListCommitsOptions): Promise<ListCommitsResult> {
   const { cwd, search, branch, skip = 0, limit = 30 } = options;
 
@@ -254,9 +282,28 @@ export async function listCommits(options: ListCommitsOptions): Promise<ListComm
     const totalCountStr = await git.raw(["rev-list", "--count", branch || "HEAD"]);
     const total = parseInt(totalCountStr.trim(), 10);
 
+    // `--grep` only matches commit-message text, so a hash-prefix query returns
+    // nothing. On the first page, additionally resolve hash-like queries directly
+    // and pin the match to the top of the results. Gated to skip === 0 so the
+    // pinned commit doesn't re-appear on every paginated page.
+    let hashCommit: CommitInfo | null = null;
+    if (search && skip === 0 && COMMIT_HASH_PREFIX_RE.test(search)) {
+      try {
+        const fullHash = (await git.raw(["rev-parse", "--verify", `${search}^{commit}`])).trim();
+        if (fullHash) {
+          const hashOutput = await git.raw(["log", COMMIT_LOG_FORMAT, "-1", fullHash]);
+          hashCommit = parseCommitOutput(hashOutput)[0] ?? null;
+        }
+      } catch {
+        // rev-parse/log failed (not found, ambiguous, or < 4 unique chars) —
+        // fall through to the message-grep pass below.
+        hashCommit = null;
+      }
+    }
+
     const logOptions: string[] = [
       "log",
-      "--format=%H%x00%h%x00%s%x00%b%x00%an%x00%ae%x00%aI%x00END",
+      COMMIT_LOG_FORMAT,
       `--skip=${skip}`,
       `-n`,
       `${limit + 1}`,
@@ -271,28 +318,20 @@ export async function listCommits(options: ListCommitsOptions): Promise<ListComm
     }
 
     const output = await git.raw(logOptions);
+    const msgCommits = parseCommitOutput(output);
+    const hasMore = msgCommits.length > limit;
 
-    const commits: CommitInfo[] = [];
-    const entries = output.split("\x00END").filter((entry) => entry.trim());
-
-    for (const entry of entries.slice(0, limit)) {
-      const parts = entry.trim().split("\x00");
-      if (parts.length >= 7) {
-        const [hash, shortHash, message, body, authorName, authorEmail, date] = parts;
-        commits.push({
-          hash,
-          shortHash,
-          message,
-          body: body?.trim() || undefined,
-          author: { name: authorName, email: authorEmail },
-          date,
-        });
-      }
+    let items: CommitInfo[];
+    if (hashCommit) {
+      const deduped = msgCommits.filter((c) => c.hash !== hashCommit!.hash);
+      items = [hashCommit, ...deduped].slice(0, limit);
+    } else {
+      items = msgCommits.slice(0, limit);
     }
 
     return {
-      items: commits,
-      hasMore: entries.length > limit,
+      items,
+      hasMore,
       total,
     };
   } catch (error) {

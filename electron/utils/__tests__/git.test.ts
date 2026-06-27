@@ -930,14 +930,115 @@ describe("listCommits", () => {
     expect(result.hasMore).toBe(true);
   });
 
-  it("passes --grep when search is provided", async () => {
+  it("passes --grep for a non-hex search string", async () => {
     mockGit.raw.mockResolvedValueOnce("0").mockResolvedValueOnce("");
 
     await listCommits({ cwd: "/test", branch: "main", search: "bugfix" });
 
+    // "bugfix" is not hex (u, g, x), so no rev-parse pass: rev-list + log only.
+    expect(mockGit.raw).toHaveBeenCalledTimes(2);
     const logCall = mockGit.raw.mock.calls[1][0] as string[];
     expect(logCall).toContain("--grep=bugfix");
     expect(logCall).toContain("-i");
+  });
+
+  it("resolves a hash prefix and prepends the matched commit on page 0", async () => {
+    const fullHash = "abc1234def567890abc1234def567890abc12345";
+    mockGit.raw
+      .mockResolvedValueOnce("10") // rev-list --count
+      .mockResolvedValueOnce(`${fullHash}\n`) // rev-parse --verify
+      .mockResolvedValueOnce(
+        makeLogOutput([
+          {
+            hash: fullHash,
+            short: "abc1234",
+            msg: "feat: the looked-up commit",
+            body: "",
+            name: "Author",
+            email: "a@b.com",
+            date: "2024-01-15T12:00:00+00:00",
+          },
+        ])
+      ) // log -1 <fullHash>
+      .mockResolvedValueOnce(
+        makeLogOutput([
+          {
+            hash: "ffff999",
+            short: "ffff999",
+            msg: "chore: a message match",
+            body: "",
+            name: "Author",
+            email: "a@b.com",
+            date: "2024-01-14T12:00:00+00:00",
+          },
+        ])
+      ); // log --grep
+
+    const result = await listCommits({ cwd: "/test", branch: "main", search: "abc1234" });
+
+    const revParseCall = mockGit.raw.mock.calls[1][0] as string[];
+    expect(revParseCall).toEqual(["rev-parse", "--verify", "abc1234^{commit}"]);
+    expect(result.items[0].hash).toBe(fullHash);
+    expect(result.items).toHaveLength(2);
+    expect(result.items[1].hash).toBe("ffff999");
+  });
+
+  it("deduplicates a hash prefix match already present in message results", async () => {
+    const fullHash = "abc1234def567890abc1234def567890abc12345";
+    const commit = {
+      hash: fullHash,
+      short: "abc1234",
+      msg: "feat: shared commit",
+      body: "",
+      name: "Author",
+      email: "a@b.com",
+      date: "2024-01-15T12:00:00+00:00",
+    };
+    mockGit.raw
+      .mockResolvedValueOnce("10") // rev-list --count
+      .mockResolvedValueOnce(`${fullHash}\n`) // rev-parse --verify
+      .mockResolvedValueOnce(makeLogOutput([commit])) // log -1 <fullHash>
+      .mockResolvedValueOnce(makeLogOutput([commit])); // log --grep (same commit)
+
+    const result = await listCommits({ cwd: "/test", branch: "main", search: "abc1234" });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].hash).toBe(fullHash);
+  });
+
+  it("skips the rev-parse pass when paginating (skip > 0)", async () => {
+    mockGit.raw.mockResolvedValueOnce("10").mockResolvedValueOnce("");
+
+    await listCommits({ cwd: "/test", branch: "main", search: "abc1234", skip: 5 });
+
+    // No rev-parse on paginated pages: rev-list + log only.
+    expect(mockGit.raw).toHaveBeenCalledTimes(2);
+    const secondCall = mockGit.raw.mock.calls[1][0] as string[];
+    expect(secondCall[0]).toBe("log");
+  });
+
+  it("gracefully falls back to message search when the hash prefix matches no commit", async () => {
+    mockGit.raw
+      .mockResolvedValueOnce("10") // rev-list --count
+      .mockRejectedValueOnce(new Error("fatal: Needed a single revision")) // rev-parse fails
+      .mockResolvedValueOnce(
+        makeLogOutput([
+          {
+            hash: "face123",
+            short: "face123",
+            msg: "fix: a face value",
+            body: "",
+            name: "Author",
+            email: "a@b.com",
+            date: "2024-01-15T12:00:00+00:00",
+          },
+        ])
+      ); // log --grep
+
+    const result = await listCommits({ cwd: "/test", branch: "main", search: "face" });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].hash).toBe("face123");
   });
 
   it("returns empty result on git error", async () => {
