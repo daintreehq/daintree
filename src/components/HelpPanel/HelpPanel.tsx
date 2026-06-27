@@ -19,6 +19,7 @@ import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar"
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { terminalClient } from "@/clients";
 import { logWarn } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { HelpIntroBanner } from "./HelpIntroBanner";
 import { HelpPanelHeader } from "./HelpPanelHeader";
@@ -377,9 +378,8 @@ export function HelpPanel({
   // token. Fire-and-forget — a slow or missing binding must never block the UI.
   useEffect(() => {
     if (!currentProjectId) return;
-    void window.electron.help.reportPanelOpen?.(currentProjectId, isOpen)?.catch((err) => {
-      logWarn("HelpPanel: failed to report panel open-state", err);
-    });
+    const reported = window.electron.help.reportPanelOpen?.(currentProjectId, isOpen);
+    if (reported) safeFireAndForget(reported, { context: "HelpPanel.reportPanelOpen" });
   }, [isOpen, currentProjectId]);
 
   // #10815: cold switch-back auto-resume. When this project's view was evicted
