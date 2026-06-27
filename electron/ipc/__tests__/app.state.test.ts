@@ -40,6 +40,7 @@ const crashService = {
   resetToFresh: vi.fn(),
   restoreBackup: vi.fn(() => false),
   setPanelFilter: vi.fn(),
+  clearPendingCrash: vi.fn(),
   getPendingCrash: vi.fn() as any,
   getConfig: vi.fn(() => ({ autoRestoreOnCrash: false })),
 };

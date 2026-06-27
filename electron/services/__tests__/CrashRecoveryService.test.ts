@@ -145,6 +145,29 @@ describe("CrashRecoveryService", () => {
       expect(pending!.entry.appVersion).toBe("1.0.0");
     });
 
+    it("clearPendingCrash() zeroes the pending record so cold reboots see no crash (#10809)", () => {
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+      expect(svc.getPendingCrash()).not.toBeNull();
+
+      svc.clearPendingCrash();
+      expect(svc.getPendingCrash()).toBeNull();
+
+      // Idempotent — a second call must not throw and stays null.
+      svc.clearPendingCrash();
+      expect(svc.getPendingCrash()).toBeNull();
+    });
+
     it("consumes marker on detection — marker deleted before new one written", () => {
       const markerPath = path.join(userData, "running.lock");
       fs.writeFileSync(
