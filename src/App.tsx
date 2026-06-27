@@ -1242,7 +1242,7 @@ function AppInner() {
                       } else if (result.id.startsWith("agent:")) {
                         const agentId = result.id.slice("agent:".length);
                         if (agentId) {
-                          launchAgent(agentId);
+                          void handleLaunchAgent(agentId);
                         }
                       } else {
                         addPanel({
@@ -1278,7 +1278,7 @@ function AppInner() {
                       } else if (selected.id.startsWith("agent:")) {
                         const agentId = selected.id.slice("agent:".length);
                         if (agentId) {
-                          launchAgent(agentId);
+                          void handleLaunchAgent(agentId);
                         }
                       } else {
                         addPanel({
