@@ -329,6 +329,23 @@ export class ProjectViewManager {
       if (outgoing && !outgoing.webContents.isDestroyed() && outgoing !== view) {
         outgoing.setBounds({ x: 0, y: 0, width, height });
       }
+      // Defensive (#10806): an orphaned view briefly attached behind the active
+      // one (a cancelled paint gate or a destroyView race outside switchChain)
+      // never receives bounds updates and drifts to a stale x-offset — two
+      // toolbars rendered side by side. Sync every other attached child so any
+      // stray duplicate overlaps the active view exactly until
+      // pruneOrphanedChildren detaches it.
+      for (const child of win.contentView.children as WebContentsView[]) {
+        if (child === view || child === outgoing) continue;
+        const childWc = child.webContents;
+        if (!childWc || childWc.isDestroyed()) continue;
+        // Only sync project views. Non-project children (PortalManager parks
+        // hidden portal tabs at OFFSCREEN_BOUNDS while still attached, the
+        // unbound welcome view, devtools) own their own bounds — forcing them
+        // to full-window here would yank a hidden portal onscreen on resize.
+        if (!this.webContentsToProject.has(childWc.id)) continue;
+        child.setBounds({ x: 0, y: 0, width, height });
+      }
       this.scheduleBackgroundResizeNotify();
     };
     win.on("resize", this.resizeHandler);
@@ -544,6 +561,13 @@ export class ProjectViewManager {
       const cachedIntent = this.consumePendingFocusIntent(projectId);
       if (cachedIntent) {
         this.deliverFocusIntent(cached.view, cachedIntent);
+      }
+      // Sweep any outgoing view a cancelled gate or destroyView race left
+      // attached behind this one (#10806). Never throws past this point.
+      try {
+        this.pruneOrphanedChildren();
+      } catch (error) {
+        console.error("[ProjectViewManager] pruneOrphanedChildren threw:", error);
       }
       return { view: cached.view, isNew: false };
     }
@@ -773,6 +797,15 @@ export class ProjectViewManager {
         registerAppView(this.win, unboundOutgoingView);
       }
 
+      // Sweep any orphan that leaked before this failed switch (#10806). The
+      // rollback above restores the previous view as active; prune removes any
+      // other stray project view still attached behind it. Best-effort.
+      try {
+        this.pruneOrphanedChildren();
+      } catch (pruneError) {
+        console.error("[ProjectViewManager] pruneOrphanedChildren threw:", pruneError);
+      }
+
       notifyError(loadError, { source: "project-switch" });
 
       throw loadError;
@@ -790,6 +823,14 @@ export class ProjectViewManager {
         this.evictStaleViews("lru");
       }
     });
+
+    // Sweep any outgoing view a cancelled gate or destroyView race left
+    // attached behind this one (#10806). Never throws past this point.
+    try {
+      this.pruneOrphanedChildren();
+    } catch (error) {
+      console.error("[ProjectViewManager] pruneOrphanedChildren threw:", error);
+    }
 
     return { view, isNew: true };
   }
@@ -1370,6 +1411,53 @@ export class ProjectViewManager {
         !this.hasActiveAgent(capturedProjectId)
       ) {
         void freezeWebContents(webContents);
+      }
+    }
+  }
+
+  /**
+   * Defensive sweep for orphaned project views still attached to
+   * `contentView.children` (#10806). The warm/cold anti-flash bridge skips
+   * `deactivateEntry(previousEntry)` whenever the paint gate resolves
+   * `"cancelled"` or `activeProjectId` no longer matches the switch target —
+   * the latter happens when `HibernationService.destroyView` runs outside
+   * `switchChain` and nulls `activeProjectId` mid-gate. A superseding switch
+   * only tears down its own `previousEntry`, so an earlier outgoing view can
+   * stay attached behind the newly active one, compositing two renderers at
+   * once (the duplicated forge toolbar). Called on each switch's success path —
+   * after the gate has settled and `pendingPaintGate` is already null — so it
+   * detaches any project view that is neither the active view nor an in-flight
+   * gate's outgoing bridge. Known live entries are parked as reusable cached
+   * views via `deactivateEntry` (preserving cleanup handlers, #6085); stray
+   * children the registry no longer tracks are simply removed.
+   */
+  private pruneOrphanedChildren(): void {
+    if (this.win.isDestroyed()) return;
+    const activeView = this.getActiveView();
+    const gateOutgoing = this.pendingPaintGate?.outgoingView ?? null;
+    // Snapshot — removeChildView/deactivateEntry mutate contentView.children.
+    const children = [...this.win.contentView.children] as WebContentsView[];
+    for (const child of children) {
+      if (child === activeView || child === gateOutgoing) continue;
+      const wc = child.webContents;
+      // Unbound/welcome views (not in webContentsToProject) own their own
+      // teardown via detachUnboundOutgoingView — never prune them here.
+      if (!wc || wc.isDestroyed() || !this.webContentsToProject.has(wc.id)) continue;
+      const projectId = this.webContentsToProject.get(wc.id) ?? null;
+      // Belt-and-suspenders: never detach the active project's view even if
+      // getActiveView() returned null (e.g. a destroyView race nulled
+      // activeProjectId but left the entry mid-teardown).
+      if (projectId !== null && projectId === this.activeProjectId) continue;
+      const entry = projectId ? this.views.get(projectId) : undefined;
+      try {
+        if (entry && entry.state !== "cached") {
+          this.deactivateEntry(entry);
+        } else {
+          this.win.contentView.removeChildView(child);
+        }
+        logWarn("projectview.orphan-pruned", { projectId });
+      } catch (error) {
+        console.error("[ProjectViewManager] pruneOrphanedChildren failed:", error);
       }
     }
   }
