@@ -69,7 +69,12 @@ export class PendingHelpHibernationStore {
         if (!projectId) continue;
         if (!this.isValid(entry)) continue;
         if (entry.capturedAt < cutoff) continue;
-        this.entries.set(projectId, entry);
+        // Defensively strip any `panelWasOpen` that reached disk (manual edit,
+        // corruption, or a regression in `persist()`): the field is in-memory
+        // only and a disk-loaded `true` would auto-resume a prior-session token
+        // on app restart — the exact invariant this feature must never break.
+        const { panelWasOpen: _panelWasOpen, ...safeEntry } = entry as PendingHelpHibernation;
+        this.entries.set(projectId, safeEntry);
       }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return;

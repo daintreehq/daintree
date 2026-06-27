@@ -274,4 +274,32 @@ describe("PendingHelpHibernationStore", () => {
     await fresh.load();
     expect(fresh.get("proj-1")?.panelWasOpen).toBeUndefined();
   });
+
+  it("strips panelWasOpen from a disk file that already contains it (defensive load) (#10815)", async () => {
+    // persist() always strips the flag, but a manually-edited / corrupted file
+    // could still carry `panelWasOpen: true`. load() must drop it so an
+    // app-restart token can never auto-resume a prior session.
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        version: 1,
+        entries: {
+          "proj-tainted": {
+            agentId: "claude",
+            agentSessionId: "resume-id",
+            cwd: "/tainted",
+            capturedAt: Date.now(),
+            panelWasOpen: true,
+          },
+        },
+      }),
+      "utf-8"
+    );
+
+    const store = new PendingHelpHibernationStore(filePath);
+    await store.load();
+    const entry = store.get("proj-tainted");
+    expect(entry).not.toBeNull();
+    expect(entry?.panelWasOpen).toBeUndefined();
+  });
 });

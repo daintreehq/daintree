@@ -930,6 +930,71 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     expect(mockProvisionSession).not.toHaveBeenCalled();
     expect(panelStoreState.addPanel).not.toHaveBeenCalled();
   });
+
+  it("defers the resume launch until the panel is actually open (isOpen gate)", async () => {
+    // The push arrives while the panel is closed. The launch must NOT fire until
+    // the panel has opened — proving the effect is gated on isOpen, not just on
+    // the arrival of the signal.
+    helpPanelState.isOpen = false;
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.terminalId = null;
+    helpPanelState.hibernateSessions = {
+      "proj-1": { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+    };
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "fresh-session",
+      sessionPath: "/tmp/help/proj-1",
+      token: "tok",
+      mcpUrl: "http://localhost:1234",
+      windowId: 1,
+    });
+    mockBuildResumeLatestCommand.mockReturnValue("claude resume --last");
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("resumed-term-1");
+
+    let view: ReturnType<typeof render> | undefined;
+    await act(async () => {
+      view = render(<HelpPanel width={380} />);
+    });
+
+    // Push arrives while closed — panel is asked to open, but with the store
+    // still reporting isOpen=false the launch must not fire yet.
+    await act(async () => {
+      coldResumeListeners[0]!({ agentId: "claude" });
+    });
+    expect(helpPanelState.setOpen).toHaveBeenCalledWith(true);
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+
+    // The panel actually opens; re-render reflects the new store state and the
+    // gated effect now fires the resume.
+    helpPanelState.isOpen = true;
+    await act(async () => {
+      view!.rerender(<HelpPanel width={380} />);
+    });
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "claude --resume abc-123" })
+    );
+  });
+
+  it("reports the panel closed to main when isOpen transitions to false", async () => {
+    helpPanelState.isOpen = true;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+
+    let view: ReturnType<typeof render> | undefined;
+    await act(async () => {
+      view = render(<HelpPanel width={380} />);
+    });
+    expect(mockReportPanelOpen).toHaveBeenCalledWith("proj-1", true);
+
+    // User closes the panel — main must learn so a later eviction does not
+    // stamp panelWasOpen:true and auto-resume an assistant the user dismissed.
+    helpPanelState.isOpen = false;
+    await act(async () => {
+      view!.rerender(<HelpPanel width={380} />);
+    });
+    expect(mockReportPanelOpen).toHaveBeenCalledWith("proj-1", false);
+  });
 });
 
 describe("HelpPanel — resume preserves user-configured launch flags", () => {

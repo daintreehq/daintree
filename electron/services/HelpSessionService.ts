@@ -290,6 +290,12 @@ export class HelpSessionService {
   // `panelWasOpen` onto the eviction hibernation entry so cold switch-back can
   // auto-reopen + auto-resume only when the panel was actually open. In-memory
   // only — a panel-open state has no meaning across an app restart.
+  // Keyed by projectId (not webContents/window) on purpose: the
+  // pending-hibernation store and its resume token are themselves projectId-
+  // scoped (one entry per project regardless of how many windows view it), so
+  // "was the assistant open for this project" is the matching granularity. In a
+  // multi-window/same-project setup the last reporter wins, which at worst
+  // reopens a panel both windows would resume into the same shared session.
   private readonly panelOpenByProjectId = new Map<string, boolean>();
   private onMcpSessionRevokedFn: ((token: string) => void) | null = null;
   private disposed = false;
