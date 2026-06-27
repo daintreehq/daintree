@@ -2861,7 +2861,13 @@ function buildElectronApi(): ElectronAPI {
     },
 
     // Help workspace API
-    help: buildHelpPreloadBindings(_unwrappingInvoke),
+    help: {
+      ...buildHelpPreloadBindings(_unwrappingInvoke),
+      // #10815: cold switch-back auto-resume push. Invoke-only bindings can't
+      // carry a listener, so wire it manually via the typed event helper.
+      onColdResume: (callback: (payload: IpcEventMap["help:cold-resume"]) => void) =>
+        _typedOn(CHANNELS.HELP_COLD_RESUME, callback),
+    },
 
     perf: {
       flushMarks: (payload: {

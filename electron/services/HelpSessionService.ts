@@ -285,6 +285,12 @@ export class HelpSessionService {
   // mid-kill displacement can't let a stale resume ID shadow the new session.
   // In-memory only — no in-flight capture is meaningful across an app restart.
   private readonly pendingCapturesByProject = new Map<string, string>();
+  // #10815: per-project assistant-panel visibility, reported by the renderer
+  // whenever its `isOpen` changes. Read at capture time to stamp
+  // `panelWasOpen` onto the eviction hibernation entry so cold switch-back can
+  // auto-reopen + auto-resume only when the panel was actually open. In-memory
+  // only — a panel-open state has no meaning across an app restart.
+  private readonly panelOpenByProjectId = new Map<string, boolean>();
   private onMcpSessionRevokedFn: ((token: string) => void) | null = null;
   private disposed = false;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
@@ -309,6 +315,21 @@ export class HelpSessionService {
 
   setPendingHibernationStore(store: PendingHelpHibernationStore | null): void {
     this.pendingHibernationStore = store;
+  }
+
+  /**
+   * #10815: record whether the assistant panel is currently open for a
+   * project, reported by the renderer on every `isOpen` change. Consulted at
+   * eviction-capture time to decide whether the cold switch-back should
+   * auto-reopen and auto-resume. In-memory only.
+   */
+  reportPanelOpen(projectId: string, isOpen: boolean): void {
+    if (!projectId) return;
+    if (isOpen) {
+      this.panelOpenByProjectId.set(projectId, true);
+    } else {
+      this.panelOpenByProjectId.delete(projectId);
+    }
   }
 
   validateToken(token: string): HelpAssistantTier | false {
@@ -917,12 +938,14 @@ export class HelpSessionService {
       // placeholder with the agent's real resume ID (below).
       if (this.pendingHibernationStore) {
         this.pendingCapturesByProject.set(record.projectId, sessionId);
+        const panelWasOpen = this.panelOpenByProjectId.get(record.projectId) === true;
         void this.pendingHibernationStore
           .set(record.projectId, {
             agentId: record.agentId,
             agentSessionId: "",
             cwd: record.sessionPath,
             capturedAt: Date.now(),
+            panelWasOpen,
           })
           .catch((err) => {
             console.warn(
@@ -1006,12 +1029,14 @@ export class HelpSessionService {
       this.pendingCapturesByProject.get(record.projectId) === sessionId
     ) {
       if (capturedAgentSessionId) {
+        const panelWasOpen = this.panelOpenByProjectId.get(record.projectId) === true;
         void this.pendingHibernationStore
           .set(record.projectId, {
             agentId: record.agentId,
             agentSessionId: capturedAgentSessionId,
             cwd: record.sessionPath,
             capturedAt: Date.now(),
+            panelWasOpen,
           })
           .catch((err) => {
             console.warn(
@@ -1050,6 +1075,7 @@ export class HelpSessionService {
     agentId: string;
     agentSessionId: string;
     cwd: string;
+    panelWasOpen: boolean;
   } | null {
     if (!this.pendingHibernationStore) return null;
     const entry = this.pendingHibernationStore.get(projectId);
@@ -1058,6 +1084,9 @@ export class HelpSessionService {
       agentId: entry.agentId,
       agentSessionId: entry.agentSessionId,
       cwd: entry.cwd,
+      // In-memory-only flag; disk-loaded prior-session entries lack it →
+      // false, so app restart never auto-resumes (#10815).
+      panelWasOpen: entry.panelWasOpen === true,
     };
   }
 

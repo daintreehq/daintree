@@ -240,4 +240,38 @@ describe("PendingHelpHibernationStore", () => {
     await store.load();
     expect(store.get("anything")).toBeNull();
   });
+
+  it("never persists the in-memory-only panelWasOpen flag to disk (#10815)", async () => {
+    // panelWasOpen drives cold switch-back auto-resume and must stay session-
+    // local: if it leaked to disk, a token reloaded on app restart would
+    // wrongly auto-reopen + auto-resume a prior session. The in-memory entry
+    // keeps the flag; the serialized file must not.
+    const capturedAt = Date.now();
+    const store = new PendingHelpHibernationStore(filePath);
+    await store.load();
+    await store.set("proj-1", {
+      agentId: "claude",
+      agentSessionId: "agent-resume-id",
+      cwd: "/sessions/proj-1",
+      capturedAt,
+      panelWasOpen: true,
+    });
+
+    // In-memory read still exposes the flag for the live capture.
+    expect(store.get("proj-1")?.panelWasOpen).toBe(true);
+
+    // The serialized JSON must not carry it.
+    const raw = await fs.readFile(filePath, "utf-8");
+    expect(raw).not.toContain("panelWasOpen");
+    const parsed = JSON.parse(raw) as {
+      entries: Record<string, Record<string, unknown>>;
+    };
+    expect(parsed.entries["proj-1"]).not.toHaveProperty("panelWasOpen");
+
+    // A fresh load (simulating an app restart) yields the entry without the
+    // flag, so the cold-resume guard reads it as a prior-session token.
+    const fresh = new PendingHelpHibernationStore(filePath);
+    await fresh.load();
+    expect(fresh.get("proj-1")?.panelWasOpen).toBeUndefined();
+  });
 });

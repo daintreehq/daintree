@@ -1324,6 +1324,9 @@ describe("HelpSessionService", () => {
         agentId: "claude",
         agentSessionId: "pulled-id",
         cwd: "/help/dir",
+        // Disk-loaded entry has no in-memory panelWasOpen → normalized false
+        // so app-restart tokens never drive cold-resume (#10815).
+        panelWasOpen: false,
       });
       // The whole point of peek vs take: the entry survives so the launch
       // flow can still consume it via takePendingHibernation.
@@ -1335,6 +1338,91 @@ describe("HelpSessionService", () => {
 
       expect(service.peekPendingHibernation("proj-empty")).toBeNull();
       expect(hibernationStore.clear).not.toHaveBeenCalled();
+    });
+
+    it("peekPendingHibernation surfaces panelWasOpen:true for a this-session capture (#10815)", () => {
+      // An in-memory entry stamped by an eviction this session carries the flag
+      // — main reads it to decide whether to push the cold-resume signal.
+      hibernationStore.get.mockReturnValueOnce({
+        agentId: "claude",
+        agentSessionId: "resume-id",
+        cwd: "/help/dir",
+        capturedAt: Date.now(),
+        panelWasOpen: true,
+      });
+
+      expect(service.peekPendingHibernation("proj-A")?.panelWasOpen).toBe(true);
+    });
+
+    it("stamps panelWasOpen:true on the captured entry when the panel was reported open (#10815)", async () => {
+      mockPtyGracefulKill.mockResolvedValueOnce("agent-resume-id-123");
+
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        projectViewWebContentsId: 99,
+        projectId: "proj-open",
+      });
+      if (!result) throw new Error("expected provision");
+      expect(service.markTerminalForToken(result.token, "term-open")).toBe(true);
+
+      // Renderer reported the assistant panel open for this project before the
+      // eviction fired.
+      service.reportPanelOpen("proj-open", true);
+
+      await service.revokeByWebContentsId(99);
+      await Promise.resolve();
+
+      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === "proj-open");
+      // Both the synchronous placeholder and the real-resume-id overwrite carry
+      // the open flag so a switch-back at any point auto-resumes.
+      expect(setCalls[0][1].panelWasOpen).toBe(true);
+      expect(setCalls[setCalls.length - 1][1]).toEqual(
+        expect.objectContaining({
+          agentSessionId: "agent-resume-id-123",
+          panelWasOpen: true,
+        })
+      );
+    });
+
+    it("stamps panelWasOpen:false when the panel was not open at eviction (#10815)", async () => {
+      mockPtyGracefulKill.mockResolvedValueOnce("agent-resume-id-456");
+
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        projectViewWebContentsId: 98,
+        projectId: "proj-closed",
+      });
+      if (!result) throw new Error("expected provision");
+      expect(service.markTerminalForToken(result.token, "term-closed")).toBe(true);
+
+      // No reportPanelOpen(true) for this project — panel was closed.
+      await service.revokeByWebContentsId(98);
+      await Promise.resolve();
+
+      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === "proj-closed");
+      expect(setCalls[setCalls.length - 1][1].panelWasOpen).toBe(false);
+    });
+
+    it("reportPanelOpen(false) clears a prior open report so a later eviction does not auto-resume (#10815)", async () => {
+      mockPtyGracefulKill.mockResolvedValueOnce("agent-resume-id-789");
+
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        projectViewWebContentsId: 97,
+        projectId: "proj-toggle",
+      });
+      if (!result) throw new Error("expected provision");
+      expect(service.markTerminalForToken(result.token, "term-toggle")).toBe(true);
+
+      service.reportPanelOpen("proj-toggle", true);
+      // User closed the panel before switching away.
+      service.reportPanelOpen("proj-toggle", false);
+
+      await service.revokeByWebContentsId(97);
+      await Promise.resolve();
+
+      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === "proj-toggle");
+      expect(setCalls[setCalls.length - 1][1].panelWasOpen).toBe(false);
     });
 
     it("peekPendingHibernation mid-capture neither consumes the entry nor blocks the real resume-id write", async () => {
@@ -1372,7 +1460,12 @@ describe("HelpSessionService", () => {
 
       // Renderer peeks mid-flight — pure read, no consumption.
       const peeked = service.peekPendingHibernation("proj-peek-race");
-      expect(peeked).toEqual({ agentId: "claude", agentSessionId: "", cwd: "/help/peek-race" });
+      expect(peeked).toEqual({
+        agentId: "claude",
+        agentSessionId: "",
+        cwd: "/help/peek-race",
+        panelWasOpen: false,
+      });
       expect(hibernationStore.clear).not.toHaveBeenCalledWith("proj-peek-race");
 
       // gracefulKill resolves with the real resume id; because peek left the

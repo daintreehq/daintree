@@ -372,6 +372,48 @@ export function HelpPanel({
       ? resumablePending.agentId
       : null;
 
+  // #10815: report this project's panel open-state to main on every change so
+  // an LRU eviction / crash capture can stamp `panelWasOpen` onto the resume
+  // token. Fire-and-forget — a slow or missing binding must never block the UI.
+  useEffect(() => {
+    if (!currentProjectId) return;
+    void window.electron.help.reportPanelOpen?.(currentProjectId, isOpen)?.catch((err) => {
+      logWarn("HelpPanel: failed to report panel open-state", err);
+    });
+  }, [isOpen, currentProjectId]);
+
+  // #10815: cold switch-back auto-resume. When this project's view was evicted
+  // (or crashed) with the assistant open, main pushes `onColdResume` on the
+  // cold-restored renderer carrying the captured agent. Subscribe
+  // unconditionally — the panel is closed by design at this point, so gating on
+  // `isOpen` would drop the signal. Open the panel and remember the agent.
+  const [autoResumeAgentId, setAutoResumeAgentId] = useState<string | null>(null);
+  useEffect(() => {
+    const off = window.electron.help.onColdResume?.((payload) => {
+      setOpen(true);
+      setAutoResumeAgentId(payload.agentId);
+    });
+    return off;
+  }, [setOpen]);
+
+  // Fire the captured resume once the panel has opened. The `!terminalId` guard
+  // covers two cases: a DevTools reload that still holds a live session, and the
+  // controller's own auto-launch (when consent is on) already having spawned —
+  // either way a live session means the resume already happened (or shouldn't
+  // double), so drop the intent. Deliberately omits `setAutoLaunchEnabled`:
+  // auto-resuming a stranded session is one-time recovery, not an opt-in to
+  // billed auto-launch on every future open (#10699). Mirrors
+  // `handleResumeAssistant`.
+  useEffect(() => {
+    if (!autoResumeAgentId || !isOpen) return;
+    if (terminalId) {
+      setAutoResumeAgentId(null);
+      return;
+    }
+    controller.launch({ agentId: autoResumeAgentId, replaceExisting: true });
+    setAutoResumeAgentId(null);
+  }, [autoResumeAgentId, isOpen, terminalId, controller]);
+
   // Lifecycle — arms IPC subscriptions on mount, clears all timers on
   // unmount. `start()` is idempotent across StrictMode's double-mount.
   useEffect(() => {

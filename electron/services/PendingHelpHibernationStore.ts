@@ -17,11 +17,20 @@ export interface PendingHelpHibernation {
   agentSessionId: string;
   cwd: string;
   capturedAt: number;
+  // In-memory only — whether the assistant panel was open when this token was
+  // captured this session. Drives auto-reopen + auto-resume on cold
+  // switch-back. Deliberately stripped before persisting (see `persist()`):
+  // tokens reloaded from disk on app restart are prior-session entries and
+  // must NOT auto-resume — only this-session eviction/crash captures do.
+  panelWasOpen?: boolean;
 }
+
+// Persisted shape excludes `panelWasOpen` — it is an in-memory-only field.
+type PersistedHelpHibernation = Omit<PendingHelpHibernation, "panelWasOpen">;
 
 interface FileShape {
   version: number;
-  entries: Record<string, PendingHelpHibernation>;
+  entries: Record<string, PersistedHelpHibernation>;
 }
 
 /**
@@ -105,9 +114,16 @@ export class PendingHelpHibernationStore {
   }
 
   private persist(): Promise<void> {
+    // Strip `panelWasOpen` (in-memory only) so reloaded entries on app restart
+    // are treated as prior-session tokens that never auto-resume.
+    const persistedEntries: Record<string, PersistedHelpHibernation> = {};
+    for (const [projectId, entry] of this.entries.entries()) {
+      const { panelWasOpen: _panelWasOpen, ...persisted } = entry;
+      persistedEntries[projectId] = persisted;
+    }
     const snapshot: FileShape = {
       version: FILE_VERSION,
-      entries: Object.fromEntries(this.entries.entries()),
+      entries: persistedEntries,
     };
     const work = this.writeChain
       .catch(() => undefined)

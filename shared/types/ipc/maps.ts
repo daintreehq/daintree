@@ -1944,6 +1944,17 @@ export interface IpcEventMap {
    */
   "plugin-capability:consent-request": import("../pluginCapabilityConsent.js").PluginCapabilityConsentRequestEvent;
 
+  /**
+   * Targeted push (main → renderer) on cold project switch-back: the evicted
+   * project's assistant PTY was graceful-killed and a resume token captured,
+   * and the panel was open at eviction time. Sent to the cold-restored
+   * WebContents from `onViewReady` so the renderer auto-reopens the panel and
+   * auto-resumes the captured session without a manual "Resume assistant"
+   * click (#10815). Only fired for this-session captures — prior-session
+   * tokens reloaded from disk lack the in-memory `panelWasOpen` flag.
+   */
+  "help:cold-resume": { agentId: string };
+
   // Typed event bus envelope (multiplexed main → renderer for IpcEventBusMap)
   "events:push": EventBusEnvelope;
 }

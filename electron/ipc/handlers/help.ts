@@ -168,6 +168,29 @@ async function handleTakePendingHibernation(
   return helpSessionService.takePendingHibernation(projectId);
 }
 
+async function handleReportPanelOpen(
+  ctx: import("../types.js").IpcContext,
+  projectId: string,
+  isOpen: boolean
+): Promise<void> {
+  if (typeof projectId !== "string" || !projectId) return;
+  if (typeof isOpen !== "boolean") return;
+  // Same cross-project guard as the hibernation handlers: only the renderer
+  // bound to this project's webContents may report its panel state. A
+  // mismatched report would let one view's open-state drive another's
+  // cold-resume decision (#10815).
+  if (!ctx.projectId || ctx.projectId !== projectId) {
+    console.warn("[help] reportPanelOpen: projectId mismatch — refusing cross-project report", {
+      requested: projectId,
+      fromView: ctx.projectId,
+      webContentsId: ctx.webContentsId,
+    });
+    return;
+  }
+  const { helpSessionService } = await getHelpSessionService();
+  helpSessionService.reportPanelOpen(projectId, isOpen);
+}
+
 export const helpNamespace = defineIpcNamespace({
   name: "help",
   ops: {
@@ -193,6 +216,9 @@ export const helpNamespace = defineIpcNamespace({
       handleTakePendingHibernation,
       { withContext: true }
     ),
+    reportPanelOpen: op(HELP_METHOD_CHANNELS.reportPanelOpen, handleReportPanelOpen, {
+      withContext: true,
+    }),
   },
 });
 

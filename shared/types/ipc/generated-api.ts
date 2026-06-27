@@ -198,6 +198,9 @@ export interface GeneratedElectronAPI {
     provisionSession(
       ...args: IpcInvokeMap["help:provision-session"]["args"]
     ): Promise<IpcInvokeMap["help:provision-session"]["result"]>;
+    reportPanelOpen(
+      ...args: IpcInvokeMap["help:report-panel-open"]["args"]
+    ): Promise<IpcInvokeMap["help:report-panel-open"]["result"]>;
     revokeSession(
       ...args: IpcInvokeMap["help:revoke-session"]["args"]
     ): Promise<IpcInvokeMap["help:revoke-session"]["result"]>;

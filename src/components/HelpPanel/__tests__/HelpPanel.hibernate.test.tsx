@@ -9,6 +9,9 @@ const {
   mockGetFolderPath,
   mockMarkTerminal,
   mockPeekPendingHibernation,
+  mockReportPanelOpen,
+  mockOnColdResume,
+  coldResumeListeners,
   mockProvisionSession,
   mockRevokeSession,
   mockGracefulKill,
@@ -37,6 +40,9 @@ const {
   mockGetFolderPath: vi.fn(),
   mockMarkTerminal: vi.fn().mockResolvedValue(undefined),
   mockPeekPendingHibernation: vi.fn().mockResolvedValue(null),
+  mockReportPanelOpen: vi.fn().mockResolvedValue(undefined),
+  mockOnColdResume: vi.fn(),
+  coldResumeListeners: [] as Array<(payload: { agentId: string }) => void>,
   mockProvisionSession: vi.fn().mockResolvedValue(null),
   mockRevokeSession: vi.fn().mockResolvedValue(undefined),
   mockGracefulKill: vi.fn().mockResolvedValue(null),
@@ -367,6 +373,17 @@ function resetState() {
   mockNotifyUserInput.mockReset();
   mockPeekPendingHibernation.mockReset();
   mockPeekPendingHibernation.mockResolvedValue(null);
+  mockReportPanelOpen.mockReset();
+  mockReportPanelOpen.mockResolvedValue(undefined);
+  coldResumeListeners.length = 0;
+  mockOnColdResume.mockReset();
+  mockOnColdResume.mockImplementation((cb: (payload: { agentId: string }) => void) => {
+    coldResumeListeners.push(cb);
+    return () => {
+      const idx = coldResumeListeners.indexOf(cb);
+      if (idx >= 0) coldResumeListeners.splice(idx, 1);
+    };
+  });
   mockProvisionSession.mockReset();
   mockProvisionSession.mockResolvedValue(null);
   mockRevokeSession.mockReset();
@@ -429,6 +446,8 @@ beforeEach(() => {
           getFolderPath: mockGetFolderPath,
           markTerminal: mockMarkTerminal,
           peekPendingHibernation: mockPeekPendingHibernation,
+          reportPanelOpen: mockReportPanelOpen,
+          onColdResume: mockOnColdResume,
           provisionSession: mockProvisionSession,
           revokeSession: mockRevokeSession,
           getPinnedActionContext: vi.fn().mockResolvedValue({}),
@@ -824,6 +843,92 @@ describe("HelpPanel — Resume affordance for eviction-captured sessions", () =>
 
     expect(await findByTestId("help-start-assistant")).toBeTruthy();
     expect(queryByTestId("help-resume-assistant")).toBeNull();
+  });
+});
+
+describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
+  it("reports the panel open-state to main for the current project", async () => {
+    helpPanelState.isOpen = true;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+
+    expect(mockReportPanelOpen).toHaveBeenCalledWith("proj-1", true);
+  });
+
+  it("auto-opens and resumes the captured session WITHOUT recording consent on the cold-resume push", async () => {
+    // Default user (consent off) so the controller does NOT auto-launch a fresh
+    // session on open — proving the resume comes from the cold-resume push.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.terminalId = null;
+    // Seed what _seedHibernateFromMain would have written so the launch actually
+    // resumes (mirrors the click-to-resume test).
+    helpPanelState.hibernateSessions = {
+      "proj-1": { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+    };
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "fresh-session",
+      sessionPath: "/tmp/help/proj-1",
+      token: "tok",
+      mcpUrl: "http://localhost:1234",
+      windowId: 1,
+    });
+    mockBuildResumeLatestCommand.mockReturnValue("claude resume --last");
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("resumed-term-1");
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+
+    // Main pushes the cold-resume signal carrying the captured agent.
+    expect(coldResumeListeners).toHaveLength(1);
+    await act(async () => {
+      coldResumeListeners[0]!({ agentId: "claude" });
+    });
+
+    // The panel is opened...
+    expect(helpPanelState.setOpen).toHaveBeenCalledWith(true);
+    // ...and the captured session resumes via the agent's --resume command.
+    expect(mockBuildResumeCommand).toHaveBeenCalledWith("claude", "abc-123", undefined);
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        launchAgentId: "claude",
+        command: "claude --resume abc-123",
+        removeOnExit: true,
+      })
+    );
+    // Auto-resuming a stranded session is recovery, NOT billed-auto-launch
+    // consent — same separation as the manual Resume CTA (#10699).
+    expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
+  });
+
+  it("opens the panel but does NOT launch when a live session already exists (DevTools reload guard)", async () => {
+    // onViewReady also fires on a DevTools reload that still holds a running
+    // assistant. The `!terminalId` guard must drop the resume so a second
+    // backend is never spawned over the live one.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.terminalId = "live-term";
+    helpPanelState.agentId = "claude";
+    helpPanelState.sessionId = "live-session";
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("should-not-be-called");
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+
+    await act(async () => {
+      coldResumeListeners[0]!({ agentId: "claude" });
+    });
+
+    expect(helpPanelState.setOpen).toHaveBeenCalledWith(true);
+    // No new session spawned over the live one.
+    expect(mockProvisionSession).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
   });
 });
 

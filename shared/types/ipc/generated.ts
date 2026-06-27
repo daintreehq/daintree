@@ -582,6 +582,10 @@ export interface GeneratedIpcInvokeMap {
       windowId: number;
     } | null;
   };
+  "help:report-panel-open": {
+    args: [projectId: string, isOpen: boolean];
+    result: void;
+  };
   "help:revoke-session": {
     args: [sessionId: string];
     result: void;
