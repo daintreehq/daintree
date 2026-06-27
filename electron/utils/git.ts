@@ -301,13 +301,7 @@ export async function listCommits(options: ListCommitsOptions): Promise<ListComm
       }
     }
 
-    const logOptions: string[] = [
-      "log",
-      COMMIT_LOG_FORMAT,
-      `--skip=${skip}`,
-      `-n`,
-      `${limit + 1}`,
-    ];
+    const logOptions: string[] = ["log", COMMIT_LOG_FORMAT, `--skip=${skip}`, `-n`, `${limit + 1}`];
 
     if (search) {
       logOptions.push(`--grep=${search}`, "-i");
