@@ -157,6 +157,17 @@ export class AgentAvailabilityStore {
   }
 
   /**
+   * Resolve the latest terminal associated with an agent id.
+   *
+   * Agent ids identify the agent type today (for example "claude"), so multiple
+   * terminals can temporarily share one id. Terminal-scoped waiters use this as
+   * a guard before trusting agent-level snapshot state.
+   */
+  getTerminalIdForAgent(agentId: string): string | undefined {
+    return this.agentToTerminal.get(agentId);
+  }
+
+  /**
    * Timestamp (ms) of the most recent state transition for an agent, sourced from the
    * canonical event payload rather than wall-clock time.
    */

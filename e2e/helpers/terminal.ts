@@ -58,6 +58,22 @@ export async function getTerminalText(panelLocator: Locator): Promise<string> {
   return panelLocator.locator(SEL.terminal.xtermRows).innerText();
 }
 
+export async function getTerminalTextById(page: Page, panelId: string): Promise<string> {
+  if (!panelId) return "";
+
+  const bufferText = await page.evaluate((id) => {
+    const reader = (window as unknown as Record<string, unknown>).__daintreeReadTerminalBuffer;
+    if (typeof reader === "function") return reader(id) as string;
+    return null;
+  }, panelId);
+
+  if (bufferText !== null) return bufferText;
+
+  const panelLocator = page.locator(`[data-panel-id="${panelId}"]`);
+  if (!(await panelLocator.isVisible().catch(() => false))) return "";
+  return panelLocator.locator(SEL.terminal.xtermRows).innerText();
+}
+
 export async function waitForTerminalText(
   panelLocator: Locator,
   text: string,
@@ -65,6 +81,17 @@ export async function waitForTerminalText(
 ): Promise<void> {
   await expect
     .poll(() => getTerminalText(panelLocator), { timeout, intervals: [200, 500, 1000] })
+    .toContain(text);
+}
+
+export async function waitForTerminalTextById(
+  page: Page,
+  panelId: string,
+  text: string,
+  timeout = 60_000
+): Promise<void> {
+  await expect
+    .poll(() => getTerminalTextById(page, panelId), { timeout, intervals: [200, 500, 1000] })
     .toContain(text);
 }
 

@@ -4,7 +4,13 @@ import { launchApp, closeApp, getActiveAppWindow, type AppContext } from "../../
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { getFocusedPanelId, getPanelById } from "../../helpers/panels";
-import { waitForTerminalPty, waitForTerminalText, getTerminalText } from "../../helpers/terminal";
+import {
+  waitForTerminalPty,
+  waitForTerminalText,
+  waitForTerminalTextById,
+  getTerminalText,
+  getTerminalTextById,
+} from "../../helpers/terminal";
 import { injectFault, injectDelay, clearAllFaults } from "../../helpers/ipcFaults";
 import { SEL } from "../../helpers/selectors";
 import { T_LONG, T_MEDIUM } from "../../helpers/timeouts";
@@ -178,6 +184,26 @@ async function broadcastViaEditor(
       })
       .toBe(false);
   }
+}
+
+async function focusHybridInput(page: Page, panel: Locator, terminalId: string): Promise<Locator> {
+  await dismissBlockingPalette(page);
+  await panel.click({ force: true, noWaitAfter: true });
+  await expect
+    .poll(() => getFocusedPanelId(page), { timeout: T_MEDIUM, intervals: [100, 250] })
+    .toBe(terminalId);
+  const editor = panel.locator(SEL.terminal.cmEditor).first();
+  await expect(editor).toBeVisible({ timeout: T_MEDIUM });
+  await editor.evaluate((node) => {
+    if (node instanceof HTMLElement) node.focus();
+  });
+  await expect
+    .poll(() => editor.evaluate((node) => document.activeElement === node).catch(() => false), {
+      timeout: T_MEDIUM,
+      intervals: [100, 250],
+    })
+    .toBe(true);
+  return editor;
 }
 
 test.describe.serial("Fleet broadcast: failure and progress paths", () => {
@@ -367,14 +393,7 @@ test.describe.serial("Fleet broadcast: failure and progress paths", () => {
       // in flight for ~12s, far longer than it takes to click Cancel, so the
       // abort always lands before batch two would dispatch.
       await injectDelay(ctx.app, TERMINAL_SUBMIT_CHANNEL, 12_000);
-      await dismissBlockingPalette(window);
-      await getPanelById(window, ids[0]!).click();
-      await expect
-        .poll(() => getFocusedPanelId(window), { timeout: T_MEDIUM, intervals: [100, 250] })
-        .toBe(ids[0]!);
-      const editor = getPanelById(window, ids[0]!).locator(SEL.terminal.cmEditor).first();
-      await expect(editor).toBeVisible({ timeout: T_MEDIUM });
-      await editor.click();
+      const editor = await focusHybridInput(window, getPanelById(window, ids[0]!), ids[0]!);
       await editor.fill(largePayload);
       await window.keyboard.press("Enter");
       // Editor fleet broadcasts intentionally do not show a paste/destructive
@@ -395,13 +414,13 @@ test.describe.serial("Fleet broadcast: failure and progress paths", () => {
       // delay applies to every batched submit, so the marker can land well past
       // 12s; keep generous headroom (60s local / scaled on CI) so a slow batch
       // drain never races the assertion.
-      await waitForTerminalText(getPanelById(window, ids[0]!), firstBatchReceiptText, T_LONG * 6);
+      await waitForTerminalTextById(window, ids[0]!, firstBatchReceiptText, T_LONG * 6);
       // ids[5] is the lone second-batch target; the abort skips it entirely.
       // Progress hidden is the structural signal that all in-flight work has
       // drained, so the absence check can no longer race a late delivery.
       await expect(window.locator(SEL.fleet.broadcastProgress)).toBeHidden({ timeout: T_LONG });
       await expect
-        .poll(() => getTerminalText(getPanelById(window, ids[5]!)), { timeout: T_MEDIUM })
+        .poll(() => getTerminalTextById(window, ids[5]!), { timeout: T_MEDIUM })
         .not.toContain(firstBatchReceiptText);
     });
   });

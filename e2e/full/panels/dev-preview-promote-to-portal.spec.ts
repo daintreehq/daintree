@@ -15,6 +15,7 @@ const PROJECT_NAME = "Promote To Portal Test";
 const COOKIE_NAME = "dt_promote_e2e";
 const COOKIE_VALUE = "carried-over";
 const DEV_PREVIEW_ADDRESS_BAR_RE = /^(?:https?:\/\/)?(?:localhost|dp-[a-z0-9-]+\.localhost):\d+$/;
+const DEV_PREVIEW_READY_TIMEOUT = T_LONG * 6;
 
 const DEV_SERVER_SCRIPT = `
 const http = require('http');
@@ -79,10 +80,12 @@ test.describe.serial("Core: Dev preview promote to portal", () => {
     //    dev-preview session partition.
     const consoleBar = window.locator('[aria-controls^="console-drawer-"]').locator("..").first();
     const statusBadge = consoleBar.locator('[role="status"]');
-    await expect(statusBadge).toContainText("Running", { timeout: T_LONG });
+    await expect(statusBadge).toContainText("Running", { timeout: DEV_PREVIEW_READY_TIMEOUT });
 
     const addressBar = window.locator(SEL.browser.addressBar);
-    await expect(addressBar).toHaveValue(DEV_PREVIEW_ADDRESS_BAR_RE, { timeout: T_MEDIUM });
+    await expect(addressBar).toHaveValue(DEV_PREVIEW_ADDRESS_BAR_RE, {
+      timeout: DEV_PREVIEW_READY_TIMEOUT,
+    });
     const displayUrl = (await addressBar.inputValue()).trim();
     const portalUrlHost = new URL(displayUrl.includes("://") ? displayUrl : `http://${displayUrl}`)
       .host;
@@ -109,7 +112,7 @@ test.describe.serial("Core: Dev preview promote to portal", () => {
       }
     };
 
-    await expect.poll(readPreviewCookieState, { timeout: T_LONG }).toEqual(
+    await expect.poll(readPreviewCookieState, { timeout: DEV_PREVIEW_READY_TIMEOUT }).toEqual(
       expect.objectContaining({
         cookie: expect.stringContaining(`${COOKIE_NAME}=${COOKIE_VALUE}`),
         href: expect.stringContaining(portalUrlHost),

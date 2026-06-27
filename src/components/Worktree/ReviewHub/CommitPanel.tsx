@@ -104,6 +104,7 @@ export function CommitPanel({
   const isFetchingHistoryRef = useRef(false);
   const draftBeforeHistoryRef = useRef("");
   const pendingFirstApplyRef = useRef(false);
+  const appliedHistoryMessageRef = useRef<string | null>(null);
 
   useEffect(() => {
     historyMessagesRef.current = null;
@@ -111,6 +112,7 @@ export function CommitPanel({
     isFetchingHistoryRef.current = false;
     draftBeforeHistoryRef.current = "";
     pendingFirstApplyRef.current = false;
+    appliedHistoryMessageRef.current = null;
   }, [worktreePath]);
 
   const fetchHistoryMessages = useCallback(async (): Promise<string[]> => {
@@ -138,6 +140,7 @@ export function CommitPanel({
 
   const applyHistoryMessage = useCallback(
     (message: string) => {
+      appliedHistoryMessageRef.current = message;
       onCommitMessageChange(message);
     },
     [onCommitMessageChange]
@@ -226,14 +229,18 @@ export function CommitPanel({
       const isCaretAtStart =
         e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0;
       const visibleMessage = e.currentTarget.value;
-      const isCyclingHistory = pendingFirstApplyRef.current || historyIndexRef.current >= 0;
+      const isAppliedHistoryVisible = appliedHistoryMessageRef.current === visibleMessage;
+      const isCyclingHistory =
+        pendingFirstApplyRef.current || historyIndexRef.current >= 0 || isAppliedHistoryVisible;
 
       if (isHistoryKey && !hasModifier && (isCaretAtStart || isCyclingHistory)) {
         e.preventDefault();
 
         if (e.key === "ArrowUp") {
           if (historyIndexRef.current < 0) {
-            const cachedIndex = historyMessagesRef.current?.indexOf(visibleMessage) ?? -1;
+            const cachedIndex = isAppliedHistoryVisible
+              ? (historyMessagesRef.current?.indexOf(visibleMessage) ?? -1)
+              : -1;
             if (cachedIndex >= 0) {
               historyIndexRef.current = cachedIndex;
               pendingFirstApplyRef.current = false;
@@ -289,7 +296,8 @@ export function CommitPanel({
           historyIndexRef.current--;
           if (historyIndexRef.current < 0) {
             pendingFirstApplyRef.current = false;
-            applyHistoryMessage(draftBeforeHistoryRef.current);
+            appliedHistoryMessageRef.current = null;
+            onCommitMessageChange(draftBeforeHistoryRef.current);
           } else {
             const messages = historyMessagesRef.current!;
             applyHistoryMessage(messages[historyIndexRef.current]!);
@@ -323,6 +331,7 @@ export function CommitPanel({
       focusBlocker,
       fetchHistoryMessages,
       applyHistoryMessage,
+      onCommitMessageChange,
     ]
   );
 
@@ -366,8 +375,11 @@ export function CommitPanel({
         ref={textareaRef}
         value={commitMessage}
         onChange={(e) => {
-          historyIndexRef.current = -1;
-          pendingFirstApplyRef.current = false;
+          if (e.target.value !== appliedHistoryMessageRef.current) {
+            historyIndexRef.current = -1;
+            pendingFirstApplyRef.current = false;
+            appliedHistoryMessageRef.current = null;
+          }
           onCommitMessageChange(e.target.value);
         }}
         onKeyDown={handleKeyDown}

@@ -137,7 +137,8 @@ export async function handleWaitUntilIdle(
     };
   };
 
-  const previousState = store.getState(agentId);
+  const agentSnapshotMatchesTerminal = () => store.getTerminalIdForAgent(agentId) === terminalId;
+  const previousState = agentSnapshotMatchesTerminal() ? store.getState(agentId) : "working";
 
   try {
     const settlement = await new Promise<Settlement>((resolve) => {
@@ -163,7 +164,7 @@ export async function handleWaitUntilIdle(
         });
       });
 
-      const currentState = store.getState(agentId);
+      const currentState = agentSnapshotMatchesTerminal() ? store.getState(agentId) : "working";
       if (currentState !== "working") {
         settle({
           kind: "already-idle",
@@ -193,7 +194,9 @@ export async function handleWaitUntilIdle(
         agentId,
         busyState: "working",
         previousBusyState: mapAgentStateToBusyState(previousState),
-        lastTransitionAt: store.getLastStateChange(agentId),
+        lastTransitionAt: agentSnapshotMatchesTerminal()
+          ? store.getLastStateChange(agentId)
+          : undefined,
         timedOut: true,
       };
     }
@@ -434,8 +437,13 @@ export async function handleWaitUntilIdleBatch(
       previousBusyState: "working",
       // Mirror the single handler's timeout result, which reports the last
       // transition even while still working. Settled tracks overwrite this with
-      // their transition timestamp.
-      lastTransitionAt: store.getLastStateChange(agentId),
+      // their transition timestamp. Only trust the agent-level snapshot when
+      // the reverse mapping still points at this terminal; agent ids currently
+      // identify agent type, so several terminals can share one id.
+      lastTransitionAt:
+        store.getTerminalIdForAgent(agentId) === terminalId
+          ? store.getLastStateChange(agentId)
+          : undefined,
     });
   }
 
@@ -506,7 +514,10 @@ export async function handleWaitUntilIdleBatch(
       // working, so `mode: "all"` can't hang on a stateless terminal.
       for (const track of tracks.values()) {
         if (track.settled || !track.agentId) continue;
-        const state = store.getState(track.agentId);
+        const state =
+          store.getTerminalIdForAgent(track.agentId) === track.terminalId
+            ? store.getState(track.agentId)
+            : "working";
         if (state !== "working") {
           settleTrackFromState(store, track, track.agentId, state ?? "idle", state ?? "idle");
         }

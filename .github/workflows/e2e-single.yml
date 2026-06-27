@@ -203,6 +203,9 @@ jobs:
       - name: Install Claude Code
         run: node scripts/ci/npm-install-retry.mjs -g @anthropic-ai/claude-code
 
+      - name: Repair Claude Code native binary
+        run: node scripts/ci/repair-claude-code-install.mjs
+
       - name: Install OpenCode
         if: inputs.suite == 'online'
         run: node scripts/ci/npm-install-retry.mjs -g opencode-ai

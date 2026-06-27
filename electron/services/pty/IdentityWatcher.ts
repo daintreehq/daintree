@@ -5,6 +5,7 @@ import {
   type DetectionResult,
   type ProcessDetector,
 } from "../ProcessDetector.js";
+import { stripAnsi } from "./AgentPatternDetector.js";
 import { detectPrompt } from "./PromptDetector.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../../utils/lifecycle.js";
 
@@ -46,6 +47,14 @@ const UNAMBIGUOUS_SHELL_PROMPT_PATTERNS = [
 const ACTIVE_AGENT_PROMPT_PATTERN =
   /(?:welcome to claude code|claude code v\d|tips for getting started|\?\s+for\s+shortcuts|welcome\s+back!)/i;
 
+function isUnambiguousShellPromptLine(line: string | undefined): boolean {
+  if (line === undefined) return false;
+  if (UNAMBIGUOUS_SHELL_PROMPT_PATTERNS.some((pattern) => pattern.test(line))) {
+    return true;
+  }
+  return DECORATED_SHELL_PROMPT_PATTERN.test(line) && !/^\s*[>❯›]\s+\d+\./.test(line);
+}
+
 // Locale-independent fallback signals for "command not found" detection. POSIX
 // exit code 127 is invisible to node-pty.onExit while the shell is alive
 // (interactive case), so output parsing remains the only viable signal here.
@@ -85,6 +94,7 @@ export interface IdentityWatcherDelegate {
   readonly processDetector: ProcessDetector | null;
   getLastNLines(n: number): string[];
   getCursorLine(): string | null;
+  getRecentOutput?(): string;
   getLastCommand(): string | undefined;
   getPtyDescendantCount(): number | undefined;
   readForegroundProcessGroupSnapshot(): { shellPgid: number; foregroundPgid: number } | null;
@@ -295,14 +305,34 @@ export class IdentityWatcher {
       .join("\n");
     const knownAgentPrompt =
       /(?:accessing workspace|yes,\s*i trust this folder|enter to confirm|quick safety check|\?\s+for\s+shortcuts|tips\s+for\s+getting\s+started|welcome\s+back!|claude code v\d)/i;
-    if (ACTIVE_AGENT_PROMPT_PATTERN.test(visibleTail)) {
+    const currentLineIsUnambiguousShellPrompt = isUnambiguousShellPromptLine(currentVisibleLine);
+    const lastVisibleLineIsUnambiguousShellPrompt = isUnambiguousShellPromptLine(lastVisibleLine);
+    const currentLineIsPowerShellPrompt = POWERSHELL_PROMPT_PATTERN.test(currentVisibleLine ?? "");
+    const lastVisibleLineIsPowerShellPrompt = POWERSHELL_PROMPT_PATTERN.test(lastVisibleLine ?? "");
+    const activeAgentPromptVisible = ACTIVE_AGENT_PROMPT_PATTERN.test(visibleTail);
+    const activeAgentInputPromptVisible =
+      AGENT_ONLY_SINGLE_CHAR_PROMPT_PATTERN.test(currentVisibleLine ?? "") ||
+      AGENT_ONLY_SINGLE_CHAR_PROMPT_PATTERN.test(lastVisibleLine ?? "") ||
+      /^\s*[>❯›]\s+\S/.test(currentVisibleLine ?? "") ||
+      /^\s*[>❯›]\s+\S/.test(lastVisibleLine ?? "");
+    if (
+      activeAgentPromptVisible &&
+      activeAgentInputPromptVisible &&
+      !currentLineIsPowerShellPrompt &&
+      !lastVisibleLineIsPowerShellPrompt
+    ) {
       return true;
     }
-    const currentLineIsUnambiguousShellPrompt =
-      currentVisibleLine !== undefined &&
-      UNAMBIGUOUS_SHELL_PROMPT_PATTERNS.some((pattern) => pattern.test(currentVisibleLine));
-    if (!hasPtyDescendants && currentLineIsUnambiguousShellPrompt) {
+    if (
+      (!hasPtyDescendants ||
+        (currentLineIsPowerShellPrompt &&
+          (lastVisibleLineIsUnambiguousShellPrompt || currentLineIsUnambiguousShellPrompt))) &&
+      (currentLineIsUnambiguousShellPrompt || lastVisibleLineIsUnambiguousShellPrompt)
+    ) {
       return false;
+    }
+    if (ACTIVE_AGENT_PROMPT_PATTERN.test(visibleTail)) {
+      return true;
     }
     return (
       knownAgentPrompt.test(recent) ||
@@ -329,6 +359,30 @@ export class IdentityWatcher {
 
   clearSeededCommandText(): void {
     this.seededCommand = undefined;
+  }
+
+  observeOutput(data: string): void {
+    if (
+      this.stopped ||
+      (!this.identity?.agentType && !this.delegate.detectedAgentId) ||
+      this.delegate.isExited ||
+      this.delegate.wasKilled
+    ) {
+      return;
+    }
+
+    const foregroundShellIdle = this.readForegroundShellIdleForAgentDemotion();
+    if (foregroundShellIdle.supported && !foregroundShellIdle.shellIdle) {
+      return;
+    }
+
+    if (
+      !this.hasRecentCommandFailureOutput() &&
+      this.hasUnambiguousShellPromptInText(data) &&
+      !this.hasAgentUiPromptFalsePositive(false)
+    ) {
+      this.clearShellCommandEvidenceAfterPromptReturn();
+    }
   }
 
   stop(): void {
@@ -376,18 +430,62 @@ export class IdentityWatcher {
     return COMMAND_NOT_FOUND_REGEX.test(recent);
   }
 
-  private isShellPromptVisible(): boolean {
-    const prompt = detectPrompt(
-      this.delegate.getLastNLines(SHELL_IDENTITY_FALLBACK_SCAN_LINES),
-      {
-        promptPatterns: [...SHELL_PROMPT_PATTERNS],
-        promptHintPatterns: [],
-        promptScanLineCount: SHELL_IDENTITY_FALLBACK_SCAN_LINES,
-        promptConfidence: 0.85,
-      },
-      this.delegate.getCursorLine()
+  private hasUnambiguousShellPromptVisible(): boolean {
+    const lines = this.delegate.getLastNLines(SHELL_IDENTITY_FALLBACK_SCAN_LINES);
+    const lastVisibleLine = [...lines]
+      .reverse()
+      .find((line) => typeof line === "string" && line.trim().length > 0);
+    const cursorLine = this.delegate.getCursorLine();
+    const recentOutputLine = this.getRecentOutputTailLines()
+      .reverse()
+      .find((line) => line.trim().length > 0);
+    return (
+      isUnambiguousShellPromptLine(cursorLine ?? undefined) ||
+      isUnambiguousShellPromptLine(lastVisibleLine) ||
+      isUnambiguousShellPromptLine(recentOutputLine)
     );
-    return prompt.isPrompt;
+  }
+
+  private getRecentOutputTailLines(): string[] {
+    const recentOutput = this.delegate.getRecentOutput?.();
+    if (!recentOutput) return [];
+    return this.getOutputTailLines(recentOutput);
+  }
+
+  private hasUnambiguousShellPromptInText(text: string): boolean {
+    return this.getOutputTailLines(text).some((line) => isUnambiguousShellPromptLine(line));
+  }
+
+  private getOutputTailLines(text: string): string[] {
+    return stripAnsi(text)
+      .split(/\r\n|\r|\n/)
+      .map((line) => line.trimEnd())
+      .filter((line) => line.trim().length > 0)
+      .slice(-SHELL_IDENTITY_FALLBACK_SCAN_LINES);
+  }
+
+  private clearShellCommandEvidenceAfterPromptReturn(): void {
+    // Prompt has returned — the command has finished. Clear the injected
+    // shell evidence as an explicit lifecycle demotion. Process-tree absence
+    // is not authoritative for agent exit; shell prompt return is. When no
+    // detector is attached, fall back to the legacy direct emission so the UI
+    // still demotes promptly.
+    if (this.delegate.processDetector) {
+      this.delegate.processDetector.clearShellCommandEvidence("prompt-return");
+    }
+    if (!this.delegate.processDetector || this.delegate.detectedAgentId) {
+      this.delegate.handleAgentDetection(
+        {
+          detectionState: "no_agent",
+          detected: false,
+          isBusy: false,
+          currentCommand: undefined,
+          evidenceSource: "shell_command",
+        },
+        this.delegate.spawnedAt
+      );
+    }
+    this.stop();
   }
 
   private readForegroundShellIdleForAgentDemotion(): {
@@ -432,12 +530,29 @@ export class IdentityWatcher {
     }
 
     const ptyDescendantCount = this.delegate.getPtyDescendantCount();
+    const foregroundShellIdle = this.readForegroundShellIdleForAgentDemotion();
     const hasPtyDescendants = ptyDescendantCount !== undefined && ptyDescendantCount > 0;
-    if (hasPtyDescendants) {
+    const hasActivePtyDescendants = foregroundShellIdle.supported
+      ? hasPtyDescendants
+      : ptyDescendantCount !== undefined && ptyDescendantCount > 1;
+    if (hasActivePtyDescendants) {
       this.sawPtyDescendant = true;
     }
 
-    const promptVisible = this.isShellPromptVisible();
+    const unambiguousShellPromptVisible = this.hasUnambiguousShellPromptVisible();
+    const promptVisible =
+      unambiguousShellPromptVisible ||
+      detectPrompt(
+        this.delegate.getLastNLines(SHELL_IDENTITY_FALLBACK_SCAN_LINES),
+        {
+          promptPatterns: [...SHELL_PROMPT_PATTERNS],
+          promptHintPatterns: [],
+          promptScanLineCount: SHELL_IDENTITY_FALLBACK_SCAN_LINES,
+          promptConfidence: 0.85,
+        },
+        this.delegate.getCursorLine(),
+        { allowHistoryScan: true }
+      ).isPrompt;
     // A live identity only pre-empts the fallback commit when it matches what
     // the fallback detected — a stale badge (e.g. a prior `npm run dev` whose
     // icon hasn't been cleared yet) must NOT block the fallback from emitting
@@ -512,7 +627,6 @@ export class IdentityWatcher {
     }
 
     const hasRecentCommandFailureOutput = this.hasRecentCommandFailureOutput();
-    const foregroundShellIdle = this.readForegroundShellIdleForAgentDemotion();
     const posixShellOwnsPtyAfterAgent =
       Boolean(this.identity.agentType) &&
       this.sawPtyDescendant &&
@@ -520,8 +634,32 @@ export class IdentityWatcher {
       foregroundShellIdle.shellIdle &&
       ptyDescendantCount === 0 &&
       !hasRecentCommandFailureOutput;
+    // Windows has no foreground-PGID probe. If the agent command had an observed
+    // child and that child is now gone, treat that as the same lifecycle signal
+    // as a returned prompt, unless the visible tail still looks like agent UI.
+    const nonPosixObservedChildExitedAfterAgent =
+      Boolean(this.identity.agentType) &&
+      this.sawPtyDescendant &&
+      !foregroundShellIdle.supported &&
+      (ptyDescendantCount ?? 0) <= 1 &&
+      !hasRecentCommandFailureOutput &&
+      !this.hasAgentUiPromptFalsePositive(false);
 
-    if (!promptVisible && !posixShellOwnsPtyAfterAgent) {
+    if (
+      this.identity.agentType &&
+      unambiguousShellPromptVisible &&
+      (!foregroundShellIdle.supported || foregroundShellIdle.shellIdle) &&
+      !hasRecentCommandFailureOutput &&
+      !this.hasAgentUiPromptFalsePositive(false)
+    ) {
+      this.promptStreak += 1;
+      if (this.promptStreak >= SHELL_IDENTITY_FALLBACK_PROMPT_POLLS) {
+        this.clearShellCommandEvidenceAfterPromptReturn();
+      }
+      return;
+    }
+
+    if (!promptVisible && !posixShellOwnsPtyAfterAgent && !nonPosixObservedChildExitedAfterAgent) {
       this.promptStreak = 0;
       return;
     }
@@ -550,7 +688,11 @@ export class IdentityWatcher {
       this.identity.agentType &&
       !hasRecentCommandFailureOutput &&
       !posixShellOwnsPtyAfterAgent &&
-      this.hasAgentUiPromptFalsePositive(hasPtyDescendants)
+      this.hasAgentUiPromptFalsePositive(
+        foregroundShellIdle.supported
+          ? hasPtyDescendants && !foregroundShellIdle.shellIdle
+          : hasActivePtyDescendants
+      )
     ) {
       if (this.promptStreak > 0) {
         console.log(
@@ -568,24 +710,6 @@ export class IdentityWatcher {
       return;
     }
 
-    // Prompt has returned — the command has finished. Clear the injected
-    // shell evidence as an explicit lifecycle demotion. Process-tree absence
-    // is not authoritative for agent exit; shell prompt return is. When no
-    // detector is attached, fall back to the legacy direct emission so the UI
-    // still demotes promptly.
-    if (this.delegate.processDetector) {
-      this.delegate.processDetector.clearShellCommandEvidence("prompt-return");
-    } else {
-      this.delegate.handleAgentDetection(
-        {
-          detectionState: "no_agent",
-          detected: false,
-          isBusy: false,
-          currentCommand: undefined,
-        },
-        this.delegate.spawnedAt
-      );
-    }
-    this.stop();
+    this.clearShellCommandEvidenceAfterPromptReturn();
   }
 }

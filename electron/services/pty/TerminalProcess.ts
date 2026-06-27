@@ -1185,15 +1185,19 @@ export class TerminalProcess {
     const buffer = terminal.buffer.active;
     if (!buffer) return [];
 
+    const viewportTop = buffer.baseY;
     const viewportBottom = buffer.baseY + terminal.rows;
-    const start = Math.max(buffer.baseY, viewportBottom - n);
 
     const lines: string[] = [];
-    for (let i = start; i < viewportBottom; i++) {
+    for (let i = viewportTop; i < viewportBottom; i++) {
       const line = buffer.getLine(i);
-      if (line) lines.push(line.translateToString(true));
+      if (!line) continue;
+      const text = line.translateToString(true);
+      if (text.trim().length > 0) {
+        lines.push(text);
+      }
     }
-    return lines;
+    return lines.slice(-n);
   }
 
   getVisibleActivityLines(n: number): string[] {
@@ -1344,6 +1348,7 @@ export class TerminalProcess {
       },
       getLastNLines: (n) => tp.getLastNLines(n),
       getCursorLine: () => tp.getCursorLine(),
+      getRecentOutput: () => tp.forensicsBuffer.getRecentOutput(),
       getLastCommand: () => tp.semanticBufferManager.getLastCommand(),
       getPtyDescendantCount: () => tp.getPtyDescendantCount(),
       readForegroundProcessGroupSnapshot: () => tp.readForegroundProcessGroupSnapshot(),
@@ -1824,6 +1829,7 @@ export class TerminalProcess {
 
     this.emitData(rendererData);
     this.forensicsBuffer.capture(data);
+    this.identityWatcher.observeOutput(data);
     this.semanticBufferManager.onData(data);
 
     // Output mirror for agent consumers: keep a rolling recent-output
