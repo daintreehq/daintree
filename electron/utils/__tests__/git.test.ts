@@ -978,9 +978,45 @@ describe("listCommits", () => {
 
     const revParseCall = mockGit.raw.mock.calls[1][0] as string[];
     expect(revParseCall).toEqual(["rev-parse", "--verify", "abc1234^{commit}"]);
+    // The resolved full hash must be trimmed before it's handed to `log -1`.
+    const logHashCall = mockGit.raw.mock.calls[2][0] as string[];
+    expect(logHashCall).toEqual(["log", expect.stringContaining("--format="), "-1", fullHash]);
+    // The grep pass must still carry the search term and branch.
+    const grepCall = mockGit.raw.mock.calls[3][0] as string[];
+    expect(grepCall).toContain("--grep=abc1234");
+    expect(grepCall).toContain("-i");
+    expect(grepCall).toContain("main");
     expect(result.items[0].hash).toBe(fullHash);
     expect(result.items).toHaveLength(2);
     expect(result.items[1].hash).toBe("ffff999");
+  });
+
+  it("keeps the hash match additive without dropping a full page of message results", async () => {
+    const fullHash = "abc1234def567890abc1234def567890abc12345";
+    const makeCommit = (h: string) => ({
+      hash: h,
+      short: h.slice(0, 7),
+      msg: `msg ${h}`,
+      body: "",
+      name: "A",
+      email: "a@b.com",
+      date: "2024-01-15T12:00:00+00:00",
+    });
+    // limit=1, grep returns 2 distinct message commits (limit+1 = "more exists"),
+    // hash match is not among them. The hash must be pinned AND no message result lost.
+    mockGit.raw
+      .mockResolvedValueOnce("10") // rev-list --count
+      .mockResolvedValueOnce(`${fullHash}\n`) // rev-parse --verify
+      .mockResolvedValueOnce(makeLogOutput([makeCommit(fullHash)])) // log -1 <fullHash>
+      .mockResolvedValueOnce(makeLogOutput([makeCommit("aaa1111"), makeCommit("bbb2222")])); // log --grep
+
+    const result = await listCommits({ cwd: "/test", branch: "main", search: "abc1234", limit: 1 });
+
+    expect(result.items).toHaveLength(2);
+    expect(result.items[0].hash).toBe(fullHash);
+    expect(result.items[1].hash).toBe("aaa1111");
+    // bbb2222 was the limit+1 peek entry, so more message results remain.
+    expect(result.hasMore).toBe(true);
   });
 
   it("deduplicates a hash prefix match already present in message results", async () => {
@@ -1004,6 +1040,8 @@ describe("listCommits", () => {
 
     expect(result.items).toHaveLength(1);
     expect(result.items[0].hash).toBe(fullHash);
+    // The only message result was the hash match itself, so nothing remains.
+    expect(result.hasMore).toBe(false);
   });
 
   it("skips the rev-parse pass when paginating (skip > 0)", async () => {
@@ -1011,10 +1049,38 @@ describe("listCommits", () => {
 
     await listCommits({ cwd: "/test", branch: "main", search: "abc1234", skip: 5 });
 
-    // No rev-parse on paginated pages: rev-list + log only.
+    // No rev-parse on paginated pages: rev-list + log only. The search term must
+    // still reach the grep call so paginated pages stay filtered.
     expect(mockGit.raw).toHaveBeenCalledTimes(2);
-    const secondCall = mockGit.raw.mock.calls[1][0] as string[];
-    expect(secondCall[0]).toBe("log");
+    const logCall = mockGit.raw.mock.calls[1][0] as string[];
+    expect(logCall[0]).toBe("log");
+    expect(logCall).toContain("--grep=abc1234");
+    expect(logCall).toContain("-i");
+  });
+
+  it("skips the rev-parse pass for sub-4-char and over-40-char hex strings", async () => {
+    mockGit.raw.mockResolvedValue("");
+
+    await listCommits({ cwd: "/test", branch: "main", search: "abc" }); // 3 chars
+    expect(mockGit.raw).toHaveBeenCalledTimes(2);
+
+    vi.clearAllMocks();
+    mockGit.raw.mockResolvedValue("");
+    await listCommits({ cwd: "/test", branch: "main", search: "a".repeat(41) }); // 41 chars
+    expect(mockGit.raw).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips the log -1 call when rev-parse returns only whitespace", async () => {
+    mockGit.raw
+      .mockResolvedValueOnce("10") // rev-list --count
+      .mockResolvedValueOnce("  \n ") // rev-parse --verify → whitespace, trims to ""
+      .mockResolvedValueOnce(""); // log --grep
+
+    const result = await listCommits({ cwd: "/test", branch: "main", search: "abc1234" });
+
+    // rev-list + rev-parse + grep-log only — no log -1 pass.
+    expect(mockGit.raw).toHaveBeenCalledTimes(3);
+    expect(result.items).toEqual([]);
   });
 
   it("gracefully falls back to message search when the hash prefix matches no commit", async () => {
@@ -1039,6 +1105,10 @@ describe("listCommits", () => {
 
     expect(result.items).toHaveLength(1);
     expect(result.items[0].hash).toBe("face123");
+    // Fallback must still pass the search term through to the grep pass.
+    const grepCall = mockGit.raw.mock.calls[2][0] as string[];
+    expect(grepCall).toContain("--grep=face");
+    expect(grepCall).toContain("-i");
   });
 
   it("returns empty result on git error", async () => {

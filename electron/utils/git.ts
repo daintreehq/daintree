@@ -319,15 +319,16 @@ export async function listCommits(options: ListCommitsOptions): Promise<ListComm
 
     const output = await git.raw(logOptions);
     const msgCommits = parseCommitOutput(output);
-    const hasMore = msgCommits.length > limit;
 
-    let items: CommitInfo[];
-    if (hashCommit) {
-      const deduped = msgCommits.filter((c) => c.hash !== hashCommit!.hash);
-      items = [hashCommit, ...deduped].slice(0, limit);
-    } else {
-      items = msgCommits.slice(0, limit);
-    }
+    // The hash match is purely additive: it's pinned ahead of a full page of
+    // message results rather than displacing one, so pagination stays aligned to
+    // the message stream and `hasMore` reflects the (deduplicated) message count.
+    const dedupedMsg = hashCommit
+      ? msgCommits.filter((c) => c.hash !== hashCommit!.hash)
+      : msgCommits;
+    const pageMsg = dedupedMsg.slice(0, limit);
+    const items = hashCommit ? [hashCommit, ...pageMsg] : pageMsg;
+    const hasMore = dedupedMsg.length > limit;
 
     return {
       items,
