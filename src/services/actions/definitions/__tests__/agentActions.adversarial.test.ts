@@ -343,6 +343,36 @@ describe("agentActions adversarial", () => {
     );
   });
 
+  it("agent.launch surfaces a worktree-not-found launcher error as ok:false through ActionService (#10812)", async () => {
+    // Regression guard: a worktree-not-found launch must reach the MCP layer as a
+    // dispatch failure (ok:false), NOT as a terminal-less success ({ok:true,result:null}).
+    // The hook throws on an unknown worktreeId; ActionService converts the throw to
+    // an EXECUTION_ERROR result, which sessionServer serializes with isError:true.
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+
+    const callbacks = makeCallbacks();
+    callbacks.onLaunchAgent.mockRejectedValueOnce(
+      new Error("Worktree 'main' not found. Available worktree IDs: wt-1, wt-2")
+    );
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+    for (const [, factory] of registry) service.register(factory());
+
+    const result = await service.dispatch(
+      "agent.launch",
+      { agentId: "claude", worktreeId: "main" },
+      { source: "agent" }
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("EXECUTION_ERROR");
+      expect(result.error.message).toContain("Worktree 'main' not found");
+      expect(result.error.message).toContain("wt-1, wt-2");
+    }
+  });
+
   it("onLaunchAgent rejection propagates out of generated agent.<id>", async () => {
     const callbacks = makeCallbacks();
     callbacks.onLaunchAgent.mockRejectedValueOnce(new Error("generator boom"));

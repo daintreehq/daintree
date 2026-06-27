@@ -281,8 +281,11 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         const targetWorktree = targetWorktreeId ? worktreeMap.get(targetWorktreeId) : null;
 
         if (targetWorktreeId && !targetWorktree && isInitialized) {
-          console.warn(`Worktree ${targetWorktreeId} not found, cannot launch agent`);
-          return null;
+          throw new Error(
+            `Worktree '${targetWorktreeId}' not found. Available worktree IDs: ${
+              [...worktreeMap.keys()].join(", ") || "none"
+            }`
+          );
         }
 
         const cwd =
