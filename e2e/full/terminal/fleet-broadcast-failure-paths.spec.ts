@@ -32,10 +32,43 @@ let fixtureDir: string;
 let fixtureCleanup: (() => void) | undefined;
 
 async function editorContains(locator: Locator, text: string): Promise<boolean> {
-  if (!(await locator.isVisible().catch(() => false))) return false;
-  return locator
-    .evaluate((element, expected) => (element.textContent ?? "").includes(expected), text)
-    .catch(() => false);
+  return (await getEditorText(locator)).includes(text);
+}
+
+async function getEditorText(locator: Locator): Promise<string> {
+  if (!(await locator.isVisible().catch(() => false))) return "";
+  return locator.evaluate((element) => element.textContent ?? "").catch(() => "");
+}
+
+async function getHybridInputText(page: Page, terminalId: string): Promise<string> {
+  return page.evaluate((id) => window.__daintreeHybridInputE2E?.getText(id) ?? "", terminalId);
+}
+
+async function setHybridInputText(page: Page, terminalId: string, text: string): Promise<void> {
+  const assertion = expect
+    .poll(
+      () =>
+        page.evaluate(
+          ([id, nextText]) => window.__daintreeHybridInputE2E?.setText(id, nextText) ?? false,
+          [terminalId, text] as const
+        ),
+      { timeout: T_MEDIUM, intervals: [100, 250] }
+    )
+    .toBe(true);
+  await assertion.catch(async (error: unknown) => {
+    const debug = await page.evaluate(
+      (id) => ({
+        mode: window.__DAINTREE_E2E_MODE__ === true,
+        hasBridge: !!window.__daintreeHybridInputE2E,
+        registeredIds: window.__daintreeHybridInputE2E?.listIds?.() ?? [],
+        requestedId: id,
+      }),
+      terminalId
+    );
+    throw new Error(
+      `Hybrid input E2E bridge did not accept text: ${JSON.stringify(debug)}\n${String(error)}`
+    );
+  });
 }
 
 async function dispatchAction<T = unknown>(
@@ -393,8 +426,14 @@ test.describe.serial("Fleet broadcast: failure and progress paths", () => {
       // in flight for ~12s, far longer than it takes to click Cancel, so the
       // abort always lands before batch two would dispatch.
       await injectDelay(ctx.app, TERMINAL_SUBMIT_CHANNEL, 12_000);
-      const editor = await focusHybridInput(window, getPanelById(window, ids[0]!), ids[0]!);
-      await editor.fill(largePayload);
+      await focusHybridInput(window, getPanelById(window, ids[0]!), ids[0]!);
+      await setHybridInputText(window, ids[0]!, largePayload);
+      await expect
+        .poll(() => getHybridInputText(window, ids[0]!), {
+          timeout: T_MEDIUM,
+          intervals: [100, 250],
+        })
+        .toContain(firstBatchReceiptText);
       await window.keyboard.press("Enter");
       // Editor fleet broadcasts intentionally do not show a paste/destructive
       // confirm; arming is the consent boundary. The large payload still

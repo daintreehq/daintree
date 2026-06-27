@@ -177,7 +177,7 @@ describe("VoiceCorrectionService integration", () => {
     async () => {
       svc = new VoiceCorrectionService();
 
-      const input = "um so we need to like update the racked component";
+      const input = "um so we need to like update the type script compiler";
       const result = await svc.correct(
         { rawText: input },
         {
@@ -192,7 +192,7 @@ describe("VoiceCorrectionService integration", () => {
       console.log("Corrected:", result.confirmedText);
 
       expect(result).toBeTruthy();
-      expect(result.confirmedText).toContain("React");
+      expect(result.confirmedText).toContain("TypeScript");
       expect(result.confirmedText.toLowerCase()).not.toMatch(/\bum\b/);
     },
     15_000

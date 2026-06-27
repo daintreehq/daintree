@@ -110,6 +110,33 @@ interface LatestState {
   isExpanded: boolean;
 }
 
+interface HybridInputE2EController {
+  setText: (text: string) => void;
+  getText: () => string;
+}
+
+type ApplyEditorValue = (
+  nextValue: string,
+  options?: { selection?: EditorSelection; focus?: boolean }
+) => void;
+
+const hybridInputE2EControllers = new Map<string, HybridInputE2EController>();
+
+function installHybridInputE2EBridge(): void {
+  if (!window.__DAINTREE_E2E_MODE__) return;
+  if (window.__daintreeHybridInputE2E) return;
+  window.__daintreeHybridInputE2E = {
+    setText: (terminalId, text) => {
+      const controller = hybridInputE2EControllers.get(terminalId);
+      if (!controller) return false;
+      controller.setText(text);
+      return true;
+    },
+    getText: (terminalId) => hybridInputE2EControllers.get(terminalId)?.getText() ?? null,
+    listIds: () => [...hybridInputE2EControllers.keys()],
+  };
+}
+
 export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarProps>(
   (
     {
@@ -174,6 +201,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       "initializing"
     );
     const latestRef = useRef<LatestState | null>(null);
+    const applyEditorValueRef = useRef<ApplyEditorValue>(() => {});
 
     const openPicker = useCommandStore((s) => s.openPicker);
     const currentProject = useProjectStore((s) => s.currentProject);
@@ -419,6 +447,26 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       });
       if (options?.focus) view.focus();
     };
+
+    useEffect(() => {
+      applyEditorValueRef.current = applyEditorValue;
+    });
+
+    useEffect(() => {
+      if (!window.__DAINTREE_E2E_MODE__) return;
+      installHybridInputE2EBridge();
+      hybridInputE2EControllers.set(terminalId, {
+        setText: (text) =>
+          applyEditorValueRef.current(text, {
+            selection: EditorSelection.create([EditorSelection.cursor(text.length)]),
+            focus: true,
+          }),
+        getText: () => editorViewRef.current?.state.doc.toString() ?? lastEmittedValueRef.current,
+      });
+      return () => {
+        hybridInputE2EControllers.delete(terminalId);
+      };
+    }, [terminalId]);
 
     const { sendText } = useTokenResolution({
       latestRef,
