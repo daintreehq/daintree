@@ -129,7 +129,6 @@ function makeMockManaged(overrides: Record<string, unknown> = {}) {
     restoreGeneration: 0,
     isSerializedRestoreInProgress: false,
     deferredOutput: [] as Array<string | Uint8Array>,
-    hibernationTimer: undefined as ReturnType<typeof setTimeout> | undefined,
     webGLRestoreTimer: undefined as number | undefined,
     webGLHideTimer: undefined as number | undefined,
     isInputLocked: false,

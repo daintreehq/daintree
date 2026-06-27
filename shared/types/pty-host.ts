@@ -103,7 +103,6 @@ export type PtyHostRequest =
        */
       pollingIntervalMs?: number;
     }
-  | { type: "wake-terminal"; id: string; requestId: string }
   | {
       type: "set-active-project";
       windowId: number;
@@ -308,13 +307,6 @@ export type PtyHostEvent =
   | { type: "exit"; id: string; exitCode: number; signal?: number }
   | { type: "error"; id: string; error: string }
   | { type: "spawn-result"; id: string; result: SpawnResult }
-  | {
-      type: "wake-result";
-      requestId: string;
-      id: string;
-      state: string | null;
-      warnings?: string[];
-    }
   | { type: "kill-by-project-result"; requestId: string; killed: number }
   | {
       type: "project-stats";
@@ -600,8 +592,9 @@ export interface AgentKilledPayload {
  *
  * Controls backend streaming behavior and resource allocation:
  * - `active`: Full visual streaming to SAB/IPC (50ms ActivityMonitor polling)
- * - `background`: Visual streaming suppressed, wake snapshots only (500ms polling)
- *                 Analysis buffer writes continue for agent state detection
+ * - `background`: Live visual streaming continues (hibernation teardown); only
+ *                 the ActivityMonitor poll cadence drops to 500ms. Analysis
+ *                 buffer writes continue for agent state detection.
  *
  * Maps from renderer TerminalRefreshTier:
  * - BURST/FOCUSED → active
@@ -695,14 +688,13 @@ export interface HostThrottlePayload {
   timestamp: number;
 }
 
-/** Payload for terminal reliability metrics (backpressure/suspend/wake) */
+/** Payload for terminal reliability metrics (backpressure/suspend) */
 export interface TerminalReliabilityMetricPayload {
   terminalId: string;
   metricType:
     | "pause-start"
     | "pause-end"
     | "suspend"
-    | "wake-latency"
     | "pending-byte-cap-hit"
     | "pending-bytes-gauge"
     | "throughput-rate"
@@ -716,8 +708,6 @@ export interface TerminalReliabilityMetricPayload {
   durationMs?: number;
   bufferUtilization?: number;
   shardIndex?: number;
-  serializedStateBytes?: number;
-  wakeLatencyMs?: number;
   totalPendingBytes?: number;
   perTerminal?: Array<{ terminalId: string; pendingBytes: number }>;
   totalBytesPerSecond?: number;
@@ -791,21 +781,7 @@ export interface TerminalReliabilityMetricPayload {
 export type RendererToPtyHostMessage =
   | { type: "write"; id: string; data: string; traceId?: string }
   | { type: "resize"; id: string; cols: number; rows: number }
-  | { type: "ack"; id: string; bytes: number }
-  | {
-      /**
-       * Wake request on the direct channel: the snapshot returns as a
-       * `wake-result` on the same port, skipping both Main-process structured
-       * clones of the serialized scrollback. `canSkipUnchanged` asserts the
-       * pane currently reflects the last snapshot it applied plus every port
-       * chunk received since — only then may the host answer `noChange`
-       * instead of serializing.
-       */
-      type: "wake";
-      id: string;
-      requestId: string;
-      canSkipUnchanged?: boolean;
-    };
+  | { type: "ack"; id: string; bytes: number };
 
 /**
  * Messages sent from Pty Host → Renderer via MessagePort (direct channel).
@@ -846,24 +822,6 @@ export type PtyHostToRendererMessage =
       /** Byte count discarded — only set when status is "data-loss". */
       droppedBytes?: number;
       timestamp: number;
-    }
-  | {
-      /**
-       * Response to a port `wake` request. Posted on the requesting window's
-       * own port after that window's pending batch for the terminal is
-       * flushed, so the snapshot is FIFO-ordered after every chunk it already
-       * contains.
-       */
-      type: "wake-result";
-      requestId: string;
-      id: string;
-      state: string | null;
-      warnings?: string[];
-      /**
-       * The buffer provably hasn't changed since this window's last faithful
-       * sync — the renderer keeps its pane as-is instead of replaying.
-       */
-      noChange?: boolean;
     };
 
 /** Per-process resource breakdown entry */

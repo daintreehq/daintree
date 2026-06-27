@@ -249,23 +249,6 @@ describe("routeHostEvent", () => {
     expect(brokerCalls).toEqual([{ requestId: "req-3", result: [] }]);
   });
 
-  it("resolves broker for wake-result with state and warnings", () => {
-    const { deps, brokerCalls } = makeDeps();
-    routeHostEvent(
-      {
-        type: "wake-result",
-        id: "t1",
-        requestId: "req-w",
-        state: "working",
-        warnings: ["slow"],
-      },
-      deps
-    );
-    expect(brokerCalls).toEqual([
-      { requestId: "req-w", result: { state: "working", warnings: ["slow"] } },
-    ]);
-  });
-
   it("preserves the legacy terminalTypes fallback shape on missing project-stats", () => {
     const { deps, brokerCalls } = makeDeps();
     routeHostEvent(

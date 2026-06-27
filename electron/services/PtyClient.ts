@@ -865,13 +865,6 @@ export class PtyClient extends EventEmitter {
     this.send({ type: "set-ipc-data-mirror", id, enabled });
   }
 
-  async wakeTerminal(id: string): Promise<{ state: string | null; warnings?: string[] }> {
-    const requestId = this.broker.generateId(`wake-${id}`);
-    const promise = this.broker.register<{ state: string | null; warnings?: string[] }>(requestId);
-    this.send({ type: "wake-terminal", id, requestId });
-    return promise.catch(() => ({ state: null }));
-  }
-
   private syncProjectContext(skipWindowIds?: ReadonlySet<number>): void {
     if (!this.lifecycle.child) {
       this.shouldResyncProjectContext = true;

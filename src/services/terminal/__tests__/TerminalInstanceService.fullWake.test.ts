@@ -94,9 +94,6 @@ type ManagedTerminalMock = {
 
 type FullWakeTestService = {
   instances: Map<string, ManagedTerminalMock>;
-  wakeManager: {
-    wakeAndRestore: (id: string) => Promise<{ ok: boolean; replayedMainBuffer: boolean }>;
-  };
   resizeController: {
     applyDeferredResize: (id: string) => void;
     lockResize: (id: string, locked: boolean, ms?: number) => void;
@@ -112,7 +109,6 @@ type FullWakeTestService = {
   handlePostWake: (id: string) => void;
   setVisible: (id: string, isVisible: boolean, expectedGeneration?: number) => void;
   rendererPolicy: { applyRendererPolicy: (id: string, tier: number) => void };
-  unhibernate: (id: string) => void;
   ensureOpened: (id: string, managed: ManagedTerminalMock) => void;
   ensureDeferredAddons: (id: string, managed: ManagedTerminalMock) => void;
   wantsWebGLAtTier: (managed: ManagedTerminalMock, tier: number | undefined) => boolean;
@@ -170,7 +166,9 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     if (service) service.instances.clear();
   });
 
-  it("runs applyDeferredResize → forceXtermReflow → wakeAndRestore → refresh → handlePostWake → discard in order on replay success", async () => {
+  // Hibernation removed: this path is now a SYNCHRONOUS plain repaint — there is
+  // no wakeManager.wakeAndRestore (reset+replay), no async wake, and no discard.
+  it("runs applyDeferredResize → forceXtermReflow → repairAtlas → refresh → handlePostWake → resumeFlush in order", async () => {
     const id = "fw-1";
     const instance = makeInstance();
     service.instances.set(id, instance);
@@ -184,11 +182,11 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     forceXtermReflowMock.mockImplementation(() => {
       calls.push("forceXtermReflow");
     });
-    const wakeAndRestore = vi
-      .spyOn(service.wakeManager, "wakeAndRestore")
-      .mockImplementation(async () => {
-        calls.push("wakeAndRestore");
-        return { ok: true, replayedMainBuffer: true };
+    const repairAtlas = vi
+      .spyOn(service.webGLManager, "repairAtlasForReactivation")
+      .mockImplementation(() => {
+        calls.push("repairAtlasForReactivation");
+        return true;
       });
     const handlePostWake = vi.spyOn(service, "handlePostWake").mockImplementation(() => {
       calls.push("handlePostWake");
@@ -204,42 +202,34 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     (instance.terminal.refresh as ReturnType<typeof vi.fn>).mockImplementation(() => {
       calls.push("refresh");
     });
-    const { terminalClient } = await import("@/clients");
-    vi.mocked(terminalClient.discardPortAcks).mockImplementation(() => {
-      calls.push("discardPortAcks");
-    });
 
     await service.fullWakeForVisibilityRestore(id);
 
-    // The replayed snapshot already contains the held bytes, so the sequence
-    // ends with the discard (ack the FIFO, then wipe the queue), not a flush
-    // (#9910).
+    // The buffer is already current (nothing was suspended), so the reveal is a
+    // plain repaint that ends in a flush — never a snapshot replay + discard.
     expect(calls).toEqual([
       "applyDeferredResize",
       "forceXtermReflow",
-      "wakeAndRestore",
+      "repairAtlasForReactivation",
       "refresh",
       "handlePostWake",
-      "discardPortAcks",
-      "resetForTerminal",
+      "resumeFlush",
     ]);
 
     expect(applyDeferredResize).toHaveBeenCalledWith(id);
     expect(forceXtermReflowMock).toHaveBeenCalledWith(instance.terminal.element);
-    expect(wakeAndRestore).toHaveBeenCalledWith(id);
+    expect(repairAtlas).toHaveBeenCalledWith(id);
     expect(handlePostWake).toHaveBeenCalledWith(id);
-    expect(resetForTerminal).toHaveBeenCalledWith(id);
-    expect(resumeFlush).not.toHaveBeenCalled();
-    expect(terminalClient.discardPortAcks).toHaveBeenCalledWith(id);
+    expect(resumeFlush).toHaveBeenCalledWith(id);
+    // No reset+replay path means no FIFO discard.
+    expect(resetForTerminal).not.toHaveBeenCalled();
   });
 
-  it("defers paint-interleave ops while a DEC 2026 synchronized-output block is open, but still runs the data restore (#10632)", async () => {
-    // Third unguarded interleave path: the switch-back WAKE path. The paint ops
-    // (forceXtermReflow / repairAtlasForReactivation / refresh) must not fire
-    // mid-block; the data path (applyDeferredResize + wakeAndRestore) must. The
-    // obligation is handed to the watchdog (revealPendingRepair) since this
-    // method has no retry-return. Fails on the pre-fix code, where all three
-    // paint ops ran unconditionally.
+  it("defers paint-interleave ops while a DEC 2026 synchronized-output block is open, but still runs the data path (#10632)", async () => {
+    // The paint ops (forceXtermReflow / repairAtlasForReactivation / refresh)
+    // must not fire mid-block; the data path (applyDeferredResize + handlePostWake
+    // + resumeFlush) must. The obligation is handed to the watchdog
+    // (revealPendingRepair) since this method has no retry-return.
     const id = "fw-sync";
     const instance = makeInstance({
       hostElement: renderableHost(),
@@ -260,17 +250,15 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     const repairAtlas = vi
       .spyOn(service.webGLManager, "repairAtlasForReactivation")
       .mockReturnValue(true);
-    const wakeAndRestore = vi
-      .spyOn(service.wakeManager, "wakeAndRestore")
-      .mockResolvedValue({ ok: true, replayedMainBuffer: false });
-    vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
-    vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
+    const handlePostWake = vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
+    const resumeFlush = vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
 
     await service.fullWakeForVisibilityRestore(id);
 
     // Data path still runs.
     expect(applyDeferredResize).toHaveBeenCalledWith(id);
-    expect(wakeAndRestore).toHaveBeenCalledWith(id);
+    expect(handlePostWake).toHaveBeenCalledWith(id);
+    expect(resumeFlush).toHaveBeenCalledWith(id);
     // Paint-interleave ops are deferred.
     expect(forceXtermReflowMock).not.toHaveBeenCalled();
     expect(repairAtlas).not.toHaveBeenCalled();
@@ -280,30 +268,7 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     expect(instance.revealPendingGeneration).toBe(3);
   });
 
-  it("flushes (no discard) when the wake succeeds without a main-buffer replay (alt-buffer)", async () => {
-    const id = "fw-1b";
-    const instance = makeInstance();
-    service.instances.set(id, instance);
-
-    vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
-    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue({
-      ok: true,
-      replayedMainBuffer: false,
-    });
-    const handlePostWake = vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
-    const resumeFlush = vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
-    const resetForTerminal = vi
-      .spyOn(service.dataBuffer, "resetForTerminal")
-      .mockImplementation(() => {});
-
-    await service.fullWakeForVisibilityRestore(id);
-
-    expect(handlePostWake).toHaveBeenCalledWith(id);
-    expect(resumeFlush).toHaveBeenCalledWith(id);
-    expect(resetForTerminal).not.toHaveBeenCalled();
-  });
-
-  it("handlePostWake skips geometry re-fit for an alt-screen pane on wake (#10807)", async () => {
+  it("handlePostWake skips geometry re-fit for an alt-screen pane on reveal (#10807)", async () => {
     const id = "fw-alt-postwake";
     const instance = makeInstance();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -312,23 +277,16 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
 
     vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
     vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
-    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue({
-      ok: true,
-      replayedMainBuffer: false,
-    });
     vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
 
-    // Earlier tests in this file mock service.handlePostWake, and beforeEach
-    // only clears call history (clearAllMocks), not implementations — so restore
-    // the REAL handlePostWake, then spy call-through. Without this the test runs
-    // a leaked no-op mock and would pass even if the alt early-return were
-    // removed.
+    // Earlier tests mock service.handlePostWake; beforeEach only clears call
+    // history (clearAllMocks), not implementations — restore the REAL one, then
+    // spy call-through, so the alt early-return is actually exercised.
     vi.spyOn(service, "handlePostWake").mockRestore();
     const handlePostWake = vi.spyOn(service, "handlePostWake");
 
     // For an alt pane the real handlePostWake must early-return after
-    // checkStaleDirecting and skip every geometry op — those would be same-size
-    // host no-ops or an out-of-band alt-frame reflow.
+    // checkStaleDirecting and skip every geometry op.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const resize = service.resizeController as any;
     const fit = vi.spyOn(resize, "fit").mockReturnValue(null);
@@ -339,14 +297,13 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
 
     await service.fullWakeForVisibilityRestore(id);
 
-    // Confirms the real handlePostWake actually ran (not a leaked no-op mock).
     expect(handlePostWake).toHaveBeenCalledWith(id);
     expect(fit).not.toHaveBeenCalled();
     expect(sendPtyResize).not.toHaveBeenCalled();
     expect(forceImmediateResize).not.toHaveBeenCalled();
   });
 
-  it("repairs the WebGL atlas before the async wakeAndRestore IPC (#9679)", async () => {
+  it("repairs the WebGL atlas before the refresh (#9679)", async () => {
     const id = "fw-webgl";
     const instance = makeInstance();
     service.instances.set(id, instance);
@@ -359,57 +316,51 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
         calls.push("repairAtlasForReactivation");
         return true;
       });
-    vi.spyOn(service.wakeManager, "wakeAndRestore").mockImplementation(async () => {
-      calls.push("wakeAndRestore");
-      return { ok: true, replayedMainBuffer: true };
+    (instance.terminal.refresh as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      calls.push("refresh");
     });
     vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
     vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
-    vi.spyOn(service.dataBuffer, "resetForTerminal").mockImplementation(() => {});
 
     await service.fullWakeForVisibilityRestore(id);
 
     expect(repair).toHaveBeenCalledWith(id);
-    // The stale-atlas repair must land synchronously before the wake IPC so the
-    // first composited frame after reactivation samples the repaired model.
-    expect(calls).toEqual(["repairAtlasForReactivation", "wakeAndRestore"]);
+    // The stale-atlas repair must land before the repaint so the first composited
+    // frame after reactivation samples the repaired model.
+    expect(calls).toEqual(["repairAtlasForReactivation", "refresh"]);
   });
 
-  it("still wakes when atlas repair reports no WebGL context (DOM renderer)", async () => {
+  it("completes the repaint even when atlas repair reports no WebGL context (DOM renderer)", async () => {
     const id = "fw-dom";
     const instance = makeInstance();
     service.instances.set(id, instance);
 
     vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
     vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(false);
-    const wakeAndRestore = vi
-      .spyOn(service.wakeManager, "wakeAndRestore")
-      .mockResolvedValue({ ok: true, replayedMainBuffer: true });
-    vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
-    vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
-
-    await service.fullWakeForVisibilityRestore(id);
-
-    // A false repair (no pooled context) must not short-circuit the wake.
-    expect(wakeAndRestore).toHaveBeenCalledWith(id);
-  });
-
-  it("still calls resumeFlush when wakeAndRestore returns false, but skips handlePostWake", async () => {
-    const id = "fw-2";
-    const instance = makeInstance();
-    service.instances.set(id, instance);
-
-    vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
-    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue({
-      ok: false,
-      replayedMainBuffer: false,
-    });
     const handlePostWake = vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
     const resumeFlush = vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
 
     await service.fullWakeForVisibilityRestore(id);
 
-    expect(handlePostWake).not.toHaveBeenCalled();
+    // A false repair (no pooled context) must not short-circuit the repaint.
+    expect(handlePostWake).toHaveBeenCalledWith(id);
+    expect(resumeFlush).toHaveBeenCalledWith(id);
+  });
+
+  it("always runs handlePostWake and resumeFlush on the synchronous repaint", async () => {
+    const id = "fw-2";
+    const instance = makeInstance();
+    service.instances.set(id, instance);
+
+    vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
+    const handlePostWake = vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
+    const resumeFlush = vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    // No wake ok/fail branch anymore: the repaint always reflows + flushes.
+    expect(handlePostWake).toHaveBeenCalledWith(id);
     expect(resumeFlush).toHaveBeenCalledWith(id);
   });
 
@@ -426,10 +377,7 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
       .spyOn(service.resizeController, "lockResize")
       .mockImplementation(() => {});
     vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
-    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue({
-      ok: true,
-      replayedMainBuffer: true,
-    });
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
     vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
     vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
 
@@ -438,7 +386,6 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     // Unlock before applyDeferredResize, relock after with remaining TTL
     expect(lockResize).toHaveBeenNthCalledWith(1, id, false);
     expect(lockResize).toHaveBeenNthCalledWith(2, id, true, expect.any(Number));
-    // Second call's TTL is the remaining suppression window — positive and ≤ 1500ms
     const relockTtl = lockResize.mock.calls[1]?.[2] as number | undefined;
     expect(relockTtl).toBeDefined();
     expect(relockTtl).toBeGreaterThan(0);
@@ -462,17 +409,12 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {
       calls.push("applyDeferredResize");
     });
-    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue({
-      ok: true,
-      replayedMainBuffer: true,
-    });
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
     vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
     vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
 
     await service.fullWakeForVisibilityRestore(id);
 
-    // Unlock must precede the resize so geometry resyncs, then relock after —
-    // even with no end time (TTL falls back to 0).
     expect(calls).toEqual(["unlock", "applyDeferredResize", "lock"]);
     expect(lockResize).toHaveBeenNthCalledWith(1, id, false);
     expect(lockResize).toHaveBeenNthCalledWith(2, id, true, 0);
@@ -487,10 +429,7 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
       .spyOn(service.resizeController, "lockResize")
       .mockImplementation(() => {});
     vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
-    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue({
-      ok: true,
-      replayedMainBuffer: true,
-    });
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
     vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
     vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
 
@@ -499,7 +438,7 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     expect(lockResize).not.toHaveBeenCalled();
   });
 
-  it("bails when terminal is not opened", async () => {
+  it("bails when terminal is not opened and the host is not measurable", async () => {
     const id = "fw-5";
     const instance = makeInstance({ isOpened: false });
     service.instances.set(id, instance);
@@ -507,17 +446,13 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     const applyDeferredResize = vi
       .spyOn(service.resizeController, "applyDeferredResize")
       .mockImplementation(() => {});
-    const wakeAndRestore = vi
-      .spyOn(service.wakeManager, "wakeAndRestore")
-      .mockResolvedValue({ ok: true, replayedMainBuffer: true });
 
     await service.fullWakeForVisibilityRestore(id);
 
     expect(applyDeferredResize).not.toHaveBeenCalled();
-    expect(wakeAndRestore).not.toHaveBeenCalled();
   });
 
-  it("syncs geometry but defers the async wake when terminal is attaching (#9702, #10070)", async () => {
+  it("syncs geometry but defers the repaint when terminal is attaching (#9702, #10070)", async () => {
     const id = "fw-6";
     const instance = makeInstance({ isAttaching: true });
     service.instances.set(id, instance);
@@ -525,19 +460,17 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     const applyDeferredResize = vi
       .spyOn(service.resizeController, "applyDeferredResize")
       .mockImplementation(() => {});
-    const wakeAndRestore = vi
-      .spyOn(service.wakeManager, "wakeAndRestore")
-      .mockResolvedValue({ ok: true, replayedMainBuffer: true });
+    const handlePostWake = vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
 
     await service.fullWakeForVisibilityRestore(id);
 
     // Geometry sync is safe mid-attach and must run so the grid is corrected
     // before the warm paint gate drops the bridge (#10070).
     expect(applyDeferredResize).toHaveBeenCalledWith(id);
-    // The async wake (which calls terminal.reset()) must still defer to avoid
-    // racing the attach's own post-rAF reconciliation (#9702).
-    expect(wakeAndRestore).not.toHaveBeenCalled();
-    // The skipped wake must leave a flag so it re-runs once attach settles.
+    // The repaint must defer to avoid racing the attach's own post-rAF
+    // reconciliation (#9702).
+    expect(handlePostWake).not.toHaveBeenCalled();
+    // The skipped repaint must leave a flag so it re-runs once attach settles.
     expect(instance.pendingVisibilityWake).toBe(true);
   });
 
@@ -549,18 +482,14 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {
       throw new Error("terminal disposed mid-wake");
     });
-    const wakeAndRestore = vi
-      .spyOn(service.wakeManager, "wakeAndRestore")
-      .mockResolvedValue({ ok: true, replayedMainBuffer: true });
+    const handlePostWake = vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
 
-    // The throw propagates, but the deferred-wake flag must already be set so
-    // notifyAttachSettledWaiters re-runs the wake once attach settles.
     await expect(service.fullWakeForVisibilityRestore(id)).rejects.toThrow(
       "terminal disposed mid-wake"
     );
 
     expect(instance.pendingVisibilityWake).toBe(true);
-    expect(wakeAndRestore).not.toHaveBeenCalled();
+    expect(handlePostWake).not.toHaveBeenCalled();
   });
 
   it("bypasses the resize lock for the geometry sync even while attaching (#10070)", async () => {
@@ -581,31 +510,24 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {
       calls.push("applyDeferredResize");
     });
-    const wakeAndRestore = vi
-      .spyOn(service.wakeManager, "wakeAndRestore")
-      .mockResolvedValue({ ok: true, replayedMainBuffer: true });
+    const handlePostWake = vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
 
     await service.fullWakeForVisibilityRestore(id);
 
-    // The lock-bypass dance still wraps the geometry sync even on the attach
-    // defer path, so a suppressed-resize terminal isn't left at stale geometry.
     expect(calls).toEqual(["unlock", "applyDeferredResize", "lock"]);
     expect(lockResize).toHaveBeenNthCalledWith(1, id, false);
     expect(lockResize).toHaveBeenNthCalledWith(2, id, true, expect.any(Number));
-    expect(wakeAndRestore).not.toHaveBeenCalled();
+    expect(handlePostWake).not.toHaveBeenCalled();
     expect(instance.pendingVisibilityWake).toBe(true);
   });
 
-  it("clears a stale pendingVisibilityWake flag when proceeding with an immediate wake (#9702)", async () => {
+  it("clears a stale pendingVisibilityWake flag when proceeding with an immediate repaint (#9702)", async () => {
     const id = "fw-clear";
     const instance = makeInstance({ pendingVisibilityWake: true });
     service.instances.set(id, instance);
 
     vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
-    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue({
-      ok: true,
-      replayedMainBuffer: true,
-    });
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
     vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
     vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
 
@@ -614,7 +536,7 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     expect(instance.pendingVisibilityWake).toBe(false);
   });
 
-  it("re-runs the deferred wake via notifyAttachSettledWaiters once attach settles (#9702)", async () => {
+  it("re-runs the deferred repaint via notifyAttachSettledWaiters once attach settles (#9702)", async () => {
     const id = "fw-deferred";
     // hostElement must be connected for isAttachSettled() to return true.
     const hostElement = document.createElement("div");
@@ -629,40 +551,37 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     const applyDeferredResize = vi
       .spyOn(service.resizeController, "applyDeferredResize")
       .mockImplementation(() => {});
-    const wakeAndRestore = vi
-      .spyOn(service.wakeManager, "wakeAndRestore")
-      .mockResolvedValue({ ok: true, replayedMainBuffer: true });
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
     vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
     vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
 
     service.notifyAttachSettledWaiters(id);
-    // The deferred wake is dispatched as a floating promise; flush microtasks.
+    // The deferred repaint is dispatched as a floating promise; flush microtasks.
     await Promise.resolve();
     await Promise.resolve();
 
     expect(instance.pendingVisibilityWake).toBe(false);
     expect(applyDeferredResize).toHaveBeenCalledWith(id);
-    expect(wakeAndRestore).toHaveBeenCalledWith(id);
 
     document.body.removeChild(hostElement);
   });
 
-  it("does not fire a deferred wake when pendingVisibilityWake is unset (#9702)", async () => {
+  it("does not fire a deferred repaint when pendingVisibilityWake is unset (#9702)", async () => {
     const id = "fw-nodefer";
     const hostElement = document.createElement("div");
     document.body.appendChild(hostElement);
     const instance = makeInstance({ isAttaching: false, hostElement });
     service.instances.set(id, instance);
 
-    const wakeAndRestore = vi
-      .spyOn(service.wakeManager, "wakeAndRestore")
-      .mockResolvedValue({ ok: true, replayedMainBuffer: true });
+    const applyDeferredResize = vi
+      .spyOn(service.resizeController, "applyDeferredResize")
+      .mockImplementation(() => {});
 
     service.notifyAttachSettledWaiters(id);
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(wakeAndRestore).not.toHaveBeenCalled();
+    expect(applyDeferredResize).not.toHaveBeenCalled();
 
     document.body.removeChild(hostElement);
   });
@@ -671,36 +590,11 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     await expect(service.fullWakeForVisibilityRestore("missing")).resolves.toBeUndefined();
   });
 
-  it("skips post-wake work when instance was replaced during wakeAndRestore", async () => {
-    const id = "fw-7";
-    const instance = makeInstance();
-    service.instances.set(id, instance);
-
-    vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
-    vi.spyOn(service.wakeManager, "wakeAndRestore").mockImplementation(async () => {
-      // Replace the managed terminal mid-flight
-      service.instances.set(id, makeInstance());
-      return { ok: true, replayedMainBuffer: true };
-    });
-    const handlePostWake = vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
-    const resumeFlush = vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
-    const resetForTerminal = vi
-      .spyOn(service.dataBuffer, "resetForTerminal")
-      .mockImplementation(() => {});
-
-    await service.fullWakeForVisibilityRestore(id);
-
-    expect(handlePostWake).not.toHaveBeenCalled();
-    expect(resumeFlush).not.toHaveBeenCalled();
-    expect(resetForTerminal).not.toHaveBeenCalled();
-  });
-
-  // Long-dwell rehydration: a terminal hibernated while its project view was
-  // backgrounded gets torn down, and unhibernate() can't re-open it behind the
+  // Long-dwell rehydration: an unopened terminal (its xterm torn down while the
+  // project view was backgrounded/evicted) can't be re-opened behind the
   // anti-flash bridge (zero host box). The foreground reveal pass re-runs this
-  // method once the view is presented; it must finish the open the occluded
-  // wake skipped, then proceed with the wake.
-  it("opens an unopened terminal when the host is foreground-measurable, then proceeds to wake", async () => {
+  // method once the view is presented; it must finish the open then repaint.
+  it("opens an unopened terminal when the host is foreground-measurable, then repaints", async () => {
     const id = "fw-open-fg";
     const host = renderableHost();
     const instance = makeInstance({ isOpened: false, hostElement: host });
@@ -710,70 +604,53 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
       instance.isOpened = true;
     });
     vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
-    const wakeAndRestore = vi
-      .spyOn(service.wakeManager, "wakeAndRestore")
-      .mockResolvedValue({ ok: true, replayedMainBuffer: true });
-    vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
+    const handlePostWake = vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
     vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
-    vi.spyOn(service.dataBuffer, "resetForTerminal").mockImplementation(() => {});
 
     await service.fullWakeForVisibilityRestore(id);
 
     expect(ensureOpened).toHaveBeenCalledWith(id, instance);
-    expect(wakeAndRestore).toHaveBeenCalledWith(id);
+    expect(handlePostWake).toHaveBeenCalledWith(id);
 
     document.body.removeChild(host);
   });
 
   it("does not open an unopened terminal whose host is detached (still occluded)", async () => {
     const id = "fw-open-occluded";
-    // Detached host → not connected → not renderable (mirrors a cached view
-    // still behind the bridge during the visibilitychange/resume wake).
     const instance = makeInstance({ isOpened: false });
     service.instances.set(id, instance);
 
     const ensureOpened = vi.spyOn(service, "ensureOpened").mockImplementation(() => {});
-    const wakeAndRestore = vi
-      .spyOn(service.wakeManager, "wakeAndRestore")
-      .mockResolvedValue({ ok: true, replayedMainBuffer: true });
+    const handlePostWake = vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
 
     await service.fullWakeForVisibilityRestore(id);
 
     expect(ensureOpened).not.toHaveBeenCalled();
-    expect(wakeAndRestore).not.toHaveBeenCalled();
+    expect(handlePostWake).not.toHaveBeenCalled();
   });
 
   it("does not open an unopened terminal whose connected host has a zero layout box (occluded behind bridge)", async () => {
     const id = "fw-open-zerobox";
-    // The production occluded case: the cached view IS attached (host connected)
-    // but reports a zero box while behind the anti-flash bridge. jsdom does no
-    // layout, so an appended-but-unstyled host reports clientWidth/Height = 0,
-    // which is exactly this state.
     const host = document.createElement("div");
     document.body.appendChild(host);
     const instance = makeInstance({ isOpened: false, hostElement: host });
     service.instances.set(id, instance);
 
     const ensureOpened = vi.spyOn(service, "ensureOpened").mockImplementation(() => {});
-    const wakeAndRestore = vi
-      .spyOn(service.wakeManager, "wakeAndRestore")
-      .mockResolvedValue({ ok: true, replayedMainBuffer: true });
+    const handlePostWake = vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
 
     await service.fullWakeForVisibilityRestore(id);
 
     expect(ensureOpened).not.toHaveBeenCalled();
-    expect(wakeAndRestore).not.toHaveBeenCalled();
+    expect(handlePostWake).not.toHaveBeenCalled();
 
     document.body.removeChild(host);
   });
 
   // Exercises the real ensureOpened() primitive (not a spy) so a regression that
-  // stops calling terminal.open() or stops flipping isOpened is caught — the
-  // seam test above only proves the gate decides to call it.
+  // stops calling terminal.open() or stops flipping isOpened is caught.
   it("ensureOpened opens xterm against the host and flips isOpened without a remount", () => {
-    // An earlier test spied ensureOpened; the suite's beforeEach clears call
-    // history but keeps the implementation (clearAllMocks, not restoreAllMocks),
-    // so restore the real method to exercise the actual primitive here.
     vi.spyOn(service, "ensureOpened").mockRestore();
 
     const id = "eo-1";
@@ -784,7 +661,6 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     instance.terminal.resize = vi.fn();
     service.instances.set(id, instance);
 
-    // Isolate the open primitive from addon/WebGL wiring (covered elsewhere).
     vi.spyOn(service, "ensureDeferredAddons").mockImplementation(() => {});
     vi.spyOn(service, "wantsWebGLAtTier").mockReturnValue(false);
 

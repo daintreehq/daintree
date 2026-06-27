@@ -431,26 +431,6 @@ export async function initGlobalServices(
           hibernateIdleProjects: async () => {
             await getHibernationService().hibernateUnderMemoryPressure();
           },
-          accelerateTerminalHibernation: (level: 1 | 2) => {
-            // Fan the per-window push event so every renderer compresses
-            // its hibernation timer. Mirrors the destroyHiddenWebviews
-            // fanout pattern above — broadcastToRenderer is not used
-            // because the renderer's TerminalInstanceService is window-
-            // scoped (xterm instances live in a single project view), so
-            // there's nothing to gain from a global broadcast.
-            if (!windowRegistry) return;
-            for (const wCtx of windowRegistry.all()) {
-              if (wCtx.browserWindow.isDestroyed()) continue;
-              try {
-                sendToRenderer(wCtx.browserWindow, CHANNELS.EVENTS_PUSH, {
-                  name: "window:accelerate-hibernation",
-                  payload: { level },
-                });
-              } catch {
-                /* non-critical */
-              }
-            }
-          },
           trimPtyHostState: () => {
             getPtyClient()?.trimState(SCROLLBACK_BACKGROUND);
           },

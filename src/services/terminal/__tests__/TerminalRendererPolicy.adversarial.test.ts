@@ -9,22 +9,6 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-interface Deferred<T> {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (reason?: unknown) => void;
-}
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
 function createManagedTerminal(
   overrides: Partial<ManagedTerminal> = {}
 ): ManagedTerminal & { terminal: { refresh: ReturnType<typeof vi.fn>; rows: number } } {
@@ -34,7 +18,6 @@ function createManagedTerminal(
     getRefreshTier: () => TerminalRefreshTier.FOCUSED,
     pendingTier: undefined,
     tierChangeTimer: undefined,
-    needsWake: undefined,
     terminal: {
       refresh: vi.fn(),
       rows: 24,
@@ -43,6 +26,10 @@ function createManagedTerminal(
   } as ManagedTerminal & { terminal: { refresh: ReturnType<typeof vi.fn>; rows: number } };
 }
 
+// Hibernation removed: the background→active transition is a synchronous plain
+// repaint (refresh + onPostWake + onResumeFlush). There is no async wake, no
+// wake-generation gating, and no discard path. These adversarial cases cover the
+// tier-dedupe / hysteresis-timer machinery that stays, plus the repaint path.
 describe("TerminalRendererPolicy adversarial", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -62,7 +49,6 @@ describe("TerminalRendererPolicy adversarial", () => {
     const managed = createManagedTerminal();
     const deps: RendererPolicyDeps = {
       getInstance: vi.fn(() => managed),
-      wakeAndRestore: vi.fn(async () => ({ ok: true, replayedMainBuffer: true })),
       onTierApplied: vi.fn(),
     };
 
@@ -85,7 +71,6 @@ describe("TerminalRendererPolicy adversarial", () => {
     const managed = createManagedTerminal();
     const deps: RendererPolicyDeps = {
       getInstance: vi.fn(() => managed),
-      wakeAndRestore: vi.fn(async () => ({ ok: true, replayedMainBuffer: true })),
       onTierApplied: vi.fn(),
     };
 
@@ -102,43 +87,10 @@ describe("TerminalRendererPolicy adversarial", () => {
     expect(managed.lastAppliedTier).toBe(TerminalRefreshTier.FOCUSED);
   });
 
-  it("WAKE_AFTER_INSTANCE_SWAP_NO_WRONG_REFRESH", async () => {
-    const wake = deferred<{ ok: boolean; replayedMainBuffer: boolean }>();
-    const original = createManagedTerminal({
-      lastAppliedTier: TerminalRefreshTier.BACKGROUND,
-      needsWake: true,
-    });
-    const replacement = createManagedTerminal({
-      lastAppliedTier: TerminalRefreshTier.BACKGROUND,
-    });
-    let currentManaged: ManagedTerminal | undefined = original;
-
-    const deps: RendererPolicyDeps = {
-      getInstance: vi.fn(() => currentManaged),
-      wakeAndRestore: vi.fn(() => wake.promise),
-    };
-
-    const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
-    const policy = new TerminalRendererPolicy(deps);
-    policy.initializeBackendTier("terminal-1", "background");
-
-    policy.applyRendererPolicy("terminal-1", TerminalRefreshTier.FOCUSED);
-    currentManaged = replacement;
-    wake.resolve({ ok: true, replayedMainBuffer: true });
-    await wake.promise;
-    await Promise.resolve();
-
-    expect(original.terminal.refresh).not.toHaveBeenCalled();
-    expect(replacement.terminal.refresh).not.toHaveBeenCalled();
-    expect(original.needsWake).toBe(true);
-    expect(replacement.needsWake).toBeUndefined();
-  });
-
   it("CHURN_COLLAPSES_TO_LAST_TIER", async () => {
     const managed = createManagedTerminal();
     const deps: RendererPolicyDeps = {
       getInstance: vi.fn(() => managed),
-      wakeAndRestore: vi.fn(async () => ({ ok: true, replayedMainBuffer: true })),
       onTierApplied: vi.fn(),
     };
 
@@ -169,7 +121,6 @@ describe("TerminalRendererPolicy adversarial", () => {
     ]);
     const deps: RendererPolicyDeps = {
       getInstance: vi.fn((id: string) => managedById.get(id)),
-      wakeAndRestore: vi.fn(async () => ({ ok: true, replayedMainBuffer: true })),
       onTierApplied: vi.fn(),
     };
 
@@ -185,49 +136,19 @@ describe("TerminalRendererPolicy adversarial", () => {
     expect(managedB.lastAppliedTier).toBe(TerminalRefreshTier.BACKGROUND);
   });
 
-  it("WAKE_REJECTION_AFTER_REMOVAL_SILENT", async () => {
-    const wake = deferred<{ ok: boolean; replayedMainBuffer: boolean }>();
-    const managed = createManagedTerminal({
-      lastAppliedTier: TerminalRefreshTier.BACKGROUND,
-      needsWake: true,
-    });
-    let currentManaged: ManagedTerminal | undefined = managed;
-    const deps: RendererPolicyDeps = {
-      getInstance: vi.fn(() => currentManaged),
-      wakeAndRestore: vi.fn(() => wake.promise),
-    };
-
-    const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
-    const policy = new TerminalRendererPolicy(deps);
-    policy.initializeBackendTier("terminal-1", "background");
-
-    policy.applyRendererPolicy("terminal-1", TerminalRefreshTier.FOCUSED);
-    currentManaged = undefined;
-    wake.reject(new Error("wake failed"));
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(managed.terminal.refresh).not.toHaveBeenCalled();
-  });
-
-  it("BACKGROUND_SEEDED_TERMINAL_RELEASES_HELD_BYTES_ON_FIRST_ACTIVATION", async () => {
-    // Mirrors the initial-BACKGROUND wiring: TerminalInstanceService seeds
-    // the backend tier via initializeBackendTier("id","background") so the
-    // first promotion is a real BACKGROUND→active transition that releases
-    // the held bytes. A successful main-buffer replay routes through
-    // onDiscardHeld (the snapshot already contains them, #9910); a no-replay
-    // wake routes through onResumeFlush.
-    const wake = deferred<{ ok: boolean; replayedMainBuffer: boolean }>();
+  it("BACKGROUND_SEEDED_TERMINAL_REPAINTS_AND_FLUSHES_ON_FIRST_ACTIVATION", async () => {
+    // Mirrors the initial-BACKGROUND wiring: TerminalInstanceService seeds the
+    // backend tier via initializeBackendTier("id","background") so the first
+    // promotion is a real BACKGROUND→active transition. With hibernation removed
+    // that transition is a synchronous plain repaint that releases held bytes via
+    // onResumeFlush — there is no snapshot replay and no discard path.
     const managed = createManagedTerminal({
       lastAppliedTier: TerminalRefreshTier.BACKGROUND,
       getRefreshTier: () => TerminalRefreshTier.FOCUSED,
-      needsWake: true,
     });
     const deps: RendererPolicyDeps = {
       getInstance: vi.fn(() => managed),
-      wakeAndRestore: vi.fn(() => wake.promise),
       onResumeFlush: vi.fn(),
-      onDiscardHeld: vi.fn(),
       onPostWake: vi.fn(),
     };
 
@@ -236,30 +157,20 @@ describe("TerminalRendererPolicy adversarial", () => {
     policy.initializeBackendTier("terminal-1", "background");
 
     policy.applyRendererPolicy("terminal-1", TerminalRefreshTier.FOCUSED);
-    expect(deps.wakeAndRestore).toHaveBeenCalledTimes(1);
 
-    wake.resolve({ ok: true, replayedMainBuffer: true });
-    await wake.promise;
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(managed.terminal.refresh).toHaveBeenCalled();
-    expect(deps.onDiscardHeld).toHaveBeenCalledWith("terminal-1");
-    expect(deps.onResumeFlush).not.toHaveBeenCalled();
+    expect(managed.terminal.refresh).toHaveBeenCalledWith(0, 23);
+    expect(deps.onPostWake).toHaveBeenCalledWith("terminal-1");
+    expect(deps.onResumeFlush).toHaveBeenCalledWith("terminal-1");
   });
 
-  it("REBACKGROUND_DURING_WAKE_DOES_NOT_FLUSH_HIDDEN_PANE", async () => {
-    const wake = deferred<{ ok: boolean; replayedMainBuffer: boolean }>();
+  it("REBACKGROUND_AFTER_FOREGROUND_DOES_NOT_REPAINT_AGAIN", async () => {
     const managed = createManagedTerminal({
       lastAppliedTier: TerminalRefreshTier.BACKGROUND,
-      getRefreshTier: () => TerminalRefreshTier.BACKGROUND,
-      needsWake: true,
+      getRefreshTier: () => TerminalRefreshTier.FOCUSED,
     });
     const deps: RendererPolicyDeps = {
       getInstance: vi.fn(() => managed),
-      wakeAndRestore: vi.fn(() => wake.promise),
       onResumeFlush: vi.fn(),
-      onDiscardHeld: vi.fn(),
       onPostWake: vi.fn(),
     };
 
@@ -267,27 +178,24 @@ describe("TerminalRendererPolicy adversarial", () => {
     const policy = new TerminalRendererPolicy(deps);
     policy.initializeBackendTier("terminal-1", "background");
 
-    // BACKGROUND→FOCUSED starts a wake (generation G1).
+    // BACKGROUND→FOCUSED repaints exactly once (synchronously).
     policy.applyRendererPolicy("terminal-1", TerminalRefreshTier.FOCUSED);
-    expect(deps.wakeAndRestore).toHaveBeenCalledTimes(1);
+    expect(managed.terminal.refresh).toHaveBeenCalledTimes(1);
+    expect(deps.onResumeFlush).toHaveBeenCalledTimes(1);
 
-    // Re-backgrounded before the wake resolves (downgrade → hysteresis timer).
+    vi.mocked(managed.terminal.refresh).mockClear();
+    vi.mocked(deps.onResumeFlush!).mockClear();
+    vi.mocked(deps.onPostWake!).mockClear();
+
+    // Re-backgrounding (active→background) must NOT run the repaint/flush path —
+    // that only fires on background→active.
+    managed.getRefreshTier = () => TerminalRefreshTier.BACKGROUND;
     policy.applyRendererPolicy("terminal-1", TerminalRefreshTier.BACKGROUND);
     vi.advanceTimersByTime(1000);
-
-    // The previously in-flight wake now resolves — it must be a no-op:
-    // the terminal is hidden again, so no refresh/flush/discard into a dead
-    // pane (a stale-generation discard would drop bytes the next real wake's
-    // snapshot may not yet contain).
-    wake.resolve({ ok: true, replayedMainBuffer: true });
-    await wake.promise;
-    await Promise.resolve();
-    await Promise.resolve();
 
     expect(managed.terminal.refresh).not.toHaveBeenCalled();
     expect(deps.onPostWake).not.toHaveBeenCalled();
     expect(deps.onResumeFlush).not.toHaveBeenCalled();
-    expect(deps.onDiscardHeld).not.toHaveBeenCalled();
   });
 
   it("HOST_PUSHED_BACKGROUND_REARMS_DEDUPE_SO_NEXT_ACTIVE_RESENDS", async () => {
@@ -301,7 +209,6 @@ describe("TerminalRendererPolicy adversarial", () => {
     const managed = createManagedTerminal();
     const deps: RendererPolicyDeps = {
       getInstance: vi.fn(() => managed),
-      wakeAndRestore: vi.fn(async () => ({ ok: true, replayedMainBuffer: true })),
     };
 
     const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
@@ -319,7 +226,6 @@ describe("TerminalRendererPolicy adversarial", () => {
 
     // Host-pushed demotion arrives over the MessagePort and re-arms the baseline.
     policy.initializeBackendTier("terminal-1", "background");
-    expect(managed.needsWake).toBe(true);
 
     // Now the renderer reactivating sends a real "active" to the host again.
     policy.setBackendTier("terminal-1", "active");
@@ -343,7 +249,6 @@ describe("TerminalRendererPolicy adversarial", () => {
     const managed = createManagedTerminal();
     const deps: RendererPolicyDeps = {
       getInstance: vi.fn(() => managed),
-      wakeAndRestore: vi.fn(async () => ({ ok: true, replayedMainBuffer: true })),
     };
 
     const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
@@ -374,7 +279,6 @@ describe("TerminalRendererPolicy adversarial", () => {
     const managed = createManagedTerminal();
     const deps: RendererPolicyDeps = {
       getInstance: vi.fn(() => managed),
-      wakeAndRestore: vi.fn(async () => ({ ok: true, replayedMainBuffer: true })),
     };
 
     const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
@@ -392,32 +296,5 @@ describe("TerminalRendererPolicy adversarial", () => {
     const sentTier = vi.mocked(terminalClient.setActivityTier).mock.calls.at(-1)?.[1];
     expect(sentTier).toBe(policy.getLastBackendTier("terminal-1"));
     expect(policy.getLastBackendTier("terminal-1")).toBe("active");
-  });
-
-  it("CLEAR_TIER_STATE_CANCELS_PENDING_WAKE_AND_RELEASES_GENERATION", async () => {
-    const wake = deferred<{ ok: boolean; replayedMainBuffer: boolean }>();
-    const managed = createManagedTerminal({
-      lastAppliedTier: TerminalRefreshTier.BACKGROUND,
-      needsWake: true,
-    });
-    const deps: RendererPolicyDeps = {
-      getInstance: vi.fn(() => managed),
-      wakeAndRestore: vi.fn(() => wake.promise),
-    };
-
-    const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
-    const policy = new TerminalRendererPolicy(deps);
-    policy.initializeBackendTier("terminal-1", "background");
-
-    policy.applyRendererPolicy("terminal-1", TerminalRefreshTier.FOCUSED);
-    policy.clearTierState("terminal-1");
-    wake.resolve({ ok: true, replayedMainBuffer: true });
-    await wake.promise;
-    await Promise.resolve();
-
-    expect(managed.terminal.refresh).not.toHaveBeenCalled();
-    expect((policy as unknown as { wakeGeneration: Map<string, number> }).wakeGeneration.size).toBe(
-      0
-    );
   });
 });

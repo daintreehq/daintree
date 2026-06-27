@@ -244,7 +244,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     trash(id: string): Promise<void>;
     restore(id: string): Promise<boolean>;
     setActivityTier(id: string, tier: PtyHostActivityTier, pollingIntervalMs?: number): void;
-    wake(id: string): Promise<{ state: string | null; warnings?: string[] }>;
     acknowledgeData(id: string, length: number): void;
     getForProject(projectId: string): Promise<BackendTerminalInfo[]>;
     getAvailableTerminals(): Promise<BackendTerminalInfo[]>;
@@ -309,7 +308,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onRestoreScrollback(callback: (data: { terminalIds: string[] }) => void): () => void;
     restartService(): Promise<void>;
     onReclaimMemory(callback: () => void): () => void;
-    onAccelerateHibernation(callback: (data: { level: 1 | 2 }) => void): () => void;
   };
   files: {
     search(payload: FileSearchPayload): Promise<FileSearchResult>;

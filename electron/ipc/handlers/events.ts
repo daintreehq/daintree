@@ -35,7 +35,6 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "window:fullscreen-change": "external",
   "window:reclaim-memory": "external",
   "window:destroy-hidden-webviews": "external",
-  "window:accelerate-hibernation": "external",
   "window:disk-space-status": "external",
   "window:sample-blink-memory": "external",
   "window:sample-renderer-elu": "external",

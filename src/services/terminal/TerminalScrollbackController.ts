@@ -12,20 +12,11 @@ function getValidScrollbackBase(value: number | undefined): number | undefined {
   return value;
 }
 
-// Hibernated terminals hold a zero-scrollback placeholder (the constructor
-// eagerly allocates the full buffer graph), so policy reads/writes target the
-// `hibernatedScrollback` stash that unhibernate() restores from — writing the
-// placeholder's options would re-allocate the buffer the clamp exists to free.
 function readScrollback(managed: ManagedTerminal): number {
-  if (managed.isHibernated) return managed.hibernatedScrollback ?? 0;
   return managed.terminal.options.scrollback ?? 0;
 }
 
 function writeScrollback(managed: ManagedTerminal, lines: number): void {
-  if (managed.isHibernated) {
-    managed.hibernatedScrollback = lines;
-    return;
-  }
   managed.terminal.options.scrollback = lines;
 }
 

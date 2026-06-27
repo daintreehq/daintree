@@ -413,18 +413,22 @@ export function setupLifecycleListeners(): DisposableStore {
         // tests. If the SAB transport is revived and `suspended` becomes
         // a real status again, re-add `|| status === "suspended"` here
         // and remove the early-return guard above.
-        if (status === "paused-backpressure") {
-          // Don't wake a terminal the user already backgrounded (#9906).
-          // A backpressure pause on a hidden pane is expected — waking it
-          // sends a stale `wake-terminal` IPC that promotes the host tier to
-          // "active" against an offscreen terminal, defeating the background
-          // gate. Primary prevention for the late-wake desync; the renderer
-          // policy's cancelPendingWake and the host's wake correction are the
-          // backstops for wakes already scheduled or in flight.
-          if (!usePanelStore.getState().backgroundedTerminals.has(id)) {
-            terminalInstanceService.wake(id);
-          }
-        }
+        // EXPERIMENT (hibernation removal, Codex review fix — Finding 2): do NOT
+        // auto-force-resume on `paused-backpressure`. `terminalClient.forceResume`
+        // routes to the host `force-resume` handler →
+        // `PtyPauseCoordinator.forceReleaseAll()`, which drops EVERY hold
+        // (resource-governor, system-sleep) — far too broad for an automatic
+        // path. A backpressure pause is released by flow control itself: as the
+        // live renderer drains and acks bytes, the host's `acknowledge-data`
+        // handler runs `ipcQueueManager.tryResume` / the port-queue resume, which
+        // release only the backpressure-family token (`ipc-queue` /
+        // `port-queue-*`) once the queue falls below its low watermark (see
+        // electron/pty-host/ipcQueue.ts, portQueue.ts). Background panes now
+        // stream live (Finding 1), so they keep draining and self-resume; a
+        // frozen/LRU-evicted view stays paused only until it returns and drains —
+        // the documented experiment scope. The user-initiated force-resume action
+        // remains the deliberate all-token escape hatch. See
+        // docs/HIBERNATION-REMOVAL-EXPERIMENT.md.
       })
     )
   );

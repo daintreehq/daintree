@@ -158,24 +158,16 @@ export interface TerminalInfo extends TerminalPublicState {
   /**
    * Monotonic count of buffer mutations: PTY output chunks (bumped at the
    * pty-host routing site), resize reflows, and the preserved-snapshot
-   * capture. Compared against `wakeSyncedEpochByWindow` so a wake can prove
-   * "nothing changed since this window's last faithful view" and skip the
-   * full serialize/replay. Runtime-only; not persisted, not crossed over IPC.
+   * capture. Runtime-only; not persisted, not crossed over IPC. Vestigial: the
+   * only reader was the wake no-change short-circuit, removed with the rest of
+   * the hibernation/wake teardown — kept as a write-only counter for now.
    */
   contentEpoch: number;
   /**
-   * Per-window `contentEpoch` at the last faithful sync: a chunk accepted by
-   * that window's port batcher, or a wake snapshot served on its port (the
-   * latter captured pre-serialize and only while no headless writes are
-   * pending, so the snapshot provably covers the recorded epoch). Entries are
-   * dropped on window disconnect. Runtime-only.
-   */
-  wakeSyncedEpochByWindow?: Map<number, number>;
-  /**
    * Headless xterm writes issued but whose parse callback hasn't fired yet.
-   * A wake only serve-marks `wakeSyncedEpochByWindow` when this is 0 —
-   * otherwise the snapshot could omit an arrived-but-unparsed tail that the
-   * epoch already counts. Runtime-only.
+   * Runtime-only. Vestigial: the only reader was the wake serialize path,
+   * removed with the hibernation/wake teardown — kept as a write-only counter
+   * (the same write callback also drives `noteAgentOutputActivity`).
    */
   pendingHeadlessWrites?: number;
 }

@@ -117,23 +117,11 @@ export interface ManagedTerminal {
 
   // Render backpressure / synchronization hints
   pendingWrites?: number;
+  // Retained as a permanently-false field: the wake/resync machinery was removed
+  // (terminals stay fully live in the background), so nothing arms this anymore.
+  // The reveal guard (wakeForFocus) and the reconciliation watchdog still read
+  // it; kept false to avoid churning that read surface (mirrors `isHibernated`).
   needsWake?: boolean;
-  // Lifetime flag (#10309): set true the first time a wake successfully replays
-  // a serialized snapshot. Gates the wake-decline data-loss marker so a fresh
-  // terminal — which legitimately wakes with no snapshot (serialize() returns
-  // "" and is coerced to null) — is not falsely marked as having dropped
-  // output. Only a terminal that previously restored and then woke with a null
-  // snapshot represents a genuine gap. Never reset on tier transitions or in
-  // clearWakeState; it is a property of the instance, cleared only on teardown.
-  everWoken?: boolean;
-  // Renderer half of the wake no-change handshake: true only while this xterm
-  // instance provably holds its last applied wake snapshot plus every port
-  // chunk received since. Set by a successful wake replay; cleared wherever
-  // the pane diverges from that stream — restore-controller reset/replay,
-  // restore failure, post-await wake declines, hibernation's placeholder swap,
-  // the local `clear` interception. While true, wakes send `canSkipUnchanged`
-  // so an idle terminal's switch-back skips the host serialize + xterm replay.
-  wakeSynced?: boolean;
 
   // First-paint perf instrumentation (#9809). terminalOpenStartedAt is stamped
   // (performance.now()) just before terminal.open() in attach(); the first real
@@ -213,23 +201,10 @@ export interface ManagedTerminal {
   attachRevealTimer?: ReturnType<typeof setTimeout>;
   attachRevealDisposable?: { dispose: () => void };
 
-  // Hibernation: xterm.js Terminal instance disposed to free memory
+  // Retained as a permanently-false field: terminals are never hibernated
+  // anymore (they stay fully live in the background), but reveal/restore/UI
+  // guards and `useIsHibernated` still read it. No code path sets it true.
   isHibernated?: boolean;
-  // Scrollback the terminal should wake with. The hibernation placeholder is
-  // constructed with scrollback 0 — xterm's constructor eagerly allocates a
-  // CircularList of rows+scrollback slots, which would retain ~100-200KB per
-  // hibernated pane in the exact path meant to release memory. Scrollback
-  // policy writes that land during hibernation target this stash (see
-  // TerminalScrollbackController); unhibernate() restores from it.
-  hibernatedScrollback?: number;
-  hibernationTimer?: ReturnType<typeof setTimeout>;
-  // Delayed re-check for active-state agent terminals (working/waiting/directing)
-  // that are not yet idle-eligible because their last write was too recent.
-  // Armed once at `lastWriteAt + AGENT_IDLE_SILENCE_MS - now`; on fire it
-  // re-calls scheduleHibernation, which arms the regular hibernationTimer if
-  // the terminal is now eligible. Cleared by cancelHibernation, hibernate, and
-  // tier upgrade alongside hibernationTimer.
-  hibernationEligibilityTimer?: ReturnType<typeof setTimeout>;
   ipcListenerCount: number;
 
   // Visibility-driven WebGL restore debounce. Show path waits ~100ms before
@@ -268,9 +243,8 @@ export const WRITE_BURST_DECAY_MS = 500;
 // Each call mutates `terminal.options.scrollback`, which xterm 6.0 turns into
 // a BufferSet.setup() that recreates the internal CircularList — cheap once,
 // but rapid repetition under tab oscillation produces GC pressure. 2000ms
-// covers the typical ~1s flip cadence with margin while staying short enough
-// that a real BACKGROUND dwell still trims memory before the 30s hibernation
-// window. The 500ms tier-downgrade hysteresis is additive, not a replacement.
+// covers the typical ~1s flip cadence with margin. The 500ms tier-downgrade
+// hysteresis is additive, not a replacement.
 export const SCROLLBACK_REDUCE_COOLDOWN_MS = 2000;
 
 // Recency window for classifying a terminal as "in an active write burst" in
@@ -279,29 +253,6 @@ export const SCROLLBACK_REDUCE_COOLDOWN_MS = 2000;
 // streaming agent doesn't lose its slot in the gap between output chunks.
 // Mirrors SCROLLBACK_REDUCE_COOLDOWN_MS — same 2s burst-cadence assumption.
 export const WRITE_BURST_RECENCY_MS = 2000;
-
-export const HIBERNATION_DELAY_MS = 30_000;
-
-// Silence window after which an agent terminal in an ACTIVE_AGENT_STATE
-// (working/waiting/directing) becomes hibernation-eligible despite a live
-// runtimeAgentId. The fixed permanent exemption used to strand idle agent
-// terminals that had been parked for hours with no output — 5 minutes is the
-// shortest window where it's plausible the agent or downstream tool is truly
-// dormant (long enough to outlast bursty prompt round-trips and long tool
-// invocations, short enough to recover the memory before the user notices).
-// "idle"/"completed"/"exited" are not gated by this — they're treated as
-// resting states and qualify for the normal HIBERNATION_DELAY_MS timer.
-export const AGENT_IDLE_SILENCE_MS = 5 * 60 * 1000;
-
-// Accelerated hibernation delays under OS memory pressure. Tier 1 (mild
-// pressure) drops the BACKGROUND→hibernate delay from HIBERNATION_DELAY_MS to
-// 5 seconds — still enough headroom for an in-flight write burst to drain
-// (WRITE_BURST_RECENCY_MS = 2s) and to absorb tab-flip oscillation. Tier 2
-// (sustained pressure) forces immediate hibernation; pendingWrites/agent-state
-// guards in `hibernate()` still apply so an actively-writing terminal can't be
-// torn down mid-burst.
-export const HIBERNATION_DELAY_PRESSURE_TIER1_MS = 5_000;
-export const HIBERNATION_DELAY_PRESSURE_TIER2_MS = 0;
 
 export const INCREMENTAL_RESTORE_CONFIG = {
   chunkBytes: 32768,

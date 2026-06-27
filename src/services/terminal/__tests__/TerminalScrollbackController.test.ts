@@ -90,27 +90,6 @@ describe("TerminalScrollbackController", () => {
       expect(managed.terminal.options.scrollback).toBe(300);
     });
 
-    it("routes a reduce on a hibernated terminal to the stash, not the placeholder", () => {
-      const managed = makeMockManaged({ isHibernated: true, hibernatedScrollback: 5000 });
-      managed.terminal.options.scrollback = 0;
-
-      reduceScrollback(managed, 500);
-
-      // Writing the placeholder's options would re-allocate the buffer the
-      // scrollback clamp exists to free.
-      expect(managed.terminal.options.scrollback).toBe(0);
-      expect(managed.hibernatedScrollback).toBe(500);
-    });
-
-    it("compares against the stash for hibernated terminals when skipping", () => {
-      const managed = makeMockManaged({ isHibernated: true, hibernatedScrollback: 300 });
-      managed.terminal.options.scrollback = 0;
-
-      reduceScrollback(managed, 500);
-
-      expect(managed.hibernatedScrollback).toBe(300);
-    });
-
     it("reduces scrollback and logs info without polluting the terminal when content exceeds target", () => {
       const managed = makeMockManaged();
       Object.defineProperty(managed.terminal.buffer.active, "length", {
@@ -252,16 +231,6 @@ describe("TerminalScrollbackController", () => {
   });
 
   describe("restoreScrollback", () => {
-    it("routes a restore on a hibernated terminal to the stash, not the placeholder", () => {
-      const managed = makeMockManaged({ isHibernated: true, hibernatedScrollback: 500 });
-      managed.terminal.options.scrollback = 0;
-
-      restoreScrollback(managed);
-
-      expect(managed.terminal.options.scrollback).toBe(0);
-      expect(managed.hibernatedScrollback).toBe(1500);
-    });
-
     it("restores to PERFORMANCE_MODE_SCROLLBACK when performance mode is on", () => {
       mockPerformanceModeStore.performanceMode = true;
       const managed = makeMockManaged();

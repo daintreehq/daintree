@@ -18,7 +18,7 @@ export { mapTerminalInfo, narrowDetectedAgentId } from "./terminalInfo.js";
  * merge their maps into a single lookup. Unknown message types are logged.
  *
  * The dispatcher itself is synchronous — handlers that perform async work
- * (`graceful-kill`, `wake-terminal`) return a promise that the dispatcher
+ * (`graceful-kill`) return a promise that the dispatcher
  * awaits before returning, so the wrapper at the call site can route handler
  * errors through a single `try/catch`. Handlers that intentionally fire and
  * forget (`get-serialized-state`) wrap their work in `void (async () => …)()`
