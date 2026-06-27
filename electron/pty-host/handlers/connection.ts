@@ -3,7 +3,6 @@ import { SharedRingBuffer } from "../../../shared/utils/SharedRingBuffer.js";
 import { POOL_ENV_EMPTY_HASH, computePoolEnvHash } from "../../services/pty/ptyPoolEnvHash.js";
 import { PortBatcher, type PortBatcherFailedBatch } from "../index.js";
 import type { HandlerMap, HostContext } from "./types.js";
-import { createWakeExecutor } from "./wakeExecutor.js";
 
 function batchDataToString(data: Uint8Array): string {
   return Buffer.from(data).toString("utf8");
@@ -19,7 +18,6 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
     createPortQueueManager,
     sendEvent,
   } = ctx;
-  const executeWake = createWakeExecutor(ctx);
 
   return {
     "connect-port": (msg, ports) => {
@@ -116,37 +114,6 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
           ) {
             perWindowQueueManager.removeBytes(portMsg.id, portMsg.bytes);
             perWindowQueueManager.tryResume(portMsg.id);
-          } else if (
-            portMsg.type === "wake" &&
-            typeof portMsg.id === "string" &&
-            typeof portMsg.requestId === "string"
-          ) {
-            const wakeId: string = portMsg.id;
-            const requestId: string = portMsg.requestId;
-            executeWake(
-              wakeId,
-              (outcome) => {
-                // Flush this window's pending batch for the terminal before
-                // the snapshot so every chunk the snapshot already contains is
-                // FIFO-ordered ahead of it on the port.
-                perWindowBatcher.flushTerminal(wakeId);
-                try {
-                  receivedPort.postMessage({
-                    type: "wake-result",
-                    requestId,
-                    id: wakeId,
-                    state: outcome.state,
-                    warnings: outcome.warnings,
-                    noChange: outcome.noChange,
-                  });
-                } catch {
-                  // Port closing — the renderer's timeout falls back to the IPC wake.
-                }
-              },
-              { windowId, canSkipUnchanged: portMsg.canSkipUnchanged === true }
-            ).catch((error) => {
-              console.error(`[PtyHost] Port wake failed for ${wakeId}:`, error);
-            });
           } else {
             console.warn("[PtyHost] Unknown or invalid MessagePort message type:", portMsg.type);
           }

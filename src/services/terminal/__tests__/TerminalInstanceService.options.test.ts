@@ -147,8 +147,8 @@ describe("TerminalInstanceService - options", () => {
       undefined
     );
 
-    // TerminalHibernationManager.unhibernate() calls new Terminal(managed.terminal.options)
-    // so these must be present on the stored options object
+    // The stored options object must carry the agent cosmetic overrides so a
+    // later Terminal re-creation (e.g. font-grid repair) keeps them.
     expect(managed.terminal.options).toMatchObject({
       cursorBlink: false,
     });

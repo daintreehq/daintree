@@ -398,12 +398,8 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
 
   describe("Project Switch State Preservation", () => {
     it("should preserve agentState and lastStateChange when retrieving terminal info", async () => {
-      const projectId = "test-project-123";
       const id = await spawnShellTerminal(manager, { launchAgentId: "claude" });
       await sleep(500);
-
-      manager.onProjectSwitch(projectId);
-      await sleep(100);
 
       manager.transitionState(id, { type: "prompt" }, "activity", 1.0);
       await sleep(200);
@@ -425,12 +421,8 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
     }, 10000);
 
     it("should preserve exited state across project switches", async () => {
-      const projectId = "test-project-456";
       const id = await spawnShellTerminal(manager, { launchAgentId: "claude" });
       await sleep(500);
-
-      manager.onProjectSwitch(projectId);
-      await sleep(100);
 
       // First transition to working, then trigger a clean exit (exit events are no-ops from idle)
       manager.transitionState(id, { type: "busy" }, "activity", 1.0);
@@ -449,12 +441,8 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
     }, 10000);
 
     it("should preserve exited state across project switches (crash exit)", async () => {
-      const projectId = "test-project-789";
       const id = await spawnShellTerminal(manager, { launchAgentId: "gemini" });
       await sleep(500);
-
-      manager.onProjectSwitch(projectId);
-      await sleep(100);
 
       // First transition to working, then trigger a crash-signal exit (SIGSEGV = 139)
       manager.transitionState(id, { type: "busy" }, "activity", 1.0);
@@ -491,7 +479,6 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
 
       // Set project A as active
       manager.setActiveProject(projectA);
-      manager.onProjectSwitch(projectA);
       await sleep(200);
 
       // Track state changes for both terminals
@@ -531,46 +518,6 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
       expect(terminalBChanges.some((s) => s.state === "working")).toBe(true);
     }, 10000);
 
-    it("should emit terminal:backgrounded and terminal:foregrounded events on project switch", async () => {
-      const projectA = "project-A";
-      const projectB = "project-B";
-
-      const terminalA = await spawnShellTerminal(manager, {
-        launchAgentId: "claude",
-        projectId: projectA,
-      });
-      const terminalB = await spawnShellTerminal(manager, {
-        launchAgentId: "gemini",
-        projectId: projectB,
-      });
-      await sleep(500);
-
-      // Track terminal lifecycle events
-      const backgroundedEvents: string[] = [];
-      const foregroundedEvents: string[] = [];
-
-      const bgHandler = (data: DaintreeEventMap["terminal:backgrounded"]) => {
-        backgroundedEvents.push(data.id);
-      };
-      const fgHandler = (data: DaintreeEventMap["terminal:foregrounded"]) => {
-        foregroundedEvents.push(data.id);
-      };
-
-      events.on("terminal:backgrounded", bgHandler);
-      events.on("terminal:foregrounded", fgHandler);
-
-      // Switch to project A - terminal B should be backgrounded
-      manager.setActiveProject(projectA);
-      manager.onProjectSwitch(projectA);
-      await sleep(200);
-
-      expect(backgroundedEvents.includes(terminalB)).toBe(true);
-      expect(foregroundedEvents.includes(terminalA)).toBe(true);
-
-      events.off("terminal:backgrounded", bgHandler);
-      events.off("terminal:foregrounded", fgHandler);
-    }, 10000);
-
     it("should maintain accurate agent state for background terminals over time", async () => {
       const projectA = "project-A";
       const projectB = "project-B";
@@ -587,7 +534,6 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
 
       // Set project A as active (terminal B becomes background)
       manager.setActiveProject(projectA);
-      manager.onProjectSwitch(projectA);
       await sleep(200);
 
       // Transition background terminal through multiple states

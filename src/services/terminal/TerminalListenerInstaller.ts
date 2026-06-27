@@ -1,14 +1,11 @@
 import { Terminal } from "@xterm/xterm";
 import { isLinux } from "@/lib/platform";
 import { terminalClient } from "@/clients";
-import { TerminalRefreshTier } from "@/types";
 import { logError, logWarn } from "@/utils/logger";
-import { SCROLLBACK_BACKGROUND } from "@shared/config/scrollback";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { isUselessTitle, normalizeObservedTitle } from "@shared/utils/isUselessTitle";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { ManagedTerminal } from "./types";
-import { reduceScrollback } from "./TerminalScrollbackController";
 import { isNonKeyboardInput } from "./inputUtils";
 import { installLinuxPrimarySelectionListeners } from "./primarySelection";
 import { writeTerminalInputOrFleet } from "./fleetInputRouter";
@@ -85,11 +82,9 @@ function snapDomRowHeightsToIntegerPixels(terminal: Terminal): void {
 }
 
 /**
- * Callback surface needed by `installTerminalBoundListeners`. Both
- * `TerminalInstanceService.getOrCreate()` (create path) and
- * `TerminalHibernationManager.unhibernate()` (wake path) satisfy this
- * interface so they install the exact same listener set — adding a new
- * terminal-bound listener is a one-edit operation.
+ * Callback surface needed by `installTerminalBoundListeners`. The create path
+ * (`TerminalInstanceService.getOrCreate()`) satisfies this interface so adding
+ * a new terminal-bound listener is a one-edit operation.
  */
 export interface TerminalListenerInstallDeps {
   // Buffer / scroll / selection scrollback
@@ -237,9 +232,6 @@ export function installTerminalBoundListeners(
     if (isAtBottom) {
       managed.isUserScrolledBack = false;
       deps.clearUnseen(id, false);
-      if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
-        reduceScrollback(managed, SCROLLBACK_BACKGROUND);
-      }
     } else {
       managed.isUserScrolledBack = true;
       deps.updateScrollState(id, true);
@@ -283,9 +275,6 @@ export function installTerminalBoundListeners(
       deps.setCachedSelection(id, sel);
     } else {
       deps.deleteCachedSelection(id);
-      if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
-        reduceScrollback(managed, SCROLLBACK_BACKGROUND);
-      }
     }
   });
   managed.listeners.push(() => selectionDisposable.dispose());

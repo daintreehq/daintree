@@ -62,7 +62,6 @@ export interface ReconciliationWatchdogDeps {
   isWebGLActive: (id: string) => boolean;
   shouldHaveWebGL: (managed: ManagedTerminal) => boolean;
   ensureWebGL: (id: string, managed: ManagedTerminal) => void;
-  unhibernate: (id: string) => void;
   forceReflow: (element: HTMLElement) => void;
   /**
    * Repair (#10632): alt-buffer-safe atomic reveal reconcile — a FRESH fit
@@ -230,8 +229,7 @@ export class TerminalReconciliationWatchdog {
 
   /**
    * Verify the rendering chain for one on-screen terminal and repair the
-   * first divergence found, ordered by causal depth: hibernation (nothing
-   * else exists without a live xterm instance) → service visibility →
+   * first divergence found, ordered by causal depth: service visibility →
    * computed/applied tier → backend tier → stranded ingest bytes → xterm
    * render pause → WebGL context. Returns the heavy-repair budget consumed
    * (0 or 1). A heavy repair skipped for budget is retried next tick — the
@@ -243,16 +241,6 @@ export class TerminalReconciliationWatchdog {
     now: number,
     heavyBudget: number
   ): number {
-    if (managed.isHibernated) {
-      if (heavyBudget <= 0) return 0;
-      managed.lastWatchdogRepairAt = now;
-      logWarn("[TerminalReconciliationWatchdog] on-screen terminal is hibernated — restoring", {
-        id,
-      });
-      this.deps.unhibernate(id);
-      return 1;
-    }
-
     if (!managed.isVisible) {
       if (heavyBudget <= 0) return 0;
       managed.lastWatchdogRepairAt = now;
@@ -317,10 +305,10 @@ export class TerminalReconciliationWatchdog {
       return 1;
     }
 
-    // Bytes stranded in the ingest queue with no drain in flight. Never flush
-    // while a wake is needed, pending, or in flight — wakeAndRestore resets
-    // the buffer during replay and flushing first would write held bytes into
-    // a pre-reset terminal (#8371); the wake path flushes itself on completion.
+    // Bytes stranded in the ingest queue with no drain in flight. The wake/resync
+    // machinery is gone (terminals stay live in the background), so these guards
+    // are always satisfied now — kept so the flush still defers if a future
+    // buffer-resetting path ever re-arms one (#8371).
     const stalledBytes = this.deps.getStalledBytes(id);
     if (
       stalledBytes > 0 &&

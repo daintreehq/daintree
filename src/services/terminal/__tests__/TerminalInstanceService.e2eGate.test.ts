@@ -67,7 +67,6 @@ const E2E_TERMINAL_GLOBALS = [
   "__daintreeTriggerTerminalLink",
   "__daintreeGetTerminalWebGLState",
   "__daintreePromoteTerminalToAgentForE2E",
-  "__daintreeHibernateTerminalForE2E",
 ] as const;
 
 function windowProp(name: string): unknown {

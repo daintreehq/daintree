@@ -716,9 +716,6 @@ function TerminalPaneComponent({
           if (managed?.terminal) {
             try {
               managed.terminal.clear();
-              // The pane no longer mirrors the host scrollback — the next
-              // wake must replay rather than take the no-change skip.
-              managed.wakeSynced = false;
             } catch (error) {
               console.warn(`Failed to clear terminal ${id}:`, error);
             }

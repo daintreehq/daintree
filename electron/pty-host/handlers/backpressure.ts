@@ -1,6 +1,5 @@
 import { selectShard } from "../../../shared/utils/shardSelection.js";
 import type { HandlerMap, HostContext } from "./types.js";
-import { createWakeExecutor } from "./wakeExecutor.js";
 
 export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
   const {
@@ -13,7 +12,6 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
     tryReplayAndResume,
     resumePausedTerminal,
   } = ctx;
-  const executeWake = createWakeExecutor(ctx);
 
   return {
     "acknowledge-data": (msg) => {
@@ -56,21 +54,24 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
       const atCoordinator = getPauseCoordinator(msg.id);
       atCoordinator?.resume("backpressure");
 
-      // Backgrounding also clears the port/IPC queue holds: the renderer
-      // ingest holds chunks without writing (and therefore without acking)
-      // while a pane is backgrounded, so a terminal paused under port or IPC
-      // backpressure could never drain to its low watermark and would stay
-      // paused until the IPC_MAX_PAUSE_MS safety timeout — starving the
-      // headless terminal that agent-state detection and wake snapshots read
-      // from. The visual stream is gated for background tiers anyway and wake
-      // resyncs via snapshot; clearQueue releases the tokens and is a no-op
-      // for untracked terminals (same path force-resume uses).
-      if (tier === "background") {
-        ipcQueueManager.clearQueue(msg.id);
-        for (const conn of ctx.rendererConnections.values()) {
-          conn.portQueueManager.clearQueue(msg.id);
-        }
-      }
+      // EXPERIMENT (hibernation teardown step 1 — #10807): do NOT clear the
+      // port/IPC queues when a terminal is marked "background". The host
+      // producer gate now streams unconditionally (pty-host.ts), so background
+      // panes keep receiving live bytes; clearing the queues here would drop
+      // genuinely in-flight bytes on the live path. The renderer is unchanged in
+      // this step and may still send a "background" tier — ignore its
+      // queue-clearing side effect. The suspended/pending-visual clears and the
+      // backpressure coordinator resume above still run, and IPC watermarks /
+      // hard caps / data-loss accounting are untouched. See
+      // docs/HIBERNATION-REMOVAL-EXPERIMENT.md.
+      //
+      // Disabled for the experiment — was:
+      //   if (tier === "background") {
+      //     ipcQueueManager.clearQueue(msg.id);
+      //     for (const conn of ctx.rendererConnections.values()) {
+      //       conn.portQueueManager.clearQueue(msg.id);
+      //     }
+      //   }
 
       const terminal = ptyManager.getTerminal(msg.id);
       if (terminal) {
@@ -104,17 +105,6 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
         });
       }
     },
-
-    "wake-terminal": (msg) =>
-      executeWake(msg.id, (outcome) => {
-        sendEvent({
-          type: "wake-result",
-          requestId: msg.requestId,
-          id: msg.id,
-          state: outcome.state,
-          warnings: outcome.warnings,
-        });
-      }),
 
     "force-resume": (msg) => {
       const coordinator = getPauseCoordinator(msg.id);

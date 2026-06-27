@@ -60,6 +60,17 @@ const GIT_SENTINEL_NAMES = new Set([
  * - Initialization timing matters (must wait for other services to be ready)
  */
 export class HibernationService {
+  // EXPERIMENT (hibernation removal, step 4): disables the PTY-kill so a
+  // backgrounded project's terminals are never torn down — by the scheduled
+  // sweep (checkAndHibernate), under memory pressure (hibernateUnderMemoryPressure),
+  // or on demand (hibernateProjectOnDemand). All three funnel through the single
+  // `gracefulKillByProject` chokepoint in hibernateProject(), guarded below.
+  // The rest of the flow (callbacks, the project-hibernated event, and the
+  // user-initiated WebContentsView eviction we KEEP) is preserved. Typed
+  // `boolean` (not the `true` literal) so the kill branch stays type-reachable
+  // for the step-7 deletion; flip to `false` to revert.
+  private static readonly EXPERIMENT_HIBERNATION_DISABLED: boolean = true;
+
   private checkInterval: NodeJS.Timeout | null = null;
   private initialCheckTimer: NodeJS.Timeout | null = null;
   private readonly CHECK_INTERVAL_MS = 60 * 60 * 1000; // Every hour
@@ -388,7 +399,12 @@ export class HibernationService {
     reason: "scheduled" | "memory-pressure" | "user-initiated",
     ptyClient: PtyClient
   ): Promise<number> {
-    const results = await ptyClient.gracefulKillByProject(projectId, { preserveSession: true });
+    // EXPERIMENT (hibernation removal, step 4): skip the PTY-kill so backgrounded
+    // projects' terminals stay fully alive; report 0 killed. The kill branch is
+    // kept reachable so ptyClient/gracefulKillByProject stay referenced.
+    const results = HibernationService.EXPERIMENT_HIBERNATION_DISABLED
+      ? []
+      : await ptyClient.gracefulKillByProject(projectId, { preserveSession: true });
     const terminalsKilled = results.length;
 
     // Write hibernation markers for each killed terminal

@@ -2,9 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "../../../../shared/types/panel";
 
-// Spy on the canonical listener installer. Both call sites — TIS.getOrCreate
-// (create) and HibernationManager.unhibernate (wake) — import this module by
-// the same resolved path, so a single mock intercepts both.
+// Spy on the canonical listener installer. The create path (TIS.getOrCreate)
+// imports this module, so the mock intercepts every terminal-bound install.
 const { installMock } = vi.hoisted(() => ({
   installMock: vi.fn(),
 }));
@@ -80,7 +79,6 @@ type CallSiteTestService = {
     getRefreshTier?: () => TerminalRefreshTier,
     onInput?: (data: string) => void
   ) => Record<string, unknown>;
-  unhibernate: (id: string) => void;
   detachForProjectSwitch: (id: string) => void;
 };
 
@@ -159,7 +157,6 @@ function makeMockManaged(overrides: Record<string, unknown> = {}) {
     isSerializedRestoreInProgress: false,
     deferredOutput: [] as Array<string | Uint8Array>,
     isHibernated: false,
-    hibernationTimer: undefined as ReturnType<typeof setTimeout> | undefined,
     isInputLocked: false,
     ipcListenerCount: 0,
     ...overrides,
@@ -207,16 +204,6 @@ describe("TerminalInstanceService — installTerminalBoundListeners call-site pa
       "t1",
       expect.any(Object)
     );
-  });
-
-  it("wake path: unhibernate installs terminal-bound listeners exactly once", () => {
-    const managed = makeMockManaged({ isHibernated: true, isOpened: false });
-    service.instances.set("t1", managed as unknown as Record<string, unknown>);
-
-    service.unhibernate("t1");
-
-    expect(installMock).toHaveBeenCalledTimes(1);
-    expect(installMock).toHaveBeenCalledWith(expect.any(Object), managed, "t1", expect.any(Object));
   });
 
   it("detach path: detachForProjectSwitch does not install listeners", () => {

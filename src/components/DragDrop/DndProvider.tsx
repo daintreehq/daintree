@@ -1117,7 +1117,7 @@ export function DndProvider({ children }: DndProviderProps) {
             // CRITICAL: Re-apply renderer policy to update lastAppliedTier.
             // Without this, terminals stuck in BACKGROUND tier continue dropping writes
             // even after visibility is restored, because writeToTerminal checks lastAppliedTier.
-            // This also triggers wakeAndRestore() for terminals that had data dropped.
+            // The background→active transition also repaints the live buffer.
             const tier = managed.getRefreshTier();
             terminalInstanceService.applyRendererPolicy(terminal.id, tier);
 

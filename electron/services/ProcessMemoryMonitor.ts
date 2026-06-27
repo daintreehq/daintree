@@ -284,17 +284,6 @@ export interface MemoryPressureActions {
   hibernateIdleProjects: () => Promise<void>;
   trimPtyHostState?: () => void;
   /**
-   * Optional accelerator that compresses the per-terminal hibernation timer
-   * under memory pressure. Tier 1 fires at the same point as
-   * `destroyHiddenWebviews(1)`; tier 2 fires alongside `hibernateIdleProjects`.
-   * Fan-out implementations should push a `window:accelerate-hibernation`
-   * event to every live renderer — the renderer-side handler in
-   * `setupResourceListeners` calls `terminalInstanceService.accelerateHibernation`.
-   * Optional so legacy callers and test fixtures with partial action objects
-   * keep compiling.
-   */
-  accelerateTerminalHibernation?: (level: 1 | 2) => void;
-  /**
    * Optional Blink memory sampler. If wired, called once per poll BEFORE
    * pressure evaluation so renderer samples land alongside the metrics
    * snapshot. Implementations should fan a `window:sample-blink-memory`
@@ -585,11 +574,6 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
           } catch {
             /* non-critical */
           }
-          try {
-            actions.accelerateTerminalHibernation?.(1);
-          } catch {
-            /* non-critical */
-          }
 
           await new Promise<void>((resolve) => setTimeout(resolve, RECLAIM_SETTLE_MS));
 
@@ -653,11 +637,6 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             });
             await actions.destroyHiddenWebviews(2);
             await actions.hibernateIdleProjects();
-            try {
-              actions.accelerateTerminalHibernation?.(2);
-            } catch {
-              /* non-critical */
-            }
           }
         } catch (err) {
           logWarn("memory-pressure-mitigation-failed", { error: String(err) });

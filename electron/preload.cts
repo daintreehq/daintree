@@ -1099,9 +1099,6 @@ function buildElectronApi(): ElectronAPI {
       setActivityTier: (id: string, tier: "active" | "background", pollingIntervalMs?: number) =>
         ipcRenderer.send(CHANNELS.TERMINAL_SET_ACTIVITY_TIER, { id, tier, pollingIntervalMs }),
 
-      wake: (id: string): Promise<{ state: string | null; warnings?: string[] }> =>
-        _unwrappingInvoke(CHANNELS.TERMINAL_WAKE, id),
-
       acknowledgeData: (id: string, length: number) =>
         ipcRenderer.send(CHANNELS.TERMINAL_ACKNOWLEDGE_DATA, { id, length }),
 
@@ -1217,9 +1214,6 @@ function buildElectronApi(): ElectronAPI {
 
       onReclaimMemory: (callback: () => void) =>
         _eventBusOn("window:reclaim-memory", () => callback()),
-
-      onAccelerateHibernation: (callback: (data: { level: 1 | 2 }) => void) =>
-        _eventBusOn("window:accelerate-hibernation", callback),
     },
 
     // Files API

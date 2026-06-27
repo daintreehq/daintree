@@ -1665,12 +1665,6 @@ export interface IpcEventMap {
   "window:fullscreen-change": boolean;
   "window:reclaim-memory": { reason: string };
   "window:destroy-hidden-webviews": { tier: 1 | 2 };
-  // Per-window push event fired by `ProcessMemoryMonitor` mitigation tiers
-  // 1 and 2. The renderer compresses every BACKGROUND-tier terminal's
-  // hibernation timer to a much shorter delay (5s / 0s) so idle agent
-  // panes release memory immediately under OS pressure instead of waiting
-  // for the fixed 30s window. Renderer handler in `setupResourceListeners`.
-  "window:accelerate-hibernation": { level: 1 | 2 };
   // Main asks renderers to report process.getBlinkMemoryInfo() so
   // ProcessMemoryMonitor can see the Blink (DOM/CSS/inter-frame) memory tier
   // that V8 heap stats miss. Renderer replies via SYSTEM_REPORT_BLINK_MEMORY.
@@ -1981,7 +1975,6 @@ export type IpcEventBusMap = Pick<
   | "window:fullscreen-change"
   | "window:reclaim-memory"
   | "window:destroy-hidden-webviews"
-  | "window:accelerate-hibernation"
   | "window:disk-space-status"
   | "window:sample-blink-memory"
   | "window:sample-renderer-elu"

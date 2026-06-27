@@ -6,13 +6,6 @@ vi.mock("@/store/slices", () => ({
   flushPanelPersistence: flushPanelPersistenceMock,
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
-    reduceScrollbackAllBackground: vi.fn(),
-    accelerateHibernation: vi.fn(),
-  },
-}));
-
 vi.mock("@/store/resourceMonitoringStore", () => ({
   useResourceMonitoringStore: {
     getState: () => ({ enabled: false, updateMetrics: vi.fn() }),
@@ -31,8 +24,6 @@ describe("setupResourceListeners — persistence flush on hide (#9914)", () => {
     (globalThis as unknown as { window: Window }).window.electron = {
       terminal: {
         onResourceMetrics: vi.fn(() => () => {}),
-        onReclaimMemory: vi.fn(() => () => {}),
-        onAccelerateHibernation: vi.fn(() => () => {}),
       },
     } as unknown as Window["electron"];
   });

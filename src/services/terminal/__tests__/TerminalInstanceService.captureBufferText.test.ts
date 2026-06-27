@@ -182,10 +182,4 @@ describe("captureBufferText", () => {
       }, 50);
     });
   });
-
-  it("returns empty string for hibernated terminal", () => {
-    createManagedTerminal("test-5");
-    terminalInstanceService.hibernate("test-5");
-    expect(terminalInstanceService.captureBufferText("test-5")).toBe("");
-  });
 });

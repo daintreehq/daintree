@@ -130,7 +130,6 @@ function makeDeps(
     isWebGLActive: vi.fn(() => true),
     shouldHaveWebGL: vi.fn(() => false),
     ensureWebGL: vi.fn(),
-    unhibernate: vi.fn(),
     forceReflow: vi.fn(),
     reconcileRevealGeometry: vi.fn(() => true),
     isStoreBackgrounded: vi.fn(() => false),
@@ -275,18 +274,6 @@ describe("TerminalReconciliationWatchdog", () => {
   });
 
   describe("repairs", () => {
-    it("unhibernates an on-screen hibernated terminal", () => {
-      instances.set("t1", makeManaged({ isHibernated: true, isVisible: false }));
-      const deps = makeDeps(instances);
-      watchdog = new TerminalReconciliationWatchdog(deps);
-
-      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
-      expect(deps.unhibernate).toHaveBeenCalledWith("t1");
-      // One repair per terminal per tick — visibility waits for the next sweep.
-      expect(deps.setVisible).not.toHaveBeenCalled();
-      expect(logWarn).toHaveBeenCalled();
-    });
-
     it("repairs isVisible=false via setVisible and logs the mismatch", () => {
       instances.set("t1", makeManaged({ isVisible: false }));
       const deps = makeDeps(instances);
@@ -540,7 +527,6 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(deps.forceReflow).not.toHaveBeenCalled();
       expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
       expect(deps.ensureWebGL).not.toHaveBeenCalled();
-      expect(deps.unhibernate).not.toHaveBeenCalled();
       expect(managed.lastWatchdogRepairAt).toBeUndefined();
     });
   });
@@ -735,7 +721,6 @@ describe("TerminalReconciliationWatchdog", () => {
       // Diagnostic only — no repair side effects.
       expect(deps.setVisible).not.toHaveBeenCalled();
       expect(deps.resumeFlush).not.toHaveBeenCalled();
-      expect(deps.unhibernate).not.toHaveBeenCalled();
     });
 
     it("ignores pointerdowns outside any terminal host element", () => {

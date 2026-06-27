@@ -233,13 +233,6 @@ class TerminalRegistryController {
   }
 
   /**
-   * Wake a terminal from hibernation.
-   */
-  async wake(id: string): Promise<{ state: string | null; warnings?: string[] }> {
-    return terminalClient.wake(id);
-  }
-
-  /**
    * Get terminals for a specific project from the backend.
    */
   async getForProject(projectId: string) {

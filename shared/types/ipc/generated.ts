@@ -1450,10 +1450,6 @@ export interface GeneratedIpcInvokeMap {
     args: [id: string];
     result: void;
   };
-  "terminal:wake": {
-    args: [id: string];
-    result: { state: string | null; warnings?: string[] | undefined };
-  };
   "watchdog:restart": {
     args: [];
     result: void;

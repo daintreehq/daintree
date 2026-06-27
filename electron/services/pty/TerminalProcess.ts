@@ -190,41 +190,6 @@ export class TerminalProcess {
   }
   private forensicsBuffer = new TerminalForensicsBuffer();
   private _activityTier: "active" | "background" = "active";
-  // Background-tier output coalescing (#10744). When a project is backgrounded
-  // the per-chunk parse pipeline (activityMonitor.onData regex bank, headless
-  // xterm VT write, forensics/semantic buffers, renderer fan-out) stops running
-  // per-chunk and instead drains a coalesced batch on a single self-rearming
-  // timer, so backgrounded terminals stop competing with the foreground project
-  // for CPU. OSC 9;4 + timestamps still run per-chunk in handlePtyData so the
-  // agent-state heartbeat stays accurate (#8753).
-  private _backgroundChunkQueue: string[] = [];
-  private _backgroundQueuedBytes = 0;
-  private _backgroundDrainTimer: NodeJS.Timeout | null = null;
-  private _backgroundDrainDeadline = 0;
-  // Wall-clock time the current batch started accumulating (queue empty→nonempty);
-  // 0 while the queue is empty. Drives the COALESCE_MAX_DEFER_MS hard ceiling,
-  // independent of the self-rearming soft deadline above.
-  private _backgroundOldestQueuedAt = 0;
-  private _backgroundDrainIntervalMs = 500;
-  // Force a drain if a backgrounded terminal accumulates this much un-parsed
-  // output, bounding queue memory for noisy agents that never pause (mirrors the
-  // renderer-side COALESCE_BATCH_CAP_BYTES from #8371). Measured in UTF-16 code
-  // units (string .length), not bytes — multi-byte output can hold up to ~3× the
-  // nominal cap, which is harmless: draining late only delays, never corrupts.
-  private readonly COALESCE_MAX_BYTES = 256 * 1024;
-  // Hard ceiling on how long output may sit un-parsed during SUSTAINED background
-  // output. The soft drain deadline (_armBackgroundDrain) is pushed forward by
-  // every chunk, so an agent emitting faster than the drain interval would never
-  // drain — starving activityMonitor.onData and the headless VT write. That
-  // freezes the ActivityMonitor's lastActivityTimestamp (refreshed only when the
-  // polled headless viewport changes) and trips its 8s idle gate, misclassifying
-  // a working backgrounded agent as "waiting" (#10744 regression). This bound
-  // forces a drain every ≤1s so the same change-detection path that keeps
-  // foreground agents "working" keeps running for backgrounded ones — well under
-  // the 8s gate, while still cutting parse frequency ~20× vs the 50ms foreground
-  // cadence. It bounds demotion starvation; it is not meant to preserve every
-  // sub-second idle→busy recovery nuance (recovery runs on the drain itself).
-  private readonly COALESCE_MAX_DEFER_MS = 1000;
   private _restoreBannerStart: IMarker | null = null;
   private _restoreBannerEnd: IMarker | null = null;
   private readonly textDecoder = new TextDecoder();
@@ -688,7 +653,6 @@ export class TerminalProcess {
     this.identityWatcher.stop();
     this.semanticBufferManager.flush();
     this.flushAgentOutput();
-    this._cancelBackgroundQueue();
 
     if (this.ptyDataDisposable) {
       try {
@@ -1164,15 +1128,6 @@ export class TerminalProcess {
     const terminal = this.terminalInfo;
     const exitReason: ExitReason = reason === "graceful-shutdown" ? "graceful-shutdown" : "kill";
 
-    // Drain any coalesced background output through the parse pipeline BEFORE
-    // teardown — and before the snapshot flush below — so a backgrounded
-    // terminal's final chunk reaches the headless model, forensics buffer,
-    // semantic buffer, and the session snapshot. teardown's
-    // _cancelBackgroundQueue() would otherwise discard it, dropping the
-    // pre-exit tail a user inspects when foregrounding a finished hidden
-    // project (#10744). emitData fan-out is still live at this call site.
-    this._drainBackgroundQueue();
-
     // Flush session snapshot synchronously BEFORE teardown.
     // Once teardown disposes the writeQueue and processTreeKiller.abort() fires,
     // debounced writes are lost — so this is the last chance.
@@ -1561,19 +1516,9 @@ export class TerminalProcess {
 
   setActivityMonitorTier(tier: "active" | "background", pollingIntervalMs: number): void {
     // The tier is authoritative; the polling interval is only a cadence hint
-    // (issue #8596 — VISIBLE-unfocused panes are "active" at 200ms).
-    if (tier === "background") {
-      // Reuse the polling cadence as the coalescing drain interval so a future
-      // tier never needs a separate constant wired through PtyManager (#10744).
-      this._backgroundDrainIntervalMs = pollingIntervalMs;
-    } else if (this._activityTier === "background") {
-      // Foreground activation: flush any deferred output synchronously so the
-      // headless terminal is current before the renderer's wake/snapshot request
-      // reads getSerializedState() (#10744). Drain before flipping the tier so a
-      // late chunk can't re-enter the background branch mid-flush.
-      this._drainBackgroundQueue();
-    }
-
+    // (issue #8596 — VISIBLE-unfocused panes are "active" at 200ms). Output is
+    // never coalesced anymore (it streams live through _runPtyPipeline), so this
+    // only adjusts the headless agent-state poll cadence.
     this._activityTier = tier;
 
     if (this.activityMonitor) {
@@ -1810,34 +1755,19 @@ export class TerminalProcess {
     // backgrounded terminals too so the heartbeat never lags (#8753, #10744).
     this.osc94Parser.feed(data, now);
 
-    // Background tier (#10744): defer the heavy parse pipeline. Coalesce raw
-    // chunks and run the pipeline once per drain cadence so backgrounded
-    // terminals stop competing with the foreground project for CPU. The xterm
-    // VT parser is stateful and chunk-boundary-safe, so feeding the concatenated
-    // batch yields identical headless grid state.
-    if (this._activityTier === "background") {
-      if (this._backgroundChunkQueue.length === 0) {
-        this._backgroundOldestQueuedAt = now;
-      }
-      this._backgroundChunkQueue.push(data);
-      this._backgroundQueuedBytes += data.length;
-      if (this._backgroundQueuedBytes >= this.COALESCE_MAX_BYTES) {
-        this._drainBackgroundQueue();
-      } else {
-        this._armBackgroundDrain();
-      }
-      return;
-    }
-
+    // Hibernation removed: PTY output ALWAYS flows through the live parse
+    // pipeline regardless of activity tier, so a backgrounded pane's renderer
+    // buffer stays current instead of being held in a coalesce queue until
+    // reveal. The agent-state poll cadence (50ms active / 500ms background, set
+    // in setActivityMonitorTier) still throttles the headless poll loop.
     this._runPtyPipeline(data);
   }
 
   /**
    * The per-chunk parse pipeline downstream of the OSC 9;4 tap and timestamp
-   * bookkeeping. Runs immediately for foreground terminals and once per drain on
-   * the coalesced batch for backgrounded ones (#10744). `data` is the raw PTY
-   * string (or the joined background batch); the renderer-bound copy is derived
-   * here after OSC color queries are answered.
+   * bookkeeping. Runs immediately for every chunk regardless of activity tier.
+   * `data` is the raw PTY string; the renderer-bound copy is derived here after
+   * OSC color queries are answered.
    */
   private _runPtyPipeline(data: string): void {
     const terminal = this.terminalInfo;
@@ -1912,87 +1842,6 @@ export class TerminalProcess {
     }
   }
 
-  /**
-   * Single self-rearming background drain timer (deadline-timestamp pattern from
-   * #8150 — avoids O(N) clear/set churn per chunk). Each incoming chunk pushes
-   * the soft deadline forward; the timer reschedules itself until output settles,
-   * so a sustained burst drains once it quiets rather than mid-burst. Two caps
-   * bound that deferral: COALESCE_MAX_BYTES (memory) in handlePtyData, and
-   * COALESCE_MAX_DEFER_MS (latency) in _onBackgroundDrainTimer, so output that
-   * never pauses still drains — keeping the agent-state clock fresh (#10744).
-   */
-  private _armBackgroundDrain(): void {
-    this._backgroundDrainDeadline = Date.now() + this._backgroundDrainIntervalMs;
-    if (this._backgroundDrainTimer) {
-      return;
-    }
-    // Never let the first fire wait past the hard ceiling, so the cap holds even
-    // if a future tier sets a drain interval larger than COALESCE_MAX_DEFER_MS.
-    const wait = Math.min(this._backgroundDrainIntervalMs, this.COALESCE_MAX_DEFER_MS);
-    this._backgroundDrainTimer = setTimeout(() => this._onBackgroundDrainTimer(), wait);
-  }
-
-  private _onBackgroundDrainTimer(): void {
-    const now = Date.now();
-    const remaining = this._backgroundDrainDeadline - now;
-    const deferredFor = now - this._backgroundOldestQueuedAt;
-    if (remaining > 0 && deferredFor < this.COALESCE_MAX_DEFER_MS) {
-      // A chunk arrived after this timer was armed and pushed the soft deadline
-      // out; reschedule for the remaining window so the burst batches optimally —
-      // but never wait past the hard ceiling, so sustained output can't starve
-      // the parse pipeline (and the agent-state clock riding on it) (#10744).
-      const wait = Math.min(remaining, this.COALESCE_MAX_DEFER_MS - deferredFor);
-      this._backgroundDrainTimer = setTimeout(() => this._onBackgroundDrainTimer(), wait);
-      return;
-    }
-    this._backgroundDrainTimer = null;
-    this._drainBackgroundQueue();
-  }
-
-  /**
-   * Flush the coalesced background queue through the parse pipeline once. Safe to
-   * call with an empty queue (no-op). Invoked by the drain timer, the
-   * COALESCE_MAX_BYTES cap, and synchronously on foreground activation so the
-   * headless terminal is current before the renderer wakes (#10744).
-   */
-  private _drainBackgroundQueue(): void {
-    if (this._backgroundDrainTimer) {
-      clearTimeout(this._backgroundDrainTimer);
-      this._backgroundDrainTimer = null;
-    }
-    this._backgroundDrainDeadline = 0;
-    this._backgroundOldestQueuedAt = 0;
-    if (this._backgroundChunkQueue.length === 0) {
-      this._backgroundQueuedBytes = 0;
-      return;
-    }
-    const coalesced = this._backgroundChunkQueue.join("");
-    this._backgroundChunkQueue = [];
-    this._backgroundQueuedBytes = 0;
-    this._runPtyPipeline(coalesced);
-  }
-
-  /**
-   * Cancel the background drain timer and discard queued output without running
-   * the pipeline. Called from teardown (kill / natural exit / dispose) so a
-   * timer armed just before teardown can't fire post-teardown and fan deferred
-   * output out to released renderer subscribers / buffers (#10744). On the
-   * kill() and natural-exit paths this is a no-op cleanup: those call sites run
-   * _drainBackgroundQueue() first so the queue is already empty here and the
-   * final chunk reached forensics / snapshot. dispose() (LRU eviction) has no
-   * live exit consumer, so it relies on this to discard.
-   */
-  private _cancelBackgroundQueue(): void {
-    if (this._backgroundDrainTimer) {
-      clearTimeout(this._backgroundDrainTimer);
-      this._backgroundDrainTimer = null;
-    }
-    this._backgroundDrainDeadline = 0;
-    this._backgroundOldestQueuedAt = 0;
-    this._backgroundChunkQueue = [];
-    this._backgroundQueuedBytes = 0;
-  }
-
   private queueAgentOutput(agentId: string, data: string): void {
     if (this.pendingAgentOutputAgentId !== null && this.pendingAgentOutputAgentId !== agentId) {
       this.flushAgentOutput();
@@ -2053,14 +1902,6 @@ export class TerminalProcess {
       }
 
       this.identityWatcher.stop();
-
-      // Drain any coalesced background output through the parse pipeline BEFORE
-      // reading the forensic tail / running teardown, so a backgrounded
-      // terminal's final chunk lands in the forensics buffer and the headless
-      // model rather than being discarded by teardown's _cancelBackgroundQueue().
-      // This keeps the terminal:exited forensic tail complete (#10744).
-      // emitData fan-out is still live here (teardown releases subscribers below).
-      this._drainBackgroundQueue();
 
       // Capture forensic tail before disposeHeadless() clears the buffer.
       // The terminal:exited subscriber reads this via the payload — once

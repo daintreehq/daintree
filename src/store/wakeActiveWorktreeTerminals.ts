@@ -11,18 +11,16 @@ const WAKE_CONCURRENCY = 2;
  * Wake every grid terminal in the active worktree (#7999, #8562).
  *
  * Called on cached `WebContentsView` reactivation (project view activation
- * via Electron 41 `addChildView`). The pty-host headless mirror keeps
- * receiving every byte regardless of tier, so the authoritative buffer is
- * always current — but the renderer's xterm.js buffer accumulates only what
- * arrives over the active stream. After the view returns, the missed range
- * needs to be pulled from the headless mirror via the `wake-terminal` IPC
- * and applied via `restoreFromSerialized`.
+ * via Electron 41 `addChildView`). With hibernation removed the renderer
+ * stays fully live in the background — the pty-host streams every byte
+ * regardless of tier, so the xterm.js buffer is already current on return.
+ * The reveal is therefore a repaint + geometry re-fit, not a snapshot pull.
  *
  * Uses `terminalInstanceService.fullWakeForVisibilityRestore(id)` rather
- * than `wake(id)` because `wake()` only triggers buffer restore +
- * xterm.refresh — visible panes were left with stale geometry and missing
- * recent output until the user clicked each pane (#8562). The full sequence
- * also runs `applyDeferredResize`, `forceXtermReflow`, `handlePostWake`, and
+ * than `wake(id)` because the full sequence re-fits geometry that the
+ * backgrounded view could not measure — visible panes were otherwise left
+ * with stale geometry until the user clicked each pane (#8562). It runs
+ * `applyDeferredResize`, `forceXtermReflow`, `handlePostWake`, and
  * `dataBuffer.resumeFlush`. Going through `applyRendererPolicy(VISIBLE)`
  * would no-op on tier equality (the backgrounded view's terminals stay at
  * VISIBLE), so the full-wake method bypasses the policy.

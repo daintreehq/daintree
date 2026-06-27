@@ -203,13 +203,6 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       broker.resolve(event.requestId, event.state ?? null);
       return true;
 
-    case "wake-result":
-      broker.resolve(event.requestId, {
-        state: event.state ?? null,
-        warnings: event.warnings,
-      });
-      return true;
-
     case "kill-by-project-result":
       broker.resolve(event.requestId, event.killed ?? 0);
       return true;

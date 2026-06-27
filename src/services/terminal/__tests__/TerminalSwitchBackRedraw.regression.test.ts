@@ -181,7 +181,6 @@ function buildDeps(
     isWebGLActive: vi.fn(() => true),
     shouldHaveWebGL: vi.fn(() => false),
     ensureWebGL: vi.fn(),
-    unhibernate: vi.fn(),
     forceReflow: vi.fn((_element: HTMLElement) => {
       // Unpause: the IO re-evaluation resumes the paused renderer. We can't know
       // which agent the element belongs to cheaply, so unpause any agent whose

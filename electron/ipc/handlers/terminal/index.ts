@@ -4,7 +4,7 @@
  * Extracted from the monolithic terminal.ts into focused modules:
  * - lifecycle.ts: spawn, kill, trash, restore
  * - io.ts: input, resize, submit, sendKey, acknowledge, forceResume
- * - snapshots.ts: getSnapshot, getCleanLog, getSerializedState, wake, getInfo
+ * - snapshots.ts: getSnapshot, getCleanLog, getSerializedState, getInfo
  * - events.ts: forwards events to renderer
  * - artifacts.ts: save to file, apply patch
  */

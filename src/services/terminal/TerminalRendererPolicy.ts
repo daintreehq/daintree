@@ -1,25 +1,14 @@
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import type { ManagedTerminal } from "./types";
-import type { WakeResult } from "./TerminalWakeManager";
 import { TIER_DOWNGRADE_HYSTERESIS_MS } from "./types";
 
 export interface RendererPolicyDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
-  wakeAndRestore: (id: string) => Promise<WakeResult>;
   onPostWake?: (id: string) => void;
   onResumeFlush?: (id: string) => void;
-  /**
-   * Discard bytes held while backgrounded instead of flushing them: the wake
-   * replayed the host's main-buffer snapshot, which already contains every
-   * byte the renderer has received — flushing would paint the tail twice
-   * (#9910). Implementations must also ack the discarded bytes so the
-   * pty-host's queuedBytes ledger drains.
-   */
-  onDiscardHeld?: (id: string) => void;
   onTierApplied?: (id: string, tier: TerminalRefreshTier, managed: ManagedTerminal) => void;
   applyDeferredResize?: (id: string) => void;
-  onBackgrounded?: (id: string) => void;
 }
 
 // Backend cadence hint sent to the PTY host alongside the binary
@@ -45,7 +34,6 @@ export class TerminalRendererPolicy {
   private lastBackendTier = new Map<string, "active" | "background">();
   private lastBackendPollingMs = new Map<string, number>();
   private knownTerminalIds = new Set<string>();
-  private wakeGeneration = new Map<string, number>();
   private deps: RendererPolicyDeps;
 
   constructor(deps: RendererPolicyDeps) {
@@ -169,85 +157,19 @@ export class TerminalRendererPolicy {
     const prevBackendTier = this.lastBackendTier.get(id) ?? "active";
     this.setBackendTier(id, backendTier, backendPollingIntervalForTier(tier));
 
-    if (backendTier === "background" && prevBackendTier === "active") {
-      // Invalidate any in-flight wake: if a BACKGROUND→active wake is still
-      // pending when the terminal is re-backgrounded, its resolved callback
-      // must not refresh/flush into a now-hidden pane (reintroduces the CPU
-      // burn this gate eliminates). The next real activation starts a fresh
-      // generation.
-      this.bumpWakeGeneration(id);
-      managed.needsWake = true;
-
-      // Cancel any scheduled-but-not-started wake (#9906). bumpWakeGeneration
-      // above only neutralizes the resolved callback of an in-flight wake — a
-      // trailing-edge rate-limited wake still queued behind the 1s window would
-      // fire its `wake-terminal` IPC and promote the host tier to "active"
-      // against this now-hidden pane. Cancel it before the IPC leaves.
-      this.deps.onBackgrounded?.(id);
-    }
-
     if (backendTier === "active" && prevBackendTier !== "active") {
-      if (managed.needsWake !== false) {
-        const wakeGeneration = this.bumpWakeGeneration(id);
-        const wakeTarget = managed;
-        void this.deps
-          .wakeAndRestore(id)
-          .then(({ ok, replayedMainBuffer }) => {
-            if (this.wakeGeneration.get(id) !== wakeGeneration) return;
-            const current = this.deps.getInstance(id);
-            if (!current || current !== wakeTarget) return;
-            current.needsWake = ok ? false : true;
-
-            // Sync xterm's grid to dims captured while background BEFORE
-            // refresh, otherwise refresh paints into a buffer sized for the
-            // previous (foreground) geometry and the user sees garbled output
-            // for one frame.
-            this.deps.applyDeferredResize?.(id);
-            current.terminal.refresh(0, current.terminal.rows - 1);
-
-            if (ok) {
-              this.deps.onPostWake?.(id);
-            }
-
-            if (replayedMainBuffer) {
-              // The replayed snapshot already contains every held byte —
-              // flushing on top would double-paint the tail (#9910). Discard
-              // the queue and ack the bytes instead.
-              this.deps.onDiscardHeld?.(id);
-            } else {
-              // No replay happened (alt-buffer wake, selection skip, missing
-              // state, restore failure) — flush bytes held while backgrounded
-              // AFTER refresh. wakeAndRestore calls terminal.reset() during
-              // replay; flushing earlier would wipe these bytes.
-              this.deps.onResumeFlush?.(id);
-            }
-          })
-          .catch(() => {
-            if (this.wakeGeneration.get(id) !== wakeGeneration) return;
-            const current = this.deps.getInstance(id);
-            if (!current || current !== wakeTarget) return;
-            current.needsWake = true;
-
-            // Force a refresh on failure as a recovery mechanism.
-            // Even if wakeAndRestore fails, this ensures the terminal attempts to render
-            // whatever content it has, preventing stuck display states.
-            this.deps.applyDeferredResize?.(id);
-            current.terminal.refresh(0, current.terminal.rows - 1);
-
-            // Wake failed, but the terminal is active again — flush held
-            // bytes so the user isn't left with a stalled pane.
-            this.deps.onResumeFlush?.(id);
-          });
-      } else {
-        // needsWake is false, but we're transitioning to active tier.
-        // Force a refresh to ensure the terminal renderer is in sync.
-        this.deps.applyDeferredResize?.(id);
-        managed.terminal.refresh(0, managed.terminal.rows - 1);
-
-        // No wake needed, but transitioning to active — flush any bytes
-        // held while backgrounded.
-        this.deps.onResumeFlush?.(id);
-      }
+      // Hibernation removed: the pane stays fully live in the background (host
+      // streams, renderer parses live), so the buffer is already current. The
+      // foreground transition is a PLAIN REPAINT — no wake/resync. Sync xterm's
+      // grid to dims captured while background BEFORE refresh so we don't paint
+      // into a buffer sized for the old geometry, repaint the live buffer, run
+      // the post-wake reflow/unpause (handlePostWake — a no-op for alt-screen),
+      // and flush any straggler bytes. WebGL reacquire + addon/scrollback
+      // restore happen in onTierApplied below.
+      this.deps.applyDeferredResize?.(id);
+      managed.terminal.refresh(0, managed.terminal.rows - 1);
+      this.deps.onPostWake?.(id);
+      this.deps.onResumeFlush?.(id);
     }
 
     this.deps.onTierApplied?.(id, tier, managed);
@@ -260,8 +182,7 @@ export class TerminalRendererPolicy {
    * applyRendererPolicy early-returns on tier equality, so re-applying the
    * same active tier through it can never re-send the backend tier — run the
    * immediate apply directly so the backend re-receives "active" and the
-   * background→active wake/flush path runs (initializeBackendTier set
-   * needsWake when it recorded the background tier).
+   * background→active repaint/flush path runs.
    */
   reassertActiveTier(id: string): void {
     const managed = this.deps.getInstance(id);
@@ -285,13 +206,13 @@ export class TerminalRendererPolicy {
     this.lastBackendTier.delete(id);
     this.lastBackendPollingMs.delete(id);
     this.knownTerminalIds.delete(id);
-    this.wakeGeneration.delete(id);
   }
 
   /**
    * Initialize the backend tier state for a terminal that was reconnected.
-   * This ensures the frontend knows the actual backend tier state after project switch,
-   * allowing proper wake behavior when transitioning back to active.
+   * This ensures the frontend knows the actual backend tier state after project
+   * switch so a later transition back to active correctly re-sends the tier (and
+   * runs the plain-repaint foreground path) instead of dedupe-dropping it.
    */
   initializeBackendTier(id: string, tier: "active" | "background"): void {
     this.knownTerminalIds.add(id);
@@ -304,14 +225,6 @@ export class TerminalRendererPolicy {
     }
 
     this.lastBackendTier.set(id, tier);
-
-    // If initializing to background, set needsWake to ensure wake happens on next activation
-    if (tier === "background") {
-      const managed = this.deps.getInstance(id);
-      if (managed) {
-        managed.needsWake = true;
-      }
-    }
   }
 
   dispose(): void {
@@ -321,11 +234,9 @@ export class TerminalRendererPolicy {
     this.knownTerminalIds.clear();
     this.lastBackendTier.clear();
     this.lastBackendPollingMs.clear();
-    this.wakeGeneration.clear();
   }
 
   private clearManagedTierState(id: string): void {
-    this.bumpWakeGeneration(id);
     const managed = this.deps.getInstance(id);
     if (!managed) return;
     if (managed.tierChangeTimer !== undefined) {
@@ -333,11 +244,5 @@ export class TerminalRendererPolicy {
       managed.tierChangeTimer = undefined;
     }
     managed.pendingTier = undefined;
-  }
-
-  private bumpWakeGeneration(id: string): number {
-    const next = (this.wakeGeneration.get(id) ?? 0) + 1;
-    this.wakeGeneration.set(id, next);
-    return next;
   }
 }

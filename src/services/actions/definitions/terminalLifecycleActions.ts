@@ -5,7 +5,6 @@ import { terminalInstanceService } from "@/services/terminal/TerminalInstanceSer
 import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { usePanelStore } from "@/store/panelStore";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isPtyPanel } from "@shared/types/panel";
 import {
   useTerminalPendingDestructiveActionStore,
@@ -378,57 +377,6 @@ export function registerTerminalLifecycleActions(
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (targetId) {
         await terminalClient.forceResume(targetId);
-      }
-    },
-  }));
-
-  actions.set("terminal.hibernate", () => ({
-    id: "terminal.hibernate",
-    title: "Sleep Terminal",
-    description:
-      "Hibernate the terminal — releases its renderer and WebGL context while preserving the PTY. Wakes on focus.",
-    category: "terminal",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    keywords: ["sleep", "pause", "freeze", "suspend", "hibernate"],
-    argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
-    run: async (args: unknown) => {
-      const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
-      const targetId = terminalId ?? usePanelStore.getState().focusedId;
-      if (!targetId) return;
-      terminalInstanceService.hibernate(targetId);
-    },
-  }));
-
-  actions.set("terminal.hibernateAllIdle", () => ({
-    id: "terminal.hibernateAllIdle",
-    title: "Sleep All Idle Terminals",
-    description:
-      "Hibernate every idle, completed, or exited terminal. Skips tooling-internal panels and active agents.",
-    category: "terminal",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    keywords: ["sleep", "pause", "freeze", "suspend", "hibernate", "idle"],
-    run: async () => {
-      const state = usePanelStore.getState();
-      for (const id of state.panelIds) {
-        const panel = state.panelsById[id];
-        if (!panel) continue;
-        if (!panel.kind || !panelKindHasPty(panel.kind)) continue;
-        if (panel.location === "trash") continue;
-        if (isPtyPanel(panel) && panel.excludeFromPersistence === true) continue;
-        const agentState = "agentState" in panel ? panel.agentState : undefined;
-        if (
-          agentState !== undefined &&
-          agentState !== "idle" &&
-          agentState !== "completed" &&
-          agentState !== "exited"
-        ) {
-          continue;
-        }
-        terminalInstanceService.hibernate(id);
       }
     },
   }));

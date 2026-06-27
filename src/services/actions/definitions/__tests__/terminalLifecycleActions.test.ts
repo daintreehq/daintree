@@ -8,7 +8,6 @@ const terminalInstanceServiceMock = vi.hoisted(() => ({
   applyRendererPolicy: vi.fn(),
   onPanelBackgrounded: vi.fn(),
   resetRenderer: vi.fn(),
-  hibernate: vi.fn(),
 }));
 const terminalClientMock = vi.hoisted(() => ({
   killTerminal: vi.fn().mockResolvedValue(undefined),
@@ -533,93 +532,5 @@ describe("terminal.rename DOM handoff", () => {
       vi.unstubAllGlobals();
       vi.useRealTimers();
     }
-  });
-});
-
-describe("terminal.hibernate", () => {
-  it("hibernates the focused terminal when no id is passed", async () => {
-    setPanelState({ focusedId: "p1", panels: [{ id: "p1", location: "grid" }] });
-    const run = setupActions();
-    await run("terminal.hibernate");
-    expect(terminalInstanceServiceMock.hibernate).toHaveBeenCalledWith("p1");
-  });
-
-  it("hibernates the explicitly targeted terminal", async () => {
-    setPanelState({
-      focusedId: "p1",
-      panels: [
-        { id: "p1", location: "grid" },
-        { id: "p2", location: "grid" },
-      ],
-    });
-    const run = setupActions();
-    await run("terminal.hibernate", { terminalId: "p2" });
-    expect(terminalInstanceServiceMock.hibernate).toHaveBeenCalledWith("p2");
-  });
-
-  it("no-ops when nothing is focused and no id is provided", async () => {
-    setPanelState({ focusedId: null, panels: [] });
-    const run = setupActions();
-    await run("terminal.hibernate");
-    expect(terminalInstanceServiceMock.hibernate).not.toHaveBeenCalled();
-  });
-});
-
-describe("terminal.hibernateAllIdle", () => {
-  function setPanelsWithStates(
-    panels: Array<{
-      id: string;
-      kind?: string;
-      location?: "grid" | "dock" | "trash";
-      agentState?: string;
-      excludeFromPersistence?: boolean;
-    }>
-  ) {
-    const panelsById: Record<string, unknown> = {};
-    for (const p of panels) {
-      panelsById[p.id] = {
-        id: p.id,
-        kind: p.kind ?? "terminal",
-        location: p.location ?? "grid",
-        agentState: p.agentState,
-        excludeFromPersistence: p.excludeFromPersistence,
-      };
-    }
-    panelStoreMock.getState.mockImplementation(() => ({
-      panelIds: panels.map((p) => p.id),
-      panelsById,
-    }));
-  }
-
-  it("hibernates idle and completed terminals; skips working and tooling-internal", async () => {
-    setPanelsWithStates([
-      { id: "idle1" },
-      { id: "completed1", agentState: "completed" },
-      { id: "exited1", agentState: "exited" },
-      { id: "working1", agentState: "working" },
-      { id: "waiting1", agentState: "waiting" },
-      { id: "directing1", agentState: "directing" },
-      { id: "ephemeral1", excludeFromPersistence: true },
-      { id: "trashed1", location: "trash" },
-      { id: "browser1", kind: "browser" },
-    ]);
-    const run = setupActions();
-    await run("terminal.hibernateAllIdle");
-
-    const calls = terminalInstanceServiceMock.hibernate.mock.calls.map((c) => c[0]);
-    expect(calls).toEqual(expect.arrayContaining(["idle1", "completed1", "exited1"]));
-    expect(calls).not.toEqual(expect.arrayContaining(["working1"]));
-    expect(calls).not.toEqual(expect.arrayContaining(["waiting1"]));
-    expect(calls).not.toEqual(expect.arrayContaining(["directing1"]));
-    expect(calls).not.toEqual(expect.arrayContaining(["ephemeral1"]));
-    expect(calls).not.toEqual(expect.arrayContaining(["trashed1"]));
-    expect(calls).not.toEqual(expect.arrayContaining(["browser1"]));
-  });
-
-  it("hibernates plain terminals without agentState", async () => {
-    setPanelsWithStates([{ id: "plain1" }]);
-    const run = setupActions();
-    await run("terminal.hibernateAllIdle");
-    expect(terminalInstanceServiceMock.hibernate).toHaveBeenCalledWith("plain1");
   });
 });
