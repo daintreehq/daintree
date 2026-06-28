@@ -759,6 +759,18 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
+   * Enumerate live terminals as {terminalId, projectId, rootPid} tuples for the
+   * memory rollup.
+   */
+  getLiveTerminalRoots(): Array<{
+    terminalId: string;
+    projectId: string | null;
+    rootPid: number;
+  }> {
+    return this.registry.getLiveTerminalRoots();
+  }
+
+  /**
    * Gracefully kill a terminal, capturing its session ID if it's an agent terminal.
    * Falls back to immediate kill for non-agent terminals.
    */

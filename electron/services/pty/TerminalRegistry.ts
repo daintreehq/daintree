@@ -200,6 +200,44 @@ export class TerminalRegistry {
   }
 
   /**
+   * Enumerate live terminals as {terminalId, projectId, rootPid} tuples for
+   * memory attribution. Excludes exited and trashed terminals and the transient
+   * Windows ConPTY `pid: 0` (#10787). projectId is the explicit terminal
+   * project when set, else the cwd-inferred main project, else null
+   * (unattributable). rootPid is the shell PID — descendant walking is the
+   * caller's job.
+   *
+   * Resolution mirrors getProjectStats/terminalMatchesProject: both honour an
+   * already-set `info.projectId` first. The bulk-stats caller runs
+   * getProjectStats() for every requested project BEFORE this rollup in the same
+   * Promise.all (the host processes those messages first, FIFO), so any
+   * cwd-inferred terminal has already had `info.projectId` back-filled to the
+   * matched requested id — keeping the rollup's keys consistent with the
+   * per-project stats it's merged into. We deliberately don't re-run the
+   * mutating matcher here to avoid a side effect on a read path.
+   */
+  getLiveTerminalRoots(): Array<{
+    terminalId: string;
+    projectId: string | null;
+    rootPid: number;
+  }> {
+    const roots: Array<{ terminalId: string; projectId: string | null; rootPid: number }> = [];
+    for (const [id, terminal] of this.terminals.entries()) {
+      const info = terminal.getInfo();
+      if (info.isExited || this.isInTrash(id)) {
+        continue;
+      }
+      const rootPid = terminal.getPtyProcess().pid;
+      if (!Number.isInteger(rootPid) || rootPid <= 0) {
+        continue;
+      }
+      const projectId = info.projectId ?? this.getProjectIdCandidates(terminal).mainProjectId;
+      roots.push({ terminalId: id, projectId: projectId ?? null, rootPid });
+    }
+    return roots;
+  }
+
+  /**
    * Get snapshot of terminal state for AI/heuristic analysis.
    */
   getSnapshot(id: string): TerminalSnapshot | null {

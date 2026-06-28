@@ -177,6 +177,70 @@ describe("getTreeResourceSummary", () => {
   });
 });
 
+describe("aggregateSubtreeMemory", () => {
+  // Seeded tree: 1 -> [2, 3], 2 -> [4]; rss 2=50000, 3=30000, 4=20000.
+  it("sums root + descendants per key and sorts top processes by memory", () => {
+    const processTree = createSeededCache();
+    const agg = processTree.aggregateSubtreeMemory([{ key: "a", rootPid: 2 }]);
+
+    // PID 2 (50000) + PID 4 (20000)
+    expect(agg.byKey["a"].memoryKb).toBe(70000);
+    expect(agg.byKey["a"].processCount).toBe(2);
+    expect(agg.totalMemoryKb).toBe(70000);
+    expect(agg.totalProcessCount).toBe(2);
+    // Sorted by RSS descending: node (50000) before npm (20000).
+    expect(agg.byKey["a"].topProcesses[0]).toMatchObject({ comm: "node", memoryKb: 50000 });
+    expect(agg.byKey["a"].topProcesses[1]).toMatchObject({ comm: "npm", memoryKb: 20000 });
+  });
+
+  it("deduplicates a pid reachable from two roots in the global total", () => {
+    const processTree = createSeededCache();
+    // Root 2 covers {2,4}; root 4 covers {4}. PID 4 must count once globally.
+    const agg = processTree.aggregateSubtreeMemory([
+      { key: "a", rootPid: 2 },
+      { key: "b", rootPid: 4 },
+    ]);
+
+    expect(agg.byKey["a"].memoryKb).toBe(70000);
+    expect(agg.byKey["b"].memoryKb).toBe(20000);
+    // Global dedup: {2,4} = 70000, NOT 90000.
+    expect(agg.totalMemoryKb).toBe(70000);
+    expect(agg.totalProcessCount).toBe(2);
+  });
+
+  it("deduplicates a pid reachable from two roots sharing a key", () => {
+    const processTree = createSeededCache();
+    const agg = processTree.aggregateSubtreeMemory([
+      { key: "a", rootPid: 2 },
+      { key: "a", rootPid: 4 },
+    ]);
+
+    // PID 4 is in both roots' trees but counts once within the key.
+    expect(agg.byKey["a"].memoryKb).toBe(70000);
+    expect(agg.byKey["a"].processCount).toBe(2);
+  });
+
+  it("contributes nothing for a root missing from the cache", () => {
+    const processTree = createSeededCache();
+    const agg = processTree.aggregateSubtreeMemory([{ key: "a", rootPid: 999 }]);
+
+    expect(agg.byKey["a"].memoryKb).toBe(0);
+    expect(agg.byKey["a"].processCount).toBe(0);
+    expect(agg.totalMemoryKb).toBe(0);
+  });
+
+  it("caps top processes per key at topPerKey", () => {
+    const processTree = createSeededCache();
+    // Root 1 (absent itself) walks descendants 4, 2, 3 — three processes.
+    const agg = processTree.aggregateSubtreeMemory([{ key: "a", rootPid: 1 }], 2);
+
+    expect(agg.byKey["a"].processCount).toBe(3);
+    expect(agg.byKey["a"].memoryKb).toBe(100000);
+    expect(agg.byKey["a"].topProcesses).toHaveLength(2);
+    expect(agg.byKey["a"].topProcesses[0].memoryKb).toBe(50000);
+  });
+});
+
 describe("Windows CPU delta computation", () => {
   // The formula in refreshWindows():
   //   cpuPercent = Number((totalDelta * 10000n) / capacity) / 100

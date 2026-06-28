@@ -75,6 +75,34 @@ export interface PtyHostSpawnOptions {
   originalAgentPresetId?: string;
 }
 
+/** Per-project terminal-workload memory, deduplicated by PID. */
+export interface MemoryRollupProject {
+  /** Resolved project id, or null for terminals not attributable to a project. */
+  projectId: string | null;
+  terminalCount: number;
+  processCount: number;
+  /** Summed resident memory (KB) across this project's terminal process trees. */
+  memoryKb: number;
+  /** Highest-memory processes in this project's trees (basename only, no command line). */
+  topProcesses: TerminalResourceProcess[];
+}
+
+/**
+ * On-demand rollup of resident memory across every live terminal's process
+ * subtree (shell + descendants: dev servers, agents, language servers), grouped
+ * by project. Sourced from the warm ProcessTreeCache; sums RSS, so it counts
+ * shared pages — a pressure heuristic, not unique footprint.
+ */
+export interface MemoryRollup {
+  byProject: MemoryRollupProject[];
+  totalMemoryKb: number;
+  totalProcessCount: number;
+  terminalCount: number;
+  /** False when the OS process table couldn't be read (ps/PowerShell failed). */
+  available: boolean;
+  sampledAt: number;
+}
+
 /**
  * Requests sent from Main → Host.
  * Each request is a discriminated union type for compile-time safety.
@@ -174,6 +202,7 @@ export type PtyHostRequest =
   | { type: "get-available-terminals"; requestId: string }
   | { type: "get-terminals-by-state"; state: AgentState; requestId: string }
   | { type: "get-all-terminals"; requestId: string }
+  | { type: "get-memory-rollup"; requestId: string }
   | {
       type: "search-semantic-buffers";
       query: string;
@@ -408,6 +437,7 @@ export type PtyHostEvent =
   | { type: "available-terminals"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | { type: "terminals-by-state"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | { type: "all-terminals"; requestId: string; terminals: PtyHostTerminalInfo[] }
+  | { type: "memory-rollup"; requestId: string; rollup: MemoryRollup }
   | {
       type: "semantic-search-result";
       requestId: string;

@@ -2,6 +2,7 @@ import { CHANNELS } from "../../channels.js";
 import { checkRateLimit, typedHandle } from "../../utils.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { BulkProjectStats } from "../../../../shared/types/ipc/project.js";
+import type { MemoryRollup, MemoryRollupProject } from "../../../../shared/types/pty-host.js";
 import { ProjectStatsService } from "../../../services/ProjectStatsService.js";
 import { registerDeferredTask } from "../../../window/deferredInitQueue.js";
 
@@ -61,13 +62,33 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
     const uniqueIds = [...new Set(projectIds.filter((id) => typeof id === "string" && id))];
     const MEMORY_PER_TERMINAL_MB = 50;
 
-    // Fetch all terminals once and per-project stats in parallel (eliminates N+1 per-terminal IPC)
-    const [allTerminals, statsResults] = await Promise.all([
+    // Fetch all terminals, per-project stats, and the measured terminal-tree
+    // memory rollup in parallel (eliminates N+1 per-terminal IPC).
+    const [allTerminals, statsResults, memoryRollup] = await Promise.all([
       deps.ptyClient!.getAllTerminalsAsync(),
       Promise.allSettled(
         uniqueIds.map((id) => deps.ptyClient!.getProjectStats(id).then((s) => [id, s] as const))
       ),
+      uniqueIds.length > 0
+        ? deps.ptyClient!.getMemoryRollup()
+        : Promise.resolve<MemoryRollup>({
+            byProject: [],
+            totalMemoryKb: 0,
+            totalProcessCount: 0,
+            terminalCount: 0,
+            available: false,
+            sampledAt: 0,
+          }),
     ]);
+
+    // Index measured per-project terminal memory; only trust it when the OS
+    // process table read succeeded, else fall back to the per-terminal estimate.
+    const measuredByProject = new Map<string, MemoryRollupProject>();
+    if (memoryRollup.available) {
+      for (const entry of memoryRollup.byProject) {
+        if (entry.projectId) measuredByProject.set(entry.projectId, entry);
+      }
+    }
 
     // Group agent counts by projectId from the bulk terminal list
     const agentCounts = new Map<string, { active: number; waiting: number }>();
@@ -101,6 +122,12 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
       if (entry.status === "fulfilled") {
         const [id, ptyStats] = entry.value;
         const counts = agentCounts.get(id) ?? { active: 0, waiting: 0 };
+        const measured = measuredByProject.get(id);
+        // Trust the measurement only once at least one process resolved — a
+        // just-spawned shell may not be in the process table yet, and reporting
+        // a measured "0MB" then would be worse than the estimate.
+        const hasMeasured = measured !== undefined && measured.processCount > 0;
+        const top = hasMeasured ? measured!.topProcesses[0] : undefined;
         result[id] = {
           processCount: ptyStats.terminalCount,
           terminalCount: ptyStats.terminalCount,
@@ -109,6 +136,10 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
           processIds: ptyStats.processIds,
           activeAgentCount: counts.active,
           waitingAgentCount: counts.waiting,
+          terminalMemoryMB: hasMeasured ? Math.round(measured!.memoryKb / 1024) : undefined,
+          topProcess: top
+            ? { name: top.comm, memoryMB: Math.round(top.memoryKb / 1024) }
+            : undefined,
         };
       }
     }

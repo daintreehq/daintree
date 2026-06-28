@@ -226,6 +226,10 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       );
       return true;
 
+    case "memory-rollup":
+      broker.resolve(event.requestId, event.rollup);
+      return true;
+
     case "terminal-diagnostic-info":
       broker.resolve(event.requestId, event.info);
       return true;

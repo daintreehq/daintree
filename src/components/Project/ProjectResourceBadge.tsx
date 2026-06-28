@@ -22,6 +22,8 @@ const MAX_SAMPLES = 12;
 const BADGE_POLL_MS = 10_000;
 const POPOVER_POLL_MS = 4_000;
 const SAMPLES_PER_MIN = 60_000 / BADGE_POLL_MS;
+// Cadence for advancing the "updated Ns ago" freshness label while the popover is open.
+const FRESHNESS_TICK_MS = 1_000;
 
 function formatUptime(seconds: number): string {
   const h = Math.floor(seconds / 3600);
@@ -92,10 +94,46 @@ function HeapBar({ heapStats }: { heapStats: HeapStats }) {
   );
 }
 
+function MemoryRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between text-[10px]">
+      <span className="text-daintree-text/50">{label}</span>
+      <span className="font-mono tabular-nums text-daintree-text/40">{value}</span>
+    </div>
+  );
+}
+
+function MemorySummary({
+  appMemoryMB,
+  workloadMB,
+  systemAvailableMB,
+}: {
+  appMemoryMB: number;
+  workloadMB: number | null;
+  systemAvailableMB: number | null;
+}) {
+  return (
+    <div className="space-y-1">
+      <MemoryRow label="Daintree app" value={formatMemory(appMemoryMB)} />
+      {workloadMB !== null && (
+        <MemoryRow label="Terminal workloads" value={formatMemory(workloadMB)} />
+      )}
+      {systemAvailableMB !== null && (
+        <MemoryRow label="System available" value={formatMemory(systemAvailableMB)} />
+      )}
+      {workloadMB !== null && (
+        <div className="text-[9px] text-daintree-text/25 leading-tight">
+          Workloads = dev servers, agents, and tools your terminals launched
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ProcessTable({ metrics }: { metrics: ProcessMetricEntry[] }) {
   return (
     <div className="space-y-1">
-      <div className="text-[10px] text-daintree-text/50 font-medium">Processes</div>
+      <div className="text-[10px] text-daintree-text/50 font-medium">Daintree processes</div>
       <div className="space-y-px">
         {metrics.map((proc) => (
           <div
@@ -131,18 +169,32 @@ function ProjectBreakdown({
     <div className="space-y-1">
       <div className="text-[10px] text-daintree-text/50 font-medium">Projects</div>
       <div className="space-y-px">
-        {entries.map((entry) => (
-          <div
-            key={entry.id}
-            className="flex items-center justify-between text-[10px] font-mono py-0.5"
-          >
-            <span className="text-daintree-text/60 truncate max-w-[140px]">{entry.name}</span>
-            <div className="flex gap-2 text-daintree-text/40 shrink-0">
-              <span>{entry.stats!.terminalCount} terms</span>
-              <span>{entry.stats!.estimatedMemoryMB}MB</span>
+        {entries.map((entry) => {
+          const s = entry.stats!;
+          // Prefer measured terminal-tree memory; the `~` prefix marks the
+          // terminalCount*50 estimate used when the OS table couldn't be read.
+          const memLabel =
+            s.terminalMemoryMB !== undefined
+              ? formatMemory(s.terminalMemoryMB)
+              : `~${formatMemory(s.estimatedMemoryMB)}`;
+          return (
+            <div
+              key={entry.id}
+              className="flex items-center justify-between text-[10px] font-mono py-0.5 gap-2"
+            >
+              <span className="text-daintree-text/60 truncate min-w-0">
+                {entry.name}
+                {s.topProcess && (
+                  <span className="text-daintree-text/25"> · {s.topProcess.name}</span>
+                )}
+              </span>
+              <div className="flex gap-2 text-daintree-text/40 shrink-0">
+                <span>{s.terminalCount} terms</span>
+                <span className="tabular-nums">{memLabel}</span>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -201,6 +253,8 @@ export function ProjectResourceBadge() {
   const [isLoading, setIsLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [popoverData, setPopoverData] = useState<PopoverData | null>(null);
+  const [popoverSampledAt, setPopoverSampledAt] = useState<number | null>(null);
+  const [nowTs, setNowTs] = useState(() => Date.now());
   const [thresholds, setThresholds] = useState<MemoryThresholds>(FALLBACK_THRESHOLDS);
   const samplesRef = useRef<number[]>([]);
   // Mirror into state so JSX doesn't read the ref during render (React Compiler).
@@ -209,6 +263,27 @@ export function ProjectResourceBadge() {
   const memoryState = getMemoryState(stats.totalMemoryMB, thresholds);
   const trend = getTrendDirection(samples, SAMPLES_PER_MIN);
   const projectIdsKey = useMemo(() => stats.projects.map((p) => p.id).join(","), [stats.projects]);
+
+  // Sum measured terminal-tree memory across projects for the popover summary.
+  // Null when no project reported a measurement (OS table unreadable) so the
+  // row hides rather than implying a real 0.
+  const workloadMB = useMemo(() => {
+    if (!popoverData) return null;
+    let sum = 0;
+    let measured = false;
+    for (const entry of Object.values(popoverData.projectStats)) {
+      if (typeof entry.terminalMemoryMB === "number") {
+        sum += entry.terminalMemoryMB;
+        measured = true;
+      }
+    }
+    return measured ? sum : null;
+  }, [popoverData]);
+  const systemAvailableMB = popoverData?.diagnosticsInfo.systemAvailableMB ?? null;
+  const ageSec =
+    popoverSampledAt !== null ? Math.max(0, Math.round((nowTs - popoverSampledAt) / 1000)) : null;
+  const ageLabel =
+    ageSec === null ? null : ageSec < 2 ? "Updated just now" : `Updated ${ageSec}s ago`;
 
   const fetchStats = useCallback(async () => {
     try {
@@ -346,6 +421,7 @@ export function ProjectResourceBadge() {
 
         if (!cancelled) {
           setPopoverData({ processMetrics, heapStats, diagnosticsInfo, projectStats });
+          setPopoverSampledAt(Date.now());
         }
       } catch (error) {
         logError("[ProjectResourceBadge] Failed to fetch popover data", error);
@@ -360,6 +436,15 @@ export function ProjectResourceBadge() {
       clearInterval(interval);
     };
   }, [open, projectIdsKey]);
+
+  // Tick a 1s clock while the popover is open so the "updated Ns ago" label
+  // advances and a stalled metric path reveals itself instead of looking fresh.
+  useEffect(() => {
+    if (!open) return;
+    setNowTs(Date.now());
+    const tick = setInterval(() => setNowTs(Date.now()), FRESHNESS_TICK_MS);
+    return () => clearInterval(tick);
+  }, [open]);
 
   if (isLoading || stats.runningProjects === 0) {
     return null;
@@ -390,22 +475,25 @@ export function ProjectResourceBadge() {
         <div className="space-y-3">
           {popoverData ? (
             <>
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-daintree-text/50 font-medium">
-                  Daintree memory
-                </span>
-                <span className="text-[10px] font-mono tabular-nums text-daintree-text/40">
-                  {formatMemory(stats.totalMemoryMB)}
-                </span>
-              </div>
+              <MemorySummary
+                appMemoryMB={stats.totalMemoryMB}
+                workloadMB={workloadMB}
+                systemAvailableMB={systemAvailableMB}
+              />
+              <ProjectBreakdown projects={stats.projects} projectStats={popoverData.projectStats} />
               <ProcessTable metrics={popoverData.processMetrics} />
               <HeapBar heapStats={popoverData.heapStats} />
-              <ProjectBreakdown projects={stats.projects} projectStats={popoverData.projectStats} />
               <DiagnosticsSection
                 diagnosticsInfo={popoverData.diagnosticsInfo}
                 trend={trend}
                 trendSamples={samples}
               />
+              <div className="pt-1 border-t border-divider space-y-0.5">
+                {ageLabel && <div className="text-[9px] text-daintree-text/30">{ageLabel}</div>}
+                <div className="text-[9px] text-daintree-text/25 leading-tight">
+                  Figures sum working-set memory and count shared pages once per process
+                </div>
+              </div>
             </>
           ) : (
             <Skeleton label="Loading resource details" className="space-y-3">

@@ -192,6 +192,39 @@ function ensureEventLoopHistogram(): IntervalHistogram {
   return eventLoopHistogram;
 }
 
+/**
+ * Snapshot total + available physical memory for the diagnostics popover.
+ * `systemTotalMB` comes from os.totalmem() (always available). `systemAvailableMB`
+ * = free (+ purgeable on macOS) per process.getSystemMemoryInfo(), mirroring
+ * ProcessMemoryMonitor.readAvailableMemoryMb so the two stay in sync; it is
+ * omitted when that Chromium API is unavailable (e.g. test mocks), so the
+ * renderer hides the row rather than showing 0.
+ */
+function readSystemMemoryMB(): { systemTotalMB?: number; systemAvailableMB?: number } {
+  try {
+    const out: { systemTotalMB?: number; systemAvailableMB?: number } = {};
+    const totalBytes = os.totalmem();
+    if (Number.isFinite(totalBytes) && totalBytes > 0) {
+      out.systemTotalMB = Math.round(totalBytes / 1024 / 1024);
+    }
+    const getInfo = (
+      process as {
+        getSystemMemoryInfo?: () => { free: number; purgeable?: number; total: number };
+      }
+    ).getSystemMemoryInfo;
+    if (typeof getInfo === "function") {
+      const info = getInfo.call(process);
+      const freeKb = typeof info.free === "number" ? info.free : 0;
+      const purgeableKb = typeof info.purgeable === "number" ? info.purgeable : 0;
+      const availableKb = freeKb + purgeableKb;
+      if (availableKb > 0) out.systemAvailableMB = Math.round(availableKb / 1024);
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
@@ -259,6 +292,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
       return {
         uptimeSeconds: Math.floor(process.uptime()),
         eventLoopP99Ms: Math.round(histogram.percentile(99) / 1_000_000),
+        ...readSystemMemoryMB(),
       };
     } catch {
       return { uptimeSeconds: 0, eventLoopP99Ms: 0 };

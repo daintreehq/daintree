@@ -556,6 +556,92 @@ export class ProcessTreeCache {
     };
   }
 
+  /**
+   * Aggregate resident memory across a set of labeled process subtrees.
+   *
+   * Each root contributes its own RSS plus that of every descendant. PIDs are
+   * deduplicated within a key (so nested or overlapping subtrees sharing a
+   * project aren't summed twice) and globally (so the grand total never
+   * double-counts a process reachable from two roots). RSS still counts
+   * shared/copy-on-write pages, so these sums are a generous pressure
+   * heuristic, not a unique-footprint measurement.
+   */
+  aggregateSubtreeMemory(
+    roots: Array<{ key: string; rootPid: number }>,
+    topPerKey: number = 5
+  ): {
+    byKey: Record<
+      string,
+      {
+        memoryKb: number;
+        processCount: number;
+        topProcesses: Array<{ pid: number; comm: string; cpuPercent: number; memoryKb: number }>;
+      }
+    >;
+    totalMemoryKb: number;
+    totalProcessCount: number;
+  } {
+    type Bucket = {
+      memoryKb: number;
+      processCount: number;
+      seen: Set<number>;
+      procs: ProcessInfo[];
+    };
+    const buckets = new Map<string, Bucket>();
+    const globalSeen = new Set<number>();
+    let totalMemoryKb = 0;
+    let totalProcessCount = 0;
+
+    for (const { key, rootPid } of roots) {
+      let bucket = buckets.get(key);
+      if (!bucket) {
+        bucket = { memoryKb: 0, processCount: 0, seen: new Set(), procs: [] };
+        buckets.set(key, bucket);
+      }
+      const pids = [rootPid, ...this.getDescendantPids(rootPid)];
+      for (const pid of pids) {
+        const proc = this.cache.get(pid);
+        if (!proc) continue;
+        if (!bucket.seen.has(pid)) {
+          bucket.seen.add(pid);
+          bucket.memoryKb += proc.rssKb;
+          bucket.processCount += 1;
+          bucket.procs.push(proc);
+        }
+        if (!globalSeen.has(pid)) {
+          globalSeen.add(pid);
+          totalMemoryKb += proc.rssKb;
+          totalProcessCount += 1;
+        }
+      }
+    }
+
+    const byKey: Record<
+      string,
+      {
+        memoryKb: number;
+        processCount: number;
+        topProcesses: Array<{ pid: number; comm: string; cpuPercent: number; memoryKb: number }>;
+      }
+    > = {};
+    for (const [key, bucket] of buckets) {
+      // Expose only comm (the process basename), never `command` — the full
+      // command line can carry paths, tokens, and branch names.
+      const topProcesses = [...bucket.procs]
+        .sort((a, b) => b.rssKb - a.rssKb)
+        .slice(0, topPerKey)
+        .map((p) => ({
+          pid: p.pid,
+          comm: p.comm,
+          cpuPercent: p.cpuPercent,
+          memoryKb: p.rssKb,
+        }));
+      byKey[key] = { memoryKb: bucket.memoryKb, processCount: bucket.processCount, topProcesses };
+    }
+
+    return { byKey, totalMemoryKb, totalProcessCount };
+  }
+
   getLastRefreshTime(): number {
     return this.lastRefreshTime;
   }

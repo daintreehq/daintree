@@ -113,6 +113,14 @@ function makePtyClient(overrides: Record<string, unknown> = {}) {
     getAllTerminalsAsync: vi.fn().mockResolvedValue([]),
     getTerminalsForProjectAsync: vi.fn().mockResolvedValue([]),
     getTerminalAsync: vi.fn().mockResolvedValue(null),
+    getMemoryRollup: vi.fn().mockResolvedValue({
+      byProject: [],
+      totalMemoryKb: 0,
+      totalProcessCount: 0,
+      terminalCount: 0,
+      available: false,
+      sampledAt: 0,
+    }),
     ...overrides,
   };
 }
@@ -537,6 +545,124 @@ describe("handleProjectGetBulkStats", () => {
     await expect(handler(fakeEvent, ["proj-a"])).rejects.toThrow("Rate limit exceeded");
     expect(ptyClient.getAllTerminalsAsync).not.toHaveBeenCalled();
     expect(ptyClient.getProjectStats).not.toHaveBeenCalled();
+  });
+
+  it("populates measured terminalMemoryMB and topProcess from the memory rollup", async () => {
+    const ptyClient = makePtyClient({
+      getProjectStats: vi.fn().mockResolvedValue({
+        terminalCount: 2,
+        terminalTypes: { agent: 2 },
+        processIds: [100, 200],
+      }),
+      getMemoryRollup: vi.fn().mockResolvedValue({
+        available: true,
+        totalMemoryKb: 1_572_864,
+        totalProcessCount: 3,
+        terminalCount: 2,
+        sampledAt: 1,
+        byProject: [
+          {
+            projectId: "proj-a",
+            terminalCount: 2,
+            processCount: 3,
+            memoryKb: 1_572_864, // 1536 MB
+            topProcesses: [{ pid: 101, comm: "node", cpuPercent: 12, memoryKb: 931_840 }], // 910 MB
+          },
+        ],
+      }),
+    });
+    registerProjectCrudHandlers(makeDeps(ptyClient));
+    const handler = getBulkStatsHandler();
+
+    const result = (await handler(fakeEvent, ["proj-a"])) as Record<
+      string,
+      {
+        terminalMemoryMB?: number;
+        topProcess?: { name: string; memoryMB: number };
+        estimatedMemoryMB: number;
+      }
+    >;
+
+    expect(result["proj-a"].terminalMemoryMB).toBe(1536);
+    expect(result["proj-a"].topProcess).toEqual({ name: "node", memoryMB: 910 });
+    // The synthetic estimate stays as a fallback alongside the measurement.
+    expect(result["proj-a"].estimatedMemoryMB).toBe(100);
+  });
+
+  it("does not request the memory rollup for empty input", async () => {
+    const ptyClient = makePtyClient();
+    registerProjectCrudHandlers(makeDeps(ptyClient));
+    const handler = getBulkStatsHandler();
+
+    await handler(fakeEvent, []);
+
+    expect(ptyClient.getMemoryRollup).not.toHaveBeenCalled();
+  });
+
+  it("leaves terminalMemoryMB undefined when the measured project has zero processes", async () => {
+    const ptyClient = makePtyClient({
+      getProjectStats: vi.fn().mockResolvedValue({
+        terminalCount: 1,
+        terminalTypes: { agent: 1 },
+        processIds: [100],
+      }),
+      getMemoryRollup: vi.fn().mockResolvedValue({
+        available: true,
+        byProject: [
+          // Terminal exists but its shell pid isn't in the process table yet.
+          { projectId: "proj-a", terminalCount: 1, processCount: 0, memoryKb: 0, topProcesses: [] },
+        ],
+        totalMemoryKb: 0,
+        totalProcessCount: 0,
+        terminalCount: 1,
+        sampledAt: 1,
+      }),
+    });
+    registerProjectCrudHandlers(makeDeps(ptyClient));
+    const handler = getBulkStatsHandler();
+
+    const result = (await handler(fakeEvent, ["proj-a"])) as Record<
+      string,
+      { terminalMemoryMB?: number; topProcess?: unknown }
+    >;
+
+    expect(result["proj-a"].terminalMemoryMB).toBeUndefined();
+    expect(result["proj-a"].topProcess).toBeUndefined();
+  });
+
+  it("leaves terminalMemoryMB undefined when the rollup is unavailable", async () => {
+    const ptyClient = makePtyClient({
+      getProjectStats: vi.fn().mockResolvedValue({
+        terminalCount: 1,
+        terminalTypes: { agent: 1 },
+        processIds: [100],
+      }),
+      getMemoryRollup: vi.fn().mockResolvedValue({
+        available: false,
+        byProject: [
+          {
+            projectId: "proj-a",
+            terminalCount: 1,
+            processCount: 1,
+            memoryKb: 999_999,
+            topProcesses: [],
+          },
+        ],
+        totalMemoryKb: 0,
+        totalProcessCount: 0,
+        terminalCount: 0,
+        sampledAt: 0,
+      }),
+    });
+    registerProjectCrudHandlers(makeDeps(ptyClient));
+    const handler = getBulkStatsHandler();
+
+    const result = (await handler(fakeEvent, ["proj-a"])) as Record<
+      string,
+      { terminalMemoryMB?: number }
+    >;
+
+    expect(result["proj-a"].terminalMemoryMB).toBeUndefined();
   });
 
   it("skips terminals without a projectId", async () => {

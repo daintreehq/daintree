@@ -68,6 +68,16 @@ export interface ProjectStats {
 export interface BulkProjectStatsEntry extends ProjectStats {
   activeAgentCount: number;
   waitingAgentCount: number;
+  /**
+   * Measured resident memory (MB) of this project's terminal process trees —
+   * each shell plus every descendant (dev servers, agents, language servers),
+   * deduplicated by PID. Undefined when the OS process table couldn't be read;
+   * consumers fall back to {@link ProjectStats.estimatedMemoryMB}. Sums RSS, so
+   * it counts shared pages — a pressure heuristic, not unique footprint.
+   */
+  terminalMemoryMB?: number;
+  /** Highest-memory process across this project's terminals (basename only). */
+  topProcess?: { name: string; memoryMB: number };
 }
 
 /** Bulk project stats response keyed by project ID */

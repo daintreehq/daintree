@@ -67,6 +67,7 @@ import type {
   CrashType,
   SpawnResult,
   FlowControlSnapshot,
+  MemoryRollup,
 } from "../../shared/types/pty-host.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
@@ -1019,6 +1020,26 @@ export class PtyClient extends EventEmitter {
     }>(requestId);
     this.send({ type: "get-project-stats", projectId, requestId });
     return promise.catch(() => ({ terminalCount: 0, processIds: [], terminalTypes: {} }));
+  }
+
+  /**
+   * On-demand rollup of resident memory across every live terminal's process
+   * subtree, grouped by project. Reads the warm ProcessTreeCache in the host —
+   * no extra OS sweep. Resolves to an unavailable rollup on IPC failure/timeout
+   * so callers never throw.
+   */
+  async getMemoryRollup(): Promise<MemoryRollup> {
+    const requestId = this.broker.generateId("memory-rollup");
+    const promise = this.broker.register<MemoryRollup>(requestId);
+    this.send({ type: "get-memory-rollup", requestId });
+    return promise.catch(() => ({
+      byProject: [],
+      totalMemoryKb: 0,
+      totalProcessCount: 0,
+      terminalCount: 0,
+      available: false,
+      sampledAt: Date.now(),
+    }));
   }
 
   /**
