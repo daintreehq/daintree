@@ -42,6 +42,10 @@ import {
   SHORTCUT_HINTS_METHOD_CHANNELS,
   buildShortcutHintsPreloadBindings,
 } from "../handlers/shortcutHints.preload.js";
+import {
+  FORGE_RECOMMENDATION_METHOD_CHANNELS,
+  buildForgeRecommendationPreloadBindings,
+} from "../handlers/forgeRecommendation.preload.js";
 import { CLI_METHOD_CHANNELS, buildCliPreloadBindings } from "../handlers/cli.preload.js";
 import { GEMINI_METHOD_CHANNELS, buildGeminiPreloadBindings } from "../handlers/gemini.preload.js";
 import {
@@ -136,7 +140,6 @@ describe("leaf preload namespace bindings", () => {
       expect(PLUGIN_METHOD_CHANNELS.list).toBe(CHANNELS.PLUGIN_LIST);
       expect(PLUGIN_METHOD_CHANNELS.setEnabled).toBe(CHANNELS.PLUGIN_SET_ENABLED);
       expect(PLUGIN_METHOD_CHANNELS.toolbarButtons).toBe(CHANNELS.PLUGIN_TOOLBAR_BUTTONS);
-      expect(PLUGIN_METHOD_CHANNELS.menuItems).toBe(CHANNELS.PLUGIN_MENU_ITEMS);
       expect(PLUGIN_METHOD_CHANNELS.validateActionIds).toBe(CHANNELS.PLUGIN_VALIDATE_ACTION_IDS);
       expect(PLUGIN_METHOD_CHANNELS.getActions).toBe(CHANNELS.PLUGIN_ACTIONS_GET);
       expect(PLUGIN_METHOD_CHANNELS.registerAction).toBe(CHANNELS.PLUGIN_ACTIONS_REGISTER);
@@ -176,6 +179,21 @@ describe("leaf preload namespace bindings", () => {
       expect(SHORTCUT_HINTS_METHOD_CHANNELS.getCounts).toBe(CHANNELS.SHORTCUT_HINTS_GET_COUNTS);
       expect(SHORTCUT_HINTS_METHOD_CHANNELS.incrementCount).toBe(
         CHANNELS.SHORTCUT_HINTS_INCREMENT_COUNT
+      );
+      expect(SHORTCUT_HINTS_METHOD_CHANNELS.getHintedHover).toBe(
+        CHANNELS.SHORTCUT_HINTS_GET_HINTED_HOVER
+      );
+      expect(SHORTCUT_HINTS_METHOD_CHANNELS.setHintedHover).toBe(
+        CHANNELS.SHORTCUT_HINTS_SET_HINTED_HOVER
+      );
+    });
+
+    it("forgeRecommendation matches", () => {
+      expect(FORGE_RECOMMENDATION_METHOD_CHANNELS.getDismissed).toBe(
+        CHANNELS.FORGE_RECOMMENDATION_GET_DISMISSED
+      );
+      expect(FORGE_RECOMMENDATION_METHOD_CHANNELS.markDismissed).toBe(
+        CHANNELS.FORGE_RECOMMENDATION_MARK_DISMISSED
       );
     });
 
@@ -585,6 +603,48 @@ describe("leaf preload namespace bindings", () => {
 
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("shortcut-hints:increment-count", "act-1");
+    });
+
+    it("routes getHintedHover() to shortcut-hints:get-hinted-hover with no args", async () => {
+      const invoke = vi.fn().mockResolvedValue([]);
+      const bindings = buildShortcutHintsPreloadBindings(invoke);
+
+      await bindings.getHintedHover();
+
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke).toHaveBeenCalledWith("shortcut-hints:get-hinted-hover");
+    });
+
+    it("routes setHintedHover(keys) to shortcut-hints:set-hinted-hover with the keys forwarded", async () => {
+      const invoke = vi.fn().mockResolvedValue(undefined);
+      const bindings = buildShortcutHintsPreloadBindings(invoke);
+
+      await bindings.setHintedHover(["act-1@1"]);
+
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke).toHaveBeenCalledWith("shortcut-hints:set-hinted-hover", ["act-1@1"]);
+    });
+  });
+
+  describe("forgeRecommendation", () => {
+    it("routes getDismissed() to forge-recommendation:get-dismissed with no args", async () => {
+      const invoke = vi.fn().mockResolvedValue({});
+      const bindings = buildForgeRecommendationPreloadBindings(invoke);
+
+      await bindings.getDismissed();
+
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke).toHaveBeenCalledWith("forge-recommendation:get-dismissed");
+    });
+
+    it("routes markDismissed(path) to forge-recommendation:mark-dismissed with the path forwarded", async () => {
+      const invoke = vi.fn().mockResolvedValue(undefined);
+      const bindings = buildForgeRecommendationPreloadBindings(invoke);
+
+      await bindings.markDismissed("/tmp/project");
+
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke).toHaveBeenCalledWith("forge-recommendation:mark-dismissed", "/tmp/project");
     });
   });
 

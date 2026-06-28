@@ -1,18 +1,23 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { TerminalSummarySchema, TerminalStatusEntrySchema } from "./schemas";
-import { stripAnsiCodes } from "@shared/utils/artifactParser";
+import { tailCapturedOutput } from "@shared/utils/artifactParser";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalClient } from "@/clients";
+import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import type { AgentState, WaitingReason } from "@shared/types/agent";
+import type { TerminalCheckResult } from "@shared/types/checkResult";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS,
+  MAX_WAIT_UNTIL_IDLE_BATCH_TERMINALS,
   WAIT_UNTIL_IDLE_DESCRIPTION,
   WAIT_UNTIL_IDLE_OUTPUT_SCHEMA,
+  WAIT_UNTIL_IDLE_BATCH_DESCRIPTION,
+  WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA,
 } from "@shared/types/terminalWaitUntilIdle";
 export function registerTerminalQueryActions(
   actions: ActionRegistry,
@@ -34,6 +39,7 @@ export function registerTerminalQueryActions(
       })
       .optional(),
     resultSchema: z.object({ terminals: z.array(TerminalSummarySchema) }),
+    mcpOutputSchema: true,
     run: async (args: unknown) => {
       const { worktreeId, location } = (args ?? {}) as {
         worktreeId?: string;
@@ -125,6 +131,7 @@ export function registerTerminalQueryActions(
       truncated: z.boolean(),
       error: z.string().optional(),
     }),
+    mcpOutputSchema: true,
     run: async (args: unknown) => {
       const {
         terminalId,
@@ -152,22 +159,20 @@ export function registerTerminalQueryActions(
         };
       }
 
-      // Split into lines and extract last N
-      const allLines = serializedState.split("\n");
-      const totalLines = allLines.length;
-      const truncated = totalLines > effectiveMaxLines;
-      const selectedLines = allLines.slice(-effectiveMaxLines);
-
-      // Optionally strip ANSI codes
-      let content = selectedLines.join("\n");
-      if (stripAnsi) {
-        content = stripAnsiCodes(content);
-      }
+      // Collapse blank padding BEFORE tailing so the last N lines are real
+      // content, not the blank region bottom-padding TUIs (e.g. Codex) leave
+      // below their composer (#10763). truncated/lineCount track normalized
+      // content, so trailing padding never reads as "output omitted".
+      const { content, lineCount, truncated } = tailCapturedOutput(
+        serializedState,
+        effectiveMaxLines,
+        stripAnsi
+      );
 
       return {
         terminalId,
         content,
-        lineCount: selectedLines.length,
+        lineCount,
         truncated,
       };
     },
@@ -177,7 +182,7 @@ export function registerTerminalQueryActions(
     id: "terminal.getStatus",
     title: "Get Terminal Status",
     description:
-      "Poll agent/terminal state across many terminals in one call. Args (all optional): `terminalIds` (1-256 explicit ids from `terminal.list`; when set, worktreeId/location are ignored and unknown ids return a per-entry `error`); `worktreeId`/`location` filters; `includeOutput:{ lines, stripAnsi }` to also return recent scrollback tails. Returns { terminals } — each with terminalId, agentId, agentState, waitingReason, lastTransitionAt, optional recentOutput, optional per-entry error. Never throws. Do NOT use `terminal.getOutput` for fleet polling, or `terminal.list` for agent state — this is the batched path.",
+      "Poll agent/terminal state across many terminals in one call. Args (all optional): `terminalIds` (1-256 ids from `terminal.list`; when set, worktreeId/location are ignored and unknown ids return a per-entry `error`); `worktreeId`/`location` filters; `includeOutput:{ lines, stripAnsi }` for recent scrollback tails. Returns { terminals } — each with terminalId, agentId, agentState, waitingReason, lastTransitionAt, exitCode (number|null — set once the PTY exits), spawnedAt, optional lastCheckResult, optional recentOutput, `armed` (in the fleet broadcast set; set via `terminal.arm`/`terminal.disarm`), optional per-entry error. `lastCheckResult` is a PARSED test/lint/build signal { command, passed, ranAt, failureSummary, truncated } from tsc/ESLint/Vitest/Jest output — best-effort, NOT an exit code; absence means no recognized summary, so read `ranAt` for freshness. Never throws. Do NOT use `terminal.getOutput` for fleet polling or `terminal.list` for agent state — this is the batched path.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -225,6 +230,7 @@ export function registerTerminalQueryActions(
       })
       .optional(),
     resultSchema: z.object({ terminals: z.array(TerminalStatusEntrySchema) }),
+    mcpOutputSchema: true,
     run: async (args: unknown) => {
       const { terminalIds, worktreeId, location, includeOutput } = (args ?? {}) as {
         terminalIds?: string[];
@@ -235,6 +241,8 @@ export function registerTerminalQueryActions(
 
       const state = usePanelStore.getState();
       const panelsById = state.panelsById;
+      // Fresh point-in-time snapshot of the fleet arming set for this call.
+      const armedIds = useFleetArmingStore.getState().armedIds;
 
       type StatusEntry = {
         terminalId: string;
@@ -242,7 +250,11 @@ export function registerTerminalQueryActions(
         agentState: AgentState | null;
         waitingReason?: WaitingReason;
         lastTransitionAt?: number;
+        exitCode?: number | null;
+        spawnedAt?: number;
+        lastCheckResult?: TerminalCheckResult;
         recentOutput?: string | null;
+        armed?: boolean;
         error?: string;
       };
 
@@ -324,6 +336,15 @@ export function registerTerminalQueryActions(
             : null,
           agentState: isPtyPanel(terminal) ? (terminal.agentState ?? null) : null,
           lastTransitionAt: isPtyPanel(terminal) ? terminal.lastStateChange : undefined,
+          // exitCode is set on the panel once the PTY exits (undefined while
+          // running); spawnedAt comes from the panel's creation timestamp.
+          exitCode: isPtyPanel(terminal) ? (terminal.exitCode ?? null) : undefined,
+          spawnedAt: isPtyPanel(terminal) ? terminal.startedAt : undefined,
+          // Parsed test/lint/check result (issue #10682). Best-effort, not
+          // authoritative — see TerminalCheckResult / the schema doc above.
+          lastCheckResult: isPtyPanel(terminal) ? terminal.lastCheckResult : undefined,
+          // Whether this terminal is in the fleet arming/broadcast set (#10695).
+          armed: armedIds.has(terminal.id),
         };
 
         if (
@@ -347,10 +368,14 @@ export function registerTerminalQueryActions(
             if (serialized === null) {
               entry.recentOutput = null;
             } else {
-              const lines = serialized.split("\n").slice(-effectiveLines);
-              let content = lines.join("\n");
-              if (stripAnsi) content = stripAnsiCodes(content);
-              entry.recentOutput = content;
+              // Normalize before tailing (#10763) — see terminal.getOutput.
+              // Without this, a bottom-padding TUI's blank rows fill the small
+              // last-N window and recentOutput reads as empty even when idle.
+              entry.recentOutput = tailCapturedOutput(
+                serialized,
+                effectiveLines,
+                stripAnsi
+              ).content;
             }
           }
         }
@@ -405,17 +430,75 @@ export function registerTerminalQueryActions(
     },
   }));
 
-  actions.set("terminal.sendCommand", () => ({
-    id: "terminal.sendCommand",
-    title: "Send Command to Terminal",
-    description: "Send a shell command to a terminal for execution",
+  // Batched sibling of terminal.waitUntilIdle — same manifest-only pattern,
+  // executed inline in the MCP CallTool handler (main process). `run()` throws if
+  // the renderer ever invokes it directly. See the note above terminal.waitUntilIdle.
+  actions.set("terminal.waitUntilIdleBatch", () => ({
+    id: "terminal.waitUntilIdleBatch",
+    title: "Wait until terminals idle (batch)",
+    description: WAIT_UNTIL_IDLE_BATCH_DESCRIPTION,
     category: "terminal",
-    kind: "command",
+    kind: "query",
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({
+      terminalIds: z
+        .array(z.string().min(1))
+        .min(1)
+        .max(MAX_WAIT_UNTIL_IDLE_BATCH_TERMINALS)
+        .describe("Panel UUIDs returned by `terminal.list` (the `id` field). 1-256 ids."),
+      mode: z
+        .enum(["first", "all"])
+        .optional()
+        .describe(
+          "'first' (default) resolves as soon as ANY terminal leaves working; 'all' resolves only once EVERY terminal is non-working."
+        ),
+      timeoutMs: z
+        .number()
+        .int()
+        .min(0)
+        .max(MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS)
+        .optional()
+        .describe(
+          "Pass 0 for an immediate non-blocking snapshot. Otherwise the maximum time to long-poll in milliseconds; defaults to 60s. Interactive sessions are capped at 60s server-side; headless sessions may block up to 2 hours."
+        ),
+    }),
+    rawOutputSchema: WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA,
+    mcpAnnotations: {
+      readOnlyHint: true,
+      idempotentHint: false,
+      destructiveHint: false,
+    },
+    run: async () => {
+      throw new Error(
+        "terminal.waitUntilIdleBatch must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
+  }));
+
+  actions.set("terminal.sendCommand", () => ({
+    id: "terminal.sendCommand",
+    title: "Submit text to terminal",
+    description:
+      "Submit text to a terminal. For a plain shell terminal it runs as a command; for an agent pane (Claude/Codex/Gemini/…) it is submitted as the agent's next prompt/turn. Multi-line text is safe: the body is delivered atomically — a single bracketed paste where the agent supports it, otherwise with interior newlines rewritten to the agent's soft-newline — then submitted with a single trailing Enter, so embedded newlines insert line breaks and never prematurely submit a partial message. Extra trailing newlines each send an additional Enter. Fire-and-return — it does not wait for the agent to respond; poll `terminal.getStatus`/`terminal.waitUntilIdle` for the result. Args: `terminalId` (from `terminal.list`), `command` (the text to submit).",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    // Reachable by user and agent (MCP) dispatch, but NOT by plugin
+    // host.dispatch — sending text into an agent terminal is exactly the
+    // injection the capability model gates. Plugins must declare `agent:input`
+    // and use `host.sendToActiveAgent(...)` instead of routing around the
+    // capability through this ungated `safe` action (#10558).
+    denyPluginDispatch: true,
+    scope: "renderer",
+    argsSchema: z.object({
       terminalId: z.string().min(1).describe("Terminal instance ID from terminal.list"),
-      command: z.string().min(1).describe("The command to execute"),
+      command: z
+        .string()
+        .min(1)
+        .describe(
+          "Text to submit. Runs as a shell command in a plain terminal, or is submitted as the next prompt/turn in an agent pane. Multi-line is delivered atomically and submitted with a single Enter, so interior newlines never prematurely submit."
+        ),
     }),
     run: async (args: unknown) => {
       const { terminalId, command } = args as { terminalId: string; command: string };

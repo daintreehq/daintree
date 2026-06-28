@@ -9,6 +9,7 @@ const crashServiceMock = vi.hoisted(() => ({
   restoreBackup: vi.fn(() => false),
   setPanelFilter: vi.fn(),
   resetToFresh: vi.fn(),
+  clearPendingCrash: vi.fn(),
   getPendingCrash: vi.fn(),
   getConfig: vi.fn(() => ({ autoRestoreOnCrash: false })),
   setConfig: vi.fn(),
@@ -91,6 +92,10 @@ describe("registerCrashRecoveryHandlers", () => {
         expect(crashServiceMock.restoreBackup).toHaveBeenCalledWith(["p1", "p2"]);
         expect(crashServiceMock.setPanelFilter).toHaveBeenCalledWith(["p1", "p2"]);
         expect(crashServiceMock.resetToFresh).not.toHaveBeenCalled();
+        // Clears the in-memory pending-crash record so a cold-rebooted
+        // WebContentsView on project switch-back does not re-present the
+        // dialog (#10809).
+        expect(crashServiceMock.clearPendingCrash).toHaveBeenCalledTimes(1);
       });
 
       it("rejects with 'Crash recovery restore failed' when restoreBackup returns false", async () => {
@@ -124,6 +129,20 @@ describe("registerCrashRecoveryHandlers", () => {
 
         expect(crashServiceMock.setPanelFilter).not.toHaveBeenCalled();
       });
+
+      it("does NOT clear the pending crash when restoreBackup returns false", async () => {
+        crashServiceMock.restoreBackup.mockReturnValue(false);
+        registerCrashRecoveryHandlers();
+        const handler = getHandlerFn("crash-recovery:resolve");
+
+        // Recovery has not succeeded, so the record must persist — a later
+        // LRU eviction should re-present the dialog so the user can retry.
+        await expect(
+          Promise.resolve().then(() => handler(FAKE_EVENT, { kind: "restore", panelIds: ["p1"] }))
+        ).rejects.toThrow("Crash recovery restore failed");
+
+        expect(crashServiceMock.clearPendingCrash).not.toHaveBeenCalled();
+      });
     });
 
     describe("fresh action", () => {
@@ -137,6 +156,7 @@ describe("registerCrashRecoveryHandlers", () => {
         expect(crashServiceMock.resetToFresh).toHaveBeenCalledTimes(1);
         expect(crashServiceMock.restoreBackup).not.toHaveBeenCalled();
         expect(crashServiceMock.setPanelFilter).not.toHaveBeenCalled();
+        expect(crashServiceMock.clearPendingCrash).toHaveBeenCalledTimes(1);
       });
     });
   });

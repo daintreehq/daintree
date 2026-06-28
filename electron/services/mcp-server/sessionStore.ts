@@ -1,11 +1,7 @@
 import type { ActionContext } from "../../../shared/types/actions.js";
 import type { McpActiveClientInfo } from "../../../shared/types/ipc/mcpServer.js";
-import type { McpTier, McpSseSession, McpHttpSession, RateLimitConfig } from "./shared.js";
-import {
-  MCP_SSE_IDLE_TIMEOUT_MS,
-  MCP_TIER_ELEVATION_TTL_MS,
-  rateLimitConfigForTool,
-} from "./shared.js";
+import type { McpTier, McpSseSession, McpHttpSession } from "./shared.js";
+import { MCP_SSE_IDLE_TIMEOUT_MS, MCP_TIER_ELEVATION_TTL_MS } from "./shared.js";
 import type { DedupCacheEntry, DedupInFlightEntry } from "./sessionDedup.js";
 import { GrantCache, type GrantLifecycleEmitter } from "./grantCache.js";
 import { getSystemSleepService } from "../SystemSleepService.js";
@@ -54,45 +50,6 @@ export interface SessionStoreOptions {
   onTierDecayed?: (sessionId: string, previousTier: McpTier, newTier: McpTier) => void;
 }
 
-/**
- * Mutable token-bucket state for one `(sessionId, toolId)` pair. `tokens`
- * is the current fractional balance; `lastRefillMs` is the wall-clock of
- * the most recent refill so the next call can recompute lazily.
- */
-export interface RateLimitBucket {
-  tokens: number;
-  lastRefillMs: number;
-}
-
-export type ConsumeTokenResult = { allowed: true } | { allowed: false; retryAfter: number };
-
-/**
- * Pure token-bucket step. Refills `bucket` for the time elapsed since its
- * last refill (capped at `config.capacity`), then attempts to consume one
- * token. Mutates `bucket` in place and returns whether the call is allowed;
- * on rejection `retryAfter` is the whole-seconds wait until one token has
- * accrued (always `>= 1`). Exported for direct unit coverage independent
- * of the session-store wiring.
- */
-export function consumeToken(
-  bucket: RateLimitBucket,
-  config: RateLimitConfig,
-  nowMs: number
-): ConsumeTokenResult {
-  const elapsed = Math.max(0, nowMs - bucket.lastRefillMs);
-  bucket.tokens = Math.min(config.capacity, bucket.tokens + elapsed * config.refillPerMs);
-  // Never move the refill anchor backward: a backward `Date.now()` (NTP
-  // step-back, which Electron can see on macOS) would otherwise let the
-  // next call accrue refill it didn't earn.
-  bucket.lastRefillMs = Math.max(bucket.lastRefillMs, nowMs);
-  if (bucket.tokens >= 1) {
-    bucket.tokens -= 1;
-    return { allowed: true };
-  }
-  const retryAfter = Math.max(1, Math.ceil((1 - bucket.tokens) / config.refillPerMs / 1000));
-  return { allowed: false, retryAfter };
-}
-
 export class SessionStore {
   readonly sessions = new Map<string, McpSseSession>();
   readonly httpSessions = new Map<string, McpHttpSession>();
@@ -126,11 +83,6 @@ export class SessionStore {
   // return the original result). Cleared on drain and idle expiry.
   readonly dedupInFlight = new Map<string, Map<string, DedupInFlightEntry>>();
   readonly dedupResultCache = new Map<string, Map<string, DedupCacheEntry>>();
-  // Per-`(sessionId, toolId)` token buckets for the runaway-loop rate
-  // limiter (#8468). Lazily populated on first call to a tool and torn
-  // down in lockstep with the other session-scoped maps on drain, idle
-  // expiry, and explicit revoke.
-  readonly rateLimitBuckets = new Map<string, Map<string, RateLimitBucket>>();
   /**
    * Per-`(sessionId, toolId)` time-bounded grants — replaces the sticky
    * `sessionTierMap` elevation pathway for the "Approve once" flow (#8442).
@@ -255,35 +207,6 @@ export class SessionStore {
   }
 
   /**
-   * Charge one token against the `(sessionId, toolId)` bucket, creating a
-   * full bucket on first use. The tier is resolved from
-   * `rateLimitConfigForTool` so an unmapped tool falls back to `standard`.
-   * Thin wrapper around the pure {@link consumeToken} step.
-   */
-  consumeRateLimitToken(
-    sessionId: string,
-    toolId: string,
-    nowMs: number = Date.now()
-  ): ConsumeTokenResult {
-    const config = rateLimitConfigForTool(toolId);
-    let byTool = this.rateLimitBuckets.get(sessionId);
-    if (!byTool) {
-      byTool = new Map<string, RateLimitBucket>();
-      this.rateLimitBuckets.set(sessionId, byTool);
-    }
-    let bucket = byTool.get(toolId);
-    if (!bucket) {
-      bucket = { tokens: config.capacity, lastRefillMs: nowMs };
-      byTool.set(toolId, bucket);
-    }
-    return consumeToken(bucket, config, nowMs);
-  }
-
-  clearRateLimitState(sessionId: string): void {
-    this.rateLimitBuckets.delete(sessionId);
-  }
-
-  /**
    * Assign the next sequential figure number for a help session and advance
    * the counter (#9828). First call for a session returns 1. Keyed by the
    * public help-session id so the sequence is stable across transport
@@ -325,7 +248,6 @@ export class SessionStore {
     this.clearFigureCounter(sessionId);
     this.sessionHelpIdMap.delete(sessionId);
     this.clearDedupState(sessionId);
-    this.clearRateLimitState(sessionId);
     this.clearClientMetadata(sessionId);
     this.idleStartedAt.delete(sessionId);
     this.clearElevationTimer(sessionId);
@@ -383,7 +305,6 @@ export class SessionStore {
     this.clearFigureCounter(sessionId);
     this.sessionHelpIdMap.delete(sessionId);
     this.clearDedupState(sessionId);
-    this.clearRateLimitState(sessionId);
     this.clearClientMetadata(sessionId);
     this.httpIdleStartedAt.delete(sessionId);
     this.clearElevationTimer(sessionId);
@@ -624,7 +545,16 @@ export class SessionStore {
     callerWebContentsId: number
   ): {
     tier: McpTier;
-    activeGrants: Array<{ toolId: string; expiresAt: number; ttlMs: number }>;
+    activeGrants: Array<{
+      toolId: string;
+      expiresAt: number;
+      ttlMs: number;
+      kind?: "per-tool" | "native";
+      grantId?: string;
+      allowedTools?: string[];
+      maxUses?: number;
+      remainingUses?: number;
+    }>;
   } | null {
     if (!helpSessionId) return null;
     for (const [transportSessionId, mappedHelpId] of this.sessionHelpIdMap) {
@@ -650,7 +580,48 @@ export class SessionStore {
         .getActiveGrants(transportSessionId)
         .filter((g) => g.expiresAt > now)
         .map((g) => ({ toolId: g.toolId, expiresAt: g.expiresAt, ttlMs: g.ttlMs }));
-      return { tier: this.getTier(transportSessionId), activeGrants };
+      // Native session-scoped automation grants (#10648) are addressed by the
+      // transport sessionId in the cache; merge them into the same snapshot so
+      // the settings surface shows the full grant lifecycle. Lazy-eviction
+      // semantics match the per-tool grants — drop logically-expired entries.
+      const nativeGrants = this.grantCache.getLiveNativeGrants(transportSessionId).map((g) => ({
+        toolId: "*",
+        expiresAt: g.expiresAt,
+        ttlMs: g.ttlMs,
+        kind: "native" as const,
+        grantId: g.id,
+        allowedTools: [...g.allowedTools],
+        maxUses: g.maxUses,
+        remainingUses: g.remainingUses,
+      }));
+      return {
+        tier: this.getTier(transportSessionId),
+        activeGrants: [...activeGrants, ...nativeGrants],
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Resolve the live transport sessionId backing a public help-session id,
+   * caller-pinned. Mirrors {@link getLiveStatusForHelpSession}'s scan: returns
+   * the transport sessionId only when a live transport exists for the help id
+   * AND it is pinned to `callerWebContentsId`, else null. Used by the native
+   * grant issuance path (#10648) so the renderer can approve a grant addressed
+   * by the public help id it already holds, never a transport id it can't see.
+   */
+  resolveLiveTransportForHelpSession(
+    helpSessionId: string,
+    callerWebContentsId: number
+  ): string | null {
+    if (!helpSessionId) return null;
+    for (const [transportSessionId, mappedHelpId] of this.sessionHelpIdMap) {
+      if (mappedHelpId !== helpSessionId) continue;
+      if (this.sessionWebContentsMap.get(transportSessionId) !== callerWebContentsId) continue;
+      if (!this.sessions.has(transportSessionId) && !this.httpSessions.has(transportSessionId)) {
+        continue;
+      }
+      return transportSessionId;
     }
     return null;
   }
@@ -684,7 +655,6 @@ export class SessionStore {
     this.clearFigureCounter(sessionId);
     this.sessionHelpIdMap.delete(sessionId);
     this.clearDedupState(sessionId);
-    this.clearRateLimitState(sessionId);
     this.clearClientMetadata(sessionId);
     this.clearElevationTimer(sessionId);
     this.dropAbuseStateFn(sessionId);
@@ -699,7 +669,6 @@ export class SessionStore {
     // resurrect a torn-down session's cache.
     this.dedupInFlight.clear();
     this.dedupResultCache.clear();
-    this.rateLimitBuckets.clear();
 
     for (const session of this.sessions.values()) {
       clearTimeout(session.idleTimer);

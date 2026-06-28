@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDndMonitor } from "@dnd-kit/core";
+import type { DraggableSyntheticListeners } from "@dnd-kit/core";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { cn, getBaseTitle } from "@/lib/utils";
 import { useTerminalInputStore, usePanelStore, useFocusStore } from "@/store";
 import type { PtyPanelData } from "@shared/types/panel";
@@ -42,6 +44,21 @@ interface DockedTerminalItemProps {
 }
 
 export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
+  // Forward only the pointer/touch drag listeners SortableDockItem publishes via
+  // DragHandleProvider, so the chip becomes a real drag source (reorder/eject)
+  // instead of just grab-cursor styling. The KeyboardSensor's onKeyDown is
+  // dropped on purpose: the chip is its own preview trigger, and dnd-kit's
+  // Space/Enter handler calls preventDefault() to start a keyboard drag, which
+  // would suppress this native <button>'s activation click — the sole keyboard
+  // path to the chip's primary action. (Grid PanelHeader has no such conflict:
+  // its drag surface is a non-interactive <div>.) Keyboard-driven reordering of
+  // dock chips is intentionally out of scope.
+  const dragHandle = useDragHandle();
+  const dragPointerListeners: DraggableSyntheticListeners = dragHandle?.listeners
+    ? Object.fromEntries(
+        Object.entries(dragHandle.listeners).filter(([name]) => name !== "onKeyDown")
+      )
+    : undefined;
   const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
   const openDockTerminal = usePanelStore((s) => s.openDockTerminal);
   const closeDockTerminal = usePanelStore((s) => s.closeDockTerminal);
@@ -189,16 +206,18 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
       terminal.exitCode,
     ]
   );
-  const brandColor = useMemo(() => {
+  const { color: brandColor, userChosen: brandColorUserChosen } = useMemo(() => {
     const fallbackColor = baseChrome.color;
-    if (!terminal.agentPresetId || !terminal.launchAgentId) return fallbackColor;
+    if (!terminal.agentPresetId || !terminal.launchAgentId)
+      return { color: fallbackColor, userChosen: false };
     const preset = getMergedPresets(
       terminal.launchAgentId,
       presetCustomPresets,
       presetCcrPresets,
       presetProjectPresets
     ).find((f) => f.id === terminal.agentPresetId);
-    return preset?.color ?? terminal.agentPresetColor ?? fallbackColor;
+    const presetColor = preset?.color ?? terminal.agentPresetColor;
+    return { color: presetColor ?? fallbackColor, userChosen: !!presetColor };
   }, [
     terminal.launchAgentId,
     terminal.agentPresetId,
@@ -299,6 +318,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
           <TerminalContextMenu terminalId={terminal.id} forceLocation="dock">
             <PopoverTrigger asChild>
               <button
+                {...dragPointerListeners}
                 data-dock-item=""
                 className={cn(
                   "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px]",
@@ -332,7 +352,12 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                 aria-label={`${terminal.title}${displayAgentState ? ` — agent ${getEffectiveStateLabel(displayAgentState)}` : ""} - Click to preview, double-click to move to grid, drag to reorder`}
               >
                 <div className="flex items-center justify-center shrink-0">
-                  <TerminalIcon kind={terminal.kind} chrome={chrome} className="w-3.5 h-3.5" />
+                  <TerminalIcon
+                    kind={terminal.kind}
+                    chrome={chrome}
+                    className="w-3.5 h-3.5"
+                    userChosen={brandColorUserChosen}
+                  />
                 </div>
                 <span className="truncate min-w-[48px] max-w-[140px] font-sans font-medium">
                   {displayTitle}

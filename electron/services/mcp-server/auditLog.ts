@@ -5,6 +5,7 @@ import type {
   McpAuditResult,
   McpAuditStats,
   McpConfirmationDecision,
+  McpGrantActorType,
   McpGrantRecord,
   McpGrantRecordType,
   McpGrantRevokedReason,
@@ -28,10 +29,14 @@ import {
   USER_REJECTED_CODE,
   CONFIRMATION_TIMEOUT_CODE,
   MCP_DEDUP_KEY_COLLISION_CODE,
-  MCP_RATE_LIMITED_CODE,
   minimumPermittingTier,
   PRE_AUTH_FAILED_CODE,
 } from "./shared.js";
+
+// Legacy error code, read-only. The CallTool rate limiter was removed (#10764),
+// so nothing emits this anymore — it survives only to classify `rate_limited`
+// outcomes deserialized from historical on-disk audit records.
+const MCP_RATE_LIMITED_CODE = "MCP_RATE_LIMITED";
 
 const ANOMALY_MIN_RECORDS = 50;
 const LATENCY_SIGMA_THRESHOLD = 3;
@@ -231,6 +236,12 @@ export class AuditService {
     revokedReason?: McpGrantRevokedReason;
     tier?: McpTier;
     previousTier?: McpTier;
+    grantId?: string;
+    maxUses?: number;
+    remainingUses?: number;
+    actorId?: string;
+    actorType?: McpGrantActorType;
+    allowedTools?: string[];
   }): void {
     if (this.readConfig().auditEnabled === false) return;
     this.hydrate();
@@ -247,6 +258,12 @@ export class AuditService {
     if (input.revokedReason !== undefined) record.revokedReason = input.revokedReason;
     if (input.tier !== undefined) record.tier = input.tier;
     if (input.previousTier !== undefined) record.previousTier = input.previousTier;
+    if (input.grantId !== undefined) record.grantId = input.grantId;
+    if (input.maxUses !== undefined) record.maxUses = input.maxUses;
+    if (input.remainingUses !== undefined) record.remainingUses = input.remainingUses;
+    if (input.actorId !== undefined) record.actorId = input.actorId;
+    if (input.actorType !== undefined) record.actorType = input.actorType;
+    if (input.allowedTools !== undefined) record.allowedTools = input.allowedTools;
 
     this.enqueueAndTrim(record);
   }
@@ -625,6 +642,39 @@ export class AuditService {
     this.flushNow();
     return this.getAuditConfig();
   }
+
+  /**
+   * Drop audit records older than `retentionDays`, then flush if anything was
+   * removed. `retentionDays <= 0` is the "Off" setting — keep everything,
+   * bounded only by the count cap. Filters on each record's own `.timestamp`
+   * (event time, `Date.now()` at append), NOT the SQLite `created_at` column:
+   * `writeAll` re-stamps `created_at` to the flush time on every flush, so it
+   * cannot distinguish record ages. Records whose `timestamp` is not a finite
+   * number are retained rather than dropped — a corrupt timestamp shouldn't
+   * silently evict privacy-sensitive history.
+   */
+  pruneByAge(retentionDays: number): void {
+    if (!Number.isFinite(retentionDays) || retentionDays <= 0) return;
+    this.hydrate();
+    const cutoff = Date.now() - retentionDays * 86_400_000;
+    const before = this.records.length;
+    this.records = this.records.filter(
+      (r) => !(Number.isFinite(r.timestamp) && r.timestamp < cutoff)
+    );
+    if (this.records.length !== before) {
+      // If the pre-auth coalesce target was pruned, reset the coalesce state so
+      // the next 401 writes a fresh record rather than mutating a vanished one —
+      // mirrors the eviction reset in `enqueueAndTrim`.
+      if (
+        this.lastPreAuthRecordId !== null &&
+        !this.records.some((r) => r.id === this.lastPreAuthRecordId)
+      ) {
+        this.lastPreAuthRecordId = null;
+        this.lastPreAuthRecordAt = 0;
+      }
+      this.flushNow();
+    }
+  }
 }
 
 export type AuditOutcome =
@@ -633,6 +683,9 @@ export type AuditOutcome =
   | { kind: "unauthorized" }
   | { kind: "dedup" }
   | { kind: "collision" }
+  // Legacy, dead for writers: nothing constructs this since the CallTool rate
+  // limiter was removed (#10764). Retained so `classifyMcpDispatchResult` can
+  // still map the `rate_limited` outcome carried by historical on-disk records.
   | { kind: "rate_limited"; retryAfter: number };
 
 /**

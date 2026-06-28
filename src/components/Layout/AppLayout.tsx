@@ -39,7 +39,7 @@ import type { CliAvailability, AgentSettings } from "@shared/types";
 import { useLayoutState, useOverlayOpen } from "@/hooks";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
-import { suppressSidebarResizes } from "@/lib/sidebarToggle";
+import { repaintAssistantAfterTransition, suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { logError } from "@/utils/logger";
 
 function preloadGlobalBannerCoordinator() {
@@ -140,6 +140,14 @@ export function AppLayout({
   // paint (the new width arrives with the class already gone — no animation).
   const [isSidebarWidthHydrating, setIsSidebarWidthHydrating] = useState(true);
   const currentProject = useProjectStore((state) => state.currentProject);
+  const isSwitchingProject = useProjectStore((state) => state.isSwitching);
+  const switchingToProjectId = useProjectStore((state) => state.switchingToProjectId);
+  const switchingToProjectName = useProjectStore((state) =>
+    state.switchingToProjectId
+      ? state.projects.find((p) => p.id === state.switchingToProjectId)?.name
+      : undefined
+  );
+  const clearSwitching = useProjectStore((state) => state.clearSwitching);
   const layout = useLayoutState();
   const diagnosticsMounted = useKeepMounted(layout.diagnosticsOpen);
   const isThemeBrowserOpen = useOverlayOpen("theme-browser");
@@ -154,6 +162,14 @@ export function AppLayout({
   const showSidebar = !layout.gestureSidebarHidden && currentProject != null;
   const showAssistant = !layout.gestureAssistantHidden && layout.helpPanelOpen;
   const effectiveAssistantWidth = showAssistant ? layout.helpPanelWidth : 0;
+  // #10693 (off-canvas): the assistant wrapper is always full-width and slides
+  // via transform, so when hidden it still has a real DOM box off-screen. Mark
+  // it inert once it has finished sliding out so keyboard focus and scroll can't
+  // land in the parked panel. Applied only AFTER the slide settles (and removed
+  // immediately on show) so a Radix Presence teardown inside the panel keeps its
+  // transitionend (#6182). pointer-events-none + the panel's own tabIndex gating
+  // already cover the in-flight window.
+  const [assistantInert, setAssistantInert] = useState(!showAssistant);
 
   // Issue #9864: the sidebar wrapper carries overflowClipMargin: 6px so the
   // resize handle's overhang paints outside the contain boundary. But
@@ -214,6 +230,38 @@ export function AppLayout({
       }
     },
     [showSidebar]
+  );
+
+  // #10693 (off-canvas): the assistant slides via a composited transform on a
+  // fixed-width wrapper, so the terminal box never resizes during show/hide and
+  // the SIGWINCH storm can't form. The PUSH (main grid reclaiming the space) is
+  // driven by a sibling layout spacer that animates its width — that spacer is
+  // the <main> reflow driver, so arm the grid-resize lock when ITS width
+  // transition starts, exactly as the wrapper's width transition used to do.
+  // Filter on width + target===currentTarget to ignore other properties and
+  // bubbled child transitions, mirroring the sidebar handler.
+  const handleAssistantSpacerTransitionStart = useCallback(
+    (event: React.TransitionEvent<HTMLDivElement>) => {
+      if (event.propertyName === "width" && event.target === event.currentTarget) {
+        suppressSidebarResizes();
+      }
+    },
+    []
+  );
+
+  // When the wrapper's transform slide settles, issue the one corrective repaint
+  // (reveal) and, on a hide, mark the parked wrapper inert. Filter on transform
+  // because that is the property the wrapper now animates. transitioncancel is
+  // intentionally unwired: a rapid hide→show re-targets the same transform and
+  // the final transitionend resolves the correct state.
+  const handleAssistantTransitionEnd = useCallback(
+    (event: React.TransitionEvent<HTMLDivElement>) => {
+      if (event.propertyName === "transform" && event.target === event.currentTarget) {
+        repaintAssistantAfterTransition();
+        if (!showAssistant) setAssistantInert(true);
+      }
+    },
+    [showAssistant]
   );
 
   useEffect(() => {
@@ -507,6 +555,35 @@ export function AppLayout({
     useMacroFocusStore.getState().setVisibility("assistant", showAssistant);
   }, [showAssistant]);
 
+  // #10693 (off-canvas): drive the inert/repaint settle for the paths where no
+  // transform transition fires. On show, clear inert immediately so focus can
+  // enter before the slide finishes. When the slide is animated, the transition
+  // handlers own the settle; when it is suppressed there is no transitionend, so
+  // reconcile geometry and toggle inert synchronously here instead. A slide is
+  // suppressed by the reduce-animations preference, performance mode, an OS
+  // prefers-reduced-motion match, OR an in-flight drag-resize (which strips the
+  // transition so the handle tracks the cursor 1:1). The media query is also
+  // subscribed so flipping the OS setting mid-hide still parks the wrapper inert.
+  useEffect(() => {
+    const mql =
+      typeof window !== "undefined"
+        ? window.matchMedia?.("(prefers-reduced-motion: reduce)")
+        : undefined;
+    const settle = () => {
+      const noTransition =
+        reduceAnimations || layout.performanceMode || isAssistantResizing || mql?.matches === true;
+      if (showAssistant) {
+        setAssistantInert(false);
+        if (noTransition) repaintAssistantAfterTransition();
+      } else if (noTransition) {
+        setAssistantInert(true);
+      }
+    };
+    settle();
+    mql?.addEventListener("change", settle);
+    return () => mql?.removeEventListener("change", settle);
+  }, [showAssistant, reduceAnimations, layout.performanceMode, isAssistantResizing]);
+
   // Clear macro focus on mouse interaction. A click inside the currently-
   // focused region must NOT clear the claim — otherwise a click within the
   // already-focused assistant (or any other claimed region) drops the macro
@@ -633,9 +710,20 @@ export function AppLayout({
         className="flex-1 flex flex-col overflow-hidden"
         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}
       >
+        {/* #10693 (off-canvas): overflow MUST be `clip`, not `hidden`. The
+            assistant wrapper is parked at right:0 + translateX(+helpPanelWidth),
+            i.e. entirely beyond this row's right edge, so it extends the row's
+            scrollable overflow rightward. `overflow:hidden` clips visually but is
+            still a scroll container, so when the panel is shown the first time
+            and HelpPanel programmatically focuses its freshly-mounted xterm while
+            the slide is still off-screen, the browser's focus scrollIntoView
+            scrolls this row right — shifting sidebar+main left and pushing the
+            worktree sidebar off the left edge. `overflow:clip` is not a scroll
+            container, so focus can never scroll it. Both the class and the inline
+            style are set because the inline `overflow` wins over the utility. */}
         <div
-          className="flex-1 flex overflow-hidden relative"
-          style={{ flex: 1, display: "flex", overflow: "hidden", position: "relative" }}
+          className="flex-1 flex overflow-clip relative"
+          style={{ flex: 1, display: "flex", overflow: "clip", position: "relative" }}
         >
           <div
             className={cn(
@@ -691,16 +779,44 @@ export function AppLayout({
               <TerminalDockRegion />
             </main>
           </ErrorBoundary>
+          {/* #10693 (off-canvas): this spacer drives the <main> push by
+              animating its width 0↔helpPanelWidth, while the panel itself slides
+              over the reclaimed space via the wrapper's transform. The spacer is
+              the grid-reflow driver, so it carries the resize-lock arming
+              transition handler the width-wrapper used to own. */}
+          <div
+            aria-hidden
+            className={cn(
+              "shrink-0 pointer-events-none",
+              !reduceAnimations &&
+                !isAssistantResizing &&
+                (showAssistant
+                  ? "transition-[width] duration-[var(--duration-200)] ease-[var(--ease-out-expo)] motion-reduce:transition-none"
+                  : "transition-[width] duration-[var(--duration-120)] ease-[var(--ease-panel-minimize)] motion-reduce:transition-none")
+            )}
+            style={{ width: effectiveAssistantWidth }}
+            onTransitionStart={handleAssistantSpacerTransitionStart}
+          />
           <ErrorBoundary variant="section" componentName="HelpPanel">
             <div
               className={cn(
-                "relative h-full shrink-0 overflow-hidden",
+                "absolute top-0 right-0 h-full overflow-hidden",
                 !reduceAnimations &&
                   !isAssistantResizing &&
-                  "transition-[width] duration-[var(--duration-250)] ease-[var(--ease-out-expo)] motion-reduce:transition-none",
+                  (showAssistant
+                    ? "transition-transform duration-[var(--duration-200)] ease-[var(--ease-out-expo)] motion-reduce:transition-none"
+                    : "transition-transform duration-[var(--duration-120)] ease-[var(--ease-panel-minimize)] motion-reduce:transition-none"),
                 !showAssistant && "pointer-events-none"
               )}
-              style={{ width: effectiveAssistantWidth, contain: "layout paint" }}
+              style={{
+                width: layout.helpPanelWidth,
+                transform: showAssistant
+                  ? "translateX(0)"
+                  : `translateX(${layout.helpPanelWidth}px)`,
+                contain: "layout paint",
+              }}
+              inert={assistantInert}
+              onTransitionEnd={handleAssistantTransitionEnd}
             >
               <div
                 className="absolute top-0 right-0 h-full"
@@ -729,7 +845,12 @@ export function AppLayout({
         )}
       </div>
 
-      <ProjectSwitchOverlay isSwitching={false} projectName={undefined} />
+      <ProjectSwitchOverlay
+        isSwitching={isSwitchingProject}
+        projectName={switchingToProjectName}
+        switchTargetId={switchingToProjectId}
+        onAutoDismiss={clearSwitching}
+      />
       <ChordIndicator />
 
       <AllClearOverlay />

@@ -21,6 +21,7 @@ import {
   RESOURCE_PROFILE_CONFIGS,
   type ResourceProfile,
   type ResourceProfilePayload,
+  type ResourceProfileSnapshot,
 } from "../../shared/types/resourceProfile.js";
 import { ACTIVE_AGENT_STATES, type AgentState } from "../../shared/types/agent.js";
 
@@ -127,6 +128,8 @@ export interface ResourceProfileDeps {
   hasSustainedRendererSaturation?: () => boolean;
 }
 
+export type { ResourceProfileSnapshot };
+
 export class ResourceProfileService {
   private currentProfile: ResourceProfile = "balanced";
   private candidateProfile: ResourceProfile | null = null;
@@ -157,12 +160,6 @@ export class ResourceProfileService {
   private lagEnterTicks = 0;
   private lagExitWindow: boolean[] = [];
   private lagPressureStartedAt: number | null = null;
-  // Memory sub-score captured from the most recent computeTargetProfile() run.
-  // Gates the setCachedViewLimit(1) clamp on efficiency entry so non-memory
-  // efficiency triggers (battery + thermal/CPU + worktrees) don't pay the
-  // cost of destroying cached WebContentsViews. sampleLag() bypasses
-  // computeTargetProfile() and must zero this before calling applyProfile().
-  private lastMemoryScore = 0;
 
   constructor(private deps: ResourceProfileDeps) {
     const totalRamMb = os.totalmem() / 1024 / 1024;
@@ -233,6 +230,21 @@ export class ResourceProfileService {
 
   getProfile(): ResourceProfile {
     return this.currentProfile;
+  }
+
+  /**
+   * Read-only snapshot of the active resource profile and the pressure inputs
+   * that drive it, for the diagnostics export (#10500). Narrow projection — the
+   * scoring internals (histograms, thresholds, candidate timers) stay private.
+   */
+  getSnapshot(): ResourceProfileSnapshot {
+    return {
+      profile: this.currentProfile,
+      thermalState: this.thermalState,
+      isOnBattery: this.isOnBattery,
+      speedLimit: this.speedLimit,
+      lagPressureActive: this.lagPressureActive,
+    };
   }
 
   /**
@@ -307,15 +319,10 @@ export class ResourceProfileService {
   applyCurrentProfileTo(pvm: ProjectViewManager): void {
     const config = RESOURCE_PROFILE_CONFIGS[this.currentProfile];
     if (this.currentProfile === "efficiency") {
-      // Same gating as applyProfile: only clamp cached views when memory
-      // contributed to entering efficiency.
-      if (this.lastMemoryScore > 0) {
-        try {
-          pvm.setCachedViewLimit(1);
-        } catch {
-          // non-critical
-        }
-      }
+      // Efficiency freezes cached views (CPU/timer suppression) but never
+      // destroys them. RAM is reclaimed only by evictStaleViews()'s own
+      // lowMemoryFreeThresholdMb floor when free RAM is genuinely low, keeping
+      // the user's working set warm under battery/thermal/CPU-only pressure.
       try {
         pvm.setEfficiencyFreeze(true);
       } catch {
@@ -502,11 +509,6 @@ export class ResourceProfileService {
         utilization: Math.round(utilization * 100) / 100,
       });
       if (this.currentProfile !== "efficiency") {
-        // Severe-spike lag entry bypasses computeTargetProfile(), so
-        // lastMemoryScore holds whatever the previous eval recorded (stale).
-        // The trigger here is CPU/event-loop, not memory — zero it so the
-        // setCachedViewLimit(1) clamp in applyProfile() stays off.
-        this.lastMemoryScore = 0;
         this.applyProfile("efficiency");
       }
       return;
@@ -525,11 +527,6 @@ export class ResourceProfileService {
           utilization: Math.round(utilization * 100) / 100,
         });
         if (this.currentProfile !== "efficiency") {
-          // Lag-triggered efficiency entry bypasses computeTargetProfile(), so
-          // lastMemoryScore holds whatever the previous eval recorded (stale).
-          // The trigger here is CPU/event-loop, not memory — zero it so the
-          // setCachedViewLimit(1) clamp in applyProfile() stays off.
-          this.lastMemoryScore = 0;
           this.applyProfile("efficiency");
         }
       }
@@ -640,7 +637,6 @@ export class ResourceProfileService {
     }
     this.lagPreviousElu = null;
     this.clearLagPressure();
-    this.lastMemoryScore = 0;
     this.thermalState = "unknown";
     this.isOnBattery = false;
     this.speedLimit = 100;
@@ -707,7 +703,6 @@ export class ResourceProfileService {
       // Skip memory signal on error — memoryScore stays 0 (correct: no measurement, no clamp)
     }
     pressureScore += memoryScore;
-    this.lastMemoryScore = memoryScore;
 
     // Battery signal (cached from startup + transition events)
     if (this.isOnBattery) {
@@ -842,9 +837,12 @@ export class ResourceProfileService {
       }
     }
 
-    // Adjust cached project view limit under memory pressure.
-    // Cached WebContentsViews cost ~100–500 MB RSS each (full Chromium renderer),
-    // so clamping to 1 on efficiency reclaims the largest memory chunk available.
+    // Freeze cached project views under efficiency to reclaim CPU, but never
+    // destroy them to reclaim RAM. Destruction is owned exclusively by
+    // evictStaleViews()'s lowMemoryFreeThresholdMb floor, which clamps to 1
+    // only when free RAM is genuinely low (independent of profile). This keeps
+    // the user's working set warm under battery/thermal/CPU-only pressure,
+    // avoiding cold-start storms when switching among many open projects.
     // Fan out across every open window's PVM so multi-window sessions all
     // honor the profile change, not just the most-recently-created window.
     for (const pvm of this.deps.getAllProjectViewManagers()) {
@@ -855,18 +853,6 @@ export class ResourceProfileService {
       // isolation applies per-PVM: a failure on one window must not skip the
       // remaining windows in the iteration.
       if (profile === "efficiency") {
-        // Only destroy cached WebContentsViews when memory actually contributed
-        // to entering efficiency. Battery + thermal/CPU-only triggers are
-        // handled by setEfficiencyFreeze(true) alone, and evictStaleViews()
-        // has its own lowMemoryFreeThresholdMb floor that clamps to 1 when
-        // free RAM really is low (independent of profile).
-        if (this.lastMemoryScore > 0) {
-          try {
-            pvm.setCachedViewLimit(1);
-          } catch {
-            // non-critical
-          }
-        }
         try {
           // Freeze cached project views' renderers via CDP under efficiency to
           // suppress timer wake-ups on top of background throttling. PVM

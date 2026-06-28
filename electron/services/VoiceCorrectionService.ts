@@ -22,6 +22,7 @@ const FILE_LINK_DETECTION_MODEL = "gpt-5-nano";
 const FILE_LINK_DETECTION_TIMEOUT_MS = 4000;
 const FILE_LINK_CACHE_PREFIX = "voice-file-link-v1";
 const LEADING_FILLER_RE = /^(?:\s*(?:um|uh)[\s,.;:!-]+)+/i;
+const DICTIONARY_TERM_BOUNDARY_RE = /[\p{L}\p{N}_]/u;
 
 // Permissive pre-filter — biased toward false positives so legitimate file references
 // always reach the LLM. False positives cost a skipped LLM call; false negatives silently
@@ -49,6 +50,10 @@ const FILE_LINK_DETECTION_SCHEMA = {
   },
   required: ["file_references"],
 } as const;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 const CORRECTION_RESULT_SCHEMA = {
   type: "object",
@@ -152,15 +157,20 @@ export class VoiceCorrectionService {
         settings
       );
 
-      const confirmedText =
+      const apiConfirmedText =
         result.action === "no_change"
           ? request.rawText
           : result.correctedText.trim() || request.rawText;
+      const confirmedText = this.canonicalizeCustomDictionaryTerms(
+        apiConfirmedText,
+        settings.customDictionary
+      );
+      const action = confirmedText === request.rawText ? "no_change" : "replace";
 
       logDebug(`${P} Correction success`, {
         rawLen: request.rawText.length,
         correctedLen: confirmedText.length,
-        action: result.action,
+        action,
         confidence: result.confidence,
         contextLen: request.recentContext?.length ?? 0,
         reason: request.reason ?? "unspecified",
@@ -168,6 +178,8 @@ export class VoiceCorrectionService {
 
       return {
         ...result,
+        action,
+        correctedText: confirmedText,
         confirmedText,
       };
     } catch (error) {
@@ -362,6 +374,26 @@ export class VoiceCorrectionService {
 
   private normalizeCorrectedText(text: string): string {
     return text.replace(LEADING_FILLER_RE, "");
+  }
+
+  private canonicalizeCustomDictionaryTerms(text: string, customDictionary: string[]): string {
+    let canonicalized = text;
+    for (const term of customDictionary) {
+      const canonical = term.trim();
+      if (!canonical) continue;
+
+      const pattern = new RegExp(escapeRegExp(canonical), "giu");
+      canonicalized = canonicalized.replace(pattern, (match, offset, fullText) => {
+        const before = offset > 0 ? fullText[offset - 1] : "";
+        const afterIndex = offset + match.length;
+        const after = afterIndex < fullText.length ? fullText[afterIndex] : "";
+        if (DICTIONARY_TERM_BOUNDARY_RE.test(before) || DICTIONARY_TERM_BOUNDARY_RE.test(after)) {
+          return match;
+        }
+        return canonical;
+      });
+    }
+    return canonicalized;
   }
 
   private async callApi(

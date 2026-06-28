@@ -63,6 +63,7 @@ function makeMockBridge(impl: ForgeProviderImpl) {
         remoteUrl: string | null;
         forgeProviderOverride: string | null;
         globalDefaultProviderId: string | null;
+        projectPath?: string | null;
       }) => Promise<ForgeResolveProviderResult>
     >(async () => ({
       status: "resolved",
@@ -136,6 +137,20 @@ function mockForgeProviderResolved(
     createIssue: vi.fn(),
     assignIssue: vi.fn(),
     unassignIssue: vi.fn(),
+    createPR: vi.fn(),
+    closePR: vi.fn(),
+    reopenPR: vi.fn(),
+    mergePR: vi.fn(),
+    convertPRToDraft: vi.fn(),
+    markPRReadyForReview: vi.fn(),
+    commentOnPR: vi.fn(),
+    editPR: vi.fn(),
+    closeIssue: vi.fn(),
+    reopenIssue: vi.fn(),
+    editIssue: vi.fn(),
+    addIssueComment: vi.fn(),
+    addIssueLabel: vi.fn(),
+    removeIssueLabel: vi.fn(),
     validateToken: vi.fn(),
     getRateLimit: vi.fn().mockResolvedValue({ limit: null, remaining: null, resetAt: null }),
   };
@@ -221,6 +236,20 @@ function makeMockEmptyImpl(): ForgeProviderImpl {
     createIssue: vi.fn(),
     assignIssue: vi.fn(),
     unassignIssue: vi.fn(),
+    createPR: vi.fn(),
+    closePR: vi.fn(),
+    reopenPR: vi.fn(),
+    mergePR: vi.fn(),
+    convertPRToDraft: vi.fn(),
+    markPRReadyForReview: vi.fn(),
+    commentOnPR: vi.fn(),
+    editPR: vi.fn(),
+    closeIssue: vi.fn(),
+    reopenIssue: vi.fn(),
+    editIssue: vi.fn(),
+    addIssueComment: vi.fn(),
+    addIssueLabel: vi.fn(),
+    removeIssueLabel: vi.fn(),
     validateToken: vi.fn(),
   };
 }
@@ -464,6 +493,22 @@ describe("PullRequestService", () => {
 
     expect(bridge.resolveProvider).toHaveBeenCalledWith(
       expect.objectContaining({ remoteUrl: "https://github.com/originowner/originrepo.git" })
+    );
+
+    pullRequestService.destroy();
+  });
+
+  it("forwards the initialized project root as projectPath so main can stamp the RepoRef (#10563)", async () => {
+    mockForgeProviderUnresolved();
+    const bridge = lastMockBridge!;
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+
+    pullRequestService.initialize("/repo");
+    await pullRequestService.refresh();
+
+    expect(bridge.resolveProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ projectPath: "/repo" })
     );
 
     pullRequestService.destroy();

@@ -56,9 +56,18 @@ test.describe.serial("Core: Panel Drag & Drop", () => {
 
     let idsAfter = idsBefore;
 
-    const keySequences = [["ArrowRight"], ["ArrowRight", "ArrowRight"]];
+    // The grid is a 2D rect-sortable, so which arrow key carries the top-left
+    // panel past its neighbour depends on the headless column count (3 panels
+    // resolve to 1, 2, or 3 columns by viewport width). The keyboard resolver is
+    // scoped to the grid container — an arrow step toward an edge with no
+    // same-container neighbour is a no-op, not a step onto the dock
+    // (sameContainerKeyboardCoordinates, #10713) — so a single hardcoded
+    // direction silently does nothing in the wrong layout. Try each direction
+    // (single step) until the order actually changes, mirroring the dock-chip
+    // test's Right→Left fallback.
+    const directions = [["ArrowRight"], ["ArrowDown"], ["ArrowLeft"], ["ArrowUp"]];
 
-    for (const keys of keySequences) {
+    for (const keys of directions) {
       const firstPanel = getPanelById(window, idsBefore[0]);
       const dragHandle = getPanelDragHandle(firstPanel);
       await expect(dragHandle).toBeVisible({ timeout: T_SHORT });

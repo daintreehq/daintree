@@ -17,7 +17,6 @@ export interface AgentMetadata {
     blockAltScreen?: boolean;
     blockMouseReporting?: boolean;
   };
-  hasDetection: boolean;
   hasVersionConfig: boolean;
   hasUpdateConfig: boolean;
   hasInstallHelp: boolean;

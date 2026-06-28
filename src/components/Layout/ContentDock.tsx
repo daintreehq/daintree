@@ -52,6 +52,7 @@ import {
 } from "@/components/ui/context-menu";
 
 import { getAgentConfig, getAgentIds } from "@/config/agents";
+import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import { isAgentInstalled } from "@shared/utils/agentAvailability";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { buildDockRenderItems, type DockRenderItem } from "./dockRenderItems";
@@ -110,6 +111,12 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   ]);
 
   const dockTerminals = useMemo<PtyPanelData[]>(() => {
+    // The dock is intentionally PTY-only: its chrome (output preview, restart,
+    // agent state) is built on terminal affordances. Non-PTY panels — browser,
+    // dev-preview, review, AND plugin-contributed kinds — are grid-only here,
+    // so `getNarrowPanel` + `isPtyPanel` is the correct gate (NOT the #10512
+    // grid render-eligibility predicate, which deliberately does not apply to
+    // the dock).
     const result: PtyPanelData[] = [];
     for (const id of storeTerminalIds) {
       const terminal = getNarrowPanel(panelsById, id);
@@ -137,6 +144,8 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     const settingsIds = agentSettings?.agents ? Object.keys(agentSettings.agents) : [];
     const extraIds = settingsIds.filter((id) => !baseIds.includes(id)).sort();
     const agents: DockLaunchAgent[] = [...baseIds, ...extraIds]
+      // Assistant-only agents are never offered in the dock launch menu.
+      .filter((id) => !isAssistantOnlyAgentId(id))
       .filter((id) => isAgentInstalled(agentAvailability?.[id]))
       .map((id) => {
         const config = getAgentConfig(id);

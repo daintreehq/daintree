@@ -110,7 +110,12 @@ describe("WorkspaceHostProcess", () => {
     host.waitForReady().catch(() => {});
 
     const execArgv: string[] = forkMock.mock.calls[0][2].execArgv;
-    expect(execArgv.some((arg) => /^--max-old-space-size=\d+$/.test(arg))).toBe(true);
+    const heapCapArg = execArgv.find((arg) => /^--max-old-space-size=\d+$/.test(arg));
+    expect(heapCapArg).toBeDefined();
+    // The cap must stay at or above the OOM-mitigation floor (#10729) — 256 MB
+    // was too tight for large multi-worktree projects and let the host OOM-loop.
+    const heapCapMb = Number(heapCapArg!.split("=")[1]);
+    expect(heapCapMb).toBeGreaterThanOrEqual(512);
     expect(execArgv.some((arg) => arg.startsWith("--diagnostic-dir="))).toBe(true);
     expect(execArgv).toContain("--report-exclude-env");
 
@@ -268,6 +273,134 @@ describe("WorkspaceHostProcess", () => {
     child.emit("message", { type: "watcher-recovered" });
 
     expect(onHostEvent).toHaveBeenCalledWith({ type: "watcher-recovered" });
+
+    host.dispose();
+  });
+
+  it("routes worktree-activated as host-event with payload intact (#10778)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const onHostEvent = vi.fn();
+    host.on("host-event", onHostEvent);
+
+    const event = {
+      type: "worktree-activated",
+      worktreeId: "wt-1",
+      epoch: "epoch-1",
+      seq: 7,
+      silent: false,
+    };
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", event);
+
+    expect(onHostEvent).toHaveBeenCalledWith(event);
+
+    host.dispose();
+  });
+
+  it("relays worktree-activated verbatim when silent — suppression is the router's job (#10778)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const onHostEvent = vi.fn();
+    host.on("host-event", onHostEvent);
+
+    const event = {
+      type: "worktree-activated",
+      worktreeId: "wt-2",
+      epoch: "epoch-2",
+      seq: 8,
+      silent: true,
+    };
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", event);
+
+    // The relay must not interpret or strip `silent`; it passes through so the
+    // WorkspaceHostEventRouter can decide suppression downstream.
+    expect(onHostEvent).toHaveBeenCalledWith(event);
+    expect(onHostEvent.mock.calls[0][0].silent).toBe(true);
+
+    host.dispose();
+  });
+
+  it("routes lifecycle-setup-error as host-event with details (#10778)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const onHostEvent = vi.fn();
+    host.on("host-event", onHostEvent);
+
+    const event = {
+      type: "lifecycle-setup-error",
+      worktreeId: "wt-3",
+      message: "Setup failed",
+      details: "ENOENT: missing hook script",
+    };
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", event);
+
+    expect(onHostEvent).toHaveBeenCalledWith(event);
+
+    host.dispose();
+  });
+
+  it("routes lifecycle-setup-error as host-event with details omitted (#10778)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const onHostEvent = vi.fn();
+    host.on("host-event", onHostEvent);
+
+    const event = {
+      type: "lifecycle-setup-error",
+      worktreeId: "wt-4",
+      message: "Setup failed",
+    };
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", event);
+
+    expect(onHostEvent).toHaveBeenCalledWith(event);
+
+    host.dispose();
+  });
+
+  it("swallows fetch-auth-failure-confirmed — no host-event, no Unknown-event warn (#10778)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const onHostEvent = vi.fn();
+    host.on("host-event", onHostEvent);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", { type: "fetch-auth-failure-confirmed", reason: "fetch" });
+
+    // Renderer-only event (delivered via DIRECT_RENDERER_EVENTS): it must not be
+    // relayed as host-event, and must not trip the default "Unknown event" warn.
+    expect(onHostEvent).not.toHaveBeenCalled();
+    const unknownWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("Unknown event"));
+    expect(unknownWarns).toHaveLength(0);
 
     host.dispose();
   });
@@ -771,6 +904,190 @@ describe("WorkspaceHostProcess crash window", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect((host as any).crashTimestamps).toHaveLength(3);
     expect(crashSpy).toHaveBeenCalledWith(1);
+
+    host.dispose();
+  });
+
+  it("slow OOM loop trips host-crash even when the burst window never holds 3 crashes (#10729)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const crashSpy = vi.fn();
+    host.on("host-crash", crashSpy);
+
+    // Crash 1 at t=0
+    const child1 = mockChildren[0] as MockUtilityChild;
+    child1.emit("message", { type: "ready" });
+    child1.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Crash 2 at t=12min (gap 12min < 20min interval → consecutive short #1)
+    await vi.advanceTimersByTimeAsync(12 * 60_000);
+    const child2 = mockChildren[1] as MockUtilityChild;
+    host.waitForReady().catch(() => {});
+    child2.emit("message", { type: "ready" });
+    child2.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(crashSpy).not.toHaveBeenCalled();
+
+    // Crash 3 at t=30min (gap 18min < 20min → consecutive short #2 → trips).
+    // The burst window has decayed crash 1 out (30min ≥ 30min window) so it
+    // holds only 2 timestamps and would NOT trip — the interval detector does.
+    await vi.advanceTimersByTimeAsync(18 * 60_000);
+    const child3 = mockChildren[2] as MockUtilityChild;
+    host.waitForReady().catch(() => {});
+    child3.emit("message", { type: "ready" });
+    child3.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect((host as any).crashTimestamps).toHaveLength(2); // burst guard alone would not trip
+    expect((host as any).consecutiveShortCrashIntervals).toBeGreaterThanOrEqual(2);
+    expect(crashSpy).toHaveBeenCalledWith(1);
+
+    // Behavioral guard: once the slow loop trips host-crash, the host must give
+    // up — no further auto-restart fork is scheduled (otherwise it would keep
+    // looping in "Reconnecting…", the exact #10729 symptom).
+    const forksAtTrip = forkMock.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(11_000); // past RESTART_CAP_MAX_MS
+    expect(forkMock.mock.calls.length).toBe(forksAtTrip);
+
+    host.dispose();
+  });
+
+  it("exactly OOM_LOOP_INTERVAL_MS apart does not increment the counter (boundary contract)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    // Crash 1 at t=0
+    const child1 = mockChildren[0] as MockUtilityChild;
+    child1.emit("message", { type: "ready" });
+    child1.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Crash 2 exactly 20min later. The detector uses strict `<`, so a gap equal
+    // to the interval is treated as "not a short interval" and resets the
+    // counter. Documenting the boundary so a future `<`→`<=` change is a
+    // deliberate, test-visible decision rather than a silent surprise.
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
+    const child2 = mockChildren[1] as MockUtilityChild;
+    host.waitForReady().catch(() => {});
+    child2.emit("message", { type: "ready" });
+    child2.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect((host as any).consecutiveShortCrashIntervals).toBe(0);
+
+    host.dispose();
+  });
+
+  it("a long gap between crashes resets the slow-OOM interval counter", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const crashSpy = vi.fn();
+    host.on("host-crash", crashSpy);
+
+    // Crash 1 at t=0
+    const child1 = mockChildren[0] as MockUtilityChild;
+    child1.emit("message", { type: "ready" });
+    child1.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Crash 2 at t=12min (gap 12min < 20min → counter goes to 1)
+    await vi.advanceTimersByTimeAsync(12 * 60_000);
+    const child2 = mockChildren[1] as MockUtilityChild;
+    host.waitForReady().catch(() => {});
+    child2.emit("message", { type: "ready" });
+    child2.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((host as any).consecutiveShortCrashIntervals).toBe(1);
+
+    // Crash 3 at t=37min (gap 25min > 20min → counter resets to 0, no trip)
+    await vi.advanceTimersByTimeAsync(25 * 60_000);
+    const child3 = mockChildren[2] as MockUtilityChild;
+    host.waitForReady().catch(() => {});
+    child3.emit("message", { type: "ready" });
+    child3.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect((host as any).consecutiveShortCrashIntervals).toBe(0);
+    expect(crashSpy).not.toHaveBeenCalled();
+
+    host.dispose();
+  });
+
+  it("ready does NOT reset the slow-OOM interval state", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    // Crash 1 at t=0
+    const child1 = mockChildren[0] as MockUtilityChild;
+    child1.emit("message", { type: "ready" });
+    child1.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Crash 2 at t=6min (gap 6min < 20min → counter goes to 1)
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    const child2 = mockChildren[1] as MockUtilityChild;
+    host.waitForReady().catch(() => {});
+    child2.emit("message", { type: "ready" });
+    child2.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((host as any).consecutiveShortCrashIntervals).toBe(1);
+
+    // Restart comes up clean — `ready` must NOT wipe the interval state, or a
+    // crash-ready-crash-ready loop would never accumulate (mirrors #8553).
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    const child3 = mockChildren[2] as MockUtilityChild;
+    child3.emit("message", { type: "ready" });
+
+    expect((host as any).consecutiveShortCrashIntervals).toBe(1);
+    expect((host as any).previousCrashAt).not.toBeNull();
+
+    host.dispose();
+  });
+
+  it("manualRestart clears the slow-OOM interval state", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    // Two short-interval crashes → counter at 1, child null (restart pending)
+    const child1 = mockChildren[0] as MockUtilityChild;
+    child1.emit("message", { type: "ready" });
+    child1.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2_001);
+    const child2 = mockChildren[1] as MockUtilityChild;
+    host.waitForReady().catch(() => {});
+    child2.emit("message", { type: "ready" });
+    child2.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((host as any).consecutiveShortCrashIntervals).toBe(1);
+    expect((host as any).child).toBeNull();
+
+    host.manualRestart();
+    expect((host as any).consecutiveShortCrashIntervals).toBe(0);
+    expect((host as any).previousCrashAt).toBeNull();
 
     host.dispose();
   });

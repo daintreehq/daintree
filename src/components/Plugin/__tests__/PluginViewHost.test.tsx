@@ -185,6 +185,198 @@ describe("makePluginViewHost", () => {
     expect(() => act(() => emit!({ kinds: [] }))).not.toThrow();
   });
 
+  it("passes the panel's extensionState to the mounted view as initialArgs", async () => {
+    const capturedProps: Array<Record<string, unknown>> = [];
+    // Replace React.lazy so the plugin view renders synchronously (the real
+    // `plugin://` dynamic import never resolves in jsdom). The stub renders a
+    // capturing component that records the props the host hands it — proving the
+    // spawn-time `extensionState` reaches the view as `initialArgs`.
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: () =>
+          function CapturingView(props: Record<string, unknown>) {
+            capturedProps.push(props);
+            return <div data-testid="plugin-view" />;
+          },
+      };
+    });
+
+    const { makePluginViewHost } = await import("../PluginViewHost");
+    const Host = makePluginViewHost(makeConfig());
+
+    const initialArgs = { path: "/repo/src/index.ts", line: 12 };
+    render(
+      <Host
+        id="panel-args"
+        title="Dashboard"
+        isFocused={false}
+        onFocus={(): void => {}}
+        onClose={(): void => {}}
+        extensionState={initialArgs}
+      />
+    );
+
+    await waitFor(() => expect(screen.queryByTestId("plugin-view")).toBeTruthy());
+    expect(capturedProps).not.toHaveLength(0);
+    const props = capturedProps[capturedProps.length - 1]!;
+    expect(props.panelId).toBe("panel-args");
+    expect(props.pluginId).toBe("acme");
+    expect(props.initialArgs).toEqual(initialArgs);
+    // The bag is forwarded by reference from extensionState, not reconstructed.
+    expect(props.initialArgs).toBe(initialArgs);
+    vi.doUnmock("react");
+  });
+
+  it("awaits plugin.activateForView with the kind id before importing the view module (#10523)", async () => {
+    // Reject activation with a sentinel so we can prove the import is *gated*
+    // on activation, not merely fired alongside it: if the `await` were dropped
+    // the factory would reject with the `plugin://` import error (module not
+    // found) instead of this sentinel.
+    const activateForView = vi.fn().mockRejectedValue(new Error("ACTIVATION_FAILED"));
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { plugin: { onPanelKindsChanged: onPanelKindsChangedMock, activateForView } },
+    });
+
+    // Capture the lazy factory so we can drive it directly — the real
+    // `plugin://` import never resolves in jsdom.
+    let capturedFactory: (() => Promise<unknown>) | undefined;
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: (factory: () => Promise<unknown>) => {
+          capturedFactory = factory;
+          return function StubView() {
+            return <div data-testid="plugin-view" />;
+          };
+        },
+      };
+    });
+
+    const { makePluginViewHost } = await import("../PluginViewHost");
+    const Host = makePluginViewHost(makeConfig());
+
+    render(
+      <Host
+        id="panel-act"
+        title="Dashboard"
+        isFocused={false}
+        onFocus={(): void => {}}
+        onClose={(): void => {}}
+      />
+    );
+
+    await waitFor(() => expect(capturedFactory).toBeDefined());
+    // Activation rejects, so the awaited call short-circuits before `import()`.
+    await expect(capturedFactory!()).rejects.toThrow("ACTIVATION_FAILED");
+    expect(activateForView).toHaveBeenCalledWith("acme.dashboard");
+    vi.doUnmock("react");
+  });
+
+  it("surfaces the real activation cause when activateForView rejects, before import (#10618)", async () => {
+    // The #10618 contract: on activation failure the activate-for-view IPC call
+    // REJECTS with the real cause (the handler throws an AppError), carrying the
+    // plugin's own message. The host's `await` rethrows it before `import()`, so
+    // the ErrorBoundary surfaces why activation failed instead of a generic
+    // import timeout. (Distinct from the #10523 gating test below, which only
+    // proves the await ordering with a sentinel.)
+    const activateForView = vi
+      .fn()
+      .mockRejectedValue(new Error('Plugin failed to activate for view "acme.dashboard": boom'));
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { plugin: { onPanelKindsChanged: onPanelKindsChangedMock, activateForView } },
+    });
+
+    let capturedFactory: (() => Promise<unknown>) | undefined;
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: (factory: () => Promise<unknown>) => {
+          capturedFactory = factory;
+          return function StubView() {
+            return <div data-testid="plugin-view" />;
+          };
+        },
+      };
+    });
+
+    const { makePluginViewHost } = await import("../PluginViewHost");
+    const Host = makePluginViewHost(makeConfig());
+
+    render(
+      <Host
+        id="panel-act-fail"
+        title="Dashboard"
+        isFocused={false}
+        onFocus={(): void => {}}
+        onClose={(): void => {}}
+      />
+    );
+
+    await waitFor(() => expect(capturedFactory).toBeDefined());
+    // The factory rejects with the real activation error and never reaches the
+    // `plugin://` import.
+    await expect(capturedFactory!()).rejects.toThrow(/boom/);
+    expect(activateForView).toHaveBeenCalledWith("acme.dashboard");
+    vi.doUnmock("react");
+  });
+
+  it("tolerates a missing activateForView binding without throwing (#10523)", async () => {
+    // beforeEach installs window.electron.plugin without activateForView, so the
+    // optional-chained call must no-op and the import must still proceed.
+    let capturedFactory: (() => Promise<unknown>) | undefined;
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: (factory: () => Promise<unknown>) => {
+          capturedFactory = factory;
+          return function StubView() {
+            return <div data-testid="plugin-view" />;
+          };
+        },
+      };
+    });
+
+    const { makePluginViewHost } = await import("../PluginViewHost");
+    const Host = makePluginViewHost(makeConfig());
+
+    render(
+      <Host
+        id="panel-noact"
+        title="Dashboard"
+        isFocused={false}
+        onFocus={(): void => {}}
+        onClose={(): void => {}}
+      />
+    );
+
+    await waitFor(() => expect(capturedFactory).toBeDefined());
+    // No activateForView present — the factory must not throw synchronously.
+    let threw = false;
+    const settled = (async () => {
+      try {
+        await capturedFactory!();
+      } catch {
+        // jsdom can't resolve the plugin:// import; that's expected here.
+      }
+    })().catch(() => {
+      threw = true;
+    });
+    await settled;
+    expect(threw).toBe(false);
+    // The host still mounted its (stubbed) view rather than crashing.
+    expect(screen.getByTestId("plugin-view")).toBeTruthy();
+    vi.doUnmock("react");
+  });
+
   it("reads the AbortController through a ref so post-retry removals abort the current signal", async () => {
     // Regression guard for the renderer-first teardown contract: if the
     // useEffect captured controllerRef.current into a const at setup time,

@@ -65,11 +65,30 @@ export function summarizeForgeArgs(
     case "getIssue":
     case "getPR":
     case "assignIssue":
-    case "unassignIssue": {
-      // assign/unassign also receive a username — deliberately omitted (PII).
+    case "unassignIssue":
+    case "approvePR":
+    case "requestChanges":
+    case "dismissReview":
+    case "requestReviewers":
+    case "closePR":
+    case "reopenPR":
+    case "mergePR":
+    case "convertPRToDraft":
+    case "markPRReadyForReview":
+    case "commentOnPR":
+    case "editPR":
+    case "closeIssue":
+    case "reopenIssue": {
+      // These also receive content (review/comment body, dismissal message,
+      // edit title/body, merge commit text), identifiers (review id), or PII
+      // (username, reviewer logins) — deliberately omitted. Only the resource
+      // number is safe metadata.
       const num = typeof args === "number" ? args : undefined;
       return JSON.stringify(num !== undefined ? { number: num } : {});
     }
+    case "createPR":
+      // head/base/title/body are all user content — and there's no number yet.
+      return "";
     case "createIssue": {
       // Only the label count is safe metadata — title and body are user content.
       const input = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
@@ -77,6 +96,32 @@ export function summarizeForgeArgs(
       if (Array.isArray(input.labels) && input.labels.length > 0) {
         summary.labels = input.labels.length;
       }
+      return JSON.stringify(summary);
+    }
+    case "editIssue": {
+      // Title/body are user content — log only which fields were touched.
+      const input = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
+      const summary: Record<string, unknown> = {};
+      if (typeof input.number === "number") summary.number = input.number;
+      if (input.hasTitle) summary.hasTitle = true;
+      if (input.hasBody) summary.hasBody = true;
+      return JSON.stringify(summary);
+    }
+    case "addIssueComment": {
+      // Comment body is user content — log only its length.
+      const input = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
+      const summary: Record<string, unknown> = {};
+      if (typeof input.number === "number") summary.number = input.number;
+      if (typeof input.bodyLength === "number") summary.bodyLength = input.bodyLength;
+      return JSON.stringify(summary);
+    }
+    case "addIssueLabel":
+    case "removeIssueLabel": {
+      // Label names are repo metadata, not PII — safe to log alongside the number.
+      const input = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
+      const summary: Record<string, unknown> = {};
+      if (typeof input.number === "number") summary.number = input.number;
+      if (typeof input.label === "string") summary.label = input.label;
       return JSON.stringify(summary);
     }
     case "validateToken":

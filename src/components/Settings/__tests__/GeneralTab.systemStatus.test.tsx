@@ -398,3 +398,55 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     });
   });
 });
+
+describe("GeneralTab — build architecture line (issue #10501)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupElectron();
+    setupDispatchMock(
+      {
+        claude: "ready",
+        gemini: "missing",
+        codex: "missing",
+        opencode: "missing",
+        cursor: "missing",
+      },
+      { agents: { claude: { pinned: true } } } as unknown as AgentSettings
+    );
+  });
+
+  it("renders the architecture line when buildArch is provided", async () => {
+    const { GeneralTab } = await import("../GeneralTab");
+    render(
+      <GeneralTab
+        appVersion="1.0.0"
+        buildArch="Intel (Rosetta)"
+        onNavigateToAgents={vi.fn()}
+        activeSubtab="overview"
+        onSubtabChange={vi.fn()}
+      />
+    );
+
+    const archLine = await screen.findByTestId("about-build-arch");
+    // Assert the provided value is surfaced verbatim, not a hardcoded label.
+    expect(archLine.textContent).toBe("Intel (Rosetta)");
+  });
+
+  it("omits the architecture line when buildArch is absent", async () => {
+    const { GeneralTab } = await import("../GeneralTab");
+    render(
+      <GeneralTab
+        appVersion="1.0.0"
+        onNavigateToAgents={vi.fn()}
+        activeSubtab="overview"
+        onSubtabChange={vi.fn()}
+      />
+    );
+
+    // The version label still renders, so the card is present — only the arch line is gated.
+    await waitFor(() => {
+      expect(screen.getByText("v1.0.0")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("about-build-arch")).toBeNull();
+  });
+});

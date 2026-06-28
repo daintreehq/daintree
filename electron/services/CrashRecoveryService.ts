@@ -108,6 +108,16 @@ export class CrashRecoveryService {
     return this.pendingCrash;
   }
 
+  // Drop the in-memory pending-crash record once the user has resolved the
+  // recovery dialog. Without this, an LRU-evicted WebContentsView that
+  // cold-reboots re-reads the stale record via app:boot and re-presents the
+  // dialog on project switch-back (#10809). Disk cleanup is already done by
+  // restoreBackup()/resetToFresh(); this only clears the cache, so it is safe
+  // to call after those complete. Idempotent.
+  clearPendingCrash(): void {
+    this.pendingCrash = null;
+  }
+
   getLastBackupTimestamp(): number | null {
     const info = this.readBackupInfo();
     return info.exists && typeof info.timestamp === "number" ? info.timestamp : null;

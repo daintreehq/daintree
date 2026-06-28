@@ -21,9 +21,11 @@ export type PluginActionAuditResult = "success" | "error" | "disabled" | "restri
  *
  * - `action-dispatch`: a plugin-contributed action dispatched through
  *   `ActionService` (the original record type).
- * - `ipc-invoke`: a raw `plugin:invoke` IPC call from the renderer. Only
- *   failure outcomes (`error` / `restricted`) are recorded — successful
- *   invokes are high-frequency and would dominate the ring buffer.
+ * - `ipc-invoke`: a `plugin:invoke` IPC call from the renderer. Both success
+ *   and failure (`error` / `restricted`) outcomes for a plugin's own
+ *   registered handler are recorded at the dispatch boundary (#10517) so a
+ *   benign-looking invoke can't run unobserved. Trust-check rejections at the
+ *   raw `plugin:invoke` channel (untrusted sender) are also recorded here.
  * - `decoration-failure`: a file-decoration provider rejected or exceeded
  *   the per-provider timeout. Successful settles are never audited.
  */

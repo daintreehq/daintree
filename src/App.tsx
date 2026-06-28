@@ -25,6 +25,8 @@ import { usePluginActions } from "./hooks/usePluginActions";
 import { usePluginPanelKinds } from "./hooks/usePluginPanelKinds";
 import { usePluginAgents } from "./hooks/usePluginAgents";
 import { usePluginKeybindings } from "./hooks/usePluginKeybindings";
+import { usePluginMcpConsentBridge } from "./hooks/usePluginMcpConsentBridge";
+import { usePluginCapabilityConsentBridge } from "./hooks/usePluginCapabilityConsentBridge";
 import { useUpdateListener } from "./hooks/useUpdateListener";
 import { useMainProcessToastListener } from "./hooks/useMainProcessToastListener";
 
@@ -36,9 +38,11 @@ import { useDoubleShift } from "./hooks/useDoubleShift";
 import { useProjectMruSwitcher } from "./hooks/useProjectMruSwitcher";
 import { useKeepMounted } from "./hooks/useKeepMounted";
 import { stashViewFileRequest } from "./components/FileViewer/pendingViewFileRequest";
+import { stashViewDiffRequest } from "./components/Worktree/pendingViewDiffRequest";
 import { useMcpBridge } from "./hooks/useMcpBridge";
 import { useMcpAnomalyStats } from "./hooks/useMcpAnomalyStats";
 import { usePluginBridge } from "./hooks/usePluginBridge";
+import { usePluginPromptBridge } from "./hooks/usePluginPromptBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { notifyViewPainted, removeStartupSkeleton } from "./utils/removeStartupSkeleton";
 import { useAppBoot } from "./hooks/app/useAppBoot";
@@ -57,6 +61,7 @@ import {
   useForgeEnableRecommendation,
   useFocusOnActivateIntent,
   useBackgroundWindowResize,
+  useResetSwitchOverlayOnReveal,
   usePluginDeepLink,
   useNotificationHistoryPruning,
   useUnloadCleanup,
@@ -89,6 +94,7 @@ import { AccessibilityAnnouncer } from "./components/Accessibility/Accessibility
 import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { TooltipProvider } from "./components/ui/tooltip";
+import { primeRadix } from "./components/ui/radix-loader";
 import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "./lib/animationUtils";
 
 // Module-scope loaders: raw import() expressions inside component effects bail
@@ -288,6 +294,13 @@ const LazyFileViewerModalHost = lazy(() =>
   preloadFileViewerModalHost().then((m) => ({ default: m.FileViewerModalHost }))
 );
 
+function preloadDiffViewerModalHost() {
+  return import("./components/Worktree/DiffViewerModalHost");
+}
+const LazyDiffViewerModalHost = lazy(() =>
+  preloadDiffViewerModalHost().then((m) => ({ default: m.DiffViewerModalHost }))
+);
+
 function preloadMcpConfirmDialog() {
   return import("./components/McpConfirmDialog");
 }
@@ -307,6 +320,30 @@ function preloadPluginMcpConfirmDialog() {
 }
 const LazyPluginMcpConfirmDialog = lazy(() =>
   preloadPluginMcpConfirmDialog().then((m) => ({ default: m.PluginMcpConfirmDialog }))
+);
+
+const LazyPluginQuickPickDialog = lazy(() =>
+  import("./components/Plugin/PluginQuickPickDialog").then((m) => ({
+    default: m.PluginQuickPickDialog,
+  }))
+);
+const LazyPluginInputBoxDialog = lazy(() =>
+  import("./components/Plugin/PluginInputBoxDialog").then((m) => ({
+    default: m.PluginInputBoxDialog,
+  }))
+);
+const LazyPluginConfirmPromptDialog = lazy(() =>
+  import("./components/Plugin/PluginConfirmPromptDialog").then((m) => ({
+    default: m.PluginConfirmPromptDialog,
+  }))
+);
+function preloadPluginCapabilityConfirmDialog() {
+  return import("./components/Plugin/PluginCapabilityConfirmDialog");
+}
+const LazyPluginCapabilityConfirmDialog = lazy(() =>
+  preloadPluginCapabilityConfirmDialog().then((m) => ({
+    default: m.PluginCapabilityConfirmDialog,
+  }))
 );
 
 function preloadPanelLimitConfirmDialog() {
@@ -378,6 +415,7 @@ import { usePanelLimitStore } from "./store/panelLimitStore";
 import { useMcpConfirmStore } from "./store/mcpConfirmStore";
 import { usePluginConfirmStore } from "./store/pluginConfirmStore";
 import { usePluginMcpConfirmStore } from "./store/pluginMcpConfirmStore";
+import { usePluginCapabilityConfirmStore } from "./store/pluginCapabilityConfirmStore";
 import { useDiagnosticsReviewStore } from "./store/diagnosticsReviewStore";
 import { useAgentSettingsStore } from "./store/agentSettingsStore";
 // Eager side-effect import: auto-discovers every built-in plugin renderer and
@@ -392,6 +430,7 @@ import type { BuiltInPanelKind } from "./types";
 import { actionService, installE2EActionDispatchBridge } from "./services/ActionService";
 import { voiceRecordingService } from "./services/VoiceRecordingService";
 import { useRenderProfiler } from "./utils/renderProfiler";
+import { logError } from "./utils/logger";
 
 import { SidebarContent, preloadNewWorktreeDialog, E2EFaultInjector } from "./components/Sidebar";
 import { ensureHydrationBootstrap } from "./utils/stateHydration/bootstrapGuard";
@@ -523,6 +562,7 @@ function AppInner() {
   useMcpBridge();
   useMcpAnomalyStats();
   usePluginBridge();
+  usePluginPromptBridge();
   const { homeDir } = useHomeDir();
 
   // Grid navigation hook for directional terminal switching
@@ -686,9 +726,13 @@ function AppInner() {
   const mcpConfirmResetKey = useMcpConfirmStore((s) => s.current?.requestId ?? "");
   const pluginConfirmResetKey = usePluginConfirmStore((s) => s.current?.requestId ?? "");
   const pluginMcpConfirmResetKey = usePluginMcpConfirmStore((s) => s.current?.requestId ?? "");
+  const pluginCapabilityConfirmResetKey = usePluginCapabilityConfirmStore(
+    (s) => s.current?.requestId ?? ""
+  );
   const diagnosticsReviewResetKey = useDiagnosticsReviewStore((s) => s.requestSeq);
   const [terminalInfoResetKey, setTerminalInfoResetKey] = useState(0);
   const [fileViewerResetKey, setFileViewerResetKey] = useState(0);
+  const [diffViewerResetKey, setDiffViewerResetKey] = useState(0);
   useEffect(() => {
     const onTerminalInfo = () => setTerminalInfoResetKey((k) => k + 1);
     const onViewFile = (e: Event) => {
@@ -697,11 +741,19 @@ function AppInner() {
       stashViewFileRequest(e);
       setFileViewerResetKey((k) => k + 1);
     };
+    const onViewDiff = (e: Event) => {
+      // Stash for DiffViewerModalHost's mount replay — same lazy-chunk race as
+      // the file viewer above.
+      stashViewDiffRequest(e);
+      setDiffViewerResetKey((k) => k + 1);
+    };
     window.addEventListener("daintree:open-terminal-info", onTerminalInfo);
     window.addEventListener("daintree:view-file", onViewFile);
+    window.addEventListener("daintree:view-diff", onViewDiff);
     return () => {
       window.removeEventListener("daintree:open-terminal-info", onTerminalInfo);
       window.removeEventListener("daintree:view-file", onViewFile);
+      window.removeEventListener("daintree:view-diff", onViewDiff);
     };
   }, []);
   // Cross-project focus intent receiver. Subscribes unconditionally so the
@@ -713,6 +765,9 @@ function AppInner() {
   // Background window-resize receiver — keeps PTY geometry tracking the
   // window while this project view is detached (#10415).
   useBackgroundWindowResize();
+  // Clears a stale switch busy flag when this cached view is reactivated, so a
+  // view that switched away never re-shows its switch overlay on return (#10736).
+  useResetSwitchOverlayOnReveal();
   // `daintree://` deep-link receiver (#9559). Surfaces the intent once hydration
   // settles; the effect below opens the Plugin Manager, which consumes it.
   const pluginDeepLink = usePluginDeepLink(isStateLoaded);
@@ -770,6 +825,7 @@ function AppInner() {
       void preloadNewWorktreeDialog();
       void preloadActionPalette();
       void preloadQuickSwitcher();
+      preloadProjectSwitcherPalette().catch(() => {});
       void preloadWorktreePalette();
       void preloadNewTerminalPalette();
       void preloadPanelPalette();
@@ -788,6 +844,12 @@ function AppInner() {
       // `Worktree/FileDiffModal.tsx`, so an explicit post-paint prefetch keeps
       // it snappy on first use.
       preloadFileViewerModal().catch(() => {});
+      // Warm the shared Radix overlay primitives chunk (`radix-deferred`) so the
+      // ProjectSwitcherPalette popover and context menus are ready on first
+      // interaction in a freshly loaded project view. Otherwise this chunk is
+      // only demand-loaded on the first pointer/focus gesture (#10752). Each
+      // WebContentsView has its own module cache, so this fires per view.
+      primeRadix().catch(() => {});
     };
 
     if (typeof scheduler !== "undefined" && typeof scheduler.postTask === "function") {
@@ -809,7 +871,15 @@ function AppInner() {
 
   const handleLaunchAgent = useCallback(
     async (type: string) => {
-      await launchAgent(type);
+      // launchAgent now throws on an unresolvable worktreeId (#10812). UI surfaces
+      // pass no explicit worktreeId (they fall back to the active one), so this is
+      // only reachable via a stale activeWorktreeId race — keep it a quiet no-op,
+      // matching the pre-fix silent behavior, rather than an unhandled rejection.
+      try {
+        await launchAgent(type);
+      } catch (error) {
+        logError("Failed to launch agent", error);
+      }
     },
     [launchAgent]
   );
@@ -884,6 +954,8 @@ function AppInner() {
   usePluginPanelKinds();
   usePluginAgents();
   usePluginKeybindings();
+  usePluginMcpConsentBridge();
+  usePluginCapabilityConsentBridge();
 
   useMenuActions();
 
@@ -1170,7 +1242,7 @@ function AppInner() {
                       } else if (result.id.startsWith("agent:")) {
                         const agentId = result.id.slice("agent:".length);
                         if (agentId) {
-                          launchAgent(agentId);
+                          void handleLaunchAgent(agentId);
                         }
                       } else {
                         addPanel({
@@ -1206,7 +1278,7 @@ function AppInner() {
                       } else if (selected.id.startsWith("agent:")) {
                         const agentId = selected.id.slice("agent:".length);
                         if (agentId) {
-                          launchAgent(agentId);
+                          void handleLaunchAgent(agentId);
                         }
                       } else {
                         addPanel({
@@ -1498,6 +1570,38 @@ function AppInner() {
               </ErrorBoundary>
             )}
             {isStateLoaded && (
+              <ErrorBoundary variant="component" componentName="PluginQuickPickDialog">
+                <Suspense fallback={null}>
+                  <LazyPluginQuickPickDialog />
+                </Suspense>
+              </ErrorBoundary>
+            )}
+            {isStateLoaded && (
+              <ErrorBoundary variant="component" componentName="PluginInputBoxDialog">
+                <Suspense fallback={null}>
+                  <LazyPluginInputBoxDialog />
+                </Suspense>
+              </ErrorBoundary>
+            )}
+            {isStateLoaded && (
+              <ErrorBoundary variant="component" componentName="PluginConfirmPromptDialog">
+                <Suspense fallback={null}>
+                  <LazyPluginConfirmPromptDialog />
+                </Suspense>
+              </ErrorBoundary>
+            )}
+            {isStateLoaded && (
+              <ErrorBoundary
+                variant="component"
+                componentName="PluginCapabilityConfirmDialog"
+                resetKeys={[pluginCapabilityConfirmResetKey]}
+              >
+                <Suspense fallback={null}>
+                  <LazyPluginCapabilityConfirmDialog />
+                </Suspense>
+              </ErrorBoundary>
+            )}
+            {isStateLoaded && (
               <ErrorBoundary
                 variant="component"
                 componentName="FileViewerModalHost"
@@ -1505,6 +1609,17 @@ function AppInner() {
               >
                 <Suspense fallback={null}>
                   <LazyFileViewerModalHost />
+                </Suspense>
+              </ErrorBoundary>
+            )}
+            {isStateLoaded && (
+              <ErrorBoundary
+                variant="component"
+                componentName="DiffViewerModalHost"
+                resetKeys={[diffViewerResetKey]}
+              >
+                <Suspense fallback={null}>
+                  <LazyDiffViewerModalHost />
                 </Suspense>
               </ErrorBoundary>
             )}

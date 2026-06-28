@@ -36,7 +36,27 @@
 
 .diff-viewer[data-wrap="true"] .diff-code {
   white-space: pre-wrap;
-  word-break: break-all;
+  /* Break at whitespace first and only split a token when it alone overflows the
+     column. word-break: break-all (the react-diff-view default) splits mid-token
+     even where a whitespace break point exists; overflow-wrap: anywhere keeps
+     whole tokens intact until they can't fit. (The columns here are fixed-width
+     so cell content doesn't drive sizing, but anywhere stays correct if the
+     wrap-mode table ever moves back to table-layout: auto.)
+
+     overflow-wrap: anywhere is LOAD-BEARING — do not drop it, and do not weaken it
+     to overflow-wrap: normal. white-space: pre-wrap on its own only wraps at
+     existing break opportunities, and the wrap-mode table is table-layout: fixed,
+     so the code column is a hard width content cannot exceed. Without a
+     break-anywhere rule, a row that overflows that fixed column — e.g. a Markdown
+     table whose cells push the row past the column width — wraps only at its
+     spaces, isolating every short token (`| Group`, `| Tools`, `` `fs.list` ``)
+     onto its own line with the rest of the column left blank, while a long
+     unbreakable run spills past the edge. That is issue #10623's exact failure,
+     which has regressed once already. The "wrap CSS contract" test in
+     DiffViewer.test.tsx parses this rule and fails if the soft-wrap/break-anywhere
+     pairing is ever broken, so it can't silently regress again. */
+  word-break: normal;
+  overflow-wrap: anywhere;
 }
 
 /* Gutter (line numbers) styling.
@@ -90,11 +110,19 @@
   white-space: nowrap;
 }
 
-/* Code content styling */
+/* Code content styling. white-space: pre alone suppresses wrapping (nowrap
+   leaves no soft-wrap opportunities), but react-diff-view's vendor sheet sets
+   word-break: break-all and word-wrap: break-word on .diff-code — reset all
+   three explicitly so the no-wrap intent on the fallback (add/delete) scroll
+   path survives even if white-space changes on a sub-path. The wrap-on rule
+   above re-enables wrapping via [data-wrap="true"]. */
 .diff-viewer .diff-code {
   background: var(--color-daintree-bg);
   padding: 0 12px;
   white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+  word-wrap: normal;
 }
 
 /* Added lines. The :root values below are the ORIGINAL hardcoded status-based
@@ -433,6 +461,22 @@
 
 .light .diff-scroll-root::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
+}
+
+/* refractor's grammars tag syntax tokens with bare class names that collide
+   with Tailwind's display utilities — most importantly the Markdown table
+   grammar, which puts class="token table …" on every cell/punctuation token of
+   a table row. Tailwind's `.table { display: table }` utility then turns those
+   inline token spans into block-level table boxes, so each token stacks on its
+   own line and a one-line Markdown table row balloons to ~18 rows (looks like
+   the whole diff "collapses" once syntax highlighting lands — the second,
+   post-paint token pass). Other grammars can collide the same way (`hidden`,
+   `block`, `inline-block`, `table-cell`, …). Syntax tokens are always inline, so
+   pin them back to inline to be immune to any Tailwind display-utility name
+   clash. The reset is unlayered (DiffViewer.css isn't in a Tailwind @layer), so
+   it outranks the layered utility regardless of specificity. */
+.diff-viewer .diff-code .token {
+  display: inline;
 }
 
 /* Syntax highlighting overrides for Tokyo Night palette */

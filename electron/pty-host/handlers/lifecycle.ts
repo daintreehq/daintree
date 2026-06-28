@@ -3,6 +3,17 @@ import type { AgentEvent } from "../../services/AgentStateMachine.js";
 import type { SpawnResult } from "../../../shared/types/pty-host.js";
 import type { HandlerMap, HostContext } from "./types.js";
 
+/** A PTY PID is usable only once it is a positive integer. */
+function isValidPid(pid: number | undefined): pid is number {
+  return typeof pid === "number" && Number.isInteger(pid) && pid > 0;
+}
+
+// On Windows, node-pty reports `pid: 0` during the brief window before the
+// ConPTY `connect()` resolves, and never emits a follow-up event when the real
+// PID lands. We poll the live PTY object across event-loop turns to recover the
+// PID, capped so a terminal that never resolves can't poll forever.
+const PID_RETRY_MAX_ATTEMPTS = 20;
+
 export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
   const {
     ptyManager,
@@ -11,6 +22,25 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
     sendEvent,
     getOrCreatePauseCoordinator,
   } = ctx;
+
+  // Poll the live PTY object across event-loop turns for a terminal that
+  // spawned with an invalid PID (Windows ConPTY). Once a positive PID lands,
+  // emit `terminal-pid` and start the process detector. Stops if the terminal
+  // disappears (killed/trashed) before the PID resolves, or after the cap.
+  function schedulePidRetry(id: string, attempt = 0): void {
+    if (attempt >= PID_RETRY_MAX_ATTEMPTS) return;
+    setImmediate(() => {
+      const terminalInfo = ptyManager.getTerminal(id);
+      if (!terminalInfo) return; // terminal gone — abandon the retry
+      const pid = terminalInfo.ptyProcess?.pid;
+      if (isValidPid(pid)) {
+        sendEvent({ type: "terminal-pid", id, pid });
+        ptyManager.startProcessDetectorForTerminal(id);
+        return;
+      }
+      schedulePidRetry(id, attempt + 1);
+    });
+  }
 
   return {
     spawn: (msg) => {
@@ -31,8 +61,12 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
 
         const terminalInfo = ptyManager.getTerminal(msg.id);
         const pid = terminalInfo?.ptyProcess?.pid;
-        if (pid !== undefined) {
+        if (isValidPid(pid)) {
           sendEvent({ type: "terminal-pid", id: msg.id, pid });
+        } else {
+          // Windows ConPTY: retry until the real PID resolves, then emit the
+          // event and start monitoring (no node-pty event fires on its own).
+          schedulePidRetry(msg.id);
         }
       } catch (error) {
         console.error(`[PtyHost] Spawn failed for terminal ${msg.id}:`, error);
@@ -41,6 +75,33 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
           id: msg.id,
           error: parseSpawnError(error),
         };
+
+        // A failed-to-start spawn never produces a PTY, so no exit event ever
+        // fires and the main-side TerminalProcess never emits agent:spawned.
+        // For a launched agent that means AgentAvailabilityStore retains the
+        // prior session's state and MCP waiters (waitUntilIdle) can't tell the
+        // crash from an idle terminal. Synthesize the spawn + exited transition
+        // so the store records "exited" and consumers see the crash (#10816).
+        // Order matters: agent-spawned resets store state to "working" (and
+        // clears stale exit metadata) before agent-state writes "exited".
+        const launchAgentId = msg.options.launchAgentId;
+        if (launchAgentId) {
+          const timestamp = Date.now();
+          sendEvent({
+            type: "agent-spawned",
+            payload: { agentId: launchAgentId, terminalId: msg.id, timestamp },
+          });
+          sendEvent({
+            type: "agent-state",
+            id: msg.id,
+            agentId: launchAgentId,
+            state: "exited",
+            previousState: "working",
+            timestamp,
+            trigger: "exit",
+            confidence: 1,
+          });
+        }
       }
 
       sendEvent({ type: "spawn-result", id: msg.id, result: spawnResult });
@@ -54,7 +115,7 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
       } else {
         ptyManager.kill(msg.id, msg.reason);
       }
-      if (killedPid !== undefined) {
+      if (isValidPid(killedPid)) {
         resourceGovernor.trackKilledPid(killedPid);
       }
     },
@@ -72,7 +133,7 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
       const pids: number[] = [];
       for (const id of terminalIds) {
         const pid = ptyManager.getTerminal(id)?.ptyProcess.pid;
-        if (pid !== undefined) pids.push(pid);
+        if (isValidPid(pid)) pids.push(pid);
       }
       const killed = ptyManager.killByProject(msg.projectId);
       for (const pid of pids) {
@@ -84,7 +145,7 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
     "graceful-kill": async (msg) => {
       const killedPid = ptyManager.getTerminal(msg.id)?.ptyProcess.pid;
       const agentSessionId = await ptyManager.gracefulKill(msg.id);
-      if (killedPid !== undefined) {
+      if (isValidPid(killedPid)) {
         resourceGovernor.trackKilledPid(killedPid);
       }
       sendEvent({
@@ -100,7 +161,7 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
       const pids: number[] = [];
       for (const id of terminalIds) {
         const pid = ptyManager.getTerminal(id)?.ptyProcess.pid;
-        if (pid !== undefined) pids.push(pid);
+        if (isValidPid(pid)) pids.push(pid);
       }
       const results = await ptyManager.gracefulKillByProject(msg.projectId, {
         preserveSession: msg.preserveSession,

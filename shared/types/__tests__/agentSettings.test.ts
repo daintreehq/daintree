@@ -153,13 +153,24 @@ describe("buildResumeLatestCommand", () => {
   });
 
   it("returns undefined for session-id agents that don't declare resumeLatestArgs", () => {
-    // Copilot/Goose/Qwen/Mistral/OpenCode are session-id agents that didn't
-    // ship a resume-latest fallback in this issue; should return undefined.
+    // Copilot/Goose/Qwen/Mistral are session-id agents that didn't ship a
+    // resume-latest fallback; should return undefined.
     expect(buildResumeLatestCommand("copilot")).toBeUndefined();
     expect(buildResumeLatestCommand("goose")).toBeUndefined();
     expect(buildResumeLatestCommand("qwen")).toBeUndefined();
     expect(buildResumeLatestCommand("mistral")).toBeUndefined();
-    expect(buildResumeLatestCommand("opencode")).toBeUndefined();
+  });
+
+  it("returns opencode --continue for opencode without flags", () => {
+    // OpenCode declares resumeLatestArgs: ["--continue"] so a previously-open
+    // terminal can resume the latest session on restart even when no session id
+    // was captured (issue #10822).
+    expect(buildResumeLatestCommand("opencode")).toBe("opencode --continue");
+  });
+
+  it("prepends launch flags before resume-latest args for opencode", () => {
+    const cmd = buildResumeLatestCommand("opencode", ["--dangerously-skip-permissions"]);
+    expect(cmd).toBe("opencode --dangerously-skip-permissions --continue");
   });
 
   it("prepends launch flags before resume-latest args for claude", () => {

@@ -49,6 +49,84 @@ vi.mock("../../store.js", () => ({
   },
 }));
 
+// Every plugin activates out-of-process via utilityProcess.fork (#10526), which
+// vitest can't run. Mock the worker host/bridge so the bridge imports the
+// fixture bundle and runs `activate(host)` IN-PROCESS against the real host —
+// preserving this suite's end-to-end coverage of real contribution registries.
+const devWorkerMock = vi.hoisted(() => {
+  interface DevWorkerOpts {
+    pluginId: string;
+    pluginDir: string;
+    bundlePath: string;
+    mode?: "dev" | "prod";
+  }
+  class MockPluginDevWorkerHost {
+    opts: DevWorkerOpts;
+    start = vi.fn(async () => undefined);
+    dispose = vi.fn();
+    isReady = (): boolean => true;
+    on = vi.fn();
+    off = vi.fn();
+    constructor(opts: DevWorkerOpts) {
+      this.opts = opts;
+    }
+  }
+  interface MockBridgeDeps {
+    workerHost: { opts: DevWorkerOpts };
+    host: unknown;
+    onActivationResult?: (
+      result: { ok: true } | { ok: false; error: string; stack?: string }
+    ) => void;
+  }
+  class MockPluginDevWorkerMainBridge {
+    deps: MockBridgeDeps;
+    private cleanup: (() => void) | null = null;
+    waitForActivation = vi.fn(async () => {
+      const bundlePath = this.deps.workerHost?.opts?.bundlePath;
+      const onResult = this.deps.onActivationResult;
+      if (!bundlePath) {
+        onResult?.({ ok: true });
+        return;
+      }
+      const { pathToFileURL } = await import("node:url");
+      const { formatErrorMessage } = await import("../../../shared/utils/errorMessage.js");
+      try {
+        const mod = (await import(pathToFileURL(bundlePath).href)) as { activate?: unknown };
+        if (typeof mod.activate === "function") {
+          const result = await (mod.activate as (h: unknown) => unknown)(this.deps.host);
+          if (typeof result === "function") this.cleanup = result as () => void;
+        }
+        onResult?.({ ok: true });
+      } catch (err) {
+        onResult?.({
+          ok: false,
+          error: formatErrorMessage(err, "activate() threw"),
+          stack: err instanceof Error ? err.stack : undefined,
+        });
+      }
+    });
+    dispose = vi.fn(() => {
+      try {
+        this.cleanup?.();
+      } catch {
+        // best-effort
+      }
+      this.cleanup = null;
+    });
+    constructor(deps: MockBridgeDeps) {
+      this.deps = deps;
+    }
+  }
+  return { MockPluginDevWorkerHost, MockPluginDevWorkerMainBridge };
+});
+vi.mock("../plugin/PluginDevWorkerHost.js", () => ({
+  PluginDevWorkerHost: devWorkerMock.MockPluginDevWorkerHost,
+  CRASH_WINDOW_MS: 30 * 60 * 1000,
+}));
+vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
+  PluginDevWorkerMainBridge: devWorkerMock.MockPluginDevWorkerMainBridge,
+}));
+
 import { PluginService } from "../PluginService.js";
 import type { PluginIpcContext } from "../../../shared/types/plugin.js";
 import {
@@ -139,6 +217,14 @@ function readMarker(key: string): unknown {
 async function initializeAndActivate(service: PluginService): Promise<void> {
   await service.initialize();
   await service.activateStartupFinishedPlugins();
+  // Lazy by default (#10523): plugins without `activationEvents` no longer
+  // activate via the startup fan-out. These integration fixtures exercise
+  // activated-plugin behavior, so explicitly activate every loaded plugin.
+  // `activatePlugin` is a no-op for disabled plugins (rejected at scan, never
+  // in the registry) and idempotent for any already activated above.
+  for (const plugin of service.listPlugins()) {
+    await service.activatePlugin(plugin.manifest.name);
+  }
 }
 
 beforeEach(async () => {
@@ -299,9 +385,9 @@ describe("PluginService integration — panel contributions", () => {
       contributes: {
         panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#abc" }],
         toolbarButtons: [
-          { id: "btn", label: "B", iconId: "i", actionId: "real-plugin.act", priority: 2 },
+          { id: "btn", label: "B", iconId: "i", actionId: "acme.real-plugin.act", priority: 2 },
         ],
-        menuItems: [{ label: "M", actionId: "real-plugin.act", location: "view" }],
+        menuItems: [{ label: "M", actionId: "acme.real-plugin.act", location: "view" }],
       },
     });
 
@@ -331,7 +417,7 @@ describe("PluginService integration — toolbar button contributions", () => {
             id: "my-btn",
             label: "My Button",
             iconId: "puzzle",
-            actionId: "toolbar-plugin.doThing",
+            actionId: "acme.toolbar-plugin.doThing",
             priority: 4,
           },
         ],
@@ -347,7 +433,7 @@ describe("PluginService integration — toolbar button contributions", () => {
       id: "acme.toolbar-plugin.my-btn",
       label: "My Button",
       iconId: "puzzle",
-      actionId: "toolbar-plugin.doThing",
+      actionId: "acme.toolbar-plugin.doThing",
       priority: 4,
       pluginId: "acme.toolbar-plugin",
     });
@@ -363,7 +449,7 @@ describe("PluginService integration — toolbar button contributions", () => {
             id: "btn",
             label: "Btn",
             iconId: "icon",
-            actionId: "default-prio.action",
+            actionId: "acme.default-prio.action",
           },
         ],
       },
@@ -385,7 +471,7 @@ describe("PluginService integration — menu item contributions", () => {
         menuItems: [
           {
             label: "Do Something",
-            actionId: "menu-plugin.doSomething",
+            actionId: "acme.menu-plugin.doSomething",
             location: "terminal",
           },
         ],
@@ -401,7 +487,7 @@ describe("PluginService integration — menu item contributions", () => {
       pluginId: "acme.menu-plugin",
       item: {
         label: "Do Something",
-        actionId: "menu-plugin.doSomething",
+        actionId: "acme.menu-plugin.doSomething",
         location: "terminal",
       },
     });
@@ -636,6 +722,58 @@ describe("PluginService integration — file decoration provider contributions",
     expect(getFileDecorationImpls("my-scope:/x")).toEqual([]);
   });
 
+  it("caps the paths broadcast by invalidateFileDecorations (#10477)", async () => {
+    // A misbehaving plugin passing an unbounded paths array must not force an
+    // arbitrarily large IPC payload to every renderer. Over the cap we fall back
+    // to a scope-wide invalidation (no `paths`) rather than truncating, so no
+    // visible file silently misses its refresh.
+    const oversized = 1500;
+    const pluginDir = await writePlugin("acme.flood-decor", {
+      name: "acme.flood-decor",
+      version: "1.0.0",
+    });
+    const mainFile = `decor-${randomUUID()}.mjs`;
+    await fs.writeFile(
+      path.join(pluginDir, mainFile),
+      `export function activate(host) {
+  const paths = Array.from({ length: ${oversized} }, (_, i) => "f" + i + ".ts");
+  host.invalidateFileDecorations("my-scope:/x", paths);
+}
+`
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.flood-decor",
+        version: "1.0.0",
+        main: mainFile,
+        contributes: {
+          fileDecorationProviders: [{ id: "badges", scopes: ["my-scope:*"] }],
+        },
+      })
+    );
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const service = new PluginService(tmpDir, "0.0.0");
+    await initializeAndActivate(service);
+
+    const call = vi
+      .mocked(broadcastToRenderer)
+      .mock.calls.find(
+        ([channel, evt]) =>
+          channel === "events:push" &&
+          (evt as { name?: string }).name === "plugin:decorations-changed"
+      );
+    expect(call).toBeDefined();
+    const payload = (call![1] as { payload: { scope: string; paths?: string[] } }).payload;
+    // Over-cap drops `paths` entirely — a scope-wide invalidation — so the
+    // renderer does an unconditional re-pull instead of missing the tail.
+    expect(payload.scope).toBe("my-scope:/x");
+    expect(payload.paths).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("exceeds cap"));
+    warnSpy.mockRestore();
+  });
+
   it("rejects registering a provider id not declared in the manifest", async () => {
     const pluginDir = await writePlugin("acme.bad-decor", {
       name: "acme.bad-decor",
@@ -682,9 +820,11 @@ describe("PluginService integration — file decoration provider contributions",
     const mainFile = `decor-${randomUUID()}.mjs`;
     await fs.writeFile(
       path.join(pluginDir, mainFile),
-      `export function activate(host) {
+      `export async function activate(host) {
   try {
-    host.invalidateFileDecorations("other:/x");
+    // invalidateFileDecorations now REJECTS (not sync-throws) a disallowed
+    // scope, so the handler must await it to observe the error (#10617).
+    await host.invalidateFileDecorations("other:/x");
   } catch (err) {
     globalThis[${JSON.stringify(markerKey)}] = String(err && err.message);
   }
@@ -782,6 +922,130 @@ describe("PluginService integration — file decoration provider contributions",
   });
 });
 
+describe("PluginService integration — panel badges (#10585)", () => {
+  interface BadgeHost {
+    setPanelBadge: (
+      panelId: string,
+      badge: { kind: string; text?: string; color?: string } | null
+    ) => Promise<void>;
+  }
+
+  async function loadBadgeHost(name: string): Promise<{ service: PluginService; host: BadgeHost }> {
+    const pluginDir = await writePlugin(name, { name, version: "1.0.0" });
+    const mainFile = `badge-${randomUUID()}.mjs`;
+    await fs.writeFile(
+      path.join(pluginDir, mainFile),
+      `export function activate(host) { globalThis.__badgeHost = host; }\n`
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name, version: "1.0.0", main: mainFile })
+    );
+    const service = new PluginService(tmpDir, "0.0.0");
+    await initializeAndActivate(service);
+    const host = (globalThis as Record<string, unknown>).__badgeHost as BadgeHost;
+    return { service, host };
+  }
+
+  function badgeBroadcasts(eventName: string) {
+    return vi
+      .mocked(broadcastToRenderer)
+      .mock.calls.filter(
+        (c) => c[0] === "events:push" && (c[1] as { name?: string }).name === eventName
+      )
+      .map((c) => (c[1] as { payload: unknown }).payload);
+  }
+
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).__badgeHost;
+  });
+
+  it("broadcasts the plugin's complete badge map when a badge is set", async () => {
+    const { host } = await loadBadgeHost("acme.badge");
+    vi.mocked(broadcastToRenderer).mockClear();
+
+    host.setPanelBadge("panel-1", { kind: "label", text: "CI", color: "success" });
+
+    const payloads = badgeBroadcasts("plugin:panel-badges-changed");
+    expect(payloads).toContainEqual({
+      pluginId: "acme.badge",
+      badges: { "panel-1": { kind: "label", text: "CI", color: "success" } },
+    });
+  });
+
+  it("accumulates badges across panels and clears one with null", async () => {
+    const { host } = await loadBadgeHost("acme.badge2");
+    host.setPanelBadge("p1", { kind: "dot" });
+    host.setPanelBadge("p2", { kind: "dot", color: "error" });
+    vi.mocked(broadcastToRenderer).mockClear();
+
+    host.setPanelBadge("p1", null); // clear just p1
+
+    const last = badgeBroadcasts("plugin:panel-badges-changed").at(-1) as {
+      badges: Record<string, unknown>;
+    };
+    expect(last.badges).toEqual({ p2: { kind: "dot", color: "error" } });
+  });
+
+  it("rejects an invalid badge shape (label over the length cap) and a bad panelId", async () => {
+    const { host } = await loadBadgeHost("acme.badge3");
+    // Validation errors now REJECT (not sync-throw) — the runtime-surface
+    // Promise contract a plugin can `.catch()` (#10617).
+    await expect(host.setPanelBadge("p1", { kind: "label", text: "TOOLONG" })).rejects.toThrow(
+      /invalid badge/
+    );
+    await expect(host.setPanelBadge("", { kind: "dot" })).rejects.toThrow(/non-empty string/);
+  });
+
+  it("broadcasts panel-badges-cleared on unload only when the plugin had badges", async () => {
+    const { service, host } = await loadBadgeHost("acme.badge4");
+    host.setPanelBadge("p1", { kind: "dot" });
+    vi.mocked(broadcastToRenderer).mockClear();
+
+    service.unloadPlugin("acme.badge4");
+
+    expect(badgeBroadcasts("plugin:panel-badges-cleared")).toContainEqual({
+      pluginId: "acme.badge4",
+    });
+  });
+
+  it("does not broadcast panel-badges-cleared when the plugin never set a badge", async () => {
+    const { service } = await loadBadgeHost("acme.badge5");
+    vi.mocked(broadcastToRenderer).mockClear();
+
+    service.unloadPlugin("acme.badge5");
+
+    expect(badgeBroadcasts("plugin:panel-badges-cleared")).toEqual([]);
+  });
+
+  it("setPanelBadge is a silent no-op after the plugin unloads", async () => {
+    const { service, host } = await loadBadgeHost("acme.badge6");
+    service.unloadPlugin("acme.badge6");
+    vi.mocked(broadcastToRenderer).mockClear();
+
+    expect(() => host.setPanelBadge("p1", { kind: "dot" })).not.toThrow();
+    expect(badgeBroadcasts("plugin:panel-badges-changed")).toEqual([]);
+  });
+
+  it("replays current badges to a cold-restored webContents via pushSnapshotTo", async () => {
+    const { service, host } = await loadBadgeHost("acme.badge7");
+    host.setPanelBadge("p1", { kind: "label", text: "2" });
+
+    const sent: Array<{ name: string; payload: unknown }> = [];
+    const fakeWc = {
+      isDestroyed: () => false,
+      send: (_channel: string, evt: { name: string; payload: unknown }) => sent.push(evt),
+    } as unknown as Electron.WebContents;
+
+    await service.pushSnapshotTo(fakeWc);
+
+    expect(sent).toContainEqual({
+      name: "plugin:panel-badges-changed",
+      payload: { pluginId: "acme.badge7", badges: { p1: { kind: "label", text: "2" } } },
+    });
+  });
+});
+
 describe("PluginService integration — main entry execution", () => {
   it("executes a plugin's main entry via dynamic import", async () => {
     const markerKey = makeMarkerKey();
@@ -826,8 +1090,8 @@ describe("PluginService integration — main entry execution", () => {
         main: mainFile,
         contributes: {
           panels: [{ id: "p", name: "P", iconId: "i", color: "#000" }],
-          toolbarButtons: [{ id: "b", label: "B", iconId: "i", actionId: "bad-main.a" }],
-          menuItems: [{ label: "M", actionId: "bad-main.a", location: "view" }],
+          toolbarButtons: [{ id: "b", label: "B", iconId: "i", actionId: "acme.bad-main.a" }],
+          menuItems: [{ label: "M", actionId: "acme.bad-main.a", location: "view" }],
         },
       })
     );
@@ -838,9 +1102,11 @@ describe("PluginService integration — main entry execution", () => {
       await initializeAndActivate(service);
 
       expect(service.hasPlugin("acme.bad-main")).toBe(true);
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to load main entry for acme.bad-main"),
-        expect.anything()
+      // The worker reports the import failure via onActivationResult, which
+      // PluginService persists as the provenance loadError (#10526) — the
+      // in-process console.error of the old loader is gone.
+      expect(service.getPluginLoadError("acme.bad-main")?.message).toContain(
+        "intentional fixture failure"
       );
       expect(getPanelKindConfig("acme.bad-main.p")).toBeDefined();
       expect(getToolbarButtonConfig("acme.bad-main.b")).toBeDefined();
@@ -1004,10 +1270,11 @@ describe("PluginService integration — activate() lifecycle", () => {
 
     const service = new PluginService(tmpDir, "0.0.0");
     await service.initialize();
-    // Activation is deferred: startup plugins activate via this fan-out (the
-    // production trigger is globalServicesInit). registerAction runs inside
-    // activate(), so the action only surfaces once activation has run.
-    await service.activateStartupFinishedPlugins();
+    // Activation is deferred and lazy by default (#10523): registerAction runs
+    // inside activate(), so the action only surfaces once activation has run.
+    // A lazy plugin activates on first use — here, dispatch would trigger it,
+    // but the pre-dispatch list assertion below needs it activated up front.
+    await service.activatePlugin("acme.action-plugin");
 
     // The action surfaces in the renderer-facing list with the namespaced id.
     expect(service.listPluginActions().map((a) => a.id)).toContain("acme.action-plugin.do-thing");
@@ -1021,7 +1288,8 @@ describe("PluginService integration — activate() lifecycle", () => {
     );
     expect(result).toEqual({ echoed: { issue: 7 } });
 
-    // Unload tears the handler down — a later dispatch finds nothing.
+    // Unload tears the handler down — a later dispatch is short-circuited by
+    // the #10462 ownership guard (the plugin left `this.plugins`).
     service.unloadPlugin("acme.action-plugin");
     expect(service.listPluginActions()).toEqual([]);
     await expect(
@@ -1031,7 +1299,7 @@ describe("PluginService integration — activate() lifecycle", () => {
         makeCtx("acme.action-plugin"),
         [{}]
       )
-    ).rejects.toThrow(/No plugin handler registered/);
+    ).rejects.toThrow(/plugin "acme\.action-plugin" is not loaded/);
   });
 
   it("invokes activate's returned cleanup before handlers are removed on unload", async () => {
@@ -1100,7 +1368,7 @@ describe("PluginService integration — activate() lifecycle", () => {
     }
   });
 
-  it("logs an error and still registers the plugin when activate throws", async () => {
+  it("records a load error and still registers the plugin when activate throws", async () => {
     const pluginDir = await writePlugin("acme.throwing-activate", {
       name: "acme.throwing-activate",
       version: "1.0.0",
@@ -1119,19 +1387,13 @@ describe("PluginService integration — activate() lifecycle", () => {
       })
     );
 
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      const service = new PluginService(tmpDir, "0.0.0");
-      await initializeAndActivate(service);
+    const service = new PluginService(tmpDir, "0.0.0");
+    await initializeAndActivate(service);
 
-      expect(service.hasPlugin("acme.throwing-activate")).toBe(true);
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to load main entry for acme.throwing-activate"),
-        expect.anything()
-      );
-    } finally {
-      errorSpy.mockRestore();
-    }
+    expect(service.hasPlugin("acme.throwing-activate")).toBe(true);
+    // The worker's activate-error is persisted as the provenance loadError
+    // (#10526) — the in-process console.error of the old loader is gone.
+    expect(service.getPluginLoadError("acme.throwing-activate")?.message).toContain("boom");
   });
 
   it("host.registerHandler enforces the plugin's own namespace", async () => {
@@ -1192,9 +1454,9 @@ describe("PluginService integration — full contribution fan-out", () => {
         contributes: {
           panels: [{ id: "v", name: "V", iconId: "eye", color: "#abc" }],
           toolbarButtons: [
-            { id: "b", label: "B", iconId: "i", actionId: "all-in-one.act", priority: 2 },
+            { id: "b", label: "B", iconId: "i", actionId: "acme.all-in-one.act", priority: 2 },
           ],
-          menuItems: [{ label: "M", actionId: "all-in-one.act", location: "view" }],
+          menuItems: [{ label: "M", actionId: "acme.all-in-one.act", location: "view" }],
         },
       })
     );
@@ -1207,7 +1469,7 @@ describe("PluginService integration — full contribution fan-out", () => {
     expect(getPluginMenuItems()).toEqual([
       {
         pluginId: "acme.all-in-one",
-        item: { label: "M", actionId: "all-in-one.act", location: "view" },
+        item: { label: "M", actionId: "acme.all-in-one.act", location: "view" },
       },
     ]);
     expect(readMarker(markerKey)).toBe(1);
@@ -1311,6 +1573,70 @@ describe("PluginService integration — built-in plugin loading", () => {
 
     expect(readMarker(markerKey)).toBe(1);
     expect(service.listPlugins()[0].isBuiltin).toBe(true);
+  });
+
+  it("rolls back imperative registrations when a built-in activate() throws (#10621)", async () => {
+    const pluginDir = await writeBuiltinPlugin("daintree.rollback-test", {
+      name: "daintree.rollback-test",
+      version: "1.0.0",
+    });
+    const mainFile = `rollback-${randomUUID()}.mjs`;
+    // activate() registers an imperative action AND a channel handler, then
+    // throws. Without the rollback both would leak into the registries forever,
+    // since a failed built-in never runs the full unloadPlugin cascade.
+    await fs.writeFile(
+      path.join(pluginDir, mainFile),
+      `export function activate(host) {
+  host.registerAction(
+    {
+      id: "ghost",
+      title: "Ghost",
+      description: "Should be rolled back",
+      category: "Actions",
+      kind: "command",
+      danger: "safe",
+    },
+    async () => "x"
+  );
+  host.registerHandler("ghostChannel", async () => "y");
+  throw new Error("activate boom after registration");
+}
+`
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "daintree.rollback-test",
+        version: "1.0.0",
+        main: mainFile,
+      })
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await initializeAndActivate(service);
+
+      // The plugin's manifest stays loaded, but the action and handler registered
+      // before the throw are rolled back — no ghost contribution survives.
+      expect(service.hasPlugin("daintree.rollback-test")).toBe(true);
+      expect(service.listPluginActions().map((a) => a.id)).not.toContain(
+        "daintree.rollback-test.ghost"
+      );
+      expect(service.listPluginActions()).toEqual([]);
+      // The channel handler registered before the throw was removed too, so a
+      // dispatch finds nothing to run.
+      await expect(
+        service.dispatchHandler(
+          "daintree.rollback-test",
+          "ghostChannel",
+          makeCtx("daintree.rollback-test"),
+          []
+        )
+      ).rejects.toThrow();
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it("does not register contributions or run main for a disabled user plugin", async () => {
@@ -1434,9 +1760,9 @@ describe("PluginService integration — diagnostic logger", () => {
     );
     const service = new PluginService(tmpDir, "0.0.0");
     await service.initialize();
-    // Activation is deferred — the logger is wired inside activate(), so it
-    // only fires once the startup fan-out runs (mirrors the line-918 pattern).
-    await service.activateStartupFinishedPlugins();
+    // Activation is deferred and lazy by default (#10523) — the logger is wired
+    // inside activate(), so trigger first-use activation explicitly here.
+    await service.activatePlugin(pluginName);
     return service;
   }
 
@@ -1511,12 +1837,32 @@ describe("PluginService integration — diagnostic logger", () => {
   });
 
   it("keeps per-plugin log buffers isolated", async () => {
-    await loadWithLoggerActivate("acme.logger-a", "__loggerHost6a", `host.logger.info("from-a");`);
-    const service = await loadWithLoggerActivate(
-      "acme.logger-b",
-      "__loggerHost6b",
-      `host.logger.info("from-b");`
-    );
+    async function writeLoggerPlugin(pluginName: string, hostKey: string, activateBody: string) {
+      globalMarkers.add(hostKey);
+      const pluginDir = await writePlugin(pluginName, { name: pluginName, version: "1.2.3" });
+      const mainFile = `logger-${randomUUID()}.mjs`;
+      await fs.writeFile(
+        path.join(pluginDir, mainFile),
+        `export function activate(host) {\n  globalThis[${JSON.stringify(hostKey)}] = host;\n  ${activateBody}\n}\n`
+      );
+      await fs.writeFile(
+        path.join(pluginDir, "plugin.json"),
+        JSON.stringify({
+          name: pluginName,
+          version: "1.2.3",
+          displayName: "Logger Plugin",
+          main: mainFile,
+        })
+      );
+    }
+
+    await writeLoggerPlugin("acme.logger-a", "__loggerHost6a", `host.logger.info("from-a");`);
+    await writeLoggerPlugin("acme.logger-b", "__loggerHost6b", `host.logger.info("from-b");`);
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+    await service.activatePlugin("acme.logger-a");
+    await service.activatePlugin("acme.logger-b");
 
     const snapshot = service.getDiagnosticsSnapshot();
     const a = snapshot.plugins.find((p) => p.pluginId === "acme.logger-a");
@@ -1543,6 +1889,98 @@ describe("PluginService integration — diagnostic logger", () => {
       .getDiagnosticsSnapshot()
       .plugins.find((p) => p.pluginId === "acme.logger-unload");
     expect(entry).toBeUndefined();
+  });
+
+  it("scrubs secrets from buffered lines and the console mirror (#10775)", async () => {
+    // ghp_ + 36 sigil chars trips the github-pat pattern in secretScrubber.
+    const token = `ghp_${"0123456789abcdefghijklmnopqrstuvwxyz"}`;
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const service = await loadWithLoggerActivate(
+        "acme.logger-secret",
+        "__loggerHost7",
+        `host.logger.info("auth " + ${JSON.stringify(token)});`
+      );
+
+      const entry = service
+        .getDiagnosticsSnapshot()
+        .plugins.find((p) => p.pluginId === "acme.logger-secret");
+      const message = entry?.logLines[0]?.message ?? "";
+      // The buffer feeds shareable bug reports, so the raw token must be gone.
+      expect(message).toContain("[REDACTED]");
+      expect(message).not.toContain(token);
+
+      // The console mirror consumes the same rendered string — also scrubbed.
+      const mirrored = infoSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(mirrored).toContain("[REDACTED]");
+      expect(mirrored).not.toContain(token);
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  it("scrubs a secret straddling the truncation boundary (#10775)", async () => {
+    // The token starts just before the codepoint cap. Scrub-before-truncate
+    // redacts the whole token; truncate-first would leave a "ghp_…" fragment.
+    const token = `ghp_${"0123456789abcdefghijklmnopqrstuvwxyz"}`;
+    const service = await loadWithLoggerActivate(
+      "acme.logger-straddle",
+      "__loggerHost8",
+      `host.logger.info("x".repeat(2040) + " " + ${JSON.stringify(token)});`
+    );
+
+    const entry = service
+      .getDiagnosticsSnapshot()
+      .plugins.find((p) => p.pluginId === "acme.logger-straddle");
+    const message = entry?.logLines[0]?.message ?? "";
+    expect(message).not.toContain(token);
+    // No recognizable sigil fragment survives — not even the "ghp_" prefix.
+    expect(message).not.toMatch(/ghp_[A-Za-z0-9_]/);
+  });
+
+  it("scrubs secrets folded in from structured fields (#10775)", async () => {
+    const token = `ghp_${"0123456789abcdefghijklmnopqrstuvwxyz"}`;
+    const service = await loadWithLoggerActivate(
+      "acme.logger-fields",
+      "__loggerHost9",
+      `host.logger.info("request", { authorization: ${JSON.stringify(token)} });`
+    );
+
+    const entry = service
+      .getDiagnosticsSnapshot()
+      .plugins.find((p) => p.pluginId === "acme.logger-fields");
+    const message = entry?.logLines[0]?.message ?? "";
+    expect(message).toContain("[REDACTED]");
+    expect(message).not.toContain(token);
+  });
+
+  it("scrubs the console mirror across all log levels (#10775)", async () => {
+    const token = `ghp_${"0123456789abcdefghijklmnopqrstuvwxyz"}`;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = await loadWithLoggerActivate(
+        "acme.logger-levels",
+        "__loggerHost10",
+        `host.logger.warn("w " + ${JSON.stringify(token)});
+         host.logger.error("e " + ${JSON.stringify(token)});`
+      );
+
+      const entry = service
+        .getDiagnosticsSnapshot()
+        .plugins.find((p) => p.pluginId === "acme.logger-levels");
+      expect(entry?.logLines.every((l) => !l.message.includes(token))).toBe(true);
+      expect(entry?.logLines.every((l) => l.message.includes("[REDACTED]"))).toBe(true);
+
+      for (const spy of [warnSpy, errorSpy]) {
+        const mirrored = spy.mock.calls.map((c) => String(c[0])).join("\n");
+        expect(mirrored).toContain("[REDACTED]");
+        expect(mirrored).not.toContain(token);
+      }
+    } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
   });
 });
 

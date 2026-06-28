@@ -56,6 +56,7 @@ vi.mock("../../../utils/performance.js", () => ({
 vi.mock("../../../services/CrashRecoveryService.js", () => ({
   getCrashRecoveryService: vi.fn(() => ({
     resetToFresh: vi.fn(),
+    clearPendingCrash: vi.fn(),
   })),
 }));
 
@@ -278,12 +279,14 @@ describe("registerRecoveryHandlers", () => {
       expect(win.loadURL).not.toHaveBeenCalled();
     });
 
-    it("resets state then reloads the app when sender is the recovery page", async () => {
+    it("resets state, clears the pending crash, then reloads the app when sender is the recovery page", async () => {
       const { getCrashRecoveryService: getCrash } =
         await import("../../../services/CrashRecoveryService.js");
       const resetMock = vi.fn();
+      const clearMock = vi.fn();
       vi.mocked(getCrash).mockReturnValue({
         resetToFresh: resetMock,
+        clearPendingCrash: clearMock,
       } as unknown as ReturnType<typeof getCrash>);
 
       const win = buildWindow();
@@ -294,9 +297,15 @@ describe("registerRecoveryHandlers", () => {
       await handler(buildEvent(TRUSTED_RECOVERY_URL));
 
       expect(resetMock).toHaveBeenCalledTimes(1);
+      // Without clearing the in-memory record, the reload's app:boot re-reads
+      // it and re-presents the dialog with the backup already gone (#10809).
+      expect(clearMock).toHaveBeenCalledTimes(1);
       expect(win.loadURL).toHaveBeenCalledTimes(1);
       expect(win.loadURL).toHaveBeenCalledWith("http://localhost:5173");
       expect(resetMock.mock.invocationCallOrder[0]).toBeLessThan(
+        clearMock.mock.invocationCallOrder[0]
+      );
+      expect(clearMock.mock.invocationCallOrder[0]).toBeLessThan(
         win.loadURL.mock.invocationCallOrder[0]
       );
     });

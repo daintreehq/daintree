@@ -195,6 +195,125 @@ describe("buildOutgoingState draft propagation (#4985)", () => {
   });
 });
 
+describe("instant switch feedback: deferred snapshot + IPC", () => {
+  const projectC = {
+    id: "project-c",
+    name: "Project C",
+    path: "/tmp/project-c",
+    emoji: "folder",
+    lastOpened: Date.now(),
+  };
+
+  it("flips isSwitching synchronously but defers the snapshot + IPC to a later task", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    // Call without awaiting: the busy flag must be set synchronously (so the
+    // overlay can mount immediately) while buildOutgoingState + the switch IPC
+    // are deferred past the paint yield — the whole point of the reorder.
+    const pending = useProjectStore.getState().switchProject(projectB.id);
+    expect(useProjectStore.getState().isSwitching).toBe(true);
+    expect(useProjectStore.getState().switchingToProjectId).toBe(projectB.id);
+    expect(projectClientMock.switch).not.toHaveBeenCalled();
+
+    await pending;
+    expect(projectClientMock.switch).toHaveBeenCalledWith(
+      projectB.id,
+      expect.any(Object),
+      undefined
+    );
+  });
+
+  it("fires the IPC only for the last of two rapid non-awaited switches", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({
+      projects: [projectA, projectB, projectC],
+      currentProject: projectA,
+    });
+
+    // Both start before either resumes from the yield; the first must supersede
+    // out at the post-yield requestId guard without firing a stale IPC.
+    void useProjectStore.getState().switchProject(projectB.id);
+    await useProjectStore.getState().switchProject(projectC.id);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(projectClientMock.switch).toHaveBeenCalledTimes(1);
+    expect(projectClientMock.switch).toHaveBeenCalledWith(
+      projectC.id,
+      expect.any(Object),
+      undefined
+    );
+  });
+
+  it("keeps feedback instant even when the outgoing project is huge (snapshot deferred, not blocking)", async () => {
+    const { setPanelStoreAccessor, getPanelStoreSnapshot } = await import("../storeAccessors");
+
+    // Simulate a heavy project: a large panel graph so the outgoing-state
+    // snapshot (buildOutgoingState maps/filters/serializes every panel) does
+    // real, measurable work — the work that, before this change, ran on the
+    // click BEFORE the busy flag was ever set.
+    const N = 8000;
+    const panelsById: Record<string, unknown> = {};
+    const panelIds: string[] = [];
+    for (let i = 0; i < N; i++) {
+      const id = `panel-${i}`;
+      panelsById[id] = {
+        id,
+        kind: "browser",
+        location: "grid",
+        browserUrl: `https://example.com/${i}`,
+      };
+      panelIds.push(id);
+    }
+    let snapshotCalls = 0;
+    setPanelStoreAccessor(() => {
+      snapshotCalls++;
+      return { panelsById: panelsById as never, panelIds, tabGroups: new Map() };
+    });
+
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    // Click → time to the busy flag that mounts the switch overlay.
+    const t0 = performance.now();
+    const pending = useProjectStore.getState().switchProject(projectB.id);
+    const timeToFeedbackMs = performance.now() - t0;
+
+    // PROOF (deterministic): the busy flag is up, but the heavy snapshot and the
+    // IPC have NOT run yet — both are deferred past the paint yield.
+    expect(useProjectStore.getState().isSwitching).toBe(true);
+    expect(snapshotCalls).toBe(0);
+    expect(projectClientMock.switch).not.toHaveBeenCalled();
+
+    await pending;
+
+    // The heavy snapshot ran (deferred) and produced the full payload.
+    expect(snapshotCalls).toBeGreaterThan(0);
+    expect(projectClientMock.switch).toHaveBeenCalledTimes(1);
+    expect(projectClientMock.switch.mock.calls[0]![1].terminals).toHaveLength(N);
+
+    // Quantify the traversal cost that no longer blocks first feedback.
+    const snap = getPanelStoreSnapshot()!;
+    const t1 = performance.now();
+    const rebuilt = snap.panelIds
+      .map((id) => snap.panelsById[id as keyof typeof snap.panelsById])
+      .filter(Boolean)
+      .map((p) => ({ id: (p as { id: string }).id, kind: (p as { kind: string }).kind }));
+    const snapshotWorkMs = performance.now() - t1;
+    expect(rebuilt).toHaveLength(N);
+
+    // eslint-disable-next-line no-console -- intentional demonstration metric
+    console.log(
+      `[switch-responsiveness] N=${N} panels | time-to-feedback=${timeToFeedbackMs.toFixed(2)}ms | outgoing-snapshot work~${snapshotWorkMs.toFixed(2)}ms (now deferred past paint; pre-fix it ran BEFORE any feedback)`
+    );
+
+    // The deterministic assertions above prove the click's feedback did not
+    // pay the snapshot cost. Avoid comparing sub-millisecond timings here:
+    // on fast local runs the synthetic traversal can be cheaper than the
+    // store update itself.
+  });
+});
+
 describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
   it("includes browser panel snapshots in outgoing terminals", async () => {
     const { setPanelStoreAccessor } = await import("../storeAccessors");
@@ -607,5 +726,130 @@ describe("worktreeLoadError surfacing (#8400)", () => {
     useProjectStore.setState({ currentProject: projectB, worktreeLoadError: null });
     statusCb!({ projectId: projectA.id, worktreeLoadError: "Other project failed" });
     expect(useProjectStore.getState().worktreeLoadError).toBeNull();
+  });
+});
+
+describe("switch busy indication (#10736)", () => {
+  it("flags isSwitching and the target project id when a switch starts", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    expect(useProjectStore.getState().isSwitching).toBe(false);
+    expect(useProjectStore.getState().switchingToProjectId).toBeNull();
+
+    await useProjectStore.getState().switchProject(projectB.id);
+
+    expect(useProjectStore.getState().isSwitching).toBe(true);
+    expect(useProjectStore.getState().switchingToProjectId).toBe(projectB.id);
+  });
+
+  it("keeps isSwitching set after the fire-and-forget IPC resolves (view is replaced)", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The happy path never re-enters this renderer, so the flag is not cleared.
+    expect(useProjectStore.getState().isSwitching).toBe(true);
+  });
+
+  it("clears isSwitching when the switch IPC rejects (outgoing view stays visible)", async () => {
+    projectClientMock.switch.mockRejectedValueOnce(new Error("boom"));
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    // Let the rejected promise's .catch() run.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useProjectStore.getState().isSwitching).toBe(false);
+    expect(useProjectStore.getState().switchingToProjectId).toBeNull();
+    expect(useProjectStore.getState().isLoading).toBe(false);
+  });
+
+  it("does not flag isSwitching when switching to the current project (early return)", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectA.id);
+
+    expect(useProjectStore.getState().isSwitching).toBe(false);
+    expect(useProjectStore.getState().switchingToProjectId).toBeNull();
+  });
+
+  it("flags isSwitching for reopenProject (background-project switch path)", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().reopenProject(projectB.id);
+
+    expect(useProjectStore.getState().isSwitching).toBe(true);
+    expect(useProjectStore.getState().switchingToProjectId).toBe(projectB.id);
+  });
+
+  it("clears isSwitching when the reopen IPC rejects", async () => {
+    projectClientMock.reopen.mockRejectedValueOnce(new Error("boom"));
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().reopenProject(projectB.id);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useProjectStore.getState().isSwitching).toBe(false);
+    expect(useProjectStore.getState().switchingToProjectId).toBeNull();
+  });
+
+  it("clearSwitching resets the switch flags and the switch-owned loading state", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    // Mirrors a parked renderer reactivated from the LRU cache: switchProject
+    // left isSwitching + isLoading true and that renderer never re-rendered.
+    useProjectStore.setState({
+      isSwitching: true,
+      switchingToProjectId: projectB.id,
+      isLoading: true,
+    });
+
+    useProjectStore.getState().clearSwitching();
+
+    expect(useProjectStore.getState().isSwitching).toBe(false);
+    expect(useProjectStore.getState().switchingToProjectId).toBeNull();
+    // Without this the reactivated view's ProjectSwitcher stays disabled.
+    expect(useProjectStore.getState().isLoading).toBe(false);
+  });
+
+  it("clearSwitching leaves an unrelated load untouched when no switch is flagged", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    // A plain loadProjects/addProject is in flight — no switch flag set.
+    useProjectStore.setState({
+      isSwitching: false,
+      switchingToProjectId: null,
+      isLoading: true,
+    });
+
+    useProjectStore.getState().clearSwitching();
+
+    expect(useProjectStore.getState().isLoading).toBe(true);
+  });
+
+  it("a superseded switch's rejection does not clobber the newer transition's busy state", async () => {
+    // Switch A→B (requestId N), then A→C supersedes it (requestId N+1). When B's
+    // IPC later rejects, the staleness guard must keep C's busy state intact so
+    // the overlay keeps tracking the live switch rather than clearing early.
+    projectClientMock.switch.mockRejectedValueOnce(new Error("B failed")); // first call (B)
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await useProjectStore.getState().switchProject("project-c");
+    // Let B's rejected promise's .catch() run (it should short-circuit).
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useProjectStore.getState().isSwitching).toBe(true);
+    expect(useProjectStore.getState().switchingToProjectId).toBe("project-c");
   });
 });

@@ -59,6 +59,22 @@ describe("runPackage", () => {
     expect(result.files).not.toContain("dist/index.js.map");
   });
 
+  it("excludes dev-only files (package.json, lockfile, tsconfig, configs)", async () => {
+    await fixture();
+    await writeFile("package.json", JSON.stringify({ name: "acme.packtest", private: true }));
+    await writeFile("package-lock.json", "{}");
+    await writeFile("tsconfig.json", "{}");
+    await writeFile("vite.config.ts", "export default {};");
+    const result = await runPackage({ dir: tmpDir, dryRun: true, skipBuild: true });
+    expect(result.files).not.toContain("package.json");
+    expect(result.files).not.toContain("package-lock.json");
+    expect(result.files).not.toContain("tsconfig.json");
+    expect(result.files).not.toContain("vite.config.ts");
+    // Real plugin output still ships.
+    expect(result.files).toContain("plugin.json");
+    expect(result.files).toContain("dist/index.js");
+  });
+
   it("includes source maps when sourcemaps=true", async () => {
     await fixture();
     const result = await runPackage({

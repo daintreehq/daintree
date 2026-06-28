@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import {
   getLaunchOptions,
   getMoreAgentsOption,
@@ -12,6 +12,11 @@ import type { WorktreeState } from "@/types";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { actionService } from "@/services/ActionService";
 import { getEffectiveAgentIds } from "@shared/config/agentRegistry";
+import {
+  subscribeToPluginAgentRegistry,
+  getPluginAgentRegistrySnapshot,
+} from "@shared/config/pluginAgentRegistry";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { isAgentInstalled } from "../../shared/utils/agentAvailability";
 
 interface UseNewTerminalPaletteProps {
@@ -43,15 +48,31 @@ export function useNewTerminalPalette({
   const addPanel = usePanelStore((state) => state.addPanel);
   const availability = useCliAvailabilityStore((state) => state.availability);
   const isAvailabilityInitialized = useCliAvailabilityStore((state) => state.isInitialized);
+  // Re-derive options when plugins register/unregister agents mid-session;
+  // getLaunchOptions reads the effective registry, which the snapshot mirrors.
+  const pluginAgentSnapshot = useSyncExternalStore(
+    subscribeToPluginAgentRegistry,
+    getPluginAgentRegistrySnapshot
+  );
 
   const options = useMemo(() => {
     const allOptions = getLaunchOptions();
-    const registryAgentIds = new Set(getEffectiveAgentIds());
+    // Union plugin agent ids (mirrored by pluginAgentSnapshot) with the effective
+    // set so this memo recomputes when plugins register/unregister mid-session;
+    // getEffectiveAgentIds already includes them, so the union is purely a
+    // recompute trigger.
+    const registryAgentIds = new Set([
+      ...getEffectiveAgentIds(),
+      ...Object.keys(pluginAgentSnapshot),
+    ]);
 
     // Before availability is known, show all agents (avoids startup flicker).
-    // Once known, hide agents that are not installed.
+    // Once known, hide built-in agents that are not installed. Plugin-contributed
+    // agents are never hidden here (#10560) — kept consistent with usePanelPalette
+    // so a plugin agent stays reachable rather than silently dropping.
     const isAgentHidden = (id: string): boolean => {
       if (!isAvailabilityInitialized) return false;
+      if (!isBuiltInAgentId(id)) return false;
       return !isAgentInstalled(availability[id]);
     };
 
@@ -62,7 +83,7 @@ export function useNewTerminalPalette({
     filtered.push(getMoreAgentsOption());
 
     return filtered;
-  }, [availability, isAvailabilityInitialized]);
+  }, [availability, isAvailabilityInitialized, pluginAgentSnapshot]);
 
   const { results, selectedIndex, close, ...paletteRest } = useSearchablePalette<LaunchOption>({
     items: options,

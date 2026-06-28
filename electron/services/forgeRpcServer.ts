@@ -91,6 +91,10 @@ const inFlight = new Map<string, InFlightEntry>();
 // before this; only misbehaving plugins ever reach it.
 const FORGE_INVOKE_TIMEOUT_MS = 35_000;
 
+// The key serializes the full args array, so `resolveProvider` calls that
+// differ only by `opts.projectPath` (and other methods whose `RepoRef` arg
+// carries a distinct `projectPath`) no longer coalesce — intended, since each
+// caller must get its own project root stamped back rather than a peer's (#10563).
 function buildSingleflightKey(req: ForgeRpcRequest): string {
   return `${req.method}\0${req.namespacedId ?? ""}\0${stringifyArgs(req.args) ?? ""}`;
 }
@@ -242,6 +246,7 @@ async function invokeResolveProvider(args: unknown[]): Promise<ForgeResolveProvi
       remoteUrl: string | null;
       forgeProviderOverride: string | null;
       globalDefaultProviderId: string | null;
+      projectPath?: string | null;
     },
   ];
   const pluginService = await getPluginService();
@@ -272,7 +277,12 @@ async function invokeResolveProvider(args: unknown[]): Promise<ForgeResolveProvi
   const repo = impl.parseRemote(opts.remoteUrl);
   if (!repo) return miss;
 
-  return { status: "resolved", namespacedId, repo };
+  // Stamp the caller's worktree path onto the ref so the provider receives the
+  // on-disk path without reconstructing it from `repo` (#10563). Main is the
+  // authority here: the workspace-host supplies its `cwd`, main returns it on
+  // the parsed ref.
+  const stamped: RepoRef = opts.projectPath ? { ...repo, projectPath: opts.projectPath } : repo;
+  return { status: "resolved", namespacedId, repo: stamped };
 }
 
 function invokeFindPRByBranch(impl: ForgeProviderImpl, args: unknown[]): Promise<PR | null> {

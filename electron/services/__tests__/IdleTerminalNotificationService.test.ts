@@ -320,6 +320,202 @@ describe("IdleTerminalNotificationService", () => {
     });
   });
 
+  describe("notified throttle", () => {
+    function setup() {
+      storeBacking.idleTerminalNotify = { enabled: true, thresholdMinutes: 60 };
+      projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
+      projectStoreMock.getAllProjects.mockReturnValue([makeProject("proj-1", "Old")]);
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({ projectId: "proj-1" }),
+      ]);
+    }
+
+    it("records a notified timestamp when it broadcasts", async () => {
+      setup();
+      const service = makeService();
+      await runCheck(service);
+
+      const persisted = storeBacking.idleTerminalNotifiedAt as Record<string, number>;
+      expect(persisted["proj-1"]).toBeGreaterThan(0);
+    });
+
+    it("does not re-broadcast for an ignored project within the cooldown", async () => {
+      setup();
+      const service = makeService();
+      await runCheck(service);
+      await runCheck(service);
+
+      // Second cycle is suppressed by the notified throttle even though nothing
+      // was dismissed — this is the stacking-toast regression fix.
+      expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-broadcasts after the cooldown lapses", async () => {
+      setup();
+      storeBacking.idleTerminalNotifiedAt = { "proj-1": Date.now() - 2 * SIXTY_MIN_MS };
+      const service = makeService();
+      await runCheck(service);
+
+      expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("suppresses an already-notified project but still broadcasts a fresh one", async () => {
+      storeBacking.idleTerminalNotify = { enabled: true, thresholdMinutes: 60 };
+      // proj-1 was notified recently; proj-2 is newly idle.
+      storeBacking.idleTerminalNotifiedAt = { "proj-1": Date.now() - 5 * 60 * 1000 };
+      projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
+      projectStoreMock.getAllProjects.mockReturnValue([
+        makeProject("proj-1"),
+        makeProject("proj-2"),
+      ]);
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({ id: "t1", projectId: "proj-1" }),
+        makeTerminal({ id: "t2", projectId: "proj-2" }),
+      ]);
+
+      const service = makeService();
+      await runCheck(service);
+
+      expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+      const [, payload] = broadcastToRendererMock.mock.calls[0];
+      expect(payload.projects.map((p: { projectId: string }) => p.projectId)).toEqual(["proj-2"]);
+    });
+
+    it("keeps the throttle while a project is merely the active project", async () => {
+      // Viewing a project (without terminal activity) must not reset the
+      // throttle — otherwise a switch-to-then-away round trip re-notifies the
+      // same still-idle terminals inside the cooldown.
+      const notifiedAt = Date.now() - 5 * 60 * 1000;
+      storeBacking.idleTerminalNotify = { enabled: true, thresholdMinutes: 60 };
+      storeBacking.idleTerminalNotifiedAt = { "proj-1": notifiedAt };
+      projectStoreMock.getCurrentProjectId.mockReturnValue("proj-1");
+      projectStoreMock.getAllProjects.mockReturnValue([makeProject("proj-1")]);
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({ projectId: "proj-1" }),
+      ]);
+
+      const service = makeService();
+      await runCheck(service);
+
+      const persisted = storeBacking.idleTerminalNotifiedAt as Record<string, number>;
+      expect(persisted["proj-1"]).toBe(notifiedAt);
+    });
+
+    it("does not re-notify after switching to a still-idle project and back", async () => {
+      storeBacking.idleTerminalNotify = { enabled: true, thresholdMinutes: 60 };
+      projectStoreMock.getAllProjects.mockReturnValue([makeProject("proj-1")]);
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({ projectId: "proj-1" }),
+      ]);
+      const service = makeService();
+
+      // Cycle 1: proj-1 idle in the background → notify.
+      projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
+      await runCheck(service);
+      // Cycle 2: user switches to proj-1 (now current) → skipped, throttle kept.
+      projectStoreMock.getCurrentProjectId.mockReturnValue("proj-1");
+      await runCheck(service);
+      // Cycle 3: user switches away; proj-1 still idle, no activity → suppressed.
+      projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
+      await runCheck(service);
+
+      expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("clears the throttle when a project has no terminals", async () => {
+      storeBacking.idleTerminalNotify = { enabled: true, thresholdMinutes: 60 };
+      storeBacking.idleTerminalNotifiedAt = { "proj-1": Date.now() - 5 * 60 * 1000 };
+      projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
+      projectStoreMock.getAllProjects.mockReturnValue([makeProject("proj-1")]);
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([]);
+
+      const service = makeService();
+      await runCheck(service);
+
+      const persisted = storeBacking.idleTerminalNotifiedAt as Record<string, number>;
+      expect(persisted["proj-1"]).toBeUndefined();
+    });
+
+    it("clears the throttle when an agent becomes active", async () => {
+      storeBacking.idleTerminalNotify = { enabled: true, thresholdMinutes: 60 };
+      storeBacking.idleTerminalNotifiedAt = { "proj-1": Date.now() - 5 * 60 * 1000 };
+      projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
+      projectStoreMock.getAllProjects.mockReturnValue([makeProject("proj-1")]);
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({ projectId: "proj-1", agentState: "working" }),
+      ]);
+
+      const service = makeService();
+      await runCheck(service);
+
+      const persisted = storeBacking.idleTerminalNotifiedAt as Record<string, number>;
+      expect(persisted["proj-1"]).toBeUndefined();
+    });
+
+    it("clears the throttle when terminal activity resumes", async () => {
+      storeBacking.idleTerminalNotify = { enabled: true, thresholdMinutes: 60 };
+      storeBacking.idleTerminalNotifiedAt = { "proj-1": Date.now() - 5 * 60 * 1000 };
+      projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
+      projectStoreMock.getAllProjects.mockReturnValue([makeProject("proj-1")]);
+      // Recent activity — the project is no longer fully idle.
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({
+          projectId: "proj-1",
+          lastInputTime: Date.now() - 60 * 1000,
+          lastOutputTime: Date.now() - 60 * 1000,
+        }),
+      ]);
+
+      const service = makeService();
+      await runCheck(service);
+
+      const persisted = storeBacking.idleTerminalNotifiedAt as Record<string, number>;
+      expect(persisted["proj-1"]).toBeUndefined();
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
+    it("does not clear an explicit dismissal when clearing the notified throttle", async () => {
+      storeBacking.idleTerminalNotify = { enabled: true, thresholdMinutes: 60 };
+      const dismissedAt = Date.now() - 5 * 60 * 1000;
+      storeBacking.idleTerminalDismissals = { "proj-1": dismissedAt };
+      storeBacking.idleTerminalNotifiedAt = { "proj-1": Date.now() - 5 * 60 * 1000 };
+      // Activity resumes → proj-1 leaves the idle state → throttle cleared, but
+      // the explicit dismissal (a separate user mute) is preserved.
+      projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
+      projectStoreMock.getAllProjects.mockReturnValue([makeProject("proj-1")]);
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({
+          projectId: "proj-1",
+          lastInputTime: Date.now() - 60 * 1000,
+          lastOutputTime: Date.now() - 60 * 1000,
+        }),
+      ]);
+
+      const service = makeService();
+      await runCheck(service);
+
+      const notified = storeBacking.idleTerminalNotifiedAt as Record<string, number>;
+      const dismissals = storeBacking.idleTerminalDismissals as Record<string, number>;
+      expect(notified["proj-1"]).toBeUndefined();
+      expect(dismissals["proj-1"]).toBe(dismissedAt);
+    });
+
+    it("clears stale notified entries", async () => {
+      storeBacking.idleTerminalNotify = { enabled: true, thresholdMinutes: 60 };
+      storeBacking.idleTerminalNotifiedAt = {
+        "expired-proj": Date.now() - 24 * SIXTY_MIN_MS,
+      };
+      projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
+      projectStoreMock.getAllProjects.mockReturnValue([]);
+
+      const service = makeService();
+      await runCheck(service);
+
+      const persisted = storeBacking.idleTerminalNotifiedAt as Record<string, number>;
+      expect(persisted["expired-proj"]).toBeUndefined();
+    });
+  });
+
   describe("closeProject", () => {
     it("delegates to HibernationService so DevPreview callbacks run", async () => {
       projectStoreMock.getAllProjects.mockReturnValue([makeProject("proj-1", "Old")]);
@@ -329,7 +525,7 @@ describe("IdleTerminalNotificationService", () => {
       const killed = await service.closeProject("proj-1");
 
       expect(killed).toBe(2);
-      expect(hibernateProjectOnDemandMock).toHaveBeenCalledWith("proj-1", "Old", "scheduled");
+      expect(hibernateProjectOnDemandMock).toHaveBeenCalledWith("proj-1", "Old", "user-initiated");
       const dismissals = storeBacking.idleTerminalDismissals as Record<string, number>;
       expect(dismissals["proj-1"]).toBeGreaterThan(0);
     });
@@ -344,7 +540,7 @@ describe("IdleTerminalNotificationService", () => {
       expect(hibernateProjectOnDemandMock).toHaveBeenCalledWith(
         "ghost-proj",
         "ghost-proj",
-        "scheduled"
+        "user-initiated"
       );
     });
 

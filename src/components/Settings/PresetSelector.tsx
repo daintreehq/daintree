@@ -58,7 +58,7 @@ export function PresetSelector({
     if (custom) {
       return {
         id: custom.id,
-        label: custom.name,
+        label: custom.displayTitle ?? custom.name,
         color: custom.color ?? agentColor,
         source: "custom",
       };
@@ -67,7 +67,7 @@ export function PresetSelector({
     if (project) {
       return {
         id: project.id,
-        label: project.name,
+        label: project.displayTitle ?? project.name,
         color: project.color ?? agentColor,
         source: "project",
       };
@@ -76,7 +76,7 @@ export function PresetSelector({
     if (ccr) {
       return {
         id: ccr.id,
-        label: stripCcrPrefix(ccr.name),
+        label: ccr.displayTitle ?? stripCcrPrefix(ccr.name),
         color: ccr.color ?? agentColor,
         source: "ccr",
       };
@@ -160,7 +160,7 @@ export function PresetSelector({
                 <PresetOption
                   key={f.id}
                   id={f.id}
-                  label={stripCcrPrefix(f.name)}
+                  label={f.displayTitle ?? stripCcrPrefix(f.name)}
                   color={f.color ?? agentColor}
                   badge="CCR"
                   isSelected={selectedPresetId === f.id}
@@ -177,7 +177,7 @@ export function PresetSelector({
                 <PresetOption
                   key={`project-${f.id}`}
                   id={f.id}
-                  label={f.name}
+                  label={f.displayTitle ?? f.name}
                   color={f.color ?? agentColor}
                   badge="Project"
                   isSelected={selectedPresetId === f.id}
@@ -194,7 +194,7 @@ export function PresetSelector({
                 <PresetOption
                   key={f.id}
                   id={f.id}
-                  label={f.name}
+                  label={f.displayTitle ?? f.name}
                   color={f.color ?? agentColor}
                   isSelected={selectedPresetId === f.id}
                   onSelect={handleSelect}

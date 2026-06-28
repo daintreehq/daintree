@@ -21,7 +21,7 @@ export function PortalLaunchpad({ links, onOpenUrl }: PortalLaunchpadProps) {
   if (links.length === 0) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center">
-        <Globe className="w-12 h-12 mb-2 opacity-50" />
+        <Globe className="w-12 h-12 mb-2 text-text-muted" />
         <p className="text-sm text-daintree-text/50">No AI agents configured</p>
         <p className="text-xs text-daintree-text/40">
           Add a portal link to use as your AI agent web client.

@@ -28,6 +28,19 @@ export interface RepoRef {
   owner: string;
   repo: string;
   rawData: unknown;
+  /**
+   * Absolute on-disk root of the project (its main worktree), injected by the
+   * host so a file- or CLI-backed provider doesn't have to reconstruct the
+   * directory from `repo` via `getActiveWorktree()`. It's the project root, not
+   * the active linked worktree — project-scoped forge data lives once at the
+   * root; a provider that genuinely needs the active worktree still reads it
+   * from `getActiveWorktree()`. Present on refs the host resolves for a concrete
+   * project; absent for synthetic refs or legacy callers, so consume it
+   * defensively (`if (repo.projectPath)`). A network provider ignores it. Never
+   * embed it in a remote API payload or a persisted cache key — it's host-local
+   * context, not repository identity.
+   */
+  projectPath?: string;
 }
 
 /**
@@ -286,6 +299,76 @@ export interface CreateIssueInput {
   labels?: string[];
 }
 
+/**
+ * Normalized input for {@link ForgeProviderImpl.createPR}. Provider-neutral:
+ * `head` and `base` are branch names, `title` is required, `body` and `draft`
+ * are optional. Providers map these onto their own create payload and silently
+ * ignore fields they don't support.
+ */
+export interface CreatePRInput {
+  /** Source branch the changes come from. */
+  head: string;
+  /** Target branch the PR merges into. */
+  base: string;
+  title: string;
+  body?: string;
+  draft?: boolean;
+}
+
+/**
+ * Normalized input for {@link ForgeProviderImpl.mergePR}. `mergeMethod` names
+ * the strategy shared across forges; providers reject methods they don't
+ * support. `commitTitle`/`commitMessage` override the merge commit text when
+ * the chosen method produces a commit.
+ */
+export interface MergePRInput {
+  mergeMethod?: "merge" | "squash" | "rebase";
+  commitTitle?: string;
+  commitMessage?: string;
+}
+
+/**
+ * Normalized input for {@link ForgeProviderImpl.editPR}. Both fields are
+ * optional; callers supply at least one. Providers ignore unset fields.
+ */
+export interface EditPRInput {
+  title?: string;
+  body?: string;
+}
+
+/**
+ * Provider-neutral reason an issue was closed. GitHub maps `completed` /
+ * `not_planned` onto its `state_reason`; forges without the concept ignore it.
+ */
+export type IssueCloseReason = "completed" | "not_planned" | "duplicate";
+
+/**
+ * Normalized input for {@link ForgeProviderImpl.editIssue}. Both fields are
+ * optional so callers can patch the title, the body, or both — providers apply
+ * only the fields present and leave the rest untouched. Callers must supply at
+ * least one field; an all-empty input is rejected by the host.
+ */
+export interface EditIssueInput {
+  title?: string;
+  body?: string;
+}
+
+/**
+ * Normalized projection of a comment created via
+ * {@link ForgeProviderImpl.addIssueComment}. Mirrors the lowest common
+ * denominator across forges.
+ */
+export interface IssueComment {
+  /** Provider comment id, as a string so non-numeric forges fit. */
+  id: string;
+  body: string;
+  url: string;
+  author?: ForgeUser;
+  /** Epoch milliseconds. */
+  createdAt: number;
+  rawData: unknown;
+}
+
 export interface PR {
   number: number;
   title: string;
@@ -381,8 +464,37 @@ export interface PushErrorClassification {
   code: string;
 }
 
+/**
+ * Reviewers to request on a pull request, modeled generically so any forge
+ * with a review concept can implement it. `users` are individual account
+ * logins; `teams` are team identifiers (GitHub expects lowercase-hyphenated
+ * slugs). At least one of the two should be non-empty — an all-empty request
+ * is rejected before it reaches the provider.
+ */
+export interface ReviewerRequest {
+  users?: string[];
+  teams?: string[];
+}
+
 export interface ReviewCapability {
   getReviewThreads(repo: RepoRef, prNumber: number): Promise<ReviewThread[]>;
+  /**
+   * Optional review-write operations. A provider that models PR reviews as
+   * read-only implements only `getReviewThreads` and omits these; the host
+   * guards on presence (`impl.reviews?.approvePR`) before dispatching, so a
+   * forge without a given operation simply doesn't surface it. Each mutates
+   * remote review state, so the `forge.*` actions that call them carry
+   * `danger: "confirm"`.
+   */
+  approvePR?(repo: RepoRef, prNumber: number, body?: string): Promise<void>;
+  requestChanges?(repo: RepoRef, prNumber: number, body: string): Promise<void>;
+  /**
+   * Dismiss a previously-submitted review. `reviewId` identifies the review to
+   * dismiss — there is no dismiss-by-PR shortcut, so callers obtain it first
+   * from a {@link ReviewThread}'s `rawData` (or the provider's review listing).
+   */
+  dismissReview?(repo: RepoRef, prNumber: number, reviewId: number, message: string): Promise<void>;
+  requestReviewers?(repo: RepoRef, prNumber: number, reviewers: ReviewerRequest): Promise<void>;
 }
 
 export interface ApprovalCapability {
@@ -844,6 +956,79 @@ export interface ForgeProviderImpl {
   createIssue(repo: RepoRef, input: CreateIssueInput): Promise<Issue>;
   assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<void>;
   unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<void>;
+  /**
+   * Open a new pull request from `input.head` into `input.base` and return the
+   * normalized {@link PR}. Providers that can't create PRs throw
+   * `"Not supported"`. The host clears its PR caches after a successful create
+   * so the new PR shows up in subsequent {@link listPRs} calls.
+   */
+  createPR(repo: RepoRef, input: CreatePRInput): Promise<PR>;
+  /** Close an open pull request without merging. */
+  closePR(repo: RepoRef, prNumber: number): Promise<void>;
+  /** Reopen a previously closed pull request. */
+  reopenPR(repo: RepoRef, prNumber: number): Promise<void>;
+  /**
+   * Merge a pull request using the optional {@link MergePRInput} strategy.
+   * Irreversible. Providers surface unmergeable states (draft, conflicts,
+   * failing required checks, stale head) as errors.
+   */
+  mergePR(repo: RepoRef, prNumber: number, input?: MergePRInput): Promise<void>;
+  /** Convert an open pull request to a draft. */
+  convertPRToDraft(repo: RepoRef, prNumber: number): Promise<void>;
+  /** Mark a draft pull request ready for review. */
+  markPRReadyForReview(repo: RepoRef, prNumber: number): Promise<void>;
+  /** Post a comment on a pull request. */
+  commentOnPR(repo: RepoRef, prNumber: number, body: string): Promise<void>;
+  /**
+   * Edit a pull request's title and/or body and return the updated
+   * normalized {@link PR}.
+   */
+  editPR(repo: RepoRef, prNumber: number, input: EditPRInput): Promise<PR>;
+  /**
+   * Close an open issue, returning the updated {@link Issue}. The optional
+   * `stateReason` lets the caller record why (GitHub: `completed` /
+   * `not_planned`); providers that don't model a reason ignore it. The host
+   * clears its issue caches after a successful close.
+   */
+  closeIssue(repo: RepoRef, issueNumber: number, stateReason?: IssueCloseReason): Promise<Issue>;
+  /**
+   * Reopen a closed issue, returning the updated {@link Issue}. The host clears
+   * its issue caches after a successful reopen.
+   */
+  reopenIssue(repo: RepoRef, issueNumber: number): Promise<Issue>;
+  /**
+   * Edit an issue's title and/or body, returning the updated {@link Issue}. At
+   * least one field of `input` must be present. The host clears its issue
+   * caches after a successful edit.
+   */
+  editIssue(repo: RepoRef, issueNumber: number, input: EditIssueInput): Promise<Issue>;
+  /**
+   * Add a comment to an issue, returning the created {@link IssueComment}.
+   */
+  addIssueComment(repo: RepoRef, issueNumber: number, body: string): Promise<IssueComment>;
+  /**
+   * Add a single label (by name) to an issue, returning the issue's full label
+   * set after the add. Additive — existing labels are preserved. The host
+   * clears its issue caches after a successful add.
+   */
+  addIssueLabel(repo: RepoRef, issueNumber: number, label: string): Promise<ForgeLabel[]>;
+  /**
+   * Remove a single label (by name) from an issue, returning the issue's
+   * remaining label set. Throws when the label isn't present on the issue. The
+   * host clears its issue caches after a successful remove.
+   */
+  removeIssueLabel(repo: RepoRef, issueNumber: number, label: string): Promise<ForgeLabel[]>;
+  /**
+   * Validate a single freshly-entered credential value at save time. The host
+   * passes exactly one string — the primary of the provider's declared
+   * {@link ForgeProviderContribution.credentialFields} (see that field for the
+   * primary-selection rule), never the full multi-field record. This signature
+   * is frozen at 1.0: a provider needing more than one value to authenticate
+   * (e.g. self-hosted forge wanting base URL + token) reads its other fields
+   * from its own settings (`settingsScopeRef`) and validates the assembled
+   * credential through {@link validateCredentials} instead, which runs against
+   * the provider's stored state rather than a host-supplied argument.
+   */
   validateToken(token: string): Promise<AuthValidation>;
 
   // Host-visible rate-limit state, parsed from the provider's own transport.
@@ -901,10 +1086,14 @@ export interface ForgeProviderImpl {
 
 /**
  * Suggested capability vocabulary surfaced in the manifest's `capabilities`
- * array. The host does not interpret these strings — they are informational,
- * driving the Preferences "supports: …" display only. Behavior gates on
- * whether the matching {@link ForgeProviderImpl} capability field is present
- * at runtime, which keeps the claim honest. The open union preserves
+ * array. Frozen at 1.0 as informational only: the host never interprets these
+ * strings and no behavior — feature gating, privilege, routing — is ever
+ * derived from them. They drive the Preferences "supports: …" display and
+ * nothing else. Every actual capability gates on whether the matching
+ * {@link ForgeProviderImpl} field is present at runtime (e.g. `impl.reviews`),
+ * so a declared-but-unimplemented hint can never enable a feature, and an
+ * implemented-but-undeclared one still works. Do not add runtime checks that
+ * cross-reference these strings against the impl. The open union preserves
  * autocomplete while allowing provider-defined strings.
  */
 export type ForgeCapabilityHint =
@@ -937,8 +1126,14 @@ export type CredentialFieldType = "password" | "text" | (string & {});
 /**
  * One credential input a forge provider declares in its manifest so the host
  * can render a real settings form for it instead of a "no configuration"
- * stub. The host never inspects the entered value beyond passing the primary
- * field to {@link ForgeProviderImpl.validateToken}; storage stays opaque.
+ * stub. A provider may declare several fields for the form, but the contract
+ * (frozen at 1.0) passes only the PRIMARY field's value to
+ * {@link ForgeProviderImpl.validateToken} and `setCredentials` — the primary
+ * being the first `"password"`-typed field, or the first field when none is
+ * `"password"`. Every entered value is persisted in the credential record, but
+ * the host never inspects any of them beyond the primary; storage stays
+ * opaque. Providers needing more than the primary at auth time read the rest
+ * from their own settings and use {@link ForgeProviderImpl.validateCredentials}.
  */
 export interface CredentialField {
   /** Stable key the entered value is stored under in the credential record. */
@@ -963,6 +1158,13 @@ export interface RegisteredForgeProvider {
 }
 
 /**
+ * Whether a forge provider reaches a remote forge over the network or serves a
+ * local/offline data source. Display-only signal; see
+ * {@link ForgeProviderContribution.kind}.
+ */
+export type ForgeProviderKind = "local" | "network";
+
+/**
  * `forgeProviders` manifest entry. Eager (manifest-driven) registration
  * populates the Preferences UI and remote-routing table before any plugin
  * code runs; the implementation handler binds lazily on first use.
@@ -973,6 +1175,16 @@ export interface ForgeProviderContribution {
   /** Display label in Preferences → Forge Integrations. */
   name: string;
   /**
+   * Whether the provider talks to a remote forge over the network (`"network"`,
+   * the default when omitted) or serves a local/offline data source backed by
+   * files or a CLI (`"local"`). Display-only and frozen at 1.0: the host never
+   * gates auth or routing on it — a `"local"` provider still owns its auth
+   * methods (use {@link localAuthStubs} to satisfy them). Preferences uses it
+   * only to label a provider that declares no {@link credentialFields} as
+   * deliberately authless rather than unconfigured.
+   */
+  kind?: ForgeProviderKind;
+  /**
    * Exact hostnames for git remote URLs; first matching provider wins.
    *
    * Matching is case-insensitive and strips a leading `www.` from both the
@@ -981,14 +1193,19 @@ export interface ForgeProviderContribution {
    * hostname your forge serves as a separate entry.
    */
   matches: string[];
-  /** Informational capability hints; the host does not interpret these. */
+  /**
+   * Informational capability hints; the host never interprets these and no
+   * behavior is derived from them (display only). See {@link ForgeCapabilityHint}.
+   */
   capabilities?: ForgeCapabilityHint[];
   /**
    * Credential inputs the host renders a real settings form from. Absent or
    * empty means the provider needs no host-side credential entry (the host
    * shows "No configuration needed"). The first `"password"`-typed field —
-   * or the first field when none is `"password"` — is the primary credential
-   * passed to {@link ForgeProviderImpl.validateToken}.
+   * or the first field when none is `"password"` — is the primary credential,
+   * the single value passed to {@link ForgeProviderImpl.validateToken} and
+   * `setCredentials`. See {@link CredentialField} for the full single-primary
+   * contract and the multi-field auth path.
    */
   credentialFields?: CredentialField[];
   /** ID prefix in this plugin's `settings` contributions, used to group provider settings. */
@@ -999,9 +1216,15 @@ export interface ForgeProviderContribution {
    * Named renderer view-slot refs for provider-owned UI. Each value is a
    * builtin-view id the plugin's renderer registers via
    * `registerBuiltinView`; the host resolves the ACTIVE provider's ref for
-   * each seam instead of hardcoding any one plugin's view ids. All optional —
-   * the host renders a neutral fallback (or hides the seam) when a ref is
-   * absent or the view is unregistered (e.g. plugin disabled).
+   * each seam instead of hardcoding any one plugin's view ids. All optional.
+   *
+   * Slot refs are validated for FORMAT only (non-empty string) at manifest
+   * parse time — the host cannot check a ref against the renderer's view
+   * registry from the main process, and a ref legitimately resolves to nothing
+   * while its plugin is disabled. Resolving an unregistered or disabled ref to
+   * a neutral fallback (or a hidden seam) is the defined 1.0 behavior, not an
+   * error. In dev builds the renderer logs a one-line warning when a non-empty
+   * ref was never registered at all, to flag plugin-author typos.
    */
   slots?: ForgeProviderSlots;
 }
@@ -1029,6 +1252,8 @@ export interface ForgeProviderDescriptor {
   id: string;
   name?: string;
   matches?: string[];
+  /** See {@link ForgeProviderContribution.kind}. */
+  kind?: ForgeProviderKind;
   capabilities?: ForgeCapabilityHint[];
   settingsScopeRef?: string;
   viewRefs?: string[];

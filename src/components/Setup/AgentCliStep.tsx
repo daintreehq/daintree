@@ -12,7 +12,7 @@ import {
 import { AGENT_REGISTRY, getAgentConfig } from "@/config/agents";
 import { resolveBrandChip } from "@/lib/brandIcon";
 import { useActiveAppScheme } from "@/hooks/useActiveAppScheme";
-import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import {
   extractInspectUrl,
   getInstallBlocksForCurrentOS,
@@ -28,7 +28,7 @@ import type { CliAvailability } from "@shared/types";
 import { isAgentInstalled } from "@shared/utils/agentAvailability";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
-const AGENT_ORDER = BUILT_IN_AGENT_IDS;
+const AGENT_ORDER = LAUNCHABLE_AGENT_IDS;
 
 type CardStatus = "idle" | "installing" | "installed" | "error" | "manual";
 

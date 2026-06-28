@@ -25,6 +25,7 @@ const {
   projectStoreState,
   preferencesState,
   terminalInputState,
+  worktreeSelectionState,
   mockTerminalSubmit,
   mockTerminalSendKey,
   mockNotifyUserInput,
@@ -71,6 +72,10 @@ const {
     terminalId: null as string | null,
     agentId: null as string | null,
     preferredAgentId: null as string | null,
+    // Consent granted by default (#10699) so the existing auto-launch coverage
+    // exercises the downstream launch wiring; the consent gate itself is
+    // unit-tested in HelpSessionController.test.ts.
+    autoLaunchEnabled: true,
     sessionId: null as string | null,
     introDismissed: true,
     conversationTouched: false,
@@ -79,6 +84,7 @@ const {
     markConversationStarted: vi.fn(),
     setWidth: vi.fn(),
     setOpen: vi.fn(),
+    setAutoLaunchEnabled: vi.fn(),
     clearTerminal: vi.fn(),
     setPreferredAgent: vi.fn(),
     setTerminal: vi.fn(),
@@ -111,6 +117,11 @@ const {
   },
   preferencesState: { reduceAnimations: false },
   terminalInputState: { hybridInputEnabled: true } as { hybridInputEnabled: boolean },
+  worktreeSelectionState: {
+    activeWorktreeId: null as string | null,
+    focusedWorktreeId: null as string | null,
+    selectWorktree: vi.fn(),
+  },
   mockTerminalSubmit: vi.fn(),
   mockTerminalSendKey: vi.fn(),
   mockNotifyUserInput: vi.fn(),
@@ -175,6 +186,7 @@ vi.mock("@/clients", () => ({
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     focus: vi.fn(),
+    setFocused: vi.fn(),
     notifyUserInput: (...args: unknown[]) => mockNotifyUserInput(...args),
   },
 }));
@@ -193,8 +205,11 @@ vi.mock("@shared/config/agentIds", () => {
   const ids = ["claude", "gemini", "codex"];
   return {
     BUILT_IN_AGENT_IDS: ids,
+    ASSISTANT_ONLY_AGENT_IDS: [],
+    LAUNCHABLE_AGENT_IDS: ids,
     isBuiltInAgentId: (value: unknown): value is "claude" | "gemini" | "codex" =>
       typeof value === "string" && ids.includes(value),
+    isAssistantOnlyAgentId: () => false,
   };
 });
 
@@ -270,7 +285,6 @@ vi.mock("@/store", () => {
     selector ? selector(preferencesState) : preferencesState;
   preferencesStore.getState = () => preferencesState;
 
-  const worktreeSelectionState = { activeWorktreeId: null as string | null };
   const worktreeSelectionStore = (selector?: (state: typeof worktreeSelectionState) => unknown) =>
     selector ? selector(worktreeSelectionState) : worktreeSelectionState;
   worktreeSelectionStore.getState = () => worktreeSelectionState;
@@ -357,12 +371,23 @@ vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 import { HelpPanel } from "../HelpPanel";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 
+// The real `app:view-revealed` bridge fans out to every registered listener;
+// HelpPanel registers the switch-back recovery effect against it (#10739).
+let viewRevealedCbs: Array<() => void> = [];
+function fireViewRevealed(): void {
+  act(() => {
+    for (const cb of viewRevealedCbs) cb();
+  });
+}
+
 function resetState() {
+  viewRevealedCbs = [];
   helpPanelState.isOpen = true;
   helpPanelState.width = 380;
   helpPanelState.terminalId = null;
   helpPanelState.agentId = null;
   helpPanelState.preferredAgentId = null;
+  helpPanelState.autoLaunchEnabled = true;
   helpPanelState.sessionId = null;
   helpPanelState.introDismissed = true;
   helpPanelState.conversationTouched = false;
@@ -371,6 +396,7 @@ function resetState() {
   helpPanelState.markConversationStarted = vi.fn();
   helpPanelState.setTerminal = vi.fn();
   helpPanelState.setOpen = vi.fn();
+  helpPanelState.setAutoLaunchEnabled = vi.fn();
   helpPanelState.setWidth = vi.fn();
   helpPanelState.clearTerminal = vi.fn();
   helpPanelState.setPreferredAgent = vi.fn();
@@ -400,6 +426,9 @@ function resetState() {
   projectStoreState.currentProject = { id: "proj-default", path: "/repo" };
   preferencesState.reduceAnimations = false;
   terminalInputState.hybridInputEnabled = true;
+  worktreeSelectionState.activeWorktreeId = null;
+  worktreeSelectionState.focusedWorktreeId = null;
+  worktreeSelectionState.selectWorktree = vi.fn();
   mockTerminalSubmit.mockReset();
   mockTerminalSubmit.mockResolvedValue(undefined);
   mockTerminalSendKey.mockReset();
@@ -522,6 +551,14 @@ beforeEach(() => {
         project: {
           getSettings: vi.fn().mockResolvedValue({}),
           saveSettings: vi.fn().mockResolvedValue(undefined),
+        },
+        app: {
+          onViewRevealed: (cb: () => void) => {
+            viewRevealedCbs.push(cb);
+            return () => {
+              viewRevealedCbs = viewRevealedCbs.filter((c) => c !== cb);
+            };
+          },
         },
       },
     },
@@ -1448,6 +1485,75 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     expect(mockDispatch).not.toHaveBeenCalled();
   });
 
+  it("'Start assistant' CTA records consent and launches, with no auto-launch beforehand (#10699)", async () => {
+    // Consent off: opening the panel must show the CTA and start nothing.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "cta-term" } });
+
+    render(<HelpPanel width={380} />);
+
+    expect(mockProvisionSession).not.toHaveBeenCalled();
+
+    const cta = await screen.findByTestId("help-start-assistant");
+    await act(async () => {
+      fireEvent.click(cta);
+    });
+
+    expect(helpPanelState.setAutoLaunchEnabled).toHaveBeenCalledWith(true);
+    expect(mockProvisionSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "claude" })
+    );
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "claude" }),
+      { source: "user" }
+    );
+  });
+
+  it("first-run starter-prompt chip records consent and launches (#10699)", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
+    // No prior agent launches → the first-run starter chips render.
+    panelStoreState.panelIds = [];
+    panelStoreState.panelsById = {};
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "chip-term" } });
+
+    render(<HelpPanel width={380} />);
+
+    const chip = await screen.findByRole("button", {
+      name: /How do I set up a new worktree\?/i,
+    });
+    await act(async () => {
+      fireEvent.click(chip);
+    });
+
+    expect(helpPanelState.setAutoLaunchEnabled).toHaveBeenCalledWith(true);
+    expect(mockProvisionSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "claude" })
+    );
+  });
+
+  it("renders the configure-in-settings fallback and no Start CTA when no single launchable agent (#10699)", () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = null;
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+
+    render(<HelpPanel width={380} />);
+
+    expect(
+      screen.getByText(/Configure an assistant agent in settings to get started/i)
+    ).toBeTruthy();
+    expect(screen.queryByTestId("help-start-assistant")).toBeNull();
+  });
+
   it("dispatches app.settings.openTab with tab='assistant' when the empty-state settings link is clicked", async () => {
     helpPanelState.preferredAgentId = null;
     cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
@@ -2138,13 +2244,16 @@ describe("HelpPanel — + New session destructive reset", () => {
   });
 });
 
-// The footer "pinned terminal dead" danger indicator must track real tool-call
-// reachability — a live grid terminal to dispatch into — not whether the
-// frozen provision-time pinned terminal id still exists (#10431). Tool calls
-// re-resolve their target at dispatch time, so the pinned id going stale is not
-// a failure; only the absence of any live grid terminal is.
-describe("HelpPanel — pinned-terminal danger tracks live grid reachability (#10431)", () => {
+// The footer pinned-context indicator is a quiet, neutral ambient signal — it
+// never paints the row red or parks a destructive "Start new session" button
+// just because no live grid terminal remains (#10792). Closing every grid
+// terminal is a normal action: tool calls re-resolve their target at dispatch
+// time and the dock-hosted chat keeps working, so it's not a failure. Recovery
+// lives on the header's "Start new session" button. These tests defend against
+// reintroducing the old false-alarm danger state (the prior #10431 behavior).
+describe("HelpPanel — pinned-terminal state stays a quiet neutral indicator (#10792)", () => {
   const DANGER_BUTTON_TITLE = "No open terminal to receive tool calls — start a new session";
+  const PINNED_LABEL = "main · main";
 
   function dockAssistantTerminal() {
     // The assistant runs in the dock; it is never a tool-call target, so it must
@@ -2160,6 +2269,12 @@ describe("HelpPanel — pinned-terminal danger tracks live grid reachability (#1
     };
   }
 
+  // The neutral pinned `<span>` (not the diverged-warning button) is what these
+  // tests assert renders. It only appears when the focused worktree matches the
+  // session's pinned worktree — otherwise the divergence branch takes over — so
+  // setupPinnedSession aligns `focusedWorktreeId` with the pinned `worktreeId`.
+  const NEUTRAL_PINNED_TITLE = "Assistant tool calls are pinned to this worktree and terminal.";
+
   function setupPinnedSession(panels: Record<string, unknown>) {
     projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
     helpPanelState.terminalId = "assistant-term";
@@ -2167,6 +2282,7 @@ describe("HelpPanel — pinned-terminal danger tracks live grid reachability (#1
     helpPanelState.sessionId = "sess-pinned";
     panelStoreState.panelIds = Object.keys(panels);
     panelStoreState.panelsById = panels;
+    worktreeSelectionState.focusedWorktreeId = "wt-1";
     window.electron.help.getPinnedActionContext = vi.fn().mockResolvedValue({
       terminalId: "pinned-grid-term",
       worktreeId: "wt-1",
@@ -2206,7 +2322,7 @@ describe("HelpPanel — pinned-terminal danger tracks live grid reachability (#1
     expect(container.querySelector(".text-status-danger")).toBeNull();
   });
 
-  it("flags danger and offers a new session when no live grid terminal remains", async () => {
+  it("stays neutral — no danger button — when no live grid terminal remains", async () => {
     setupPinnedSession({
       // Only the dock assistant terminal exists — no grid target to reach.
       "assistant-term": dockAssistantTerminal(),
@@ -2214,10 +2330,15 @@ describe("HelpPanel — pinned-terminal danger tracks live grid reachability (#1
 
     const { container } = await renderResolved();
 
-    const button = container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`);
-    expect(button).not.toBeNull();
-    expect(button!.textContent).toContain("Start new session");
-    expect(container.querySelector(".text-status-danger")).not.toBeNull();
+    // The pinned label still renders, but quietly: the neutral non-button span,
+    // no danger tint, no footer "Start new session" button (recovery lives on
+    // the header).
+    const neutral = container.querySelector(`span[title="${NEUTRAL_PINNED_TITLE}"]`);
+    expect(neutral).not.toBeNull();
+    expect(neutral!.tagName).toBe("SPAN");
+    expect(neutral!.textContent).toContain(PINNED_LABEL);
+    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).toBeNull();
+    expect(container.querySelector(".text-status-danger")).toBeNull();
   });
 
   it("does not flag danger when a dead and a live grid terminal both exist", async () => {
@@ -2249,7 +2370,7 @@ describe("HelpPanel — pinned-terminal danger tracks live grid reachability (#1
     expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).toBeNull();
   });
 
-  it("flags danger when the only grid terminal has exited", async () => {
+  it("stays neutral when the only grid terminal has exited", async () => {
     setupPinnedSession({
       "assistant-term": dockAssistantTerminal(),
       "dead-grid": {
@@ -2265,10 +2386,14 @@ describe("HelpPanel — pinned-terminal danger tracks live grid reachability (#1
 
     const { container } = await renderResolved();
 
-    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).not.toBeNull();
+    const neutral = container.querySelector(`span[title="${NEUTRAL_PINNED_TITLE}"]`);
+    expect(neutral).not.toBeNull();
+    expect(neutral!.textContent).toContain(PINNED_LABEL);
+    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).toBeNull();
+    expect(container.querySelector(".text-status-danger")).toBeNull();
   });
 
-  it("flags danger when the only grid terminal is a missing-cli gate (no backing PTY)", async () => {
+  it("stays neutral when the only grid terminal is a missing-cli gate (no backing PTY)", async () => {
     setupPinnedSession({
       "assistant-term": dockAssistantTerminal(),
       // A `missing-cli` gate panel looks otherwise live (no exitCode/runtimeStatus)
@@ -2284,7 +2409,41 @@ describe("HelpPanel — pinned-terminal danger tracks live grid reachability (#1
 
     const { container } = await renderResolved();
 
-    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).not.toBeNull();
+    const neutral = container.querySelector(`span[title="${NEUTRAL_PINNED_TITLE}"]`);
+    expect(neutral).not.toBeNull();
+    expect(neutral!.textContent).toContain(PINNED_LABEL);
+    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).toBeNull();
+    expect(container.querySelector(".text-status-danger")).toBeNull();
+  });
+
+  it("surfaces the diverged-worktree warning when focus moves to another worktree", async () => {
+    // The pinned indicator is neutral only while focus stays on the bound
+    // worktree. Focusing a different one escalates to the one-click recovery
+    // button (still warning-toned, never danger) — proving the neutral branch
+    // above is a real branch, not the only thing the component can render.
+    setupPinnedSession({ "assistant-term": dockAssistantTerminal() });
+    worktreeSelectionState.focusedWorktreeId = "wt-2";
+
+    const { container } = await renderResolved();
+
+    const button = container.querySelector(
+      'button[title="Switch to the worktree this assistant is pinned to"]'
+    );
+    expect(button).not.toBeNull();
+    expect(container.querySelector(`span[title="${NEUTRAL_PINNED_TITLE}"]`)).toBeNull();
+    fireEvent.click(button!);
+    expect(worktreeSelectionState.selectWorktree).toHaveBeenCalledWith("wt-1", { source: "user" });
+  });
+
+  it("keeps the header recovery button available with no live grid terminal", async () => {
+    // Removing the footer "Start new session" button must not strand the user:
+    // the header button (canStartNewSession = terminalId && agentId, both still
+    // set via the dock assistant) remains the recovery path (#10792).
+    setupPinnedSession({ "assistant-term": dockAssistantTerminal() });
+
+    const { container } = await renderResolved();
+
+    expect(container.querySelector('[aria-label="Start new session"]')).not.toBeNull();
   });
 
   it("does not flag danger when pinnedContext has no terminal id", async () => {
@@ -2409,6 +2568,41 @@ describe("HelpPanel — assistant survives visibility-hidden (project switch per
       { source: "user" }
     );
     expect(mockProvisionSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-drives a launch stranded by a switch-back via app:view-revealed with no terminal bound (#10739)", async () => {
+    // No bound terminal — the stuck-loader case. The existing reveal-repaint
+    // effect is gated on `terminalId`, so it never registers a listener here;
+    // only the new recovery effect (gated on `isOpen`) can re-drive.
+    helpPanelState.terminalId = null;
+    helpPanelState.agentId = null;
+    helpPanelState.preferredAgentId = "claude";
+    helpPanelState.sessionId = null;
+
+    // getFolderPath never resolves, so the launch parks in `version-checking` —
+    // exactly the stranded loading phase a parked view's frozen watchdog can't
+    // reap.
+    mockGetFolderPath.mockReturnValue(new Promise(() => {}));
+
+    await act(async () => {
+      render(<HelpPanel width={380} isReadyToLaunch />);
+    });
+    await flushAsync();
+
+    // The initial auto-launch fired and hung before reaching dispatch.
+    const folderCallsBefore = mockGetFolderPath.mock.calls.length;
+    expect(folderCallsBefore).toBeGreaterThan(0);
+    expect(mockDispatch).not.toHaveBeenCalled();
+
+    // Switch-back reveal reaps the stall and re-drives, even though terminalId
+    // is still null (the terminalId-gated repaint listener never registered).
+    fireViewRevealed();
+    await flushAsync();
+
+    expect(mockGetFolderPath.mock.calls.length).toBeGreaterThan(folderCallsBefore);
+    // Recovery is silent — no launch-error banner, no toast.
+    expect(screen.queryByTestId("help-launch-error-banner")).toBeNull();
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 });
 

@@ -31,7 +31,12 @@ function createMockWebContents() {
 vi.mock("electron", () => {
   function MockWebContentsView() {
     const wc = createMockWebContents();
-    return { webContents: wc, setBounds: vi.fn(), setBackgroundColor: vi.fn() };
+    return {
+      webContents: wc,
+      setBounds: vi.fn(),
+      setBackgroundColor: vi.fn(),
+      setVisible: vi.fn(),
+    };
   }
   return {
     app: {
@@ -357,6 +362,54 @@ describe("ProjectViewManager — efficiency freeze", () => {
     expect(cachedCalls.every((call) => (call[0] as unknown) !== initialWc)).toBe(true);
   });
 
+  type VisibleSpy = { setVisible: ReturnType<typeof vi.fn> };
+
+  it("parks the deactivated view invisible AFTER removing it from the hierarchy", async () => {
+    // proj-b is a factory-created view (its setVisible is a real spy); proj-a is
+    // the initial view. Switch a→b→c so proj-b is deactivated and parked.
+    await manager.switchTo("proj-b", "/path/b");
+    const viewB = manager.getActiveView()! as unknown as VisibleSpy;
+    await manager.switchTo("proj-c", "/path/c");
+
+    expect(viewB.setVisible).toHaveBeenCalledWith(false);
+
+    // setVisible(false) must fire after the view is detached, so the compositor
+    // releases the parked view's tile textures rather than a still-attached one.
+    const removeIdx = win.contentView.removeChildView.mock.calls.findIndex(
+      (call) => (call[0] as unknown) === viewB
+    );
+    expect(removeIdx).toBeGreaterThanOrEqual(0);
+    const removeOrder = win.contentView.removeChildView.mock.invocationCallOrder[removeIdx];
+    const visibleOrder = viewB.setVisible.mock.invocationCallOrder[0];
+    expect(removeOrder).toBeLessThan(visibleOrder);
+  });
+
+  it("restores visibility BEFORE unfreezing on warm reactivation", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    const viewB = manager.getActiveView()! as unknown as VisibleSpy & {
+      webContents: ReturnType<typeof createMockWebContents>;
+    };
+    const viewBWc = viewB.webContents;
+    await manager.switchTo("proj-c", "/path/c");
+
+    viewB.setVisible.mockClear();
+    vi.mocked(unfreezeWebContents).mockClear();
+
+    // Warm reactivation: proj-b is cached (within the cap of 3), so this wakes
+    // the existing view rather than cold-starting.
+    await manager.switchTo("proj-b", "/path/b");
+
+    expect(viewB.setVisible).toHaveBeenCalledWith(true);
+
+    const unfreezeIdx = vi
+      .mocked(unfreezeWebContents)
+      .mock.calls.findIndex((call) => (call[0] as unknown) === viewBWc);
+    expect(unfreezeIdx).toBeGreaterThanOrEqual(0);
+    const unfreezeOrder = vi.mocked(unfreezeWebContents).mock.invocationCallOrder[unfreezeIdx];
+    const visibleOrder = viewB.setVisible.mock.invocationCallOrder[0];
+    expect(visibleOrder).toBeLessThan(unfreezeOrder);
+  });
+
   function seedActiveAgent(terminalId: string, projectId: string) {
     const priv = manager as unknown as {
       projectByTerminal: Map<string, string>;
@@ -462,6 +515,37 @@ describe("ProjectViewManager — efficiency freeze", () => {
     await vi.advanceTimersByTimeAsync(0); // flush the async seed()
 
     expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(initialWc);
+    manager.dispose();
+  });
+
+  it("drops a terminal from the freeze-seed maps when it exits", async () => {
+    const captured: Record<string, (...a: unknown[]) => void> = {};
+    const ptyClient = {
+      getAllTerminalsAsync: vi.fn(async () => [
+        { id: "t1", projectId: "proj-a", agentState: "working" },
+      ]),
+      on: vi.fn((evt: string, h: (...a: unknown[]) => void) => {
+        captured[evt] = h;
+      }),
+      off: vi.fn(),
+    };
+    await manager.initAgentStateCache(ptyClient as never);
+
+    const priv = manager as unknown as {
+      projectByTerminal: Map<string, string>;
+      agentStateByTerminal: Map<string, string>;
+    };
+    // Seed populates projectByTerminal; set the agent-state entry explicitly so
+    // the test pins the exit handler's cleanup of BOTH maps.
+    priv.agentStateByTerminal.set("t1", "working");
+    expect(priv.projectByTerminal.has("t1")).toBe(true);
+
+    // The terminal exits → its now-stale entries must be dropped so a dead
+    // terminal can't keep hasActiveAgent() reporting a phantom active agent.
+    captured["exit"]?.("t1", 0);
+
+    expect(priv.projectByTerminal.has("t1")).toBe(false);
+    expect(priv.agentStateByTerminal.has("t1")).toBe(false);
     manager.dispose();
   });
 });

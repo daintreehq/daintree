@@ -1,0 +1,324 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "fs/promises";
+import path from "path";
+import os from "os";
+
+const projectStoreMock = vi.hoisted(() => ({
+  getCurrentProject: vi.fn((): { path: string } | null => null),
+  getProjectById: vi.fn((_id: string): { path: string } | null => null),
+}));
+
+vi.mock("../ProjectStore.js", () => ({ projectStore: projectStoreMock }));
+
+const { PluginStorageManager } = await import("../plugin/PluginStorageManager.js");
+
+const PLUGIN_ID = "acme.storage-test";
+
+let tmpDir: string;
+let activeWorktreePath: string | undefined;
+
+function managerFor(): InstanceType<typeof PluginStorageManager> {
+  return new PluginStorageManager({
+    getPluginsRoot: () => path.join(tmpDir, "plugins"),
+    getActiveWorktreePath: async () => activeWorktreePath,
+  });
+}
+
+beforeEach(async () => {
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-plugin-storage-"));
+  activeWorktreePath = undefined;
+  projectStoreMock.getCurrentProject.mockReturnValue(null);
+});
+
+afterEach(async () => {
+  await fs.rm(tmpDir, { recursive: true, force: true });
+  vi.clearAllMocks();
+});
+
+describe("PluginStorageManager path resolution", () => {
+  it("resolves user scope to the plugin-storage root (sibling of plugin-settings)", async () => {
+    const mgr = managerFor();
+    const filePath = await mgr.resolveStorageFilePath(PLUGIN_ID, "user");
+    // The storage root is a sibling of the plugins dir, not under plugin-settings.
+    expect(filePath).toBe(path.join(tmpDir, "plugin-storage", `${PLUGIN_ID}.json`));
+    expect(filePath).not.toContain("plugin-settings");
+  });
+
+  it("resolves project scope inside the active project's .daintree dir", async () => {
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: "/projects/alpha" });
+    const mgr = managerFor();
+    const filePath = await mgr.resolveStorageFilePath(PLUGIN_ID, "project");
+    expect(filePath).toBe(
+      path.join("/projects/alpha", ".daintree", "plugin-storage", `${PLUGIN_ID}.json`)
+    );
+  });
+
+  it("resolves worktree scope inside the active worktree's .daintree dir", async () => {
+    activeWorktreePath = "/worktrees/feature-x";
+    const mgr = managerFor();
+    const filePath = await mgr.resolveStorageFilePath(PLUGIN_ID, "worktree");
+    expect(filePath).toBe(
+      path.join("/worktrees/feature-x", ".daintree", "plugin-storage", `${PLUGIN_ID}.json`)
+    );
+  });
+
+  it("returns undefined when no project is active (project scope)", async () => {
+    const mgr = managerFor();
+    expect(await mgr.resolveStorageFilePath(PLUGIN_ID, "project")).toBeUndefined();
+  });
+
+  it("returns undefined when no worktree is active (worktree scope)", async () => {
+    activeWorktreePath = undefined;
+    const mgr = managerFor();
+    expect(await mgr.resolveStorageFilePath(PLUGIN_ID, "worktree")).toBeUndefined();
+  });
+});
+
+describe("PluginStorageManager store cache", () => {
+  it("returns the same store for a repeated (plugin, scope, path) and a fresh one per path", async () => {
+    const mgr = managerFor();
+    const a = mgr.getOrCreateStorageStore(PLUGIN_ID, "user", path.join(tmpDir, "a.json"));
+    const aAgain = mgr.getOrCreateStorageStore(PLUGIN_ID, "user", path.join(tmpDir, "a.json"));
+    const b = mgr.getOrCreateStorageStore(PLUGIN_ID, "user", path.join(tmpDir, "b.json"));
+    expect(aAgain).toBe(a);
+    expect(b).not.toBe(a);
+  });
+
+  it("persists, reads back, and deletes a value through the backing store", async () => {
+    const mgr = managerFor();
+    const filePath = (await mgr.resolveStorageFilePath(PLUGIN_ID, "user"))!;
+    const store = mgr.getOrCreateStorageStore(PLUGIN_ID, "user", filePath);
+
+    expect(await store.set("count", 3)).toBe(true);
+    expect(await store.get<number>("count")).toBe(3);
+
+    // The value is written to the plugin-storage path on disk, not plugin-settings.
+    const onDisk = JSON.parse(await fs.readFile(filePath, "utf-8"));
+    expect(onDisk).toEqual({ count: 3 });
+
+    expect(await store.delete("count")).toBe(true);
+    expect(await store.get("count")).toBeUndefined();
+    // Deleting an already-absent key is a no-op (false), not a throw.
+    expect(await store.delete("count")).toBe(false);
+  });
+
+  it("round-trips a literal __proto__ key without prototype pollution", async () => {
+    const mgr = managerFor();
+    const filePath = (await mgr.resolveStorageFilePath(PLUGIN_ID, "user"))!;
+    const store = mgr.getOrCreateStorageStore(PLUGIN_ID, "user", filePath);
+
+    // "__proto__" is a valid (undeclared) storage key. A naive `obj[k] = v`
+    // persist would mutate Object.prototype and drop the value on reload.
+    expect(await store.set("__proto__", { x: 1 })).toBe(true);
+
+    // Force a cold read from disk through a brand-new manager/store instance.
+    const fresh = managerFor();
+    const reread = fresh.getOrCreateStorageStore(PLUGIN_ID, "user", filePath);
+    expect(await reread.get("__proto__")).toEqual({ x: 1 });
+    // The global prototype was not polluted.
+    expect(({} as Record<string, unknown>).x).toBeUndefined();
+  });
+});
+
+describe("PluginStorageManager serialization guard", () => {
+  it("rejects a non-JSON-serializable value", () => {
+    const mgr = managerFor();
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(() => mgr.assertStorageSerializable(PLUGIN_ID, "k", circular)).toThrow(
+      /not JSON-serializable/
+    );
+  });
+
+  it("accepts plain JSON values", () => {
+    const mgr = managerFor();
+    expect(() =>
+      mgr.assertStorageSerializable(PLUGIN_ID, "k", { a: 1, b: ["x"], c: null })
+    ).not.toThrow();
+  });
+});
+
+describe("PluginStorageManager subscribers", () => {
+  it("fires only the matching (key, scope) subscriber and snapshots the live set", () => {
+    const mgr = managerFor();
+    const userCb = vi.fn();
+    const worktreeCb = vi.fn();
+    mgr.addSubscriber(PLUGIN_ID, { key: "k", scope: "user", cb: userCb });
+    mgr.addSubscriber(PLUGIN_ID, { key: "k", scope: "worktree", cb: worktreeCb });
+
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "v");
+    expect(userCb).toHaveBeenCalledWith("v");
+    expect(worktreeCb).not.toHaveBeenCalled();
+
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "worktree", "k", "w");
+    expect(worktreeCb).toHaveBeenCalledWith("w");
+    // A different key in the same scope does not fire.
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "other", "z");
+    expect(userCb).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops firing after removeSubscriber", () => {
+    const mgr = managerFor();
+    const cb = vi.fn();
+    const sub = { key: "k", scope: "user" as const, cb };
+    mgr.addSubscriber(PLUGIN_ID, sub);
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "v1");
+    mgr.removeSubscriber(PLUGIN_ID, sub);
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "v2");
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it("isolates a throwing subscriber so siblings still fire", () => {
+    const mgr = managerFor();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const bad = vi.fn(() => {
+      throw new Error("boom");
+    });
+    const good = vi.fn();
+    mgr.addSubscriber(PLUGIN_ID, { key: "k", scope: "user", cb: bad });
+    mgr.addSubscriber(PLUGIN_ID, { key: "k", scope: "user", cb: good });
+    expect(() => mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "v")).not.toThrow();
+    expect(good).toHaveBeenCalledWith("v");
+    errorSpy.mockRestore();
+  });
+
+  it("quarantines a subscriber that throws on 3 consecutive notifications", () => {
+    const mgr = managerFor();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const bad = vi.fn(() => {
+      throw new Error("boom");
+    });
+    mgr.addSubscriber(PLUGIN_ID, { key: "k", scope: "user", cb: bad });
+
+    // Three consecutive throws trip the quarantine on the third.
+    for (let i = 0; i < 3; i++) {
+      mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", `v${i}`);
+    }
+    expect(bad).toHaveBeenCalledTimes(3);
+
+    // A 4th notify no longer reaches the auto-unsubscribed callback.
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "v3");
+    expect(bad).toHaveBeenCalledTimes(3);
+
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it("resets the failure counter on a successful notification (no quarantine on intermittent errors)", () => {
+    const mgr = managerFor();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    let shouldThrow = true;
+    const cb = vi.fn(() => {
+      if (shouldThrow) throw new Error("intermittent");
+    });
+    mgr.addSubscriber(PLUGIN_ID, { key: "k", scope: "user", cb });
+
+    // Two throws, then a success resets the counter.
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "a");
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "b");
+    shouldThrow = false;
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "c");
+    // Two more throws — still under the consecutive threshold, so not removed.
+    shouldThrow = true;
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "d");
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "e");
+
+    // The subscriber is still live: a final success fires.
+    shouldThrow = false;
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "f");
+    expect(cb).toHaveBeenCalledTimes(6);
+    expect(cb).toHaveBeenLastCalledWith("f");
+
+    errorSpy.mockRestore();
+  });
+});
+
+describe("PluginStorageManager evictWorktreeScopedStores", () => {
+  it("evicts only worktree-scoped stores, leaving user and project caches intact", () => {
+    const mgr = managerFor();
+    mgr.getOrCreateStorageStore(PLUGIN_ID, "user", path.join(tmpDir, "user.json"));
+    mgr.getOrCreateStorageStore(PLUGIN_ID, "project", path.join(tmpDir, "project.json"));
+    mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", path.join(tmpDir, "wt-a.json"));
+    mgr.getOrCreateStorageStore("acme.other", "worktree", path.join(tmpDir, "wt-b.json"));
+
+    mgr.evictWorktreeScopedStores();
+
+    const keys = [
+      ...(mgr as unknown as { storageStores: Map<string, unknown> }).storageStores.keys(),
+    ];
+    expect(keys.some((k) => k.includes("\u0000worktree\u0000"))).toBe(false);
+    expect(keys.some((k) => k.includes("\u0000user\u0000"))).toBe(true);
+    expect(keys.some((k) => k.includes("\u0000project\u0000"))).toBe(true);
+  });
+
+  it("forces a fresh store instance for a worktree scope after eviction", () => {
+    const mgr = managerFor();
+    const filePath = path.join(tmpDir, "wt.json");
+    const first = mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", filePath);
+    expect(mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", filePath)).toBe(first);
+
+    mgr.evictWorktreeScopedStores();
+
+    const second = mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", filePath);
+    expect(second).not.toBe(first);
+  });
+
+  it("re-reads the backing file after eviction, dropping a stale in-memory snapshot", async () => {
+    const mgr = managerFor();
+    const filePath = path.join(tmpDir, "wt-stale.json");
+    const first = mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", filePath);
+    expect(await first.set("k", "old")).toBe(true);
+    expect(await first.get("k")).toBe("old");
+
+    // Simulate the file changing out from under the cached store while the
+    // worktree was inactive (e.g. another window wrote it).
+    await fs.writeFile(filePath, JSON.stringify({ k: "new" }), "utf-8");
+    // The cached store still serves its stale in-memory snapshot.
+    expect(await first.get("k")).toBe("old");
+
+    mgr.evictWorktreeScopedStores();
+
+    // A post-eviction store reads the updated value straight from disk.
+    const second = mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", filePath);
+    expect(await second.get("k")).toBe("new");
+  });
+});
+
+describe("PluginStorageManager clearPluginStorageState", () => {
+  it("drops the plugin's subscribers and store caches", async () => {
+    const mgr = managerFor();
+    const cb = vi.fn();
+    mgr.addSubscriber(PLUGIN_ID, { key: "k", scope: "user", cb });
+    const filePath = (await mgr.resolveStorageFilePath(PLUGIN_ID, "user"))!;
+    mgr.getOrCreateStorageStore(PLUGIN_ID, "user", filePath);
+
+    mgr.clearPluginStorageState(PLUGIN_ID);
+
+    const internals = mgr as unknown as {
+      storageSubscribers: Map<string, unknown>;
+      storageStores: Map<string, unknown>;
+    };
+    expect(internals.storageSubscribers.has(PLUGIN_ID)).toBe(false);
+    expect(
+      [...internals.storageStores.keys()].some((k) => k.startsWith(`${PLUGIN_ID}\u0000`))
+    ).toBe(false);
+
+    // A later notify is a no-op once the plugin's state is cleared.
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "v");
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it("only clears the target plugin's entries", async () => {
+    const mgr = managerFor();
+    const other = "acme.other";
+    mgr.getOrCreateStorageStore(PLUGIN_ID, "user", path.join(tmpDir, `${PLUGIN_ID}.json`));
+    mgr.getOrCreateStorageStore(other, "user", path.join(tmpDir, `${other}.json`));
+
+    mgr.clearPluginStorageState(PLUGIN_ID);
+
+    const stores = (mgr as unknown as { storageStores: Map<string, unknown> }).storageStores;
+    expect([...stores.keys()].some((k) => k.startsWith(`${other}\u0000`))).toBe(true);
+    expect([...stores.keys()].some((k) => k.startsWith(`${PLUGIN_ID}\u0000`))).toBe(false);
+  });
+});

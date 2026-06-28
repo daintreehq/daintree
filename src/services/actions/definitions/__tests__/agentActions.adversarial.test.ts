@@ -343,6 +343,36 @@ describe("agentActions adversarial", () => {
     );
   });
 
+  it("agent.launch surfaces a worktree-not-found launcher error as ok:false through ActionService (#10812)", async () => {
+    // Regression guard: a worktree-not-found launch must reach the MCP layer as a
+    // dispatch failure (ok:false), NOT as a terminal-less success ({ok:true,result:null}).
+    // The hook throws on an unknown worktreeId; ActionService converts the throw to
+    // an EXECUTION_ERROR result, which sessionServer serializes with isError:true.
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+
+    const callbacks = makeCallbacks();
+    callbacks.onLaunchAgent.mockRejectedValueOnce(
+      new Error("Worktree 'main' not found. Available worktree IDs: wt-1, wt-2")
+    );
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+    for (const [, factory] of registry) service.register(factory());
+
+    const result = await service.dispatch(
+      "agent.launch",
+      { agentId: "claude", worktreeId: "main" },
+      { source: "agent" }
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("EXECUTION_ERROR");
+      expect(result.error.message).toContain("Worktree 'main' not found");
+      expect(result.error.message).toContain("wt-1, wt-2");
+    }
+  });
+
   it("onLaunchAgent rejection propagates out of generated agent.<id>", async () => {
     const callbacks = makeCallbacks();
     callbacks.onLaunchAgent.mockRejectedValueOnce(new Error("generator boom"));
@@ -379,6 +409,8 @@ describe("agentActions adversarial", () => {
       state: "idle",
       waitingReason: null,
       lastTransitionAt: 1717000005000,
+      exitCode: null,
+      spawnedAt: null,
       terminalId: "term-b",
       found: true,
     });
@@ -406,6 +438,8 @@ describe("agentActions adversarial", () => {
       state: "working",
       waitingReason: null,
       lastTransitionAt: 1717000009000,
+      exitCode: null,
+      spawnedAt: null,
       terminalId: "term-runtime",
       found: true,
     });
@@ -428,6 +462,8 @@ describe("agentActions adversarial", () => {
       state: null,
       waitingReason: null,
       lastTransitionAt: null,
+      exitCode: null,
+      spawnedAt: null,
       terminalId: null,
       found: false,
     });
@@ -476,6 +512,8 @@ describe("agentActions adversarial", () => {
       state: null,
       waitingReason: null,
       lastTransitionAt: null,
+      exitCode: null,
+      spawnedAt: null,
       terminalId: "term-a",
       found: true,
     });
@@ -575,7 +613,7 @@ describe("agent.launch dispatch integration", () => {
     });
   });
 
-  it("rejects malformed args with a VALIDATION_ERROR targeting agentId and never invokes the callback", async () => {
+  it("rejects an empty agentId with a VALIDATION_ERROR targeting agentId and never invokes the callback", async () => {
     const { ActionService } = await import("../../../ActionService");
     const service = new ActionService();
 
@@ -587,11 +625,10 @@ describe("agent.launch dispatch integration", () => {
       service.register(factory());
     }
 
-    const result = await service.dispatch(
-      "agent.launch",
-      { agentId: "not-a-real-agent" },
-      { source: "user" }
-    );
+    // An empty string is the genuinely-malformed case: the schema now accepts
+    // arbitrary non-empty ids (plugin-contributed agents, #10560), but still
+    // rejects empty/missing ids at the boundary.
+    const result = await service.dispatch("agent.launch", { agentId: "" }, { source: "user" });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -599,6 +636,34 @@ describe("agent.launch dispatch integration", () => {
       expect(JSON.stringify(result.error.details)).toContain("agentId");
     }
     expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
+  it("accepts an unknown (plugin-contributed) agentId through the schema so plugin agents launch (#10560)", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+
+    const callbacks = makeCallbacks();
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+
+    for (const [, factory] of registry) {
+      service.register(factory());
+    }
+
+    // Plugin agent ids are dynamic and unknown at schema-definition time, so the
+    // schema must let them through; existence is resolved downstream in the
+    // launcher (an unresolved id falls back to a plain terminal, never a crash).
+    const result = await service.dispatch(
+      "agent.launch",
+      { agentId: "acme-agent", worktreeId: "wt-1", location: "grid" },
+      { source: "user" }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+      "acme-agent",
+      expect.objectContaining({ worktreeId: "wt-1", location: "grid" })
+    );
   });
 
   it("accepts dev-preview through the schema so worktree-card dev-preview launches don't silently fail", async () => {

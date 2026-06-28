@@ -28,6 +28,8 @@ import {
   WAIT_UNTIL_IDLE_DESCRIPTION,
   WAIT_UNTIL_IDLE_INPUT_SCHEMA,
   WAIT_UNTIL_IDLE_OUTPUT_SCHEMA,
+  WAIT_UNTIL_IDLE_BATCH_DESCRIPTION,
+  WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA,
 } from "../../../shared/types/terminalWaitUntilIdle.js";
 
 const waitUntilIdleManifestEntry = (): ActionManifestEntry => ({
@@ -40,6 +42,34 @@ const waitUntilIdleManifestEntry = (): ActionManifestEntry => ({
   danger: "safe" as ActionDanger,
   inputSchema: WAIT_UNTIL_IDLE_INPUT_SCHEMA,
   outputSchema: WAIT_UNTIL_IDLE_OUTPUT_SCHEMA,
+  enabled: true,
+  requiresArgs: true,
+  mcpAnnotations: {
+    readOnlyHint: true,
+    idempotentHint: false,
+    destructiveHint: false,
+  },
+});
+
+const waitUntilIdleBatchManifestEntry = (): ActionManifestEntry => ({
+  id: "terminal.waitUntilIdleBatch" as ActionId,
+  name: "terminal.waitUntilIdleBatch",
+  title: "Wait until terminals idle (batch)",
+  description: WAIT_UNTIL_IDLE_BATCH_DESCRIPTION,
+  category: "terminal",
+  kind: "query" as ActionKind,
+  danger: "safe" as ActionDanger,
+  inputSchema: {
+    type: "object",
+    properties: {
+      terminalIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 256 },
+      mode: { type: "string", enum: ["first", "all"] },
+      timeoutMs: { type: "integer", minimum: 0 },
+    },
+    required: ["terminalIds"],
+    additionalProperties: false,
+  },
+  outputSchema: WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA,
   enabled: true,
   requiresArgs: true,
   mcpAnnotations: {
@@ -694,7 +724,6 @@ describe("McpServerService", () => {
   });
 
   it("applies mcpAnnotations overrides on top of kind/danger defaults", async () => {
-    storeState.mcpServer.fullToolSurface = true;
     const { window } = createMockWindow({
       getManifest: () => [
         // Query that requires UX confirmation but is not destructive.
@@ -709,9 +738,9 @@ describe("McpServerService", () => {
         // Command that is semantically a read-only lookup; both readOnly and
         // idempotent hints are forced on via override.
         createManifestEntry({
-          id: "test.readOnlyCommand" as ActionId,
+          id: "git.stageFile" as ActionId,
           title: "Read Only Command",
-          description: "Synthetic read-only command for override coverage",
+          description: "Allowlisted command used for override coverage",
           kind: "command",
           danger: "safe",
           mcpAnnotations: { readOnlyHint: true, idempotentHint: true },
@@ -719,9 +748,9 @@ describe("McpServerService", () => {
         // Query whose readOnly/idempotent hints are explicitly forced off via
         // override — guards against regressing the merge from `??` to `||`.
         createManifestEntry({
-          id: "test.queryOverriddenFalse" as ActionId,
+          id: "git.listCommits" as ActionId,
           title: "Query With False Overrides",
-          description: "Synthetic query whose hints are explicitly false",
+          description: "Allowlisted query whose hints are explicitly false",
           kind: "query",
           danger: "safe",
           mcpAnnotations: { readOnlyHint: false, idempotentHint: false },
@@ -735,8 +764,8 @@ describe("McpServerService", () => {
 
     const result = await client.listTools();
     const generate = result.tools.find((t) => t.name === "copyTree.generate");
-    const readOnlyCmd = result.tools.find((t) => t.name === "test.readOnlyCommand");
-    const queryFalse = result.tools.find((t) => t.name === "test.queryOverriddenFalse");
+    const readOnlyCmd = result.tools.find((t) => t.name === "git.stageFile");
+    const queryFalse = result.tools.find((t) => t.name === "git.listCommits");
 
     // Override flips destructiveHint off; readOnlyHint/idempotentHint still
     // come from the `kind: "query"` default. openWorldHint now defaults to true.
@@ -772,12 +801,11 @@ describe("McpServerService", () => {
   });
 
   it("allows overriding openWorldHint via mcpAnnotations", async () => {
-    storeState.mcpServer.fullToolSurface = true;
     const { window } = createMockWindow({
       getManifest: () => [
         // openWorldHint defaults to true; explicit false override must win.
         createManifestEntry({
-          id: "keybinding.resetAll" as ActionId,
+          id: "worktree.delete" as ActionId,
           title: "Reset All Keybindings",
           description: "Local-only destructive action",
           category: "settings",
@@ -787,7 +815,7 @@ describe("McpServerService", () => {
         }),
         // No override — must default to true (spec-conservative).
         createManifestEntry({
-          id: "github.someTool" as ActionId,
+          id: "forge.createPR" as ActionId,
           title: "Some GitHub Tool",
           description: "Tool without openWorldHint override",
           category: "github",
@@ -807,15 +835,14 @@ describe("McpServerService", () => {
     transports.push(transport);
 
     const result = await client.listTools();
-    const localTool = result.tools.find((t) => t.name === "keybinding.resetAll");
-    const ghTool = result.tools.find((t) => t.name === "github.someTool");
+    const localTool = result.tools.find((t) => t.name === "worktree.delete");
+    const ghTool = result.tools.find((t) => t.name === "forge.createPR");
 
     expect(localTool?.annotations?.openWorldHint).toBe(false);
     expect(ghTool?.annotations?.openWorldHint).toBe(true);
   });
 
   it("defaults openWorldHint to true for all categories per spec", async () => {
-    storeState.mcpServer.fullToolSurface = true;
     const { window } = createMockWindow({
       getManifest: () => [
         createManifestEntry({
@@ -833,7 +860,7 @@ describe("McpServerService", () => {
           kind: "query",
         }),
         createManifestEntry({
-          id: "worktree.create" as ActionId,
+          id: "worktree.createWithRecipe" as ActionId,
           title: "Create Worktree",
           description: "Create a new worktree",
           category: "worktree",
@@ -849,7 +876,7 @@ describe("McpServerService", () => {
     const result = await client.listTools();
     const ghTool = result.tools.find((t) => t.name === "forge.listPRs");
     const systemTool = result.tools.find((t) => t.name === "system.checkCommand");
-    const wtTool = result.tools.find((t) => t.name === "worktree.create");
+    const wtTool = result.tools.find((t) => t.name === "worktree.createWithRecipe");
 
     expect(ghTool?.annotations?.openWorldHint).toBe(true);
     expect(systemTool?.annotations?.openWorldHint).toBe(true);
@@ -925,6 +952,53 @@ describe("McpServerService", () => {
         confirmed: false,
       })
     );
+  });
+
+  it("returns browser.captureScreenshot bytes as an MCP image content block", async () => {
+    const dispatchMock = vi.fn(
+      (): ActionDispatchResult => ({
+        ok: true,
+        result: { pngBase64: "aGVsbG8=", width: 1024, height: 768 },
+      })
+    );
+
+    const { window } = createMockWindow({
+      getManifest: () => [
+        createManifestEntry({
+          id: "browser.captureScreenshot" as ActionId,
+          title: "Capture Browser Screenshot",
+          description:
+            "Capture a screenshot of the focused browser panel and return it as a PNG image",
+        }),
+      ],
+      dispatchAction: dispatchMock,
+    });
+
+    // browser.captureScreenshot lives in the `action` tier — connect with a
+    // token that resolves there so the tool is permitted.
+    paneTokenTiers.set("token-action", "action");
+    await service.start(window);
+    const { client, transport } = await connectClient(service.currentPort!, {
+      Authorization: "Bearer token-action",
+    });
+    transports.push(transport);
+
+    const result = await client.callTool({
+      name: "browser.captureScreenshot",
+      arguments: {},
+    });
+    const content = result.content as Array<Record<string, unknown>>;
+
+    expect(result.isError).toBeFalsy();
+    // The base64 PNG is surfaced as a real image block, not text-serialized.
+    expect(content[0]).toMatchObject({
+      type: "image",
+      mimeType: "image/png",
+      data: "aGVsbG8=",
+    });
+    expect(content[1]).toMatchObject({ type: "text" });
+    expect(String(content[1]!.text)).toContain("1024×768");
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
   });
 
   it("threads the external bearer's identity through to the renderer dispatch payload (#9157)", async () => {
@@ -2044,7 +2118,7 @@ describe("McpServerService", () => {
     expect(ids).not.toContain("panel.gridLayout.setStrategy");
   });
 
-  it("exposes the full non-restricted surface when fullToolSurface is enabled", async () => {
+  it("keeps non-allowlisted tools off the surface even when fullToolSurface is enabled (#10701)", async () => {
     storeState.mcpServer.fullToolSurface = true;
     const { window } = createMockWindow({
       getManifest: () => [
@@ -2057,7 +2131,7 @@ describe("McpServerService", () => {
         createManifestEntry({
           id: "panel.gridLayout.setStrategy" as ActionId,
           title: "Set grid layout",
-          description: "Power-user UI plumbing",
+          description: "Sensitive UI plumbing — not in the curated allowlist",
         }),
         createManifestEntry({
           id: "internal.dangerous" as ActionId,
@@ -2075,12 +2149,15 @@ describe("McpServerService", () => {
     const result = await client.listTools();
     const ids = result.tools.map((tool) => tool.name);
 
+    // fullToolSurface lifts the floor through the curated full-surface allowlist;
+    // it does not bypass it. Allowlisted tools stay reachable; non-allowlisted
+    // and restricted tools stay hidden.
     expect(ids).toContain("actions.list");
-    expect(ids).toContain("panel.gridLayout.setStrategy");
+    expect(ids).not.toContain("panel.gridLayout.setStrategy");
     expect(ids).not.toContain("internal.dangerous");
   });
 
-  it("dispatches fullToolSurface external tools that are outside the curated allowlist", async () => {
+  it("denies dispatch of non-allowlisted tools even with fullToolSurface enabled (#10701)", async () => {
     storeState.mcpServer.fullToolSurface = true;
     const dispatchMock = vi.fn(
       (payload: DispatchRequest): ActionDispatchResult => ({
@@ -2093,7 +2170,7 @@ describe("McpServerService", () => {
         createManifestEntry({
           id: "panel.gridLayout.setStrategy" as ActionId,
           title: "Set grid layout",
-          description: "Power-user UI plumbing",
+          description: "Sensitive UI plumbing — not in the curated allowlist",
         }),
       ],
       dispatchAction: dispatchMock,
@@ -2110,11 +2187,10 @@ describe("McpServerService", () => {
       })
     );
 
-    expect(result.isError).not.toBe(true);
-    expect(result.content[0].text).toContain('"dispatched": "panel.gridLayout.setStrategy"');
-    expect(dispatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({ actionId: "panel.gridLayout.setStrategy" })
-    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("TIER_NOT_PERMITTED");
+    expect(result.content[0].text).toContain("panel.gridLayout.setStrategy");
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("treats non-true fullToolSurface values as curated (fail-closed)", async () => {
@@ -2526,6 +2602,26 @@ describe("McpServerService", () => {
         description: "Permanently remove all terminals",
       }),
       createManifestEntry({
+        id: "terminal.restart" as ActionId,
+        title: "Restart Terminal",
+        description: "Restart the terminal process",
+      }),
+      createManifestEntry({
+        id: "terminal.arm" as ActionId,
+        title: "Arm Terminal",
+        description: "Add a terminal to the fleet broadcast set",
+      }),
+      createManifestEntry({
+        id: "terminal.disarm" as ActionId,
+        title: "Disarm Terminal",
+        description: "Remove a terminal from the fleet broadcast set",
+      }),
+      createManifestEntry({
+        id: "terminal.disarmAll" as ActionId,
+        title: "Disarm All Terminals",
+        description: "Clear the fleet broadcast set",
+      }),
+      createManifestEntry({
         id: "copyTree.generateAndCopyFile" as ActionId,
         title: "Generate And Copy Context",
         description: "Write generated context to the OS clipboard",
@@ -2613,6 +2709,24 @@ describe("McpServerService", () => {
         kind: "query",
       }),
       createManifestEntry({
+        id: "system.getResourceProfileSnapshot" as ActionId,
+        title: "Get Resource Profile Snapshot",
+        description: "Read host resource pressure and the active resource profile",
+        kind: "query",
+      }),
+      createManifestEntry({
+        id: "cliAvailability.get" as ActionId,
+        title: "Get CLI Availability",
+        description: "Read cached agent CLI availability",
+        kind: "query",
+      }),
+      createManifestEntry({
+        id: "hibernation.getConfig" as ActionId,
+        title: "Get Hibernation Config",
+        description: "Read auto-hibernation configuration",
+        kind: "query",
+      }),
+      createManifestEntry({
         id: "project.update" as ActionId,
         title: "Update Project",
         description: "Update project metadata",
@@ -2637,6 +2751,21 @@ describe("McpServerService", () => {
         id: "worktree.refresh" as ActionId,
         title: "Refresh Worktrees",
         description: "Refresh worktree status from disk",
+      }),
+      createManifestEntry({
+        id: "worktree.resource.provision" as ActionId,
+        title: "Provision Resource",
+        description: "Run resource provisioning commands for a worktree",
+      }),
+      createManifestEntry({
+        id: "worktree.resource.pause" as ActionId,
+        title: "Pause Resource",
+        description: "Pause the resource associated with a worktree",
+      }),
+      createManifestEntry({
+        id: "worktree.resource.resume" as ActionId,
+        title: "Resume Resource",
+        description: "Resume the resource associated with a worktree",
       }),
       createManifestEntry({
         id: "terminal.inject" as ActionId,
@@ -2673,6 +2802,7 @@ describe("McpServerService", () => {
           "Rename a terminal. Accepts an optional terminalId (defaults to the focused terminal) and a name; omitting the name opens the rename dialog.",
       }),
       waitUntilIdleManifestEntry(),
+      waitUntilIdleBatchManifestEntry(),
       createManifestEntry({
         id: "recipe.list" as ActionId,
         title: "List Recipes",
@@ -2693,7 +2823,69 @@ describe("McpServerService", () => {
         title: "Open File in Editor",
         description: "Open a file in the system editor",
       }),
+      createManifestEntry({
+        id: "browser.navigate" as ActionId,
+        title: "Navigate Browser",
+        description: "Navigate a browser panel to a URL",
+      }),
+      createManifestEntry({
+        id: "browser.openUrl" as ActionId,
+        title: "Open URL in Browser",
+        description: "Open a URL in a browser panel, reusing an existing one or creating a new one",
+      }),
+      createManifestEntry({
+        id: "browser.captureScreenshot" as ActionId,
+        title: "Capture Browser Screenshot",
+        description:
+          "Capture a screenshot of the focused browser panel and return it as a PNG image",
+      }),
+      createManifestEntry({
+        id: "panel.focus" as ActionId,
+        title: "Focus Panel",
+        description: "Focus a specific panel by id",
+      }),
+      createManifestEntry({
+        id: "devPreview.reloadPreview" as ActionId,
+        title: "Reload Dev Preview",
+        description: "Reload the dev preview panel",
+      }),
+      createManifestEntry({
+        id: "devPreview.restart" as ActionId,
+        title: "Restart Dev Server",
+        description: "Restart the dev server for the dev preview panel",
+      }),
+      createManifestEntry({
+        id: "devPreview.promoteToPortal" as ActionId,
+        title: "Promote Dev Preview to Portal",
+        description: "Promote a dev preview panel to a portal tab",
+      }),
+      createManifestEntry({
+        id: "portal.openUrl" as ActionId,
+        title: "Open URL in Portal",
+        description: "Open a URL in a new portal tab",
+      }),
+      createManifestEntry({
+        id: "portal.newTab" as ActionId,
+        title: "New Portal Tab",
+        description: "Open a new portal tab",
+      }),
+      createManifestEntry({
+        id: "portal.toggle" as ActionId,
+        title: "Toggle Portal",
+        description: "Show or hide the portal",
+      }),
+      createManifestEntry({
+        id: "portal.toggleDevDashboard" as ActionId,
+        title: "Toggle Dev Dashboard",
+        description: "Show or hide the portal dev dashboard",
+      }),
       // Additional entries needed for full SYSTEM_TIER_ADDONS coverage.
+      createManifestEntry({
+        id: "worktree.resource.teardown" as ActionId,
+        title: "Teardown Resource",
+        description: "Run resource teardown commands for a worktree",
+        danger: "confirm",
+      }),
       createManifestEntry({
         id: "git.stageFile" as ActionId,
         title: "Stage File",
@@ -2750,6 +2942,46 @@ describe("McpServerService", () => {
         description: "Assign an issue via the forge provider",
       }),
       createManifestEntry({
+        id: "forge.unassignIssue" as ActionId,
+        title: "Unassign Issue (Forge)",
+        description: "Remove an assignment from an issue via the forge provider",
+      }),
+      createManifestEntry({
+        id: "forge.createIssue" as ActionId,
+        title: "Create Issue (Forge)",
+        description: "Create an issue via the forge provider",
+      }),
+      createManifestEntry({
+        id: "forge.closeIssue" as ActionId,
+        title: "Close Issue (Forge)",
+        description: "Close an issue via the forge provider",
+      }),
+      createManifestEntry({
+        id: "forge.reopenIssue" as ActionId,
+        title: "Reopen Issue (Forge)",
+        description: "Reopen an issue via the forge provider",
+      }),
+      createManifestEntry({
+        id: "forge.editIssue" as ActionId,
+        title: "Edit Issue (Forge)",
+        description: "Edit an issue's title or body via the forge provider",
+      }),
+      createManifestEntry({
+        id: "forge.addIssueComment" as ActionId,
+        title: "Add Issue Comment (Forge)",
+        description: "Add a comment to an issue via the forge provider",
+      }),
+      createManifestEntry({
+        id: "forge.addIssueLabel" as ActionId,
+        title: "Add Issue Label (Forge)",
+        description: "Add a label to an issue via the forge provider",
+      }),
+      createManifestEntry({
+        id: "forge.removeIssueLabel" as ActionId,
+        title: "Remove Issue Label (Forge)",
+        description: "Remove a label from an issue via the forge provider",
+      }),
+      createManifestEntry({
         id: "forge.validateToken" as ActionId,
         title: "Validate Token (Forge)",
         description: "Validate credentials via the forge provider",
@@ -2758,6 +2990,84 @@ describe("McpServerService", () => {
         id: "forge.openPR" as ActionId,
         title: "Open PR",
         description: "Open a pull request via the forge provider",
+      }),
+      createManifestEntry({
+        id: "forge.approvePR" as ActionId,
+        title: "Approve PR (Forge)",
+        description: "Submit an approving review via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.requestChanges" as ActionId,
+        title: "Request Changes (Forge)",
+        description: "Submit a request-changes review via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.dismissReview" as ActionId,
+        title: "Dismiss Review (Forge)",
+        description: "Dismiss a submitted review via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.requestReviewers" as ActionId,
+        title: "Request Reviewers (Forge)",
+        description: "Request reviewers via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.getPR" as ActionId,
+        title: "Get PR",
+        description: "Fetch a pull request via the forge provider",
+        kind: "query",
+      }),
+      createManifestEntry({
+        id: "forge.createPR" as ActionId,
+        title: "Create PR",
+        description: "Open a pull request via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.closePR" as ActionId,
+        title: "Close PR",
+        description: "Close a pull request via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.reopenPR" as ActionId,
+        title: "Reopen PR",
+        description: "Reopen a pull request via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.mergePR" as ActionId,
+        title: "Merge PR",
+        description: "Merge a pull request via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.convertPRToDraft" as ActionId,
+        title: "Convert PR to draft",
+        description: "Convert a pull request to draft via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.markPRReadyForReview" as ActionId,
+        title: "Mark PR ready",
+        description: "Mark a pull request ready for review via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.commentOnPR" as ActionId,
+        title: "Comment on PR",
+        description: "Comment on a pull request via the forge provider",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "forge.editPR" as ActionId,
+        title: "Edit PR",
+        description: "Edit a pull request via the forge provider",
+        danger: "confirm",
       }),
     ];
 
@@ -2772,11 +3082,16 @@ describe("McpServerService", () => {
       WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "workflow.prepBranchForReview")!,
       WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "agentSettings.get")!,
       WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "keybinding.getOverrides")!,
+      WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "system.getResourceProfileSnapshot")!,
+      WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "cliAvailability.get")!,
+      WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "hibernation.getConfig")!,
     ] as const;
 
-    // Fleet-broadcast primitives are renderer-only — they remain available
-    // via keybindings, palette, and menus, but are NOT exposed through the
-    // MCP control plane on any tier.
+    // terminal.bulkCommand (the one-shot broadcast-send) is renderer-only — it
+    // remains available via keybindings, palette, and menus, but is NOT exposed
+    // through the MCP control plane on any tier. (Distinct from the arming
+    // primitives terminal.arm/disarm/disarmAll, which only edit the broadcast
+    // membership set and ARE exposed at the system tier.)
     const NEVER_EXPOSED_VIA_MCP = ["terminal.bulkCommand"] as const;
 
     // External tier (apiKey) curates MCP_TOOL_ALLOWLIST independently from the
@@ -3064,6 +3379,26 @@ describe("McpServerService", () => {
     function getAuditRecords(svc: McpServerService): AuditRecord[] {
       return (svc as unknown as { getAuditRecords: () => AuditRecord[] }).getAuditRecords();
     }
+
+    it("pruneAuditByRetention delegates to both audit and turn-outcome services (#10776)", () => {
+      const auditSpy = vi.spyOn(service._auditService, "pruneByAge");
+      const turnSpy = vi.spyOn(service._turnOutcomeService, "pruneByAge");
+
+      service.pruneAuditByRetention(30);
+
+      expect(auditSpy).toHaveBeenCalledWith(30);
+      expect(turnSpy).toHaveBeenCalledWith(30);
+    });
+
+    it("pruneAuditByRetention forwards the Off value (0) to both rings (#10776)", () => {
+      const auditSpy = vi.spyOn(service._auditService, "pruneByAge");
+      const turnSpy = vi.spyOn(service._turnOutcomeService, "pruneByAge");
+
+      service.pruneAuditByRetention(0);
+
+      expect(auditSpy).toHaveBeenCalledWith(0);
+      expect(turnSpy).toHaveBeenCalledWith(0);
+    });
 
     it("records a successful dispatch with redacted args and a non-empty session id", async () => {
       const dispatchMock = vi.fn(
@@ -3919,18 +4254,17 @@ describe("McpServerService", () => {
     };
 
     it("advertises outputSchema in listTools for actions with an object resultSchema", async () => {
-      storeState.mcpServer.fullToolSurface = true;
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "log.getEntries" as ActionId,
+            id: "git.getProjectPulse" as ActionId,
             title: "Get Log Entries",
             description: "Returns log entries",
             kind: "query",
             outputSchema: objectSchema,
           }),
           createManifestEntry({
-            id: "worktree.create" as ActionId,
+            id: "worktree.createWithRecipe" as ActionId,
             title: "Create Worktree",
             description: "Create a worktree",
             kind: "command",
@@ -3950,8 +4284,8 @@ describe("McpServerService", () => {
       transports.push(transport);
 
       const result = await client.listTools();
-      const objectTool = result.tools.find((t) => t.name === "log.getEntries");
-      const primitiveTool = result.tools.find((t) => t.name === "worktree.create");
+      const objectTool = result.tools.find((t) => t.name === "git.getProjectPulse");
+      const primitiveTool = result.tools.find((t) => t.name === "worktree.createWithRecipe");
       const noSchemaTool = result.tools.find((t) => t.name === "actions.list");
 
       expect(objectTool).toBeDefined();
@@ -3963,12 +4297,11 @@ describe("McpServerService", () => {
     });
 
     it("emits structuredContent on callTool when the action has an object outputSchema and an object result", async () => {
-      storeState.mcpServer.fullToolSurface = true;
       const objectResult = { count: 7, label: "ok" };
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "log.getEntries" as ActionId,
+            id: "git.getProjectPulse" as ActionId,
             title: "Get Log Entries",
             description: "Returns log entries",
             kind: "query",
@@ -3984,7 +4317,7 @@ describe("McpServerService", () => {
 
       await client.listTools();
       const result = (await client.callTool({
-        name: "log.getEntries",
+        name: "git.getProjectPulse",
         arguments: {},
       })) as {
         content: Array<{ type: string; text: string }>;
@@ -3997,11 +4330,10 @@ describe("McpServerService", () => {
     });
 
     it("omits structuredContent when the action has a primitive resultSchema", async () => {
-      storeState.mcpServer.fullToolSurface = true;
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "worktree.create" as ActionId,
+            id: "worktree.createWithRecipe" as ActionId,
             title: "Create Worktree",
             description: "Create a worktree",
             kind: "command",
@@ -4017,7 +4349,7 @@ describe("McpServerService", () => {
 
       await client.listTools();
       const result = (await client.callTool({
-        name: "worktree.create",
+        name: "worktree.createWithRecipe",
         arguments: {},
       })) as {
         content: Array<{ type: string; text: string }>;
@@ -4093,11 +4425,10 @@ describe("McpServerService", () => {
     });
 
     it("does not emit structuredContent on failed tool calls", async () => {
-      storeState.mcpServer.fullToolSurface = true;
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "log.getEntries" as ActionId,
+            id: "git.getProjectPulse" as ActionId,
             title: "Get Log Entries",
             description: "Returns log entries",
             kind: "query",
@@ -4116,7 +4447,7 @@ describe("McpServerService", () => {
 
       await client.listTools();
       const result = (await client.callTool({
-        name: "log.getEntries",
+        name: "git.getProjectPulse",
         arguments: {},
       })) as {
         content: Array<{ type: string; text: string }>;
@@ -4631,7 +4962,7 @@ describe("McpServerService", () => {
         previousState: "idle",
         trigger: "output",
         confidence: 1,
-        timestamp: Date.now(),
+        timestamp: 1_700_000_000_000,
       });
 
       const { window } = createMockWindow({ getManifest: manifestForResources });
@@ -4642,7 +4973,13 @@ describe("McpServerService", () => {
       const result = await client.readResource({ uri: "daintree://agent/agent-xyz/state" });
       const content = result.contents[0] as { uri: string; mimeType: string; text: string };
       expect(content.mimeType).toBe("application/json");
-      expect(JSON.parse(content.text)).toEqual({ agentId: "agent-xyz", state: "working" });
+      // A working agent has no exit metadata; lastTransitionAt tracks the last
+      // state change.
+      expect(JSON.parse(content.text)).toEqual({
+        agentId: "agent-xyz",
+        state: "working",
+        lastTransitionAt: 1_700_000_000_000,
+      });
 
       const missing = await client.readResource({ uri: "daintree://agent/agent-missing/state" });
       const missingContent = missing.contents[0] as {
@@ -4664,7 +5001,7 @@ describe("McpServerService", () => {
         trigger: "output",
         confidence: 1,
         waitingReason: "question",
-        timestamp: Date.now(),
+        timestamp: 1_700_000_000_000,
       });
 
       const { window } = createMockWindow({ getManifest: manifestForResources });
@@ -4678,6 +5015,7 @@ describe("McpServerService", () => {
         agentId: "agent-waiting",
         state: "waiting",
         waitingReason: "question",
+        lastTransitionAt: 1_700_000_000_000,
       });
     });
 

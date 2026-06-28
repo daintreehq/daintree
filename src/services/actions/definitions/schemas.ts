@@ -5,7 +5,14 @@ import {
   PROJECT_SETTINGS_TAB_IDS,
 } from "@/components/Settings/settingsTabIds";
 
-export const AgentIdSchema = z.enum([...BUILT_IN_AGENT_IDS, "terminal", "browser", "dev-preview"]);
+// Built-in agent ids plus the synthetic terminal/browser kinds, OR any non-empty
+// string so plugin-contributed agent ids (#10560) validate through the action
+// system (`agent.launch`). Plugin ids are validated at registration time in
+// `pluginAgentRegistry`; this schema is not the authoritative boundary for them.
+export const AgentIdSchema = z.union([
+  z.enum([...BUILT_IN_AGENT_IDS, "terminal", "browser", "dev-preview"]),
+  z.string().min(1),
+]);
 
 export const LaunchLocationSchema = z
   .enum(["grid", "dock", "overlay"])
@@ -103,6 +110,7 @@ export const AgentPresetSchema = z.object({
   customFlags: z.string().optional(),
   inlineMode: z.boolean().optional(),
   color: z.string().optional(),
+  displayTitle: z.string().optional(),
   fallbacks: z.array(z.string()).optional(),
 });
 
@@ -137,7 +145,10 @@ export const WorktreeSummarySchema = z.object({
 export const TerminalSummarySchema = z.object({
   id: z.string(),
   kind: z.string(),
-  type: z.unknown().nullable(),
+  // Vestigial: terminal.list always emits this as `undefined`, which drops out
+  // on JSON serialization. Keep it optional so the advertised MCP outputSchema
+  // (#10676) does not mark a key the structuredContent never carries as required.
+  type: z.unknown().nullable().optional(),
   worktreeId: z.string().nullable(),
   title: z.string().nullable(),
   location: z.enum(["grid", "dock", "trash", "background"]),
@@ -153,7 +164,33 @@ export const TerminalStatusEntrySchema = z.object({
   agentState: z.string().nullable(),
   waitingReason: z.string().optional(),
   lastTransitionAt: z.number().optional(),
+  // Process exit code from the last exit, present once the PTY has exited;
+  // null when the process was signal-terminated with no numeric code. Lets a
+  // supervisor tell a clean finish from a failure without scraping output.
+  exitCode: z.number().int().nullable().optional(),
+  // Wall-clock spawn timestamp (ms), for run-duration/staleness reasoning.
+  spawnedAt: z.number().optional(),
+  // Parsed test/lint/build result from the agent's most recent recognized check
+  // summary (issue #10682). Best-effort and PARSED, not an authoritative exit
+  // code — the check runs as a child of the agent CLI inside the PTY, so the
+  // real subcommand exit code is unobservable. `passed` is derived from
+  // tsc/ESLint/Vitest/Jest summary lines; absence means "no recognized check
+  // summary was seen", NOT "no check ran" and NOT "passed". Read `ranAt` for
+  // freshness and `command` (may be null) for which check it was.
+  lastCheckResult: z
+    .object({
+      command: z.string().nullable(),
+      passed: z.boolean(),
+      ranAt: z.number(),
+      failureSummary: z.string().nullable(),
+      truncated: z.boolean(),
+    })
+    .optional(),
   recentOutput: z.string().nullable().optional(),
+  // True when this terminal is in the fleet arming set (broadcast input is
+  // routed to it). Always populated for found terminals; absent on not-found
+  // entries (which carry `error` instead).
+  armed: z.boolean().optional(),
   error: z.string().optional(),
 });
 

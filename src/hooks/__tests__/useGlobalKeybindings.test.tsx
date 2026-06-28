@@ -36,7 +36,15 @@ const mocks = vi.hoisted(() => ({
     }),
   },
   actionService: {
-    dispatch: vi.fn(async () => ({ ok: true, result: undefined })),
+    // Typed signature so mock.calls is a labeled tuple (not the empty tuple),
+    // letting tests destructure the dispatched actionId without TS2493.
+    dispatch: vi.fn<
+      (
+        actionId: string,
+        args?: unknown,
+        options?: unknown
+      ) => Promise<{ ok: boolean; result?: unknown; error?: unknown }>
+    >(async () => ({ ok: true, result: undefined })),
   },
 }));
 
@@ -216,6 +224,51 @@ describe("useGlobalKeybindings — Cmd+W escape stack guard", () => {
       );
     } finally {
       dockPanel.remove();
+    }
+  });
+
+  it("closes the Daintree Assistant via help.togglePanel when its panel is focused (issue #10509)", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "terminal.close" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+
+    // The assistant runs an embedded xterm whose focused escape handler bails
+    // to let Escape reach the PTY, so routing Cmd+W through the escape stack
+    // would swallow it. Focus inside the aside must close the assistant instead.
+    const assistant = document.createElement("aside");
+    assistant.id = "daintree-assistant-panel";
+    const focusable = document.createElement("div");
+    focusable.tabIndex = -1;
+    assistant.appendChild(focusable);
+    document.body.appendChild(assistant);
+
+    try {
+      const escapeHandler = vi.fn();
+      registerEscape(escapeHandler);
+
+      render(<Host />);
+      focusable.focus();
+      expect(document.activeElement).toBe(focusable);
+
+      pressCmdW();
+
+      expect(escapeHandler).not.toHaveBeenCalled();
+      expect(mocks.actionService.dispatch).toHaveBeenCalledTimes(1);
+      expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+        "help.togglePanel",
+        undefined,
+        expect.objectContaining({ source: "keybinding" })
+      );
+      // terminal.close must NOT also fire — the assistant branch returns early.
+      // expect.anything() would not match the production `undefined` second arg,
+      // so assert against the dispatched action ids directly.
+      expect(mocks.actionService.dispatch.mock.calls.map(([id]) => id)).not.toContain(
+        "terminal.close"
+      );
+    } finally {
+      assistant.remove();
     }
   });
 

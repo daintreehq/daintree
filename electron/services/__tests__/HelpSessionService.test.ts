@@ -387,6 +387,33 @@ describe("HelpSessionService", () => {
     expect(settings.defaultMode).toBeUndefined();
   });
 
+  it("provisions the Daintree Assistant at the system tier regardless of the stored setting", async () => {
+    // Selecting the Daintree Assistant grants full capability (system tier),
+    // overriding the action-tier floor that governs the Claude/Codex help
+    // overlays. The stored setting here says `action`; the agent identity wins.
+    mockStoreGet.mockReturnValue({ tier: "action", bypassPermissions: false });
+
+    const result = await service.provisionSession({
+      ...provisionInput(),
+      agentId: "daintree-assistant",
+    });
+    if (!result) throw new Error("expected result");
+    expect(result.tier).toBe("system");
+  });
+
+  it("leaves non-assistant help agents on the stored action tier", async () => {
+    // Contrast with the Daintree Assistant override above: a Claude help overlay
+    // keeps the deliberate action floor so irreversible mutations still need a grant.
+    mockStoreGet.mockReturnValue({ tier: "action", bypassPermissions: false });
+
+    const result = await service.provisionSession({
+      ...provisionInput(),
+      agentId: "claude",
+    });
+    if (!result) throw new Error("expected result");
+    expect(result.tier).toBe("action");
+  });
+
   it("getBypassPermissions returns the snapshot taken at provision time", async () => {
     mockStoreGet.mockReturnValue({ tier: "action", bypassPermissions: true });
 
@@ -405,6 +432,30 @@ describe("HelpSessionService", () => {
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
     expect(service.getBypassPermissions(result.token)).toBe(false);
+  });
+
+  it("getDebugLogging returns the snapshot taken at provision time", async () => {
+    mockStoreGet.mockReturnValue({ tier: "action", debugLogging: true });
+
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+
+    // Mutate the store after provisioning: the accessor must return the
+    // value captured at provision time, not re-read the live store.
+    mockStoreGet.mockReturnValue({ tier: "action", debugLogging: false });
+
+    expect(service.getDebugLogging(result.token)).toBe(true);
+    expect(service.getDebugLogging("not-a-token")).toBe(false);
+    expect(service.getDebugLogging("")).toBe(false);
+
+    await service.revokeSession(result.sessionId);
+    expect(service.getDebugLogging(result.token)).toBe(false);
+  });
+
+  it("getDebugLogging defaults to false when settings have not been touched", async () => {
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+    expect(service.getDebugLogging(result.token)).toBe(false);
   });
 
   it("omits the daintree MCP server when daintreeControl is false", async () => {
@@ -1029,6 +1080,90 @@ describe("HelpSessionService", () => {
     });
   });
 
+  describe("orphan-bearer sweep (#10698)", () => {
+    it("revokes an unbound bearer older than the ceiling and tears down its MCP session", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.validateToken(result.token)).toBe("action");
+      // Wire the teardown spy AFTER provisioning — `ensureMcpServerReady` (run
+      // during provision) re-sets `onMcpSessionRevoked`, so an earlier spy
+      // would be overwritten before the sweep fires.
+      const onRevoked = vi.fn();
+      service.setOnMcpSessionRevoked(onRevoked);
+
+      // maxAge 0 → cutoff is now, so the just-minted record (createdAt <= now)
+      // counts as past-ceiling. It was never bound to a terminal → orphan.
+      await service.sweepOrphanSessions(0);
+
+      expect(service.validateToken(result.token)).toBe(false);
+      expect(onRevoked).toHaveBeenCalledWith(result.token);
+      // No terminal was ever bound, so there's nothing to kill.
+      expect(mockPtyKill).not.toHaveBeenCalled();
+    });
+
+    it("leaves a freshly provisioned bearer alone (younger than the ceiling)", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      // A generous ceiling means the just-minted record is well within it.
+      await service.sweepOrphanSessions(60 * 60 * 1000);
+
+      expect(service.validateToken(result.token)).toBe("action");
+    });
+
+    it("never sweeps a bound session regardless of age", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+
+      // Even with maxAge 0 (sweep everything past now), the bound session is
+      // a healthy live assistant and must survive.
+      await service.sweepOrphanSessions(0);
+
+      expect(service.validateToken(result.token)).toBe("action");
+      expect(mockPtyKill).not.toHaveBeenCalled();
+    });
+
+    it("does not re-revoke an already-revoked session", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      // Wire the spy after provision (see note above) so it's the active
+      // teardown hook when revokeSession and the sweep run.
+      const onRevoked = vi.fn();
+      service.setOnMcpSessionRevoked(onRevoked);
+      await service.revokeSession(result.sessionId);
+      expect(onRevoked).toHaveBeenCalledTimes(1);
+
+      // The revoked record was already dropped from the index, so the sweep
+      // can't see it and the teardown callback never fires a second time.
+      await service.sweepOrphanSessions(0);
+
+      expect(onRevoked).toHaveBeenCalledTimes(1);
+    });
+
+    it("startOrphanSweep arms a periodic sweep that dispose tears down", () => {
+      vi.useFakeTimers();
+      const svc = new HelpSessionService();
+      svc.setMcpRegistry({} as never);
+      const sweepSpy = vi.spyOn(svc, "sweepOrphanSessions").mockResolvedValue(undefined);
+      try {
+        svc.startOrphanSweep();
+        svc.startOrphanSweep(); // idempotent — must not arm a second timer
+
+        vi.advanceTimersByTime(5 * 60 * 1000);
+        expect(sweepSpy).toHaveBeenCalledTimes(1);
+        vi.advanceTimersByTime(5 * 60 * 1000);
+        expect(sweepSpy).toHaveBeenCalledTimes(2);
+
+        svc.dispose();
+        vi.advanceTimersByTime(15 * 60 * 1000);
+        expect(sweepSpy).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe("hibernation capture on eviction (project-switch persistence)", () => {
     let hibernationStore: {
       get: ReturnType<typeof vi.fn>;
@@ -1173,6 +1308,177 @@ describe("HelpSessionService", () => {
 
       expect(taken).toBeNull();
       expect(hibernationStore.clear).not.toHaveBeenCalled();
+    });
+
+    it("peekPendingHibernation reads the entry WITHOUT clearing it", async () => {
+      hibernationStore.get.mockReturnValue({
+        agentId: "claude",
+        agentSessionId: "pulled-id",
+        cwd: "/help/dir",
+        capturedAt: Date.now(),
+      });
+
+      const peeked = service.peekPendingHibernation("proj-A");
+
+      expect(peeked).toEqual({
+        agentId: "claude",
+        agentSessionId: "pulled-id",
+        cwd: "/help/dir",
+        // Disk-loaded entry has no in-memory panelWasOpen → normalized false
+        // so app-restart tokens never drive cold-resume (#10815).
+        panelWasOpen: false,
+      });
+      // The whole point of peek vs take: the entry survives so the launch
+      // flow can still consume it via takePendingHibernation.
+      expect(hibernationStore.clear).not.toHaveBeenCalled();
+    });
+
+    it("peekPendingHibernation returns null when no entry exists", () => {
+      hibernationStore.get.mockReturnValueOnce(null);
+
+      expect(service.peekPendingHibernation("proj-empty")).toBeNull();
+      expect(hibernationStore.clear).not.toHaveBeenCalled();
+    });
+
+    it("peekPendingHibernation surfaces panelWasOpen:true for a this-session capture (#10815)", () => {
+      // An in-memory entry stamped by an eviction this session carries the flag
+      // — the renderer's pull-on-mount peek reads it to decide whether to
+      // auto-reopen and resume on cold switch-back.
+      hibernationStore.get.mockReturnValueOnce({
+        agentId: "claude",
+        agentSessionId: "resume-id",
+        cwd: "/help/dir",
+        capturedAt: Date.now(),
+        panelWasOpen: true,
+      });
+
+      expect(service.peekPendingHibernation("proj-A")?.panelWasOpen).toBe(true);
+    });
+
+    it("stamps panelWasOpen:true on the captured entry when the panel was reported open (#10815)", async () => {
+      mockPtyGracefulKill.mockResolvedValueOnce("agent-resume-id-123");
+
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        projectViewWebContentsId: 99,
+        projectId: "proj-open",
+      });
+      if (!result) throw new Error("expected provision");
+      expect(service.markTerminalForToken(result.token, "term-open")).toBe(true);
+
+      // Renderer reported the assistant panel open for this project before the
+      // eviction fired.
+      service.reportPanelOpen("proj-open", true);
+
+      await service.revokeByWebContentsId(99);
+      await Promise.resolve();
+
+      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === "proj-open");
+      // Both the synchronous placeholder and the real-resume-id overwrite carry
+      // the open flag so a switch-back at any point auto-resumes.
+      expect(setCalls[0][1].panelWasOpen).toBe(true);
+      expect(setCalls[setCalls.length - 1][1]).toEqual(
+        expect.objectContaining({
+          agentSessionId: "agent-resume-id-123",
+          panelWasOpen: true,
+        })
+      );
+    });
+
+    it("stamps panelWasOpen:false when the panel was not open at eviction (#10815)", async () => {
+      mockPtyGracefulKill.mockResolvedValueOnce("agent-resume-id-456");
+
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        projectViewWebContentsId: 98,
+        projectId: "proj-closed",
+      });
+      if (!result) throw new Error("expected provision");
+      expect(service.markTerminalForToken(result.token, "term-closed")).toBe(true);
+
+      // No reportPanelOpen(true) for this project — panel was closed.
+      await service.revokeByWebContentsId(98);
+      await Promise.resolve();
+
+      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === "proj-closed");
+      expect(setCalls[setCalls.length - 1][1].panelWasOpen).toBe(false);
+    });
+
+    it("reportPanelOpen(false) clears a prior open report so a later eviction does not auto-resume (#10815)", async () => {
+      mockPtyGracefulKill.mockResolvedValueOnce("agent-resume-id-789");
+
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        projectViewWebContentsId: 97,
+        projectId: "proj-toggle",
+      });
+      if (!result) throw new Error("expected provision");
+      expect(service.markTerminalForToken(result.token, "term-toggle")).toBe(true);
+
+      service.reportPanelOpen("proj-toggle", true);
+      // User closed the panel before switching away.
+      service.reportPanelOpen("proj-toggle", false);
+
+      await service.revokeByWebContentsId(97);
+      await Promise.resolve();
+
+      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === "proj-toggle");
+      expect(setCalls[setCalls.length - 1][1].panelWasOpen).toBe(false);
+    });
+
+    it("peekPendingHibernation mid-capture neither consumes the entry nor blocks the real resume-id write", async () => {
+      // A switch-back can peek (to render the Resume CTA) while main's
+      // gracefulKill is still resolving. Peek must be a pure read: it must NOT
+      // clear the entry or release the in-flight capture owner, or the
+      // post-gracefulKill finalize would skip writing the agent's real resume
+      // id (#9639 ownership guard) and the user would resume nothing.
+      let resolveGraceful: (value: string | null) => void = () => {};
+      mockPtyGracefulKill.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveGraceful = resolve;
+          })
+      );
+      // Surface the #9639 empty-sentinel placeholder the eviction path wrote
+      // synchronously before awaiting gracefulKill.
+      hibernationStore.get.mockReturnValueOnce({
+        agentId: "claude",
+        agentSessionId: "",
+        cwd: "/help/peek-race",
+        capturedAt: Date.now(),
+      });
+
+      const sess = await service.provisionSession({
+        ...provisionInput(),
+        projectViewWebContentsId: 60,
+        projectId: "proj-peek-race",
+      });
+      if (!sess) throw new Error("expected provision");
+      expect(service.markTerminalForToken(sess.token, "term-peek")).toBe(true);
+
+      // Eviction-revoke kicks off and hangs on gracefulKill.
+      const revokePromise = service.revokeByWebContentsId(60);
+
+      // Renderer peeks mid-flight — pure read, no consumption.
+      const peeked = service.peekPendingHibernation("proj-peek-race");
+      expect(peeked).toEqual({
+        agentId: "claude",
+        agentSessionId: "",
+        cwd: "/help/peek-race",
+        panelWasOpen: false,
+      });
+      expect(hibernationStore.clear).not.toHaveBeenCalledWith("proj-peek-race");
+
+      // gracefulKill resolves with the real resume id; because peek left the
+      // capture owner intact, finalize still overwrites the placeholder.
+      resolveGraceful("real-resume-id");
+      await revokePromise;
+      await Promise.resolve();
+
+      expect(hibernationStore.set).toHaveBeenCalledWith(
+        "proj-peek-race",
+        expect.objectContaining({ agentSessionId: "real-resume-id" })
+      );
     });
 
     it("skips pending-hibernation write when a same-project provision displaces the record during gracefulKill", async () => {
@@ -1678,25 +1984,27 @@ describe("HelpSessionService", () => {
       expect(args).toEqual(["--approval-mode=plan"]);
     });
 
-    it("getGeminiLaunchArgs returns null for a Claude session (cross-agent defense)", async () => {
-      const result = await service.provisionSession(provisionInput());
+    it.each([
+      {
+        name: "getGeminiLaunchArgs returns null for a Claude session",
+        provision: () => provisionInput(),
+        call: (token: string) => service.getGeminiLaunchArgs(token),
+      },
+      {
+        name: "getGeminiLaunchArgs returns null for a Codex session",
+        provision: () => ({ ...provisionInput(), agentId: "codex" as const }),
+        call: (token: string) => service.getGeminiLaunchArgs(token),
+      },
+      {
+        name: "getCodexLaunchArgs returns null for a Gemini session",
+        provision: () => geminiInput(),
+        call: (token: string) => service.getCodexLaunchArgs(token),
+      },
+    ])("$name (cross-agent defense)", async ({ provision, call }) => {
+      const result = await service.provisionSession(provision());
       if (!result) throw new Error("expected result");
 
-      expect(service.getGeminiLaunchArgs(result.token)).toBeNull();
-    });
-
-    it("getGeminiLaunchArgs returns null for a Codex session (cross-agent defense)", async () => {
-      const result = await service.provisionSession({ ...provisionInput(), agentId: "codex" });
-      if (!result) throw new Error("expected result");
-
-      expect(service.getGeminiLaunchArgs(result.token)).toBeNull();
-    });
-
-    it("getCodexLaunchArgs returns null for a Gemini session (cross-agent defense)", async () => {
-      const result = await service.provisionSession(geminiInput());
-      if (!result) throw new Error("expected result");
-
-      expect(service.getCodexLaunchArgs(result.token)).toBeNull();
+      expect(call(result.token)).toBeNull();
     });
 
     it("getGeminiLaunchArgs returns null for unknown / revoked tokens", async () => {
@@ -1946,19 +2254,21 @@ describe("HelpSessionService", () => {
       expect(service.getCopilotLaunchArgs(result.token)).toEqual(["--plan"]);
     });
 
-    it("getCopilotLaunchArgs returns null for a Claude session (cross-agent defense)", async () => {
-      const result = await service.provisionSession(provisionInput());
-      if (!result) throw new Error("expected result");
+    it.each([
+      { name: "a Claude session", provision: () => provisionInput() },
+      {
+        name: "a Gemini session",
+        provision: () => ({ ...provisionInput(), agentId: "gemini" as const }),
+      },
+    ])(
+      "getCopilotLaunchArgs returns null for $name (cross-agent defense)",
+      async ({ provision }) => {
+        const result = await service.provisionSession(provision());
+        if (!result) throw new Error("expected result");
 
-      expect(service.getCopilotLaunchArgs(result.token)).toBeNull();
-    });
-
-    it("getCopilotLaunchArgs returns null for a Gemini session (cross-agent defense)", async () => {
-      const result = await service.provisionSession({ ...provisionInput(), agentId: "gemini" });
-      if (!result) throw new Error("expected result");
-
-      expect(service.getCopilotLaunchArgs(result.token)).toBeNull();
-    });
+        expect(service.getCopilotLaunchArgs(result.token)).toBeNull();
+      }
+    );
 
     it("getCopilotLaunchArgs returns null for unknown / revoked tokens", async () => {
       const result = await service.provisionSession(copilotInput());

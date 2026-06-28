@@ -222,6 +222,23 @@ async function typeDirectlyIntoTerminal(
     await dismissBlockingPalette(page);
     await expect(xterm).toBeVisible({ timeout: T_MEDIUM });
     await xterm.click({ force: true });
+    const targetFocused = await expect
+      .poll(() => getFocusedPanelId(page), { timeout: 2_000, intervals: [100, 250] })
+      .toBe(terminalId)
+      .then(() => true)
+      .catch(() => false);
+
+    if (!targetFocused) {
+      const focusResult = await dispatchAction(
+        page,
+        "panel.focus",
+        { panelId: terminalId },
+        { source: "test" }
+      );
+      expect(focusResult.ok, focusResult.error?.message).toBe(true);
+      await xterm.click({ force: true });
+    }
+
     await expect
       .poll(() => getFocusedPanelId(page), { timeout: T_MEDIUM, intervals: [100, 250] })
       .toBe(terminalId);

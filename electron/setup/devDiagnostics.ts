@@ -1,6 +1,7 @@
 // eager-import-allow: writes dev diagnostics via sync fs during setup
 import { app, ipcMain } from "electron";
 import fs from "node:fs";
+import { isE2EMode } from "./runtimeFlags.js";
 
 const SWEEP_INTERVAL_MS = 10_000;
 const LISTENER_THRESHOLD = 5;
@@ -22,7 +23,7 @@ function handleProcessWarning(warning: Error): void {
   // past the default 10-listener threshold without indicating a real leak.
   // Killing the app in that environment derails entire test files —
   // surface the warning and keep going.
-  if (process.env.DAINTREE_E2E_MODE === "1") return;
+  if (isE2EMode) return;
   // app.exit(1) skips before-quit/will-quit/quit so the CrashLoopGuard does not
   // count this as a crash, and Chromium subprocesses are torn down cleanly.
   // throw would route through globalErrorHandlers' relaunch path; process.exit

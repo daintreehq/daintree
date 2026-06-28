@@ -18,6 +18,39 @@ const REQUIRED_EXCLUSIONS: readonly string[] = ["node_modules/", ".git/"];
 const SOURCE_EXTS = new Set([".ts", ".tsx"]);
 const SOURCEMAP_EXTS = new Set([".js.map", ".mjs.map"]);
 
+// Dev-only metadata that must never ship in a `.dntr`: package manifests,
+// lockfiles, TS config, and build configs. `package.json` is the worst
+// offender — it carries the author's full dependency layout and, in a
+// monorepo/`file:` setup, leaks the author's absolute home path into every
+// distributed copy (#10514); `package-lock.json` is also usually the bulk of
+// the archive. A `.dntr` should contain only the manifest, built outputs, and
+// declared assets, so these are excluded from packing AND rejected by
+// {@link verifyPluginArchive}.
+const ROOT_DEV_FILE_NAMES: ReadonlySet<string> = new Set([
+  "package.json",
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+  "yarn.lock",
+  "pnpm-lock.yaml",
+  "bun.lock",
+  "bun.lockb",
+]);
+
+// `*.config.*` at the archive root: vite.config.ts, tsup.config.mjs,
+// vitest.config.ts, etc.
+const ROOT_CONFIG_FILE = /^[^/]+\.config\.[^/]+$/;
+
+// Scope to the archive ROOT only (no `/` in the path) so a plugin that
+// legitimately ships e.g. `dist/app.config.json` as a runtime asset keeps it —
+// the leak and bloat we're guarding against live at the package root.
+function isExcludedRootDevFile(name: string): boolean {
+  if (name.includes("/")) return false;
+  if (ROOT_DEV_FILE_NAMES.has(name)) return true;
+  // tsconfig.json, tsconfig.build.json, tsconfig.node.json, …
+  if (name.startsWith("tsconfig") && name.endsWith(".json")) return true;
+  return ROOT_CONFIG_FILE.test(name);
+}
+
 export interface PackOptions {
   sourcemaps?: boolean;
 }
@@ -37,6 +70,13 @@ function normalizePath(filePath: string): string {
   let normalised = filePath.replace(/\\/g, "/");
   if (normalised.startsWith("/")) {
     normalised = normalised.slice(1);
+  }
+  // Strip a leading `./` so a crafted entry like `./package.json` normalizes to
+  // its bare root name — otherwise the leading dot keeps it out of the
+  // root-level dev-file exclusion (the privacy/bloat guard). It also aligns with
+  // the `stripLeading` the manifest.main/view checks already apply.
+  if (normalised.startsWith("./")) {
+    normalised = normalised.slice(2);
   }
   return normalised;
 }
@@ -67,6 +107,7 @@ function matchesExclusionPattern(name: string, sourcemaps: boolean): boolean {
   }
   const ext = path.extname(name);
   if (SOURCE_EXTS.has(ext)) return true;
+  if (isExcludedRootDevFile(name)) return true;
   if (!sourcemaps) {
     for (const smExt of SOURCEMAP_EXTS) {
       if (name.endsWith(smExt)) return true;
@@ -582,7 +623,7 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
         }
       }
 
-      for (const view of manifest.contributes.experimental_views) {
+      for (const view of manifest.contributes.views) {
         const viewPath = stripLeading(view.componentPath);
         if (!entryNames.has(viewPath)) {
           return resolve({

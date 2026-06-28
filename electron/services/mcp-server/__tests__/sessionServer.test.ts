@@ -12,7 +12,7 @@ vi.mock("electron", () => ({
 import { createSessionServer, validateDisplayImageUrl } from "../sessionServer.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import type { SessionStore } from "../sessionStore.js";
-import { SessionStore as RealSessionStore, consumeToken } from "../sessionStore.js";
+import { SessionStore as RealSessionStore } from "../sessionStore.js";
 import { GrantCache } from "../grantCache.js";
 import {
   buildToolError,
@@ -26,12 +26,12 @@ import {
   ELICITATION_FAILED_CODE,
   MCP_DEDUP_KEY_COLLISION_CODE,
   MCP_DEDUP_ALLOWLIST,
-  MCP_RATE_LIMITED_CODE,
-  RATE_LIMIT_TIERS,
-  RATE_LIMIT_TOOL_MAP,
+  minimumPermittingTier,
   unwrapDispatchResult,
 } from "../shared.js";
-import { SessionBindingError } from "../rendererBridge.js";
+import { SessionBindingError, RendererBridgeUnavailableError } from "../rendererBridge.js";
+import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
+import { events } from "../../events.js";
 
 function fakeSessionStore(
   tier: "workbench" | "action" | "system" | "external" = "workbench"
@@ -48,7 +48,6 @@ function fakeSessionStore(
     resourceSubscriptions: new Map(),
     dedupInFlight: new Map(),
     dedupResultCache: new Map(),
-    rateLimitBuckets: new Map(),
     grantCache,
     drain: vi.fn(),
     getTier: vi.fn(() => tier),
@@ -57,11 +56,6 @@ function fakeSessionStore(
     resetIdleTimer: vi.fn(),
     resetHttpIdleTimer: vi.fn(),
     clearDedupState: vi.fn(),
-    // Permissive by default so existing suites aren't throttled; the
-    // rate-limit suite overrides this with a counting stub or the real
-    // implementation.
-    consumeRateLimitToken: vi.fn(() => ({ allowed: true })),
-    clearRateLimitState: vi.fn(),
   } as unknown as SessionStore;
   return store;
 }
@@ -72,6 +66,7 @@ function fakeDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
     requestManifest: vi.fn().mockResolvedValue([]),
     dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result: null } }),
     handleWaitUntilIdle: vi.fn(),
+    handleWaitUntilIdleBatch: vi.fn(),
     appendAuditRecord: vi.fn(),
     getCachedManifest: vi.fn(() => null),
     getFullToolSurface: vi.fn(() => false),
@@ -217,9 +212,10 @@ function makeManifestEntry(id: string): ActionManifestEntry {
 }
 
 describe("sessionServer tools/list handler", () => {
-  // tier "external" + fullToolSurface bypasses the per-id allowlist in
-  // shouldExposeTool, so any non-restricted entry surfaces — keeps these tests
-  // decoupled from TIER_ALLOWLISTS membership.
+  // tier "external" + fullToolSurface routes through MCP_FULL_TOOL_SURFACE_ALLOWLIST
+  // (#10701 — it no longer bypasses the allowlist). These manifest-plumbing tests
+  // therefore use allowlisted action ids so the live/cache/fail-closed paths are
+  // exercised independent of exposure gating.
   function fullSurfaceDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
     return fakeDeps({
       sessionStore: fakeSessionStore("external"),
@@ -234,8 +230,8 @@ describe("sessionServer tools/list handler", () => {
 
   it("returns the live manifest when requestManifest succeeds", async () => {
     const deps = fullSurfaceDeps({
-      requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("fresh_tool")]),
-      getCachedManifest: vi.fn(() => [makeManifestEntry("stale_tool")]),
+      requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("actions.list")]),
+      getCachedManifest: vi.fn(() => [makeManifestEntry("terminal.list")]),
     });
     const server = createSessionServer("tools-list-fresh", deps);
     await server.connect(makeMockTransport());
@@ -243,7 +239,7 @@ describe("sessionServer tools/list handler", () => {
     const result = await listTools(server);
 
     // Fresh result wins over the (different) cache, proving the live path is used.
-    expect(result.tools.map((t) => t.name)).toEqual(["fresh_tool"]);
+    expect(result.tools.map((t) => t.name)).toEqual(["actions.list"]);
   });
 
   it("falls back to the cached manifest, warning with the error, when requestManifest rejects", async () => {
@@ -251,14 +247,14 @@ describe("sessionServer tools/list handler", () => {
     const rejection = new Error("Manifest request timed out");
     const deps = fullSurfaceDeps({
       requestManifest: vi.fn().mockRejectedValue(rejection),
-      getCachedManifest: vi.fn(() => [makeManifestEntry("cached_tool")]),
+      getCachedManifest: vi.fn(() => [makeManifestEntry("git.commit")]),
     });
     const server = createSessionServer("tools-list-fallback", deps);
     await server.connect(makeMockTransport());
 
     const result = await listTools(server);
 
-    expect(result.tools.map((t) => t.name)).toEqual(["cached_tool"]);
+    expect(result.tools.map((t) => t.name)).toEqual(["git.commit"]);
     expect(warnSpy).toHaveBeenCalledTimes(1);
     // The rejection must reach the log so operators can diagnose the stale serve.
     expect(warnSpy.mock.calls[0]).toContain(rejection);
@@ -269,7 +265,7 @@ describe("sessionServer tools/list handler", () => {
     const deps = fullSurfaceDeps({
       requestManifest: vi.fn().mockRejectedValue(new Error("Manifest request timed out")),
       getCachedManifest: vi.fn(() => [
-        makeManifestEntry("allowed_tool"),
+        makeManifestEntry("actions.list"),
         { ...makeManifestEntry("restricted_tool"), danger: "restricted" as const },
       ]),
     });
@@ -279,7 +275,7 @@ describe("sessionServer tools/list handler", () => {
     const result = await listTools(server);
 
     // shouldExposeTool drops restricted entries even on the cache path.
-    expect(result.tools.map((t) => t.name)).toEqual(["allowed_tool"]);
+    expect(result.tools.map((t) => t.name)).toEqual(["actions.list"]);
   });
 
   it("fails closed with an McpError when requestManifest rejects and no cache exists", async () => {
@@ -1355,28 +1351,6 @@ describe("CallTool live activity notifications (#9759)", () => {
     expect(settled).not.toHaveBeenCalled();
   });
 
-  it("does not emit started/settled for a rate-limited rejection", async () => {
-    const started = vi.fn();
-    const settled = vi.fn();
-    const sessionStore = fakeSessionStore("workbench");
-    (sessionStore.consumeRateLimitToken as ReturnType<typeof vi.fn>).mockReturnValue({
-      allowed: false,
-      retryAfter: 5,
-    });
-    const deps = fakeDeps({
-      sessionStore,
-      notifyToolCallStarted: started,
-      notifyToolCallSettled: settled,
-    });
-    const server = createSessionServer("session-C", deps);
-    await server.connect(makeMockTransport());
-
-    await callTool(server, { name: "worktree.list", arguments: {} });
-
-    expect(started).not.toHaveBeenCalled();
-    expect(settled).not.toHaveBeenCalled();
-  });
-
   it('flags danger:"confirm" tools on the started event', async () => {
     const started = vi.fn();
     const requestManifest = vi
@@ -1596,6 +1570,113 @@ describe("CallTool error envelope (integration through sessionServer)", () => {
     expect(parsed.message).toContain("Do not retry");
     expect(parsed.message).toContain("42");
   });
+
+  it("reclassifies a no-channel confirm dispatch to CONFIRMATION_REQUIRED, not EXECUTION_ERROR (#10640)", async () => {
+    // recipe.run is a real danger:"confirm" action in the action tier. With a
+    // client that lacks elicitation.form, the unconfirmed dispatch is forwarded
+    // to the renderer bridge, which throws RendererBridgeUnavailableError when
+    // no Daintree window is open. Because the manifest entry IS known to be
+    // confirm-gated, that must surface as a non-retriable CONFIRMATION_REQUIRED
+    // (the human couldn't be asked) rather than a retriable EXECUTION_ERROR.
+    const manifest = [
+      {
+        id: "recipe.run",
+        title: "Recipe: run",
+        description: "Run a recipe",
+        category: "recipe",
+        danger: "confirm" as const,
+        source: ["agent"] as const,
+      },
+    ] as unknown as import("../../../../shared/types/actions.js").ActionManifestEntry[];
+    const dispatchAction = vi.fn().mockRejectedValue(new RendererBridgeUnavailableError());
+    const deps = fakeDeps({
+      // action tier so recipe.run clears the tier floor and reaches dispatch.
+      sessionStore: fakeSessionStore("action"),
+      requestManifest: vi.fn().mockResolvedValue(manifest),
+      getCachedManifest: vi.fn(() => manifest),
+      dispatchAction,
+    });
+    const server = createSessionServer("s-no-channel", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "recipe.run",
+      arguments: {},
+    })) as { isError: boolean; content: { type: string; text: string }[] };
+
+    // Dispatch was attempted unconfirmed (the renderer is the confirm gate).
+    expect(dispatchAction).toHaveBeenCalledWith("recipe.run", {}, false);
+    expect(result.isError).toBe(true);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.code).toBe("CONFIRMATION_REQUIRED");
+    expect(parsed.retriable).toBe(false);
+    expect(parsed.details).toEqual({ confirmationChannel: "unavailable" });
+  });
+
+  it("keeps a retriable EXECUTION_ERROR for a non-confirm tool when the bridge is unavailable (#10640)", async () => {
+    // The reclassification is scoped to confirm-gated tools. A safe tool that
+    // hits the same RendererBridgeUnavailableError is a genuine "no renderer"
+    // failure (nothing needed confirming) and stays a retriable EXECUTION_ERROR
+    // — but with an explicit cause rather than an opaque dispatch failure.
+    const manifest = [
+      {
+        id: "files.search",
+        title: "Files: search",
+        description: "Search files",
+        category: "files",
+        danger: "safe" as const,
+        source: ["agent"] as const,
+      },
+    ] as unknown as import("../../../../shared/types/actions.js").ActionManifestEntry[];
+    const deps = fakeDeps({
+      requestManifest: vi.fn().mockResolvedValue(manifest),
+      getCachedManifest: vi.fn(() => manifest),
+      dispatchAction: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
+    });
+    const server = createSessionServer("s-safe-no-channel", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "files.search",
+      arguments: {},
+    })) as { isError: boolean; content: { type: string; text: string }[] };
+
+    expect(result.isError).toBe(true);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.code).toBe(EXECUTION_ERROR_CODE);
+    expect(parsed.retriable).toBe(true);
+    expect(parsed.message).toContain("No Daintree window is open");
+  });
+
+  it("cold-cache confirm tool with no renderer stays a retriable EXECUTION_ERROR — danger is unknowable without a manifest (#10640)", async () => {
+    // Deliberate boundary: when no window is open AND the manifest cache is cold,
+    // the manifest fetch itself goes through the renderer and throws, so
+    // `lookupManifestEntry` returns undefined and the tool's danger is unknown.
+    // We must NOT claim CONFIRMATION_REQUIRED for an unverified confirm tool, so
+    // this stays a retriable EXECUTION_ERROR (the renderer may return when a
+    // window opens) rather than the non-retriable confirmation signal the
+    // warm-cache path produces.
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("action"),
+      // Cold cache + no renderer: both the manifest fetch and the dispatch fail.
+      getCachedManifest: vi.fn(() => null),
+      requestManifest: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
+      dispatchAction: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
+    });
+    const server = createSessionServer("s-cold-cache", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "recipe.run",
+      arguments: {},
+    })) as { isError: boolean; content: { type: string; text: string }[] };
+
+    expect(result.isError).toBe(true);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.code).toBe(EXECUTION_ERROR_CODE);
+    expect(parsed.retriable).toBe(true);
+    expect(parsed.message).toContain("No Daintree window is open");
+  });
 });
 
 describe("Resource error envelope (integration through sessionServer)", () => {
@@ -1717,6 +1798,71 @@ describe("Resource error envelope (integration through sessionServer)", () => {
       expect((err as McpError).message).toContain("Unknown resource URI");
     }
   });
+
+  it("surfaces exit metadata in the agentState resource after the agent exits (#10638)", async () => {
+    const store = getAgentAvailabilityStore();
+    store.clear();
+    events.emit("agent:spawned", {
+      agentId: "claude",
+      terminalId: "term-exit",
+      timestamp: 5_000,
+    });
+    events.emit("agent:state-changed", {
+      agentId: "claude",
+      terminalId: "term-exit",
+      state: "exited",
+      previousState: "working",
+      trigger: "exit",
+      confidence: 1,
+      timestamp: 6_000,
+      exitCode: 2,
+    });
+
+    const deps = fakeDeps();
+    const server = createSessionServer("s-res-agentstate", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await readResource(server, "daintree://agent/claude/state")) as {
+      contents: { uri: string; mimeType: string; text: string }[];
+    };
+    const parsed = JSON.parse(result.contents[0].text);
+    expect(parsed.state).toBe("exited");
+    expect(parsed.exitCode).toBe(2);
+    expect(parsed.spawnedAt).toBe(5_000);
+    expect(parsed.lastTransitionAt).toBe(6_000);
+    store.clear();
+  });
+
+  it("omits exitCode in the agentState resource while the agent is still working (#10638)", async () => {
+    const store = getAgentAvailabilityStore();
+    store.clear();
+    events.emit("agent:spawned", {
+      agentId: "codex",
+      terminalId: "term-working",
+      timestamp: 1_000,
+    });
+    events.emit("agent:state-changed", {
+      agentId: "codex",
+      terminalId: "term-working",
+      state: "working",
+      previousState: "idle",
+      trigger: "output",
+      confidence: 1,
+      timestamp: 2_000,
+    });
+
+    const deps = fakeDeps();
+    const server = createSessionServer("s-res-agentstate-working", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await readResource(server, "daintree://agent/codex/state")) as {
+      contents: { uri: string; mimeType: string; text: string }[];
+    };
+    const parsed = JSON.parse(result.contents[0].text);
+    expect(parsed.state).toBe("working");
+    expect(parsed).not.toHaveProperty("exitCode");
+    store.clear();
+  });
 });
 
 describe("sessionServer grant cache fallback (#8442)", () => {
@@ -1790,6 +1936,103 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     expect(notify).not.toHaveBeenCalled();
     expect(refreshSpy).toHaveBeenCalledTimes(1);
     expect(resetIdle).toHaveBeenCalledWith("s");
+    sessionStore.grantCache.dispose();
+  });
+
+  it("native grant authorizes a denied tool without a modal and refreshes on success (#10648)", async () => {
+    const sessionStore = fakeSessionStore("workbench");
+    sessionStore.sessions.set("s", {
+      transport: {} as never,
+      server: {} as never,
+      idleTimer: setTimeout(() => {}, 1_000_000),
+    });
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 2,
+    });
+    const refreshSpy = vi.spyOn(sessionStore.grantCache, "refreshNativeGrant");
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: {},
+    })) as { isError?: boolean };
+
+    expect(result.isError).not.toBe(true);
+    // dispatchConfirmed=true → the native grant bypasses the confirm modal,
+    // unlike a per-tool grant which dispatches with `false`.
+    expect(dispatchAction).toHaveBeenCalledWith("worktree.delete", expect.any(Object), true);
+    expect(refreshSpy).toHaveBeenCalledWith(grant.id);
+    // One use consumed at authorization.
+    expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(1);
+    sessionStore.grantCache.dispose();
+  });
+
+  it("native grant for tool A does not authorize tool B (fails closed on scope) (#10648)", async () => {
+    const sessionStore = fakeSessionStore("workbench");
+    sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 5,
+    });
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    // git.push is denied at the workbench floor AND is not in the grant's
+    // allowlist → fail closed with TIER_NOT_PERMITTED, never dispatched.
+    const result = (await callTool(server, {
+      name: "git.push",
+      arguments: {},
+    })) as { isError?: boolean; content?: Array<{ text?: string }> };
+
+    expect(result.isError).toBe(true);
+    expect(result.content?.[0]?.text ?? "").toContain("TIER_NOT_PERMITTED");
+    expect(dispatchAction).not.toHaveBeenCalled();
+    sessionStore.grantCache.dispose();
+  });
+
+  it("an exhausted native grant fails closed on the next call (#10648)", async () => {
+    const sessionStore = fakeSessionStore("workbench");
+    sessionStore.sessions.set("s", {
+      transport: {} as never,
+      server: {} as never,
+      idleTimer: setTimeout(() => {}, 1_000_000),
+    });
+    sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 1,
+    });
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    const first = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: {},
+    })) as { isError?: boolean };
+    expect(first.isError).not.toBe(true);
+
+    const second = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: {},
+    })) as { isError?: boolean; content?: Array<{ text?: string }> };
+    expect(second.isError).toBe(true);
+    expect(second.content?.[0]?.text ?? "").toContain("TIER_NOT_PERMITTED");
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
     sessionStore.grantCache.dispose();
   });
 
@@ -1934,312 +2177,6 @@ describe("sessionServer grant cache fallback (#8442)", () => {
   });
 });
 
-function parseToolErrorPayload(result: { content: unknown; isError?: boolean }): {
-  code: string;
-  retriable: boolean;
-  details?: { retryAfter?: number };
-} {
-  const text = (result as { content: Array<{ text: string }> }).content[0].text;
-  return JSON.parse(text);
-}
-
-describe("consumeToken (pure token bucket)", () => {
-  const mutation = RATE_LIMIT_TIERS.mutation; // capacity 10, 10/min
-
-  it("allows up to capacity then rejects with a positive retryAfter", () => {
-    const bucket = { tokens: mutation.capacity, lastRefillMs: 1000 };
-    for (let i = 0; i < mutation.capacity; i++) {
-      expect(consumeToken(bucket, mutation, 1000).allowed).toBe(true);
-    }
-    const rejected = consumeToken(bucket, mutation, 1000);
-    expect(rejected.allowed).toBe(false);
-    if (!rejected.allowed) {
-      expect(rejected.retryAfter).toBeGreaterThanOrEqual(1);
-    }
-  });
-
-  it("refills proportionally to elapsed wall-clock", () => {
-    const bucket = { tokens: 0, lastRefillMs: 0 };
-    // 10/min => one token every 6000ms. After 6000ms exactly one token.
-    const r = consumeToken(bucket, mutation, 6000);
-    expect(r.allowed).toBe(true);
-    expect(bucket.tokens).toBeCloseTo(0, 5);
-  });
-
-  it("caps refill at capacity (no unbounded accrual while idle)", () => {
-    const bucket = { tokens: 0, lastRefillMs: 0 };
-    // A huge idle gap must not let the bucket exceed capacity.
-    consumeToken(bucket, mutation, 60 * 60 * 1000);
-    expect(bucket.tokens).toBeLessThanOrEqual(mutation.capacity);
-  });
-
-  it("never returns a sub-second retryAfter", () => {
-    const bucket = { tokens: 0.99, lastRefillMs: 0 };
-    const r = consumeToken(bucket, RATE_LIMIT_TIERS.highFreqRead, 0);
-    expect(r.allowed).toBe(false);
-    if (!r.allowed) expect(r.retryAfter).toBeGreaterThanOrEqual(1);
-  });
-});
-
-describe("SessionStore.consumeRateLimitToken", () => {
-  it("exhausts the mutation tier (git.commit) after capacity calls", () => {
-    const store = new RealSessionStore(() => {});
-    const cap = RATE_LIMIT_TIERS.mutation.capacity;
-    for (let i = 0; i < cap; i++) {
-      expect(store.consumeRateLimitToken("s", "git.commit", 1000).allowed).toBe(true);
-    }
-    const rejected = store.consumeRateLimitToken("s", "git.commit", 1000);
-    expect(rejected.allowed).toBe(false);
-    store.drain();
-  });
-
-  it("uses the high-frequency tier for read tools (terminal.getStatus)", () => {
-    const store = new RealSessionStore(() => {});
-    const cap = RATE_LIMIT_TIERS.highFreqRead.capacity;
-    for (let i = 0; i < cap; i++) {
-      expect(store.consumeRateLimitToken("s", "terminal.getStatus", 1000).allowed).toBe(true);
-    }
-    expect(store.consumeRateLimitToken("s", "terminal.getStatus", 1000).allowed).toBe(false);
-    store.drain();
-  });
-
-  it("falls back to the standard tier for unmapped tools", () => {
-    const store = new RealSessionStore(() => {});
-    const cap = RATE_LIMIT_TIERS.standard.capacity;
-    for (let i = 0; i < cap; i++) {
-      expect(store.consumeRateLimitToken("s", "files.search", 1000).allowed).toBe(true);
-    }
-    expect(store.consumeRateLimitToken("s", "files.search", 1000).allowed).toBe(false);
-    store.drain();
-  });
-
-  it("isolates buckets per session", () => {
-    const store = new RealSessionStore(() => {});
-    const cap = RATE_LIMIT_TIERS.mutation.capacity;
-    for (let i = 0; i < cap; i++) {
-      store.consumeRateLimitToken("session-a", "git.push", 1000);
-    }
-    expect(store.consumeRateLimitToken("session-a", "git.push", 1000).allowed).toBe(false);
-    // A fresh session is unaffected by session-a's exhausted bucket.
-    expect(store.consumeRateLimitToken("session-b", "git.push", 1000).allowed).toBe(true);
-    store.drain();
-  });
-
-  it("isolates buckets per tool within a session", () => {
-    const store = new RealSessionStore(() => {});
-    const cap = RATE_LIMIT_TIERS.mutation.capacity;
-    for (let i = 0; i < cap; i++) {
-      store.consumeRateLimitToken("s", "git.commit", 1000);
-    }
-    expect(store.consumeRateLimitToken("s", "git.commit", 1000).allowed).toBe(false);
-    expect(store.consumeRateLimitToken("s", "git.push", 1000).allowed).toBe(true);
-    store.drain();
-  });
-
-  it("clearRateLimitState resets the session's buckets", () => {
-    const store = new RealSessionStore(() => {});
-    const cap = RATE_LIMIT_TIERS.mutation.capacity;
-    for (let i = 0; i < cap; i++) {
-      store.consumeRateLimitToken("s", "git.commit", 1000);
-    }
-    expect(store.consumeRateLimitToken("s", "git.commit", 1000).allowed).toBe(false);
-    store.clearRateLimitState("s");
-    // Fresh bucket — full capacity again.
-    expect(store.consumeRateLimitToken("s", "git.commit", 1000).allowed).toBe(true);
-    store.drain();
-  });
-
-  it("drain() tears down all rate-limit buckets", () => {
-    const store = new RealSessionStore(() => {});
-    store.consumeRateLimitToken("s", "git.commit", 1000);
-    expect(store.rateLimitBuckets.has("s")).toBe(true);
-    store.drain();
-    expect(store.rateLimitBuckets.size).toBe(0);
-  });
-
-  it("revokeSession() tears down the rate-limit buckets for a live session", () => {
-    const store = new RealSessionStore(() => {});
-    store.consumeRateLimitToken("live", "git.commit", 1000);
-    expect(store.rateLimitBuckets.has("live")).toBe(true);
-    // Install a minimal HTTP session so revokeSession() has an entry to
-    // tear down (it returns false and no-ops without one).
-    store.httpSessions.set("live", {
-      transport: { close: vi.fn().mockResolvedValue(undefined) },
-      server: {},
-      idleTimer: setTimeout(() => {}, 1_000_000),
-    } as unknown as typeof store.httpSessions extends Map<string, infer V> ? V : never);
-    expect(store.revokeSession("live")).toBe(true);
-    expect(store.rateLimitBuckets.has("live")).toBe(false);
-    store.drain();
-  });
-
-  it("does not advance lastRefillMs backward on a clock step-back", () => {
-    const store = new RealSessionStore(() => {});
-    store.consumeRateLimitToken("s", "git.commit", 10000);
-    store.consumeRateLimitToken("s", "git.commit", 9000); // clock went back
-    const bucket = store.rateLimitBuckets.get("s")!.get("git.commit")!;
-    expect(bucket.lastRefillMs).toBe(10000);
-    store.consumeRateLimitToken("s", "git.commit", 10001);
-    expect(bucket.lastRefillMs).toBe(10001);
-    store.drain();
-  });
-});
-
-describe("CallTool rate limiting (handler integration)", () => {
-  it("rejects with MCP_RATE_LIMITED + retryAfter when the bucket is exhausted", async () => {
-    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
-    const sessionStore = fakeSessionStore("system");
-    (sessionStore.consumeRateLimitToken as ReturnType<typeof vi.fn>).mockReturnValue({
-      allowed: false,
-      retryAfter: 7,
-    });
-    const appendAuditRecord = vi.fn();
-    const deps = fakeDeps({ sessionStore, dispatchAction, appendAuditRecord });
-    const server = createSessionServer("rl-1", deps);
-
-    const result = (await callTool(server, {
-      name: "git.commit",
-      arguments: { message: "x" },
-    })) as { content: unknown; isError?: boolean };
-
-    expect(result.isError).toBe(true);
-    const payload = parseToolErrorPayload(result);
-    expect(payload.code).toBe(MCP_RATE_LIMITED_CODE);
-    expect(payload.retriable).toBe(true);
-    expect(payload.details?.retryAfter).toBe(7);
-    // Rate limit runs before dispatch — the action never ran.
-    expect(dispatchAction).not.toHaveBeenCalled();
-  });
-
-  it("writes a rate_limited audit record before returning", async () => {
-    const sessionStore = fakeSessionStore("system");
-    (sessionStore.consumeRateLimitToken as ReturnType<typeof vi.fn>).mockReturnValue({
-      allowed: false,
-      retryAfter: 3,
-    });
-    const appendAuditRecord = vi.fn();
-    const deps = fakeDeps({ sessionStore, appendAuditRecord });
-    const server = createSessionServer("rl-2", deps);
-
-    await callTool(server, { name: "git.push", arguments: {} });
-
-    expect(appendAuditRecord).toHaveBeenCalledTimes(1);
-    const arg = appendAuditRecord.mock.calls[0]![0] as {
-      outcome: { kind: string; retryAfter?: number };
-      toolId: string;
-    };
-    expect(arg.toolId).toBe("git.push");
-    expect(arg.outcome.kind).toBe("rate_limited");
-    expect(arg.outcome.retryAfter).toBe(3);
-  });
-
-  it("runs before dedup — an exhausted bucket short-circuits an allowlisted tool", async () => {
-    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
-    const sessionStore = fakeSessionStore("system");
-    (sessionStore.consumeRateLimitToken as ReturnType<typeof vi.fn>).mockReturnValue({
-      allowed: false,
-      retryAfter: 1,
-    });
-    const deps = fakeDeps({ sessionStore, dispatchAction });
-    const server = createSessionServer("rl-3", deps);
-
-    // terminal.new is dedup-allowlisted; rate-limit must win the race.
-    const result = (await callTool(server, {
-      name: "terminal.new",
-      arguments: { spawnedBy: { kind: "user" } },
-    })) as { content: unknown; isError?: boolean };
-
-    expect(result.isError).toBe(true);
-    expect(parseToolErrorPayload(result).code).toBe(MCP_RATE_LIMITED_CODE);
-    expect(dispatchAction).not.toHaveBeenCalled();
-    expect(sessionStore.dedupInFlight.size).toBe(0);
-  });
-
-  it("does not consume a token for tier-denied calls (auth precedes rate limit)", async () => {
-    // workbench tier cannot call git.commit; the tier check returns first
-    // and the rate-limit token must not be charged.
-    const sessionStore = fakeSessionStore("workbench");
-    const deps = fakeDeps({ sessionStore });
-    const server = createSessionServer("rl-4", deps);
-
-    const result = (await callTool(server, {
-      name: "git.commit",
-      arguments: { message: "x" },
-    })) as { content: unknown; isError?: boolean };
-
-    expect(result.isError).toBe(true);
-    expect(parseToolErrorPayload(result).code).not.toBe(MCP_RATE_LIMITED_CODE);
-    expect(sessionStore.consumeRateLimitToken).not.toHaveBeenCalled();
-  });
-
-  it("lets allowed calls dispatch normally", async () => {
-    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
-    const sessionStore = fakeSessionStore("system");
-    const deps = fakeDeps({ sessionStore, dispatchAction });
-    const server = createSessionServer("rl-5", deps);
-
-    const result = (await callTool(server, {
-      name: "files.search",
-      arguments: { query: "x" },
-    })) as { isError?: boolean };
-
-    expect(result.isError).not.toBe(true);
-    expect(sessionStore.consumeRateLimitToken).toHaveBeenCalledWith("rl-5", "files.search");
-    expect(dispatchAction).toHaveBeenCalledTimes(1);
-  });
-
-  it("charges a token even when the call is served from the dedup cache", async () => {
-    // Real store so dedup actually caches; spy on the real token bucket to
-    // prove rate-limit runs before dedup for *cached* hits, not just
-    // in-flight ones.
-    const store = new RealSessionStore(() => {});
-    store.sessionTierMap.set("rl-dedup", "system");
-    const consumeSpy = vi.spyOn(store, "consumeRateLimitToken");
-    const dispatchAction = vi
-      .fn()
-      .mockResolvedValue({ result: { ok: true, result: { sha: "abc" } } });
-    const deps = fakeDeps({ sessionStore: store, dispatchAction });
-    const server = createSessionServer("rl-dedup", deps);
-
-    const args = { message: "one" };
-    await callTool(server, { name: "git.commit", arguments: args });
-    await callTool(server, { name: "git.commit", arguments: args });
-
-    // Second call is a dedup cache hit (dispatch ran once) but the token
-    // was still charged on both — runaway loops stay bounded.
-    expect(dispatchAction).toHaveBeenCalledTimes(1);
-    expect(consumeSpy).toHaveBeenCalledTimes(2);
-    store.drain();
-  });
-
-  it("rate-limits a grant-authorized call (auth passes, rate limit fails)", async () => {
-    // Workbench tier can't call worktree.delete; a per-tool grant lifts the
-    // auth gate. The rate limiter must still reject, and the tier-mismatch
-    // banner must NOT fire (this is not an authorization failure).
-    const sessionStore = fakeSessionStore("workbench");
-    sessionStore.grantCache.issueGrant("rl-grant", "worktree.delete");
-    (sessionStore.consumeRateLimitToken as ReturnType<typeof vi.fn>).mockReturnValue({
-      allowed: false,
-      retryAfter: 4,
-    });
-    const dispatchAction = vi.fn();
-    const notifyTierMismatch = vi.fn();
-    const deps = fakeDeps({ sessionStore, dispatchAction, notifyTierMismatch });
-    const server = createSessionServer("rl-grant", deps);
-
-    const result = (await callTool(server, {
-      name: "worktree.delete",
-      arguments: { worktreeId: "w1" },
-    })) as { content: unknown; isError?: boolean };
-
-    expect(result.isError).toBe(true);
-    expect(parseToolErrorPayload(result).code).toBe(MCP_RATE_LIMITED_CODE);
-    expect(notifyTierMismatch).not.toHaveBeenCalled();
-    expect(dispatchAction).not.toHaveBeenCalled();
-    sessionStore.grantCache.dispose();
-  });
-});
-
 describe("MCP_DEDUP_ALLOWLIST widening (#8468)", () => {
   it("retains the original creation-tool cohort", () => {
     for (const tool of [
@@ -2264,6 +2201,32 @@ describe("MCP_DEDUP_ALLOWLIST widening (#8468)", () => {
   });
 });
 
+describe("worktree resource lifecycle dedup (#10683)", () => {
+  it("dedups provision (spins up a remote resource)", () => {
+    expect(MCP_DEDUP_ALLOWLIST.has("worktree.resource.provision")).toBe(true);
+  });
+
+  it("does not dedup pause/resume/teardown (intentionally re-runnable)", () => {
+    for (const tool of [
+      "worktree.resource.pause",
+      "worktree.resource.resume",
+      "worktree.resource.teardown",
+    ]) {
+      expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(false);
+    }
+  });
+
+  it("gates each tool at its intended minimum tier", () => {
+    expect(minimumPermittingTier("worktree.resource.provision")).toBe("action");
+    expect(minimumPermittingTier("worktree.resource.pause")).toBe("action");
+    expect(minimumPermittingTier("worktree.resource.resume")).toBe("action");
+    expect(minimumPermittingTier("worktree.resource.teardown")).toBe("system");
+    expect(minimumPermittingTier("system.getResourceProfileSnapshot")).toBe("workbench");
+    expect(minimumPermittingTier("cliAvailability.get")).toBe("workbench");
+    expect(minimumPermittingTier("hibernation.getConfig")).toBe("workbench");
+  });
+});
+
 describe("MCP_DEDUP_ALLOWLIST widening (#9156)", () => {
   const NEW_MUTATIONS = [
     "worktree.delete",
@@ -2278,15 +2241,8 @@ describe("MCP_DEDUP_ALLOWLIST widening (#9156)", () => {
     }
   });
 
-  it("maps the new cohort to the mutation rate-limit tier", () => {
-    for (const tool of NEW_MUTATIONS) {
-      expect(RATE_LIMIT_TOOL_MAP.get(tool)).toBe(RATE_LIMIT_TIERS.mutation);
-    }
-  });
-
   it("stays bounded — adjacent read-only tools remain excluded", () => {
     expect(MCP_DEDUP_ALLOWLIST.has("git.snapshotGet")).toBe(false);
-    expect(RATE_LIMIT_TOOL_MAP.has("git.snapshotGet")).toBe(false);
   });
 
   it.each(NEW_MUTATIONS)(
@@ -2307,6 +2263,29 @@ describe("MCP_DEDUP_ALLOWLIST widening (#9156)", () => {
       expect(second).toEqual(first);
     }
   );
+});
+
+describe("CallTool rate limiter removal (#10764)", () => {
+  it("dispatches a burst of mutation calls without ever rejecting with MCP_RATE_LIMITED", async () => {
+    // The mutation tier used to cap git.commit at 10/min — a burst past the
+    // cap returned MCP_RATE_LIMITED before dispatch. With the limiter gone,
+    // every call must reach dispatch. Distinct args sidestep dedup so each is
+    // a genuine dispatch, not a cached hit.
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+    const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
+    const server = createSessionServer("rl-removed", deps);
+
+    const BURST = 15; // comfortably past the old mutation cap of 10
+    for (let i = 0; i < BURST; i++) {
+      const result = (await callTool(server, {
+        name: "git.commit",
+        arguments: { message: `commit-${i}` },
+      })) as { isError?: boolean };
+      expect(result.isError).not.toBe(true);
+    }
+
+    expect(dispatchAction).toHaveBeenCalledTimes(BURST);
+  });
 });
 
 describe("validateDisplayImageUrl (#9828)", () => {
@@ -2458,5 +2437,108 @@ describe("help.displayImage short-circuit (#9828)", () => {
     expect(result.isError).toBe(true);
     expect(JSON.parse(result.content[0].text).code).toBe("TIER_NOT_PERMITTED");
     expect(notifyDisplayImage).not.toHaveBeenCalled();
+  });
+});
+
+describe("structuredContent for terminal query actions (#10676)", () => {
+  // The three high-value query actions carry `mcpOutputSchema: true`, so the real
+  // manifest entry the renderer reports back carries an object-typed outputSchema.
+  // Mirror that here (per-action, so the fixture shape tracks the real result)
+  // so the CallTool path exercises buildStructuredContent.
+  const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
+    "terminal.list": { type: "object", properties: { terminals: { type: "array" } } },
+    "terminal.getStatus": { type: "object", properties: { terminals: { type: "array" } } },
+    "terminal.getOutput": {
+      type: "object",
+      properties: {
+        terminalId: { type: "string" },
+        content: { type: ["string", "null"] },
+        lineCount: { type: "number" },
+        truncated: { type: "boolean" },
+      },
+    },
+  };
+
+  function entryWithOutputSchema(id: string): ActionManifestEntry {
+    return {
+      ...makeManifestEntry(id),
+      outputSchema: OUTPUT_SCHEMAS[id] ?? { type: "object", properties: {} },
+    };
+  }
+
+  function structuredOf(result: unknown): Record<string, unknown> | undefined {
+    return (result as { structuredContent?: Record<string, unknown> }).structuredContent;
+  }
+
+  function textOf(result: unknown): string {
+    return (result as { content: { text: string }[] }).content[0].text;
+  }
+
+  // tier "external" + getFullToolSurface routes through the full-surface allowlist
+  // (#10701); the ids exercised here (terminal.list/getStatus/getOutput) are all
+  // curated-allowlist members, so the call reaches dispatch.
+  function deps(id: string, payload: unknown, withSchema = true): SessionServerDeps {
+    return fakeDeps({
+      sessionStore: fakeSessionStore("external"),
+      getFullToolSurface: vi.fn(() => true),
+      requestManifest: vi
+        .fn()
+        .mockResolvedValue([withSchema ? entryWithOutputSchema(id) : makeManifestEntry(id)]),
+      dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result: payload } }),
+    });
+  }
+
+  it("emits structuredContent for terminal.list and still emits the JSON text body", async () => {
+    const payload = { terminals: [{ id: "t-1", kind: "terminal", isFocused: true }] };
+    const server = createSessionServer("sc-list", deps("terminal.list", payload));
+    const result = await callTool(server, { name: "terminal.list", arguments: {} });
+
+    expect(structuredOf(result)).toEqual(payload);
+    // Backward compatibility: the text body is preserved for clients that ignore
+    // structuredContent, and it serializes the same data.
+    expect(JSON.parse(textOf(result))).toEqual(payload);
+  });
+
+  it("emits structuredContent for terminal.getStatus", async () => {
+    const payload = {
+      terminals: [{ terminalId: "t-1", agentId: "claude", agentState: "working" }],
+    };
+    const server = createSessionServer("sc-status", deps("terminal.getStatus", payload));
+    const result = await callTool(server, { name: "terminal.getStatus", arguments: {} });
+
+    expect(structuredOf(result)).toEqual(payload);
+  });
+
+  it("emits structuredContent for terminal.getOutput", async () => {
+    const payload = { terminalId: "t-1", content: "hello", lineCount: 1, truncated: false };
+    const server = createSessionServer("sc-output", deps("terminal.getOutput", payload));
+    const result = await callTool(server, {
+      name: "terminal.getOutput",
+      arguments: { terminalId: "t-1" },
+    });
+
+    expect(structuredOf(result)).toEqual(payload);
+  });
+
+  it("emits structuredContent for an empty result set (not just non-empty)", async () => {
+    const payload = { terminals: [] };
+    const server = createSessionServer("sc-empty", deps("terminal.list", payload));
+    const result = await callTool(server, { name: "terminal.list", arguments: {} });
+
+    expect(structuredOf(result)).toEqual(payload);
+  });
+
+  it("omits structuredContent when the manifest entry carries no outputSchema", async () => {
+    // Proves the outputSchema gate is load-bearing: without it, the same object
+    // result falls back to a text-only response (the pre-#10676 behavior).
+    const payload = { terminals: [{ id: "t-1" }] };
+    const server = createSessionServer(
+      "sc-noschema",
+      deps("terminal.list", payload, /* withSchema */ false)
+    );
+    const result = await callTool(server, { name: "terminal.list", arguments: {} });
+
+    expect(structuredOf(result)).toBeUndefined();
+    expect(JSON.parse(textOf(result))).toEqual(payload);
   });
 });

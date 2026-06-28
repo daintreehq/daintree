@@ -56,6 +56,18 @@ test.describe.serial("Core: Terminal Recipes", () => {
       return ctx.window.getByRole("dialog").filter({ hasText: title });
     }
 
+    function recipeNameInput(editor: ReturnType<typeof getRecipeEditor>) {
+      return editor.getByLabel("Recipe Name");
+    }
+
+    function terminalTitleInput(editor: ReturnType<typeof getRecipeEditor>, index: number) {
+      return editor.getByLabel("Title (optional)").nth(index);
+    }
+
+    function terminalCommandInput(editor: ReturnType<typeof getRecipeEditor>, index: number) {
+      return editor.getByLabel("Command (optional)").nth(index);
+    }
+
     test("recipe editor opens with name input and one terminal slot", async () => {
       const { window } = ctx;
       await openRecipesTab();
@@ -88,15 +100,15 @@ test.describe.serial("Core: Terminal Recipes", () => {
       const editor = getRecipeEditor();
       await expect(editor).toBeVisible({ timeout: T_MEDIUM });
 
-      await editor.locator(SEL.recipeEditor.nameInput).fill("E2E Test Recipe");
-      await editor.locator(SEL.recipeEditor.terminalCommand(0)).fill("echo hello");
+      await recipeNameInput(editor).fill("E2E Test Recipe");
+      await terminalCommandInput(editor, 0).fill("echo hello");
 
       // Add a second terminal
       await editor.locator(SEL.recipeEditor.addTerminalButton).click();
       await expect(editor.locator(SEL.recipeEditor.terminalType(1))).toBeVisible({
         timeout: T_SHORT,
       });
-      await editor.locator(SEL.recipeEditor.terminalTitle(1)).fill("Second Terminal");
+      await terminalTitleInput(editor, 1).fill("Second Terminal");
 
       // Save
       await editor.locator(SEL.recipeEditor.createButton).click();
@@ -127,19 +139,18 @@ test.describe.serial("Core: Terminal Recipes", () => {
       await expect(editor).toBeVisible({ timeout: T_MEDIUM });
 
       // Verify saved values loaded
-      await expect(editor.locator(SEL.recipeEditor.nameInput)).toHaveValue("E2E Test Recipe", {
+      await expect(recipeNameInput(editor)).toHaveValue("E2E Test Recipe", {
         timeout: T_SHORT,
       });
-      await expect(editor.locator(SEL.recipeEditor.terminalCommand(0))).toHaveValue("echo hello", {
+      await expect(terminalCommandInput(editor, 0)).toHaveValue("echo hello", {
         timeout: T_SHORT,
       });
-      await expect(editor.locator(SEL.recipeEditor.terminalTitle(1))).toHaveValue(
-        "Second Terminal",
-        { timeout: T_SHORT }
-      );
+      await expect(terminalTitleInput(editor, 1)).toHaveValue("Second Terminal", {
+        timeout: T_SHORT,
+      });
 
       // Make a change to trigger dirty state
-      await editor.locator(SEL.recipeEditor.nameInput).fill("Modified Recipe");
+      await recipeNameInput(editor).fill("Modified Recipe");
 
       // Cancel but keep editing via the discard-changes confirm (stay in editor)
       await editor.locator(SEL.recipeEditor.cancelButton).click();
@@ -162,7 +173,7 @@ test.describe.serial("Core: Terminal Recipes", () => {
         .click({ force: true });
       const editorAgain = getRecipeEditor("Edit Recipe");
       await expect(editorAgain).toBeVisible({ timeout: T_MEDIUM });
-      await expect(editorAgain.locator(SEL.recipeEditor.nameInput)).toHaveValue("E2E Test Recipe", {
+      await expect(recipeNameInput(editorAgain)).toHaveValue("E2E Test Recipe", {
         timeout: T_SHORT,
       });
 
@@ -186,7 +197,7 @@ test.describe.serial("Core: Terminal Recipes", () => {
       await expect(editor).toBeVisible({ timeout: T_MEDIUM });
 
       // Update the recipe name
-      await editor.locator(SEL.recipeEditor.nameInput).fill("E2E Updated Recipe");
+      await recipeNameInput(editor).fill("E2E Updated Recipe");
       await editor.locator(SEL.recipeEditor.updateButton).click();
       await expect(editor).not.toBeVisible({ timeout: T_MEDIUM });
 
@@ -204,10 +215,9 @@ test.describe.serial("Core: Terminal Recipes", () => {
         .locator(SEL.projectSettings.editRecipeButton("E2E Updated Recipe"))
         .click({ force: true });
       const editorAgain = getRecipeEditor("Edit Recipe");
-      await expect(editorAgain.locator(SEL.recipeEditor.nameInput)).toHaveValue(
-        "E2E Updated Recipe",
-        { timeout: T_SHORT }
-      );
+      await expect(recipeNameInput(editorAgain)).toHaveValue("E2E Updated Recipe", {
+        timeout: T_SHORT,
+      });
       await editorAgain.locator(SEL.recipeEditor.cancelButton).click();
       await expect(editorAgain).not.toBeVisible({ timeout: T_SHORT });
 

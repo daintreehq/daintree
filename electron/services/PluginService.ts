@@ -1,9 +1,9 @@
 import fs from "fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, watch as fsWatch, type FSWatcher } from "node:fs";
 import path from "path";
 import os from "os";
 import { pathToFileURL } from "url";
-import { app } from "electron";
+import { app, clipboard } from "electron";
 import * as semver from "semver";
 // Aliased to avoid colliding with Vite's auto-injected ESM shim
 // (`import { createRequire } from 'module'; const require = createRequire(import.meta.url);`),
@@ -27,8 +27,23 @@ interface AjvInstance {
   compile(schema: Record<string, unknown>): ValidateFn;
 }
 
-import { getPluginManifestSchema, PluginToastOptionsSchema } from "../schemas/plugin.js";
+import {
+  DEPRECATED_CONTRIBUTION_ALIASES,
+  getPluginManifestSchema,
+  PluginPanelBadgeSchema,
+  PluginToastOptionsSchema,
+  SCOPED_PLUGIN_NAME_PATTERN,
+} from "../schemas/plugin.js";
 import { getPluginMcpSupervisor } from "./PluginMcpSupervisor.js";
+import { PluginProcessManager } from "./plugin/PluginProcessManager.js";
+import { getPluginCapabilityConsentService } from "./plugin-capability/instances.js";
+import { resolveContainedPath, PluginPathNotAllowedError } from "./plugin/pluginFsContainment.js";
+import { e2eSideloadPluginDir, isE2EMode } from "../setup/runtimeFlags.js";
+import { PluginHostGit, type HostGitFactory } from "./plugin/pluginHostGit.js";
+import {
+  PLUGIN_PROCESS_STREAM_CHANNEL,
+  type PluginProcessInfo,
+} from "../../shared/types/ipc/pluginProcess.js";
 import { z } from "zod";
 import type {
   PluginManifest,
@@ -41,25 +56,58 @@ import type {
   PluginChannelSchema,
   PluginTypedIpcHandler,
   ActionHandler,
+  PluginQuickPickItem,
+  PluginQuickPickOptions,
+  PluginInputBoxOptions,
+  PluginConfirmOptions,
   BuiltInPluginCapability,
   PluginLoadError,
+  PluginActivationResult,
   PluginInstallResult,
   PluginInstallOptions,
   PluginCheckUpdateResult,
   PluginSettingsScope,
+  PluginStorageScope,
   PluginSettingsUiValues,
+  PluginWorktreeStatus,
+  PluginAgentSnapshot,
+  PluginProcessApi,
+  PluginProcessHandle,
+  PluginProcessSpawnOptions,
+  PluginFsApi,
+  PluginFsDirEntry,
+  PluginFsStat,
+  PluginGitApi,
+  PluginClipboardApi,
+  PluginGitStatus,
+  PluginGitCommitOptions,
+  PluginGitCommitResult,
+  PluginPanelBadge,
   ViewContribution,
 } from "../../shared/types/plugin.js";
 import { PluginInstalledRecordsStore } from "./plugin/PluginInstalledRecordsStore.js";
 import { PluginContributionBroadcaster } from "./plugin/PluginContributionBroadcaster.js";
 import { PluginRendererDispatcher } from "./plugin/PluginRendererDispatcher.js";
+import { PluginUIPromptDispatcher } from "./plugin/PluginUIPromptDispatcher.js";
 import { PluginSettingsManager, assertSettingsKey } from "./plugin/PluginSettingsManager.js";
+import { PluginStorageManager, assertStorageKey } from "./plugin/PluginStorageManager.js";
+import { createListenerFailureState, invokeTrackedListener } from "./plugin/pluginCallbackUtils.js";
 import { PluginChannelRegistry, isChannelSchema } from "./plugin/PluginChannelRegistry.js";
 import { PluginInstaller } from "./plugin/PluginInstaller.js";
 import { PluginDevWorkerHost } from "./plugin/PluginDevWorkerHost.js";
 import { PluginDevWorkerMainBridge } from "./plugin/PluginDevWorkerMainBridge.js";
+import { PluginInvokeOwnershipError } from "./plugin/PluginInvokeErrors.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
-import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
+import {
+  toPluginWorktreeSnapshot,
+  toPluginWorktreeStatus,
+} from "../../shared/utils/pluginWorktreeSnapshot.js";
+import {
+  toPluginAgentSnapshot,
+  type AgentStateChangePayload,
+} from "../../shared/utils/pluginAgentSnapshot.js";
+import { events } from "./events.js";
+import { getPtyClient } from "../window/serviceRefs.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import {
   registerPanelKind,
@@ -93,6 +141,7 @@ import {
 } from "./forgeProviderRegistry.js";
 import { buildStoredCredentials } from "./forge/forgeCredentialUtils.js";
 import { makeForgeProviderId } from "../../shared/utils/forgeProviderIds.js";
+import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import {
   registerFileDecorationProviderImpl,
   registerFileDecorationProviders,
@@ -106,16 +155,21 @@ import {
   unregisterPluginAgents,
 } from "../../shared/config/pluginAgentRegistry.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
+import { deepFreeze } from "../utils/deepFreeze.js";
 import { CHANNELS } from "../ipc/channels.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
 import type { PluginToolbarButtonId } from "../../shared/types/toolbar.js";
 import { getPluginActionAuditService } from "./PluginActionAuditService.js";
+import { stableArgsSha256 } from "../utils/pluginMcpHash.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { markAuditedHandlerFailure } from "../utils/pluginAuditMarker.js";
 import type {
   PluginDiagnosticsAuditRecord,
   PluginDiagnosticsLogLine,
   PluginDiagnosticsSnapshot,
 } from "../../shared/types/ipc/pluginDiagnostics.js";
 import { BUILT_IN_ACTION_IDS } from "../../shared/config/actionIds.js";
+import { CONFIRM_TRIGGERING_CAPABILITIES } from "../../shared/config/pluginCapabilities.js";
 
 /** Plugin action IDs must be `{pluginId}.{actionId}`. Built-in IDs use colons, so the formats cannot collide. */
 const PLUGIN_ACTION_ID_RE = /^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
@@ -135,37 +189,17 @@ const BUILT_IN_ACTION_ID_SET: ReadonlySet<string> = new Set<string>(BUILT_IN_ACT
 
 /**
  * Filesystem-convention extensions probed for a manifest-declared command's
- * handler module, in precedence order. `.ts`/`.tsx` resolve in Electron 41
- * (Node 24's type-stripping covers `.ts`; `.tsx` needs the plugin author to
- * pre-compile or it'll fail at first dispatch) so a dev-mode plugin can ship
- * source directly. The probe is async file-access only — no module evaluation
- * happens until dispatch time.
+ * handler module, in precedence order. Only shippable JavaScript is probed:
+ * `.ts`/`.tsx` are deliberately excluded (#10620). Node 24's type-stripping
+ * makes a `.ts` handler *appear* to work for erasable syntax but throws a
+ * `SyntaxError` at first dispatch on any non-erasable construct (enum,
+ * parameter properties, decorators), and `.tsx` never runs — a high-confusion
+ * footgun that surfaces only at runtime. A `.ts`/`.tsx` handler in a built-in
+ * or sample plugin's `src/` is caught at build time by
+ * `validateCommandHandlerExtensions` in `scripts/build-main.mjs`. The probe is
+ * async file-access only — no module evaluation happens until dispatch time.
  */
-const COMMAND_HANDLER_EXTENSIONS = [".ts", ".tsx", ".js", ".mjs"] as const;
-
-/**
- * Capabilities whose presence in a plugin's manifest forces every action that
- * plugin contributes up to `effectiveDanger: "confirm"`, regardless of the
- * `danger` the plugin self-declared. These are the capabilities that grant
- * irreversible or hard-to-undo side effects: arbitrary process execution,
- * git history mutation, project/user-config filesystem writes, and agent
- * invocation. Read-only or trivially-reversible capabilities (`*-read`,
- * `network:fetch`, `clipboard:*`) are intentionally excluded — promoting on
- * those would over-confirm and train users to dismiss the dialog. The host
- * may only raise danger; a plugin declaring `"confirm"` always stays
- * `"confirm"` even with none of these.
- */
-const CONFIRM_TRIGGERING_CAPABILITIES: ReadonlySet<BuiltInPluginCapability> = new Set([
-  "shell:exec",
-  "git:write",
-  "fs:project-write",
-  "fs:user-data-write",
-  "agent:invoke",
-  // Registering a launchable agent CLI (with its own command/args, and a
-  // detection config in the full tier) is a runtime side effect on par with
-  // `agent:invoke` — a plugin holding it elevates its actions to "confirm".
-  "agent:register",
-]);
+const COMMAND_HANDLER_EXTENSIONS = [".js", ".mjs"] as const;
 
 /**
  * Compound-capability lattice (#9247). The flat
@@ -251,7 +285,8 @@ function computePluginDanger(manifest: PluginManifest | undefined): "safe" | "co
 }
 
 interface LoadedPlugin {
-  manifest: PluginManifest;
+  /** Deep-frozen at load (see `deepFreeze` call in `loadPlugin`); `Readonly` is the compile-time half of that invariant. */
+  manifest: Readonly<PluginManifest>;
   dir: string;
   resolvedMain?: string;
   loadedAt: number;
@@ -324,6 +359,20 @@ const PLUGIN_LOG_BUFFER_MAX = 500;
 const PLUGIN_LOG_LINE_MAX_CHARS = 2048;
 /** Max audit records included per plugin in a diagnostics snapshot. */
 const PLUGIN_DIAGNOSTICS_AUDIT_PER_PLUGIN = 50;
+/**
+ * Max file paths a single `host.invalidateFileDecorations` call broadcasts.
+ * A misbehaving plugin could otherwise pass an unbounded array, forcing an
+ * arbitrarily large IPC payload to every renderer view. Beyond the cap the
+ * scope-wide invalidation (no `paths`) is the correct fallback anyway.
+ */
+const MAX_FILE_DECORATION_PATHS = 1000;
+/**
+ * Floor for a plugin-supplied `onDidChangeWorktrees` `debounceMs`. A positive
+ * value below this is clamped up so a plugin can't request a near-zero debounce
+ * that defeats the coalescing intent while still paying timer overhead; `0` /
+ * omitted disables debouncing entirely (fire on every change).
+ */
+const MIN_PLUGIN_SUBSCRIPTION_DEBOUNCE_MS = 50;
 
 /**
  * Serialize an arbitrary logger payload without ever throwing. Tries
@@ -355,32 +404,124 @@ function runUnloadStep(pluginId: string, step: string, fn: () => void): void {
 }
 
 /**
- * Validate a manifest-declared `experimental_views[].componentPath` before we
- * resolve it to a `plugin://` URL (#9229). The protocol handler at
- * `electron/setup/protocols.ts` rejects traversal at request time, but
- * pre-validating here surfaces a noisy authoring mistake (`/abs/path` or
- * `../escape`) as a `[PluginService]` warn during load, instead of a silent
- * 404 from `import('plugin://...')` later. Accepts relative POSIX paths only —
- * a leading `./` is preserved (the URL builder normalizes it).
+ * Validate the `items` passed to `host.showQuickPick` and return a structurally
+ * narrowed copy — only the serializable fields cross the IPC boundary, so a
+ * plugin that attaches extra non-cloneable properties (functions, class
+ * instances) can't strand the send. Throws on a non-array or any malformed row
+ * so authoring mistakes surface loudly (mirrors the showToast options check).
  */
-function isSafePluginViewComponentPath(componentPath: string): boolean {
-  if (typeof componentPath !== "string" || componentPath.length === 0) return false;
-  if (componentPath.startsWith("/")) return false;
-  if (componentPath.includes("\\")) return false;
-  if (componentPath.includes("\0")) return false;
-  // Reject embedded URL structure markers — `https://...` (`:`), `?query`, or
-  // `#fragment`. The `plugin://` protocol handler defends against traversal at
-  // request time via realpath containment, so these are authoring-mistake
-  // guards (catch typos early, don't pollute the V8 module cache with
-  // duplicate query-string variants), not the security boundary.
-  if (componentPath.includes(":")) return false;
-  if (componentPath.includes("?")) return false;
-  if (componentPath.includes("#")) return false;
-  const segments = componentPath.split("/");
-  for (const seg of segments) {
-    if (seg === "..") return false;
+function validateQuickPickItems(
+  pluginId: string,
+  items: PluginQuickPickItem[]
+): PluginQuickPickItem[] {
+  if (!Array.isArray(items)) {
+    throw new Error(`Plugin "${pluginId}" showQuickPick: items must be an array`);
   }
-  return true;
+  const seen = new Set<string>();
+  return items.map((item, index) => {
+    if (!item || typeof item !== "object") {
+      throw new Error(`Plugin "${pluginId}" showQuickPick: items[${index}] must be an object`);
+    }
+    if (typeof item.id !== "string" || item.id.length === 0) {
+      throw new Error(
+        `Plugin "${pluginId}" showQuickPick: items[${index}].id must be a non-empty string`
+      );
+    }
+    if (typeof item.label !== "string") {
+      throw new Error(`Plugin "${pluginId}" showQuickPick: items[${index}].label must be a string`);
+    }
+    // Ids must be unique — selection tracking and multi-select keys off the id,
+    // so a duplicate would toggle/return multiple rows in lockstep.
+    if (seen.has(item.id)) {
+      throw new Error(
+        `Plugin "${pluginId}" showQuickPick: duplicate item id "${item.id}" (ids must be unique)`
+      );
+    }
+    seen.add(item.id);
+    return {
+      id: item.id,
+      label: item.label,
+      ...(item.description !== undefined ? { description: String(item.description) } : {}),
+      ...(item.detail !== undefined ? { detail: String(item.detail) } : {}),
+    };
+  });
+}
+
+/**
+ * Coerce the string fields of the prompt option objects before they cross to
+ * the renderer. A buggy plugin passing a non-string (e.g. `{ message: {} }`)
+ * would otherwise crash the dialog inside its ErrorBoundary and strand the
+ * pending promise until unload — coercion keeps the round-trip serializable and
+ * the dialog renderable. Booleans are normalized with `Boolean(...)`.
+ */
+function sanitizeQuickPickOptions(options?: PluginQuickPickOptions): PluginQuickPickOptions {
+  if (!options || typeof options !== "object") return {};
+  return {
+    ...(options.title !== undefined ? { title: String(options.title) } : {}),
+    ...(options.placeholder !== undefined ? { placeholder: String(options.placeholder) } : {}),
+    ...(options.canSelectMany !== undefined
+      ? { canSelectMany: Boolean(options.canSelectMany) }
+      : {}),
+    ...(options.matchOnDescription !== undefined
+      ? { matchOnDescription: Boolean(options.matchOnDescription) }
+      : {}),
+  };
+}
+
+function sanitizeInputBoxOptions(options?: PluginInputBoxOptions): PluginInputBoxOptions {
+  if (!options || typeof options !== "object") return {};
+  return {
+    ...(options.title !== undefined ? { title: String(options.title) } : {}),
+    ...(options.prompt !== undefined ? { prompt: String(options.prompt) } : {}),
+    ...(options.placeholder !== undefined ? { placeholder: String(options.placeholder) } : {}),
+    ...(options.value !== undefined ? { value: String(options.value) } : {}),
+    ...(options.password !== undefined ? { password: Boolean(options.password) } : {}),
+    ...(options.validationPattern !== undefined
+      ? { validationPattern: String(options.validationPattern) }
+      : {}),
+    ...(options.validationMessage !== undefined
+      ? { validationMessage: String(options.validationMessage) }
+      : {}),
+  };
+}
+
+function sanitizeConfirmOptions(options: PluginConfirmOptions): PluginConfirmOptions {
+  return {
+    title: String(options.title),
+    ...(options.message !== undefined ? { message: String(options.message) } : {}),
+    ...(options.confirmLabel !== undefined ? { confirmLabel: String(options.confirmLabel) } : {}),
+    ...(options.cancelLabel !== undefined ? { cancelLabel: String(options.cancelLabel) } : {}),
+    ...(options.destructive !== undefined ? { destructive: Boolean(options.destructive) } : {}),
+  };
+}
+
+/**
+ * Append a plugin audit record without ever surfacing an audit failure to the
+ * caller. Mirrors the `safeAppend` in `electron/ipc/handlers/plugin.ts` — a
+ * throw from `append()` (corrupt store, disk error) must never mask the
+ * handler error we're in the middle of rethrowing. Audit is a side channel.
+ */
+function safeAppendAudit(
+  input: Parameters<ReturnType<typeof getPluginActionAuditService>["append"]>[0]
+): void {
+  try {
+    getPluginActionAuditService().append(input);
+  } catch (err) {
+    console.error("[PluginService] Failed to append audit record:", err);
+  }
+}
+
+/**
+ * SHA-256 of the dispatch args for forensic grouping, best-effort. A
+ * serialization throw here must not mask the handler error, so it degrades to
+ * an empty hash (the documented "hashing failed" sentinel).
+ */
+function safeArgsHash(args: unknown[]): string {
+  try {
+    return stableArgsSha256(args);
+  } catch {
+    return "";
+  }
 }
 
 /**
@@ -422,15 +563,39 @@ function isParkedOrTempDirName(name: string): boolean {
 
 type WorkspaceWorktreeEvent = "worktree-update" | "worktree-activated" | "worktree-removed";
 
+/**
+ * Capability class of an expanded `scopes.fs.allowedPaths` root. Project /
+ * worktree roots gate on `fs:project-*`; the implicit per-plugin data dir and
+ * any path under the user's home dir gate on `fs:user-data-*`.
+ */
+type FsRootClass = "project" | "user-data";
+
+/** An `allowedPaths` entry after token expansion, with its capability class. */
+interface ExpandedFsPath {
+  path: string;
+  rootClass: FsRootClass;
+}
+
 export class PluginService {
   private plugins = new Map<string, LoadedPlugin>();
+  /**
+   * Live panel badges set via `host.setPanelBadge`, keyed `pluginId → panelId →
+   * badge` (#10585). Plugin-first so {@link unloadPlugin} drops a plugin's whole
+   * set in O(1), and {@link pushSnapshotTo} can replay each plugin's current
+   * badges to a cold-restored WebContentsView (badges are ephemeral, not
+   * persisted, so without replay an LRU-evicted view loses them until the plugin
+   * next re-emits). The renderer store inverts this to `panelId → pluginId` for
+   * O(1) lookup at render time.
+   */
+  private pluginBadges = new Map<string, Map<string, PluginPanelBadge>>();
   /**
    * Per-plugin diagnostic log ring buffer, keyed by `pluginId` (= manifest
    * name). Written by `host.logger.*`, capped at {@link PLUGIN_LOG_BUFFER_MAX}
    * lines (FIFO eviction), and cleared in {@link unloadPlugin} so a reload of
-   * the same plugin starts clean. Lines are stored raw — secret/path scrubbing
-   * happens only at the report-export boundary, never here (mirrors the
-   * action-breadcrumb ring's raw-capture convention).
+   * the same plugin starts clean. Lines are stored scrubbed — this buffer is
+   * itself an outbound boundary (it feeds {@link getDiagnosticsSnapshot} →
+   * shareable bug reports), and the same scrubbed line mirrors to the console,
+   * so {@link recordPluginLog} runs `scrubSecrets` once before either sink.
    */
   private logBuffers = new Map<string, PluginDiagnosticsLogLine[]>();
   /**
@@ -505,6 +670,15 @@ export class PluginService {
   private pluginEventCleanups = new Map<string, Array<() => void>>();
   private workspaceClient: WorkspaceClient | null = null;
   /**
+   * Service-level `worktree-activated` listener that evicts stale worktree-scoped
+   * storage stores (#10621). Independent of any plugin's
+   * `onDidChangeActiveWorktree` so a worktree switch always drops the prior
+   * worktree's cached in-memory snapshot even when no plugin subscribed.
+   */
+  private readonly onWorktreeActivatedForCache = (): void => {
+    this.storage.evictWorktreeScopedStores();
+  };
+  /**
    * Event subscriptions registered during plugin `activate()` when the
    * WorkspaceClient did not yet exist. Replayed in `setWorkspaceClient()`
    * so early-boot subscriptions attach to the real client instead of being
@@ -546,13 +720,36 @@ export class PluginService {
   private readonly enableTransitions = new Map<string, Promise<void>>();
   private records = new PluginInstalledRecordsStore();
   /**
-   * Live dev-mode hot-reload workers, keyed by pluginId (#9304). Each holds the
-   * forked `utilityProcess` lifecycle, the message bridge to the real host, and
-   * the host `revoke` to call on unload. Disposed via the {@link cleanupMap}
-   * disposer registered at activation, so `unloadPlugin` tears the worker down
-   * through its normal cascade.
+   * Manager for child processes spawned via `host.process.spawn` (#9234).
+   * Lazily constructed so the `node:child_process` spawn path only wires up
+   * when a plugin actually uses it. The stream sink fans each process's
+   * stdout/stderr/exit out to the owning plugin's panels over the same
+   * `postToPanel` transport (`plugin:{pluginId}:process`); the auditor records
+   * each spawn in the plugin audit trail.
    */
-  private devWorkers = new Map<
+  private processManager: PluginProcessManager | null = null;
+  /**
+   * Active `host.fs.watch` watchers keyed by pluginId — each entry is a disposer
+   * that closes the underlying `fs.watch` handle. Torn down on unload so a
+   * disable/revoke can't strand a file watcher (#7880 / fs-API containment unit).
+   */
+  private pluginFsWatchers = new Map<string, Set<() => void>>();
+  /**
+   * Test seam: override the git client factory `host.git` uses so commit/add/
+   * diff/status can be exercised against a fake simple-git without forking a
+   * real repo. Production leaves it `undefined` → {@link PluginHostGit} defaults
+   * to `createHardenedGit`.
+   */
+  private hostGitFactory: HostGitFactory | undefined = undefined;
+  /**
+   * Live plugin workers, keyed by pluginId (#9304, #10526). Every user-installed
+   * plugin (dev and prod) runs in a forked `utilityProcess`; built-ins activate
+   * in-process and are absent here. Each entry holds that lifecycle, the message
+   * bridge to the real host, and the host `revoke` to call on unload. Disposed
+   * via the {@link cleanupMap} disposer registered at activation, so
+   * `unloadPlugin` tears the worker down through its normal cascade.
+   */
+  private pluginWorkers = new Map<
     string,
     { workerHost: PluginDevWorkerHost; bridge: PluginDevWorkerMainBridge; revoke: () => void }
   >();
@@ -576,7 +773,7 @@ export class PluginService {
   private appVersion: string;
   /**
    * Owns the coalesced per-tick contribution broadcasts (actions, panel kinds,
-   * toolbar buttons, menu items, keybindings, context-menu items) plus the
+   * toolbar buttons, keybindings, context-menu items) plus the
    * cold-start {@link pushSnapshotTo} replay. Constructed in the constructor
    * after {@link initPromise} is set, so it can await the init gate.
    */
@@ -601,6 +798,13 @@ export class PluginService {
    */
   private readonly dispatcher: PluginRendererDispatcher;
   /**
+   * Owns the imperative `host.showQuickPick`/`showInputBox`/`showConfirm`
+   * main→renderer round-trip (#10522): the active-renderer resolution, the lazy
+   * `ipcMain` response listener, the pending-prompt map, and the per-plugin
+   * cancel drain on unload. Torn down from {@link dispose}.
+   */
+  private readonly promptDispatcher: PluginUIPromptDispatcher;
+  /**
    * Owns the per-(plugin, scope, path) settings store cache, scope/file-path
    * resolution, subscriber notification, the settings-template resolver, and the
    * renderer-facing settings-UI bridge. The settings stores and subscribers live
@@ -608,6 +812,15 @@ export class PluginService {
    * lookup callback.
    */
   private readonly settings: PluginSettingsManager;
+  /**
+   * Owns the per-(plugin, scope, path) private-storage store cache, scope and
+   * file-path resolution (including the `"worktree"` scope that resolves the
+   * active worktree at call time), and subscriber notification for the machine-
+   * owned `host.storage` API. Deliberately separate from {@link settings}: storage
+   * has no declared-key gating, no secret routing, and never surfaces in the
+   * settings UI.
+   */
+  private readonly storage: PluginStorageManager;
   /**
    * Owns the atomic install/upgrade orchestration, the manual update-check
    * download/compare flow, the uninstall flow, and the stale-temp-dir sweep at
@@ -641,6 +854,10 @@ export class PluginService {
       isDisposed: () => this.disposed,
     });
 
+    this.promptDispatcher = new PluginUIPromptDispatcher({
+      isDisposed: () => this.disposed,
+    });
+
     this.settings = new PluginSettingsManager({
       getPluginsRoot: () => this.pluginsRoot,
       // Fall back to disabledPlugins so settings for a launch-disabled plugin
@@ -648,6 +865,19 @@ export class PluginService {
       // renders a settings form whether or not the plugin is running.
       getManifest: (pluginId) =>
         (this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId))?.manifest,
+    });
+
+    this.storage = new PluginStorageManager({
+      getPluginsRoot: () => this.pluginsRoot,
+      // Resolve the active worktree's path the same way host.getActiveWorktree
+      // does — first isCurrent snapshot — so "worktree"-scoped storage tracks the
+      // user's active worktree. Returns undefined when none is active or the
+      // workspace client isn't wired yet, which the storage API treats as
+      // "no target" (read → undefined, write → throw).
+      getActiveWorktreePath: async () => {
+        const snapshots = await this.fetchAllWorktreeSnapshots();
+        return snapshots.find((s) => s.isCurrent === true)?.path;
+      },
     });
 
     this.channels = new PluginChannelRegistry({
@@ -723,6 +953,7 @@ export class PluginService {
         console.error(`[PluginService] unloadPlugin("${id}") threw during dispose:`, err);
       }
     }
+    this.workspaceClient?.off("worktree-activated", this.onWorktreeActivatedForCache);
     this.disposeRegistrySubscriptions();
     // Settle the init gate so unit tests that tear down the service without
     // running activateStartupFinishedPlugins() don't hang IPC callers awaiting
@@ -730,6 +961,7 @@ export class PluginService {
     this.resolveInit?.();
     this.resolveInit = null;
     this.dispatcher.dispose();
+    this.promptDispatcher.dispose();
   }
 
   /**
@@ -740,7 +972,17 @@ export class PluginService {
    * subscriptions that were registered during early plugin activate().
    */
   setWorkspaceClient(client: WorkspaceClient | null): void {
+    // Re-point the service-level worktree-scope cache eviction listener off the
+    // previous client onto the new one (#10621). `off` before `on` keeps the
+    // subscription single even when called repeatedly with the same client.
+    if (this.workspaceClient && this.workspaceClient !== client) {
+      this.workspaceClient.off("worktree-activated", this.onWorktreeActivatedForCache);
+    }
     this.workspaceClient = client;
+    if (client) {
+      client.off("worktree-activated", this.onWorktreeActivatedForCache);
+      client.on("worktree-activated", this.onWorktreeActivatedForCache);
+    }
     if (client && this.pendingWorktreeSubs.length > 0) {
       const pending = this.pendingWorktreeSubs;
       this.pendingWorktreeSubs = [];
@@ -915,6 +1157,29 @@ export class PluginService {
     }
 
     const manifest = parseResult.data;
+    // Manifest-immutability invariant: the parsed manifest is stored on
+    // LoadedPlugin.manifest and read across the whole PluginService lifecycle
+    // (capability checks, contribution loops, host closures). Deep-freeze it so
+    // an accidental in-place mutation of a declared contribution can't poison the
+    // shared record. DEV-only (see deepFreeze) — the Readonly<PluginManifest>
+    // type below is the compile-time half of the same invariant.
+    deepFreeze(manifest);
+
+    // Deprecation surface for the 1.0 freeze: the schema migrates the old
+    // `experimental_*` contribution keys to their stable names before
+    // validation, so warn (once per alias) when an old manifest is still using
+    // them. Inspect the raw JSON because the migrated `manifest` no longer
+    // carries the deprecated keys.
+    const rawContributes = (json as { contributes?: Record<string, unknown> } | null)?.contributes;
+    if (rawContributes && typeof rawContributes === "object") {
+      for (const [deprecated, canonical] of Object.entries(DEPRECATED_CONTRIBUTION_ALIASES)) {
+        if (deprecated in rawContributes) {
+          console.warn(
+            `[PluginService] Plugin "${manifest.name}": contributes.${deprecated} is deprecated — rename it to contributes.${canonical}`
+          );
+        }
+      }
+    }
 
     // Plugins disabled in Preferences are skipped entirely — neither
     // registered in the plugins map nor activated — for both built-in and
@@ -1034,25 +1299,16 @@ export class PluginService {
     // runtime panel id is `${manifest.name}.${panel.id}`.
     const viewsByBareId = new Map<string, ViewContribution>();
     const unmatchedViewIds = new Set<string>();
-    for (const view of manifest.contributes.experimental_views) {
-      if (view.location === "sidebar") {
-        console.warn(
-          `[PluginService] Plugin "${manifest.name}": experimental_views entry "${view.id}" has location "sidebar" which is not yet implemented and will be ignored`
-        );
-        continue;
-      }
-      if (!isSafePluginViewComponentPath(view.componentPath)) {
-        console.warn(
-          `[PluginService] Plugin "${manifest.name}": experimental_views entry "${view.id}" has an unsafe componentPath ${JSON.stringify(view.componentPath)} and will be ignored`
-        );
-        continue;
-      }
+    for (const view of manifest.contributes.views) {
+      // `location` is narrowed to `"panel"` and `componentPath` safety is
+      // enforced by `ViewContributionSchema` at manifest parse — an unsupported
+      // location or unsafe path fails validation before we reach this loop.
       if (viewsByBareId.has(view.id)) {
         // Two entries with the same bare id — last would silently overwrite
         // earlier. Surface the authoring mistake; keep the first to make the
         // outcome deterministic.
         console.warn(
-          `[PluginService] Plugin "${manifest.name}": experimental_views has duplicate entries for id "${view.id}"; keeping the first occurrence`
+          `[PluginService] Plugin "${manifest.name}": views has duplicate entries for id "${view.id}"; keeping the first occurrence`
         );
         continue;
       }
@@ -1083,14 +1339,14 @@ export class PluginService {
         // would never render because TerminalPane owns the surface. Surface the
         // collision rather than silently dropping the view.
         console.warn(
-          `[PluginService] Plugin "${manifest.name}": experimental_views entry "${view.id}" matches a panel with hasPty=true; the view will be ignored because PTY panels are rendered by TerminalPane`
+          `[PluginService] Plugin "${manifest.name}": views entry "${view.id}" matches a panel with hasPty=true; the view will be ignored because PTY panels are rendered by TerminalPane`
         );
       }
     }
 
     for (const orphanId of unmatchedViewIds) {
       console.warn(
-        `[PluginService] Plugin "${manifest.name}": experimental_views entry "${orphanId}" has no matching contributes.panels entry and will be ignored`
+        `[PluginService] Plugin "${manifest.name}": views entry "${orphanId}" has no matching contributes.panels entry and will be ignored`
       );
     }
 
@@ -1116,9 +1372,6 @@ export class PluginService {
     for (const menuItem of manifest.contributes.menuItems) {
       trackPluginExpression(manifest.name, menuItem.when);
       registerPluginMenuItem(manifest.name, menuItem);
-    }
-    if (manifest.contributes.menuItems.length > 0) {
-      this.broadcaster.scheduleMenuItemsBroadcast(false);
     }
 
     for (const keybinding of manifest.contributes.keybindings) {
@@ -1156,8 +1409,13 @@ export class PluginService {
     }
 
     if (manifest.contributes.agents.length > 0) {
-      registerPluginAgents(manifest.name, manifest.contributes.agents);
+      registerPluginAgents(manifest.name, manifest.contributes.agents, pluginDir);
       this.broadcaster.scheduleAgentsBroadcast(false);
+      // Mirror the updated registry into the pty-host so its activity monitor
+      // resolves this agent's detection patterns at spawn time (#10587). The
+      // renderer is covered by the broadcast above; the pty-host is a separate
+      // process that never registers agents itself.
+      getPtyClient()?.syncPluginAgentRegistry();
     }
 
     // Insert the plugin into the registry BEFORE importing its main module so
@@ -1269,7 +1527,7 @@ export class PluginService {
   }
 
   /**
-   * Probe `{pluginDir}/src/{cmdId}.{ts,tsx,js,mjs}` in precedence order,
+   * Probe `{pluginDir}/src/{cmdId}.{js,mjs}` in precedence order,
    * returning the first existing path or `null` when none match. The result
    * is cached in {@link commandModulePaths} so the probe runs once per
    * command per load — dispatch reads the cached path directly. Path
@@ -1332,16 +1590,20 @@ export class PluginService {
   }
 
   /**
-   * In v1 only `"onStartupFinished"` is recognised. An empty `activationEvents`
-   * array is treated the same as `["onStartupFinished"]` — every plugin with a
-   * `main` entry activates at startup unless it explicitly lists other events
-   * (none of which exist yet). When `onCommand:*`, `onView:*` etc. land, a
-   * plugin will be able to opt out of startup activation by omitting
-   * `"onStartupFinished"` from a non-empty list.
+   * Plugins are lazy by default (#10523): an absent or empty `activationEvents`
+   * means the plugin's `main` is imported and `activate()` is run only on first
+   * use — a contributed command being dispatched, a forge provider or file
+   * decoration being queried, or a contributed panel view being opened. Their
+   * static contributions (commands, panels, keybindings, …) are still registered
+   * eagerly at load time, so they appear in the palette before any plugin code
+   * runs. `"onStartupFinished"` is the explicit opt-in for plugins that genuinely
+   * need to run at boot. It is still the only recognised literal; lazy triggers
+   * call `activatePlugin` directly rather than matching inferred `onCommand:*` /
+   * `onView:*` event strings.
    */
   private shouldActivateOnStartup(manifest: PluginManifest): boolean {
     const events = manifest.activationEvents;
-    if (!events || events.length === 0) return true;
+    if (!events || events.length === 0) return false;
     return events.includes("onStartupFinished");
   }
 
@@ -1355,13 +1617,24 @@ export class PluginService {
   private async _doActivate(pluginId: string): Promise<void> {
     const plugin = this.plugins.get(pluginId);
     if (!plugin || !plugin.resolvedMain) return;
-    // Dev-mode plugins run inside a hot-reload worker instead of the in-process
-    // import() loader (#9304).
-    if (plugin.devMode) {
-      return this.activateViaDevWorker(pluginId, plugin);
+    // User-installed plugins activate inside a `utilityProcess.fork` worker
+    // (#10526). Dev plugins hot-reload on each `dist/index.js` rebuild; packaged
+    // prod plugins run the same worker without the file watcher. Out-of-process
+    // gives each a fresh module realm per lifecycle — so uninstall/disable/reload
+    // truly reclaims its module state by killing the worker (no ESM cache leak)
+    // — plus OS-level crash isolation.
+    //
+    // Built-in plugins stay on the in-process `import()` loader: they are trusted
+    // app-bundled code, never uninstalled, and never dev-symlinked, so the
+    // unload/divergence problems don't apply. Crucially, the GitHub built-in's
+    // `host.registerForgeProvider` binds a forge impl whose `parseRemote` and URL
+    // builders are SYNCHRONOUS — they can't cross the worker's async MessagePort
+    // (#8879), so routing built-ins through the worker would silently break forge.
+    if (!plugin.isBuiltin) {
+      return this.activateViaWorker(pluginId, plugin);
     }
     try {
-      // Bound the dynamic import — a plugin with a hanging top-level await
+      // Bound the dynamic import — a built-in with a hanging top-level await
       // would otherwise pin this promise forever and stall `Promise.allSettled`
       // fan-outs (file-decoration scope, startup activation).
       const mod = (await this.runImport(pluginId, plugin.resolvedMain)) as {
@@ -1370,66 +1643,94 @@ export class PluginService {
       if (typeof mod.activate === "function") {
         const activate = mod.activate as PluginActivate;
         const { host, revoke } = this.createHost(pluginId);
+
+        // Pre-register a rollback that undoes activate-time imperative
+        // registrations — channels, imperative actions, and every disposer
+        // tracked in `pluginEventCleanups` (event/forge/worktree subscriptions).
+        // A built-in whose `activate()` registers then throws — or is unloaded
+        // mid-activation — would otherwise strand those registrations forever:
+        // unlike a user plugin's worker, a failed built-in never runs the full
+        // `unloadPlugin` cascade on its own. Mirrors the worker path, which
+        // registers its teardown disposer before `start()` (#10621).
+        const rollback = (): void => {
+          this.removeHandlers(pluginId);
+          this.unregisterImperativePluginActions(pluginId);
+          this.flushPluginEventCleanups(pluginId);
+        };
+        this.cleanupMap.set(pluginId, rollback);
+
         try {
           const cleanup = await this.runActivate(pluginId, activate, host);
           // Guard against an unload that ran concurrently with this activation:
           // by the time `runActivate` resolves, `unloadPlugin` may have already
-          // cleared `cleanupMap` — writing a cleanup back after that fires
-          // would leak (e.g. a setInterval the plugin set up in activate()
-          // would never be cleared). Drop it on the floor instead.
-          if (typeof cleanup === "function" && this.plugins.has(pluginId)) {
-            this.cleanupMap.set(pluginId, cleanup);
+          // fired (and cleared) the pre-registered rollback. Only rebind when
+          // the plugin is still loaded; otherwise drop it on the floor (#9428).
+          if (this.plugins.has(pluginId)) {
+            // Activation succeeded — the host-side teardown is owned by
+            // `unloadPlugin`'s cascade, so replace the rollback with the
+            // plugin's own cleanup (or clear it when none was returned),
+            // matching the pre-#10621 contract.
+            if (typeof cleanup === "function") {
+              this.cleanupMap.set(pluginId, cleanup);
+            } else if (this.cleanupMap.get(pluginId) === rollback) {
+              this.cleanupMap.delete(pluginId);
+            }
+          } else if (this.cleanupMap.get(pluginId) === rollback) {
+            this.cleanupMap.delete(pluginId);
           }
+        } catch (activateErr) {
+          // `activate()` threw after partially registering. No `unloadPlugin`
+          // cascade runs for a failed built-in activation, so undo the partial
+          // registrations now. The identity check skips a double-fire if a
+          // concurrent unload already ran (and cleared) the rollback.
+          if (this.cleanupMap.get(pluginId) === rollback) {
+            this.cleanupMap.delete(pluginId);
+            rollback();
+          }
+          throw activateErr;
         } finally {
           revoke();
         }
       }
-      // Successful activation (or a main with no activate fn) clears any
-      // diagnostic record left over from a prior failed attempt — persisted
-      // to the provenance record so it survives a host restart. Plugins with
-      // a load-time error that is independent of `main` activation (e.g. a
-      // manifest command id collision, #9281) are exempted: their diagnostic
-      // is a manifest-level fact that doesn't go away when `main` activates.
-      if (!plugin.isBuiltin && !this.pluginsWithLoadTimeErrors.has(pluginId)) {
-        this.records.upsertInstalledRecord(pluginId, { loadError: null });
-      }
     } catch (err) {
-      const loadError = toPluginLoadError(err);
-      if (!plugin.isBuiltin) {
-        this.records.upsertInstalledRecord(pluginId, { loadError });
-      }
+      // Built-ins don't carry a provenance record (they're not user-installed),
+      // so a failure is logged but not persisted — mirrors the prior loader.
       console.error(`[PluginService] Failed to load main entry for ${pluginId}:`, err);
       throw err;
     }
   }
 
   /**
-   * Activate a dev-mode plugin inside a hot-reload worker (#9304). The plugin's
-   * code runs in a `utilityProcess.fork` child; the real host (from
-   * {@link createHost}) is bridged to the worker over MessagePort. The worker
-   * watches `dist/index.js` and respawns on every rebuild, so module-scope state
-   * never leaks across reloads (the robust fix for the Vite ESM cache leak).
+   * Activate a plugin inside a `utilityProcess.fork` worker (#9304, #10526).
+   * The plugin's code runs in the child; the real host (from {@link createHost})
+   * is bridged to the worker over MessagePort. Dev plugins (`mode: "dev"`) watch
+   * `dist/index.js` and respawn on every rebuild, so module-scope state never
+   * leaks across reloads (the robust fix for the Vite ESM cache leak); prod
+   * plugins (`mode: "prod"`) run the same worker without the watcher, getting a
+   * fresh module realm per load/unload — uninstall truly reclaims their memory.
    *
-   * The host is left un-revoked for the worker's lifetime — unlike the
-   * in-process path, the worker legitimately re-registers on every reload, and
-   * the activation-window contract is enforced worker-side by its own proxy.
+   * The host is left un-revoked for the worker's lifetime: the worker
+   * legitimately re-registers on every reload, post-activation host calls
+   * (dispatch, toast, spawn, fs.watch) keep relaying at runtime, and the
+   * activation-window contract is enforced worker-side by its own proxy.
    *
-   * A failed `activate()` is recorded but does NOT tear the worker down: the
+   * A failed `activate()` is recorded but does NOT tear the worker down: a dev
    * worker keeps watching so the author can fix the error and save to reload.
    * Only a fork failure (no worker at all) rejects.
    */
-  private async activateViaDevWorker(pluginId: string, plugin: LoadedPlugin): Promise<void> {
+  private async activateViaWorker(pluginId: string, plugin: LoadedPlugin): Promise<void> {
     if (!plugin.resolvedMain) return;
     // A re-activation while a worker is already live is a no-op — the worker
     // owns its own reload cycle; activatePlugin's idempotency normally prevents
     // this, but guard defensively against the unload-race re-entry path.
-    if (this.devWorkers.has(pluginId)) return;
+    if (this.pluginWorkers.has(pluginId)) return;
 
     const { host, revoke } = this.createHost(pluginId);
     const workerHost = new PluginDevWorkerHost({
       pluginId,
       pluginDir: plugin.dir,
       bundlePath: plugin.resolvedMain,
+      mode: plugin.devMode ? "dev" : "prod",
     });
     const bridge = new PluginDevWorkerMainBridge({
       pluginId,
@@ -1451,6 +1752,7 @@ export class PluginService {
       // and a freshly-introduced one is recorded — the first-activation promise
       // alone can't see post-reload outcomes.
       onActivationResult: (result) => {
+        lastActivationOk = result.ok;
         if (plugin.isBuiltin) return;
         if (result.ok) {
           if (!this.pluginsWithLoadTimeErrors.has(pluginId)) {
@@ -1458,14 +1760,20 @@ export class PluginService {
           }
         } else {
           this.records.upsertInstalledRecord(pluginId, {
-            loadError: { message: result.error, at: Date.now() },
+            loadError: { message: result.error, stack: result.stack, at: Date.now() },
           });
         }
       },
     });
 
+    // Tracks the most recent activate() outcome reported by the bridge. A failed
+    // first activation must not be cached as "activated" (#10523 retry-on-reopen):
+    // for a prod worker — which has no file watcher to auto-recover — we tear the
+    // worker down below so a re-open (Settings → Retry) re-forks and re-runs.
+    let lastActivationOk: boolean | undefined;
+
     const entry = { workerHost, bridge, revoke };
-    this.devWorkers.set(pluginId, entry);
+    this.pluginWorkers.set(pluginId, entry);
 
     // Register the teardown disposer up front so a concurrent unloadPlugin()
     // during fork/activation tears the worker down through the normal cascade.
@@ -1473,8 +1781,8 @@ export class PluginService {
       bridge.dispose();
       workerHost.dispose();
       revoke();
-      if (this.devWorkers.get(pluginId) === entry) {
-        this.devWorkers.delete(pluginId);
+      if (this.pluginWorkers.get(pluginId) === entry) {
+        this.pluginWorkers.delete(pluginId);
       }
     };
     this.cleanupMap.set(pluginId, cleanup);
@@ -1488,12 +1796,12 @@ export class PluginService {
       if (!plugin.isBuiltin) {
         this.records.upsertInstalledRecord(pluginId, { loadError });
       }
-      console.error(`[PluginService] Failed to start dev worker for ${pluginId}:`, err);
+      console.error(`[PluginService] Failed to start worker for ${pluginId}:`, err);
       throw err;
     }
 
     // If an unload raced the fork, the cleanup already disposed everything.
-    if (!this.plugins.has(pluginId) || this.devWorkers.get(pluginId) !== entry) {
+    if (!this.plugins.has(pluginId) || this.pluginWorkers.get(pluginId) !== entry) {
       cleanup();
       return;
     }
@@ -1501,10 +1809,10 @@ export class PluginService {
     // Bound the first activation so a plugin with a hanging `activate()` (or a
     // never-resolving top-level await in the worker) can't stall the
     // `Promise.allSettled` startup gate forever. On timeout the worker stays
-    // alive and watching — `onActivationResult` will clear/record the error if
-    // activation eventually settles or a reload follows. Mirrors the in-process
-    // ACTIVATE_TIMEOUT_MS contract. The provenance `loadError` is owned by
-    // `onActivationResult`; this catch only logs and unblocks startup.
+    // alive — `onActivationResult` will clear/record the error if activation
+    // eventually settles (or, for a dev worker, a reload follows). The
+    // provenance `loadError` is owned by `onActivationResult`; this catch only
+    // logs and unblocks startup.
     let timer: NodeJS.Timeout | undefined;
     try {
       await Promise.race([
@@ -1513,7 +1821,7 @@ export class PluginService {
           timer = setTimeout(() => {
             reject(
               new Error(
-                `Dev plugin "${pluginId}" activate() did not settle within ${ACTIVATE_TIMEOUT_MS}ms`
+                `Plugin "${pluginId}" activate() did not settle within ${ACTIVATE_TIMEOUT_MS}ms`
               )
             );
           }, ACTIVATE_TIMEOUT_MS);
@@ -1521,9 +1829,32 @@ export class PluginService {
         }),
       ]);
     } catch (err) {
-      console.error(`[PluginService] Dev plugin "${pluginId}" activation:`, err);
+      // The worker didn't settle in time — typically a hanging `activate()` or a
+      // never-resolving top-level await in the bundle. The worker stays alive in
+      // isolation (it can't stall the main process); record the timeout as the
+      // provenance loadError so diagnostics surface why the plugin never came up.
+      // If activation eventually settles (or a dev reload follows),
+      // `onActivationResult` overwrites this.
+      if (!plugin.isBuiltin) {
+        this.records.upsertInstalledRecord(pluginId, { loadError: toPluginLoadError(err) });
+      }
+      console.error(`[PluginService] Plugin "${pluginId}" activation:`, err);
     } finally {
       if (timer) clearTimeout(timer);
+    }
+
+    // A failed first activation must not be cached as a successful one
+    // (#10523): `activatePlugin` adds the id to `activatedPlugins` when this
+    // method resolves, which would short-circuit every later re-open. A dev
+    // worker keeps watching so the author can fix the error and save to reload —
+    // its retry path is the watcher, not a re-activation — so leave it alive.
+    // A prod worker has no watcher, so the only recovery is a re-open / Settings
+    // → Retry that re-runs `activatePlugin`; tear the failed worker down and
+    // rethrow so the in-flight entry is dropped and the id is never cached,
+    // mirroring the in-process loader's rethrow-on-activate-failure semantics.
+    if (lastActivationOk === false && !plugin.devMode) {
+      cleanup();
+      throw new Error(`Plugin "${pluginId}" activate() failed`);
     }
   }
 
@@ -1589,12 +1920,13 @@ export class PluginService {
   }
 
   /**
-   * Fan out activation for every plugin whose manifest opts into
-   * `"onStartupFinished"` (or whose `activationEvents` is unset / empty —
-   * see {@link shouldActivateOnStartup}). Activations run in parallel via
-   * `Promise.allSettled`; one slow plugin must not block the rest. Wired
-   * fire-and-forget from the `plugin-service` deferred task so the renderer
-   * keeps progressing while plugins warm up in the background.
+   * Fan out activation for every plugin that opts into `"onStartupFinished"`
+   * (see {@link shouldActivateOnStartup}). Plugins without `activationEvents`
+   * are lazy (#10523) and are deliberately excluded here — they activate on
+   * first use instead. Activations run in parallel via `Promise.allSettled`;
+   * one slow plugin must not block the rest. Wired fire-and-forget from the
+   * `plugin-service` deferred task so the renderer keeps progressing while
+   * plugins warm up in the background.
    */
   async activateStartupFinishedPlugins(): Promise<void> {
     try {
@@ -1635,6 +1967,49 @@ export class PluginService {
         }
       }
     }
+  }
+
+  /**
+   * Activate the plugin that owns the contributed panel view identified by
+   * `panelKindId` before its `plugin://` module is imported in the renderer.
+   * Without this hook a lazy plugin's view module would load before its
+   * `activate()` ran, so the `host.registerHandler` calls the view depends on
+   * would not yet have fired (#10523). Mirrors {@link activatePluginForForgeProvider}:
+   * the owning plugin is resolved by matching the registered panel-kind id
+   * (`${pluginId}.${panel.id}`, exactly as built in `loadPlugin`) against the
+   * manifest registry rather than splitting `panelKindId` on a dot — plugin ids
+   * are `publisher.name` and already contain dots.
+   *
+   * Returns a plain {@link PluginActivationResult} so the renderer's
+   * `PluginViewHost` can surface the real activation cause (#10618). Because
+   * {@link activatePlugin} never rejects (the contribution-point trigger
+   * contract), failures are read back from the persisted provenance `loadError`
+   * after the await — covering all three failure modes (worker fork failure,
+   * activate() timeout, activate() throw). An unknown kind id resolves to
+   * `{ ok: true }`: there is nothing to activate, and the renderer's module
+   * import then fails on its own with a more specific error.
+   *
+   * Limitation: built-in plugins have no installed provenance record, so a
+   * built-in activation failure (logged, not persisted) reads back as
+   * `{ ok: true }` here and falls through to the renderer's generic import
+   * error. Built-ins are app-bundled trusted code where this is rare; surfacing
+   * it would need a separate in-memory built-in load-error map.
+   */
+  async activatePluginForView(panelKindId: string): Promise<PluginActivationResult> {
+    if (typeof panelKindId !== "string" || panelKindId.length === 0) return { ok: true };
+    for (const [pluginId, plugin] of this.plugins) {
+      for (const panel of plugin.manifest.contributes.panels) {
+        if (`${pluginId}.${panel.id}` === panelKindId) {
+          await this.activatePlugin(pluginId);
+          const loadError = this.getPluginLoadError(pluginId);
+          if (loadError) {
+            return { ok: false, error: loadError.message, stack: loadError.stack };
+          }
+          return { ok: true };
+        }
+      }
+    }
+    return { ok: true };
   }
 
   /**
@@ -1689,8 +2064,16 @@ export class PluginService {
       const serialized = safeStringify(fields);
       rendered = serialized ? `${rendered} ${serialized}` : rendered;
     }
+    // Scrub before truncation: scrubSecrets replaces each secret with the
+    // shorter "[REDACTED]" sentinel, so the codepoint cap below still bounds the
+    // line — and a secret straddling that boundary is fully redacted instead of
+    // being bisected into a fragment too short for the scrubber to match. Both
+    // sinks below — the log buffer that feeds shareable bug reports and the
+    // console mirror — consume this scrubbed value.
+    rendered = scrubSecrets(rendered);
     // Codepoint-aware cap: spreading splits at codepoint (not UTF-16 code-unit)
-    // boundaries, so the slice can never bisect a surrogate pair.
+    // boundaries, so the slice can never bisect a surrogate pair. (It may clip a
+    // trailing "[REDACTED]" sentinel, which is harmless.)
     const codepoints = Array.from(rendered);
     if (codepoints.length > PLUGIN_LOG_LINE_MAX_CHARS) {
       rendered = `${codepoints.slice(0, PLUGIN_LOG_LINE_MAX_CHARS - 1).join("")}…`;
@@ -1763,6 +2146,16 @@ export class PluginService {
     // the live instance so a stale host (post-unload, or after a same-id
     // reload) can't write into the current session's log buffer.
     const boundPlugin = this.plugins.get(pluginId);
+    // Liveness for the non-revoke-guarded runtime methods: the plugin must still
+    // be loaded AND be the same instance this host was bound to. Identity (not
+    // just id membership) so a stale timer from a pre-reload instance can't emit
+    // into the current same-id instance's panels or read its worktrees.
+    const isBound = (): boolean =>
+      boundPlugin !== undefined && this.plugins.get(pluginId) === boundPlugin;
+    // Last agent-state snapshot observed for this host since it subscribed via
+    // onDidChangeAgentState. The host keeps no pre-subscription history, so
+    // getAgentState() returns null until the first transition is observed.
+    let lastAgentSnapshot: PluginAgentSnapshot | null = null;
     const host: PluginHostApi = {
       get pluginId() {
         return pluginId;
@@ -1821,6 +2214,9 @@ export class PluginService {
         owners.add(namespacedId);
 
         this.broadcaster.broadcastPluginActions();
+        // All registry mutation above is synchronous (sync throws still surface
+        // at the call site during activate()); only the return value is async.
+        return Promise.resolve();
       },
       registerHandler: ((
         channel: string,
@@ -1850,6 +2246,7 @@ export class PluginService {
         } else {
           this.registerHandler(pluginId, channel, schemaOrHandler as PluginIpcHandler);
         }
+        return Promise.resolve();
       }) as PluginHostApi["registerHandler"],
       broadcastToRenderer: (channel, payload) => {
         if (revoked) {
@@ -1862,16 +2259,127 @@ export class PluginService {
             `Plugin broadcast channel must be a string without colons: ${String(channel)}`
           );
         }
-        broadcastToRenderer(`plugin:${pluginId}:${channel}`, payload);
+        // Wrap in the per-instance envelope (panelId: null = broadcast) so the
+        // preload dispatcher sees the same shape for every push over this
+        // transport — broadcastToRenderer, postToPanel, and the process stream
+        // share the `plugin:{pluginId}:{channel}` channel and one `plugin.on`
+        // subscriber receives all three.
+        broadcastToRenderer(`plugin:${pluginId}:${channel}`, { panelId: null, payload });
+        return Promise.resolve();
+      },
+      // The post-activation-safe sibling of broadcastToRenderer: same
+      // `plugin:{pluginId}:{channel}` transport, but NOT revoke-guarded — it is
+      // called from the plugin's own timers, polls, and subscription callbacks
+      // long after activate() resolves, so a plugin can stream live data into
+      // its panels without the renderer degrading to invoke() polling. Liveness
+      // is plugin membership (mirrors invalidateFileDecorations/showToast): once
+      // the plugin unloads this silently no-ops.
+      postToPanel: (channel, payload, panelId) => {
+        if (!isBound()) return Promise.resolve();
+        if (typeof channel !== "string" || channel.length === 0 || channel.includes(":")) {
+          // Reject (not sync throw): this is a post-activation runtime-surface
+          // method returning a Promise, so a validation error must stay inside
+          // the Promise contract a plugin can `.catch()` (#10617). The liveness
+          // no-op above stays a silent resolve.
+          return Promise.reject(
+            new Error(
+              `Plugin "${pluginId}" postToPanel: channel must be a non-empty string without colons: ${String(channel)}`
+            )
+          );
+        }
+        // `undefined` (arg omitted) and `null` both mean broadcast; only a
+        // non-empty string targets a single panel instance. An empty string is
+        // an authoring mistake (it would silently match no subscriber), so
+        // reject it loudly rather than coercing to broadcast.
+        if (panelId !== undefined && panelId !== null) {
+          if (typeof panelId !== "string" || panelId.length === 0) {
+            throw new Error(
+              `Plugin "${pluginId}" postToPanel: panelId must be a non-empty string, null, or undefined: ${String(panelId)}`
+            );
+          }
+        }
+        const targetPanelId = panelId ?? null;
+        broadcastToRenderer(`plugin:${pluginId}:${channel}`, { panelId: targetPanelId, payload });
+        return Promise.resolve();
       },
       getActiveWorktree: async () => {
+        if (!isBound()) return null;
         const snapshots = await this.fetchAllWorktreeSnapshots();
+        if (!isBound()) return null;
         const active = snapshots.find((s) => s.isCurrent === true);
         return active ? toPluginWorktreeSnapshot(active) : null;
       },
       getWorktrees: async () => {
+        if (!isBound()) return [];
         const snapshots = await this.fetchAllWorktreeSnapshots();
+        if (!isBound()) return [];
         return snapshots.map(toPluginWorktreeSnapshot);
+      },
+      getWorktreeStatus: async (path, options) => {
+        options?.signal?.throwIfAborted();
+        if (!isBound()) return null;
+        if (typeof path !== "string" || path.length === 0) return null;
+        const snapshots = await this.fetchAllWorktreeSnapshots();
+        options?.signal?.throwIfAborted();
+        if (!isBound()) return null;
+        const match = snapshots.find((s) => s.path === path);
+        return match ? toPluginWorktreeStatus(match.worktreeChanges) : null;
+      },
+      getAgentState: async () => {
+        // Liveness first (mirrors getActiveWorktree/getWorktrees): once unloaded
+        // the method degrades to null rather than throwing, so a plugin calling
+        // it from a stray timer after unload doesn't get an unhandled rejection.
+        // declaredCapabilities() also returns [] post-unload, so a capability
+        // check first would mis-report PERMISSION_REQUIRED for a torn-down plugin.
+        if (!isBound()) return null;
+        if (!this.declaredCapabilities(pluginId).has("agent:read")) {
+          throw new Error(
+            `PERMISSION_REQUIRED: plugin "${pluginId}" getAgentState requires "agent:read", which is not declared in manifest.capabilities`
+          );
+        }
+        return lastAgentSnapshot;
+      },
+      sendToActiveAgent: async (text, options) => {
+        // Liveness first (mirrors getAgentState): once unloaded the method
+        // degrades to a no-op rather than throwing into a stray post-unload
+        // timer. declaredCapabilities() also returns [] post-unload, so a
+        // capability check first would mis-report PERMISSION_REQUIRED.
+        if (!isBound()) return;
+        if (!this.declaredCapabilities(pluginId).has("agent:input")) {
+          throw new Error(
+            `PERMISSION_REQUIRED: plugin "${pluginId}" sendToActiveAgent requires "agent:input", which is not declared in manifest.capabilities`
+          );
+        }
+        // Validate BEFORE prompting for consent so an invalid call can't bank a
+        // silent grant and then inject real text unprompted (mirrors the
+        // process.spawn ordering for #10524). Reject whitespace-only text too:
+        // it stages to nothing but with submit:true would fire a bare Enter,
+        // submitting whatever is already in the agent's input buffer — an effect
+        // the consent prompt never showed the user.
+        if (typeof text !== "string" || text.trim().length === 0) {
+          throw new Error(
+            `Plugin "${pluginId}" sendToActiveAgent: text must be a non-empty, non-whitespace string`
+          );
+        }
+        // JIT consent fires before any side effect — first use prompts the user;
+        // the grant covers later calls. Throws PERMISSION_REQUIRED on denial.
+        // Re-check binding after the prompt await so a racing unload doesn't
+        // inject into a torn-down session.
+        await this.ensureCapabilityConsent(pluginId, "agent:input");
+        if (!isBound()) return;
+        const terminalId = await this.resolveActiveAgentTerminalId();
+        if (!isBound()) return;
+        const ptyClient = getPtyClient();
+        if (!ptyClient) {
+          throw new Error("NO_ACTIVE_AGENT: terminal host is not available");
+        }
+        // submit defaults to false — stage-only (no Enter) is the default-safe
+        // mode per #10558. submit:true appends Enter and runs the text.
+        if (options?.submit === true) {
+          ptyClient.submit(terminalId, text);
+        } else {
+          ptyClient.stage(terminalId, text);
+        }
       },
       onDidChangeActiveWorktree: (callback) => {
         if (revoked) {
@@ -1879,7 +2387,9 @@ export class PluginService {
             `Plugin "${pluginId}" host revoked: onDidChangeActiveWorktree called after activate() returned or timed out`
           );
         }
-        return this.subscribeWorktreeEvent(pluginId, "worktree-activated", async () => {
+        // Subscription wired synchronously (revoke guard already held above);
+        // only the disposer return value is wrapped in a resolved promise.
+        const dispose = this.subscribeWorktreeEvent(pluginId, "worktree-activated", async () => {
           if (!this.plugins.has(pluginId)) return;
           try {
             const snapshots = await this.fetchAllWorktreeSnapshots();
@@ -1895,14 +2405,23 @@ export class PluginService {
             );
           }
         });
+        return Promise.resolve(dispose);
       },
-      onDidChangeWorktrees: (callback) => {
+      onDidChangeWorktrees: (callback, options) => {
         if (revoked) {
           throw new Error(
             `Plugin "${pluginId}" host revoked: onDidChangeWorktrees called after activate() returned or timed out`
           );
         }
-        const emit = async (): Promise<void> => {
+        // Opt-in debounce: the host re-emits the worktree set on every git-status
+        // poll, so a UI-updating plugin can coalesce bursts into a single
+        // trailing callback. Values below the floor are clamped up; 0/omitted
+        // fires on every change. See PluginHostSubscriptionOptions.
+        const debounceMs =
+          typeof options?.debounceMs === "number" && options.debounceMs > 0
+            ? Math.max(options.debounceMs, MIN_PLUGIN_SUBSCRIPTION_DEBOUNCE_MS)
+            : 0;
+        const runEmit = async (): Promise<void> => {
           if (!this.plugins.has(pluginId)) return;
           try {
             const snapshots = await this.fetchAllWorktreeSnapshots();
@@ -1915,18 +2434,87 @@ export class PluginService {
             );
           }
         };
+        let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+        const emit =
+          debounceMs > 0
+            ? (): void => {
+                if (debounceTimer) clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => {
+                  debounceTimer = null;
+                  void runEmit();
+                }, debounceMs);
+              }
+            : (): void => {
+                void runEmit();
+              };
         // Fires on both add/update and remove so plugins' cached lists stay
         // correct after deletions. Each subscription is tracked separately
-        // so a single disposer stops both.
+        // so a single disposer stops both. A shared debounce timer coalesces
+        // bursts that span both event kinds.
         const disposeUpdate = this.subscribeWorktreeEvent(pluginId, "worktree-update", emit);
         const disposeRemove = this.subscribeWorktreeEvent(pluginId, "worktree-removed", emit);
         let disposed = false;
-        return () => {
+        const dispose = (): void => {
           if (disposed) return;
           disposed = true;
+          if (debounceTimer) {
+            clearTimeout(debounceTimer);
+            debounceTimer = null;
+          }
           disposeUpdate();
           disposeRemove();
         };
+        return Promise.resolve(dispose);
+      },
+      onDidChangeAgentState: (callback) => {
+        if (revoked) {
+          throw new Error(
+            `Plugin "${pluginId}" host revoked: onDidChangeAgentState called after activate() returned or timed out`
+          );
+        }
+        if (!this.declaredCapabilities(pluginId).has("agent:read")) {
+          throw new Error(
+            `PERMISSION_REQUIRED: plugin "${pluginId}" onDidChangeAgentState requires "agent:read", which is not declared in manifest.capabilities`
+          );
+        }
+        // The agent:state-changed bus is a synchronous module-level singleton
+        // (unlike WorkspaceClient), so we subscribe directly — no deferred
+        // replay queue is needed. The handler caches the latest snapshot so
+        // getAgentState() can serve it without re-deriving state.
+        const failures = createListenerFailureState();
+        const handler = (payload: AgentStateChangePayload): void => {
+          if (!this.plugins.has(pluginId)) return;
+          invokeTrackedListener(
+            failures,
+            pluginId,
+            "onDidChangeAgentState",
+            () => {
+              const snapshot = toPluginAgentSnapshot(payload);
+              lastAgentSnapshot = snapshot;
+              return callback(snapshot);
+            },
+            () => dispose()
+          );
+        };
+        const unsub = events.on("agent:state-changed", handler);
+        let disposed = false;
+        const dispose = (): void => {
+          if (disposed) return;
+          disposed = true;
+          unsub();
+          const list = this.pluginEventCleanups.get(pluginId);
+          if (!list) return;
+          const idx = list.indexOf(dispose);
+          if (idx >= 0) list.splice(idx, 1);
+          if (list.length === 0) this.pluginEventCleanups.delete(pluginId);
+        };
+        let list = this.pluginEventCleanups.get(pluginId);
+        if (!list) {
+          list = [];
+          this.pluginEventCleanups.set(pluginId, list);
+        }
+        list.push(dispose);
+        return Promise.resolve(dispose);
       },
       registerForgeProvider: (descriptor, impl) => {
         if (revoked) {
@@ -2006,7 +2594,9 @@ export class PluginService {
           this.pluginEventCleanups.set(pluginId, list);
         }
         list.push(dispose);
-        return dispose;
+        // Disposer captured and registered into the unload cascade
+        // synchronously above; only the return value is async.
+        return Promise.resolve(dispose);
       },
       registerFileDecorationProvider: (descriptor, impl) => {
         if (revoked) {
@@ -2064,17 +2654,20 @@ export class PluginService {
           this.pluginEventCleanups.set(pluginId, list);
         }
         list.push(dispose);
-        return dispose;
+        return Promise.resolve(dispose);
       },
       // NOT revoke-guarded: called from the plugin's own post-activation
       // subscription callbacks (worktree changes, polling timers). The
       // liveness guard is plugin membership, not the activation window — once
       // the plugin unloads this becomes a silent no-op.
       invalidateFileDecorations: (scope, paths) => {
-        if (!this.plugins.has(pluginId)) return;
+        if (!this.plugins.has(pluginId)) return Promise.resolve();
         if (typeof scope !== "string" || scope.length === 0) {
-          throw new Error(
-            `Plugin "${pluginId}" invalidateFileDecorations: scope must be a non-empty string`
+          // Reject (not sync throw): runtime-surface Promise method (#10617).
+          return Promise.reject(
+            new Error(
+              `Plugin "${pluginId}" invalidateFileDecorations: scope must be a non-empty string`
+            )
           );
         }
         // A plugin may only invalidate scopes it actually declared in
@@ -2089,18 +2682,80 @@ export class PluginService {
           !declaredScopes ||
           !declaredScopes.some((pattern) => scopeMatchesPattern(scope, pattern))
         ) {
-          throw new Error(
-            `Plugin "${pluginId}" invalidateFileDecorations: scope "${scope}" is not covered by any declared contributes.fileDecorationProviders[].scopes`
+          // Reject (not sync throw): runtime-surface Promise method (#10617).
+          return Promise.reject(
+            new Error(
+              `Plugin "${pluginId}" invalidateFileDecorations: scope "${scope}" is not covered by any declared contributes.fileDecorationProviders[].scopes`
+            )
           );
         }
-        const narrowed =
+        let narrowed =
           Array.isArray(paths) && paths.length > 0
             ? paths.filter((p): p is string => typeof p === "string" && p.length > 0)
             : undefined;
+        if (narrowed && narrowed.length > MAX_FILE_DECORATION_PATHS) {
+          // Over the cap, fall back to a scope-wide invalidation (drop `paths`)
+          // rather than truncating: a truncated list would silently omit the
+          // tail, and the renderer skips a re-pull for any visible file not in
+          // the list — leaving stale decorations with no error surfaced. A
+          // path-less broadcast forces an unconditional re-pull, which is
+          // correct (just broader) for this pathological case.
+          console.warn(
+            `Plugin "${pluginId}" invalidateFileDecorations: ${narrowed.length} paths exceeds cap of ${MAX_FILE_DECORATION_PATHS} for scope "${scope}"; falling back to scope-wide invalidation`
+          );
+          narrowed = undefined;
+        }
         broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
           name: "plugin:decorations-changed",
           payload: { scope, ...(narrowed && narrowed.length > 0 ? { paths: narrowed } : {}) },
         });
+        return Promise.resolve();
+      },
+      // NOT revoke-guarded for the same reason as invalidateFileDecorations:
+      // plugins set badges from post-activation worktree/agent subscription
+      // callbacks. Liveness is plugin membership, so it no-ops once unloaded
+      // (unloadPlugin clears the plugin's whole badge set).
+      setPanelBadge: (panelId, badge) => {
+        if (!this.plugins.has(pluginId)) return Promise.resolve();
+        if (typeof panelId !== "string" || panelId.length === 0) {
+          // Reject (not sync throw): runtime-surface Promise method (#10617).
+          return Promise.reject(
+            new Error(`Plugin "${pluginId}" setPanelBadge: panelId must be a non-empty string`)
+          );
+        }
+        let validated: PluginPanelBadge | null = null;
+        if (badge !== null && badge !== undefined) {
+          const parsed = PluginPanelBadgeSchema.safeParse(badge);
+          if (!parsed.success) {
+            // Reject (not sync throw): runtime-surface Promise method (#10617).
+            return Promise.reject(
+              new Error(
+                `Plugin "${pluginId}" setPanelBadge: invalid badge — ${parsed.error.issues
+                  .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+                  .join("; ")}`
+              )
+            );
+          }
+          validated = parsed.data;
+        }
+        let panelMap = this.pluginBadges.get(pluginId);
+        if (validated === null) {
+          // Clear: drop just this panel's badge; prune the plugin's map when empty.
+          if (!panelMap || !panelMap.has(panelId)) return Promise.resolve();
+          panelMap.delete(panelId);
+          if (panelMap.size === 0) this.pluginBadges.delete(pluginId);
+        } else {
+          if (!panelMap) {
+            panelMap = new Map<string, PluginPanelBadge>();
+            this.pluginBadges.set(pluginId, panelMap);
+          }
+          panelMap.set(panelId, validated);
+        }
+        broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+          name: "plugin:panel-badges-changed",
+          payload: { pluginId, badges: this.serializePluginBadges(pluginId) },
+        });
+        return Promise.resolve();
       },
       // NOT revoke-guarded for the same reason as invalidateFileDecorations:
       // plugins fire toasts from post-activation callbacks and timers. Liveness
@@ -2148,6 +2803,76 @@ export class PluginService {
         }
         return this.dispatcher.sendDispatchToRenderer(actionId, args);
       },
+      // Built-in action catalog (#10561). NOT revoke-guarded for the same reason
+      // as dispatch: plugins introspect from post-activation callbacks/timers.
+      // Once the plugin unloads these degrade to empty/absent results ([] / null
+      // / "restricted") without a renderer round-trip. The renderer projects
+      // ActionService.list()/get() — which already filter danger:"restricted" —
+      // to the slim PluginActionManifestEntry, so the catalog never exposes a
+      // restricted action.
+      actions: {
+        list: async () => {
+          if (!this.plugins.has(pluginId)) return [];
+          return this.dispatcher.sendActionsListToRenderer();
+        },
+        get: async (actionId) => {
+          if (!this.plugins.has(pluginId)) return null;
+          return this.dispatcher.sendActionsGetToRenderer(actionId);
+        },
+        // canDispatch derives locally from get() — no extra round-trip. A null
+        // entry (unknown id, or a restricted action the renderer projects away)
+        // maps to "restricted"; "confirm" actions surface as "confirm" so a
+        // plugin can warn before dispatch() returns CONFIRMATION_REQUIRED.
+        canDispatch: async (actionId) => {
+          if (!this.plugins.has(pluginId)) return "restricted";
+          const entry = await this.dispatcher.sendActionsGetToRenderer(actionId);
+          if (!entry) return "restricted";
+          if (entry.danger === "confirm") return "confirm";
+          // Fail closed: only an explicit "safe" entry is dispatchable without a
+          // prompt. Any other danger (including an unexpected value) → restricted.
+          if (entry.danger === "safe") return "ok";
+          return "restricted";
+        },
+      },
+      // Imperative UI prompts (#10522). NOT revoke-guarded for the same reason
+      // as showToast/dispatch: plugins prompt from command handlers that run
+      // long after activate() resolves. Liveness is plugin membership — once the
+      // plugin unloads these resolve the dismiss value (undefined / false)
+      // without a renderer round-trip, and an in-flight prompt is drained by
+      // promptDispatcher.cancelForPlugin in unloadPlugin. Invalid options throw
+      // so authoring mistakes surface loudly (mirrors showToast).
+      showQuickPick: (async (
+        items: PluginQuickPickItem[],
+        options?: PluginQuickPickOptions
+      ): Promise<PluginQuickPickItem | PluginQuickPickItem[] | undefined> => {
+        if (!this.plugins.has(pluginId)) return undefined;
+        const validItems = validateQuickPickItems(pluginId, items);
+        const value = await this.promptDispatcher.requestPrompt(pluginId, {
+          kind: "quickPick",
+          items: validItems,
+          options: sanitizeQuickPickOptions(options),
+        });
+        return value as PluginQuickPickItem | PluginQuickPickItem[] | undefined;
+      }) as PluginHostApi["showQuickPick"],
+      showInputBox: async (options) => {
+        if (!this.plugins.has(pluginId)) return undefined;
+        const value = await this.promptDispatcher.requestPrompt(pluginId, {
+          kind: "inputBox",
+          options: sanitizeInputBoxOptions(options),
+        });
+        return value as string | undefined;
+      },
+      showConfirm: async (options) => {
+        if (!this.plugins.has(pluginId)) return false;
+        if (!options || typeof options !== "object" || typeof options.title !== "string") {
+          throw new Error(`Plugin "${pluginId}" showConfirm: options.title must be a string`);
+        }
+        const value = await this.promptDispatcher.requestPrompt(pluginId, {
+          kind: "confirm",
+          options: sanitizeConfirmOptions(options),
+        });
+        return value === true;
+      },
       // NOT revoke-guarded for the same reason as showToast/dispatch: plugins
       // log from post-activation callbacks and timers. Liveness is plugin
       // membership (enforced inside recordPluginLog) — writes silently no-op
@@ -2163,20 +2888,53 @@ export class PluginService {
           if (boundPlugin) this.recordPluginLog(boundPlugin, pluginId, "error", message, fields);
         },
       },
+      // Managed child-process surface (#9234). NOT revoke-guarded — a process
+      // orchestrator spawns/respawns from post-activation timers and callbacks.
+      // `spawn` is the first runtime enforcement of a scope capability: it
+      // rejects unless the plugin declared `shell:exec` (mirrors the channel
+      // capability gate at the dispatch boundary). Liveness is plugin membership
+      // — once the plugin unloads `spawn` rejects and outstanding processes are
+      // torn down by `killAll` in unloadPlugin.
+      process: this.buildProcessApi(pluginId),
+      // Host-mediated, scope-contained filesystem + git surfaces (fs-API
+      // containment unit). NOT revoke-guarded — plugins read/write from
+      // post-activation timers and callbacks. Every path argument is realpath-
+      // contained to the declared scopes.fs.allowedPaths and capability-gated;
+      // this is the runtime enforcement of allowedPaths (formerly advisory).
+      fs: this.buildFsApi(pluginId),
+      git: this.buildGitApi(pluginId),
+      // Host-mediated OS clipboard surface backing the clipboard:read /
+      // clipboard:write tokens. Runs in the main process (Electron's clipboard
+      // module is unavailable in the dev-worker utility process), so it works
+      // from a headless plugin with no mounted panel. NOT revoke-guarded —
+      // liveness is plugin membership; once unloaded every method rejects.
+      clipboard: this.buildClipboardApi(pluginId),
       // NOT revoke-guarded: plugins read/write settings throughout their
       // lifetime (IPC handlers, timers), long after activate() resolves. The
       // store is the source of truth, so a late call is harmless.
       settings: {
         get: async <T = unknown>(
           key: string,
-          scope: PluginSettingsScope = "user"
+          scope?: PluginSettingsScope
         ): Promise<T | undefined> => {
           assertSettingsKey(pluginId, "get", key);
-          const filePath = this.settings.resolveSettingsFilePath(pluginId, scope);
+          // Resolve the manifest-declared scope so a read targets the same scope
+          // the write path enforces — otherwise a `scope: "project"` key read
+          // with no scope arg silently reads the wrong ("user") store (#10586).
+          const declaredScope = this.settings.getDeclaredScope(pluginId, key);
+          if (scope !== undefined && declaredScope !== undefined && declaredScope !== scope) {
+            throw new Error(
+              `Plugin "${pluginId}" settings.get: key "${key}" is declared in "${declaredScope}" scope, not "${scope}"`
+            );
+          }
+          const effectiveScope = declaredScope ?? scope ?? "user";
+          const filePath = this.settings.resolveSettingsFilePath(pluginId, effectiveScope);
           // Project scope with no active project: read resolves to undefined
           // rather than throwing, matching the "unset key" return.
           if (!filePath) return undefined;
-          return this.settings.getOrCreateSettingsStore(pluginId, scope, filePath).get<T>(key);
+          return this.settings
+            .getOrCreateSettingsStore(pluginId, effectiveScope, filePath)
+            .get<T>(key, { secret: this.settings.isSecretKey(pluginId, key) });
         },
         set: async <T = unknown>(
           key: string,
@@ -2198,14 +2956,16 @@ export class PluginService {
             );
           }
           const store = this.settings.getOrCreateSettingsStore(pluginId, scope, filePath);
-          const changed = await store.set(key, value);
+          const changed = await store.set(key, value, {
+            secret: this.settings.isSecretKey(pluginId, key),
+          });
           if (changed) this.settings.notifySettingsSubscribers(pluginId, scope, key, value);
         },
         onDidChange: <T = unknown>(
           key: string,
           callback: (value: T | undefined) => void,
           scope: PluginSettingsScope = "user"
-        ): (() => void) => {
+        ): Promise<() => void> => {
           if (revoked) {
             throw new Error(
               `Plugin "${pluginId}" host revoked: settings.onDidChange called after activate() returned or timed out`
@@ -2239,7 +2999,100 @@ export class PluginService {
             this.pluginEventCleanups.set(pluginId, list);
           }
           list.push(dispose);
-          return dispose;
+          return Promise.resolve(dispose);
+        },
+      },
+      // Private machine-owned key/value storage (#10556). NOT revoke-guarded
+      // (except onDidChange): plugins read/write storage throughout their
+      // lifetime. The "worktree"/"project" scopes resolve their target
+      // asynchronously, so set/delete re-check liveness after the await — a
+      // plugin unloaded mid-resolution silently no-ops rather than writing into
+      // a torn-down plugin's file (lessons #9322/#9428/#9533).
+      storage: {
+        get: async <T = unknown>(
+          key: string,
+          scope: PluginStorageScope = "user"
+        ): Promise<T | undefined> => {
+          assertStorageKey(pluginId, "get", key);
+          const filePath = await this.storage.resolveStorageFilePath(pluginId, scope);
+          // No active project/worktree (or unset key): read resolves to undefined
+          // rather than throwing, matching the "unset key" return.
+          if (!filePath || !isBound()) return undefined;
+          return this.storage.getOrCreateStorageStore(pluginId, scope, filePath).get<T>(key);
+        },
+        set: async <T = unknown>(
+          key: string,
+          value: T,
+          scope: PluginStorageScope = "user"
+        ): Promise<void> => {
+          assertStorageKey(pluginId, "set", key);
+          if (value === undefined) {
+            throw new Error(
+              `Plugin "${pluginId}" storage.set: value for "${key}" is undefined — storage cannot store undefined`
+            );
+          }
+          this.storage.assertStorageSerializable(pluginId, key, value);
+          const filePath = await this.storage.resolveStorageFilePath(pluginId, scope);
+          // Re-check liveness after the async resolve so a racing unloadPlugin()
+          // doesn't write into a torn-down plugin's storage file.
+          if (!isBound()) return;
+          if (!filePath) {
+            throw new Error(
+              `Plugin "${pluginId}" storage.set: no active ${scope} — "${scope}" scope has no target`
+            );
+          }
+          const store = this.storage.getOrCreateStorageStore(pluginId, scope, filePath);
+          const changed = await store.set(key, value);
+          if (changed) this.storage.notifyStorageSubscribers(pluginId, scope, key, value);
+        },
+        delete: async (key: string, scope: PluginStorageScope = "user"): Promise<void> => {
+          assertStorageKey(pluginId, "delete", key);
+          const filePath = await this.storage.resolveStorageFilePath(pluginId, scope);
+          // Missing target or unloaded plugin: a delete is a no-op rather than a
+          // throw (matching the "already absent" return of the store).
+          if (!filePath || !isBound()) return;
+          const store = this.storage.getOrCreateStorageStore(pluginId, scope, filePath);
+          const changed = await store.delete(key);
+          if (changed) this.storage.notifyStorageSubscribers(pluginId, scope, key, undefined);
+        },
+        onDidChange: <T = unknown>(
+          key: string,
+          callback: (value: T | undefined) => void,
+          scope: PluginStorageScope = "user"
+        ): Promise<() => void> => {
+          if (revoked) {
+            throw new Error(
+              `Plugin "${pluginId}" host revoked: storage.onDidChange called after activate() returned or timed out`
+            );
+          }
+          assertStorageKey(pluginId, "onDidChange", key);
+          if (typeof callback !== "function") {
+            throw new Error(
+              `Plugin "${pluginId}" storage.onDidChange: callback must be a function`
+            );
+          }
+          const sub = { key, scope, cb: callback as (value: unknown) => void };
+          this.storage.addSubscriber(pluginId, sub);
+
+          let disposed = false;
+          const dispose = (): void => {
+            if (disposed) return;
+            disposed = true;
+            this.storage.removeSubscriber(pluginId, sub);
+            const list = this.pluginEventCleanups.get(pluginId);
+            if (!list) return;
+            const idx = list.indexOf(dispose);
+            if (idx >= 0) list.splice(idx, 1);
+            if (list.length === 0) this.pluginEventCleanups.delete(pluginId);
+          };
+
+          let list = this.pluginEventCleanups.get(pluginId);
+          if (!list) {
+            list = [];
+            this.pluginEventCleanups.set(pluginId, list);
+          }
+          list.push(dispose);
+          return Promise.resolve(dispose);
         },
       },
     };
@@ -2247,6 +3100,790 @@ export class PluginService {
       host,
       revoke: () => {
         revoked = true;
+      },
+    };
+  }
+
+  /**
+   * Lazily construct the managed-process manager, wiring its stream sink to the
+   * plugin's `postToPanel` transport and its audit hook to the plugin audit
+   * trail. Single instance per service so the per-plugin concurrency cap and
+   * the unload teardown see every spawned process.
+   */
+  private getProcessManager(): PluginProcessManager {
+    if (!this.processManager) {
+      this.processManager = new PluginProcessManager({
+        streamSink: (pluginId, event) => {
+          // Membership-gated like postToPanel: a late stream emit after the
+          // plugin unloads is dropped rather than broadcast.
+          if (!this.plugins.has(pluginId)) return;
+          // Same per-instance envelope as host.postToPanel — the process stream
+          // rides the same transport and is consumed by the same `plugin.on`
+          // dispatcher. Process events are not panel-scoped, so broadcast (null).
+          broadcastToRenderer(`plugin:${pluginId}:${PLUGIN_PROCESS_STREAM_CHANNEL}`, {
+            panelId: null,
+            payload: event,
+          });
+        },
+        auditor: ({ pluginId, command, args, processId }) => {
+          // Surface the spawn in the audit trail so process execution is
+          // observable. Best-effort — an audit failure must never block a spawn.
+          safeAppendAudit({
+            pluginId,
+            actionId: `process.spawn:${command}`,
+            recordType: "ipc-invoke",
+            channel: "plugin:process-spawn",
+            result: "success",
+            errorMessage: "",
+            argsHash: safeArgsHash([{ command, args, processId }]),
+            durationMs: 0,
+          });
+        },
+      });
+    }
+    return this.processManager;
+  }
+
+  /** Read-only process snapshot for the `plugin-process:list` IPC, optionally scoped to one plugin. */
+  listManagedProcesses(pluginId?: string): PluginProcessInfo[] {
+    if (!this.processManager) return [];
+    return this.processManager.list(pluginId);
+  }
+
+  /**
+   * Test seam: inject a {@link PluginProcessManager} wired to a controllable
+   * fake spawner so host-level spawn/unload behavior can be exercised without
+   * forking a real `node:child_process`. Production never calls this.
+   */
+  _setProcessManagerForTests(manager: PluginProcessManager): void {
+    this.processManager = manager;
+  }
+
+  /**
+   * Test-only seams for the host-mediated fs/git surface: register a fake
+   * loaded plugin (capabilities + scopes) and build its host so `host.fs` /
+   * `host.git` containment + gating can be exercised without a real on-disk
+   * plugin or a forked git. Production never calls these.
+   */
+  _setHostGitFactoryForTests(factory: HostGitFactory): void {
+    this.hostGitFactory = factory;
+  }
+
+  _registerFakePluginForTests(plugin: LoadedPlugin): void {
+    this.plugins.set(plugin.manifest.name, plugin);
+  }
+
+  _unregisterFakePluginForTests(pluginId: string): void {
+    this.plugins.delete(pluginId);
+  }
+
+  _createHostForTests(pluginId: string): PluginHostApi {
+    return this.createHost(pluginId).host;
+  }
+
+  /**
+   * Build the `host.process` surface for one plugin. `spawn` is gated on the
+   * declared `shell:exec` capability — the first runtime enforcement of a scope
+   * capability, mirroring how the typed-channel `requires` gate reads
+   * `manifest.capabilities`. A plugin without it is rejected with a
+   * `PERMISSION_REQUIRED:` prefix (the same prefix `useHostChannel` already
+   * discriminates on).
+   */
+  private buildProcessApi(pluginId: string): PluginProcessApi {
+    const spawn = async (
+      command: string,
+      options?: PluginProcessSpawnOptions
+    ): Promise<PluginProcessHandle> => {
+      if (!this.plugins.has(pluginId)) {
+        throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
+      }
+      const declared = new Set<BuiltInPluginCapability>(
+        this.plugins.get(pluginId)?.manifest.capabilities ?? []
+      );
+      if (!declared.has("shell:exec")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" process.spawn requires the "shell:exec" capability, which is not declared in manifest.capabilities`
+        );
+      }
+      // Validate inputs BEFORE prompting for consent so a call that would fail
+      // anyway never spends — or banks — a user grant. A plugin must not be able
+      // to harvest a silent shell:exec grant via a deliberately invalid call
+      // (e.g. spawn("")) and then execute real commands unprompted (#10524).
+      if (typeof command !== "string" || command.length === 0) {
+        throw new Error(`Plugin "${pluginId}" process.spawn: command must be a non-empty string`);
+      }
+      const args = Array.isArray(options?.args)
+        ? options.args.filter((a): a is string => typeof a === "string")
+        : [];
+      const env =
+        options?.env && typeof options.env === "object"
+          ? Object.fromEntries(Object.entries(options.env).filter(([, v]) => typeof v === "string"))
+          : {};
+      // Default cwd to the active worktree so a relative `command`/argv resolves
+      // against the project the user is in, then fall back to the host cwd.
+      let cwd =
+        typeof options?.cwd === "string" && options.cwd.length > 0 ? options.cwd : undefined;
+      if (cwd === undefined) {
+        const active = await this.fetchAllWorktreeSnapshots();
+        cwd = active.find((s) => s.isCurrent === true)?.path;
+      }
+      // Re-check membership after the async cwd resolution so a racing unload
+      // doesn't spawn into a disposed plugin.
+      if (!this.plugins.has(pluginId)) {
+        throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
+      }
+      // JIT consent fires LAST, right before the spawn — first use prompts the
+      // user; the grant covers every later spawn by this plugin. Throws
+      // PERMISSION_REQUIRED on denial. Re-check membership after the prompt await.
+      await this.ensureCapabilityConsent(pluginId, "shell:exec");
+      if (!this.plugins.has(pluginId)) {
+        throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
+      }
+
+      const handle = this.getProcessManager().spawn(pluginId, { command, args, cwd, env });
+      return {
+        get id() {
+          return handle.id;
+        },
+        // Gate lifecycle control on membership so a stale handle retained by a
+        // leaked timer can't kill or respawn a process after the plugin unloads
+        // (killManagedProcesses already tore the live children down on unload).
+        kill: () => {
+          if (!this.plugins.has(pluginId)) return;
+          handle.kill();
+        },
+        restart: () => {
+          if (!this.plugins.has(pluginId)) return Promise.resolve();
+          return handle.restart();
+        },
+        onExit: (cb) => handle.onExit(cb),
+        onCrash: (cb) => handle.onCrash(cb),
+      };
+    };
+    return { spawn };
+  }
+
+  /**
+   * Just-in-time consent gate for a high-risk host capability (#10524).
+   * Resolves silently for built-in (first-party) plugins and for capabilities
+   * the user has already granted; otherwise raises a first-use prompt and
+   * throws a `PERMISSION_REQUIRED:` error on denial. Callers invoke this AFTER
+   * the static `manifest.capabilities` check passes, at the top of each gated
+   * host API closure — the static check answers "may this plugin ever do X",
+   * this answers "has the user agreed to it doing X now".
+   */
+  private async ensureCapabilityConsent(
+    pluginId: string,
+    capability: BuiltInPluginCapability
+  ): Promise<void> {
+    const plugin = this.plugins.get(pluginId);
+    // Membership is re-checked by the caller after this await; a missing plugin
+    // here means it unloaded mid-call, so skip the prompt and let the caller's
+    // liveness guard reject.
+    if (!plugin) return;
+    // Built-ins are bundled first-party code — they skip the install-time
+    // capability disclosure and likewise skip JIT consent.
+    if (plugin.isBuiltin) return;
+    const displayName = plugin.manifest.displayName ?? plugin.manifest.name;
+    await getPluginCapabilityConsentService().ensureAllowed(
+      pluginId,
+      displayName,
+      capability,
+      plugin.manifest.capabilities ?? []
+    );
+  }
+
+  /**
+   * Resolve the terminal id of the "active agent" for `host.sendToActiveAgent`
+   * (#10558). Centralised here so plugins stop reinventing `terminal.list`-based
+   * selection heuristics that drift. Scopes strictly to the active project when
+   * one is set — it never crosses a project boundary, since "the active agent"
+   * the user consented to is the one in front of them; only when no project is
+   * active (e.g. before any project loads) does it consider all terminals. Ranks
+   * focused/visible agent (`activityTier: "active"`) first, then a `waiting`
+   * agent, then the most recently active by output — with a deterministic id
+   * tiebreak. Terminals with no agent or in an ended state (`exited` /
+   * `completed`, or no live PTY) are excluded.
+   *
+   * @throws {Error} `NO_ACTIVE_AGENT:` when no eligible agent terminal exists.
+   */
+  private async resolveActiveAgentTerminalId(): Promise<string> {
+    const ptyClient = getPtyClient();
+    if (!ptyClient) {
+      throw new Error("NO_ACTIVE_AGENT: terminal host is not available");
+    }
+    const all = await ptyClient.getAllTerminalsAsync();
+    const activeProjectId = ptyClient.getActiveProjectId();
+    type Term = (typeof all)[number];
+    const eligible = (t: Term): boolean =>
+      Boolean(t.detectedAgentId ?? t.launchAgentId) &&
+      t.hasPty !== false &&
+      t.agentState !== "exited" &&
+      t.agentState !== "completed";
+    // Scope to the active project; never cross into another project's terminals.
+    const pool = activeProjectId != null ? all.filter((t) => t.projectId === activeProjectId) : all;
+    const candidates = pool.filter(eligible);
+    if (candidates.length === 0) {
+      throw new Error(
+        "NO_ACTIVE_AGENT: no agent terminal is available to receive input in the current project"
+      );
+    }
+    const score = (t: Term): number =>
+      (t.activityTier === "active" ? 2 : 0) + (t.agentState === "waiting" ? 1 : 0);
+    candidates.sort((a, b) => {
+      const byScore = score(b) - score(a);
+      if (byScore !== 0) return byScore;
+      const byOutput = (b.lastOutputTime ?? 0) - (a.lastOutputTime ?? 0);
+      if (byOutput !== 0) return byOutput;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+    return candidates[0].id;
+  }
+
+  /** The capabilities a loaded plugin declared, as a Set. Empty when unloaded. */
+  private declaredCapabilities(pluginId: string): Set<BuiltInPluginCapability> {
+    return new Set<BuiltInPluginCapability>(
+      this.plugins.get(pluginId)?.manifest.capabilities ?? []
+    );
+  }
+
+  /** The plugin's declared `scopes.fs.allowedPaths` (empty when none / unloaded). */
+  private declaredAllowedPaths(pluginId: string): readonly string[] {
+    return this.plugins.get(pluginId)?.manifest.scopes?.fs?.allowedPaths ?? [];
+  }
+
+  /** The implicit per-plugin data dir, always an allowed `user-data` root. */
+  private pluginDataDir(pluginId: string): string {
+    return path.join(os.homedir(), ".daintree", "plugin-data", pluginId);
+  }
+
+  /** Lexical containment: is `candidate` inside (or equal to) `root`? */
+  private isPathUnder(root: string, candidate: string): boolean {
+    const rel = path.relative(root, candidate);
+    return (
+      rel === "" || (rel !== ".." && !rel.startsWith(".." + path.sep) && !path.isAbsolute(rel))
+    );
+  }
+
+  /**
+   * Expand the plugin's declared `scopes.fs.allowedPaths` into concrete,
+   * capability-classified roots at call time. `${project}` / `${worktree}`
+   * tokens resolve against the live worktree snapshots — fail-closed: a token
+   * with no matching live worktree contributes NO root (it is dropped, never
+   * resolved to a fallback or empty path that could widen scope — #9492), so a
+   * path that only that token would have matched is still rejected by
+   * containment. Dropping just the unresolvable entry (rather than aborting the
+   * whole expansion) preserves the always-on data dir and any literal / other
+   * resolvable token roots. When `includeDataDir`, the implicit per-plugin data
+   * dir is prepended as a `user-data` root so every plugin always has a private
+   * scratch space. Literal absolute paths are classified by home-dir membership.
+   *
+   * The caller is responsible for `requireLoaded()` re-checks around the await
+   * (the plugin may unload mid-call — #9533).
+   */
+  private async expandAllowedPathEntries(
+    pluginId: string,
+    opts: { includeDataDir: boolean }
+  ): Promise<ExpandedFsPath[]> {
+    const declared = this.declaredAllowedPaths(pluginId);
+    const needsSnapshots = declared.some(
+      (entry) => entry.startsWith("${project}") || entry.startsWith("${worktree}")
+    );
+    const snapshots = needsSnapshots ? await this.fetchAllWorktreeSnapshots() : [];
+
+    const entries: ExpandedFsPath[] = [];
+    if (opts.includeDataDir) {
+      entries.push({ path: this.pluginDataDir(pluginId), rootClass: "user-data" });
+    }
+    for (const raw of declared) {
+      try {
+        entries.push(this.expandAllowedPathEntry(pluginId, raw, snapshots));
+      } catch (err) {
+        // Fail-closed on a token with no live worktree: drop just that entry
+        // (it contributes no root, so a path that only matched it is still
+        // rejected by containment) rather than discarding the whole list — the
+        // implicit data dir and any literal/other-token roots stay usable.
+        if (err instanceof PluginPathNotAllowedError) continue;
+        throw err;
+      }
+    }
+    return entries;
+  }
+
+  /** Expand a single `allowedPaths` entry (token or literal) into a typed root. */
+  private expandAllowedPathEntry(
+    pluginId: string,
+    raw: string,
+    snapshots: readonly WorktreeSnapshot[]
+  ): ExpandedFsPath {
+    const token = raw.startsWith("${worktree}")
+      ? "worktree"
+      : raw.startsWith("${project}")
+        ? "project"
+        : null;
+    if (token === null) {
+      // Literal absolute path: a path under the user's home dir is user-data
+      // class; anything else (project trees, system paths) is project class.
+      return {
+        path: raw,
+        rootClass: this.isPathUnder(os.homedir(), raw) ? "user-data" : "project",
+      };
+    }
+    const base =
+      token === "worktree"
+        ? snapshots.find((s) => s.isCurrent === true)?.path
+        : snapshots.find((s) => s.isMainWorktree === true)?.path;
+    if (typeof base !== "string" || base.length === 0) {
+      throw new PluginPathNotAllowedError(pluginId, raw);
+    }
+    const suffix = raw.slice(`\${${token}}`.length);
+    return { path: suffix.length > 0 ? path.join(base, suffix) : base, rootClass: "project" };
+  }
+
+  /**
+   * Build the host-mediated `host.fs` surface for one plugin. Every path
+   * argument is realpath-contained to the declared `scopes.fs.allowedPaths`
+   * (traversal/symlink-escape rejected), and reads/writes are capability-gated
+   * (`fs:*-read` / `fs:*-write`). This is the first runtime enforcement of
+   * `scopes.fs.allowedPaths` — formerly advisory-only. Writes are audited.
+   */
+  private buildFsApi(pluginId: string): PluginFsApi {
+    const requireLoaded = (op: string): void => {
+      if (!this.plugins.has(pluginId)) {
+        throw new Error(
+          `PLUGIN_UNLOADED: plugin "${pluginId}" fs.${op}: plugin is no longer loaded`
+        );
+      }
+    };
+    // Fast-fail before any filesystem work: a plugin with no fs read/write cap
+    // of any class can't touch the surface at all.
+    const requireAnyReadCap = (op: string): void => {
+      const caps = this.declaredCapabilities(pluginId);
+      if (!caps.has("fs:project-read") && !caps.has("fs:user-data-read")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" fs.${op} requires "fs:project-read" or "fs:user-data-read", which is not declared in manifest.capabilities`
+        );
+      }
+    };
+    // Sync capability check; returns the write capability JIT consent gates on.
+    // A plugin holding both prompts once on the project-write grant — the path
+    // containment already bounds where the write can land, so a single fs-write
+    // grant is the meaningful unit. Consent itself fires later (after input
+    // validation + containment), so an invalid call never banks a grant.
+    const requireWriteCap = (op: string): BuiltInPluginCapability => {
+      const caps = this.declaredCapabilities(pluginId);
+      if (!caps.has("fs:project-write") && !caps.has("fs:user-data-write")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" fs.${op} requires "fs:project-write" or "fs:user-data-write", which is not declared in manifest.capabilities`
+        );
+      }
+      return caps.has("fs:project-write") ? "fs:project-write" : "fs:user-data-write";
+    };
+    // Precise per-root-class gate, applied AFTER containment resolves which root
+    // class the path falls under: project/worktree paths need `fs:project-*`,
+    // the data dir / home paths need `fs:user-data-*`. A plugin can't reach a
+    // project path with only a user-data cap (or vice versa).
+    const requireReadCapForClass = (op: string, rootClass: FsRootClass): void => {
+      const needed = rootClass === "project" ? "fs:project-read" : "fs:user-data-read";
+      if (!this.declaredCapabilities(pluginId).has(needed)) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" fs.${op} requires the "${needed}" capability for ${rootClass} paths, which is not declared in manifest.capabilities`
+        );
+      }
+    };
+    const requireWriteCapForClass = (op: string, rootClass: FsRootClass): void => {
+      const needed = rootClass === "project" ? "fs:project-write" : "fs:user-data-write";
+      if (!this.declaredCapabilities(pluginId).has(needed)) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" fs.${op} requires the "${needed}" capability for ${rootClass} paths, which is not declared in manifest.capabilities`
+        );
+      }
+    };
+    // Contain against the call-time-expanded roots and report which root class
+    // matched. We contain per-entry so the matched entry's class is exact (the
+    // first containing root wins, same "any allowed root" semantics as before).
+    const containWithClass = async (
+      targetPath: string
+    ): Promise<{ resolved: string; rootClass: FsRootClass }> => {
+      const entries = await this.expandAllowedPathEntries(pluginId, { includeDataDir: true });
+      let lastErr: unknown;
+      for (const entry of entries) {
+        try {
+          const resolved = await resolveContainedPath(pluginId, targetPath, [entry.path]);
+          return { resolved, rootClass: entry.rootClass };
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      throw lastErr instanceof Error
+        ? lastErr
+        : new PluginPathNotAllowedError(pluginId, targetPath);
+    };
+
+    return {
+      readFile: async (filePath, options) => {
+        options?.signal?.throwIfAborted();
+        requireLoaded("readFile");
+        requireAnyReadCap("readFile");
+        const { resolved, rootClass } = await containWithClass(filePath);
+        requireLoaded("readFile");
+        requireReadCapForClass("readFile", rootClass);
+        // Deliberately no 500KB / binary cap — this is a sanctioned plugin API,
+        // not the size-limited files.read preview path. The signal cancels the
+        // read itself (Node honors it) as well as the boundary checks above.
+        return fs.readFile(resolved, { encoding: "utf-8", signal: options?.signal });
+      },
+      writeFile: async (filePath, contents) => {
+        requireLoaded("writeFile");
+        const writeCap = requireWriteCap("writeFile");
+        if (typeof contents !== "string") {
+          throw new Error(`Plugin "${pluginId}" fs.writeFile: contents must be a string`);
+        }
+        // Lazily materialize the implicit per-plugin data dir before containment
+        // when the target (lexically) lands inside it — resolveContainedPath
+        // realpaths every root and skips ones that don't exist, so a first write
+        // into a not-yet-created data dir would otherwise fail containment. The
+        // lexical check only gates the mkdir; realpath containment below stays
+        // the security authority.
+        const dataDir = this.pluginDataDir(pluginId);
+        // Identify a data-dir write from the (lexical) request path, not the
+        // realpath-resolved one: on macOS the resolved path picks up the
+        // /private prefix while `dataDir` does not, so comparing against
+        // `resolved` would wrongly miss the match. The realpath containment
+        // below remains the security authority either way.
+        const isDataDirWrite =
+          path.isAbsolute(filePath) && this.isPathUnder(dataDir, path.normalize(filePath));
+        if (isDataDirWrite) {
+          // A data-dir write is always user-data class — gate before the mkdir
+          // so a plugin lacking the cap doesn't materialize the dir as a side
+          // effect (the post-containment check below re-asserts it).
+          requireWriteCapForClass("writeFile", "user-data");
+          await fs.mkdir(dataDir, { recursive: true });
+        }
+        requireLoaded("writeFile");
+        const { resolved, rootClass } = await containWithClass(filePath);
+        requireLoaded("writeFile");
+        requireWriteCapForClass("writeFile", rootClass);
+        // Create intermediate dirs for a nested write inside the data dir so a
+        // plugin can lay out its own subtree without a separate mkdir API.
+        if (isDataDirWrite) {
+          await fs.mkdir(path.dirname(resolved), { recursive: true });
+        }
+        // Consent fires after validation + containment so a call that would fail
+        // anyway never banks a grant (#10524). Re-check liveness after the await.
+        await this.ensureCapabilityConsent(pluginId, writeCap);
+        requireLoaded("writeFile");
+        await fs.writeFile(resolved, contents, "utf-8");
+        // Audit every write so host-mediated filesystem mutation is observable.
+        safeAppendAudit({
+          pluginId,
+          actionId: `fs.writeFile:${resolved}`,
+          recordType: "ipc-invoke",
+          channel: "plugin:fs-write",
+          result: "success",
+          errorMessage: "",
+          argsHash: safeArgsHash([{ path: resolved, bytes: Buffer.byteLength(contents) }]),
+          durationMs: 0,
+        });
+      },
+      readdir: async (dirPath, options) => {
+        options?.signal?.throwIfAborted();
+        requireLoaded("readdir");
+        requireAnyReadCap("readdir");
+        const { resolved, rootClass } = await containWithClass(dirPath);
+        options?.signal?.throwIfAborted();
+        requireLoaded("readdir");
+        requireReadCapForClass("readdir", rootClass);
+        const entries = await fs.readdir(resolved, { withFileTypes: true });
+        return entries.map(
+          (e): PluginFsDirEntry => ({
+            name: e.name,
+            isDirectory: e.isDirectory(),
+            isFile: e.isFile(),
+            isSymbolicLink: e.isSymbolicLink(),
+          })
+        );
+      },
+      stat: async (targetPath, options) => {
+        options?.signal?.throwIfAborted();
+        requireLoaded("stat");
+        requireAnyReadCap("stat");
+        const { resolved, rootClass } = await containWithClass(targetPath);
+        options?.signal?.throwIfAborted();
+        requireLoaded("stat");
+        requireReadCapForClass("stat", rootClass);
+        const s = await fs.stat(resolved);
+        return {
+          isDirectory: s.isDirectory(),
+          isFile: s.isFile(),
+          isSymbolicLink: s.isSymbolicLink(),
+          size: s.size,
+          mtimeMs: s.mtimeMs,
+        } satisfies PluginFsStat;
+      },
+      watch: async (paths, callback, options) => {
+        options?.signal?.throwIfAborted();
+        requireLoaded("watch");
+        requireAnyReadCap("watch");
+        if (typeof callback !== "function") {
+          throw new Error(`Plugin "${pluginId}" fs.watch: callback must be a function`);
+        }
+        const targets = Array.isArray(paths) ? paths : [];
+        if (targets.length === 0) {
+          throw new Error(`Plugin "${pluginId}" fs.watch: paths must be a non-empty array`);
+        }
+        // Contain every path up front so an out-of-scope watch target rejects
+        // before any watcher is created; gate each on its own root class.
+        const contained = await Promise.all(targets.map((p) => containWithClass(p)));
+        options?.signal?.throwIfAborted();
+        requireLoaded("watch");
+        for (const c of contained) requireReadCapForClass("watch", c.rootClass);
+        const resolvedTargets = contained.map((c) => c.resolved);
+
+        const watchers: FSWatcher[] = [];
+        let disposed = false;
+        const dispose = (): void => {
+          if (disposed) return;
+          disposed = true;
+          for (const w of watchers) {
+            try {
+              w.close();
+            } catch {
+              // best-effort
+            }
+          }
+          this.pluginFsWatchers.get(pluginId)?.delete(dispose);
+        };
+
+        try {
+          for (const resolved of resolvedTargets) {
+            const watcher = fsWatch(resolved, { persistent: false }, (_event, filename) => {
+              if (disposed || !this.plugins.has(pluginId)) return;
+              const changed =
+                typeof filename === "string" && filename.length > 0
+                  ? path.join(resolved, filename)
+                  : resolved;
+              try {
+                callback(changed);
+              } catch (err) {
+                console.error(`[PluginService] plugin "${pluginId}" fs.watch callback threw:`, err);
+              }
+            });
+            watcher.on("error", (err) => {
+              console.error(`[PluginService] plugin "${pluginId}" fs.watch error:`, err);
+            });
+            watchers.push(watcher);
+          }
+        } catch (err) {
+          // A later path's fsWatch threw (e.g. ENOENT) after earlier watchers
+          // were created — close them so a partial failure doesn't leak FDs
+          // (dispose isn't registered in pluginFsWatchers yet, so teardown
+          // wouldn't catch them).
+          for (const w of watchers) {
+            try {
+              w.close();
+            } catch {
+              // best-effort
+            }
+          }
+          throw err;
+        }
+
+        let set = this.pluginFsWatchers.get(pluginId);
+        if (!set) {
+          set = new Set();
+          this.pluginFsWatchers.set(pluginId, set);
+        }
+        set.add(dispose);
+        return dispose;
+      },
+    };
+  }
+
+  /**
+   * Build the host-mediated `host.git` surface for one plugin. The
+   * `worktreePath` is realpath-contained to the declared `scopes.fs.allowedPaths`
+   * before any git work; reads gate on `git:read`, mutations on `git:write`.
+   * `commit` enforces the host-side change-preview safeguard (#7880 / D2).
+   * Implemented over the existing hardened simple-git layer via {@link PluginHostGit}.
+   */
+  private buildGitApi(pluginId: string): PluginGitApi {
+    const requireLoaded = (op: string): void => {
+      if (!this.plugins.has(pluginId)) {
+        throw new Error(
+          `PLUGIN_UNLOADED: plugin "${pluginId}" git.${op}: plugin is no longer loaded`
+        );
+      }
+    };
+    const requireReadCap = (op: string): void => {
+      if (!this.declaredCapabilities(pluginId).has("git:read")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" git.${op} requires the "git:read" capability, which is not declared in manifest.capabilities`
+        );
+      }
+    };
+    const requireWriteCap = (op: string): void => {
+      if (!this.declaredCapabilities(pluginId).has("git:write")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" git.${op} requires the "git:write" capability, which is not declared in manifest.capabilities`
+        );
+      }
+    };
+    // A worktree the plugin may access = one contained inside its declared
+    // allowedPaths (with `${project}` / `${worktree}` tokens expanded at call
+    // time). We resolve the worktree root itself (not a child) so the git ops
+    // run against the realpath-verified directory. The implicit per-plugin data
+    // dir is NOT an allowed git root — git ops gate on git:read/git:write and
+    // should never reach into a plugin's private scratch space.
+    const containWorktree = async (worktreePath: string): Promise<string> => {
+      const entries = await this.expandAllowedPathEntries(pluginId, { includeDataDir: false });
+      let lastErr: unknown;
+      for (const entry of entries) {
+        try {
+          return await resolveContainedPath(pluginId, worktreePath, [entry.path]);
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      throw lastErr instanceof Error
+        ? lastErr
+        : new PluginPathNotAllowedError(pluginId, worktreePath);
+    };
+    const git = new PluginHostGit(pluginId, this.hostGitFactory);
+
+    return {
+      status: async (worktreePath, options): Promise<PluginGitStatus> => {
+        options?.signal?.throwIfAborted();
+        requireLoaded("status");
+        requireReadCap("status");
+        const resolved = await containWorktree(worktreePath);
+        requireLoaded("status");
+        return git.status(resolved, options?.signal);
+      },
+      diff: async (worktreePath, filePath, options): Promise<string> => {
+        options?.signal?.throwIfAborted();
+        requireLoaded("diff");
+        requireReadCap("diff");
+        const resolved = await containWorktree(worktreePath);
+        requireLoaded("diff");
+        return git.diff(resolved, filePath, options?.signal);
+      },
+      add: async (worktreePath, paths, options): Promise<void> => {
+        options?.signal?.throwIfAborted();
+        requireLoaded("add");
+        requireWriteCap("add");
+        const resolved = await containWorktree(worktreePath);
+        requireLoaded("add");
+        // Consent fires after containment so an out-of-scope path never banks a
+        // git:write grant (#10524). Re-check liveness after the prompt await.
+        await this.ensureCapabilityConsent(pluginId, "git:write");
+        requireLoaded("add");
+        await git.add(resolved, paths, options?.signal);
+        safeAppendAudit({
+          pluginId,
+          actionId: `git.add:${resolved}`,
+          recordType: "ipc-invoke",
+          channel: "plugin:git-add",
+          result: "success",
+          errorMessage: "",
+          argsHash: safeArgsHash([{ worktreePath: resolved, paths: paths ?? ["."] }]),
+          durationMs: 0,
+        });
+      },
+      commit: async (
+        worktreePath,
+        options: PluginGitCommitOptions,
+        callOptions
+      ): Promise<PluginGitCommitResult> => {
+        callOptions?.signal?.throwIfAborted();
+        requireLoaded("commit");
+        requireWriteCap("commit");
+        // commit returns the staged diff as its change-preview, so it discloses
+        // repo content — require read alongside write.
+        requireReadCap("commit");
+        // Reject an empty message BEFORE prompting for consent, mirroring the
+        // #7880 no-silent-fallback guard git.commit enforces internally, so a
+        // doomed commit can't bank a git:write grant (#10524).
+        if (
+          !options ||
+          typeof options.message !== "string" ||
+          options.message.trim().length === 0
+        ) {
+          throw new Error(
+            `COMMIT_MESSAGE_REQUIRED: plugin "${pluginId}" git.commit requires a non-empty message`
+          );
+        }
+        const resolved = await containWorktree(worktreePath);
+        requireLoaded("commit");
+        // Consent fires after containment + message validation so a doomed call
+        // never banks a grant (#10524). Re-check liveness after the prompt await.
+        await this.ensureCapabilityConsent(pluginId, "git:write");
+        requireLoaded("commit");
+        const result = await git.commit(resolved, options, callOptions?.signal);
+        safeAppendAudit({
+          pluginId,
+          actionId: `git.commit:${resolved}`,
+          recordType: "ipc-invoke",
+          channel: "plugin:git-commit",
+          result: "success",
+          errorMessage: "",
+          argsHash: safeArgsHash([{ worktreePath: resolved, commit: result.commit }]),
+          durationMs: 0,
+        });
+        return result;
+      },
+    };
+  }
+
+  /**
+   * Host-mediated OS clipboard surface backing the `clipboard:read` /
+   * `clipboard:write` tokens. Text-only; both methods run here in the main
+   * process because Electron's `clipboard` module is undefined inside the
+   * dev-worker utility process (a worker-side call would silently no-op). Like
+   * {@link buildGitApi} the liveness check precedes the capability check so a
+   * torn-down plugin reports `PLUGIN_UNLOADED`, not `PERMISSION_REQUIRED`
+   * (declaredCapabilities() also returns [] post-unload). Clipboard ops are
+   * stateless — no watchers or handles — so there is nothing to tear down on
+   * unload.
+   */
+  private buildClipboardApi(pluginId: string): PluginClipboardApi {
+    // Mirror the renderer IPC clipboard write guard (electron/ipc/handlers/
+    // clipboard.ts) so a runaway plugin can't exhaust the main-process heap.
+    const MAX_TEXT_BYTES = 8 * 1024 * 1024;
+    const requireLoaded = (op: string): void => {
+      if (!this.plugins.has(pluginId)) {
+        throw new Error(
+          `PLUGIN_UNLOADED: plugin "${pluginId}" clipboard.${op}: plugin is no longer loaded`
+        );
+      }
+    };
+    return {
+      writeText: async (text): Promise<void> => {
+        requireLoaded("writeText");
+        if (!this.declaredCapabilities(pluginId).has("clipboard:write")) {
+          throw new Error(
+            `PERMISSION_REQUIRED: plugin "${pluginId}" clipboard.writeText requires the "clipboard:write" capability, which is not declared in manifest.capabilities`
+          );
+        }
+        if (typeof text !== "string") {
+          throw new Error(`VALIDATION: plugin "${pluginId}" clipboard.writeText requires a string`);
+        }
+        if (Buffer.byteLength(text, "utf8") > MAX_TEXT_BYTES) {
+          throw new Error(
+            `PAYLOAD_TOO_LARGE: plugin "${pluginId}" clipboard.writeText text exceeds the ${MAX_TEXT_BYTES} byte limit`
+          );
+        }
+        clipboard.writeText(text);
+      },
+      readText: async (): Promise<string> => {
+        requireLoaded("readText");
+        if (!this.declaredCapabilities(pluginId).has("clipboard:read")) {
+          throw new Error(
+            `PERMISSION_REQUIRED: plugin "${pluginId}" clipboard.readText requires the "clipboard:read" capability, which is not declared in manifest.capabilities`
+          );
+        }
+        // Electron returns "" for empty or non-text clipboard content.
+        return clipboard.readText();
       },
     };
   }
@@ -2260,6 +3897,20 @@ export class PluginService {
       console.error("[PluginService] Failed to fetch worktree snapshots:", err);
       return [];
     }
+  }
+
+  /**
+   * Renderer-facing companion to the per-plugin `host.getWorktreeStatus`: the
+   * changed-file / git-status projection for the worktree at `path`, read off
+   * the host's already-polled status (no extra shell-out). `null` when no
+   * worktree matches. Used by `plugin:worktree-status-get` so a file list
+   * outside the Review Hub can scan the changed set.
+   */
+  async getWorktreeStatusForPath(path: string): Promise<PluginWorktreeStatus | null> {
+    if (typeof path !== "string" || path.length === 0) return null;
+    const snapshots = await this.fetchAllWorktreeSnapshots();
+    const match = snapshots.find((s) => s.path === path);
+    return match ? toPluginWorktreeStatus(match.worktreeChanges) : null;
   }
 
   /**
@@ -2326,6 +3977,11 @@ export class PluginService {
     return dispose;
   }
 
+  /**
+   * Run a built-in plugin's `activate(host)` bounded by a timeout so a hanging
+   * activate can't stall the host. Used only for the in-process built-in path;
+   * user plugins activate in the worker (see {@link activateViaWorker}).
+   */
   private async runActivate(
     pluginId: string,
     activate: PluginActivate,
@@ -2391,6 +4047,22 @@ export class PluginService {
     ctx: PluginIpcContext,
     args: unknown[]
   ): Promise<unknown> {
+    // Ownership guard (#10462): the renderer is a single shared WebContents in
+    // which every plugin runs in the same realm, so a caller can pass an
+    // arbitrary `pluginId`. Reject any id the host has not actually loaded
+    // before activation or routing — this is the boundary's only achievable
+    // ownership guarantee given that shared realm. It lives here, in the single
+    // chokepoint every plugin:invoke flows through, rather than in the IPC
+    // handler, so no current or future caller of `dispatchHandler` can reach a
+    // handler for an unloaded plugin (dev-worker channels are dispatched here
+    // too, via their `host.registerHandler` registrations).
+    if (!this.plugins.has(pluginId)) {
+      throw new PluginInvokeOwnershipError(pluginId, channel);
+    }
+
+    // Start the clock before activation so a failure record carries the full
+    // dispatch cost (cold activation included) the renderer actually waited on.
+    const dispatchStart = Date.now();
     // Implicit activation: the first dispatch into a plugin's channel forces
     // its `activate()` to run if it hasn't yet, so handlers registered during
     // activation are available on the very first call. No-op once activated.
@@ -2457,16 +4129,44 @@ export class PluginService {
     // handler sees the same value the input-schema validation accepted above
     // (which also defaults the empty case to `{}`).
     if (actionHandler) {
+      let actionResult: unknown;
       try {
-        return await actionHandler(args.length > 0 ? args[0] : {});
+        actionResult = await actionHandler(args.length > 0 ? args[0] : {});
       } catch (err) {
         // Contain at the boundary so a throwing handler can't propagate up
         // through `ipcMain.handle` as an unhandled rejection. The error still
         // surfaces to the renderer (rethrown after logging).
-        // TODO(#9232): emit PluginActionAuditRecord to the audit pipeline.
         console.error(`[PluginService] Action handler "${channel}" threw:`, err);
+        // Audit at the dispatch boundary (#10463) so non-IPC callers (agent
+        // automation, recipe dispatch) leave the same durable trail as a
+        // `plugin:invoke` call. Mark the error so the outer `plugin:invoke`
+        // catch doesn't record it a second time.
+        safeAppendAudit({
+          pluginId,
+          actionId: channel,
+          recordType: "action-dispatch",
+          result: "error",
+          errorMessage: formatErrorMessage(err, "plugin action handler threw"),
+          argsHash: safeArgsHash(args),
+          durationMs: Date.now() - dispatchStart,
+        });
+        markAuditedHandlerFailure(err);
         throw err;
       }
+      // Audit the success path too (#10517). A plugin calling its own
+      // registered action handler from its view must leave the same durable
+      // trail on success as on failure — otherwise a benign-looking action can
+      // run unobserved while only its failures are recorded.
+      safeAppendAudit({
+        pluginId,
+        actionId: channel,
+        recordType: "action-dispatch",
+        result: "success",
+        errorMessage: "",
+        argsHash: safeArgsHash(args),
+        durationMs: Date.now() - dispatchStart,
+      });
+      return actionResult;
     }
 
     if (!handler) {
@@ -2513,11 +4213,25 @@ export class PluginService {
       // process. The error still surfaces to the renderer (we rethrow after
       // logging) — the renderer-side wrapping in `usePluginActions` turns
       // that rejection into a user-facing toast.
-      // TODO(#9232): emit PluginActionAuditRecord to the audit pipeline.
       console.error(`[PluginService] Handler "${key}" threw:`, err);
+      // Audit at the dispatch boundary (#10463). `channel` carries the plugin
+      // channel string that failed (the IPC transport is always plugin:invoke);
+      // mark the error so the outer `plugin:invoke` catch doesn't double-record.
+      safeAppendAudit({
+        pluginId,
+        actionId: channel,
+        recordType: "ipc-invoke",
+        channel,
+        result: "error",
+        errorMessage: formatErrorMessage(err, "plugin IPC handler threw"),
+        argsHash: safeArgsHash(args),
+        durationMs: Date.now() - dispatchStart,
+      });
+      markAuditedHandlerFailure(err);
       throw err;
     }
 
+    let finalResult: unknown = result;
     if (channelSchema) {
       const parsedResult = channelSchema.result.safeParse(result);
       if (!parsedResult.success) {
@@ -2525,10 +4239,25 @@ export class PluginService {
           `SCHEMA_ERROR: result for channel "${channel}" failed validation: ${z.prettifyError(parsedResult.error)}`
         );
       }
-      return parsedResult.data;
+      finalResult = parsedResult.data;
     }
 
-    return result;
+    // Audit the success path too (#10517). The catch above records IPC-handler
+    // failures; without this, a plugin invoking its own registered handler via
+    // `plugin:invoke` runs with zero audit trail on success. Recorded only once
+    // the dispatch will truly return (after result-schema validation), so a
+    // host-side schema rejection isn't logged as a success.
+    safeAppendAudit({
+      pluginId,
+      actionId: channel,
+      recordType: "ipc-invoke",
+      channel,
+      result: "success",
+      errorMessage: "",
+      argsHash: safeArgsHash(args),
+      durationMs: Date.now() - dispatchStart,
+    });
+    return finalResult;
   }
 
   removeHandlers(pluginId: string): void {
@@ -2556,6 +4285,47 @@ export class PluginService {
    */
   async checkForUpdate(pluginId: string): Promise<PluginCheckUpdateResult> {
     return this.installer.checkForUpdate(pluginId);
+  }
+
+  /**
+   * Load and activate a dev plugin the `daintree-plugin dev` CLI has already
+   * symlinked into {@link pluginsRoot} and stamped with a `.dev-marker`. Called
+   * over the CLI control socket (`plugin.dev.start`) once the first build is in
+   * place. Reuses the standard {@link loadPlugin} path — the `.dev-marker`
+   * detection there routes it through the hot-reload worker. The CLI owns the
+   * symlink; this method only reads from `pluginsRoot`, so it doesn't touch the
+   * installer's content-mutation invariant (#9292).
+   *
+   * Idempotent across dev sessions: if the plugin is already loaded (a prior
+   * session that didn't clean up, or a crashed CLI), it's unloaded first so the
+   * duplicate-name guard in {@link loadPlugin} doesn't reject the reload.
+   */
+  async loadDevPlugin(pluginId: string): Promise<void> {
+    // The id becomes `path.join(pluginsRoot, pluginId)` in `loadPlugin`, so a
+    // `../` segment would escape the plugins root and load an arbitrary
+    // `plugin.json` (#10518) — reachable over the CLI control socket. Gate on
+    // the same scoped-name pattern the uninstall path enforces before any
+    // filesystem access.
+    if (!SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
+      throw new Error(`Invalid dev plugin id "${pluginId}" — expected a scoped "publisher.name"`);
+    }
+    if (this.plugins.has(pluginId)) {
+      this.unloadPlugin(pluginId);
+    }
+    // Honor the user's persisted disabled intent — the dev path must not be a
+    // trust escape hatch that force-loads a plugin the user turned off (#10518).
+    // A disabled id makes `loadPlugin` skip + return null, surfacing the clear
+    // error below to the CLI caller rather than silently activating it.
+    const loaded = await this.loadPlugin(this.pluginsRoot, pluginId, {
+      isBuiltin: false,
+      disabled: this.records.getDisabledIds(),
+    });
+    if (!loaded) {
+      throw new Error(
+        `Couldn't load dev plugin "${pluginId}" from ${this.pluginsRoot} — it may be disabled in Preferences, or the symlink/plugin.json may be invalid`
+      );
+    }
+    await this.activatePlugin(pluginId);
   }
 
   unloadPlugin(pluginId: string): void {
@@ -2603,9 +4373,6 @@ export class PluginService {
       this.unregisterPluginActions(pluginId)
     );
     runUnloadStep(pluginId, "unregisterPluginMenuItems", () => unregisterPluginMenuItems(pluginId));
-    runUnloadStep(pluginId, "scheduleMenuItemsBroadcast", () =>
-      this.broadcaster.scheduleMenuItemsBroadcast(true)
-    );
     runUnloadStep(pluginId, "unregisterPluginKeybindings", () =>
       unregisterPluginKeybindings(pluginId)
     );
@@ -2653,12 +4420,50 @@ export class PluginService {
     runUnloadStep(pluginId, "scheduleAgentsBroadcast", () =>
       this.broadcaster.scheduleAgentsBroadcast(true)
     );
+    // Re-mirror the (now-smaller) registry to the pty-host so it stops resolving
+    // detection patterns for the unloaded plugin's agents (#10587).
+    runUnloadStep(pluginId, "syncPluginAgentRegistryToPtyHost", () =>
+      getPtyClient()?.syncPluginAgentRegistry()
+    );
     // Subscriber disposers already fired in flushPluginEventCleanups() above;
     // this drops any leftover subscriber-set entry and the in-memory settings
     // store caches so a reload starts from disk.
     runUnloadStep(pluginId, "clearPluginSettingsState", () =>
       this.settings.clearPluginSettingsState(pluginId)
     );
+    // Same teardown for private storage: drops leftover subscriber-set entries
+    // and the in-memory storage store caches so a reload starts from disk. A
+    // discrete step (not bundled with settings) per the unload-cascade contract
+    // — a throw here can't strand later cleanup (lessons #9322/#9533).
+    runUnloadStep(pluginId, "clearPluginStorageState", () =>
+      this.storage.clearPluginStorageState(pluginId)
+    );
+
+    // Kill every child process this plugin spawned via host.process.spawn
+    // (#9234): clean SIGTERM, then SIGKILL after the grace window. Tied to the
+    // plugin lifecycle so a disable/unload/revoke can't strand a dev server or
+    // CI job. Best-effort — a throw here can't strand later steps.
+    runUnloadStep(pluginId, "killManagedProcesses", () => {
+      this.processManager?.killAll(pluginId);
+    });
+
+    // Tear down every active host.fs.watch watcher this plugin opened so a
+    // disable/unload/revoke can't strand an fs.watch handle. Each disposer
+    // closes its underlying watcher and removes itself from the set; copy the
+    // set first since dispose() mutates it. Best-effort per the cascade contract.
+    runUnloadStep(pluginId, "closeFsWatchers", () => {
+      const watchers = this.pluginFsWatchers.get(pluginId);
+      if (watchers) {
+        for (const dispose of [...watchers]) {
+          try {
+            dispose();
+          } catch (err) {
+            console.error(`[PluginService] plugin "${pluginId}" fs watcher dispose threw:`, err);
+          }
+        }
+        this.pluginFsWatchers.delete(pluginId);
+      }
+    });
 
     // Tear down any MCP servers contributed by this plugin (#9233). Best-effort
     // — a failing teardown is logged but cannot block the unload chain.
@@ -2678,7 +4483,26 @@ export class PluginService {
     // doesn't carry forward log lines from the previous session.
     this.logBuffers.delete(pluginId);
 
+    // Resolve any imperative UI prompt this plugin had open (#10522) — the
+    // pending host.show* promise resolves undefined/false (never throws) and the
+    // renderer dismisses the stranded dialog. Best-effort per the cascade.
+    runUnloadStep(pluginId, "cancelUiPrompts", () =>
+      this.promptDispatcher.cancelForPlugin(pluginId)
+    );
+
     this.plugins.delete(pluginId);
+
+    // Drop any live panel badges this plugin set and tell the renderer to clear
+    // them (#10585). Only broadcast when the plugin actually had badges so an
+    // unload of a non-badging plugin stays silent.
+    if (this.pluginBadges.delete(pluginId)) {
+      runUnloadStep(pluginId, "clearPanelBadges", () => {
+        broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+          name: "plugin:panel-badges-cleared",
+          payload: { pluginId },
+        });
+      });
+    }
 
     if (decorationScopes && decorationScopes.length > 0) {
       runUnloadStep(pluginId, "broadcastDecorationsChanged", () => {
@@ -2690,6 +4514,18 @@ export class PluginService {
         }
       });
     }
+  }
+
+  /**
+   * Flatten one plugin's live badges (`panelId → badge`) into a plain
+   * structured-clone-safe record for the `plugin:panel-badges-changed`
+   * broadcast. Empty when the plugin has no badges (the renderer reads that as
+   * "clear all of this plugin's badges").
+   */
+  private serializePluginBadges(pluginId: string): Record<string, PluginPanelBadge> {
+    const panelMap = this.pluginBadges.get(pluginId);
+    if (!panelMap || panelMap.size === 0) return {};
+    return Object.fromEntries(panelMap);
   }
 
   private flushPluginEventCleanups(pluginId: string): void {
@@ -2711,7 +4547,7 @@ export class PluginService {
   }
 
   /**
-   * Look up a single `contributes.experimental_mcpServers` entry by id along
+   * Look up a single `contributes.mcpServers` entry by id along
    * with the plugin's resolved on-disk directory. Used by the
    * `plugin-mcp:restart` IPC handler to feed the supervisor a fresh
    * contribution (with re-resolved `${settings:*}` substitutions) on each
@@ -2722,17 +4558,34 @@ export class PluginService {
     serverId: string
   ):
     | {
-        contribution: PluginManifest["contributes"]["experimental_mcpServers"][number];
+        contribution: PluginManifest["contributes"]["mcpServers"][number];
         pluginDir: string;
       }
     | undefined {
     const plugin = this.plugins.get(pluginId);
     if (!plugin) return undefined;
-    const contribution = plugin.manifest.contributes.experimental_mcpServers.find(
-      (c) => c.id === serverId
-    );
+    const contribution = plugin.manifest.contributes.mcpServers.find((c) => c.id === serverId);
     if (!contribution) return undefined;
     return { contribution, pluginDir: plugin.dir };
+  }
+
+  /**
+   * Resolve the consent-facing metadata for a loaded plugin — the display name
+   * and declared capabilities the plugin-MCP `tools/call` handler folds into the
+   * consent prompt and tier derivation. Returns `undefined` when the plugin is
+   * not currently loaded (e.g. a renderer race with unload).
+   */
+  getMcpConsentMeta(
+    pluginId: string
+  ):
+    | { pluginDisplayName: string; manifestCapabilities: readonly BuiltInPluginCapability[] }
+    | undefined {
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin) return undefined;
+    return {
+      pluginDisplayName: plugin.manifest.displayName ?? plugin.manifest.name,
+      manifestCapabilities: plugin.manifest.capabilities ?? [],
+    };
   }
 
   /**
@@ -3166,7 +5019,18 @@ export class PluginService {
     scope: PluginSettingsScope,
     projectId: string | null
   ): Promise<void> {
-    return this.settings.setSettingValueFromUi(pluginId, key, value, scope, projectId);
+    const changed = await this.settings.setSettingValueFromUi(
+      pluginId,
+      key,
+      value,
+      scope,
+      projectId
+    );
+    // Only user-scope values feed `${settings:*}` resolution (resolveSettingTemplate
+    // reads user scope), so a project-scope write never affects a supervised
+    // MCP server. And a redundant re-save of the same value shouldn't churn a
+    // running server through a restart — gate on the store actually changing.
+    if (scope === "user" && changed) this.restartMcpServersForSettingChange(pluginId, key);
   }
 
   async deleteSettingValueFromUi(
@@ -3175,7 +5039,32 @@ export class PluginService {
     scope: PluginSettingsScope,
     projectId: string | null
   ): Promise<void> {
-    return this.settings.deleteSettingValueFromUi(pluginId, key, scope, projectId);
+    const changed = await this.settings.deleteSettingValueFromUi(pluginId, key, scope, projectId);
+    if (scope === "user" && changed) this.restartMcpServersForSettingChange(pluginId, key);
+  }
+
+  /**
+   * Restart any running MCP server that references the just-changed setting so a
+   * rotated secret takes effect (#10619). The supervisor owns the
+   * detection + debounce and which servers are eligible (ready/crashed only);
+   * this supplies the actual restart — re-resolving the contribution and minting
+   * a fresh `resolveSettings` closure, mirroring the `plugin-mcp:restart` IPC
+   * path so the supervisor never holds a stale closure.
+   */
+  private restartMcpServersForSettingChange(pluginId: string, settingId: string): void {
+    getPluginMcpSupervisor().notifySettingChanged(pluginId, settingId, async (serverId) => {
+      const lookup = this.findMcpServerContribution(pluginId, serverId);
+      // The plugin may have unloaded between the debounce scheduling and now —
+      // a missing contribution means there's nothing left to restart.
+      if (!lookup) return;
+      await getPluginMcpSupervisor().restart({
+        pluginId,
+        pluginDir: lookup.pluginDir,
+        serverId,
+        contribution: lookup.contribution,
+        resolveSettings: (id) => this.resolveSettingTemplate(pluginId, id),
+      });
+    });
   }
 
   async revealSecretSettingForUi(
@@ -3200,9 +5089,27 @@ export class PluginService {
    * against this snapshot — replay is authoritative for the target view but
    * conceptually identical to a coalesced "load tick" broadcast, not an
    * unload sweep.
+   *
+   * Panel badges (#10585) are replayed here too — one
+   * `plugin:panel-badges-changed` per badging plugin — so a cold-restored view
+   * recovers live badge state it missed while evicted, rather than waiting for
+   * each plugin to next re-emit from a subscription callback.
    */
-  pushSnapshotTo(webContents: Electron.WebContents): Promise<void> {
-    return this.broadcaster.pushSnapshotTo(webContents);
+  async pushSnapshotTo(webContents: Electron.WebContents): Promise<void> {
+    await this.broadcaster.pushSnapshotTo(webContents);
+    if (webContents.isDestroyed()) return;
+    // Each send is independently guarded against a TOCTOU destroy, matching the
+    // broadcaster's defensive pattern above.
+    for (const pluginId of this.pluginBadges.keys()) {
+      try {
+        webContents.send(CHANNELS.EVENTS_PUSH, {
+          name: "plugin:panel-badges-changed",
+          payload: { pluginId, badges: this.serializePluginBadges(pluginId) },
+        });
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
   }
 }
 
@@ -3212,7 +5119,14 @@ export class PluginService {
 // reserved `daintree.*` namespace can pass the manifest schema. The
 // constant-folded define in `scripts/build-main.mjs` rewrites this read to
 // `""` in production builds, so no shipped binary ever sideloads anything.
-const e2eSideloadDir = process.env.DAINTREE_E2E_SIDELOAD_PLUGIN_DIR || undefined;
 export const pluginService = new PluginService(undefined, undefined, {
-  sideloadPluginsRoot: e2eSideloadDir,
+  sideloadPluginsRoot: e2eSideloadPluginDir,
 });
+
+// E2E backdoor: activate a loaded plugin by id without adding a production IPC
+// surface. Production builds replace DAINTREE_E2E_MODE with "" and strip this.
+if (isE2EMode) {
+  const activateKey = ["__", "daintree", "Activate", "E2E", "Plugin"].join("");
+  (globalThis as Record<string, unknown>)[activateKey] = (pluginId: string) =>
+    pluginService.activatePlugin(pluginId);
+}

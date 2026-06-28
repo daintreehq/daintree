@@ -37,10 +37,13 @@ export class PluginMcpConsentStore {
    * against the persisted pin (if any) and classifies the result so the
    * dispatch chain knows whether to prompt and which framing to use.
    *
-   * `raw-changed` is checked before `schema-changed` deliberately: a raw
-   * mutation is more security-relevant (it could carry a prompt-injection
-   * payload invisible in the display string), so the user must always see it
-   * even when both changed simultaneously.
+   * `raw-changed` is checked before `schema-changed` before `annotation-changed`
+   * deliberately: a raw mutation is the most security-relevant (it could carry a
+   * prompt-injection payload invisible in the display string), so the user must
+   * always see it even when several fields changed simultaneously. A legacy pin
+   * minted before `annotationHash` existed carries the `""` sentinel (see
+   * {@link normalizeRecord}), which never equals a real 64-char digest, so it
+   * surfaces as `annotation-changed` and re-prompts.
    */
   lookup(
     identity: PluginMcpToolIdentity,
@@ -56,6 +59,9 @@ export class PluginMcpConsentStore {
     }
     if (pin.fingerprint.schemaHash !== current.schemaHash) {
       return { kind: "schema-changed", previousPin: pin };
+    }
+    if (pin.fingerprint.annotationHash !== current.annotationHash) {
+      return { kind: "annotation-changed", previousPin: pin };
     }
     return { kind: "approved", pin };
   }
@@ -237,6 +243,11 @@ function normalizeRecord(raw: unknown): PluginMcpConsentRecord | null {
       rawHash: fpRec.rawHash,
       displayHash: fpRec.displayHash,
       schemaHash: fpRec.schemaHash,
+      // Legacy pins predate `annotationHash`. The `""` sentinel never equals a
+      // real digest, so the next lookup classifies them as `annotation-changed`
+      // and re-prompts — the tool was approved without annotation coverage, so
+      // re-consent is the fail-safe behaviour.
+      annotationHash: typeof fpRec.annotationHash === "string" ? fpRec.annotationHash : "",
     },
   };
 }

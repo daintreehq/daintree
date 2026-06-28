@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import { app } from "electron";
 import { resilientAtomicWriteFile, resilientUnlink } from "../utils/fs.js";
 import type { DaintreeMcpTier } from "../../shared/types/project.js";
+import type { ActionContext } from "../../shared/types/actions.js";
 
 const PANE_CONFIG_DIR_NAME = "mcp-pane-configs";
 const MCP_SERVER_KEY = "daintree";
@@ -17,6 +18,14 @@ interface PaneRecord {
 interface TokenRecord {
   paneId: string;
   tier: DaintreeMcpTier;
+  // Assistant-session pinning side-channel (#10647). Set only for
+  // `daintree-assistant` pane tokens via `registerAssistantPaneBearer`; left
+  // undefined for every generic pane agent so the resolvers below return null
+  // and those sessions keep their existing focused-window fallback in
+  // `httpLifecycle.buildSessionServerDeps`. Stored on the token record so that
+  // `revokePaneConfig` (PTY exit / spawn failure) tears it down for free.
+  webContentsId?: number;
+  actionContext?: ActionContext;
 }
 
 export interface PreparePaneConfigParams {
@@ -150,6 +159,51 @@ export class McpPaneConfigService {
   getTierForToken(token: string): DaintreeMcpTier | undefined {
     if (!token) return undefined;
     return this.tokens.get(token)?.tier;
+  }
+
+  /**
+   * Promote an already-minted pane token to a pinned assistant-session bearer
+   * (#10647). Binds the token to the launching renderer's WebContents and the
+   * launch-time `ActionContext` snapshot so the MCP transport handshake routes
+   * the session through `dispatchActionForWebContents` instead of the
+   * active-window fallback. Must be called synchronously in the spawn handler,
+   * after `preparePaneConfig`, before the IPC promise resolves — otherwise the
+   * CLI's first `/mcp` POST can race ahead of the binding and pin to nothing.
+   *
+   * No-ops if the token was never minted or has already been revoked (the
+   * record is gone), so a teardown that races the registration can't resurrect
+   * a stale entry.
+   */
+  registerAssistantPaneBearer(
+    token: string,
+    webContentsId: number,
+    actionContext?: ActionContext
+  ): void {
+    const record = this.tokens.get(token);
+    if (!record) return;
+    record.webContentsId = webContentsId;
+    record.actionContext = actionContext;
+  }
+
+  /**
+   * Resolver consulted at MCP handshake to pin an assistant-session bearer to
+   * the WebContents that launched it. Returns null for generic pane tokens
+   * (never registered as assistant bearers) so they keep focused-window
+   * semantics. Mirrors `HelpSessionService.getWebContentsIdForToken`.
+   */
+  getWebContentsIdForToken(token: string): number | null {
+    if (!token) return null;
+    return this.tokens.get(token)?.webContentsId ?? null;
+  }
+
+  /**
+   * Resolver consulted at MCP handshake to replay the launch-time
+   * `ActionContext` for an assistant-session bearer. Returns null for generic
+   * pane tokens so they keep the live focused-window context.
+   */
+  getActionContextForToken(token: string): ActionContext | null {
+    if (!token) return null;
+    return this.tokens.get(token)?.actionContext ?? null;
   }
 }
 

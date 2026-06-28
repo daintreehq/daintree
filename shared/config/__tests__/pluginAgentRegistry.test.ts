@@ -51,6 +51,55 @@ describe("pluginAgentRegistry (issue #9560)", () => {
     expect(isBuiltInAgent("acme-agent")).toBe(false);
   });
 
+  it("forwards a declared detection block onto the resolved config (#10587)", () => {
+    // contributionToAgentConfig now threads `detection` through so a plugin
+    // agent can drive the working/waiting/completed UI via output patterns.
+    registerPluginAgents("acme.plugin", [
+      {
+        ...ACME_AGENT,
+        detection: { primaryPatterns: ["thinking"], completionPatterns: ["done"] },
+      },
+    ]);
+    const config = getEffectiveAgentConfig("acme-agent");
+    expect(config).toBeDefined();
+    expect(config?.detection?.primaryPatterns).toEqual(["thinking"]);
+    expect(config?.detection?.completionPatterns).toEqual(["done"]);
+  });
+
+  it("round-trips every detection field onto the resolved config (#10587)", () => {
+    // Guards against silent truncation if contributionToAgentConfig ever stops
+    // forwarding the detection object wholesale.
+    const detection = {
+      primaryPatterns: ["working"],
+      fallbackPatterns: ["starting"],
+      bootCompletePatterns: ["ready"],
+      promptPatterns: ["waiting"],
+      promptHintPatterns: ["\\[y/n\\]"],
+      completionPatterns: ["done"],
+      scanLineCount: 12,
+      promptScanLineCount: 4,
+      debounceMs: 9000,
+      promptFastPathMinQuietMs: 9000,
+      primaryConfidence: 0.9,
+      fallbackConfidence: 0.7,
+      promptConfidence: 0.8,
+      completionConfidence: 0.85,
+      titleStatePatterns: { working: ["Running"], waiting: ["Idle"] },
+    };
+    registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, detection }]);
+    expect(getEffectiveAgentConfig("acme-agent")?.detection).toEqual(detection);
+  });
+
+  it("omits the detection field entirely for a launch-only contribution (#10587)", () => {
+    // The common case carries no detection block — it must stay absent rather
+    // than land as `detection: undefined`, so output-volume state is the only
+    // path and nothing downstream sees an empty pattern config.
+    registerPluginAgents("acme.plugin", [ACME_AGENT]);
+    const config = getEffectiveAgentConfig("acme-agent");
+    expect(config).toBeDefined();
+    expect("detection" in (config as object)).toBe(false);
+  });
+
   it("removes the agent on unregister", () => {
     registerPluginAgents("acme.plugin", [ACME_AGENT]);
     unregisterPluginAgents("acme.plugin");
@@ -124,6 +173,41 @@ describe("pluginAgentRegistry (issue #9560)", () => {
     const registry = getEffectiveRegistry();
     expect(registry["acme-agent"]).toBeDefined();
     expect(registry["claude"]).toBeDefined();
+  });
+
+  it("resolves a ./-prefixed command to an absolute path against pluginDir (#10560)", () => {
+    registerPluginAgents(
+      "acme.plugin",
+      [{ ...ACME_AGENT, command: "./bin/agent.mjs" }],
+      "/plugins/acme"
+    );
+    expect(getEffectiveAgentConfig("acme-agent")?.command).toBe("/plugins/acme/bin/agent.mjs");
+  });
+
+  it("leaves a bare PATH command unchanged even when pluginDir is provided (#10560)", () => {
+    registerPluginAgents("acme.plugin", [ACME_AGENT], "/plugins/acme");
+    expect(getEffectiveAgentConfig("acme-agent")?.command).toBe("acme");
+  });
+
+  it("leaves a ./-prefixed command unresolved when no pluginDir is provided (#10560)", () => {
+    registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, command: "./bin/agent.mjs" }]);
+    expect(getEffectiveAgentConfig("acme-agent")?.command).toBe("./bin/agent.mjs");
+  });
+
+  it("joins a Windows-style pluginDir with backslashes (#10560)", () => {
+    registerPluginAgents(
+      "acme.plugin",
+      [{ ...ACME_AGENT, command: "./bin/agent.cmd" }],
+      String.raw`C:\plugins\acme`
+    );
+    expect(getEffectiveAgentConfig("acme-agent")?.command).toBe(
+      String.raw`C:\plugins\acme\bin\agent.cmd`
+    );
+  });
+
+  it("does not double a trailing separator on pluginDir (#10560)", () => {
+    registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, command: "./agent" }], "/plugins/acme/");
+    expect(getEffectiveAgentConfig("acme-agent")?.command).toBe("/plugins/acme/agent");
   });
 
   it("does not let a reserved id pollute the snapshot prototype", () => {

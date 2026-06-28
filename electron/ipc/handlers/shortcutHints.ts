@@ -15,6 +15,16 @@ export const shortcutHintsNamespace = defineIpcNamespace({
       counts[actionId] = (counts[actionId] ?? 0) + 1;
       store.set("shortcutHintCounts", counts);
     }),
+    getHintedHover: op(SHORTCUT_HINTS_METHOD_CHANNELS.getHintedHover, (): string[] => {
+      return store.get("shortcutHintHoveredKeys") ?? [];
+    }),
+    setHintedHover: op(SHORTCUT_HINTS_METHOD_CHANNELS.setHintedHover, (keys: string[]): void => {
+      if (!Array.isArray(keys)) return;
+      store.set(
+        "shortcutHintHoveredKeys",
+        keys.filter((key): key is string => typeof key === "string")
+      );
+    }),
   },
 });
 

@@ -166,6 +166,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["forge-audit:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["forge-audit:set-enabled"]["result"]>;
   };
+  forgeRecommendation: {
+    getDismissed(
+      ...args: IpcInvokeMap["forge-recommendation:get-dismissed"]["args"]
+    ): Promise<IpcInvokeMap["forge-recommendation:get-dismissed"]["result"]>;
+    markDismissed(
+      ...args: IpcInvokeMap["forge-recommendation:mark-dismissed"]["args"]
+    ): Promise<IpcInvokeMap["forge-recommendation:mark-dismissed"]["result"]>;
+  };
   gemini: {
     enableAlternateBuffer(
       ...args: IpcInvokeMap["gemini:enable-alternate-buffer"]["args"]
@@ -184,9 +192,15 @@ export interface GeneratedElectronAPI {
     markTerminal(
       ...args: IpcInvokeMap["help:mark-terminal"]["args"]
     ): Promise<IpcInvokeMap["help:mark-terminal"]["result"]>;
+    peekPendingHibernation(
+      ...args: IpcInvokeMap["help:peek-pending-hibernation"]["args"]
+    ): Promise<IpcInvokeMap["help:peek-pending-hibernation"]["result"]>;
     provisionSession(
       ...args: IpcInvokeMap["help:provision-session"]["args"]
     ): Promise<IpcInvokeMap["help:provision-session"]["result"]>;
+    reportPanelOpen(
+      ...args: IpcInvokeMap["help:report-panel-open"]["args"]
+    ): Promise<IpcInvokeMap["help:report-panel-open"]["result"]>;
     revokeSession(
       ...args: IpcInvokeMap["help:revoke-session"]["args"]
     ): Promise<IpcInvokeMap["help:revoke-session"]["result"]>;
@@ -256,6 +270,9 @@ export interface GeneratedElectronAPI {
     issueGrant(
       ...args: IpcInvokeMap["mcp-server:issue-grant"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:issue-grant"]["result"]>;
+    issueNativeGrant(
+      ...args: IpcInvokeMap["mcp-server:issue-native-grant"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:issue-native-grant"]["result"]>;
     listActiveBearers(
       ...args: IpcInvokeMap["mcp-server:list-active-bearers"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:list-active-bearers"]["result"]>;
@@ -268,6 +285,9 @@ export interface GeneratedElectronAPI {
     resetDenialCounts(
       ...args: IpcInvokeMap["mcp-server:reset-denial-counts"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:reset-denial-counts"]["result"]>;
+    revokeNativeGrant(
+      ...args: IpcInvokeMap["mcp-server:revoke-native-grant"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:revoke-native-grant"]["result"]>;
     revokeSessionGrants(
       ...args: IpcInvokeMap["mcp-server:revoke-session-grants"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:revoke-session-grants"]["result"]>;
@@ -353,6 +373,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["os-dnd:get-state"]["result"]>;
   };
   plugin: {
+    activateForView(
+      ...args: IpcInvokeMap["plugin:activate-for-view"]["args"]
+    ): Promise<IpcInvokeMap["plugin:activate-for-view"]["result"]>;
     checkForUpdate(
       ...args: IpcInvokeMap["plugin:check-for-update"]["args"]
     ): Promise<IpcInvokeMap["plugin:check-for-update"]["result"]>;
@@ -395,6 +418,9 @@ export interface GeneratedElectronAPI {
     getSettingValues(
       ...args: IpcInvokeMap["plugin:settings-get-values"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-get-values"]["result"]>;
+    getWorktreeStatus(
+      ...args: IpcInvokeMap["plugin:worktree-status-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:worktree-status-get"]["result"]>;
     install(
       ...args: IpcInvokeMap["plugin:install"]["args"]
     ): Promise<IpcInvokeMap["plugin:install"]["result"]>;
@@ -413,9 +439,12 @@ export interface GeneratedElectronAPI {
     list(
       ...args: IpcInvokeMap["plugin:list"]["args"]
     ): Promise<IpcInvokeMap["plugin:list"]["result"]>;
-    menuItems(
-      ...args: IpcInvokeMap["plugin:menu-items"]["args"]
-    ): Promise<IpcInvokeMap["plugin:menu-items"]["result"]>;
+    pathExists(
+      ...args: IpcInvokeMap["plugin:path-exists"]["args"]
+    ): Promise<IpcInvokeMap["plugin:path-exists"]["result"]>;
+    pickPath(
+      ...args: IpcInvokeMap["plugin:pick-path"]["args"]
+    ): Promise<IpcInvokeMap["plugin:pick-path"]["result"]>;
     registerAction(
       ...args: IpcInvokeMap["plugin:actions-register"]["args"]
     ): Promise<IpcInvokeMap["plugin:actions-register"]["result"]>;
@@ -447,7 +476,15 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["plugin:validate-action-ids"]["args"]
     ): Promise<IpcInvokeMap["plugin:validate-action-ids"]["result"]>;
   };
+  pluginCapability: {
+    resolveConsent(
+      ...args: IpcInvokeMap["plugin-capability:resolve-consent"]["args"]
+    ): Promise<IpcInvokeMap["plugin-capability:resolve-consent"]["result"]>;
+  };
   pluginMcp: {
+    callTool(
+      ...args: IpcInvokeMap["plugin-mcp:call-tool"]["args"]
+    ): Promise<IpcInvokeMap["plugin-mcp:call-tool"]["result"]>;
     getConfig(
       ...args: IpcInvokeMap["plugin-mcp:get-config"]["args"]
     ): Promise<IpcInvokeMap["plugin-mcp:get-config"]["result"]>;
@@ -463,12 +500,20 @@ export interface GeneratedElectronAPI {
     listTools(
       ...args: IpcInvokeMap["plugin-mcp:list-tools"]["args"]
     ): Promise<IpcInvokeMap["plugin-mcp:list-tools"]["result"]>;
+    resolveConsent(
+      ...args: IpcInvokeMap["plugin-mcp:resolve-consent"]["args"]
+    ): Promise<IpcInvokeMap["plugin-mcp:resolve-consent"]["result"]>;
     restart(
       ...args: IpcInvokeMap["plugin-mcp:restart"]["args"]
     ): Promise<IpcInvokeMap["plugin-mcp:restart"]["result"]>;
     setConfig(
       ...args: IpcInvokeMap["plugin-mcp:set-config"]["args"]
     ): Promise<IpcInvokeMap["plugin-mcp:set-config"]["result"]>;
+  };
+  pluginProcess: {
+    list(
+      ...args: IpcInvokeMap["plugin-process:list"]["args"]
+    ): Promise<IpcInvokeMap["plugin-process:list"]["result"]>;
   };
   portal: {
     closeTab(
@@ -545,9 +590,15 @@ export interface GeneratedElectronAPI {
     getCounts(
       ...args: IpcInvokeMap["shortcut-hints:get-counts"]["args"]
     ): Promise<IpcInvokeMap["shortcut-hints:get-counts"]["result"]>;
+    getHintedHover(
+      ...args: IpcInvokeMap["shortcut-hints:get-hinted-hover"]["args"]
+    ): Promise<IpcInvokeMap["shortcut-hints:get-hinted-hover"]["result"]>;
     incrementCount(
       ...args: IpcInvokeMap["shortcut-hints:increment-count"]["args"]
     ): Promise<IpcInvokeMap["shortcut-hints:increment-count"]["result"]>;
+    setHintedHover(
+      ...args: IpcInvokeMap["shortcut-hints:set-hinted-hover"]["args"]
+    ): Promise<IpcInvokeMap["shortcut-hints:set-hinted-hover"]["result"]>;
   };
   slashCommands: {
     list(
@@ -558,6 +609,9 @@ export interface GeneratedElectronAPI {
     getResourceProfile(
       ...args: IpcInvokeMap["system:get-resource-profile"]["args"]
     ): Promise<IpcInvokeMap["system:get-resource-profile"]["result"]>;
+    getResourceProfileSnapshot(
+      ...args: IpcInvokeMap["system:get-resource-profile-snapshot"]["args"]
+    ): Promise<IpcInvokeMap["system:get-resource-profile-snapshot"]["result"]>;
   };
   systemSleep: {
     getAwakeTime(
@@ -571,6 +625,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["system-sleep:reset"]["result"]>;
   };
   webview: {
+    captureScreenshot(
+      ...args: IpcInvokeMap["webview:capture-screenshot"]["args"]
+    ): Promise<IpcInvokeMap["webview:capture-screenshot"]["result"]>;
     getNavigationHistory(
       ...args: IpcInvokeMap["webview:get-navigation-history"]["args"]
     ): Promise<IpcInvokeMap["webview:get-navigation-history"]["result"]>;

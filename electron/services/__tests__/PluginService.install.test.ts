@@ -30,6 +30,12 @@ const storeMock = vi.hoisted(() => {
     _state: state,
   };
 });
+// Plugin-MCP consent + rate-limiter singletons are only reached by the
+// installer's uninstall/upgrade purge; stub them so the upgrade-consent-reset
+// test can assert the revoke without standing up the real persistence.
+const consentMock = vi.hoisted(() => ({ revokeAllForPlugin: vi.fn(() => true) }));
+const capConsentMock = vi.hoisted(() => ({ revokeAllForPlugin: vi.fn(() => true) }));
+const rateLimiterMock = vi.hoisted(() => ({ dropPlugin: vi.fn() }));
 
 vi.mock("electron", () => ({ app: appMock, ipcMain: { on: vi.fn(), removeListener: vi.fn() } }));
 vi.mock("../../window/windowRef.js", () => ({
@@ -84,6 +90,7 @@ vi.mock("../PluginMcpSupervisor.js", () => ({
     shutdownAll: vi.fn(async () => undefined),
     callTool: vi.fn(),
     restart: vi.fn(),
+    removeState: vi.fn(),
     list: vi.fn(() => []),
     getStderr: vi.fn(() => ({ pluginId: "", serverId: "", lines: [], totalLines: 0 })),
   }),
@@ -94,6 +101,13 @@ vi.mock("../../utils/fs.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../utils/fs.js")>();
   return { ...actual, resilientRename: vi.fn(actual.resilientRename) };
 });
+vi.mock("../plugin-mcp/instances.js", () => ({
+  getPluginMcpConsentService: () => consentMock,
+  getPluginMcpRateLimiter: () => rateLimiterMock,
+}));
+vi.mock("../plugin-capability/instances.js", () => ({
+  getPluginCapabilityConsentService: () => capConsentMock,
+}));
 
 import { PluginService } from "../PluginService.js";
 import { packPluginArchive } from "../PluginArchive.js";
@@ -633,6 +647,141 @@ describe("installPlugin — load + provenance edge cases", () => {
     const afterDir = (storeState.get("plugins") as { installed: Record<string, unknown> })
       .installed["acme.rehash"] as { archiveHash: string | null };
     expect(afterDir.archiveHash).toBeNull();
+
+    service.dispose();
+  });
+});
+
+describe("installPlugin — name collision (#10518)", () => {
+  // The installer's `existing` probe only sees the user plugins root. These tests
+  // reach into the service's launch-time bookkeeping (the same `reservedNames` /
+  // `disabledPlugins` the deps bag exposes) to simulate a built-in or reserved
+  // name that has no user-root directory.
+  type Internals = {
+    reservedNames: Set<string>;
+    disabledPlugins: Map<string, { manifest: unknown; dir: string; isBuiltin: boolean }>;
+  };
+
+  it("rejects installing over a built-in name with name_collision and writes no dir", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    (service as unknown as Internals).disabledPlugins.set("acme.builtin-clash", {
+      manifest: { name: "acme.builtin-clash" },
+      dir: "/builtin/acme.builtin-clash",
+      isBuiltin: true,
+    });
+
+    const archive = await makeArchive({ name: "acme.builtin-clash", version: "1.0.0" });
+    const result = await service.installPlugin(archive);
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.errors[0].code).toBe("name_collision");
+    }
+    expect(await exists(path.join(pluginsRoot, "acme.builtin-clash"))).toBe(false);
+    // No temp/parked debris either — the guard returns before the swap.
+    const entries = await fs.readdir(pluginsRoot).catch(() => [] as string[]);
+    expect(entries.filter((e) => e.startsWith(".install-tmp-"))).toHaveLength(0);
+
+    service.dispose();
+  });
+
+  it("rejects a fresh install whose id is a launch-reserved name", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    (service as unknown as Internals).reservedNames.add("acme.reserved-clash");
+
+    const archive = await makeArchive({ name: "acme.reserved-clash", version: "1.0.0" });
+    const result = await service.installPlugin(archive);
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.errors[0].code).toBe("name_collision");
+    }
+    expect(await exists(path.join(pluginsRoot, "acme.reserved-clash"))).toBe(false);
+
+    service.dispose();
+  });
+
+  it("still allows upgrading a normal user plugin whose dir already exists", async () => {
+    // A reserved name with an EXISTING dir is a legitimate upgrade, not a
+    // collision — the guard only fires on `!existing`.
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    const v1 = await makeArchive({ name: "acme.not-a-clash", version: "1.0.0" });
+    expect((await service.installPlugin(v1)).status).toBe("installed");
+
+    const v2 = await makeArchive({ name: "acme.not-a-clash", version: "2.0.0" });
+    expect((await service.installPlugin(v2)).status).toBe("installed");
+
+    service.dispose();
+  });
+});
+
+describe("installPlugin — consent reset on upgrade (#10518)", () => {
+  it("revokes the plugin's consent pins on upgrade but not on a fresh install", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    const v1 = await makeArchive({ name: "acme.consent-reset", version: "1.0.0" });
+    expect((await service.installPlugin(v1)).status).toBe("installed");
+    // A fresh install has no prior pins to inherit — nothing to revoke.
+    expect(consentMock.revokeAllForPlugin).not.toHaveBeenCalled();
+
+    consentMock.revokeAllForPlugin.mockClear();
+    capConsentMock.revokeAllForPlugin.mockClear();
+    const v2 = await makeArchive({ name: "acme.consent-reset", version: "2.0.0" });
+    expect((await service.installPlugin(v2)).status).toBe("installed");
+
+    // Any code change forces a consent re-prompt: the upgrade purges BOTH the MCP
+    // TOFU pins and the JIT host-capability grants.
+    expect(consentMock.revokeAllForPlugin).toHaveBeenCalledWith("acme.consent-reset");
+    expect(capConsentMock.revokeAllForPlugin).toHaveBeenCalledWith("acme.consent-reset");
+
+    service.dispose();
+  });
+
+  it("revokes the plugin's consent pins on uninstall", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    const v1 = await makeArchive({ name: "acme.uninstall-consent", version: "1.0.0" });
+    expect((await service.installPlugin(v1)).status).toBe("installed");
+
+    consentMock.revokeAllForPlugin.mockClear();
+    capConsentMock.revokeAllForPlugin.mockClear();
+    await service.uninstallPlugin("acme.uninstall-consent");
+
+    // Uninstall is the other half of the consent-reset guarantee — a same-name
+    // reinstall must not inherit the removed plugin's MCP or capability approvals.
+    expect(consentMock.revokeAllForPlugin).toHaveBeenCalledWith("acme.uninstall-consent");
+    expect(capConsentMock.revokeAllForPlugin).toHaveBeenCalledWith("acme.uninstall-consent");
+
+    service.dispose();
+  });
+});
+
+describe("loadDevPlugin — trust gates (#10518)", () => {
+  it.each(["../../etc/passwd", "..", "foo/../../bar", "/abs/path", "no-dot-name"])(
+    "rejects a non-scoped / traversal dev plugin id %s before any fs access",
+    async (badId) => {
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      await expect(service.loadDevPlugin(badId)).rejects.toThrow(/Invalid dev plugin id|scoped/);
+      service.dispose();
+    }
+  );
+
+  it("honors the persisted disabled set instead of force-loading", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    // A dev plugin present on disk but disabled in Preferences must NOT load —
+    // the old code passed an empty disabled set and would have force-loaded it.
+    const devDir = path.join(pluginsRoot, "acme.dev-honor");
+    await fs.mkdir(devDir, { recursive: true });
+    await fs.writeFile(
+      path.join(devDir, "plugin.json"),
+      JSON.stringify({ name: "acme.dev-honor", version: "1.0.0" })
+    );
+    (
+      service as unknown as { records: { setEnabled(id: string, enabled: boolean): void } }
+    ).records.setEnabled("acme.dev-honor", false);
+
+    await expect(service.loadDevPlugin("acme.dev-honor")).rejects.toThrow(/disabled|Couldn't load/);
 
     service.dispose();
   });

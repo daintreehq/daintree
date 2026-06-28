@@ -292,7 +292,7 @@ describe("usePluginActions", () => {
     expect(usePluginConfirmStore.getState().current).toBeNull();
   });
 
-  it("surfaces an error toast when invoke rejects and returns undefined (boundary 2 — #9276)", async () => {
+  it("surfaces a failure toast AND rethrows when invoke rejects (boundary 2 — #9276/#10476)", async () => {
     const { actionService } = await import("@/services/ActionService");
     const { usePluginActions } = await import("../usePluginActions");
 
@@ -305,11 +305,11 @@ describe("usePluginActions", () => {
 
     const result = await actionService.dispatch(action.id, { x: 1 });
 
-    // The rejection is contained at the renderer boundary: the dispatch
-    // resolves successfully with undefined, never propagating the rejection
-    // back through ActionService's own catch (which would emit a *second*
-    // error path).
-    expect(result).toEqual({ ok: true, result: undefined });
+    // The catch surfaces the toast and rethrows so ActionService reports the
+    // dispatch as failed. Returning undefined here would let ActionService
+    // emit an `action:dispatched` *success* event and write a misleading
+    // `success` audit record over the genuine main-side `error` row (#10476).
+    expect(result).toMatchObject({ ok: false, error: { code: "EXECUTION_ERROR" } });
     expect(notifyMock).toHaveBeenCalledTimes(1);
     expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -347,9 +347,9 @@ describe("usePluginActions", () => {
     rejectInvoke!(new Error("late boom"));
     const result = await pending;
 
-    // Run still returns undefined (boundary 2 swallows the throw) and
-    // ActionService wraps that as a successful dispatch.
-    expect(result).toEqual({ ok: true, result: undefined });
+    // Run rethrows the rejection, so ActionService reports the dispatch as
+    // failed — but the toast is gated on the still-mounted check.
+    expect(result).toMatchObject({ ok: false, error: { code: "EXECUTION_ERROR" } });
     // Critical: no toast on a stale in-flight rejection.
     expect(notifyMock).not.toHaveBeenCalled();
   });

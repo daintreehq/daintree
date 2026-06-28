@@ -155,8 +155,11 @@ test.describe.serial("Core: Terminal Scroll Indicator", () => {
     const indicator = panel.locator(SEL.terminal.scrollIndicator);
     await expect(indicator).not.toBeVisible();
 
-    // Wait for the delayed output to arrive (the node process is still running)
-    await waitForTerminalText(panel, "SCRL_A_NEW_20", T_LONG);
+    // Wait for the delayed output to arrive (the node process is still running).
+    // The local producer intentionally starts after 8s and then takes another
+    // few seconds to emit all lines, so the generic local T_LONG can be too
+    // tight on a busy machine.
+    await waitForTerminalText(panel, "SCRL_A_NEW_20", delayedOutputMs + T_LONG);
 
     // The indicator should now be visible
     await expect(indicator).toBeVisible({ timeout: T_MEDIUM });

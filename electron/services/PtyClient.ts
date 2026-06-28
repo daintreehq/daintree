@@ -45,6 +45,7 @@ import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 import { createLogger, isValidLogOverrideLevel } from "../utils/logger.js";
 import { store } from "../store.js";
+import { getPluginAgentRegistry } from "../../shared/config/pluginAgentRegistry.js";
 
 const logger = createLogger("main:PtyClient");
 const logInfo = (msg: string, ctx?: Record<string, unknown>) =>
@@ -66,6 +67,7 @@ import type {
   CrashType,
   SpawnResult,
   FlowControlSnapshot,
+  MemoryRollup,
 } from "../../shared/types/pty-host.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
@@ -390,6 +392,12 @@ export class PtyClient extends EventEmitter {
       type: "set-log-level-overrides",
       overrides: this.logLevelOverridesCache,
     });
+    // Mirror the current plugin-agent registry to the (re)started host before
+    // any spawn replay below, so respawned plugin-agent terminals resolve their
+    // detection patterns from the first tick (#10587). Reads the authoritative
+    // main-process snapshot directly — no cache needed, and a host restart
+    // re-syncs whatever plugins are loaded now.
+    this.send({ type: "set-plugin-agent-registry", registry: getPluginAgentRegistry() });
     // Re-arm the watchdog on every successful ready — covers both the initial
     // boot and every auto-restart cycle. The original code armed it inside
     // startHost() before ready arrived, but the tick was a no-op until
@@ -547,6 +555,20 @@ export class PtyClient extends EventEmitter {
     }
   }
 
+  /**
+   * Push the current plugin-agent registry to the host so its activity monitor
+   * can resolve plugin detection patterns (#10587). Called by `PluginService`
+   * after a plugin load/unload changes the registry. Reads the authoritative
+   * main snapshot at call time; on a host restart the registry is replayed from
+   * the `ready` handler, so callers don't track restarts themselves. No-op when
+   * the host isn't ready yet — the ready replay covers that window.
+   */
+  syncPluginAgentRegistry(): void {
+    if (this.lifecycle.isInitialized && this.lifecycle.child) {
+      this.send({ type: "set-plugin-agent-registry", registry: getPluginAgentRegistry() });
+    }
+  }
+
   private flushPendingMessagePorts(): void {
     if (!this.lifecycle.child || this.pendingMessagePorts.size === 0) {
       return;
@@ -699,6 +721,14 @@ export class PtyClient extends EventEmitter {
     this.send({ type: "submit", id, text });
   }
 
+  /**
+   * Stage text into a terminal's input without submitting it (no Enter). The
+   * no-execute counterpart to {@link submit}; see {@link TerminalProcess.stage}.
+   */
+  stage(id: string, text: string): void {
+    this.send({ type: "stage", id, text });
+  }
+
   sendKey(id: string, key: string): void {
     const sequence = this.resolveKeySequence(key);
     if (!sequence) {
@@ -836,13 +866,6 @@ export class PtyClient extends EventEmitter {
     this.send({ type: "set-ipc-data-mirror", id, enabled });
   }
 
-  async wakeTerminal(id: string): Promise<{ state: string | null; warnings?: string[] }> {
-    const requestId = this.broker.generateId(`wake-${id}`);
-    const promise = this.broker.register<{ state: string | null; warnings?: string[] }>(requestId);
-    this.send({ type: "wake-terminal", id, requestId });
-    return promise.catch(() => ({ state: null }));
-  }
-
   private syncProjectContext(skipWindowIds?: ReadonlySet<number>): void {
     if (!this.lifecycle.child) {
       this.shouldResyncProjectContext = true;
@@ -869,6 +892,15 @@ export class PtyClient extends EventEmitter {
         });
       }
     }
+  }
+
+  /**
+   * The project most recently marked active (across windows). Used by host-side
+   * consumers — e.g. `PluginService.sendToActiveAgent` — to scope active-agent
+   * resolution to the project the user is currently in.
+   */
+  getActiveProjectId(): string | null {
+    return this.activeProjectId;
   }
 
   setActiveProject(
@@ -988,6 +1020,26 @@ export class PtyClient extends EventEmitter {
     }>(requestId);
     this.send({ type: "get-project-stats", projectId, requestId });
     return promise.catch(() => ({ terminalCount: 0, processIds: [], terminalTypes: {} }));
+  }
+
+  /**
+   * On-demand rollup of resident memory across every live terminal's process
+   * subtree, grouped by project. Reads the warm ProcessTreeCache in the host —
+   * no extra OS sweep. Resolves to an unavailable rollup on IPC failure/timeout
+   * so callers never throw.
+   */
+  async getMemoryRollup(): Promise<MemoryRollup> {
+    const requestId = this.broker.generateId("memory-rollup");
+    const promise = this.broker.register<MemoryRollup>(requestId);
+    this.send({ type: "get-memory-rollup", requestId });
+    return promise.catch(() => ({
+      byProject: [],
+      totalMemoryKb: 0,
+      totalProcessCount: 0,
+      terminalCount: 0,
+      available: false,
+      sampledAt: Date.now(),
+    }));
   }
 
   /**

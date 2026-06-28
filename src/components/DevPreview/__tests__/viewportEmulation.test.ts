@@ -24,13 +24,13 @@ describe("buildEmulationParams", () => {
     expect(params!.deviceScaleFactor).toBe(3);
   });
 
-  it("builds Galaxy S25 portrait params", () => {
+  it("builds Galaxy S26 portrait params", () => {
     const params = buildEmulationParams("galaxy", false, 1);
     expect(params!.screenSize).toEqual({ width: 360, height: 780 });
     expect(params!.viewSize).toEqual({ width: 360, height: 780 });
   });
 
-  it("builds iPad Air M3 params", () => {
+  it('builds iPad Air 11" params', () => {
     const params = buildEmulationParams("ipad", false, 1);
     expect(params!.screenSize).toEqual({ width: 820, height: 1180 });
   });

@@ -135,6 +135,7 @@ export type ErrorType =
  */
 export type GitOperationReason =
   | "auth-failed"
+  | "rate-limited"
   | "network-unavailable"
   | "repository-not-found"
   | "not-a-repository"

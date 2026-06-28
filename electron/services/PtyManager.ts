@@ -1,7 +1,6 @@
 import { EventEmitter } from "events";
 import { execFileSync } from "child_process";
 import fs from "fs";
-import { events } from "./events.js";
 import type { AgentEvent } from "./AgentStateMachine.js";
 import type { AgentStateChangeTrigger } from "../schemas/agent.js";
 import type { PtyPool } from "./PtyPool.js";
@@ -369,6 +368,19 @@ export class PtyManager extends EventEmitter {
       return;
     }
     terminal.submit(text);
+  }
+
+  /**
+   * Stage text into a terminal's input without submitting it (no Enter). The
+   * no-execute counterpart to {@link submit}; see {@link TerminalProcess.stage}.
+   */
+  stage(id: string, text: string): void {
+    const terminal = this.registry.get(id);
+    if (!terminal) {
+      logWarn(`Terminal ${id} not found, cannot stage`);
+      return;
+    }
+    terminal.stage(text);
   }
 
   /**
@@ -747,6 +759,18 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
+   * Enumerate live terminals as {terminalId, projectId, rootPid} tuples for the
+   * memory rollup.
+   */
+  getLiveTerminalRoots(): Array<{
+    terminalId: string;
+    projectId: string | null;
+    rootPid: number;
+  }> {
+    return this.registry.getLiveTerminalRoots();
+  }
+
+  /**
    * Gracefully kill a terminal, capturing its session ID if it's an agent terminal.
    * Falls back to immediate kill for non-agent terminals.
    */
@@ -829,60 +853,14 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
-   * Handle project switch.
-   * Uses tiered monitoring: active terminals poll at 50ms, background at 500ms.
-   * This keeps agent state accurate across all projects while reducing CPU for background terminals.
+   * Start the process detector for a single terminal.
+   * Used by the pty-host deferred-PID retry: on Windows, node-pty reports
+   * `pid: 0` during the ConPTY connect() window, so detection is skipped at
+   * spawn time and re-triggered here once a real PID resolves. Idempotent —
+   * `startProcessDetector()` no-ops if a detector already exists.
    */
-  onProjectSwitch(
-    newProjectId: string,
-    onTierChange?: (id: string, tier: "active" | "background") => void
-  ): void {
-    logInfo(`Switching to project: ${newProjectId}`);
-
-    let backgrounded = 0;
-    let foregrounded = 0;
-
-    const ACTIVE_POLLING_MS = 50;
-    const BACKGROUND_POLLING_MS = 500;
-
-    for (const [id, terminalProcess] of this.registry.entries()) {
-      const terminalInfo = terminalProcess.getInfo();
-      const belongsToProject = this.registry.terminalBelongsToProject(
-        terminalProcess,
-        newProjectId
-      );
-
-      if (!belongsToProject) {
-        backgrounded++;
-        events.emit("terminal:backgrounded", {
-          id,
-          projectId: terminalInfo.projectId || "unknown",
-          timestamp: Date.now(),
-        });
-
-        // Keep monitors running but reduce polling frequency for background terminals
-        terminalProcess.setActivityMonitorTier("background", BACKGROUND_POLLING_MS);
-        // Notify caller to sync backpressure tier
-        onTierChange?.(id, "background");
-        // Process detector remains active to detect new agents
-      } else {
-        foregrounded++;
-        events.emit("terminal:foregrounded", {
-          id,
-          projectId: terminalInfo.projectId || newProjectId,
-          timestamp: Date.now(),
-        });
-
-        // Active terminals get full-speed polling
-        terminalProcess.setActivityMonitorTier("active", ACTIVE_POLLING_MS);
-        // Notify caller to sync backpressure tier
-        onTierChange?.(id, "active");
-        // Ensure process detector is running
-        terminalProcess.startProcessDetector();
-      }
-    }
-
-    logInfo(`Project switch complete: ${foregrounded} foregrounded, ${backgrounded} backgrounded`);
+  startProcessDetectorForTerminal(id: string): void {
+    this.registry.get(id)?.startProcessDetector();
   }
 
   /**

@@ -57,7 +57,11 @@ vi.mock("@/hooks/useResolvedForgeProvider", () => ({
   }),
 }));
 
-import { useRepositoryStats } from "../useRepositoryStats";
+import {
+  useRepositoryStats,
+  FRESH_THRESHOLD_MS,
+  _resetSwitchBackCacheForTests,
+} from "../useRepositoryStats";
 import { _resetPollingLifecycleForTests } from "../usePollingLifecycle";
 import { useSystemWakeStore } from "@/store/systemWakeStore";
 import {
@@ -82,6 +86,7 @@ describe("useRepositoryStats", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     _resetPollingLifecycleForTests();
+    _resetSwitchBackCacheForTests();
     useSystemWakeStore.setState({
       wakeEpoch: 0,
       lastSleepDuration: 0,
@@ -303,6 +308,464 @@ describe("useRepositoryStats", () => {
       expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
       expect(getRepoStatsMock.mock.calls[1]?.[0]).toBe("/repo/b");
       expect(result.current.stats?.commitCount).toBe(77);
+    });
+  });
+
+  describe("cross-project guard + switch-back reuse (issue #10761)", () => {
+    function freshStats(overrides: Partial<ForgeRepositoryStats>): ForgeRepositoryStats {
+      return {
+        commitCount: 0,
+        issueCount: 0,
+        prCount: 0,
+        loading: false,
+        stale: false,
+        lastUpdated: Date.now(),
+        ...overrides,
+      };
+    }
+
+    // The polling lifecycle serializes fetches: a switch while a fetch is in
+    // flight queues the next fetch (rather than running concurrently), so the
+    // previous project's request resolves first and must bail before applying.
+    it("does not leak an in-flight previous-project error onto the new project", async () => {
+      let currentProject = { id: "a", path: "/repo/a" };
+      getCurrentMock.mockImplementation(async () => currentProject);
+      let switchHandler: (() => void) | undefined;
+      onSwitchMock.mockImplementation((cb: () => void) => {
+        switchHandler = cb;
+        return () => {};
+      });
+
+      const slowA = createDeferred<ForgeRepositoryStats>();
+      const statsB = freshStats({ commitCount: 22, issueCount: 2, prCount: 2 });
+      getRepoStatsMock.mockImplementationOnce(() => slowA.promise).mockResolvedValueOnce(statsB);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(getRepoStatsMock).toHaveBeenCalledTimes(1));
+
+      // Switch to B while A's fetch is still pending, then let A fail. A's
+      // error must be discarded; the queued B fetch then loads cleanly.
+      currentProject = { id: "b", path: "/repo/b" };
+      act(() => {
+        switchHandler?.();
+      });
+      await act(async () => {
+        slowA.reject(new Error("Project A network failure"));
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+        expect(result.current.stats?.commitCount).toBe(22);
+        expect(result.current.error).toBeNull();
+        expect(result.current.freshnessLevel).not.toBe("errored");
+      });
+    });
+
+    it("does not leak an in-flight previous-project success onto the new project", async () => {
+      let currentProject = { id: "a", path: "/repo/a" };
+      getCurrentMock.mockImplementation(async () => currentProject);
+      let switchHandler: (() => void) | undefined;
+      onSwitchMock.mockImplementation((cb: () => void) => {
+        switchHandler = cb;
+        return () => {};
+      });
+
+      const slowA = createDeferred<ForgeRepositoryStats>();
+      const statsA = freshStats({ commitCount: 11, issueCount: 9, prCount: 9 });
+      const statsB = freshStats({ commitCount: 22, issueCount: 2, prCount: 2 });
+      getRepoStatsMock.mockImplementationOnce(() => slowA.promise).mockResolvedValueOnce(statsB);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(getRepoStatsMock).toHaveBeenCalledTimes(1));
+
+      currentProject = { id: "b", path: "/repo/b" };
+      act(() => {
+        switchHandler?.();
+      });
+      await act(async () => {
+        slowA.resolve(statsA);
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+        expect(result.current.stats?.commitCount).toBe(22);
+      });
+      // A's stale counts never surfaced on B.
+      expect(result.current.stats?.issueCount).toBe(2);
+    });
+
+    it("restores cached stats and skips the network revalidation when switching back within FRESH_THRESHOLD_MS (#10765)", async () => {
+      let currentProject = { id: "a", path: "/repo/a" };
+      getCurrentMock.mockImplementation(async () => currentProject);
+      let switchHandler: (() => void) | undefined;
+      onSwitchMock.mockImplementation((cb: () => void) => {
+        switchHandler = cb;
+        return () => {};
+      });
+
+      const now = Date.now();
+      const statsA = freshStats({ commitCount: 7, issueCount: 4, prCount: 3, lastUpdated: now });
+      const statsB = freshStats({ commitCount: 12, issueCount: 1, prCount: 1, lastUpdated: now });
+
+      getRepoStatsMock.mockResolvedValueOnce(statsA).mockResolvedValueOnce(statsB);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(7));
+
+      currentProject = { id: "b", path: "/repo/b" };
+      act(() => {
+        switchHandler?.();
+      });
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(12));
+
+      // Switch back to A within the freshness window — cached counts restore
+      // immediately, the skeleton never shows. Before #10765 a reactivation
+      // here fired a third getRepoStats call (the redundant revalidation that,
+      // under rapid switching, bursts past the IPC rate limiter and paints the
+      // red toolbar error). Now the fresh cache short-circuits the network:
+      // getRepoStats stays at 2 total.
+      currentProject = { id: "a", path: "/repo/a" };
+      act(() => {
+        switchHandler?.();
+      });
+      await waitFor(() => {
+        expect(result.current.stats?.commitCount).toBe(7);
+        expect(result.current.loading).toBe(false);
+      });
+      // Flush any queued/drained reactivation fetch to prove none fires.
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("skips the network even when both project-switch and visibility reactivations fire (#10765)", async () => {
+      // Production per-view reality: reactivating a backgrounded WebContentsView
+      // fires BOTH onProjectSwitch and visibilitychange, each a reactivation
+      // fetch. With fresh cached data neither should hit the network — this is
+      // the exact double-trigger that bursts the rate limiter on rapid switching.
+      let currentProject = { id: "a", path: "/repo/a" };
+      getCurrentMock.mockImplementation(async () => currentProject);
+      let switchHandler: (() => void) | undefined;
+      onSwitchMock.mockImplementation((cb: () => void) => {
+        switchHandler = cb;
+        return () => {};
+      });
+
+      const now = Date.now();
+      const statsA = freshStats({ commitCount: 7, issueCount: 4, prCount: 3, lastUpdated: now });
+      const statsB = freshStats({ commitCount: 12, issueCount: 1, prCount: 1, lastUpdated: now });
+      getRepoStatsMock.mockResolvedValueOnce(statsA).mockResolvedValueOnce(statsB);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(7));
+
+      currentProject = { id: "b", path: "/repo/b" };
+      act(() => {
+        switchHandler?.();
+      });
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(12));
+
+      // Switch back to A and fire both reactivation triggers in one tick.
+      currentProject = { id: "a", path: "/repo/a" };
+      Object.defineProperty(document, "hidden", { value: false, configurable: true });
+      await act(async () => {
+        switchHandler?.();
+        document.dispatchEvent(new Event("visibilitychange"));
+        await Promise.resolve();
+      });
+
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(7));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("still force-fetches on a manual refresh after a fresh reactivation (#10765)", async () => {
+      let currentProject = { id: "a", path: "/repo/a" };
+      getCurrentMock.mockImplementation(async () => currentProject);
+      let switchHandler: (() => void) | undefined;
+      onSwitchMock.mockImplementation((cb: () => void) => {
+        switchHandler = cb;
+        return () => {};
+      });
+
+      const now = Date.now();
+      const statsA = freshStats({ commitCount: 7, issueCount: 4, prCount: 3, lastUpdated: now });
+      const statsB = freshStats({ commitCount: 12, issueCount: 1, prCount: 1, lastUpdated: now });
+      const statsARefreshed = freshStats({
+        commitCount: 9,
+        issueCount: 6,
+        prCount: 4,
+        lastUpdated: now + 1,
+      });
+      getRepoStatsMock
+        .mockResolvedValueOnce(statsA)
+        .mockResolvedValueOnce(statsB)
+        .mockResolvedValueOnce(statsARefreshed);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(7));
+
+      currentProject = { id: "b", path: "/repo/b" };
+      act(() => {
+        switchHandler?.();
+      });
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(12));
+
+      // Fresh reactivation back to A — restores cache, no network.
+      currentProject = { id: "a", path: "/repo/a" };
+      act(() => {
+        switchHandler?.();
+      });
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(7));
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+
+      // A manual refresh is forced and reason 'manual' — it must always hit the
+      // network, never short-circuit on freshness.
+      await act(async () => {
+        await result.current.refresh({ force: true });
+      });
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(9));
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(3);
+      expect(getRepoStatsMock.mock.calls[2]?.[1]).toBe(true);
+    });
+
+    it("never paints an error under rapid dual-trigger switching once data is cached (#10765)", async () => {
+      // Closest reproduction of the production failure: each switch fires both
+      // onProjectSwitch and visibilitychange, and the IPC layer rejects once a
+      // burst exceeds the 10-calls/10s limiter. With freshness short-circuiting,
+      // only the two cold loads reach the network, so the burst never trips it.
+      let currentProject = { id: "a", path: "/repo/a" };
+      getCurrentMock.mockImplementation(async () => currentProject);
+      let switchHandler: (() => void) | undefined;
+      onSwitchMock.mockImplementation((cb: () => void) => {
+        switchHandler = cb;
+        return () => {};
+      });
+
+      const now = Date.now();
+      let callCount = 0;
+      getRepoStatsMock.mockImplementation(async (path: string) => {
+        callCount += 1;
+        if (callCount > 10) throw new Error("RATE_LIMITED: too many requests");
+        return freshStats({ commitCount: path === "/repo/a" ? 7 : 12, lastUpdated: now });
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(7));
+
+      Object.defineProperty(document, "hidden", { value: false, configurable: true });
+      const sequence = ["/repo/b", "/repo/a", "/repo/b", "/repo/a", "/repo/b", "/repo/a"];
+      for (const path of sequence) {
+        currentProject = { id: path, path };
+        await act(async () => {
+          switchHandler?.();
+          document.dispatchEvent(new Event("visibilitychange"));
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+      }
+
+      await waitFor(() => expect(result.current.stats).not.toBeNull());
+      // Only the two cold loads (A, then B) hit the network; every subsequent
+      // reactivation restores fresh cache and short-circuits.
+      expect(callCount).toBeLessThanOrEqual(3);
+      expect(result.current.error).toBeNull();
+      expect(result.current.freshnessLevel).not.toBe("errored");
+    });
+
+    it("skips the network when reactivation triggers arrive in separate ticks (#10765)", async () => {
+      // The same-tick dual-trigger test guarantees queue coalescing; this one
+      // proves the short-circuit also holds when onProjectSwitch and
+      // visibilitychange land in distinct macrotasks (no coalescing).
+      let currentProject = { id: "a", path: "/repo/a" };
+      getCurrentMock.mockImplementation(async () => currentProject);
+      let switchHandler: (() => void) | undefined;
+      onSwitchMock.mockImplementation((cb: () => void) => {
+        switchHandler = cb;
+        return () => {};
+      });
+
+      const now = Date.now();
+      const statsA = freshStats({ commitCount: 7, issueCount: 4, prCount: 3, lastUpdated: now });
+      const statsB = freshStats({ commitCount: 12, issueCount: 1, prCount: 1, lastUpdated: now });
+      getRepoStatsMock.mockResolvedValueOnce(statsA).mockResolvedValueOnce(statsB);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(7));
+
+      currentProject = { id: "b", path: "/repo/b" };
+      act(() => {
+        switchHandler?.();
+      });
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(12));
+
+      // Switch back to A — fire the two triggers in separate act() ticks.
+      currentProject = { id: "a", path: "/repo/a" };
+      await act(async () => {
+        switchHandler?.();
+        await Promise.resolve();
+      });
+      Object.defineProperty(document, "hidden", { value: false, configurable: true });
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+        await Promise.resolve();
+      });
+
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(7));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not reuse cached stats when switching back after FRESH_THRESHOLD_MS", async () => {
+      let currentProject = { id: "a", path: "/repo/a" };
+      getCurrentMock.mockImplementation(async () => currentProject);
+      let switchHandler: (() => void) | undefined;
+      onSwitchMock.mockImplementation((cb: () => void) => {
+        switchHandler = cb;
+        return () => {};
+      });
+
+      // A's stats are older than the fresh window (but still within aging, so
+      // the entry survives eviction) — switch-back must not restore them.
+      const staleAge = Date.now() - (FRESH_THRESHOLD_MS + 5_000);
+      const statsA = freshStats({ commitCount: 7, lastUpdated: staleAge });
+      const statsB = freshStats({ commitCount: 12 });
+      const slowA2 = createDeferred<ForgeRepositoryStats>();
+
+      getRepoStatsMock
+        .mockResolvedValueOnce(statsA)
+        .mockResolvedValueOnce(statsB)
+        .mockImplementationOnce(() => slowA2.promise);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(7));
+
+      currentProject = { id: "b", path: "/repo/b" };
+      act(() => {
+        switchHandler?.();
+      });
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(12));
+
+      // Switch back to A — its cache entry is past FRESH_THRESHOLD_MS, so the
+      // hook clears to a skeleton and refetches.
+      currentProject = { id: "a", path: "/repo/a" };
+      act(() => {
+        switchHandler?.();
+      });
+      await waitFor(() => {
+        expect(result.current.stats).toBeNull();
+        expect(result.current.loading).toBe(true);
+      });
+
+      await act(async () => {
+        slowA2.resolve(freshStats({ commitCount: 9, issueCount: 4, prCount: 2 }));
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(9));
+    });
+
+    it("never restores a previous error on switch-back (errors are not cached)", async () => {
+      let currentProject = { id: "a", path: "/repo/a" };
+      getCurrentMock.mockImplementation(async () => currentProject);
+      let switchHandler: (() => void) | undefined;
+      onSwitchMock.mockImplementation((cb: () => void) => {
+        switchHandler = cb;
+        return () => {};
+      });
+
+      const erroredA = freshStats({
+        commitCount: 0,
+        issueCount: null,
+        prCount: null,
+        stale: true,
+        error: "Token expired",
+      });
+      const statsB = freshStats({ commitCount: 12 });
+      const freshA = freshStats({ commitCount: 5, issueCount: 2, prCount: 1 });
+
+      getRepoStatsMock
+        .mockResolvedValueOnce(erroredA)
+        .mockResolvedValueOnce(statsB)
+        .mockResolvedValueOnce(freshA);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(result.current.error).toBe("Token expired"));
+
+      currentProject = { id: "b", path: "/repo/b" };
+      act(() => {
+        switchHandler?.();
+      });
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(12));
+
+      // Switch back to A — the errored result was never cached, so a fresh fetch
+      // runs and the error does not reappear.
+      currentProject = { id: "a", path: "/repo/a" };
+      act(() => {
+        switchHandler?.();
+      });
+      await waitFor(() => {
+        expect(getRepoStatsMock).toHaveBeenCalledTimes(3);
+        expect(result.current.stats?.commitCount).toBe(5);
+        expect(result.current.error).toBeNull();
+      });
+    });
+
+    it("evicts the oldest cache entry once the cap is exceeded", async () => {
+      // Cap is 20 entries. Loading 21 distinct projects evicts the oldest
+      // (smallest lastUpdated), so switching back to it can no longer restore
+      // from cache and must refetch with a skeleton.
+      let currentProject = { id: "p0", path: "/repo/p0" };
+      getCurrentMock.mockImplementation(async () => currentProject);
+      let switchHandler: (() => void) | undefined;
+      onSwitchMock.mockImplementation((cb: () => void) => {
+        switchHandler = cb;
+        return () => {};
+      });
+
+      const base = Date.now();
+      let tick = 0;
+      getRepoStatsMock.mockImplementation(async () => {
+        tick += 1;
+        return freshStats({ commitCount: tick, lastUpdated: base + tick });
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(1));
+
+      // Load 20 more distinct projects (p1..p20) → 21 total, evicting p0.
+      for (let i = 1; i <= 20; i++) {
+        currentProject = { id: `p${i}`, path: `/repo/p${i}` };
+        act(() => {
+          switchHandler?.();
+        });
+        await waitFor(() => expect(result.current.stats?.commitCount).toBe(i + 1));
+      }
+
+      // Switch back to p0 — its entry was evicted, so it refetches with a
+      // skeleton instead of restoring instantly.
+      const slowP0 = createDeferred<ForgeRepositoryStats>();
+      getRepoStatsMock.mockImplementationOnce(() => slowP0.promise);
+      currentProject = { id: "p0", path: "/repo/p0" };
+      act(() => {
+        switchHandler?.();
+      });
+      await waitFor(() => {
+        expect(result.current.stats).toBeNull();
+        expect(result.current.loading).toBe(true);
+      });
+
+      await act(async () => {
+        slowP0.resolve(freshStats({ commitCount: 999 }));
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(result.current.stats?.commitCount).toBe(999));
     });
   });
 

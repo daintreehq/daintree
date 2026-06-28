@@ -335,12 +335,6 @@ test.describe.serial("Full: terminal agent-state and status surfaces", () => {
       })
       .toBe("working");
 
-    await test.step("Sleep Terminal is disabled while the agent is working", async () => {
-      const sleepItem = window.getByRole("menuitem", { name: /^Sleep Terminal/i });
-      await expect(sleepItem).toBeVisible({ timeout: T_SHORT });
-      await expect(sleepItem).toHaveAttribute("aria-disabled", "true");
-    });
-
     await test.step("Restart Terminal opens a confirmation dialog instead of firing", async () => {
       await clickTerminalContextMenuItem(panel, "Restart Terminal");
       const dialog = window.getByRole("alertdialog");

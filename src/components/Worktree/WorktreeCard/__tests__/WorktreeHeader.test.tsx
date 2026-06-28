@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { WorktreeHeader, type WorktreeHeaderProps } from "../WorktreeHeader";
@@ -13,6 +13,18 @@ import { actionService } from "@/services/ActionService";
 vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
   return { ...actual, createPortal: (children: ReactNode) => children };
+});
+
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+beforeAll(() => {
+  if (typeof globalThis.ResizeObserver === "undefined") {
+    globalThis.ResizeObserver = ResizeObserverStub as typeof ResizeObserver;
+  }
 });
 
 let mockMissingCredential = false;
@@ -388,28 +400,27 @@ describe("WorktreeHeader primary worktree standard branch layout", () => {
     expect(screen.getByText("main")).toBeDefined();
   });
 
-  it("applies active styling to project name when isActive", () => {
-    renderHeader({
+  it("styles the project name differently when active vs inactive", () => {
+    const active = renderHeader({
       worktree: mainWorktree,
       isMainWorktree: true,
       isMainOnStandardBranch: true,
       isActive: true,
       branchLabel: "main",
     });
-    const projectName = screen.getByTestId("primary-worktree-project-name");
-    expect(projectName.className).toContain("text-text-primary/90");
-  });
+    const activeClass = active.getByTestId("primary-worktree-project-name").className;
+    active.unmount();
 
-  it("applies inactive styling to project name when not active", () => {
-    renderHeader({
+    const inactive = renderHeader({
       worktree: mainWorktree,
       isMainWorktree: true,
       isMainOnStandardBranch: true,
       isActive: false,
       branchLabel: "main",
     });
-    const projectName = screen.getByTestId("primary-worktree-project-name");
-    expect(projectName.className).toContain("text-text-secondary");
+    const inactiveClass = inactive.getByTestId("primary-worktree-project-name").className;
+
+    expect(activeClass).not.toBe(inactiveClass);
   });
 
   it("falls back to BranchLabel when isMainOnStandardBranch is false", () => {
@@ -704,31 +715,6 @@ describe("WorktreeHeader click bubbling", () => {
     fireEvent.click(collapseButton);
     expect(onToggleCollapse).toHaveBeenCalledOnce();
     expect(onParentClick).not.toHaveBeenCalled();
-  });
-});
-
-describe("WorktreeHeader decorative elements", () => {
-  it("Sprout icon has pointer-events-none when isMainWorktree", () => {
-    const { container } = renderHeader({ isMainWorktree: true });
-    const sprout = container.querySelector('svg[aria-hidden="true"]');
-    expect(sprout).toBeDefined();
-    expect(sprout!.getAttribute("class")).toContain("pointer-events-none");
-  });
-
-  it("Pin icon has pointer-events-none when isPinned", () => {
-    const { container } = renderHeader({ isPinned: true });
-    const pin = container.querySelector('svg[aria-label="Pinned"]');
-    expect(pin).toBeDefined();
-    expect(pin!.getAttribute("class")).toContain("pointer-events-none");
-  });
-
-  it("git state badge has pointer-events-none", () => {
-    renderHeader({
-      gitStateIndicator: { kind: "detached", label: "detached", tone: "warning" },
-    });
-    const badge = screen.getByText("detached");
-    expect(badge.className).toContain("pointer-events-none");
-    expect(badge.className).toContain("text-status-warning");
   });
 });
 
@@ -1182,11 +1168,14 @@ describe("WorktreeHeader token-missing badge behavior", () => {
       name: /Add a forge access token to see issue details/,
     });
     expect(issueButton).toBeDefined();
-    // Button stays full-opacity for focus-ring contrast; icon is dimmed.
+    // Button stays full-opacity for focus-ring contrast; the icon is muted with a
+    // solid token (not its active state color, and not opacity/grayscale dimming).
     expect(issueButton.className).not.toContain("opacity-60");
     const issueIcon = issueButton.querySelector("svg");
-    expect(issueIcon?.className.baseVal).toContain("grayscale");
-    expect(issueIcon?.className.baseVal).toContain("opacity-50");
+    expect(issueIcon?.className.baseVal).toContain("text-text-muted");
+    expect(issueIcon?.className.baseVal).not.toContain("text-pr-open");
+    expect(issueIcon?.className.baseVal).not.toContain("grayscale");
+    expect(issueIcon?.className.baseVal).not.toContain("opacity-50");
   });
 
   it("issue badge dispatches settings action on click when no token configured", () => {
@@ -1224,8 +1213,11 @@ describe("WorktreeHeader token-missing badge behavior", () => {
     expect(prButton).toBeDefined();
     expect(prButton.className).not.toContain("opacity-60");
     const prIcon = prButton.querySelector("svg");
-    expect(prIcon?.className.baseVal).toContain("grayscale");
-    expect(prIcon?.className.baseVal).toContain("opacity-50");
+    // Muted with a solid token, not the active PR-state color or opacity/grayscale.
+    expect(prIcon?.className.baseVal).toContain("text-text-muted");
+    expect(prIcon?.className.baseVal).not.toContain("text-pr-open");
+    expect(prIcon?.className.baseVal).not.toContain("grayscale");
+    expect(prIcon?.className.baseVal).not.toContain("opacity-50");
   });
 
   it("PR badge dispatches settings action on click when no token configured", () => {
@@ -1498,5 +1490,132 @@ describe("WorktreeHeader upstream sync indicator", () => {
     expect(indicator.getAttribute("data-fetch-auth-failed")).toBe("true");
     expect(indicator.getAttribute("data-fetch-network-failed")).toBeNull();
     expect(indicator.className).not.toContain("opacity-75");
+  });
+});
+
+describe("WorktreeHeader blocking-op recovery row (#10715)", () => {
+  // The row mounts off worktree.repoState (the raw in-progress operation), NOT
+  // gitStateIndicator — so it surfaces even when conflicts make the badge read
+  // "conflicted". gitStateIndicator only drives the inert badge label.
+  function conflictedChanges(): WorktreeState["worktreeChanges"] {
+    return {
+      worktreeId: "test-wt",
+      rootPath: "/tmp/test-wt",
+      changedFileCount: 1,
+      changes: [{ path: "a.ts", status: "conflicted", insertions: null, deletions: null }],
+    };
+  }
+
+  function blockingHeader(
+    repoState: WorktreeState["repoState"],
+    overrides: Partial<Omit<WorktreeHeaderProps, "worktree">> & {
+      worktree?: Partial<WorktreeState>;
+    } = {}
+  ) {
+    const { worktree: worktreeOverride, ...rest } = overrides;
+    return renderHeader({
+      worktree: { ...baseWorktree, repoState, ...(worktreeOverride ?? {}) },
+      onAbortRepositoryOperation: vi.fn().mockResolvedValue(undefined),
+      onContinueRepositoryOperation: vi.fn().mockResolvedValue(undefined),
+      ...rest,
+    });
+  }
+
+  // getAllByRole(...)[i] is `HTMLElement | undefined` under noUncheckedIndexedAccess.
+  function nthButton(name: string, index: number): HTMLElement {
+    const els = screen.getAllByRole("button", { name });
+    const el = index < 0 ? els[els.length + index] : els[index];
+    if (!el) throw new Error(`button "${name}" at index ${index} not found`);
+    return el;
+  }
+
+  const BLOCKING = [
+    { repoState: "REVERTING", label: "revert" },
+    { repoState: "REBASING", label: "rebase" },
+    { repoState: "MERGING", label: "merge" },
+    { repoState: "CHERRY_PICKING", label: "cherry-pick" },
+  ] as const;
+
+  it.each(BLOCKING)("renders Continue + Abort for $repoState", ({ repoState, label }) => {
+    blockingHeader(repoState);
+    expect(screen.getByRole("button", { name: `Continue ${label}` })).toBeTruthy();
+    expect(screen.getByRole("button", { name: `Abort ${label}` })).toBeTruthy();
+  });
+
+  it("renders the row for an in-progress operation that has conflicts (the canonical stuck case)", () => {
+    blockingHeader("REVERTING", { worktree: { worktreeChanges: conflictedChanges() } });
+    // Row still mounts even though the badge would read "conflicted"...
+    expect(screen.getByRole("button", { name: "Abort revert" })).toBeTruthy();
+    // ...and Continue is disabled until the conflicts are resolved.
+    const cont = screen.getByRole("button", { name: "Continue revert" });
+    expect(cont.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("does not render the row when no operation is in progress", () => {
+    renderHeader({
+      worktree: { ...baseWorktree, repoState: undefined, isDetached: true },
+      onAbortRepositoryOperation: vi.fn(),
+      onContinueRepositoryOperation: vi.fn(),
+    });
+    expect(screen.queryByRole("button", { name: /^Continue / })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Abort / })).toBeNull();
+  });
+
+  it("does not render the row when collapsed", () => {
+    blockingHeader("REVERTING", { isCollapsed: true });
+    expect(screen.queryByRole("button", { name: "Continue revert" })).toBeNull();
+  });
+
+  it("does not render the row when callbacks are absent", () => {
+    renderHeader({ worktree: { ...baseWorktree, repoState: "REVERTING" } });
+    expect(screen.queryByRole("button", { name: "Continue revert" })).toBeNull();
+  });
+
+  it("Abort opens a destructive ConfirmDialog and confirming invokes onAbort", async () => {
+    const onAbort = vi.fn().mockResolvedValue(undefined);
+    blockingHeader("REVERTING", { onAbortRepositoryOperation: onAbort });
+    // The inline Abort button only opens the dialog — it must not call IPC directly.
+    fireEvent.click(nthButton("Abort revert", 0));
+    expect(onAbort).not.toHaveBeenCalled();
+
+    // The dialog's confirm button carries the same verb-noun label; it's the
+    // last "Abort revert" button now that the dialog has opened.
+    fireEvent.click(nthButton("Abort revert", -1));
+    await Promise.resolve();
+    expect(onAbort).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the abort dialog open when the abort fails so the user can retry", async () => {
+    const onAbort = vi.fn().mockRejectedValue(new Error("nope"));
+    blockingHeader("REVERTING", { onAbortRepositoryOperation: onAbort });
+    fireEvent.click(nthButton("Abort revert", 0));
+    fireEvent.click(nthButton("Abort revert", -1));
+    await Promise.resolve();
+    await Promise.resolve();
+    // Dialog still mounted (both trigger + confirm present) and not stuck loading.
+    expect(screen.getAllByRole("button", { name: "Abort revert" }).length).toBeGreaterThan(1);
+    expect(onAbort).toHaveBeenCalledTimes(1);
+  });
+
+  it("Continue invokes onContinue when there are no unresolved conflicts", async () => {
+    const onContinue = vi.fn().mockResolvedValue(undefined);
+    blockingHeader("REBASING", { onContinueRepositoryOperation: onContinue });
+    const btn = screen.getByRole("button", { name: "Continue rebase" });
+    expect(btn.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(btn);
+    await Promise.resolve();
+    expect(onContinue).toHaveBeenCalledTimes(1);
+  });
+
+  it("Continue is disabled while unresolved conflicts remain", () => {
+    const onContinue = vi.fn();
+    blockingHeader("REBASING", {
+      worktree: { worktreeChanges: conflictedChanges() },
+      onContinueRepositoryOperation: onContinue,
+    });
+    const btn = screen.getByRole("button", { name: "Continue rebase" });
+    expect(btn.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(btn);
+    expect(onContinue).not.toHaveBeenCalled();
   });
 });

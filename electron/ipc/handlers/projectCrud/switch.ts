@@ -64,12 +64,26 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       await awaitPendingOutgoingPersist(projectId);
       await activateProjectView(deps, ctx.event, pvm, projectId, project, {
         logPrefix: "[ProjectSwitch]",
+        resumeWorkspace: true,
       });
       await persistOutgoing;
       return project;
     }
 
     await persistOutgoing;
+    // Legacy (non-PVM) path bypasses WorkspaceHostPool.loadProject, so the
+    // pool's switch-away background demotion never fires. Pause the outgoing
+    // project and resume the incoming one explicitly so background projects
+    // stop full-rate polling here too (#10743).
+    if (deps.worktreeService) {
+      if (previousProjectId && previousProjectId !== projectId) {
+        const previousPath = projectStore.getProjectById(previousProjectId)?.path;
+        if (previousPath) {
+          deps.worktreeService.pauseProject(previousPath);
+        }
+      }
+      deps.worktreeService.resumeProject(project.path);
+    }
     return await projectSwitchService.switchProject(projectId);
   };
   handlers.push(typedHandleWithContext(CHANNELS.PROJECT_SWITCH, handleProjectSwitch));

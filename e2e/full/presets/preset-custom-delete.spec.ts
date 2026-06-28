@@ -129,12 +129,12 @@ test.describe.serial("Presets: Custom Delete (45–52)", () => {
     // nothing in the current UI.
     const chevron = ctx.window.locator('[aria-label^="Set"][aria-label$="preset"]').first();
     await expect(chevron).toBeVisible({ timeout: T_MEDIUM });
-    // Each custom/CCR/project preset renders as a menuitemradio in the
-    // toolbar split-button dropdown (the "Agent default" radio is always there).
-    const presetRadios = ctx.window.locator('[role="menuitemradio"]');
     await chevron.click();
-    await expect(presetRadios.first()).toBeVisible({ timeout: T_MEDIUM });
-    const countBefore = await presetRadios.count();
+    const presetItems = ctx.window
+      .locator('[role="menu"] [role="menuitem"]')
+      .filter({ hasNotText: "Manage Presets..." });
+    await expect(presetItems.first()).toBeVisible({ timeout: T_MEDIUM });
+    const countBefore = await presetItems.count();
     expect(countBefore).toBeGreaterThan(1);
     await ctx.window.keyboard.press("Escape");
 
@@ -148,8 +148,8 @@ test.describe.serial("Presets: Custom Delete (45–52)", () => {
 
     await expect(chevron).toBeVisible({ timeout: T_MEDIUM });
     await chevron.click();
-    await expect(presetRadios.first()).toBeVisible({ timeout: T_MEDIUM });
-    await expect.poll(() => presetRadios.count(), { timeout: T_MEDIUM }).toBeLessThan(countBefore);
+    await expect(presetItems.first()).toBeVisible({ timeout: T_MEDIUM });
+    await expect.poll(() => presetItems.count(), { timeout: T_MEDIUM }).toBeLessThan(countBefore);
     await ctx.window.keyboard.press("Escape");
   });
 

@@ -22,6 +22,7 @@ import {
 } from "../utils/performance.js";
 import { AppError } from "../utils/errorTypes.js";
 import { assertIpcSecurityReady } from "./ipcGuard.js";
+import { isE2EFaultMode } from "../setup/runtimeFlags.js";
 
 /**
  * Parse the first argument of an IPC payload against a Zod schema. On
@@ -314,7 +315,7 @@ export function _resetRateLimitQueuesForTest(): void {
   }
 }
 
-if (process.env.DAINTREE_E2E_FAULT_MODE === "1") {
+if (isE2EFaultMode) {
   (globalThis as Record<string, unknown>).__daintreeResetRateLimits = _resetRateLimitQueuesForTest;
 }
 

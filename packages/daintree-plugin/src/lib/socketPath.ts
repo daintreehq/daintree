@@ -3,4 +3,9 @@
 // single source of truth instead of two byte-for-byte copies. The shared module
 // is pure node, so tsup bundles it into the standalone CLI without pulling in
 // electron.
-export { getCliSocketPath } from "../../../../shared/utils/cliSocketPath.js";
+export {
+  getCliSocketPath,
+  getCliControlFilePath,
+  readCliControlFile,
+  type CliControlInfo,
+} from "../../../../shared/utils/cliSocketPath.js";

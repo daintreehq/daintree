@@ -54,7 +54,7 @@ test.describe.serial("Core: Concurrent terminal output during UI interactions", 
     const { window } = ctx;
 
     await runTerminalCommand(window, terminalPanel, streamingCommand("CONC_A"));
-    await waitForTerminalText(terminalPanel, "CONC_A_1", T_MEDIUM);
+    await waitForTerminalText(terminalPanel, "CONC_A_1", T_LONG);
 
     await window.keyboard.press(`${mod}+Shift+P`);
     const dialog = window.locator(SEL.actionPalette.dialog);

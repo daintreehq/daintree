@@ -74,7 +74,7 @@ test.describe.serial("Core: Plugin settings form", () => {
     const { ctx: launched, cleanup } = await launchWithSamplePlugin("plugin-settings");
     ctx = launched;
     fixtureCleanup = cleanup;
-    await waitForRichPluginReady(ctx.window);
+    await waitForRichPluginReady(ctx.app, ctx.window);
     await resetUserSettings(ctx.window);
   });
 

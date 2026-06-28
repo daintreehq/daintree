@@ -4,7 +4,7 @@ import { setCurrentViewStore } from "@/store/createWorktreeStore";
 import type { WorktreeViewStore, WorktreeViewStoreApi } from "@/store/createWorktreeStore";
 import type { WorktreeSnapshot } from "@shared/types";
 import { KEY_ACTION_VALUES } from "@shared/types/keymap";
-import { BUILT_IN_ACTION_IDS } from "@shared/config/actionIds";
+import { BUILT_IN_ACTION_IDS, DENY_PLUGIN_DISPATCH_ACTION_IDS } from "@shared/config/actionIds";
 import type { ActionId } from "@shared/types/actions";
 import type { ActionRegistry, ActionCallbacks } from "../actionTypes";
 import { DEFAULT_KEYBINDINGS } from "../../defaultKeybindings";
@@ -333,6 +333,16 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "devPreview.reinstallAndRestart",
   "artifact.applyPatch",
   "agentSettings.reset",
+  "forge.createPR",
+  "forge.closePR",
+  "forge.reopenPR",
+  "forge.mergePR",
+  "forge.convertPRToDraft",
+  "forge.markPRReadyForReview",
+  "forge.commentOnPR",
+  "forge.editPR",
+  "forge.closeIssue",
+  "forge.editIssue",
 ];
 
 /**
@@ -399,6 +409,24 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // ConfirmDialog with diff preview in ArtifactOverlay.tsx; the dispatch lives in
   // useArtifacts.ts (action ID not co-located with the dialog component).
   "artifact.applyPatch",
+  // Forge PR write actions are agent/MCP-only — exposed over MCP, not bound to a
+  // user-side ConfirmDialog. danger:"confirm" gates agent dispatch (requiring
+  // confirmed:true) and excludes them from repeatLast/MRU; there is no UI
+  // dispatch path to wire a dialog to (issue #10654).
+  "forge.createPR",
+  "forge.closePR",
+  "forge.reopenPR",
+  "forge.mergePR",
+  "forge.convertPRToDraft",
+  "forge.markPRReadyForReview",
+  "forge.commentOnPR",
+  "forge.editPR",
+  // Agent/MCP-only forge write surface (#10653) — no user-side ConfirmDialog.
+  // danger:"confirm" gates agent dispatch only (closing an issue / overwriting
+  // its body on the shared forge are D2 mutations needing acknowledgment); user
+  // dispatch happens through the forge UI, not these actions.
+  "forge.closeIssue",
+  "forge.editIssue",
 ];
 
 describe("destructive-action confirm wiring", () => {
@@ -467,6 +495,18 @@ describe("destructive-action danger metadata", () => {
       recipeId: "recipe-placeholder",
       patchContent: "--- a\n+++ b",
       cwd: "/placeholder",
+      // forge.* PR write actions require these before the confirm gate runs.
+      prNumber: 1,
+      head: "feature-branch",
+      base: "main",
+      title: "placeholder",
+      body: "placeholder",
+      // forge.closeIssue/editIssue need a valid issueNumber (+ a title so
+      // editIssue's title-or-body refinement passes) to clear arg validation
+      // and reach the confirm gate.
+      issueNumber: 1,
+      // terminal.kill/restart require a terminalId before their confirm gate runs.
+      terminalId: "term-placeholder",
     };
 
     // Some listed actions (e.g. worktree.resource.teardown) gate availability
@@ -539,6 +579,61 @@ describe("destructive-action danger metadata", () => {
       }
     }
 
+    expect(failures).toEqual([]);
+  });
+});
+
+/**
+ * Built-in actions that inject text/keystrokes into terminals and therefore must
+ * be closed to plugin `host.dispatch` (#10558) — plugins inject only through the
+ * `agent:input`-gated `host.sendToActiveAgent`. The single source of truth is
+ * `DENY_PLUGIN_DISPATCH_ACTION_IDS` in `shared/config/actionIds.ts`, which the
+ * plugin manifest validator (#10580) also consumes; the completeness guard below
+ * asserts it stays in lockstep with the registry's `denyPluginDispatch: true`
+ * flags so a new injection action can't silently bypass either gate.
+ */
+const PLUGIN_DENIED_INJECTION_ACTIONS: ReadonlyArray<ActionId> =
+  DENY_PLUGIN_DISPATCH_ACTION_IDS as unknown as ActionId[];
+
+describe("plugin-dispatch injection guard (#10558)", () => {
+  it("DENY_PLUGIN_DISPATCH_ACTION_IDS exactly matches the registry's denyPluginDispatch flags", async () => {
+    // `satisfies readonly BuiltInRuntimeActionId[]` on the constant only catches
+    // renames/removals — a newly-flagged action omitted from the list would slip
+    // through. This is the completeness guard (#10580, lesson #8341): the exported
+    // deny-list and the actual `denyPluginDispatch: true` definitions must be the
+    // same set, or both the runtime dispatch gate and the manifest validator drift.
+    const { registry } = await createRegistryWithAudit();
+    const flaggedInRegistry = new Set<string>();
+    for (const [id, factory] of registry) {
+      if (factory().denyPluginDispatch === true) {
+        flaggedInRegistry.add(id);
+      }
+    }
+    expect([...flaggedInRegistry].sort()).toEqual([...DENY_PLUGIN_DISPATCH_ACTION_IDS].sort());
+  });
+
+  it("rejects plugin-source dispatch with RESTRICTED for every injection action", async () => {
+    const { ActionService } = await import("../../ActionService");
+    const { registry } = await createRegistryWithAudit();
+    const service = new ActionService();
+    for (const [, factory] of registry) {
+      service.register(factory());
+    }
+    // Valid args so dispatch reaches the plugin-dispatch gate rather than
+    // short-circuiting on VALIDATION_ERROR (terminal.sendCommand requires both).
+    const args = { terminalId: "t-placeholder", command: "noop", url: "https://example.com" };
+
+    const failures: string[] = [];
+    for (const id of PLUGIN_DENIED_INJECTION_ACTIONS) {
+      const result = await service.dispatch(id, args, { source: "plugin" });
+      if (result.ok) {
+        failures.push(`${id} (plugin dispatch succeeded — side door open)`);
+        continue;
+      }
+      if (result.error.code !== "RESTRICTED") {
+        failures.push(`${id} (got "${result.error.code}", expected RESTRICTED)`);
+      }
+    }
     expect(failures).toEqual([]);
   });
 });

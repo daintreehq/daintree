@@ -21,12 +21,22 @@ interface MockWc {
   removeListener: ReturnType<typeof vi.fn>;
   setWindowOpenHandler: ReturnType<typeof vi.fn>;
   setIgnoreMenuShortcuts: ReturnType<typeof vi.fn>;
+  // WebContents-scoped ipc receiver (Electron `webContents.ipc`). Production
+  // registers the cold-start skeleton-parsed listener here; the real renderer
+  // `send` is simulated via `_emitIpcOnce`.
+  ipc: {
+    once: ReturnType<typeof vi.fn>;
+    on: ReturnType<typeof vi.fn>;
+    removeListener: ReturnType<typeof vi.fn>;
+  };
   _fireOnce: (event: string, ...args: unknown[]) => void;
+  _emitIpcOnce: (channel: string, ...args: unknown[]) => void;
 }
 
 function createMockWebContents(opts?: { autoFinishLoad?: boolean }): MockWc {
   const id = nextWebContentsId++;
   const handlers = new Map<string, Handler[]>();
+  const ipcHandlers = new Map<string, Handler[]>();
   const autoFinish = opts?.autoFinishLoad ?? true;
 
   const wc: MockWc = {
@@ -58,8 +68,23 @@ function createMockWebContents(opts?: { autoFinishLoad?: boolean }): MockWc {
     }),
     setWindowOpenHandler: vi.fn(),
     setIgnoreMenuShortcuts: vi.fn(),
+    ipc: {
+      once: vi.fn((channel: string, handler: Handler) => {
+        if (!ipcHandlers.has(channel)) ipcHandlers.set(channel, []);
+        ipcHandlers.get(channel)!.push(handler);
+      }),
+      on: vi.fn(),
+      removeListener: vi.fn(),
+    },
     _fireOnce(event: string, ...args: unknown[]) {
       const list = handlers.get(event);
+      if (list && list.length > 0) {
+        const h = list.shift()!;
+        h(...args);
+      }
+    },
+    _emitIpcOnce(channel: string, ...args: unknown[]) {
+      const list = ipcHandlers.get(channel);
       if (list && list.length > 0) {
         const h = list.shift()!;
         h(...args);
@@ -74,7 +99,12 @@ let wcQueue: MockWc[] = [];
 vi.mock("electron", () => {
   function MockWebContentsView() {
     const wc = wcQueue.shift();
-    return { webContents: wc, setBounds: vi.fn(), setBackgroundColor: vi.fn() };
+    return {
+      webContents: wc,
+      setBounds: vi.fn(),
+      setBackgroundColor: vi.fn(),
+      setVisible: vi.fn(),
+    };
   }
   return {
     app: {
@@ -189,6 +219,7 @@ import { ProjectViewManager } from "../ProjectViewManager.js";
 import { logInfo, logWarn } from "../../utils/logger.js";
 import { registerAppView } from "../webContentsRegistry.js";
 import { unfreezeWebContents } from "../../utils/webContentsLifecycle.js";
+import { CHANNELS } from "../../ipc/channels.js";
 
 function createMockWindow() {
   const children: unknown[] = [];
@@ -459,6 +490,285 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     // Correct signal — releases.
     manager.signalViewPainted(incomingWc.id);
     await switchPromise;
+    expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
+  });
+
+  it("early-reveals on the real skeleton-parsed IPC signal (before React paints)", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+
+    const switchPromise = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The cold path must register a scoped skeleton-parsed listener on the
+    // incoming view's webContents — this is the real production wiring, not the
+    // test calling signalSkeletonPainted() directly.
+    expect(incomingWc.ipc.once).toHaveBeenCalledWith(
+      CHANNELS.APP_SKELETON_PARSED,
+      expect.any(Function)
+    );
+
+    // Bridge armed: incoming behind outgoing, outgoing still attached.
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+    // Fire the renderer's skeleton-parsed send (well before any APP_VIEW_PAINTED)
+    // through the real listener — the outgoing view detaches and the branded
+    // skeleton reveals on the fast path.
+    incomingWc._emitIpcOnce(CHANNELS.APP_SKELETON_PARSED);
+    await switchPromise;
+
+    expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+    // Telemetry records the fast-path strategy.
+    const cold = vi.mocked(logInfo).mock.calls.find(([e]) => e === "projectview.coldstart");
+    expect(cold?.[1]).toMatchObject({
+      gateChannel: "skeleton-painted",
+      paintGateOutcome: "signal",
+    });
+    // Released cleanly by the early signal — no timeout warnings.
+    expect(
+      vi
+        .mocked(logWarn)
+        .mock.calls.filter(
+          ([e]) =>
+            e === "projectview.paintgate.softtimeout" || e === "projectview.paintgate.hardtimeout"
+        )
+    ).toHaveLength(0);
+  });
+
+  it("arms the skeleton listener before loadURL so the parse-time send can't be missed", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+
+    const switchPromise = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The listener must be armed before navigation — skeleton-ready.js fires
+    // during HTML parse, so a listener registered after loadURL could miss it.
+    const onceOrder = incomingWc.ipc.once.mock.invocationCallOrder[0];
+    const loadOrder = incomingWc.loadURL.mock.invocationCallOrder[0];
+    expect(onceOrder).toBeDefined();
+    expect(loadOrder).toBeDefined();
+    expect(onceOrder).toBeLessThan(loadOrder);
+
+    incomingWc._emitIpcOnce(CHANNELS.APP_SKELETON_PARSED);
+    await switchPromise;
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+  });
+
+  it("does not arm the skeleton listener (or early-reveal) when a focus intent is pending", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+
+    // A pending focus intent forces the legacy "painted" gating: the focus IPC
+    // listener isn't mounted until React commits, so the gate must wait for the
+    // real paint rather than the bare pre-React skeleton (#4670).
+    manager.setPendingFocusIntent("proj-b", "focus-next-waiting");
+
+    const switchPromise = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The focus-intent path must NOT register a skeleton listener at all.
+    expect(incomingWc.ipc.once).not.toHaveBeenCalledWith(
+      CHANNELS.APP_SKELETON_PARSED,
+      expect.anything()
+    );
+
+    // Even a (defensively) injected skeleton signal must NOT release the gate.
+    manager.signalSkeletonPainted(incomingWc.id);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+    expect(incomingWc.send).not.toHaveBeenCalledWith(
+      "project:focus-on-activate",
+      expect.anything()
+    );
+
+    // The real React paint releases the gate AND delivers the focus intent.
+    manager.signalViewPainted(incomingWc.id);
+    await switchPromise;
+
+    expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+    expect(incomingWc.send).toHaveBeenCalledWith("project:focus-on-activate", {
+      intent: "focus-next-waiting",
+    });
+    const cold = vi.mocked(logInfo).mock.calls.find(([e]) => e === "projectview.coldstart");
+    expect(cold?.[1]).toMatchObject({ gateChannel: "painted" });
+  });
+
+  it("does NOT consume a focus intent that arrives mid-flight on the fast skeleton path", async () => {
+    // Regression: a repeated focusNextWaitingGlobal can set a focus intent AFTER
+    // a skeleton-gated switch armed (when no intent existed). The fast path must
+    // not consume-and-drop it — it must leave it pending for the next
+    // same-project switch to deliver once React is mounted.
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+
+    const switchPromise = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Intent set mid-flight (after the gate was armed for the skeleton channel).
+    manager.setPendingFocusIntent("proj-b", "focus-next-waiting");
+
+    incomingWc._emitIpcOnce(CHANNELS.APP_SKELETON_PARSED);
+    await switchPromise;
+
+    // Revealed fast; the mid-flight intent was NOT delivered into the bare
+    // pre-React skeleton.
+    expect(incomingWc.send).not.toHaveBeenCalledWith(
+      "project:focus-on-activate",
+      expect.anything()
+    );
+
+    // …and crucially it was NOT consumed/dropped. A follow-up switch to the
+    // (now active) same project takes the active-project path, which consumes
+    // and delivers the surviving intent — proving it outlived the fast reveal.
+    await manager.switchTo("proj-b", "/path/b");
+    expect(incomingWc.send).toHaveBeenCalledWith("project:focus-on-activate", {
+      intent: "focus-next-waiting",
+    });
+  });
+
+  it("captures a skeleton signal that arrives before did-finish-load resolves", async () => {
+    // The gate (and its scoped skeleton listener) is armed BEFORE awaiting
+    // loadView, so a skeleton-ready send firing during parse — possibly before
+    // did-finish-load resolves — is captured, not dropped to the timeout.
+    const incomingWc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(incomingWc);
+
+    const switchPromise = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+
+    // Skeleton parses first — captured by the pre-armed listener.
+    incomingWc._emitIpcOnce(CHANNELS.APP_SKELETON_PARSED);
+    // Outgoing stays attached until loadView resolves (the swap runs after the
+    // awaited load, not on the bare signal).
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+    // Now let did-finish-load resolve — the captured signal drives a clean swap.
+    incomingWc._fireOnce("did-finish-load");
+    await switchPromise;
+
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+    expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
+    expect(
+      vi
+        .mocked(logWarn)
+        .mock.calls.filter(
+          ([e]) =>
+            e === "projectview.paintgate.softtimeout" || e === "projectview.paintgate.hardtimeout"
+        )
+    ).toHaveLength(0);
+  });
+
+  it("treats a later view-painted as an idempotent no-op after the skeleton already revealed", async () => {
+    vi.useFakeTimers();
+    try {
+      const incomingWc = createMockWebContents();
+      wcQueue.push(incomingWc);
+
+      const switchPromise = manager.switchTo("proj-b", "/path/b");
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Fast reveal on the skeleton signal.
+      incomingWc._emitIpcOnce(CHANNELS.APP_SKELETON_PARSED);
+      await switchPromise;
+      expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
+
+      // React paints later (the normal real sequence). The gate is already
+      // settled, so this is a no-op — no second detach, one coldstart log, no
+      // timeout warnings.
+      manager.signalViewPainted(incomingWc.id);
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
+      expect(
+        vi.mocked(logInfo).mock.calls.filter(([e]) => e === "projectview.coldstart")
+      ).toHaveLength(1);
+      expect(
+        vi
+          .mocked(logWarn)
+          .mock.calls.filter(
+            ([e]) =>
+              e === "projectview.paintgate.softtimeout" || e === "projectview.paintgate.hardtimeout"
+          )
+      ).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases a skeleton gate via the view-painted fallback when the skeleton signal never arrives", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+
+    const switchPromise = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+    // No skeleton signal arrives (e.g. the classic skeleton-ready script raced a
+    // navigation). The later React paint must still detach the bridge, so an
+    // early-reveal switch can never hang worse than the legacy behaviour.
+    manager.signalViewPainted(incomingWc.id);
+    await switchPromise;
+
+    expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+    // Still recorded as the fast-path strategy (the channel reflects the
+    // strategy chosen, not which signal ultimately fired).
+    const cold = vi.mocked(logInfo).mock.calls.find(([e]) => e === "projectview.coldstart");
+    expect(cold?.[1]).toMatchObject({ gateChannel: "skeleton-painted" });
+  });
+
+  it("ignores a skeleton signal from an unknown webContentsId", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+
+    const switchPromise = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Bogus skeleton signal — gate stays open.
+    manager.signalSkeletonPainted(99_999);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+    // Correct skeleton signal — releases.
+    manager.signalSkeletonPainted(incomingWc.id);
+    await switchPromise;
+    expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
+  });
+
+  it("a skeleton signal does not release a warm bridge gate", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+
+    // Prime B in the cache via the fast skeleton path.
+    const firstSwitch = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+    manager.signalSkeletonPainted(incomingWc.id);
+    await firstSwitch;
+
+    win.contentView.removeChildView.mockClear();
+
+    // Switch back to A (cached) — this opens a WARM gate, not a cold one.
+    const switchBack = manager.switchTo("proj-a", "/path/a");
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+
+    // The cold skeleton channel must not satisfy the warm gate (different
+    // releaseChannel), even with a matching webContentsId.
+    manager.signalSkeletonPainted(initialWc.id);
+    await Promise.resolve();
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+    manager.signalWarmViewPainted(initialWc.id);
+    await switchBack;
     expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
   });
 
@@ -825,5 +1135,20 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     });
     expect(typeof payload.loadToPaintMs).toBe("number");
     expect(payload.loadToPaintMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("notifies a view it is being cached so the renderer can cancel reveal work", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+
+    const switchPromise = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+    manager.signalViewPainted(incomingWc.id);
+    await switchPromise;
+
+    // The outgoing project-a view was cached → its renderer is told so it can
+    // cancel any in-flight wake/repaint rAFs before being throttled/frozen.
+    expect(initialWc.send).toHaveBeenCalledWith(CHANNELS.APP_VIEW_CACHED);
   });
 });

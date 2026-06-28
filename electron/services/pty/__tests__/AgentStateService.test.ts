@@ -88,6 +88,61 @@ describe("AgentStateService", () => {
     expect(terminal.agentState).toBe("exited");
   });
 
+  it("threads exitCode and exitSignal onto the exited state-changed payload (#10638)", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "working" });
+    const stateChanges: Array<{ state: string; exitCode?: number | null; exitSignal?: number }> =
+      [];
+
+    events.on("agent:state-changed", (payload) => {
+      stateChanges.push({
+        state: payload.state,
+        exitCode: payload.exitCode,
+        exitSignal: payload.exitSignal,
+      });
+    });
+
+    service.updateAgentState(terminal, { type: "exit", code: 137, signal: 9 });
+
+    expect(stateChanges).toHaveLength(1);
+    expect(stateChanges[0]?.state).toBe("exited");
+    expect(stateChanges[0]?.exitCode).toBe(137);
+    expect(stateChanges[0]?.exitSignal).toBe(9);
+  });
+
+  it("carries exitCode 0 without an exitSignal on a clean exit (#10638)", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "working" });
+    const stateChanges: Array<{ exitCode?: number | null; exitSignal?: number }> = [];
+
+    events.on("agent:state-changed", (payload) => {
+      stateChanges.push({ exitCode: payload.exitCode, exitSignal: payload.exitSignal });
+    });
+
+    service.updateAgentState(terminal, { type: "exit", code: 0 });
+
+    expect(stateChanges).toHaveLength(1);
+    expect(stateChanges[0]?.exitCode).toBe(0);
+    expect(stateChanges[0]?.exitSignal).toBeUndefined();
+  });
+
+  it("does not attach exit metadata to non-exit completion transitions (#10638)", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "working" });
+    const stateChanges: Array<{ state: string; exitCode?: number | null }> = [];
+
+    events.on("agent:state-changed", (payload) => {
+      stateChanges.push({ state: payload.state, exitCode: payload.exitCode });
+    });
+
+    // A pattern-driven completion (not a PTY exit) has no exit code to report.
+    service.updateAgentState(terminal, { type: "completion" }, "activity", 1.0);
+
+    expect(stateChanges).toHaveLength(1);
+    expect(stateChanges[0]?.state).toBe("completed");
+    expect(stateChanges[0]?.exitCode).toBeUndefined();
+  });
+
   it("transitions idle → exited on graceful agent exit detected from idle (Issue #5767)", () => {
     const service = new AgentStateService();
     const terminal = createTerminal({ agentState: "idle" });
@@ -1107,6 +1162,95 @@ describe("AgentStateService", () => {
       expect(stateChanges[0]?.state).toBe("exited");
       expect(stateChanges[0]?.previousState).toBe("working");
       expect(stateChanges[0]?.trigger).toBe("exit");
+    });
+  });
+
+  describe("lastCheckResult detection (issue #10682)", () => {
+    it("attaches a parsed check result when settling out of working", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        agentState: "working",
+        semanticBuffer: ["> tsc --noEmit", "Found 0 errors."],
+      });
+      const payloads: Array<{ lastCheckResult?: unknown }> = [];
+      events.on("agent:state-changed", (payload) => payloads.push(payload));
+
+      service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+      expect(terminal.agentState).toBe("waiting");
+      expect(payloads).toHaveLength(1);
+      const result = payloads[0]?.lastCheckResult as
+        | { passed: boolean; command: string | null }
+        | undefined;
+      expect(result?.passed).toBe(true);
+      expect(result?.command).toContain("tsc");
+      // Stored on the terminal for getPublicState() hydration.
+      expect(terminal.lastCheckResult?.passed).toBe(true);
+    });
+
+    it("does not attach a result for transitions with no recognized summary", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        agentState: "working",
+        semanticBuffer: ["just some agent narration", "no structured summary here"],
+      });
+      const payloads: Array<{ lastCheckResult?: unknown }> = [];
+      events.on("agent:state-changed", (payload) => payloads.push(payload));
+
+      service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.lastCheckResult).toBeUndefined();
+      expect(terminal.lastCheckResult).toBeUndefined();
+    });
+
+    it("does not re-attach an identical result on repeat settles", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        agentState: "working",
+        semanticBuffer: ["> eslint .", "✖ 2 problems (2 errors, 0 warnings)"],
+      });
+      const payloads: Array<{ lastCheckResult?: unknown }> = [];
+      events.on("agent:state-changed", (payload) => payloads.push(payload));
+
+      // working → waiting (first detection)
+      service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+      // waiting → working (no detection; not a settle state)
+      service.updateAgentState(terminal, { type: "busy" }, "activity", 1.0);
+      // working → waiting again, same buffer (deduped — no new attach)
+      service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+      const withResult = payloads.filter((p) => p.lastCheckResult !== undefined);
+      expect(withResult).toHaveLength(1);
+      expect((withResult[0]?.lastCheckResult as { passed: boolean } | undefined)?.passed).toBe(
+        false
+      );
+    });
+
+    it("clears the stored result on respawn and does not re-detect the old buffer", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        agentState: "exited",
+        // Stale summary from the prior session still sitting in the buffer.
+        semanticBuffer: ["> tsc --noEmit", "Found 0 errors."],
+        lastCheckResult: {
+          command: "tsc --noEmit",
+          passed: true,
+          ranAt: 1,
+          failureSummary: null,
+          truncated: false,
+        },
+      });
+      const payloads: Array<{ lastCheckResult?: unknown }> = [];
+      events.on("agent:state-changed", (payload) => payloads.push(payload));
+
+      // respawn: exited → idle (a settle state) — must NOT resurrect the stale result.
+      service.updateAgentState(terminal, { type: "respawn" });
+
+      expect(terminal.agentState).toBe("idle");
+      expect(terminal.lastCheckResult).toBeUndefined();
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.lastCheckResult).toBeUndefined();
     });
   });
 });

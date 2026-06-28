@@ -5,6 +5,7 @@ import { openExternalUrl } from "./utils/openExternal.js";
 import { CHANNELS } from "./ipc/channels.js";
 import { broadcastProjectSwitchUpdates } from "./ipc/projectSwitchBroadcast.js";
 import { getEffectiveRegistry } from "../shared/config/agentRegistry.js";
+import { isAssistantOnlyAgentId } from "../shared/config/agentIds.js";
 import type { CliAvailabilityService } from "./services/CliAvailabilityService.js";
 import { isAgentInstalled } from "../shared/utils/agentAvailability.js";
 import * as CliInstallService from "./services/CliInstallService.js";
@@ -121,6 +122,8 @@ export function createApplicationMenu(
     const items: Electron.MenuItemConstructorOptions[] = [];
 
     Object.values(getEffectiveRegistry()).forEach((agent) => {
+      // Assistant-only agents are never offered as a launchable native menu item.
+      if (isAssistantOnlyAgentId(agent.id)) return;
       if (isAgentInstalled(availability?.[agent.id])) {
         items.push({
           label: `New ${agent.name}`,

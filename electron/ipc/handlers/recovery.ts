@@ -55,7 +55,13 @@ export function registerRecoveryHandlers(deps: HandlerDependencies): () => void 
       const win = deps.windowRegistry?.getPrimary()?.browserWindow ?? deps.mainWindow;
       if (win && !win.isDestroyed()) {
         console.log("[MAIN] Recovery: resetting state and reloading app");
-        getCrashRecoveryService().resetToFresh();
+        const service = getCrashRecoveryService();
+        service.resetToFresh();
+        // Drop the in-memory pending-crash record too — the reload below
+        // fires app:boot, which re-reads getPendingCrash(); without this the
+        // recovery dialog reappears immediately with the backup already
+        // deleted from disk (#10809, same surface as LRU switch-back).
+        service.clearPendingCrash();
         win.loadURL(getAppUrl());
       }
     })

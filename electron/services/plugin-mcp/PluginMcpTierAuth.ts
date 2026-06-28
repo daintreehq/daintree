@@ -1,6 +1,7 @@
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import type { PluginCapability } from "../../../shared/types/plugin.js";
 import type { PluginMcpDangerTier } from "../../../shared/types/pluginMcpConsent.js";
+import { CONFIRM_TRIGGERING_CAPABILITIES } from "../../../shared/config/pluginCapabilities.js";
 
 /**
  * Capability cap on the host-derived danger tier. The cap classifies what a
@@ -16,18 +17,12 @@ import type { PluginMcpDangerTier } from "../../../shared/types/pluginMcpConsent
  * server to reach D2. Read-only and network-fetch capabilities cap at D1 — the
  * server can still ask for a confirmation, but cannot reach the "shared-state
  * mutation" tier.
+ *
+ * The high-risk set is `CONFIRM_TRIGGERING_CAPABILITIES` from
+ * `shared/config/pluginCapabilities.ts` — the single source of truth shared with
+ * `PluginService`'s action-danger model, so the MCP tier cap and the action
+ * elevation can never drift apart.
  */
-// Keep in lockstep with `CONFIRM_TRIGGERING_CAPABILITIES` in PluginService.ts —
-// both classify the same high-risk capabilities (irreversible side effects) and
-// must stay in sync so the MCP tier cap matches the action-danger model.
-const HIGH_RISK_CAPABILITIES: ReadonlySet<PluginCapability> = new Set([
-  "fs:project-write",
-  "fs:user-data-write",
-  "git:write",
-  "shell:exec",
-  "agent:invoke",
-]);
-
 export type PluginMcpTierClassification =
   | { kind: "tier"; tier: PluginMcpDangerTier }
   | {
@@ -97,7 +92,7 @@ function raiseForOpenWorld(
 
 function deriveCapabilityCap(capabilities: readonly PluginCapability[]): PluginMcpDangerTier {
   for (const cap of capabilities) {
-    if (HIGH_RISK_CAPABILITIES.has(cap)) return "D2";
+    if (CONFIRM_TRIGGERING_CAPABILITIES.has(cap)) return "D2";
   }
   return "D1";
 }

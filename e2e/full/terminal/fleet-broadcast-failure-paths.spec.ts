@@ -4,7 +4,13 @@ import { launchApp, closeApp, getActiveAppWindow, type AppContext } from "../../
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { getFocusedPanelId, getPanelById } from "../../helpers/panels";
-import { waitForTerminalPty, waitForTerminalText, getTerminalText } from "../../helpers/terminal";
+import {
+  waitForTerminalPty,
+  waitForTerminalText,
+  waitForTerminalTextById,
+  getTerminalText,
+  getTerminalTextById,
+} from "../../helpers/terminal";
 import { injectFault, injectDelay, clearAllFaults } from "../../helpers/ipcFaults";
 import { SEL } from "../../helpers/selectors";
 import { T_LONG, T_MEDIUM } from "../../helpers/timeouts";
@@ -26,10 +32,43 @@ let fixtureDir: string;
 let fixtureCleanup: (() => void) | undefined;
 
 async function editorContains(locator: Locator, text: string): Promise<boolean> {
-  if (!(await locator.isVisible().catch(() => false))) return false;
-  return locator
-    .evaluate((element, expected) => (element.textContent ?? "").includes(expected), text)
-    .catch(() => false);
+  return (await getEditorText(locator)).includes(text);
+}
+
+async function getEditorText(locator: Locator): Promise<string> {
+  if (!(await locator.isVisible().catch(() => false))) return "";
+  return locator.evaluate((element) => element.textContent ?? "").catch(() => "");
+}
+
+async function getHybridInputText(page: Page, terminalId: string): Promise<string> {
+  return page.evaluate((id) => window.__daintreeHybridInputE2E?.getText(id) ?? "", terminalId);
+}
+
+async function setHybridInputText(page: Page, terminalId: string, text: string): Promise<void> {
+  const assertion = expect
+    .poll(
+      () =>
+        page.evaluate(
+          ([id, nextText]) => window.__daintreeHybridInputE2E?.setText(id, nextText) ?? false,
+          [terminalId, text] as const
+        ),
+      { timeout: T_MEDIUM, intervals: [100, 250] }
+    )
+    .toBe(true);
+  await assertion.catch(async (error: unknown) => {
+    const debug = await page.evaluate(
+      (id) => ({
+        mode: window.__DAINTREE_E2E_MODE__ === true,
+        hasBridge: !!window.__daintreeHybridInputE2E,
+        registeredIds: window.__daintreeHybridInputE2E?.listIds?.() ?? [],
+        requestedId: id,
+      }),
+      terminalId
+    );
+    throw new Error(
+      `Hybrid input E2E bridge did not accept text: ${JSON.stringify(debug)}\n${String(error)}`
+    );
+  });
 }
 
 async function dispatchAction<T = unknown>(
@@ -178,6 +217,26 @@ async function broadcastViaEditor(
       })
       .toBe(false);
   }
+}
+
+async function focusHybridInput(page: Page, panel: Locator, terminalId: string): Promise<Locator> {
+  await dismissBlockingPalette(page);
+  await panel.click({ force: true, noWaitAfter: true });
+  await expect
+    .poll(() => getFocusedPanelId(page), { timeout: T_MEDIUM, intervals: [100, 250] })
+    .toBe(terminalId);
+  const editor = panel.locator(SEL.terminal.cmEditor).first();
+  await expect(editor).toBeVisible({ timeout: T_MEDIUM });
+  await editor.evaluate((node) => {
+    if (node instanceof HTMLElement) node.focus();
+  });
+  await expect
+    .poll(() => editor.evaluate((node) => document.activeElement === node).catch(() => false), {
+      timeout: T_MEDIUM,
+      intervals: [100, 250],
+    })
+    .toBe(true);
+  return editor;
 }
 
 test.describe.serial("Fleet broadcast: failure and progress paths", () => {
@@ -367,15 +426,14 @@ test.describe.serial("Fleet broadcast: failure and progress paths", () => {
       // in flight for ~12s, far longer than it takes to click Cancel, so the
       // abort always lands before batch two would dispatch.
       await injectDelay(ctx.app, TERMINAL_SUBMIT_CHANNEL, 12_000);
-      await dismissBlockingPalette(window);
-      await getPanelById(window, ids[0]!).click();
+      await focusHybridInput(window, getPanelById(window, ids[0]!), ids[0]!);
+      await setHybridInputText(window, ids[0]!, largePayload);
       await expect
-        .poll(() => getFocusedPanelId(window), { timeout: T_MEDIUM, intervals: [100, 250] })
-        .toBe(ids[0]!);
-      const editor = getPanelById(window, ids[0]!).locator(SEL.terminal.cmEditor).first();
-      await expect(editor).toBeVisible({ timeout: T_MEDIUM });
-      await editor.click();
-      await editor.fill(largePayload);
+        .poll(() => getHybridInputText(window, ids[0]!), {
+          timeout: T_MEDIUM,
+          intervals: [100, 250],
+        })
+        .toContain(firstBatchReceiptText);
       await window.keyboard.press("Enter");
       // Editor fleet broadcasts intentionally do not show a paste/destructive
       // confirm; arming is the consent boundary. The large payload still
@@ -395,13 +453,13 @@ test.describe.serial("Fleet broadcast: failure and progress paths", () => {
       // delay applies to every batched submit, so the marker can land well past
       // 12s; keep generous headroom (60s local / scaled on CI) so a slow batch
       // drain never races the assertion.
-      await waitForTerminalText(getPanelById(window, ids[0]!), firstBatchReceiptText, T_LONG * 6);
+      await waitForTerminalTextById(window, ids[0]!, firstBatchReceiptText, T_LONG * 6);
       // ids[5] is the lone second-batch target; the abort skips it entirely.
       // Progress hidden is the structural signal that all in-flight work has
       // drained, so the absence check can no longer race a late delivery.
       await expect(window.locator(SEL.fleet.broadcastProgress)).toBeHidden({ timeout: T_LONG });
       await expect
-        .poll(() => getTerminalText(getPanelById(window, ids[5]!)), { timeout: T_MEDIUM })
+        .poll(() => getTerminalTextById(window, ids[5]!), { timeout: T_MEDIUM })
         .not.toContain(firstBatchReceiptText);
     });
   });

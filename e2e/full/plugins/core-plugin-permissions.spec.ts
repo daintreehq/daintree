@@ -31,7 +31,7 @@ test.describe.serial("Core: Plugin permissions tab", () => {
     const { ctx: launched, cleanup } = await launchWithSamplePlugin("plugin-permissions");
     ctx = launched;
     fixtureCleanup = cleanup;
-    await waitForRichPluginReady(ctx.window);
+    await waitForRichPluginReady(ctx.app, ctx.window);
   });
 
   test.afterAll(async () => {

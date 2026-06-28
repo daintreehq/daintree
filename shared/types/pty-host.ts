@@ -11,6 +11,7 @@ import type { AgentState, AgentId, WaitingReason } from "./agent.js";
 import type { PanelKind, TerminalFlowStatus, PanelTitleMode } from "./panel.js";
 import type { ResourceProfile } from "./resourceProfile.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
+import type { AgentConfig } from "../config/agentRegistry.js";
 import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js";
 
 export type { TerminalFlowStatus };
@@ -74,6 +75,34 @@ export interface PtyHostSpawnOptions {
   originalAgentPresetId?: string;
 }
 
+/** Per-project terminal-workload memory, deduplicated by PID. */
+export interface MemoryRollupProject {
+  /** Resolved project id, or null for terminals not attributable to a project. */
+  projectId: string | null;
+  terminalCount: number;
+  processCount: number;
+  /** Summed resident memory (KB) across this project's terminal process trees. */
+  memoryKb: number;
+  /** Highest-memory processes in this project's trees (basename only, no command line). */
+  topProcesses: TerminalResourceProcess[];
+}
+
+/**
+ * On-demand rollup of resident memory across every live terminal's process
+ * subtree (shell + descendants: dev servers, agents, language servers), grouped
+ * by project. Sourced from the warm ProcessTreeCache; sums RSS, so it counts
+ * shared pages — a pressure heuristic, not unique footprint.
+ */
+export interface MemoryRollup {
+  byProject: MemoryRollupProject[];
+  totalMemoryKb: number;
+  totalProcessCount: number;
+  terminalCount: number;
+  /** False when the OS process table couldn't be read (ps/PowerShell failed). */
+  available: boolean;
+  sampledAt: number;
+}
+
 /**
  * Requests sent from Main → Host.
  * Each request is a discriminated union type for compile-time safety.
@@ -84,6 +113,7 @@ export type PtyHostRequest =
   | { type: "write"; id: string; data: string; traceId?: string }
   | { type: "broadcast-write"; ids: string[]; data: string }
   | { type: "submit"; id: string; text: string }
+  | { type: "stage"; id: string; text: string }
   | { type: "batch-double-escape"; ids: string[] }
   | { type: "kill"; id: string; reason?: string; escalationDelayMs?: number }
   | { type: "trash"; id: string }
@@ -101,7 +131,6 @@ export type PtyHostRequest =
        */
       pollingIntervalMs?: number;
     }
-  | { type: "wake-terminal"; id: string; requestId: string }
   | {
       type: "set-active-project";
       windowId: number;
@@ -173,6 +202,7 @@ export type PtyHostRequest =
   | { type: "get-available-terminals"; requestId: string }
   | { type: "get-terminals-by-state"; state: AgentState; requestId: string }
   | { type: "get-all-terminals"; requestId: string }
+  | { type: "get-memory-rollup"; requestId: string }
   | {
       type: "search-semantic-buffers";
       query: string;
@@ -192,6 +222,15 @@ export type PtyHostRequest =
   | { type: "set-session-persist-suppressed"; suppressed: boolean }
   | { type: "set-resource-profile"; profile: ResourceProfile }
   | { type: "set-process-tree-poll-interval"; ms: number }
+  /**
+   * Mirror the main-process plugin-agent registry into the pty-host (#10587).
+   * The pty-host runs the activity monitor and resolves `getEffectiveAgentConfig`
+   * for detection patterns, but never registers plugin agents itself — main is
+   * authoritative. Carries the flattened, command-resolved snapshot; the host
+   * applies it via `setPluginAgentRegistry`. Replayed on every host-ready so a
+   * restarted host re-syncs before any spawn replay.
+   */
+  | { type: "set-plugin-agent-registry"; registry: Record<string, AgentConfig> }
   | { type: "get-flow-control-snapshot"; requestId: string };
 
 /** Per-terminal flow-control state in a {@link FlowControlSnapshot}. */
@@ -297,13 +336,6 @@ export type PtyHostEvent =
   | { type: "exit"; id: string; exitCode: number; signal?: number }
   | { type: "error"; id: string; error: string }
   | { type: "spawn-result"; id: string; result: SpawnResult }
-  | {
-      type: "wake-result";
-      requestId: string;
-      id: string;
-      state: string | null;
-      warnings?: string[];
-    }
   | { type: "kill-by-project-result"; requestId: string; killed: number }
   | {
       type: "project-stats";
@@ -329,6 +361,10 @@ export type PtyHostEvent =
       waitingReason?: WaitingReason;
       sessionCost?: number;
       sessionTokens?: number;
+      /** Process exit code on completed/exited transitions; null on a signal kill with no numeric code. */
+      exitCode?: number | null;
+      /** Raw OS signal number on completed/exited transitions, when applicable. */
+      exitSignal?: number;
       /**
        * Live activity-temperature reading at the moment the transition was
        * committed. Present only for transitions that flow through the activity
@@ -401,6 +437,7 @@ export type PtyHostEvent =
   | { type: "available-terminals"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | { type: "terminals-by-state"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | { type: "all-terminals"; requestId: string; terminals: PtyHostTerminalInfo[] }
+  | { type: "memory-rollup"; requestId: string; rollup: MemoryRollup }
   | {
       type: "semantic-search-result";
       requestId: string;
@@ -585,8 +622,9 @@ export interface AgentKilledPayload {
  *
  * Controls backend streaming behavior and resource allocation:
  * - `active`: Full visual streaming to SAB/IPC (50ms ActivityMonitor polling)
- * - `background`: Visual streaming suppressed, wake snapshots only (500ms polling)
- *                 Analysis buffer writes continue for agent state detection
+ * - `background`: Live visual streaming continues (hibernation teardown); only
+ *                 the ActivityMonitor poll cadence drops to 500ms. Analysis
+ *                 buffer writes continue for agent state detection.
  *
  * Maps from renderer TerminalRefreshTier:
  * - BURST/FOCUSED → active
@@ -680,14 +718,13 @@ export interface HostThrottlePayload {
   timestamp: number;
 }
 
-/** Payload for terminal reliability metrics (backpressure/suspend/wake) */
+/** Payload for terminal reliability metrics (backpressure/suspend) */
 export interface TerminalReliabilityMetricPayload {
   terminalId: string;
   metricType:
     | "pause-start"
     | "pause-end"
     | "suspend"
-    | "wake-latency"
     | "pending-byte-cap-hit"
     | "pending-bytes-gauge"
     | "throughput-rate"
@@ -701,8 +738,6 @@ export interface TerminalReliabilityMetricPayload {
   durationMs?: number;
   bufferUtilization?: number;
   shardIndex?: number;
-  serializedStateBytes?: number;
-  wakeLatencyMs?: number;
   totalPendingBytes?: number;
   perTerminal?: Array<{ terminalId: string; pendingBytes: number }>;
   totalBytesPerSecond?: number;
@@ -776,21 +811,7 @@ export interface TerminalReliabilityMetricPayload {
 export type RendererToPtyHostMessage =
   | { type: "write"; id: string; data: string; traceId?: string }
   | { type: "resize"; id: string; cols: number; rows: number }
-  | { type: "ack"; id: string; bytes: number }
-  | {
-      /**
-       * Wake request on the direct channel: the snapshot returns as a
-       * `wake-result` on the same port, skipping both Main-process structured
-       * clones of the serialized scrollback. `canSkipUnchanged` asserts the
-       * pane currently reflects the last snapshot it applied plus every port
-       * chunk received since — only then may the host answer `noChange`
-       * instead of serializing.
-       */
-      type: "wake";
-      id: string;
-      requestId: string;
-      canSkipUnchanged?: boolean;
-    };
+  | { type: "ack"; id: string; bytes: number };
 
 /**
  * Messages sent from Pty Host → Renderer via MessagePort (direct channel).
@@ -831,24 +852,6 @@ export type PtyHostToRendererMessage =
       /** Byte count discarded — only set when status is "data-loss". */
       droppedBytes?: number;
       timestamp: number;
-    }
-  | {
-      /**
-       * Response to a port `wake` request. Posted on the requesting window's
-       * own port after that window's pending batch for the terminal is
-       * flushed, so the snapshot is FIFO-ordered after every chunk it already
-       * contains.
-       */
-      type: "wake-result";
-      requestId: string;
-      id: string;
-      state: string | null;
-      warnings?: string[];
-      /**
-       * The buffer provably hasn't changed since this window's last faithful
-       * sync — the renderer keeps its pane as-is instead of replaying.
-       */
-      noChange?: boolean;
     };
 
 /** Per-process resource breakdown entry */

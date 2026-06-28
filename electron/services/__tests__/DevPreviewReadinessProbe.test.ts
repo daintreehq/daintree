@@ -94,12 +94,7 @@ vi.mock("ws", () => {
   };
 });
 
-import {
-  waitForServerReady,
-  probeHmrWebSocket,
-  READINESS_TIMEOUT_MS,
-  READINESS_HMR_TIMEOUT_MS,
-} from "../DevPreviewReadinessProbe.js";
+import { waitForServerReady, probeHmrWebSocket } from "../DevPreviewReadinessProbe.js";
 
 function resetWsState() {
   wsInstances.length = 0;
@@ -447,17 +442,5 @@ describe("probeHmrWebSocket", () => {
 
     const result = await probePromise;
     expect(result).toBe(true);
-  });
-});
-
-describe("READINESS_TIMEOUT_MS", () => {
-  it("is the expected default", () => {
-    expect(READINESS_TIMEOUT_MS).toBe(30000);
-  });
-});
-
-describe("READINESS_HMR_TIMEOUT_MS", () => {
-  it("is the expected default", () => {
-    expect(READINESS_HMR_TIMEOUT_MS).toBe(1500);
   });
 });

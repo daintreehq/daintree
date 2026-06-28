@@ -1,8 +1,8 @@
 import React, { useCallback, useMemo, useEffect, useEffectEvent, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store";
-import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
-import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import { getRenderablePanel } from "@/store/slices/panelRegistry/selectors";
+import { isBuiltInPanelKind, isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
@@ -35,7 +35,9 @@ export const GridTabGroup = React.memo(function GridTabGroup({
   const panels = usePanelStore(
     useShallow((state) =>
       group.panelIds
-        .map((id) => getNarrowPanel(state.panelsById, id))
+        // Render-eligibility, not type-narrowing: a tab group may hold a
+        // plugin-contributed panel, which must stay in the rendered set (#10512).
+        .map((id) => getRenderablePanel(state.panelsById, id))
         .filter((p): p is PanelInstance => p !== undefined)
     )
   );
@@ -266,6 +268,12 @@ export const GridTabGroup = React.memo(function GridTabGroup({
     return null;
   }
 
+  // Only built-in kinds can be duplicated (panelDuplicationService throws for
+  // plugin kinds). Now that plugin panels render in tab groups (#10512), hide
+  // the add-tab affordance for them instead of surfacing a button that throws —
+  // mirrors GridPanel's single-panel add-tab gate.
+  const canAddTab = isBuiltInPanelKind(activePanel.kind);
+
   const isFocused = activePanel.id === focusedId;
 
   return (
@@ -280,7 +288,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
       onTabClick={handleTabClick}
       onTabClose={handleTabClose}
       onTabRename={handleTabRename}
-      onAddTab={handleAddTab}
+      onAddTab={canAddTab ? handleAddTab : undefined}
       onTabReorder={handleTabReorder}
     />
   );

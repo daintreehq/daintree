@@ -43,6 +43,8 @@ import { buildPortalPreloadBindings } from "./ipc/handlers/portal.preload.js";
 import { buildDevPreviewPreloadBindings } from "./ipc/handlers/devPreview.preload.js";
 import { buildPluginPreloadBindings } from "./ipc/handlers/plugin.preload.js";
 import { buildPluginMcpPreloadBindings } from "./ipc/handlers/pluginMcp.preload.js";
+import { buildPluginCapabilityPreloadBindings } from "./ipc/handlers/pluginCapability.preload.js";
+import { buildPluginProcessPreloadBindings } from "./ipc/handlers/pluginProcess.preload.js";
 import { buildScratchPreloadBindings } from "./ipc/handlers/scratch/preload.js";
 import { buildMcpServerPreloadBindings } from "./ipc/handlers/mcpServer.preload.js";
 import { buildForgeAuditPreloadBindings } from "./ipc/handlers/forgeAudit.preload.js";
@@ -51,6 +53,7 @@ import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
 import { buildMilestonesPreloadBindings } from "./ipc/handlers/milestones.preload.js";
 import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
 import { buildShortcutHintsPreloadBindings } from "./ipc/handlers/shortcutHints.preload.js";
+import { buildForgeRecommendationPreloadBindings } from "./ipc/handlers/forgeRecommendation.preload.js";
 import { buildSentryPreloadBindings } from "./ipc/handlers/sentry.preload.js";
 import { buildPrivacyPreloadBindings } from "./ipc/handlers/privacy.preload.js";
 import { buildTelemetryPreloadBindings } from "./ipc/handlers/telemetry.preload.js";
@@ -68,6 +71,7 @@ import { buildCliPreloadBindings } from "./ipc/handlers/cli.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
 import { buildWebviewNavigationPreloadBindings } from "./ipc/handlers/webviewNavigation.preload.js";
+import { buildWebviewCapturePreloadBindings } from "./ipc/handlers/webviewCapture.preload.js";
 import { buildWorktreeConfigPreloadBindings } from "./ipc/handlers/worktreeConfig.preload.js";
 import { buildTerminalLayoutPreloadBindings } from "./ipc/handlers/terminalLayout.preload.js";
 import { buildTerminalConfigPreloadBindings } from "./ipc/handlers/terminalConfig.preload.js";
@@ -141,10 +145,10 @@ import type { PortalNewTabMenuAction } from "../shared/types/portal.js";
 import type { ResourceProfilePayload } from "../shared/types/resourceProfile.js";
 import type {
   PluginActionDescriptor,
-  MenuItemContribution,
   PluginKeybindingDescriptor,
   ContextMenuContribution,
   PluginDeepLinkIntent,
+  PluginPanelBadge,
 } from "../shared/types/plugin.js";
 import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
 import type { ToolbarButtonConfig } from "../shared/config/toolbarButtonRegistry.js";
@@ -222,13 +226,20 @@ const E2E_MODE_ARG = "--daintree-e2e-mode";
 const E2E_SKIP_FIRST_RUN_DIALOGS_ARG = "--daintree-e2e-skip-first-run-dialogs";
 const E2E_FAULT_MODE_ARG = "--daintree-e2e-fault-mode";
 // E2E flags are threaded into renderer argv via webPreferences.additionalArguments
-// only after the main process validates the matching DAINTREE_E2E_* env values.
-// Rely on those argv switches here: sandboxed renderer preload contexts do not
-// consistently inherit the launch env on every platform/Electron build.
-const isE2EMode = !isPackagedBuild && process.argv.includes(E2E_MODE_ARG);
+// after the main process validates the matching DAINTREE_E2E_* env values.
+// Electron 42 local sandboxed WebContentsView preloads can omit those extra
+// argv switches, so keep an exact env fallback for the Playwright-launched
+// process while preserving the non-packaged gate.
+const isE2EMode =
+  !isPackagedBuild &&
+  (process.argv.includes(E2E_MODE_ARG) || process.env.DAINTREE_E2E_MODE === "1");
 const isE2ESkipFirstRunDialogs =
-  !isPackagedBuild && process.argv.includes(E2E_SKIP_FIRST_RUN_DIALOGS_ARG);
-const isE2EFaultMode = !isPackagedBuild && process.argv.includes(E2E_FAULT_MODE_ARG);
+  !isPackagedBuild &&
+  (process.argv.includes(E2E_SKIP_FIRST_RUN_DIALOGS_ARG) ||
+    process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1");
+const isE2EFaultMode =
+  !isPackagedBuild &&
+  (process.argv.includes(E2E_FAULT_MODE_ARG) || process.env.DAINTREE_E2E_FAULT_MODE === "1");
 
 function e2eGlobalKey(name: string): string {
   return ["__", "DAINTREE", "_", "E2E", "_", name, "__"].join("");
@@ -854,6 +865,89 @@ function _terminalDataOn(id: string, callback: TerminalDataSubscriber): () => vo
   };
 }
 
+// Multiplexer for the plugin push transport `plugin:{pluginId}:{channel}`,
+// mirroring _terminalDataOn. host.broadcastToRenderer, host.postToPanel, and the
+// managed-process stream all push a PluginPanelEventEnvelope `{ panelId, payload }`
+// over this channel, and multiple panel instances of one kind each subscribe to
+// the same channel. Before #10618 every `plugin.on` call added its own raw
+// ipcRenderer.on with no per-instance filter, so every push reached every
+// instance. Now one physical listener per full channel fans out by panelId: a
+// broadcast envelope (`panelId: null`) reaches only broadcast subscribers (those
+// registered via `plugin.on`), and a targeted envelope reaches only the
+// subscribers registered for that exact panelId via `plugin.onPanel` — so
+// `postToPanel(channel, payload, "panel-a")` no longer leaks to sibling
+// instances.
+type PluginPushSubscriber = (payload: unknown) => void;
+interface PluginPushChannelEntry {
+  handler: (event: Electron.IpcRendererEvent, raw: unknown) => void;
+  // Keyed by panelId; the `null` key holds broadcast subscribers.
+  subscribers: Map<string | null, Set<PluginPushSubscriber>>;
+}
+const _pluginPushChannels = new Map<string, PluginPushChannelEntry>();
+
+function _pluginPushOn(
+  pluginId: string,
+  channel: string,
+  panelId: string | null,
+  callback: PluginPushSubscriber
+): () => void {
+  const fullChannel = `plugin:${pluginId}:${channel}`;
+  let entry = _pluginPushChannels.get(fullChannel);
+  if (!entry) {
+    const subscribers = new Map<string | null, Set<PluginPushSubscriber>>();
+    const handler = (_event: Electron.IpcRendererEvent, raw: unknown): void => {
+      // Unwrap the envelope. Every push site enveloples, but normalize
+      // defensively: an unexpected shape degrades to a broadcast of the raw
+      // value rather than crashing the dispatcher or dropping the push.
+      let targetPanelId: string | null = null;
+      let payload: unknown = raw;
+      if (raw !== null && typeof raw === "object" && "panelId" in raw && "payload" in raw) {
+        const env = raw as { panelId: unknown; payload: unknown };
+        targetPanelId = typeof env.panelId === "string" ? env.panelId : null;
+        payload = env.payload;
+      }
+      const set = subscribers.get(targetPanelId);
+      if (!set || set.size === 0) return;
+      // Snapshot before dispatch: a subscriber may unsubscribe (or its panel may
+      // unmount) inside its own callback, mutating the Set mid-iteration.
+      for (const cb of [...set]) {
+        try {
+          cb(payload);
+        } catch (err) {
+          console.error("[Preload] plugin push subscriber threw for", fullChannel, err);
+        }
+      }
+    };
+    ipcRenderer.on(fullChannel, handler);
+    entry = { handler, subscribers };
+    _pluginPushChannels.set(fullChannel, entry);
+  }
+  let set = entry.subscribers.get(panelId);
+  if (!set) {
+    set = new Set();
+    entry.subscribers.set(panelId, set);
+  }
+  // Fresh wrapper per subscription so the same callback can subscribe twice and
+  // each cleanup removes only its own registration.
+  const wrapped: PluginPushSubscriber = (payload) => callback(payload);
+  set.add(wrapped);
+  return () => {
+    const current = _pluginPushChannels.get(fullChannel);
+    if (!current) return;
+    const currentSet = current.subscribers.get(panelId);
+    if (currentSet) {
+      currentSet.delete(wrapped);
+      if (currentSet.size === 0) current.subscribers.delete(panelId);
+    }
+    // Tear down the physical listener once every panelId bucket is empty, so an
+    // unmounted view doesn't leak its channel listener.
+    if (current.subscribers.size === 0) {
+      ipcRenderer.removeListener(fullChannel, current.handler);
+      _pluginPushChannels.delete(fullChannel);
+    }
+  };
+}
+
 // Recovery API (used by recovery.html). Hoisted out of buildElectronApi so the
 // recovery page exposes these four methods without constructing the full
 // ~490-closure surface.
@@ -1005,9 +1099,6 @@ function buildElectronApi(): ElectronAPI {
       setActivityTier: (id: string, tier: "active" | "background", pollingIntervalMs?: number) =>
         ipcRenderer.send(CHANNELS.TERMINAL_SET_ACTIVITY_TIER, { id, tier, pollingIntervalMs }),
 
-      wake: (id: string): Promise<{ state: string | null; warnings?: string[] }> =>
-        _unwrappingInvoke(CHANNELS.TERMINAL_WAKE, id),
-
       acknowledgeData: (id: string, length: number) =>
         ipcRenderer.send(CHANNELS.TERMINAL_ACKNOWLEDGE_DATA, { id, length }),
 
@@ -1123,9 +1214,6 @@ function buildElectronApi(): ElectronAPI {
 
       onReclaimMemory: (callback: () => void) =>
         _eventBusOn("window:reclaim-memory", () => callback()),
-
-      onAccelerateHibernation: (callback: (data: { level: 1 | 2 }) => void) =>
-        _eventBusOn("window:accelerate-hibernation", callback),
     },
 
     // Files API
@@ -1347,6 +1435,7 @@ function buildElectronApi(): ElectronAPI {
       onConfigReloaded: (callback: () => void) => _typedOn(CHANNELS.APP_CONFIG_RELOADED, callback),
 
       onViewRevealed: (callback: () => void) => _typedOn(CHANNELS.APP_VIEW_REVEALED, callback),
+      onViewCached: (callback: () => void) => _typedOn(CHANNELS.APP_VIEW_CACHED, callback),
     },
 
     menu: buildMenuPreloadBindings(_unwrappingInvoke),
@@ -1384,12 +1473,25 @@ function buildElectronApi(): ElectronAPI {
         context?: Record<string, unknown>
       ) => _unwrappingInvoke(CHANNELS.LOGS_WRITE, { level, message, context }),
 
+      writeBatch: (
+        entries: Array<{
+          level: "debug" | "info" | "warn" | "error";
+          message: string;
+          context?: Record<string, unknown>;
+        }>
+      ) => _unwrappingInvoke(CHANNELS.LOGS_WRITE_BATCH, entries),
+
+      getDefaultLevel: () => _unwrappingInvoke(CHANNELS.LOGS_GET_DEFAULT_LEVEL),
+
       getLevelOverrides: () => _unwrappingInvoke(CHANNELS.LOGS_GET_LEVEL_OVERRIDES),
 
       setLevelOverrides: (overrides: Record<string, string>) =>
         _unwrappingInvoke(CHANNELS.LOGS_SET_LEVEL_OVERRIDES, overrides),
 
       clearLevelOverrides: () => _unwrappingInvoke(CHANNELS.LOGS_CLEAR_LEVEL_OVERRIDES),
+
+      onLevelOverridesChanged: (callback: (overrides: Record<string, string>) => void) =>
+        _typedOn(CHANNELS.LOGS_LEVEL_OVERRIDES_CHANGED, callback),
 
       getRegistry: () => _unwrappingInvoke(CHANNELS.LOGS_GET_REGISTRY),
     },
@@ -1916,6 +2018,7 @@ function buildElectronApi(): ElectronAPI {
       getScrollPosition: (webContentsId: number): Promise<number> =>
         _unwrappingInvoke(CHANNELS.WEBVIEW_GET_SCROLL_POSITION, webContentsId),
       ...buildWebviewNavigationPreloadBindings(_unwrappingInvoke),
+      ...buildWebviewCapturePreloadBindings(_unwrappingInvoke),
     },
 
     // Hibernation API
@@ -1926,7 +2029,7 @@ function buildElectronApi(): ElectronAPI {
         callback: (payload: {
           projectId: string;
           projectName: string;
-          reason: "scheduled" | "memory-pressure";
+          reason: "scheduled" | "memory-pressure" | "user-initiated";
           terminalsKilled: number;
           timestamp: number;
         }) => void
@@ -2335,6 +2438,8 @@ function buildElectronApi(): ElectronAPI {
 
     shortcutHints: buildShortcutHintsPreloadBindings(_unwrappingInvoke),
 
+    forgeRecommendation: buildForgeRecommendationPreloadBindings(_unwrappingInvoke),
+
     forge: {
       getSettings: () => _unwrappingInvoke(CHANNELS.FORGE_GET_SETTINGS),
       setDefaultProvider: (providerId: string | null) =>
@@ -2356,6 +2461,44 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_ASSIGN_ISSUE, payload),
       unassignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_UNASSIGN_ISSUE, payload),
+      approvePR: (payload: { cwd: string; prNumber: number; body?: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_APPROVE_PR, payload),
+      requestChanges: (payload: { cwd: string; prNumber: number; body: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_REQUEST_CHANGES, payload),
+      dismissReview: (payload: {
+        cwd: string;
+        prNumber: number;
+        reviewId: number;
+        message: string;
+      }) => _unwrappingInvoke(CHANNELS.FORGE_DISMISS_REVIEW, payload),
+      requestReviewers: (payload: {
+        cwd: string;
+        prNumber: number;
+        users?: string[];
+        teams?: string[];
+      }) => _unwrappingInvoke(CHANNELS.FORGE_REQUEST_REVIEWERS, payload),
+      createIssue: (payload: {
+        cwd: string;
+        input: { title: string; body?: string; labels?: string[] };
+      }) => _unwrappingInvoke(CHANNELS.FORGE_CREATE_ISSUE, payload),
+      closeIssue: (payload: {
+        cwd: string;
+        issueNumber: number;
+        stateReason?: "completed" | "not_planned";
+      }) => _unwrappingInvoke(CHANNELS.FORGE_CLOSE_ISSUE, payload),
+      reopenIssue: (payload: { cwd: string; issueNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_REOPEN_ISSUE, payload),
+      editIssue: (payload: {
+        cwd: string;
+        issueNumber: number;
+        input: { title?: string; body?: string };
+      }) => _unwrappingInvoke(CHANNELS.FORGE_EDIT_ISSUE, payload),
+      addIssueComment: (payload: { cwd: string; issueNumber: number; body: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_ADD_ISSUE_COMMENT, payload),
+      addIssueLabel: (payload: { cwd: string; issueNumber: number; label: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_ADD_ISSUE_LABEL, payload),
+      removeIssueLabel: (payload: { cwd: string; issueNumber: number; label: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_REMOVE_ISSUE_LABEL, payload),
       validateToken: (payload: { providerId: string; token: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_VALIDATE_TOKEN, payload),
       setCredential: (providerId: string, credentials: Record<string, string>) =>
@@ -2412,6 +2555,33 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_GET_RATE_LIMIT_DETAILS, payload),
       openPR: (payload: { cwd: string; prNumber: number }) =>
         _unwrappingInvoke(CHANNELS.FORGE_OPEN_PR, payload),
+      createPR: (payload: {
+        cwd: string;
+        head: string;
+        base: string;
+        title: string;
+        body?: string;
+        draft?: boolean;
+      }) => _unwrappingInvoke(CHANNELS.FORGE_CREATE_PR, payload),
+      closePR: (payload: { cwd: string; prNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_CLOSE_PR, payload),
+      reopenPR: (payload: { cwd: string; prNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_REOPEN_PR, payload),
+      mergePR: (payload: {
+        cwd: string;
+        prNumber: number;
+        mergeMethod?: "merge" | "squash" | "rebase";
+        commitTitle?: string;
+        commitMessage?: string;
+      }) => _unwrappingInvoke(CHANNELS.FORGE_MERGE_PR, payload),
+      convertPRToDraft: (payload: { cwd: string; prNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_CONVERT_PR_TO_DRAFT, payload),
+      markPRReadyForReview: (payload: { cwd: string; prNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_MARK_PR_READY_FOR_REVIEW, payload),
+      commentOnPR: (payload: { cwd: string; prNumber: number; body: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_COMMENT_ON_PR, payload),
+      editPR: (payload: { cwd: string; prNumber: number; title?: string; body?: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_EDIT_PR, payload),
       onRepoStatsAndPageUpdated: (
         callback: (
           data: import("../shared/types/ipc/forge.js").ForgeRepoStatsAndPagePayload
@@ -2555,6 +2725,44 @@ function buildElectronApi(): ElectronAPI {
       }) => {
         ipcRenderer.send(CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE, payload);
       },
+
+      onActionsListRequest: (callback: (payload: { requestId: string }) => void) =>
+        _typedOn(CHANNELS.PLUGIN_ACTIONS_LIST_REQUEST, callback),
+
+      sendActionsListResponse: (payload: {
+        requestId: string;
+        entries: import("../shared/types/actions.js").PluginActionManifestEntry[];
+      }) => {
+        ipcRenderer.send(CHANNELS.PLUGIN_ACTIONS_LIST_RESPONSE, payload);
+      },
+
+      onActionsGetRequest: (callback: (payload: { requestId: string; actionId: string }) => void) =>
+        _typedOn(CHANNELS.PLUGIN_ACTIONS_GET_REQUEST, callback),
+
+      sendActionsGetResponse: (payload: {
+        requestId: string;
+        entry: import("../shared/types/actions.js").PluginActionManifestEntry | null;
+      }) => {
+        ipcRenderer.send(CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE, payload);
+      },
+
+      onUiPromptRequest: (
+        callback: (
+          payload: import("../shared/types/pluginUiPrompt.js").PluginUiPromptRequest
+        ) => void
+      ) => _typedOn(CHANNELS.PLUGIN_UI_PROMPT_REQUEST, callback),
+
+      sendUiPromptResponse: (
+        payload: import("../shared/types/pluginUiPrompt.js").PluginUiPromptResponse
+      ) => {
+        ipcRenderer.send(CHANNELS.PLUGIN_UI_PROMPT_RESPONSE, payload);
+      },
+
+      onUiPromptCancel: (
+        callback: (
+          payload: import("../shared/types/pluginUiPrompt.js").PluginUiPromptCancel
+        ) => void
+      ) => _typedOn(CHANNELS.PLUGIN_UI_PROMPT_CANCEL, callback),
     },
 
     plugin: {
@@ -2573,13 +2781,30 @@ function buildElectronApi(): ElectronAPI {
       invoke: (pluginId: string, channel: string, ...args: unknown[]) =>
         _unwrappingInvoke(CHANNELS.PLUGIN_INVOKE, pluginId, channel, ...args),
 
-      on: (pluginId: string, channel: string, callback: (payload: unknown) => void) => {
-        const fullChannel = `plugin:${pluginId}:${channel}`;
-        const handler = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
-        ipcRenderer.on(fullChannel, handler);
-        return () => {
-          ipcRenderer.removeListener(fullChannel, handler);
-        };
+      // Broadcast subscription: receives `host.postToPanel(channel, payload)`
+      // and `host.broadcastToRenderer` pushes (envelope `panelId: null`) for
+      // every instance of the kind. Per-instance targeting is `onPanel` below.
+      on: (pluginId: string, channel: string, callback: (payload: unknown) => void) =>
+        _pluginPushOn(pluginId, channel, null, callback),
+
+      // Per-instance subscription: receives only the pushes targeted at this
+      // exact `panelId` via `host.postToPanel(channel, payload, panelId)`, so
+      // multiple open instances of the same panel kind no longer all receive
+      // every push (#10618). Broadcast pushes (`panelId: null`) do NOT reach an
+      // onPanel subscriber — use `on` for those.
+      onPanel: (
+        pluginId: string,
+        channel: string,
+        panelId: string,
+        callback: (payload: unknown) => void
+      ) => {
+        // Reject an empty panelId loudly: the host side rejects an empty target
+        // in postToPanel, so an empty subscription here could never be reached —
+        // it would be a silently-dead listener. Surface the authoring mistake.
+        if (typeof panelId !== "string" || panelId.length === 0) {
+          throw new Error(`plugin.onPanel: panelId must be a non-empty string: ${String(panelId)}`);
+        }
+        return _pluginPushOn(pluginId, channel, panelId, callback);
       },
 
       onActionsChanged: (callback: (payload: { actions: PluginActionDescriptor[] }) => void) =>
@@ -2597,12 +2822,6 @@ function buildElectronApi(): ElectronAPI {
       onToolbarButtonsChanged: (
         callback: (payload: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void
       ) => _eventBusOn("plugin:toolbar-buttons-changed", callback),
-      onMenuItemsChanged: (
-        callback: (payload: {
-          items: Array<{ pluginId: string; item: MenuItemContribution }>;
-          complete: boolean;
-        }) => void
-      ) => _eventBusOn("plugin:menu-items-changed", callback),
       onKeybindingsChanged: (
         callback: (payload: {
           keybindings: PluginKeybindingDescriptor[];
@@ -2617,11 +2836,20 @@ function buildElectronApi(): ElectronAPI {
       ) => _eventBusOn("plugin:context-menu-items-changed", callback),
       onDecorationsChanged: (callback: (payload: { scope: string; paths?: string[] }) => void) =>
         _eventBusOn("plugin:decorations-changed", callback),
+      onPanelBadgesChanged: (
+        callback: (payload: { pluginId: string; badges: Record<string, PluginPanelBadge> }) => void
+      ) => _eventBusOn("plugin:panel-badges-changed", callback),
+      onPanelBadgesCleared: (callback: (payload: { pluginId: string }) => void) =>
+        _eventBusOn("plugin:panel-badges-cleared", callback),
       onDeepLink: (callback: (intent: PluginDeepLinkIntent) => void) =>
         _eventBusOn("plugin:deep-link", callback),
     },
 
     pluginMcp: buildPluginMcpPreloadBindings(_unwrappingInvoke),
+
+    pluginCapability: buildPluginCapabilityPreloadBindings(_unwrappingInvoke),
+
+    pluginProcess: buildPluginProcessPreloadBindings(_unwrappingInvoke),
 
     crashRecovery: {
       getPending: () => _unwrappingInvoke(CHANNELS.CRASH_RECOVERY_GET_PENDING),

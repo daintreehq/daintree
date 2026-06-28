@@ -37,6 +37,7 @@ export type { NotificationType, Notification, NotificationPayload } from "./noti
 
 // Agent types
 export type { AgentState, AgentStateChangeTrigger } from "./agent.js";
+export type { TerminalCheckResult } from "./checkResult.js";
 
 // Panel types
 export type {
@@ -363,6 +364,7 @@ export {
 } from "./ipc/mcpServer.js";
 export type {
   PluginActionAuditRecord,
+  PluginActionAuditRecordType,
   PluginActionAuditResult,
   PluginAuditConfig,
 } from "./ipc/pluginAudit.js";

@@ -35,6 +35,8 @@ export interface ReportEnvInfo {
   electron: string;
   chrome: string;
   os: string;
+  /** Human-readable running architecture; surfaces Rosetta translation for triage. */
+  arch?: string;
 }
 
 export interface ReportIssueInput {
@@ -226,6 +228,7 @@ function formatEnvBlock(envInfo: ReportEnvInfo | undefined): string {
     `electron: ${envInfo.electron || "unknown"}\n` +
     `chrome: ${envInfo.chrome || "unknown"}\n` +
     `os: ${envInfo.os || "unknown"}\n` +
+    (envInfo.arch ? `arch: ${envInfo.arch}\n` : "") +
     "```\n\n"
   );
 }

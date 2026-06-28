@@ -404,24 +404,18 @@ function createPortQueueManager(windowId: number): PortQueueManager {
 
 /** Recompute activity tiers for all terminals based on union of connected windows' projects */
 function recomputeActivityTiers(): void {
-  const activeProjects = new Set<string>();
-  for (const projectId of windowProjectMap.values()) {
-    if (projectId !== null) activeProjects.add(projectId);
-  }
-
+  // EXPERIMENT (hibernation teardown step 1 — #10807): never demote a
+  // switched-away/backgrounded terminal to the "background" tier. Pinning every
+  // terminal to "active" keeps the producer gate below from suppressing the
+  // visual byte stream, so background panes keep streaming live — nothing goes
+  // stale, so there is nothing to lossily resync on wake. The old logic built an
+  // `activeProjects` set from `windowProjectMap` and demoted terminals whose
+  // project wasn't active (issue #9778 handling); intentionally disabled for the
+  // experiment. See docs/HIBERNATION-REMOVAL-EXPERIMENT.md.
   for (const terminal of ptyManager.getAll()) {
-    // A terminal with no project association is global/shared, not orphaned —
-    // it must stay active whenever any window is connected. The old condition
-    // (`projectId !== undefined && activeProjects.has(projectId)`) demoted such
-    // terminals to background the moment any project became active, silently
-    // freezing their output (issue #9778).
-    const isActiveInAnyWindow =
-      activeProjects.size === 0 ||
-      terminal.projectId === undefined ||
-      activeProjects.has(terminal.projectId);
-    const tier = isActiveInAnyWindow ? "active" : "background";
+    const tier = "active" as const;
     backpressureManager.setActivityTier(terminal.id, tier, "recompute-activity-tiers");
-    ptyManager.setActivityMonitorTier(terminal.id, tier, tier === "active" ? 50 : 500);
+    ptyManager.setActivityMonitorTier(terminal.id, tier, 50);
 
     // Reconcile the renderer's dedupe baseline. The host rewrites tiers here
     // unilaterally, but TerminalRendererPolicy.setBackendTier dedupes outbound
@@ -474,12 +468,6 @@ function disconnectWindow(windowId: number, reason: string): void {
   }
 
   rendererConnections.delete(windowId);
-  // Drop this window's wake-sync epochs: chunks accepted by the disposed
-  // batcher may never have reached the renderer, so a reconnecting window
-  // must not be served a no-change wake against them.
-  for (const terminal of ptyManager.getAll()) {
-    terminal.wakeSyncedEpochByWindow?.delete(windowId);
-  }
   // Keep the active project mapping across transient renderer-port failures.
   // Without it, a multi-view window whose MessagePort just failed falls back
   // to the single-consumer SAB path and another cached view can consume/drop
@@ -637,10 +625,15 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     terminalInfo.contentEpoch++;
   }
 
-  // Background tier: suppress visual streaming entirely (wake snapshots will resync state)
-  // Analysis buffer writes still occur for agent state detection
-  const activityTier = backpressureManager.getActivityTier(id);
-  const isBackgrounded = activityTier === "background";
+  // EXPERIMENT (hibernation teardown step 1 — #10807): visual streaming is
+  // unconditional with respect to the background tier. recomputeActivityTiers no
+  // longer demotes terminals to "background", and as belt-and-suspenders we hard-
+  // pin this gate off so a stray "background" tier from any other path can never
+  // suppress the live visual byte stream. The isSuspended (backpressure) gate and
+  // the project-routing filter below are unchanged; analysis/headless buffer
+  // writes and agent-state detection still run. See
+  // docs/HIBERNATION-REMOVAL-EXPERIMENT.md.
+  const isBackgrounded = false;
   // PRIORITY 1: MESSAGEPORT (Per-Window Routed Path)
   // Send data directly to renderer windows via MessagePort with per-window project filtering.
   // MessagePort is primary because SharedArrayBuffer ring buffers use a single shared read pointer
@@ -691,20 +684,9 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
         terminalInfo !== undefined &&
         Date.now() - terminalInfo.lastInputTime < PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS;
       const saturated: RendererConnection[] = [];
-      for (const { windowId, conn } of targets) {
+      for (const { conn } of targets) {
         if (conn.batcher.write(id, chunk, byteCount, owned, interactive)) {
           visualWritten = true;
-          // Port-clean delivery: this window's view now tracks the buffer
-          // through this chunk (the port is FIFO, so any wake-result for the
-          // terminal is ordered behind it). Anything less — saturation,
-          // IPC/SAB fallback, suppression — leaves the synced epoch stale and
-          // forces the next wake to serialize.
-          if (terminalInfo) {
-            (terminalInfo.wakeSyncedEpochByWindow ??= new Map()).set(
-              windowId,
-              terminalInfo.contentEpoch
-            );
-          }
         } else {
           saturated.push(conn);
         }
@@ -1059,6 +1041,11 @@ events.on("agent:state-changed", (payload) => {
       waitingReason: payload.waitingReason,
       sessionCost: payload.sessionCost,
       sessionTokens: payload.sessionTokens,
+      // Exit metadata on completed/exited transitions. Omit when absent so the
+      // wire stays minimal; exitCode may legitimately be null (signal kill), so
+      // forward on presence rather than truthiness. #10638
+      ...(payload.exitCode !== undefined ? { exitCode: payload.exitCode } : {}),
+      ...(payload.exitSignal !== undefined ? { exitSignal: payload.exitSignal } : {}),
       // Live temperature fields (only populated when the activity detector
       // drove the transition). Omit when absent so the wire stays minimal.
       ...(payload.temperature !== undefined ? { temperature: payload.temperature } : {}),

@@ -355,34 +355,6 @@ describe("PtyManager adversarial", () => {
     expect(shared.deleteSessionFile).toHaveBeenCalledWith("t1");
   });
 
-  it("PROJECT_SWITCH_RE_TIERS_AND_EMITS", () => {
-    const manager = new PtyManager();
-    const tierChanges: Array<{ id: string; tier: "active" | "background" }> = [];
-
-    manager.spawn("t1", spawnOptions({ projectId: "project-a" }));
-    manager.spawn("t2", spawnOptions({ projectId: "project-b" }));
-
-    manager.onProjectSwitch("project-a", (id, tier) => {
-      tierChanges.push({ id, tier });
-    });
-
-    expect(shared.created[0]!.setActivityMonitorTier).toHaveBeenCalledWith("active", 50);
-    expect(shared.created[1]!.setActivityMonitorTier).toHaveBeenCalledWith("background", 500);
-    expect(shared.created[0]!.startProcessDetector).toHaveBeenCalledTimes(1);
-    expect(tierChanges).toEqual([
-      { id: "t1", tier: "active" },
-      { id: "t2", tier: "background" },
-    ]);
-    expect(shared.eventsEmit).toHaveBeenCalledWith(
-      "terminal:foregrounded",
-      expect.objectContaining({ id: "t1", projectId: "project-a" })
-    );
-    expect(shared.eventsEmit).toHaveBeenCalledWith(
-      "terminal:backgrounded",
-      expect.objectContaining({ id: "t2", projectId: "project-b" })
-    );
-  });
-
   it("TRANSITIONSTATE_FORWARDS_INFO", () => {
     const manager = new PtyManager();
     const spawnedAt = 4242;

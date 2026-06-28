@@ -1,5 +1,5 @@
 import path from "path";
-import { expect, type Page } from "@playwright/test";
+import { expect, type ElectronApplication, type Page } from "@playwright/test";
 import { launchApp, type AppContext } from "./launch";
 import { createFixtureRepo } from "./fixtures";
 import { openAndOnboardProject } from "./project";
@@ -37,6 +37,20 @@ async function getPluginActionIds(page: Page): Promise<string[]> {
   });
 }
 
+/** Activate a loaded plugin by id through the E2E-only main-process hook. */
+export async function activateE2EPlugin(app: ElectronApplication, pluginId: string): Promise<void> {
+  await app.evaluate(async (_modules, id) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- E2E hook
+    const activate = (globalThis as any).__daintreeActivateE2EPlugin as
+      | ((pluginId: string) => Promise<void>)
+      | undefined;
+    if (!activate) {
+      throw new Error("E2E plugin activation hook not available");
+    }
+    await activate(id);
+  }, pluginId);
+}
+
 /** IDs of toolbar buttons contributed by loaded plugins (main-process truth). */
 export async function getPluginToolbarButtonIds(page: Page): Promise<string[]> {
   return page.evaluate(async () => {
@@ -62,7 +76,8 @@ export async function waitForSamplePluginReady(page: Page): Promise<void> {
  * activation is independent — specs that assert against its capabilities or
  * settings must gate on this rather than `waitForSamplePluginReady`.
  */
-export async function waitForRichPluginReady(page: Page): Promise<void> {
+export async function waitForRichPluginReady(app: ElectronApplication, page: Page): Promise<void> {
+  await activateE2EPlugin(app, "daintree.rich");
   await expect
     .poll(() => getPluginActionIds(page), { timeout: PLUGIN_READY_TIMEOUT })
     .toContain("daintree.rich.ready");
@@ -81,6 +96,7 @@ export async function launchWithSamplePlugin(
   });
   const { dir, cleanup } = createFixtureRepo({ name });
   ctx.window = await openAndOnboardProject(ctx.app, ctx.window, dir, name);
+  await activateE2EPlugin(ctx.app, "daintree.hello");
   await waitForSamplePluginReady(ctx.window);
   return { ctx, cleanup };
 }

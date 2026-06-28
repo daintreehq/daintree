@@ -9,8 +9,9 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { ExternalLink, Settings2, ShieldAlert, X } from "lucide-react";
+import { ExternalLink, MessageCircle, Settings2, ShieldAlert, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
 import { MissingCliGate } from "@/components/Terminal/MissingCliGate";
 import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
@@ -18,6 +19,7 @@ import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar"
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { terminalClient } from "@/clients";
 import { logWarn } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { HelpIntroBanner } from "./HelpIntroBanner";
 import { HelpPanelHeader } from "./HelpPanelHeader";
@@ -25,7 +27,7 @@ import { HelpPanelBanners } from "./HelpPanelBanners";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
 import { HelpLaunchingState } from "./HelpLaunchingState";
 import { McpActivityStrip } from "./McpActivityStrip";
-import { McpAnomalyFooterLink } from "./McpAnomalyFooterLink";
+import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { TurnOutcomePip } from "./TurnOutcomePip";
 import { FigureRail } from "./FigureRail";
 import {
@@ -43,13 +45,14 @@ import {
 } from "@/store";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
+import { buildResumeLatestCommand } from "@shared/types/agentSettings";
 import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import { actionService } from "@/services/ActionService";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { TerminalRefreshTier } from "@/types";
 import { CLOSE_CONFIRM_AGENT_STATES } from "@shared/types/agent";
-import { isGridPanelLocation, isPtyPanel } from "@shared/types/panel";
+import { isPtyPanel } from "@shared/types/panel";
 import type { PinnedActionContextSnapshot } from "@shared/types/ipc/help";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
@@ -65,6 +68,16 @@ const RESIZE_PAGE_STEP = 50;
 const ASSISTANT_DOCS_URL = "https://daintree.org/assistant";
 const ASSISTANT_INSTALLER_URL = "https://daintree.org/download";
 
+// First-run starter prompts. Clicking one starts the assistant AND seeds the
+// agent with the question, so the very first session is an explicit, useful
+// action rather than a bare empty terminal. Shown only before the user has
+// ever launched an agent (#10699).
+const STARTER_PROMPTS = [
+  "How do I set up a new worktree?",
+  "Explain Daintree's panel system",
+  "Help me configure my first agent",
+] as const;
+
 interface HelpPanelProps {
   /**
    * Configured panel width in pixels (the stable stored size, never 0).
@@ -73,9 +86,10 @@ interface HelpPanelProps {
    */
   width: number;
   /**
-   * Whether the panel is visible. When false, AppLayout collapses the clipped
-   * right-sidebar slot so the panel grid slides over it. Defaults to width > 0
-   * for backward compatibility.
+   * Whether the panel is visible. When false, AppLayout slides the fixed-width
+   * wrapper off-canvas via transform while a sibling spacer animates the <main>
+   * push, and marks the parked wrapper inert once the slide settles (#10693).
+   * Defaults to width > 0 for backward compatibility.
    */
   isVisible?: boolean;
   /**
@@ -111,6 +125,10 @@ export function HelpPanel({
   // it on close so keyboard users return to where they were rather than
   // body. Mirrors the pattern in AppDialog/AppPaletteDialog.
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  // Idempotent teardown for an in-flight resize drag. Stored in a ref so an
+  // unmount (or window blur) mid-drag can run it and never leak the document
+  // listeners or the body userSelect/cursor overrides. Mirrors TwoPaneSplitDivider.
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
   const [isResizing, setIsResizing] = useState(false);
   const isMacroFocused = useMacroFocusStore((s) => s.focusedRegion === "assistant");
   // Ordinary DOM focus (click-to-focus, programmatic) inside the aside — the
@@ -150,6 +168,7 @@ export function HelpPanel({
     sessionId,
     agentId,
     preferredAgentId,
+    autoLaunchEnabled,
     droppedPreferredAgentId,
     introDismissed,
     conversationTouched,
@@ -158,6 +177,7 @@ export function HelpPanel({
     markConversationStarted,
     setWidth,
     setOpen,
+    setAutoLaunchEnabled,
     dismissIntro,
     clearDroppedPreferredAgent,
   } = useHelpPanelStore(
@@ -168,6 +188,7 @@ export function HelpPanel({
       sessionId: s.sessionId,
       agentId: s.agentId,
       preferredAgentId: s.preferredAgentId,
+      autoLaunchEnabled: s.autoLaunchEnabled,
       droppedPreferredAgentId: s.droppedPreferredAgentId,
       introDismissed: s.introDismissed,
       conversationTouched: s.conversationTouched,
@@ -176,6 +197,7 @@ export function HelpPanel({
       markConversationStarted: s.markConversationStarted,
       setWidth: s.setWidth,
       setOpen: s.setOpen,
+      setAutoLaunchEnabled: s.setAutoLaunchEnabled,
       dismissIntro: s.dismissIntro,
       clearDroppedPreferredAgent: s.clearDroppedPreferredAgent,
     }))
@@ -228,36 +250,44 @@ export function HelpPanel({
   const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);
   // Tool calls re-resolve their target terminal live at dispatch time, so the
   // frozen provision-time `pinnedContext.terminalId` going stale doesn't mean
-  // they can't reach anything. Danger only when a pinned session has no live
-  // grid terminal left to dispatch into; warning when the user has since
-  // focused a different worktree than the one the session is bound to. Danger
-  // wins — nowhere to reach is the more urgent mismatch. The dock-hosted
-  // assistant terminal is excluded — it's never a tool-call target.
-  const hasAnyLiveGridPty = usePanelStore((s) =>
-    s.panelIds.some((id) => {
-      const p = s.panelsById[id];
-      return (
-        p != null &&
-        isPtyPanel(p) &&
-        isGridPanelLocation(p.location) &&
-        // `missing-cli`/`failed` gate panels are UI placeholders with no backing
-        // PTY — they can't receive a dispatched command.
-        p.spawnStatus !== "missing-cli" &&
-        p.spawnStatus !== "failed" &&
-        p.hasPty !== false &&
-        p.exitCode === undefined &&
-        p.runtimeStatus !== "exited" &&
-        p.runtimeStatus !== "error"
-      );
-    })
-  );
-  const isPinnedTerminalDead = pinnedContext?.terminalId != null && !hasAnyLiveGridPty;
+  // they can't reach anything. The only recoverable mismatch worth surfacing in
+  // the footer is divergence: the user focused a different worktree than the one
+  // the session is bound to, fixable in one click. (Closing every grid terminal
+  // is a normal action, not a failure — the dock-hosted chat keeps working — so
+  // it no longer paints the footer red; #10792.)
   const isPinnedWorktreeDiverged =
     pinnedContext?.worktreeId != null &&
     focusedWorktreeId !== null &&
     pinnedContext.worktreeId !== focusedWorktreeId;
 
   const agentConfig = agentId ? getAgentConfig(agentId) : undefined;
+  // The model the live session actually launched with, read from its persisted
+  // launch flags (not current settings — those can drift after the session
+  // starts). `lastIndexOf` so a custom-args `--model` override wins, matching the
+  // CLI's last-flag semantics. Resolved to the catalog short label when known.
+  const launchedModelLabel = useMemo(() => {
+    const flags = terminalPty?.agentLaunchFlags;
+    if (!flags || !agentId) return null;
+    // Scan from the end so a later (custom-args) --model override wins, matching
+    // the CLI's last-flag semantics. Handles both "--model X" and "--model=X",
+    // and ignores a dangling "--model" or one followed by another flag.
+    let modelId: string | null = null;
+    for (let i = flags.length - 1; i >= 0; i--) {
+      const flag = flags[i];
+      if (!flag) continue;
+      if (flag.startsWith("--model=")) {
+        modelId = flag.slice("--model=".length);
+        break;
+      }
+      const next = flags[i + 1];
+      if (flag === "--model" && next && !next.startsWith("-")) {
+        modelId = next;
+        break;
+      }
+    }
+    if (!modelId) return null;
+    return getAgentConfig(agentId)?.models?.find((m) => m.id === modelId)?.shortLabel ?? modelId;
+  }, [terminalPty?.agentLaunchFlags, agentId]);
   const effectiveAgentId = isBuiltInAgentId(agentId) ? agentId : undefined;
   const showHybridInputBar = shouldShowHybridInputBar({
     hasAgentIdentity: effectiveAgentId !== undefined,
@@ -273,6 +303,154 @@ export function HelpPanel({
     return getAssistantSupportedAgentIds().filter((id) => isAgentInstalled(cliAvailability[id]));
   }, [cliHasRealData, cliAvailability]);
   const supportedInstalledAgentIdsKey = supportedInstalledAgentIds.join(",");
+
+  // A conversation the eviction/crash path captured for this project but never
+  // resumed. On LRU eviction (or renderer crash) main kills the assistant PTY
+  // via HelpSessionService.revokeByWebContentsId — grid PTYs survive in the
+  // pty-host, the assistant doesn't — and stashes a resume token in its
+  // pending-hibernation store. When the idle empty state is about to show, peek
+  // that store so we can offer "Resume assistant" instead of a fresh "Start
+  // assistant", making a project switch-back read as a recoverable pause rather
+  // than a crash. The peek is non-consuming: the launch flow still consumes the
+  // entry via takePendingHibernation. We stamp the entry with its projectId so a
+  // mid-flight A→B switch can't show project A's Resume CTA over project B.
+  const [resumablePending, setResumablePending] = useState<{
+    projectId: string;
+    agentId: string;
+  } | null>(null);
+  const currentProjectId = currentProject?.id ?? null;
+  useEffect(() => {
+    if (!isOpen || terminalId || !currentProjectId) {
+      setResumablePending(null);
+      return;
+    }
+    // Optional-chained like the `onViewRevealed` subscription below: a missing
+    // binding degrades to the normal "Start assistant" CTA rather than throwing.
+    const peek = window.electron.help.peekPendingHibernation?.(currentProjectId);
+    if (!peek) {
+      setResumablePending(null);
+      return;
+    }
+    let cancelled = false;
+    void peek
+      .then((pending) => {
+        if (cancelled) return;
+        const pendingAgentId = pending?.agentId ?? null;
+        // Offer Resume only for an agent that is BOTH still installed AND
+        // actually resume-capable. A captured-but-non-resumable agent (e.g. the
+        // built-in assistant — no `resume` config) would dead-end in
+        // `_spawnResumed` and silently start fresh, so "Resume" would lie.
+        // `buildResumeLatestCommand` is the same capability probe the controller
+        // uses for live agents.
+        const canResume =
+          pendingAgentId != null &&
+          supportedInstalledAgentIds.includes(pendingAgentId) &&
+          buildResumeLatestCommand(pendingAgentId) !== undefined;
+        setResumablePending(
+          canResume ? { projectId: currentProjectId, agentId: pendingAgentId } : null
+        );
+      })
+      .catch((err) => {
+        logWarn("HelpPanel: failed to peek pending hibernation", err);
+        if (!cancelled) setResumablePending(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isOpen,
+    terminalId,
+    currentProjectId,
+    supportedInstalledAgentIdsKey,
+    supportedInstalledAgentIds,
+  ]);
+
+  // Cross-project bleed guard: an A→B switch re-runs the peek effect, but B's
+  // peek resolves asynchronously, so only trust a pending entry whose projectId
+  // matches the project currently in view.
+  const resumableAgentId =
+    resumablePending && resumablePending.projectId === currentProjectId
+      ? resumablePending.agentId
+      : null;
+
+  // #10815: report this project's panel open-state to main on every change so
+  // an LRU eviction / crash capture can stamp `panelWasOpen` onto the resume
+  // token. Fire-and-forget — a slow or missing binding must never block the UI.
+  useEffect(() => {
+    if (!currentProjectId) return;
+    const reported = window.electron.help.reportPanelOpen?.(currentProjectId, isOpen);
+    if (reported) safeFireAndForget(reported, { context: "HelpPanel.reportPanelOpen" });
+  }, [isOpen, currentProjectId]);
+
+  // #10815: cold switch-back auto-resume — driven by the reliable pull-on-mount
+  // peek, NOT a racy main→renderer push. The lazy HelpPanel mounts behind
+  // hydration gates and subscribes long after main's `did-finish-load` fires, so
+  // a one-shot push was dropped on a true cold restore (the exact scenario this
+  // targets). The peek is request/response and can't be missed: when this
+  // project's view was evicted (or crashed) with the assistant open, main's
+  // capture stamped `panelWasOpen` onto the resume token (in-memory only —
+  // disk-loaded prior-session entries lack it, so app restart reads false and
+  // never auto-resumes). Runs even while closed: the panel is closed by design
+  // after a cold restore, so gating on `isOpen` would drop the signal.
+  // `coldResumeArmedRef` plus the `!terminalId` gate keep it one-shot — a
+  // re-peek on a dep change can't re-arm, and a DevTools reload that still holds
+  // a live session never arms a second backend. `peekPendingHibernation` is
+  // non-consuming; the launch flow below does the atomic `take`.
+  //
+  // Gated on `isReadyToLaunch` so we don't arm — or even peek — until the
+  // controller can actually accept the launch (#10815). A true cold restore
+  // renders with project state still hydrating (`isReadyToLaunch === false`);
+  // arming then would set `autoResumeAgentId`, and the fire-effect would call
+  // `launch()` against a not-ready controller, which rejects and burns the
+  // one-shot intent — silently losing the resume in exactly the target scenario.
+  // Deferring the whole effect until ready preserves the intent (the peek is
+  // non-consuming, so main keeps the entry until the atomic take): the effect
+  // re-runs when `isReadyToLaunch` flips true, by which point `syncInputs` has
+  // already pushed the ready state into the controller, so no fire-vs-sync race.
+  const [autoResumeAgentId, setAutoResumeAgentId] = useState<string | null>(null);
+  const coldResumeArmedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!currentProjectId || terminalId || !isReadyToLaunch) return;
+    if (coldResumeArmedRef.current === currentProjectId) return;
+    const peek = window.electron.help.peekPendingHibernation?.(currentProjectId);
+    if (!peek) return;
+    let cancelled = false;
+    void peek
+      .then((pending) => {
+        if (cancelled || coldResumeArmedRef.current === currentProjectId) return;
+        if (!pending?.panelWasOpen || !pending.agentId) return;
+        coldResumeArmedRef.current = currentProjectId;
+        setOpen(true);
+        setAutoResumeAgentId(pending.agentId);
+      })
+      .catch((err) => {
+        logWarn("HelpPanel: failed to peek cold-resume hibernation", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentProjectId, terminalId, isReadyToLaunch, setOpen]);
+
+  // Fire the captured resume once the panel has opened. The `!terminalId` guard
+  // covers two cases: a DevTools reload that still holds a live session, and the
+  // controller's own auto-launch (when consent is on) already having spawned —
+  // either way a live session means the resume already happened (or shouldn't
+  // double), so drop the intent. Deliberately omits `setAutoLaunchEnabled`:
+  // auto-resuming a stranded session is one-time recovery, not an opt-in to
+  // billed auto-launch on every future open (#10699). Mirrors
+  // `handleResumeAssistant`. `resumeOnly` makes the launch restore-or-nothing:
+  // if main's pending entry is already gone (another window won the atomic take,
+  // or a stale peek), the controller aborts instead of fresh-launching a blank
+  // session that would displace the resumed backend (#10815).
+  useEffect(() => {
+    if (!autoResumeAgentId || !isOpen) return;
+    if (terminalId) {
+      setAutoResumeAgentId(null);
+      return;
+    }
+    controller.launch({ agentId: autoResumeAgentId, replaceExisting: true, resumeOnly: true });
+    setAutoResumeAgentId(null);
+  }, [autoResumeAgentId, isOpen, terminalId, controller]);
 
   // Lifecycle — arms IPC subscriptions on mount, clears all timers on
   // unmount. `start()` is idempotent across StrictMode's double-mount.
@@ -294,6 +472,7 @@ export function HelpPanel({
       terminalId,
       preferredAgentId,
       supportedInstalledAgentIds,
+      autoLaunchEnabled,
       visibilityEpoch,
     });
   }, [
@@ -305,6 +484,7 @@ export function HelpPanel({
     preferredAgentId,
     supportedInstalledAgentIdsKey,
     supportedInstalledAgentIds,
+    autoLaunchEnabled,
     visibilityEpoch,
   ]);
 
@@ -327,6 +507,22 @@ export function HelpPanel({
       document.removeEventListener("visibilitychange", handler);
     };
   }, []);
+
+  // Recover a launch stranded by a project switch-back (#10739). When a launch
+  // is interrupted mid-flight, the view is parked in the LRU cache where the
+  // watchdog timer can't fire, leaving the loading skeleton stuck with no
+  // terminal bound. Key off the explicit `app:view-revealed` signal (reliable
+  // for cached-view reveal, unlike DOM `visibilitychange`) so the controller can
+  // reap the stall and re-drive. Gated only on `isOpen` — crucially NOT on
+  // `terminalId`, since the stuck-launch case has no terminal yet, nor on
+  // `isVisible`, so the subscription is live the moment the cached view reveals.
+  useEffect(() => {
+    if (!isOpen) return;
+    const off = window.electron?.app?.onViewRevealed?.(() => {
+      controller.handleViewRevealed();
+    });
+    return () => off?.();
+  }, [controller, isOpen]);
 
   // Revoke the bound help session if the underlying PTY panel disappears
   // from the panel store. The controller's `_pendingNewTerminalId` guard
@@ -491,6 +687,24 @@ export function HelpPanel({
     return undefined;
   }, [isOpen, isVisible, focusRequest, terminalId, terminal, showHybridInputBar]);
 
+  // Pin the WebGL context to the assistant terminal while it owns focus (#10672).
+  // The reveal effect above only calls `focus()` (xterm DOM focus); it never
+  // routes through `setFocused()`, which is the sole service path that calls
+  // `webGLManager.pinFocus()`. Without this, when the fleet falls to DOM mode
+  // (WebGL context count at cap) the assistant could never become the pinned
+  // context and rendered garbled. Drive it from real DOM focus — not the reveal
+  // trigger — so a closed/hidden-but-mounted panel never grabs the pin. The
+  // cleanup's `setFocused(false)` covers close, visibility collapse, terminal
+  // change, blur, and unmount; it only clears `managed.isFocused` (it does not
+  // release the pin — that resolves on the next grid-terminal focus).
+  useEffect(() => {
+    if (!terminalId) return undefined;
+    terminalInstanceService.setFocused(terminalId, isOpen && isVisible && hasDomFocus);
+    return () => {
+      terminalInstanceService.setFocused(terminalId, false);
+    };
+  }, [isOpen, isVisible, hasDomFocus, terminalId]);
+
   // Post-reveal repaint for the assistant terminal (#10362). The project-level
   // reveal sweep folds the assistant into its targets, but it repaints on a
   // fixed double-rAF tuned to the project grid — and this slide-out panel can
@@ -501,10 +715,16 @@ export function HelpPanel({
   useEffect(() => {
     if (!isOpen || !isVisible || !terminalId) return;
     if (typeof requestAnimationFrame !== "function") return;
-    const off = window.electron?.app?.onViewRevealed?.(() => {
+
+    // One reveal-correction pass: poll a few frames for the slide-out panel to
+    // settle to real width, then repaint. Visibility-guarded so a backstop that
+    // fires after the user switched away again no-ops.
+    const runRepaintPass = (): void => {
+      if (document.visibilityState !== "visible") return;
       let frames = 0;
       const tick = (): void => {
         if (!useHelpPanelStore.getState().isOpen) return;
+        if (document.visibilityState !== "visible") return;
         // Wait for the container to have real width before repainting —
         // repaintForReveal's own size guard would otherwise no-op against a
         // not-yet-laid-out panel. Give up after a bounded window.
@@ -515,13 +735,44 @@ export function HelpPanel({
         if (++frames < 8) requestAnimationFrame(tick);
       };
       requestAnimationFrame(tick);
+    };
+
+    // Timed redraw backstop, mirroring the worktree-terminal reveal cadence
+    // (WorktreeStoreContext): the single frame-sweep above is bounded to ~130ms
+    // and never retries, but that window falls before the compositor presents
+    // the foreground view, before xterm's IntersectionObserver un-pauses the
+    // renderer, and inside the project-switch resize lock — exactly when a
+    // repaint can't stick, leaving the Assistant garbled with no Redraw button
+    // to recover it. Re-run the same cheap, idempotent, box-/visibility-guarded
+    // repaint on a fixed cadence so a late-settling panel self-corrects: 1s
+    // catches the common settle, 3s a late straggler.
+    const REVEAL_BACKSTOP_DELAYS_MS = [1000, 3000];
+    let backstopTimers: ReturnType<typeof setTimeout>[] = [];
+    const clearRevealBackstops = (): void => {
+      for (const timer of backstopTimers) clearTimeout(timer);
+      backstopTimers = [];
+    };
+
+    const off = window.electron?.app?.onViewRevealed?.(() => {
+      runRepaintPass();
+      // Cancel any backstops still pending from a prior switch so rapid
+      // back-and-forth switching can't stack passes, then arm this switch's.
+      clearRevealBackstops();
+      for (const delay of REVEAL_BACKSTOP_DELAYS_MS) {
+        backstopTimers.push(setTimeout(runRepaintPass, delay));
+      }
     });
-    return off;
+
+    return () => {
+      clearRevealBackstops();
+      off?.();
+    };
   }, [isOpen, isVisible, terminalId]);
 
   // Resize via mouse drag
   const handleResizeStart = useCallback(
     (e: React.MouseEvent) => {
+      if (e.button !== 0) return;
       e.preventDefault();
       onResizeStart?.();
       setIsResizing(true);
@@ -537,18 +788,62 @@ export function HelpPanel({
         setWidth(newWidth);
       };
 
-      const onMouseUp = () => {
-        setIsResizing(false);
-        onResizeEnd?.();
+      const prevUserSelect = document.body.style.userSelect;
+      const prevCursor = document.body.style.cursor;
+
+      // Idempotent: removing absent listeners and reassigning styles is a no-op,
+      // so unmount/blur/mouseup can all call this without double-restore hazards.
+      const cleanup = () => {
         document.removeEventListener("mousemove", onMouseMove);
         document.removeEventListener("mouseup", onMouseUp);
+        window.removeEventListener("blur", onWindowBlur);
+        document.body.style.userSelect = prevUserSelect;
+        document.body.style.cursor = prevCursor;
+        resizeCleanupRef.current = null;
       };
+
+      const endResize = () => {
+        // Tear down listeners/styles before user callbacks so a throwing
+        // onResizeEnd can't leak the global userSelect/cursor overrides.
+        cleanup();
+        setIsResizing(false);
+        onResizeEnd?.();
+      };
+
+      const onMouseUp = () => endResize();
+      // Drag interrupted (alt-tab, OS gesture) — restore everything; no commit
+      // needed since width is applied live during the drag.
+      const onWindowBlur = () => endResize();
+
+      resizeCleanupRef.current = cleanup;
 
       document.addEventListener("mousemove", onMouseMove);
       document.addEventListener("mouseup", onMouseUp);
+      window.addEventListener("blur", onWindowBlur);
+      // Drop any live selection before the drag. userSelect:none below only
+      // stops NEW drag-selections from forming; a selection that already exists
+      // in the terminal still gets torn as the rows reflow, firing a document
+      // `selectionchange` that makes xterm's AccessibilityManager recompute an
+      // inverted (start >= end) range and throw "invalid range". Collapsing it
+      // up front leaves nothing to tear (the collapse itself is handled by the
+      // manager's isCollapsed early-return).
+      const selection = document.getSelection();
+      if (selection && !selection.isCollapsed) selection.removeAllRanges();
+      // Suppress text selection during the drag. Without this, a fast drag
+      // selects across the terminal rows while they reflow, and xterm's
+      // AccessibilityManager throws "invalid range" on the torn selection.
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "col-resize";
     },
     [width, setWidth, onResizeStart, onResizeEnd]
   );
+
+  // Run any in-flight resize teardown if the panel unmounts mid-drag.
+  useEffect(() => {
+    return () => {
+      resizeCleanupRef.current?.();
+    };
+  }, []);
 
   // Resize via keyboard.
   const handleResizeKeyDown = useCallback(
@@ -651,6 +946,47 @@ export function HelpPanel({
     controller.runAnyway();
   }, [controller]);
 
+  // The agent the idle empty state's "Start assistant" CTA would launch — the
+  // user's preference, or the sole installed assistant backend. Mirrors the
+  // controller's own auto-launch eligibility so the CTA is shown only when a
+  // single unambiguous target exists; otherwise the user is sent to settings.
+  const launchableAgentId =
+    preferredAgentId ??
+    (supportedInstalledAgentIds.length === 1 ? (supportedInstalledAgentIds[0] ?? null) : null);
+
+  // Explicit, billed start (#10699). Records consent so future opens may
+  // auto-launch, then launches directly — relying on syncInputs re-evaluation
+  // would leave a render-cycle gap. An optional starter prompt seeds the first
+  // turn (skips the resume path by design).
+  const handleStartAssistant = useCallback(
+    (seedPrompt?: string) => {
+      if (!launchableAgentId) return;
+      setAutoLaunchEnabled(true);
+      controller.launch({
+        agentId: launchableAgentId,
+        replaceExisting: true,
+        ...(seedPrompt ? { seedPrompt } : {}),
+      });
+    },
+    [controller, launchableAgentId, setAutoLaunchEnabled]
+  );
+
+  // Recovery resume after the eviction/crash path killed the assistant PTY on a
+  // project switch-away. Unlike "Start assistant", this deliberately does NOT
+  // record auto-launch consent (#10699): resuming a stranded session is a
+  // one-time, user-initiated recovery, not an opt-in to billed auto-launch on
+  // every future open. The launch flow seeds the captured entry from main and
+  // spawns a `--resume` process (HelpSessionController._executeLaunch). Launched
+  // with the captured agent id (not the CTA agent) so the resume branch — gated
+  // on `hibernated.agentId === launchAgentId` — actually fires.
+  const handleResumeAssistant = useCallback(() => {
+    if (!resumableAgentId) return;
+    controller.launch({
+      agentId: resumableAgentId,
+      replaceExisting: true,
+    });
+  }, [controller, resumableAgentId]);
+
   const dismissResume = useCallback(() => controller.dismissResumeBanner(), [controller]);
   const dismissSnapshot = useCallback(() => controller.dismissPreflightSnapshot(), [controller]);
   const dismissTierMismatch = useCallback(() => controller.dismissTierMismatch(), [controller]);
@@ -674,7 +1010,7 @@ export function HelpPanel({
   // Both guards are scoped to the panel so a focused CodeMirror or xterm in a
   // different panel (e.g. FileViewer, a grid terminal) can't trap Escape here.
   const handleEscape = useCallback(() => {
-    const active = document.activeElement as HTMLElement | null;
+    const active = document.activeElement;
     if (active && panelRef.current?.contains(active)) {
       if (active.closest(".xterm-helper-textarea")) return;
       if (active.closest(".cm-editor")) return;
@@ -732,7 +1068,7 @@ export function HelpPanel({
       }}
       className={cn(
         "relative shrink-0 flex flex-col h-full overflow-hidden outline-hidden",
-        "bg-daintree-bg border-l border-daintree-border transition-colors duration-300",
+        "bg-daintree-bg border-l border-daintree-border transition-[border-left-color,box-shadow] duration-150",
         isHighlighted && "assistant-focused",
         !isVisible && "pointer-events-none"
       )}
@@ -884,7 +1220,7 @@ export function HelpPanel({
                     longer available
                   </p>
                   <p className="mt-0.5 text-daintree-text/70">
-                    The agent was removed or is no longer supported as an assistant backend.
+                    The agent was removed or is no longer supported as an assistant backend
                   </p>
                   <button
                     type="button"
@@ -897,7 +1233,7 @@ export function HelpPanel({
                 <button
                   type="button"
                   onClick={clearDroppedPreferredAgent}
-                  aria-label="Dismiss"
+                  aria-label="Dismiss agent unavailable notice"
                   className="text-daintree-text/50 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                 >
                   <X className="w-3 h-3" />
@@ -906,13 +1242,66 @@ export function HelpPanel({
             )}
             <div className="flex-1 flex flex-col items-center justify-center gap-6 p-8 text-center">
               <p className="text-sm text-daintree-text/70 max-w-[30ch]">
-                Use Daintree Assistant to configure and navigate Daintree.
+                {resumableAgentId
+                  ? "Your last assistant session is paused"
+                  : "Use Daintree Assistant to configure and navigate Daintree."}
               </p>
+              {resumableAgentId ? (
+                <div className="flex flex-col items-center gap-4 w-full max-w-[34ch]">
+                  {/* Recovery resume — the eviction/crash path killed the PTY on
+                      switch-away, but the conversation can be picked back up.
+                      Does not record auto-launch consent (#10699), unlike "Start
+                      assistant". This is the single load-bearing accent here.
+                      Starting a fresh session is the header's "+ New session". */}
+                  <Button
+                    type="button"
+                    onClick={handleResumeAssistant}
+                    data-testid="help-resume-assistant"
+                  >
+                    <Sparkles />
+                    Resume assistant
+                  </Button>
+                </div>
+              ) : launchableAgentId ? (
+                <div className="flex flex-col items-center gap-4 w-full max-w-[34ch]">
+                  {/* Explicit start — opening the panel no longer auto-bills a
+                      session (#10699); the user kicks it off here. This is the
+                      single load-bearing accent in the idle focus region. */}
+                  <Button
+                    type="button"
+                    onClick={() => handleStartAssistant()}
+                    data-testid="help-start-assistant"
+                  >
+                    <Sparkles />
+                    Start assistant
+                  </Button>
+                  {!hasEverLaunchedAgent && (
+                    <div className="flex flex-col gap-1.5 w-full">
+                      <p className="text-[11px] text-daintree-text/60">Or start with a question</p>
+                      {STARTER_PROMPTS.map((prompt) => (
+                        <button
+                          key={prompt}
+                          type="button"
+                          onClick={() => handleStartAssistant(prompt)}
+                          className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs rounded-[var(--radius-md)] border border-daintree-border text-daintree-text/80 hover:text-daintree-text hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                        >
+                          <MessageCircle className="w-3.5 h-3.5 shrink-0 text-daintree-text/50" />
+                          <span>{prompt}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-daintree-text/70 max-w-[32ch]">
+                  Configure an assistant agent in settings to get started.
+                </p>
+              )}
               <div className="flex flex-col gap-2">
                 <button
                   type="button"
                   onClick={handleOpenSettings}
-                  className="flex items-center gap-1 text-[11px] text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                  className="flex items-center gap-1 text-[11px] text-daintree-text/70 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                 >
                   <Settings2 className="w-3.5 h-3.5" />
                   Assistant settings
@@ -920,7 +1309,7 @@ export function HelpPanel({
                 <button
                   type="button"
                   onClick={handleOpenAssistantDocs}
-                  className="flex items-center gap-1 text-[11px] text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                  className="flex items-center gap-1 text-[11px] text-daintree-text/70 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                   Daintree Assistant guide
@@ -940,16 +1329,18 @@ export function HelpPanel({
         <div className="flex items-center justify-between gap-3 border-t border-daintree-border shrink-0 px-3 py-1.5 text-[11px] text-daintree-text/40">
           <span className="flex items-center gap-2 min-w-0">
             <McpActivityStrip sessionId={sessionId} activity={session.mcpActivity} />
-            <McpAnomalyFooterLink />
             <TurnOutcomePip outcome={session.outcomeAlert} onDismiss={dismissOutcomeAlert} />
           </span>
           <span className="flex items-center gap-2 min-w-0 shrink-0 max-w-[70%]">
             {pinnedContext &&
               // A diverged worktree is recoverable in one click — switch focus
-              // back to the worktree the session is pinned to. A dead terminal
-              // can't be fixed by switching, so it stays a passive indicator and
-              // surfaces a "Start new session" button beside it (#10017).
-              (isPinnedWorktreeDiverged && !isPinnedTerminalDead ? (
+              // back to the worktree the session is pinned to. A pinned terminal
+              // with no live grid target is no longer a failure to shout about:
+              // tool calls re-resolve at dispatch time and the dock-hosted chat
+              // keeps working, so it stays a quiet neutral indicator. The
+              // recovery path lives on the header's "Start new session" button
+              // (#10792).
+              (isPinnedWorktreeDiverged ? (
                 <button
                   type="button"
                   onClick={() => {
@@ -977,22 +1368,12 @@ export function HelpPanel({
                 </button>
               ) : (
                 <span
-                  className={cn(
-                    "flex items-center gap-1.5 min-w-0",
-                    isPinnedTerminalDead ? "text-status-danger" : undefined
-                  )}
-                  title={
-                    isPinnedTerminalDead
-                      ? "No open terminal can receive this assistant's tool calls."
-                      : "Assistant tool calls are pinned to this worktree and terminal."
-                  }
+                  className="flex items-center gap-1.5 min-w-0"
+                  title="Assistant tool calls are pinned to this worktree and terminal."
                 >
                   <span
                     aria-hidden
-                    className={cn(
-                      "w-1.5 h-1.5 rounded-full shrink-0",
-                      isPinnedTerminalDead ? "bg-status-danger" : "bg-daintree-text/30"
-                    )}
+                    className="w-1.5 h-1.5 rounded-full shrink-0 bg-daintree-text/30"
                   />
                   <span className="truncate">
                     {[pinnedContext.worktreeName, pinnedContext.worktreeBranch]
@@ -1001,34 +1382,48 @@ export function HelpPanel({
                   </span>
                 </span>
               ))}
-            {isPinnedTerminalDead && (
-              <button
-                type="button"
-                onClick={handleNewSession}
-                className={cn(
-                  "flex items-center shrink-0 px-1.5 py-0.5 rounded-[var(--radius-sm)] text-[11px] font-medium",
-                  "bg-status-danger/10 text-status-danger hover:bg-status-danger/15 transition-colors duration-150",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
-                )}
-                title="No open terminal to receive tool calls — start a new session"
+            {agentId === "daintree-assistant" ? (
+              // The Daintree Assistant is the workspace's own conductor, so the
+              // brand mark already says "Daintree" — pairing it with just
+              // "assistant" keeps this status row from repeating the word twice
+              // and frees up the tight footer width.
+              <span
+                className="flex items-center gap-1 shrink-0"
+                title={
+                  launchedModelLabel
+                    ? `Assistant agent: ${agentConfig.name} · ${launchedModelLabel}`
+                    : `Assistant agent: ${agentConfig.name}`
+                }
               >
-                Start new session
-              </button>
+                <DaintreeIcon className="w-3.5 h-3.5" />
+                Assistant
+                {launchedModelLabel && (
+                  <span className="text-daintree-text/50">· {launchedModelLabel}</span>
+                )}
+              </span>
+            ) : (
+              <span
+                className="flex items-center gap-1 shrink-0"
+                title={
+                  launchedModelLabel
+                    ? `Assistant agent: ${agentConfig.name} · ${launchedModelLabel}`
+                    : `Assistant agent: ${agentConfig.name}`
+                }
+              >
+                <agentConfig.icon className="w-3.5 h-3.5" />
+                {agentConfig.name}
+                {launchedModelLabel && (
+                  <span className="text-daintree-text/50">· {launchedModelLabel}</span>
+                )}
+              </span>
             )}
-            <span
-              className="flex items-center gap-1 shrink-0"
-              title={`Assistant agent: ${agentConfig.name}`}
-            >
-              <agentConfig.icon className="w-3.5 h-3.5" />
-              {agentConfig.name}
-            </span>
           </span>
         </div>
       )}
       <ConfirmDialog
         isOpen={showNewSessionConfirm}
         title="Start a new session?"
-        description="The current agent will stop and the conversation will be discarded."
+        description="The current agent will stop and the conversation will be discarded"
         confirmLabel="Start new session"
         onConfirm={handleConfirmNewSession}
         onClose={handleCancelNewSession}
@@ -1039,7 +1434,7 @@ export function HelpPanel({
         title={`Switch to ${
           getAgentConfig(preferredAgentId ?? "")?.name ?? preferredAgentId ?? "agent"
         }?`}
-        description="The current session will end and the conversation will be discarded."
+        description="The current session will end and the conversation will be discarded"
         confirmLabel="Switch agent"
         onConfirm={handleConfirmAgentSwitch}
         onClose={handleCancelAgentSwitch}

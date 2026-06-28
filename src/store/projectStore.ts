@@ -89,10 +89,39 @@ function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   };
 }
 
+/**
+ * Yield one macrotask so a pending React commit can paint before the caller
+ * resumes. A project switch flips `isSwitching` (which mounts the busy overlay)
+ * and then must run the heavy synchronous `buildOutgoingState()` snapshot and
+ * fire the switch IPC; doing all of it in one task blocks the event loop so the
+ * overlay can't reach the screen until they finish, and the click reads as
+ * unresponsive. Awaiting this between the flag flip and the heavy work lets the
+ * overlay paint first. `setTimeout` (a macrotask), not `queueMicrotask`,
+ * because the browser paints between macrotasks, never between microtasks.
+ */
+function yieldToPaint(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 interface ProjectState {
   projects: Project[];
   currentProject: Project | null;
   isLoading: boolean;
+  /**
+   * True while a project switch is in flight (#10736). Distinct from the shared
+   * `isLoading`, which also fires for load/add/remove — this is scoped to the
+   * switch so the main-content busy overlay only appears during a switch. Set
+   * synchronously in `switchProject` before the fire-and-forget IPC; never
+   * cleared on the happy path (the outgoing renderer is detached and replaced),
+   * only in the `.catch()` where the outgoing view stays visible. Transient,
+   * never persisted.
+   */
+  isSwitching: boolean;
+  /**
+   * Id of the project being switched to while `isSwitching` is true, used to
+   * label the busy overlay. Set/cleared atomically with `isSwitching`.
+   */
+  switchingToProjectId: string | null;
   error: string | null;
   /**
    * True once the batched boot payload has seeded `projects` + `currentProject`
@@ -126,6 +155,7 @@ interface ProjectState {
     options?: { focusIntent?: "focus-next-waiting" }
   ) => Promise<void>;
   setWorktreeLoadError: (error: string | null) => void;
+  clearSwitching: () => void;
   updateProject: (id: string, updates: Partial<Project>) => Promise<void>;
   enableInRepoSettings: (id: string) => Promise<Project>;
   disableInRepoSettings: (id: string) => Promise<Project>;
@@ -327,6 +357,8 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   projects: [],
   currentProject: null,
   isLoading: false,
+  isSwitching: false,
+  switchingToProjectId: null,
   isBootstrapped: false,
   gitInitDialogOpen: false,
   gitInitDirectoryPath: null,
@@ -526,14 +558,34 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     // from the LRU cache.
     clearFleetArmingThroughAccessor();
 
-    // Capture outgoing state before the renderer gets detached
+    // Capture the outgoing project id now, while it's still the active project.
     const currentProjectId = get().currentProject?.id;
+
+    // Flip the busy/switch flags FIRST and clear any stale worktree-load banner
+    // atomically with the switch start (#8400, mirrors the #4451 atomic-swap
+    // fix), THEN yield so the switch overlay paints before we run the heavy
+    // outgoing-state snapshot and fire the IPC. buildOutgoingState() walks the
+    // whole panel graph synchronously; running it inline here blocked the event
+    // loop so the overlay couldn't reach the screen, and the click felt
+    // unresponsive for the duration of the snapshot.
+    set({
+      isLoading: true,
+      isSwitching: true,
+      switchingToProjectId: projectId,
+      error: null,
+      worktreeLoadError: null,
+    });
+
+    await yieldToPaint();
+    // A newer transition started while we yielded — let it own the switch so a
+    // stale snapshot/IPC can't clobber it.
+    if (requestId !== projectTransitionRequestId) return;
+
+    // Capture outgoing state just before firing, after the paint. The outgoing
+    // view is not detached until the main process handles the IPC, so the panel
+    // store still reflects the outgoing project here.
     const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
 
-    // Clear any stale worktree-load banner atomically with the switch start so
-    // the previous project's failure never coexists with the new project (#8400,
-    // mirrors the #4451 atomic-swap fix).
-    set({ isLoading: true, error: null, worktreeLoadError: null });
     // Fire-and-forget: the main process swaps WebContentsViews, so this
     // renderer gets detached. Don't write the response into stores — the
     // new view handles its own state independently.
@@ -561,12 +613,36 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
           },
         ],
       });
-      set({ error: message, isLoading: false });
+      // The switch failed before the view swap, so this outgoing renderer stays
+      // visible — clear the busy flag here (the happy path never reaches this
+      // renderer again, so it needs no clear).
+      set({ error: message, isLoading: false, isSwitching: false, switchingToProjectId: null });
     });
   },
 
   setWorktreeLoadError: (worktreeLoadError) => {
     set({ worktreeLoadError });
+  },
+
+  /**
+   * Force-clears the switch busy state (#10736 follow-up). The happy path
+   * deliberately leaves `isSwitching`/`isLoading` set on the outgoing renderer
+   * (the view is detached and replaced, so it never re-renders) — but that
+   * renderer is kept in the LRU view cache and reactivated on a later switch
+   * *back*, where it would otherwise resurface its stale flags: the busy overlay
+   * re-shows forever (trapping all input) and `ProjectSwitcher` stays disabled
+   * on the stuck `isLoading`. This is the reset called when a cached view
+   * returns to the foreground, and the hard-stop the overlay watchdog invokes
+   * if the flag ever sticks.
+   *
+   * Gated on a switch actually being flagged so it never clobbers an unrelated
+   * `isLoading` (load/add/remove also use it); `isLoading` is only reset here
+   * because, in that branch, the in-flight load was the switch's own — a
+   * reactivated parked view has no other operation running. Idempotent.
+   */
+  clearSwitching: () => {
+    if (!get().isSwitching && get().switchingToProjectId === null) return;
+    set({ isSwitching: false, switchingToProjectId: null, isLoading: false });
   },
 
   updateProject: async (id, updates) => {
@@ -721,9 +797,21 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   reopenProject: async (projectId) => {
     const requestId = ++projectTransitionRequestId;
     const currentProjectId = get().currentProject?.id;
-    const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
 
-    set({ isLoading: true, error: null, worktreeLoadError: null });
+    // Flip the busy/switch flags first, then yield so the overlay paints before
+    // the heavy outgoing-state snapshot + IPC (see switchProject for the why).
+    set({
+      isLoading: true,
+      isSwitching: true,
+      switchingToProjectId: projectId,
+      error: null,
+      worktreeLoadError: null,
+    });
+
+    await yieldToPaint();
+    if (requestId !== projectTransitionRequestId) return;
+
+    const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
     projectClient.reopen(projectId, outgoingState).catch((error) => {
       if (requestId !== projectTransitionRequestId) {
         return;
@@ -748,7 +836,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
           },
         ],
       });
-      set({ error: message, isLoading: false });
+      // The reopen failed before the view swap, so this outgoing renderer stays
+      // visible — clear the busy flag (mirrors switchProject). Guarded by the
+      // requestId check above so a superseded reopen never clobbers a newer
+      // transition's state.
+      set({ error: message, isLoading: false, isSwitching: false, switchingToProjectId: null });
     });
   },
 

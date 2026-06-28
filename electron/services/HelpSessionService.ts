@@ -10,6 +10,7 @@ import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { probeMcpServer, probeMcpSseServer } from "./mcp-server/readinessProbe.js";
 import { getAssistantWiredAgentIds } from "../../shared/config/agentRegistry.js";
+import { ASSISTANT_ONLY_AGENT_IDS } from "../../shared/config/agentIds.js";
 import type { HelpAssistantTier } from "../../shared/types/ipc/maps.js";
 import type { ActionContext } from "../../shared/types/actions.js";
 import type { PtyClient } from "./PtyClient.js";
@@ -39,10 +40,33 @@ const PROJECT_HASH_LEN = 16;
 // might grow to ship.
 const TEMPLATE_HASH_FILE = ".template-hash";
 
+// `action` is the deliberate default tier for assistant sessions, including the
+// headless Daintree Assistant CLI (#10640): it covers orchestration, terminal
+// driving, branch setup, recipes, and reads, while leaving irreversible
+// mutations (git.push, worktree.delete) above the floor so they require a
+// human-approved scoped grant rather than running unattended. What that tier
+// permits vs. withholds is locked by the policy guard in
+// `mcp-server/__tests__/tierAuth.test.ts`; this constant selects it as the
+// provisioning default.
 const DEFAULT_TIER: HelpAssistantTier = "action";
 const DEFAULT_DAINTREE_CONTROL = true;
 const DEFAULT_DOC_SEARCH = true;
 const DEFAULT_BYPASS_PERMISSIONS = false;
+const DEFAULT_DEBUG_LOGGING = false;
+
+// Belt-and-suspenders bound for orphaned provisional bearers (#10698). A
+// session record is minted at provision time, then bound to a PTY terminal once
+// the agent spawns. If the launch hangs past the renderer watchdog AND the
+// watchdog's revoke somehow didn't run (renderer crash, view torn down
+// mid-launch), the record can outlive the launch with a live token but no bound
+// terminal. The periodic sweep revokes any such unbound record older than this
+// ceiling. Bound sessions are never swept regardless of age — they're healthy
+// long-lived assistants. 30 min mirrors the MCP idle-reaper horizon; an orphan
+// is reaped between 30 and ~35 min old (this floor plus up to one sweep
+// interval). The 90s launch watchdog is the primary fix — this is the
+// renderer-crash backstop, so the coarse timing is intentional.
+const ORPHAN_SESSION_MAX_AGE_MS = 30 * 60 * 1000;
+const ORPHAN_SESSION_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
 function isHelpAssistantTier(value: unknown): value is HelpAssistantTier {
   return value === "workbench" || value === "action" || value === "system";
@@ -91,6 +115,12 @@ interface HelpSessionRecord {
    * can still bypass Claude's confirmation gate (and vice versa).
    */
   bypassPermissions: boolean;
+  /**
+   * Snapshot at provision time of the user's debug-logging preference. Consumed
+   * by `lifecycle.ts` to decide whether to inject `DAINTREE_ASSISTANT_DEBUG_LOG=1`
+   * into the spawn env. Only the `daintree-assistant` backend reads that var.
+   */
+  debugLogging: boolean;
   createdAt: number;
   revoked: boolean;
   /**
@@ -255,8 +285,21 @@ export class HelpSessionService {
   // mid-kill displacement can't let a stale resume ID shadow the new session.
   // In-memory only — no in-flight capture is meaningful across an app restart.
   private readonly pendingCapturesByProject = new Map<string, string>();
+  // #10815: per-project assistant-panel visibility, reported by the renderer
+  // whenever its `isOpen` changes. Read at capture time to stamp
+  // `panelWasOpen` onto the eviction hibernation entry so cold switch-back can
+  // auto-reopen + auto-resume only when the panel was actually open. In-memory
+  // only — a panel-open state has no meaning across an app restart.
+  // Keyed by projectId (not webContents/window) on purpose: the
+  // pending-hibernation store and its resume token are themselves projectId-
+  // scoped (one entry per project regardless of how many windows view it), so
+  // "was the assistant open for this project" is the matching granularity. In a
+  // multi-window/same-project setup the last reporter wins, which at worst
+  // reopens a panel both windows would resume into the same shared session.
+  private readonly panelOpenByProjectId = new Map<string, boolean>();
   private onMcpSessionRevokedFn: ((token: string) => void) | null = null;
   private disposed = false;
+  private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   setMcpRegistry(registry: WindowRegistry): void {
     this.mcpRegistry = registry;
@@ -278,6 +321,21 @@ export class HelpSessionService {
 
   setPendingHibernationStore(store: PendingHelpHibernationStore | null): void {
     this.pendingHibernationStore = store;
+  }
+
+  /**
+   * #10815: record whether the assistant panel is currently open for a
+   * project, reported by the renderer on every `isOpen` change. Consulted at
+   * eviction-capture time to decide whether the cold switch-back should
+   * auto-reopen and auto-resume. In-memory only.
+   */
+  reportPanelOpen(projectId: string, isOpen: boolean): void {
+    if (!projectId) return;
+    if (isOpen) {
+      this.panelOpenByProjectId.set(projectId, true);
+    } else {
+      this.panelOpenByProjectId.delete(projectId);
+    }
   }
 
   validateToken(token: string): HelpAssistantTier | false {
@@ -487,7 +545,18 @@ export class HelpSessionService {
     pathHash: string
   ): Promise<ProvisionResult | null> {
     const settings = this.readSettings();
-    const tier = settings.tier;
+    // The Daintree Assistant is the workspace's first-class conductor: when the
+    // user explicitly selects it, it runs at the top `system` tier so the full
+    // action surface — forge writes, git mutations, worktree.delete — is reachable
+    // (still behind the per-action confirm gate; the tier opens the door, it does
+    // not skip confirmation). Other help-overlay agents (Claude/Codex) keep the
+    // deliberate `action` floor from settings, where irreversible mutations need a
+    // human-approved scoped grant. Policy locks live in
+    // `mcp-server/__tests__/tierAuth.test.ts`.
+    const isDaintreeAssistant = (ASSISTANT_ONLY_AGENT_IDS as readonly string[]).includes(
+      input.agentId
+    );
+    const tier: HelpAssistantTier = isDaintreeAssistant ? "system" : settings.tier;
     const sessionId = randomUUID();
     const token = randomBytes(SESSION_TOKEN_BYTES).toString("hex");
     const sessionsRoot = this.getSessionsRoot();
@@ -634,6 +703,7 @@ export class HelpSessionService {
       agentId: input.agentId,
       tier,
       bypassPermissions: settings.bypassPermissions,
+      debugLogging: settings.debugLogging,
       createdAt: now,
       revoked: false,
       actionContext: input.actionContext,
@@ -874,12 +944,14 @@ export class HelpSessionService {
       // placeholder with the agent's real resume ID (below).
       if (this.pendingHibernationStore) {
         this.pendingCapturesByProject.set(record.projectId, sessionId);
+        const panelWasOpen = this.panelOpenByProjectId.get(record.projectId) === true;
         void this.pendingHibernationStore
           .set(record.projectId, {
             agentId: record.agentId,
             agentSessionId: "",
             cwd: record.sessionPath,
             capturedAt: Date.now(),
+            panelWasOpen,
           })
           .catch((err) => {
             console.warn(
@@ -963,12 +1035,14 @@ export class HelpSessionService {
       this.pendingCapturesByProject.get(record.projectId) === sessionId
     ) {
       if (capturedAgentSessionId) {
+        const panelWasOpen = this.panelOpenByProjectId.get(record.projectId) === true;
         void this.pendingHibernationStore
           .set(record.projectId, {
             agentId: record.agentId,
             agentSessionId: capturedAgentSessionId,
             cwd: record.sessionPath,
             capturedAt: Date.now(),
+            panelWasOpen,
           })
           .catch((err) => {
             console.warn(
@@ -993,6 +1067,33 @@ export class HelpSessionService {
     } else if (record.agentId === "gemini") {
       await this.stripStaleGeminiDaintreeEntry(record.sessionPath);
     }
+  }
+
+  /**
+   * Non-consuming read of the eviction-captured resume entry for a project.
+   * Unlike `takePendingHibernation`, this does NOT clear the entry or touch
+   * the in-flight capture owner — it's a pure lookup so the renderer's idle
+   * empty state can decide whether to offer a "Resume assistant" affordance
+   * before the user commits to a launch. The actual resume still goes through
+   * `takePendingHibernation` (atomic take) inside the launch flow.
+   */
+  peekPendingHibernation(projectId: string): {
+    agentId: string;
+    agentSessionId: string;
+    cwd: string;
+    panelWasOpen: boolean;
+  } | null {
+    if (!this.pendingHibernationStore) return null;
+    const entry = this.pendingHibernationStore.get(projectId);
+    if (!entry) return null;
+    return {
+      agentId: entry.agentId,
+      agentSessionId: entry.agentSessionId,
+      cwd: entry.cwd,
+      // In-memory-only flag; disk-loaded prior-session entries lack it →
+      // false, so app restart never auto-resumes (#10815).
+      panelWasOpen: entry.panelWasOpen === true,
+    };
   }
 
   /**
@@ -1164,8 +1265,49 @@ export class HelpSessionService {
     );
   }
 
+  /**
+   * Arm the periodic orphan-bearer sweep (#10698). Wired once at app boot from
+   * `globalServicesInit`. Idempotent and a no-op after `dispose`. The timer is
+   * `unref`'d so it never keeps the process alive on its own.
+   */
+  startOrphanSweep(): void {
+    if (this.disposed || this.sweepTimer) return;
+    this.sweepTimer = setInterval(() => {
+      try {
+        this.sweepOrphanSessions(ORPHAN_SESSION_MAX_AGE_MS);
+      } catch (err) {
+        console.warn("[HelpSessionService] Orphan-bearer sweep failed:", err);
+      }
+    }, ORPHAN_SESSION_SWEEP_INTERVAL_MS);
+    this.sweepTimer.unref?.();
+  }
+
+  /**
+   * Revoke every unrevoked session record that was minted more than `maxAgeMs`
+   * ago but never bound to a PTY terminal — an orphaned provisional bearer
+   * whose launch was abandoned without the renderer revoking its token. Bound
+   * sessions (present in `terminalBySessionId`) are skipped regardless of age:
+   * a healthy long-running assistant must never be swept. Snapshots the target
+   * list before mutating so the `revokeSession` map deletes don't disturb the
+   * iteration.
+   */
+  async sweepOrphanSessions(maxAgeMs: number): Promise<void> {
+    const cutoff = Date.now() - maxAgeMs;
+    const orphans = [...this.sessionsById.values()].filter(
+      (record) =>
+        !record.revoked &&
+        !this.terminalBySessionId.has(record.sessionId) &&
+        record.createdAt <= cutoff
+    );
+    await Promise.all(orphans.map((record) => this.revokeSession(record.sessionId)));
+  }
+
   dispose(): void {
     this.disposed = true;
+    if (this.sweepTimer) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = null;
+    }
     void this.revokeAll();
   }
 
@@ -1208,6 +1350,7 @@ export class HelpSessionService {
     docSearch: boolean;
     tier: HelpAssistantTier;
     bypassPermissions: boolean;
+    debugLogging: boolean;
   } {
     const stored = (store.get("helpAssistant") as Record<string, unknown> | undefined) ?? {};
     // Read-time migration from the legacy `skipPermissions` boolean. This
@@ -1236,6 +1379,8 @@ export class HelpSessionService {
       docSearch: typeof stored.docSearch === "boolean" ? stored.docSearch : DEFAULT_DOC_SEARCH,
       tier,
       bypassPermissions,
+      debugLogging:
+        typeof stored.debugLogging === "boolean" ? stored.debugLogging : DEFAULT_DEBUG_LOGGING,
     };
   }
 
@@ -1267,6 +1412,18 @@ export class HelpSessionService {
     const record = this.sessionsByToken.get(token);
     if (!record || record.revoked) return false;
     return record.bypassPermissions;
+  }
+
+  /**
+   * Returns the snapshot of the user's debug-logging preference taken at
+   * provision time. `lifecycle.ts` reads this to decide whether to inject
+   * `DAINTREE_ASSISTANT_DEBUG_LOG=1` into the assistant spawn env.
+   */
+  getDebugLogging(token: string): boolean {
+    if (!token) return false;
+    const record = this.sessionsByToken.get(token);
+    if (!record || record.revoked) return false;
+    return record.debugLogging;
   }
 
   private getSessionsRoot(): string {

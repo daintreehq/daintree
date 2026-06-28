@@ -44,7 +44,15 @@ import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
 import { runScratchCleanup } from "../services/ScratchCleanupService.js";
 import { runAssistantScratchCleanup } from "../services/AssistantScratchService.js";
 import { getPeriodicCleanupService } from "../services/PeriodicCleanupService.js";
-import { pruneOldLogs, pruneOldLogsAsync, logError } from "../utils/logger.js";
+import {
+  pruneOldLogs,
+  pruneOldLogsAsync,
+  pruneHeapSnapshots,
+  pruneHeapSnapshotsAsync,
+  MAX_HEAP_SNAPSHOTS,
+  logError,
+} from "../utils/logger.js";
+import { effectiveCachedProjectViews } from "../utils/cachedProjectViews.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -57,6 +65,7 @@ import { getProjectStatsService } from "../ipc/handlers/projectCrud/index.js";
 import { registerDeferredTask } from "./deferredInitQueue.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { setPluginDirResolver } from "../setup/protocols.js";
+import { isE2EFaultMode } from "../setup/runtimeFlags.js";
 import { activateOpenFileInstaller } from "../setup/openFileInstall.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { registerCommands } from "../services/commands/index.js";
@@ -180,7 +189,7 @@ export async function initGlobalServices(
   // `watchdog:disabled` broadcast) without real memory pressure or three
   // genuine watchdog crashes. (The GitHub token seams moved into the
   // daintree.github plugin's main module alongside its token storage.)
-  if (process.env.DAINTREE_E2E_FAULT_MODE === "1") {
+  if (isE2EFaultMode) {
     const VALID_RESOURCE_PROFILES = new Set<ResourceProfile>([
       "performance",
       "balanced",
@@ -236,7 +245,18 @@ export async function initGlobalServices(
   registerDeferredTask({
     name: "hibernation-service",
     run: () => {
-      initializeHibernationService();
+      const svc = initializeHibernationService();
+      // Let user-initiated hibernation reach every window's cached project
+      // renderers so it can evict them (#10668). Lazy lambda — windows open and
+      // close after this wires, so re-read the registry on each call. Same
+      // pattern ResourceProfileService uses below.
+      svc.setProjectViewManagersProvider(
+        () =>
+          windowRegistry
+            ?.all()
+            .map((wCtx) => wCtx.services.projectViewManager)
+            .filter((pvm): pvm is ProjectViewManager => pvm !== undefined) ?? []
+      );
     },
   });
 
@@ -317,6 +337,7 @@ export async function initGlobalServices(
                 if (retentionDays > 0) {
                   pruneOldLogs(app.getPath("userData"), retentionDays);
                 }
+                pruneHeapSnapshots(app.getPath("logs"), MAX_HEAP_SNAPSHOTS);
               } catch (err) {
                 logError("[DiskSpaceMonitor] log prune threw", err);
               }
@@ -409,26 +430,6 @@ export async function initGlobalServices(
           },
           hibernateIdleProjects: async () => {
             await getHibernationService().hibernateUnderMemoryPressure();
-          },
-          accelerateTerminalHibernation: (level: 1 | 2) => {
-            // Fan the per-window push event so every renderer compresses
-            // its hibernation timer. Mirrors the destroyHiddenWebviews
-            // fanout pattern above — broadcastToRenderer is not used
-            // because the renderer's TerminalInstanceService is window-
-            // scoped (xterm instances live in a single project view), so
-            // there's nothing to gain from a global broadcast.
-            if (!windowRegistry) return;
-            for (const wCtx of windowRegistry.all()) {
-              if (wCtx.browserWindow.isDestroyed()) continue;
-              try {
-                sendToRenderer(wCtx.browserWindow, CHANNELS.EVENTS_PUSH, {
-                  name: "window:accelerate-hibernation",
-                  payload: { level },
-                });
-              } catch {
-                /* non-critical */
-              }
-            }
           },
           trimPtyHostState: () => {
             getPtyClient()?.trimState(SCROLLBACK_BACKGROUND);
@@ -665,8 +666,7 @@ export async function initGlobalServices(
             .filter((pvm): pvm is ProjectViewManager => pvm !== undefined) ?? [],
         getProjectStatsService: () => getProjectStatsService(),
         getUserCachedViewLimit: () =>
-          store.get("terminalConfig")?.cachedProjectViews ??
-          (process.env.DAINTREE_E2E_MODE ? 4 : 1),
+          effectiveCachedProjectViews(store.get("terminalConfig")?.cachedProjectViews),
         hasSustainedRendererSaturation: () => hasSustainedRendererSaturation(),
       });
       setResourceProfileService(svc);
@@ -758,6 +758,13 @@ export async function initGlobalServices(
     // stub `.mcp.json` missing the daintree entry. The setter is just a
     // reference store — no MCP SDK loaded.
     helpSessionService.setMcpRegistry(registryRef);
+
+    // Arm the periodic orphan-bearer sweep (#10698): a defense-in-depth bound
+    // that revokes provisional session tokens minted by a launch that hung and
+    // was abandoned without the renderer revoking. The renderer watchdog is the
+    // primary fix; this catches the residual case (renderer crash / view torn
+    // down mid-launch). The timer is unref'd, so it never holds the process up.
+    helpSessionService.startOrphanSweep();
 
     // Load the pending-hibernation file and wire it into HelpSessionService.
     // Floated, not awaited: the deadline is the user's first project switch
@@ -868,6 +875,9 @@ export async function initGlobalServices(
       // because its files are appended-to, not truncated.
       const retentionDays = store.get("privacy")?.logRetentionDays ?? 30;
       await pruneOldLogsAsync(app.getPath("userData"), retentionDays);
+      // Heap snapshots land in app.getPath("logs") (a separate dir from
+      // userData/logs) and are bounded by count, not age — see pruneHeapSnapshots.
+      await pruneHeapSnapshotsAsync(app.getPath("logs"), MAX_HEAP_SNAPSHOTS);
     },
   });
 

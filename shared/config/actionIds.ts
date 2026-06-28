@@ -12,11 +12,13 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.getStatus",
   "terminal.sendCommand",
   "terminal.waitUntilIdle",
+  "terminal.waitUntilIdleBatch",
 
   // -- panelActions --
   "panel.list",
   "panel.focus",
   "panel.focusIndex",
+  "panel.openPluginPanel",
   "panel.palette",
   "panel.gridLayout.setStrategy",
   "panel.gridLayout.setValue",
@@ -89,6 +91,7 @@ export const BUILT_IN_ACTION_IDS = [
   "system.checkCommand",
   "system.checkDirectory",
   "system.getHomeDir",
+  "system.getResourceProfileSnapshot",
 
   // -- cliAvailabilityActions --
   "cliAvailability.get",
@@ -101,6 +104,8 @@ export const BUILT_IN_ACTION_IDS = [
   // -- idleTerminalNotifyActions --
   "idleTerminalNotify.getConfig",
   "idleTerminalNotify.updateConfig",
+  "idleTerminalNotify.closeProject",
+  "idleTerminalNotify.muteProject",
 
   // -- agentSettingsActions --
   "agentSettings.get",
@@ -131,6 +136,7 @@ export const BUILT_IN_ACTION_IDS = [
   // -- fileActions --
   "files.search",
   "file.view",
+  "file.openDiff",
   "file.openInEditor",
   "file.openImageViewer",
 
@@ -192,11 +198,31 @@ export const BUILT_IN_ACTION_IDS = [
   "forge.openPR",
   "forge.assignIssue",
   "forge.unassignIssue",
+  "forge.approvePR",
+  "forge.requestChanges",
+  "forge.dismissReview",
+  "forge.requestReviewers",
+  "forge.createIssue",
+  "forge.closeIssue",
+  "forge.reopenIssue",
+  "forge.editIssue",
+  "forge.addIssueComment",
+  "forge.addIssueLabel",
+  "forge.removeIssueLabel",
   "forge.validateToken",
   "forge.getRepoStats",
   "forge.listIssues",
   "forge.listPRs",
   "forge.getIssue",
+  "forge.getPR",
+  "forge.createPR",
+  "forge.closePR",
+  "forge.reopenPR",
+  "forge.mergePR",
+  "forge.convertPRToDraft",
+  "forge.markPRReadyForReview",
+  "forge.commentOnPR",
+  "forge.editPR",
 
   // -- projectActions --
   "project.getAll",
@@ -300,8 +326,6 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.restartService",
   "watchdog.restart",
   "terminal.new",
-  "terminal.hibernate",
-  "terminal.hibernateAllIdle",
 
   // -- terminalNavigationActions --
   "terminal.moveToDock",
@@ -355,6 +379,7 @@ export const BUILT_IN_ACTION_IDS = [
   // -- browserActions --
   "browser.reload",
   "browser.navigate",
+  "browser.openUrl",
   "browser.back",
   "browser.forward",
   "browser.openExternal",
@@ -363,6 +388,7 @@ export const BUILT_IN_ACTION_IDS = [
   "browser.captureScreenshot",
   "browser.toggleConsole",
   "browser.clearConsole",
+  "browser.getConsoleMessages",
   "browser.toggleDevTools",
   "browser.hardReload",
 
@@ -449,3 +475,19 @@ export const BUILT_IN_ACTION_IDS = [
 ] as const;
 
 export type BuiltInRuntimeActionId = (typeof BUILT_IN_ACTION_IDS)[number];
+
+// Built-in actions flagged `denyPluginDispatch: true` (terminal input injection,
+// fleet command relays) can never be dispatched from a plugin contribution — the
+// host refuses the dispatch at runtime. A contribution wired to one of these
+// paints a button that is dead on arrival, so the manifest validator rejects it
+// at authoring time. `satisfies readonly BuiltInRuntimeActionId[]` is a
+// compile-time drift guard: renaming or removing any of these built-ins breaks
+// the build instead of silently leaving a stale entry here (#8341).
+export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
+  "terminal.sendCommand",
+  "terminal.paste",
+  "fleet.accept",
+  "fleet.reject",
+  "fleet.interrupt",
+  "fleet.retryFailures",
+] as const satisfies readonly BuiltInRuntimeActionId[];

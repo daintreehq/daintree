@@ -249,23 +249,6 @@ describe("routeHostEvent", () => {
     expect(brokerCalls).toEqual([{ requestId: "req-3", result: [] }]);
   });
 
-  it("resolves broker for wake-result with state and warnings", () => {
-    const { deps, brokerCalls } = makeDeps();
-    routeHostEvent(
-      {
-        type: "wake-result",
-        id: "t1",
-        requestId: "req-w",
-        state: "working",
-        warnings: ["slow"],
-      },
-      deps
-    );
-    expect(brokerCalls).toEqual([
-      { requestId: "req-w", result: { state: "working", warnings: ["slow"] } },
-    ]);
-  });
-
   it("preserves the legacy terminalTypes fallback shape on missing project-stats", () => {
     const { deps, brokerCalls } = makeDeps();
     routeHostEvent(
@@ -293,6 +276,42 @@ describe("routeHostEvent", () => {
     const { deps, state } = makeDeps();
     routeHostEvent({ type: "terminal-pid", id: "t1", pid: 12345 }, deps);
     expect(state.terminalPids.get("t1")).toBe(12345);
+  });
+
+  it("ignores a non-positive terminal-pid without storing or notifying (#10787)", () => {
+    const logWarn = vi.fn();
+    const { deps, state, callbacks } = makeDeps({ logWarn });
+
+    for (const pid of [0, -1]) {
+      const handled = routeHostEvent({ type: "terminal-pid", id: "t1", pid }, deps);
+      expect(handled).toBe(true);
+    }
+
+    expect(state.terminalPids.has("t1")).toBe(false);
+    expect(callbacks.terminalPidCalls).toEqual([]);
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("invalid terminal-pid"));
+  });
+
+  it("stores a valid terminal-pid arriving after a prior invalid one (#10787)", () => {
+    const { deps, state, callbacks } = makeDeps();
+
+    routeHostEvent({ type: "terminal-pid", id: "t1", pid: 0 }, deps);
+    routeHostEvent({ type: "terminal-pid", id: "t1", pid: 777 }, deps);
+
+    expect(state.terminalPids.get("t1")).toBe(777);
+    expect(callbacks.terminalPidCalls).toEqual([{ id: "t1", pid: 777 }]);
+  });
+
+  it("retains a stored valid PID when later invalid events arrive (#10787)", () => {
+    const { deps, state, callbacks } = makeDeps();
+
+    routeHostEvent({ type: "terminal-pid", id: "t1", pid: 555 }, deps);
+    for (const pid of [0, -1, NaN, Infinity]) {
+      routeHostEvent({ type: "terminal-pid", id: "t1", pid }, deps);
+    }
+
+    expect(state.terminalPids.get("t1")).toBe(555);
+    expect(callbacks.terminalPidCalls).toEqual([{ id: "t1", pid: 555 }]);
   });
 
   it("invokes onTerminalPid with id and pid after updating the state map (#7526)", () => {

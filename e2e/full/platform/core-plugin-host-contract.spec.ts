@@ -5,6 +5,7 @@ import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
+import { activateE2EPlugin } from "../../helpers/plugins";
 
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 const ROOT = path.resolve(import.meta.dirname, "../../..");
@@ -148,6 +149,7 @@ test.describe.serial("Core: Plugin host-contract harness", () => {
     const { dir, cleanup } = createFixtureRepo({ name: "plugin-host-contract" });
     fixtureCleanup = cleanup;
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, dir, "Plugin Host Contract");
+    await activateE2EPlugin(ctx.app, "daintree.hello");
     await waitForSamplePluginReady(ctx.window);
   });
 

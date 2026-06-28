@@ -101,6 +101,7 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
             onCancelEdit={scope.handleCancelEdit}
             onStartEdit={scope.handleStartEdit}
             onColorChange={(color) => scope.handleUpdatePreset(scope.selectedPreset!.id, { color })}
+            onDisplayTitleChange={scope.handleDisplayTitleChange}
             onDuplicate={scope.handleDuplicatePreset}
             onDelete={scope.handleDeletePreset}
           />

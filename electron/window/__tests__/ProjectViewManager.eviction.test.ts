@@ -52,7 +52,12 @@ const mockGetAllWebContents = vi.fn<() => unknown[]>(() => []);
 vi.mock("electron", () => {
   function MockWebContentsView() {
     const wc = createMockWebContents();
-    return { webContents: wc, setBounds: vi.fn(), setBackgroundColor: vi.fn() };
+    return {
+      webContents: wc,
+      setBounds: vi.fn(),
+      setBackgroundColor: vi.fn(),
+      setVisible: vi.fn(),
+    };
   }
   return {
     app: {
@@ -310,6 +315,42 @@ describe("ProjectViewManager — eviction safety", () => {
 
       expect(wcB.reload).toHaveBeenCalledTimes(1);
       expect(manager.getAllViews().map((v) => v.projectId)).toContain("proj-b");
+    });
+  });
+
+  describe("getViewInventory / getCacheConfig (#10500)", () => {
+    it("projects each view to safe scalars with the live webContentsId and lifecycle state", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      await manager.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+
+      const inventory = manager.getViewInventory();
+      expect(inventory.map((v) => v.projectId).sort()).toEqual(["proj-b", "proj-c"]);
+
+      const liveC = manager.getAllViews().find((v) => v.projectId === "proj-c")!;
+      const invC = inventory.find((v) => v.projectId === "proj-c")!;
+      // webContentsId must be the real id of the live view, not a placeholder.
+      expect(invC.webContentsId).toBe(liveC.view.webContents.id);
+      // The just-activated project is active; the previous one is cached.
+      expect(invC.state).toBe("active");
+      expect(inventory.find((v) => v.projectId === "proj-b")!.state).toBe("cached");
+      // Never-evicted views carry no eviction timestamp.
+      expect(invC.evictedAt).toBeUndefined();
+      // The live WebContentsView must never leak through the projection.
+      expect(invC).not.toHaveProperty("view");
+    });
+
+    it("getCacheConfig reflects the active project and the cache limit", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+
+      expect(manager.getCacheConfig().activeProjectId).toBe("proj-b");
+      // Constructed with cachedProjectViews: 3.
+      expect(manager.getCacheConfig().maxCachedViews).toBe(3);
+
+      manager.setCachedViewLimit(2);
+      expect(manager.getCacheConfig().maxCachedViews).toBe(2);
     });
   });
 
@@ -822,6 +863,10 @@ describe("ProjectViewManager — eviction safety", () => {
       { pid: wcA.osPid, memory: { privateBytes: 250 * 1024 } },
     ] as unknown as Electron.ProcessMetric[]);
 
+    // Sweep fresh: a background sample timer may have cached empty metrics
+    // during the awaits above, and the 5s snapshot TTL would otherwise shadow
+    // the mock this eviction must read.
+    resetAppMetricsSnapshotForTesting();
     await managerWithLimit.switchTo("proj-c", "/path/c");
     await flushImmediates();
 
@@ -1289,6 +1334,10 @@ describe("ProjectViewManager — telemetry", () => {
       { pid: wcB.osPid, memory: { privateBytes: 300 * 1024 } },
     ] as unknown as Electron.ProcessMetric[]);
 
+    // Sweep fresh: a background sample timer may have cached empty metrics
+    // during the awaits above, and the 5s snapshot TTL would otherwise shadow
+    // the mock this test just set.
+    resetAppMetricsSnapshotForTesting();
     vi.mocked(logInfo).mockClear();
 
     (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
@@ -1336,6 +1385,10 @@ describe("ProjectViewManager — telemetry", () => {
       { pid: guestPid, memory: { privateBytes: 400 * 1024 } },
     ] as unknown as Electron.ProcessMetric[]);
 
+    // Sweep fresh: a background sample timer may have cached empty metrics
+    // during the awaits above, and the 5s snapshot TTL would otherwise shadow
+    // the mock this test just set.
+    resetAppMetricsSnapshotForTesting();
     vi.mocked(logInfo).mockClear();
 
     (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
@@ -1430,6 +1483,7 @@ describe("ProjectViewManager — telemetry", () => {
     // proj-c is now active; proj-a and proj-b are cached.
     const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")?.view
       .webContents as unknown as ReturnType<typeof createMockWebContents>;
+    const wcBPid = wcB.getOSProcessId();
 
     // proj-a's getOSProcessId throws — the iteration over proj-a must be skipped,
     // but proj-b must still be sampled.
@@ -1438,10 +1492,15 @@ describe("ProjectViewManager — telemetry", () => {
     });
 
     mockGetAppMetrics.mockReturnValue([
-      { pid: wcB.osPid, memory: { privateBytes: 400 * 1024 } },
+      { pid: wcBPid, memory: { privateBytes: 400 * 1024 } },
     ] as unknown as Electron.ProcessMetric[]);
 
+    // Sweep fresh: a background sample timer may have cached empty metrics
+    // during the awaits above, and the 5s snapshot TTL would otherwise shadow
+    // the mock this test just set.
+    resetAppMetricsSnapshotForTesting();
     vi.mocked(logInfo).mockClear();
+    resetAppMetricsSnapshotForTesting();
 
     expect(() =>
       (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory()

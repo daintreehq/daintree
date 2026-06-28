@@ -170,6 +170,39 @@ describe("buildSkeletonCss pre-read theme config (#10393)", () => {
   });
 });
 
+describe("buildSkeletonCss instantReveal (Doherty bypass for project switches)", () => {
+  beforeEach(() => {
+    storeMock.get.mockReset();
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appState") return { sidebarWidth: 350, focusMode: false };
+      if (key === "appTheme") return { colorSchemeId: "daintree" };
+      return undefined;
+    });
+  });
+
+  it("drops the Doherty entry delay only when instantReveal is set", () => {
+    const gated = buildSkeletonCss(undefined, undefined);
+    const instant = buildSkeletonCss(undefined, undefined, { instantReveal: true });
+    // The override must be opt-in: the initial-launch path keeps the 400ms gate.
+    expect(gated).not.toContain("animation-delay");
+    expect(instant).toContain("#startup-skeleton { animation-delay: 0ms !important; }");
+  });
+
+  it("overrides only the delay longhand so reduced-motion's `animation: none` survives", () => {
+    const instant = buildSkeletonCss(undefined, undefined, { instantReveal: true });
+    // Touching the `animation` shorthand would restore an animation-name that
+    // the reduced-motion media query set to none — the override must not do that.
+    expect(instant).not.toMatch(/#startup-skeleton\s*\{\s*animation:/);
+  });
+
+  it("threads instantReveal through injectSkeletonCss to the inserted stylesheet", () => {
+    const wc = makeWc();
+    injectSkeletonCss(wc as never, null, { instantReveal: true });
+    const css = wc.insertCSS.mock.calls[0]?.[0] as string;
+    expect(css).toContain("animation-delay: 0ms !important;");
+  });
+});
+
 describe("injectSkeletonProjectIdentity (#9162)", () => {
   it("paints emoji and name into the title via executeJavaScript", () => {
     const wc = makeWc();

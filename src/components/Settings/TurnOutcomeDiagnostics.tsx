@@ -56,41 +56,76 @@ interface PerToolRollup {
 
 interface TurnOutcomeDiagnosticsProps {
   auditRecords?: McpLogRecord[];
+  /**
+   * When provided, the component renders these records instead of self-fetching.
+   * Lets a parent that already holds turn-outcome data (the assistant settings
+   * tab) drive the panel without a redundant IPC round-trip.
+   */
+  records?: AssistantTurnRecord[];
+  /** Refresh handler used in controlled mode; falls back to the internal fetch. */
+  onRefresh?: () => Promise<void> | void;
 }
 
-export function TurnOutcomeDiagnostics({ auditRecords }: TurnOutcomeDiagnosticsProps) {
-  const [records, setRecords] = useState<AssistantTurnRecord[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [outcomeSectionOpen, setOutcomeSectionOpen] = useState(true);
-  const [toolErrorOpen, setToolErrorOpen] = useState(true);
-  const [tierRejectedOpen, setTierRejectedOpen] = useState(true);
+export function TurnOutcomeDiagnostics({
+  auditRecords,
+  records: controlledRecords,
+  onRefresh,
+}: TurnOutcomeDiagnosticsProps) {
+  const isControlled = controlledRecords !== undefined;
+  const [internalRecords, setInternalRecords] = useState<AssistantTurnRecord[]>([]);
+  const [internalLoading, setInternalLoading] = useState(true);
+  const records = isControlled ? controlledRecords : internalRecords;
+  const loading = isControlled ? false : internalLoading;
+  const [outcomeSectionOpen, setOutcomeSectionOpen] = useState(false);
+  const [toolErrorOpen, setToolErrorOpen] = useState(false);
+  const [tierRejectedOpen, setTierRejectedOpen] = useState(false);
   const [agentStuckOpen, setAgentStuckOpen] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
 
   const fetchRecords = async () => {
-    setLoading(true);
+    setInternalLoading(true);
     try {
       const result = await window.electron.mcpServer.getTurnOutcomeRecords();
-      setRecords(result);
+      setInternalRecords(result);
     } catch (err) {
       logError("Failed to load turn outcome records", err);
     } finally {
-      setLoading(false);
+      setInternalLoading(false);
+    }
+  };
+
+  const handleRefresh = () => {
+    if (isControlled) {
+      void onRefresh?.();
+    } else {
+      void fetchRecords();
     }
   };
 
   const confirmClearTurnOutcomeLog = async () => {
     if (isClearing) return;
     setIsClearing(true);
+    let cleared = false;
     try {
       await window.electron.mcpServer.clearTurnOutcomeLog();
-      setRecords([]);
+      cleared = true;
+      if (!isControlled) setInternalRecords([]);
       setShowClearConfirm(false);
     } catch (err) {
       logError("Failed to clear turn outcome log", err);
     } finally {
       setIsClearing(false);
+    }
+    // The post-clear refresh is best-effort: the clear already committed, so a
+    // refresh failure must not reopen the dialog or re-surface the destructive
+    // action — log it separately and leave the closed, cleared state intact.
+    if (cleared && isControlled) {
+      try {
+        await onRefresh?.();
+      } catch (err) {
+        logError("Failed to refresh turn outcomes after clearing log", err);
+      }
     }
   };
 
@@ -100,10 +135,13 @@ export function TurnOutcomeDiagnostics({ auditRecords }: TurnOutcomeDiagnosticsP
   };
 
   useEffect(() => {
+    // Controlled mode: the parent owns the records and loading lifecycle.
+    if (isControlled) return;
+
     let settled = false;
     const timer = setTimeout(() => {
       settled = true;
-      setLoading(false);
+      setInternalLoading(false);
       logError("Turn outcome records load timed out");
     }, 10_000);
 
@@ -111,7 +149,7 @@ export function TurnOutcomeDiagnostics({ auditRecords }: TurnOutcomeDiagnosticsP
       .getTurnOutcomeRecords()
       .then((result) => {
         if (settled) return;
-        setRecords(result);
+        setInternalRecords(result);
       })
       .catch((err) => {
         if (settled) return;
@@ -121,14 +159,17 @@ export function TurnOutcomeDiagnostics({ auditRecords }: TurnOutcomeDiagnosticsP
         if (!settled) {
           settled = true;
           clearTimeout(timer);
-          setLoading(false);
+          setInternalLoading(false);
         }
       });
 
     return () => {
+      // Mark settled so a late-resolving fetch can't write state after unmount
+      // or after a switch into controlled mode.
+      settled = true;
       clearTimeout(timer);
     };
-  }, []);
+  }, [isControlled]);
 
   const outcomeCounts = useMemo(() => {
     const counts = new Map<TurnOutcomeClass, number>();
@@ -486,7 +527,7 @@ export function TurnOutcomeDiagnostics({ auditRecords }: TurnOutcomeDiagnosticsP
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => void fetchRecords()}
+              onClick={handleRefresh}
               disabled={loading}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
             >

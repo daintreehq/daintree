@@ -17,32 +17,89 @@
 // Every message is structured-clone-safe: no functions, no Zod instances, no
 // class instances. Requests that expect a reply carry a `requestId`.
 
-import type { PluginIpcContext, PluginSettingsScope } from "./plugin.js";
+import type {
+  PluginIpcContext,
+  PluginSettingsScope,
+  PluginStorageScope,
+  PluginQuickPickItem,
+  PluginQuickPickOptions,
+  PluginInputBoxOptions,
+  PluginConfirmOptions,
+  PluginProcessSpawnOptions,
+  PluginPanelBadge,
+} from "./plugin.js";
 
 /** Async host methods the worker proxy relays to main and awaits a reply for. */
 export type PluginHostCallMethod =
   | "getActiveWorktree"
   | "getWorktrees"
+  | "getWorktreeStatus"
+  | "getAgentState"
+  | "sendToActiveAgent"
   | "showToast"
   | "dispatch"
+  | "actions.list"
+  | "actions.get"
   | "settings.get"
-  | "settings.set";
+  | "settings.set"
+  | "storage.get"
+  | "storage.set"
+  | "storage.delete"
+  | "fs.readFile"
+  | "fs.writeFile"
+  | "fs.readdir"
+  | "fs.stat"
+  | "fs.watch"
+  | "git.status"
+  | "git.diff"
+  | "git.add"
+  | "git.commit"
+  | "clipboard.writeText"
+  | "clipboard.readText"
+  | "showQuickPick"
+  | "showInputBox"
+  | "showConfirm"
+  | "process.spawn"
+  | "process.restart";
 
 /** Fire-and-forget host methods (no reply needed). */
 export type PluginHostNotifyMethod =
   | "registerAction"
   | "registerHandler"
   | "broadcastToRenderer"
+  | "postToPanel"
   | "invalidateFileDecorations"
+  | "setPanelBadge"
+  | "registerFileDecorationProvider"
+  | "unregisterFileDecorationProvider"
   | "logger.info"
   | "logger.warn"
-  | "logger.error";
+  | "logger.error"
+  | "process.kill";
 
-/** Event subscriptions the worker proxy can open against the host. */
-export type PluginWorkerSubscriptionKind = "active-worktree" | "worktrees" | "settings";
+/**
+ * Event subscriptions the worker proxy can open against the host. The
+ * `process-exit` / `process-crash` kinds wire a spawned process's lifecycle
+ * callbacks back to the worker, keyed by the handle id carried in `processId`.
+ */
+export type PluginWorkerSubscriptionKind =
+  | "active-worktree"
+  | "worktrees"
+  | "settings"
+  | "storage"
+  | "agent-state"
+  | "process-exit"
+  | "process-crash";
 
-/** Callback kinds main invokes back in the worker. */
-export type PluginWorkerInvokeKind = "action" | "handler";
+/**
+ * Callback kinds main invokes back in the worker. `file-decoration-method`
+ * round-trips a registered `FileDecorationProviderImpl` method (just
+ * `provideDecorations`, which is async — see {@link RegisterFileDecorationProviderParams}).
+ * Forge providers are deliberately absent: `ForgeProviderImpl` has required
+ * SYNCHRONOUS methods (`parseRemote`, the URL builders, `classifyPushError`)
+ * the host calls and consumes synchronously, which can't cross this async port.
+ */
+export type PluginWorkerInvokeKind = "action" | "handler" | "file-decoration-method";
 
 /** Messages sent main → worker. */
 export type PluginHostToWorkerMessage =
@@ -72,6 +129,14 @@ export type PluginHostToWorkerMessage =
       ctx: PluginIpcContext;
       args: unknown[];
     }
+  | {
+      type: "invoke";
+      requestId: string;
+      kind: "file-decoration-method";
+      providerId: string;
+      method: string;
+      args: unknown[];
+    }
   /** Deliver a subscription event to a worker-held callback (fire-and-forget). */
   | { type: "subscription-event"; subscriptionId: string; payload: unknown }
   /**
@@ -99,6 +164,13 @@ export type PluginWorkerToHostMessage =
       method: PluginHostCallMethod;
       params: unknown;
     }
+  /**
+   * Cancel an in-flight `host-call`. The proxy posts this when the caller's
+   * `AbortSignal` fires — the signal itself isn't structured-clone-safe, so the
+   * `requestId` is the cancellation handle. The bridge aborts the matching
+   * in-flight host call; a no-op if it already settled.
+   */
+  | { type: "host-cancel"; requestId: string }
   /** Fire-and-forget host method call. `registrationKey` correlates `register-error`. */
   | {
       type: "host-notify";
@@ -112,7 +184,14 @@ export type PluginWorkerToHostMessage =
       subscriptionId: string;
       kind: PluginWorkerSubscriptionKind;
       key?: string;
-      scope?: PluginSettingsScope;
+      scope?: PluginSettingsScope | PluginStorageScope;
+      /**
+       * Opt-in debounce for the `worktrees` subscription (host-side coalescing).
+       * Ignored for other kinds. Mirrors `PluginHostSubscriptionOptions.debounceMs`.
+       */
+      debounceMs?: number;
+      /** Handle id for `process-exit` / `process-crash` subscriptions. */
+      processId?: string;
     }
   /** Close a previously opened subscription. */
   | { type: "unsubscribe"; subscriptionId: string }
@@ -153,10 +232,48 @@ export interface BroadcastToRendererParams {
   payload: unknown;
 }
 
+/**
+ * Params for `postToPanel` (`host-notify`) — the post-activation-safe sibling
+ * of `broadcastToRenderer`. Relayed off the activation-window guard so it stays
+ * callable from worker timers and subscription callbacks. `panelId` carries the
+ * per-instance target (#10618): a non-empty string targets one panel instance,
+ * `null`/absent broadcasts. Forwarded verbatim — the main-side host resolves the
+ * routing and wraps the renderer envelope.
+ */
+export interface PostToPanelParams {
+  channel: string;
+  payload: unknown;
+  panelId?: string | null;
+}
+
 /** Params for `invalidateFileDecorations` (`host-notify`). */
 export interface InvalidateFileDecorationsParams {
   scope: string;
   paths?: string[];
+}
+
+/** Params for `setPanelBadge` (`host-notify`). `null` clears the badge. */
+export interface SetPanelBadgeParams {
+  panelId: string;
+  badge: PluginPanelBadge | null;
+}
+
+/**
+ * Params for `registerFileDecorationProvider` (`host-notify`). Only the
+ * structured-clone-safe descriptor fields travel; the `provideDecorations` impl
+ * stays in the worker and main invokes it back via a `file-decoration-method`
+ * `invoke` (mirrors the `registerAction` handler round-trip).
+ */
+export interface RegisterFileDecorationProviderParams {
+  descriptor: {
+    id: string;
+    scopes?: string[];
+  };
+}
+
+/** Params for `unregisterFileDecorationProvider` (`host-notify`). */
+export interface UnregisterFileDecorationProviderParams {
+  providerId: string;
 }
 
 /** Params for a `logger.*` call (`host-notify`). */
@@ -168,7 +285,12 @@ export interface LoggerParams {
 /** Params for `settings.get` (`host-call`). */
 export interface SettingsGetParams {
   key: string;
-  scope: PluginSettingsScope;
+  /**
+   * Omitted (`undefined`) when the plugin passed no scope, so the host resolves
+   * the key's manifest-declared scope on read (#10586) rather than a defaulted
+   * "user" that a project-scoped key would reject.
+   */
+  scope?: PluginSettingsScope;
 }
 
 /** Params for `settings.set` (`host-call`). */
@@ -176,6 +298,25 @@ export interface SettingsSetParams {
   key: string;
   value: unknown;
   scope: PluginSettingsScope;
+}
+
+/** Params for `storage.get` (`host-call`). */
+export interface StorageGetParams {
+  key: string;
+  scope: PluginStorageScope;
+}
+
+/** Params for `storage.set` (`host-call`). */
+export interface StorageSetParams {
+  key: string;
+  value: unknown;
+  scope: PluginStorageScope;
+}
+
+/** Params for `storage.delete` (`host-call`). */
+export interface StorageDeleteParams {
+  key: string;
+  scope: PluginStorageScope;
 }
 
 /** Params for `showToast` (`host-call`). */
@@ -192,8 +333,101 @@ export interface DispatchParams {
 }
 
 /**
+ * Params for `actions.get` (`host-call`, #10561). `actions.list` takes no
+ * params. `actions.canDispatch` is derived worker-side from `actions.get`, so it
+ * has no dedicated host-call method.
+ */
+export interface ActionsGetParams {
+  actionId: string;
+}
+
+/** Params for `sendToActiveAgent` (`host-call`). */
+export interface SendToActiveAgentParams {
+  text: string;
+  options?: { submit?: boolean };
+}
+
+/** Params for `showQuickPick` (`host-call`). */
+export interface ShowQuickPickParams {
+  items: PluginQuickPickItem[];
+  options?: PluginQuickPickOptions;
+}
+
+/** Params for `showInputBox` (`host-call`). */
+export interface ShowInputBoxParams {
+  options?: PluginInputBoxOptions;
+}
+
+/** Params for `showConfirm` (`host-call`). */
+export interface ShowConfirmParams {
+  options: PluginConfirmOptions;
+}
+
+/** Params for `fs.readFile` / `fs.readdir` / `fs.stat` (`host-call`). */
+export interface FsPathParams {
+  path: string;
+}
+
+/** Params for `fs.writeFile` (`host-call`). */
+export interface FsWriteFileParams {
+  path: string;
+  contents: string;
+}
+
+/** Params for `git.status` / `git.diff` / `git.add` / `git.commit` (`host-call`). */
+export interface GitOpParams {
+  worktreePath: string;
+  filePath?: string;
+  paths?: string[];
+  message?: string;
+}
+
+/** Params for `clipboard.writeText` (`host-call`). `clipboard.readText` takes no params. */
+export interface ClipboardWriteTextParams {
+  text: string;
+}
+
+/** Params for `process.spawn` (`host-call`). */
+export interface ProcessSpawnParams {
+  command: string;
+  options?: PluginProcessSpawnOptions;
+}
+
+/**
+ * Result of `process.spawn` (`host-call`). The host-assigned handle id the
+ * worker proxy uses to address `process.kill` / `process.restart` and to open
+ * the `process-exit` / `process-crash` subscriptions.
+ */
+export interface ProcessSpawnResult {
+  id: string;
+}
+
+/** Params for `process.kill` (`host-notify`) and `process.restart` (`host-call`). */
+export interface ProcessHandleRefParams {
+  processId: string;
+}
+
+/**
+ * Params for `fs.watch` (`host-call`). The call both establishes the watcher —
+ * rejecting on a missing capability / out-of-scope path so the in-process
+ * `watch` rejection contract is preserved — and opens the subscription whose
+ * change events arrive as `subscription-event`s keyed by `subscriptionId`.
+ */
+export interface FsWatchParams {
+  subscriptionId: string;
+  paths: string[];
+}
+
+/**
  * Env var name set on the forked worker so the worker module can assert it is
  * running in the intended utility-process kind (mirrors the
  * `DAINTREE_UTILITY_PROCESS_KIND` convention used by the other hosts).
  */
 export const PLUGIN_DEV_WORKER_KIND = "plugin-dev-worker";
+
+/**
+ * Sibling of {@link PLUGIN_DEV_WORKER_KIND} for production plugins. They run in
+ * the same `utilityProcess.fork` worker but without the dev hot-reload file
+ * watcher; the distinct kind keeps the two apart in process-monitor logs.
+ */
+export const PLUGIN_PROD_WORKER_KIND = "plugin-prod-worker";

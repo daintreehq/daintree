@@ -50,6 +50,36 @@ describe("runValidate", () => {
     expect(result.warnings.join("\n")).toMatch(/engines\.daintree omitted/);
   });
 
+  it("accepts a deprecated experimental_* alias but warns to rename it (#10466)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: "^0.11.0" },
+      contributes: {
+        experimental_mcpServers: [{ id: "main", name: "Server", command: "node" }],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).toMatch(
+      /contributes\.experimental_mcpServers is deprecated.*contributes\.mcpServers/
+    );
+  });
+
+  it("does not warn about deprecated aliases when the stable key is used (#10466)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: "^0.11.0" },
+      contributes: {
+        mcpServers: [{ id: "main", name: "Server", command: "node" }],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).not.toMatch(/deprecated/);
+  });
+
   it("warns when a command has no keywords", async () => {
     await writeManifest({
       name: "acme.demo",
@@ -79,7 +109,7 @@ describe("runValidate", () => {
       version: "1.0.0",
       engines: { daintree: "^0.11.0" },
       contributes: {
-        experimental_mcpServers: [
+        mcpServers: [
           {
             id: "main",
             name: "Server",
@@ -101,7 +131,10 @@ describe("runValidate", () => {
       version: "1.0.0",
       engines: { daintree: "^0.11.0" },
       contributes: {
-        experimental_mcpServers: [
+        // The token must reference a declared setting now (#10620), else the
+        // schema rejects the manifest before --env resolution runs.
+        settings: [{ id: "apiToken", type: "secret" }],
+        mcpServers: [
           {
             id: "main",
             name: "Server",
@@ -119,5 +152,147 @@ describe("runValidate", () => {
     );
     const result = await runValidate({ dir: tmpDir, env: true });
     expect(result.ok).toBe(true);
+  });
+
+  it("suggests the open-ended engine range in the omitted-engines warning (#10513)", async () => {
+    await writeManifest({ name: "acme.demo", version: "1.0.0" });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.warnings.join("\n")).toMatch(/>=0\.11\.0/);
+    // The old caret suggestion would be rejected by the host past 0.11.x.
+    expect(result.warnings.join("\n")).not.toMatch(/\^0\.11\.0/);
+  });
+
+  it("warns (non-fatally) on an unrecognized panel iconId (#10513)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "layout-panel-top", color: "var(--x)" }],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).toMatch(/iconId "layout-panel-top".*terminal icon/);
+  });
+
+  it("does not warn on a recognized panel iconId (#10513)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "puzzle", color: "var(--x)" }],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).not.toMatch(/iconId/);
+  });
+
+  it("rejects a setting id outside the safe-id grammar (#10513)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        settings: [{ id: "bad id", type: "string" }],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join("\n")).toMatch(/settings\.0\.id/);
+  });
+
+  it("rejects a ${settings:…} token whose key breaks the safe-id grammar (#10620)", async () => {
+    // #10513 chose to silently ignore a malformed token here; #10620 tightens
+    // the manifest schema so a token the host could never resolve (`bad key`
+    // with a space) is a hard error (settings_token_malformed). The validator
+    // imports the same schema, so it now reports the malformed token rather
+    // than passing the literal through to exec at runtime.
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        mcpServers: [{ id: "main", name: "S", command: "node", env: { T: "${settings:bad key}" } }],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir, env: true });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join("\n")).toMatch(/Malformed settings token/);
+  });
+
+  it("warns when main points at a missing file whose dir exists (#10513)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      main: "src/missing.js",
+    });
+    await fs.mkdir(path.join(tmpDir, "src"));
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).toMatch(/main "src\/missing\.js" doesn't exist/);
+  });
+
+  it("stays quiet about an unbuilt dist/ main (#10513)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      main: "dist/index.js",
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).not.toMatch(/doesn't exist/);
+  });
+
+  it("stays quiet about a ./-prefixed unbuilt dist/ main (#10513)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      main: "./dist/index.js",
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).not.toMatch(/doesn't exist/);
+  });
+
+  it("warns when a view componentPath is missing but its dir exists (#10513)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "puzzle", color: "var(--x)" }],
+        views: [
+          { id: "main", name: "Main", componentPath: "src/missing-panel.js", location: "panel" },
+        ],
+      },
+    });
+    await fs.mkdir(path.join(tmpDir, "src"));
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).toMatch(
+      /views\[0\]\.componentPath "src\/missing-panel\.js" doesn't exist/
+    );
+  });
+
+  it("does not warn when a panel iconId is a built-in agent id (#10513)", async () => {
+    // `claude` resolves to the agent brand icon via getAgentConfig, so the
+    // "renders as terminal" advisory would be wrong — it must be suppressed.
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "claude", color: "var(--x)" }],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).not.toMatch(/iconId/);
   });
 });

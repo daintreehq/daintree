@@ -132,4 +132,32 @@ describe("getDefaultAgentId", () => {
     expect(getDefaultAgentId(undefined, "terminal", availability)).toBe("gemini");
     expect(getDefaultAgentId(undefined, "browser", availability)).toBe("gemini");
   });
+
+  it("favours daintree-assistant over registry order when installed and no defaults", () => {
+    const availability: CliAvailability = {
+      claude: "ready",
+      gemini: "ready",
+      codex: "ready",
+      "daintree-assistant": "ready",
+    };
+    // Even though claude/gemini/codex precede daintree-assistant in registry
+    // order, the soft-default guard wins when no explicit preference is set.
+    expect(getDefaultAgentId(undefined, undefined, availability)).toBe("daintree-assistant");
+  });
+
+  it("does not favour daintree-assistant when it is not installed", () => {
+    const availability: CliAvailability = {
+      claude: "ready",
+      "daintree-assistant": "missing",
+    };
+    expect(getDefaultAgentId(undefined, undefined, availability)).toBe("claude");
+  });
+
+  it("an explicit default agent still wins over daintree-assistant", () => {
+    const availability: CliAvailability = {
+      claude: "ready",
+      "daintree-assistant": "ready",
+    };
+    expect(getDefaultAgentId("claude", undefined, availability)).toBe("claude");
+  });
 });

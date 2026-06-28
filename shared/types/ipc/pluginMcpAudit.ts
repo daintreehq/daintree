@@ -36,7 +36,7 @@ export interface PluginMcpAuditRecord {
   ts: number;
   /** Contributing plugin id (`manifest.name`). */
   pluginId: string;
-  /** Server id from `contributes.experimental_mcpServers[].id`. */
+  /** Server id from `contributes.mcpServers[].id`. */
   serverId: string;
   /** Tool name as advertised by the server's `tools/list`. */
   toolName: string;
@@ -79,3 +79,5 @@ export const PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS = 500;
 export const PLUGIN_MCP_CAPABILITY_CAP_EXCEEDED_CODE = "PLUGIN_MCP_CAPABILITY_CAP_EXCEEDED";
 export const PLUGIN_MCP_USER_REJECTED_CODE = "PLUGIN_MCP_USER_REJECTED";
 export const PLUGIN_MCP_CONSENT_TIMEOUT_CODE = "PLUGIN_MCP_CONSENT_TIMEOUT";
+/** Recorded when a `tools/call` is throttled by the per-server rate limiter. */
+export const PLUGIN_MCP_RATE_LIMITED_CODE = "PLUGIN_MCP_RATE_LIMITED";

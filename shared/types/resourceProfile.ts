@@ -107,6 +107,29 @@ export interface ResourceProfilePayload {
   config: ResourceProfileConfig;
 }
 
+/** Thermal pressure reported by the OS power monitor (macOS only; "unknown" elsewhere). */
+export type ResourceThermalState = "unknown" | "nominal" | "fair" | "serious" | "critical";
+
+/**
+ * Read-only projection of the active resource profile and the host-pressure
+ * inputs that drive it. Surfaced in the diagnostics export (#10500) and over
+ * MCP (#10683) so an orchestrator can observe machine pressure before
+ * dispatching work. The scoring internals (histograms, thresholds, candidate
+ * timers) stay private to ResourceProfileService.
+ */
+export interface ResourceProfileSnapshot {
+  /** The profile currently in effect. */
+  profile: ResourceProfile;
+  /** Latest OS thermal pressure reading. */
+  thermalState: ResourceThermalState;
+  /** Whether the machine is running on battery power. */
+  isOnBattery: boolean;
+  /** CPU speed-limit percentage reported by the OS (0–100; 100 = unthrottled). */
+  speedLimit: number;
+  /** Whether sustained event-loop-lag mitigation is currently latched. */
+  lagPressureActive: boolean;
+}
+
 /**
  * Profile configurations.
  * "balanced" values MUST match today's hardcoded defaults exactly:

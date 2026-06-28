@@ -1,7 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { toPluginWorktreeSnapshot } from "../pluginWorktreeSnapshot.js";
+import { toPluginWorktreeSnapshot, toPluginWorktreeStatus } from "../pluginWorktreeSnapshot.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../forgeProviderIds.js";
 import type { WorktreeSnapshot } from "../../types/workspace-host.js";
+import type { FileChangeDetail, WorktreeChanges } from "../../types/git.js";
+
+function change(path: string, status: FileChangeDetail["status"]): FileChangeDetail {
+  return { path, status, insertions: null, deletions: null };
+}
+
+function makeChanges(changes: FileChangeDetail[]): WorktreeChanges {
+  return {
+    worktreeId: "wt-1",
+    rootPath: "/repo/feature-x",
+    changes,
+    changedFileCount: changes.length,
+  };
+}
 
 function makeSnapshot(extra: Partial<WorktreeSnapshot> = {}): WorktreeSnapshot {
   return {
@@ -382,5 +396,94 @@ describe("toPluginWorktreeSnapshot — host-built vs legacy fallback parity (#99
     expect(out.linked?.pr?.ref.providerId).not.toBe("builtin.github");
     expect(out.linked?.issue?.ref.providerId).not.toBe("github");
     expect(out.linked?.issue?.ref.providerId).not.toBe("builtin.github");
+  });
+});
+
+describe("toPluginWorktreeStatus — changed-file projection", () => {
+  it("returns null when the host has not polled changes", () => {
+    expect(toPluginWorktreeStatus(null)).toBeNull();
+    expect(toPluginWorktreeStatus(undefined)).toBeNull();
+  });
+
+  it("projects each changed file to a path + normalized state", () => {
+    const out = toPluginWorktreeStatus(
+      makeChanges([change("src/a.ts", "modified"), change("src/b.ts", "untracked")])
+    );
+    expect(out?.files).toEqual([
+      { path: "src/a.ts", state: "modified" },
+      { path: "src/b.ts", state: "untracked" },
+    ]);
+    expect(out?.changedFileCount).toBe(2);
+  });
+
+  it("collapses copied→added and conflicted→modified, drops ignored", () => {
+    const out = toPluginWorktreeStatus(
+      makeChanges([
+        change("c.ts", "copied"),
+        change("d.ts", "conflicted"),
+        change("e.ts", "ignored"),
+      ])
+    );
+    // ignored is filtered out entirely; the other two collapse.
+    const byPath = Object.fromEntries((out?.files ?? []).map((f) => [f.path, f.state]));
+    expect(byPath).toEqual({ "c.ts": "added", "d.ts": "modified" });
+    expect(out?.changedFileCount).toBe(2);
+    expect(out?.files.some((f) => f.path === "e.ts")).toBe(false);
+  });
+
+  it("counts per state over the projected files", () => {
+    const out = toPluginWorktreeStatus(
+      makeChanges([
+        change("a", "added"),
+        change("b", "copied"),
+        change("c", "modified"),
+        change("d", "deleted"),
+        change("e", "renamed"),
+        change("f", "untracked"),
+        change("g", "ignored"),
+      ])
+    );
+    // copied folds into added → added:2; ignored dropped.
+    expect(out?.counts).toEqual({
+      added: 2,
+      modified: 1,
+      deleted: 1,
+      untracked: 1,
+      renamed: 1,
+    });
+  });
+
+  it("sorts files by path so the order is stable to diff against", () => {
+    const out = toPluginWorktreeStatus(
+      makeChanges([
+        change("z.ts", "modified"),
+        change("a.ts", "modified"),
+        change("m.ts", "modified"),
+      ])
+    );
+    expect(out?.files.map((f) => f.path)).toEqual(["a.ts", "m.ts", "z.ts"]);
+  });
+
+  it("deep-freezes the projection, the files array, each file, and the counts", () => {
+    const out = toPluginWorktreeStatus(makeChanges([change("a.ts", "modified")]));
+    expect(Object.isFrozen(out)).toBe(true);
+    expect(Object.isFrozen(out?.files)).toBe(true);
+    expect(Object.isFrozen(out?.files[0])).toBe(true);
+    expect(Object.isFrozen(out?.counts)).toBe(true);
+  });
+
+  it("populates the snapshot's status field from worktreeChanges", () => {
+    const out = toPluginWorktreeSnapshot(
+      makeSnapshot({
+        worktreeChanges: makeChanges([change("src/x.ts", "added")]),
+      })
+    );
+    expect(out.status?.changedFileCount).toBe(1);
+    expect(out.status?.files[0]).toEqual({ path: "src/x.ts", state: "added" });
+    expect(Object.isFrozen(out.status)).toBe(true);
+  });
+
+  it("yields status: null on the snapshot when no changes were polled", () => {
+    expect(toPluginWorktreeSnapshot(makeSnapshot()).status).toBeNull();
   });
 });

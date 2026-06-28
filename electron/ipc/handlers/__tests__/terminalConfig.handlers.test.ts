@@ -136,7 +136,7 @@ describe("terminalConfig handlers", () => {
     expect(result).toEqual(
       expect.objectContaining(storeState.data.terminalConfig as Record<string, unknown>)
     );
-    expect(result.cachedProjectViews).toBe(1);
+    expect(result.cachedProjectViews).toBe(2);
   });
 
   describe("get derives cachedProjectViews", () => {
@@ -160,67 +160,67 @@ describe("terminalConfig handlers", () => {
       expect(result.cachedProjectViews).toBe(2);
     });
 
-    it("returns 1 for an 8 GiB machine with no preference", async () => {
+    it("returns 2 for an 8 GiB machine with no preference", async () => {
       osState.totalmem = 8 * 1024 ** 3;
       registerTerminalConfigHandlers();
       const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
 
       const result = (await handler({}, undefined)) as Record<string, unknown>;
-      expect(result.cachedProjectViews).toBe(1);
+      expect(result.cachedProjectViews).toBe(2);
     });
 
-    it("returns 1 for a 16 GiB machine with no preference", async () => {
+    it("returns 3 for a 16 GiB machine (at the 16 GiB threshold)", async () => {
       osState.totalmem = 16 * 1024 ** 3;
       registerTerminalConfigHandlers();
       const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
 
       const result = (await handler({}, undefined)) as Record<string, unknown>;
-      expect(result.cachedProjectViews).toBe(1);
+      expect(result.cachedProjectViews).toBe(3);
     });
 
-    it("returns 1 for a 24 GiB machine (below the 32 GiB threshold)", async () => {
+    it("returns 3 for a 24 GiB machine (between 16 and 32 GiB)", async () => {
       osState.totalmem = 24 * 1024 ** 3;
       registerTerminalConfigHandlers();
       const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
 
       const result = (await handler({}, undefined)) as Record<string, unknown>;
-      expect(result.cachedProjectViews).toBe(1);
+      expect(result.cachedProjectViews).toBe(3);
     });
 
-    it("returns 2 at the 32 GiB threshold", async () => {
+    it("returns 4 at the 32 GiB threshold", async () => {
       osState.totalmem = 32 * 1024 ** 3;
       registerTerminalConfigHandlers();
       const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
 
       const result = (await handler({}, undefined)) as Record<string, unknown>;
-      expect(result.cachedProjectViews).toBe(2);
+      expect(result.cachedProjectViews).toBe(4);
     });
 
-    it("returns 2 for a 48 GiB machine", async () => {
+    it("returns 4 for a 48 GiB machine", async () => {
       osState.totalmem = 48 * 1024 ** 3;
       registerTerminalConfigHandlers();
       const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
 
       const result = (await handler({}, undefined)) as Record<string, unknown>;
-      expect(result.cachedProjectViews).toBe(2);
+      expect(result.cachedProjectViews).toBe(4);
     });
 
-    it("returns 3 at the 64 GiB threshold", async () => {
+    it("returns 5 at the 64 GiB threshold", async () => {
       osState.totalmem = 64 * 1024 ** 3;
       registerTerminalConfigHandlers();
       const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
 
       const result = (await handler({}, undefined)) as Record<string, unknown>;
-      expect(result.cachedProjectViews).toBe(3);
+      expect(result.cachedProjectViews).toBe(5);
     });
 
-    it("returns 3 for a 128 GiB machine", async () => {
+    it("returns 5 for a 128 GiB machine", async () => {
       osState.totalmem = 128 * 1024 ** 3;
       registerTerminalConfigHandlers();
       const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
 
       const result = (await handler({}, undefined)) as Record<string, unknown>;
-      expect(result.cachedProjectViews).toBe(3);
+      expect(result.cachedProjectViews).toBe(5);
     });
 
     it("returns 4 in E2E mode when no preference is stored, regardless of RAM", async () => {
@@ -240,7 +240,7 @@ describe("terminalConfig handlers", () => {
       const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
 
       const result = (await handler({}, undefined)) as Record<string, unknown>;
-      expect(result.cachedProjectViews).toBe(3);
+      expect(result.cachedProjectViews).toBe(5);
     });
 
     it("treats out-of-range stored values as absent and falls back to the RAM default", async () => {
@@ -250,7 +250,7 @@ describe("terminalConfig handlers", () => {
       const handler = getHandler(CHANNELS.TERMINAL_CONFIG_GET);
 
       const result = (await handler({}, undefined)) as Record<string, unknown>;
-      expect(result.cachedProjectViews).toBe(2);
+      expect(result.cachedProjectViews).toBe(4);
     });
   });
 

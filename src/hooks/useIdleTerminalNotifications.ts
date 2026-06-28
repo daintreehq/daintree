@@ -2,7 +2,6 @@ import { useEffect } from "react";
 import { isElectronAvailable } from "./useElectron";
 import { idleTerminalClient } from "@/clients/idleTerminalClient";
 import { notify } from "@/lib/notify";
-import { useUIStore } from "@/store/uiStore";
 
 // One-way latch: the broadcast IPC listener is an app-lifetime, notify-only
 // singleton with no teardown. Never reset this — resetting it on unmount let a
@@ -21,78 +20,51 @@ export function useIdleTerminalNotifications(): void {
       const projects = payload.projects ?? [];
       if (projects.length === 0) return;
 
-      const single = projects.length === 1 ? projects[0] : null;
+      // Idle background terminals are an ignorable, self-recovering state — the
+      // user can keep working without ever acting on it. Per the Runtime
+      // Signals rules this is a passive (Tier 0/1) signal, so it routes to the
+      // durable notification inbox only (`priority: "low"` → no toast, no
+      // interruption) instead of a stack of sticky toasts (#10455 follow-up).
+      // One inbox row per project, keyed by `supersedeKey` so a re-fire retires
+      // the prior row for that project rather than accumulating near-duplicates.
+      for (const project of projects) {
+        const message = `${pluralize(project.terminalCount, "terminal")} inactive for ${project.idleMinutes}m`;
 
-      // Single-project: action targets that project. Multi-project: open the
-      // notification center (the coalesce buildAction can't safely close
-      // multiple projects from a closure that only sees a count).
-      const closeAction = single
-        ? {
-            label: "Close Them",
-            variant: "primary" as const,
-            onClick: () => {
-              void idleTerminalClient.closeProject(single.projectId);
+        notify({
+          type: "info",
+          title: `Idle terminals in "${project.projectName}"`,
+          message,
+          inboxMessage: message,
+          priority: "low",
+          supersedeKey: `idle-terminal:${project.projectId}`,
+          // Action-backed so the affordances survive into the persisted inbox
+          // row — `notify()` only keeps actions that carry an `actionId`
+          // (closure-only `onClick` actions are dropped from history). The
+          // inbox dispatches via `actionId`/`actionArgs`; `onClick` is the
+          // equivalent toast-path handler (unused while priority is "low").
+          actions: [
+            {
+              label: "Close them",
+              variant: "primary" as const,
+              actionId: "idleTerminalNotify.closeProject",
+              actionArgs: { projectId: project.projectId },
+              onClick: () => {
+                void idleTerminalClient.closeProject(project.projectId);
+              },
             },
-          }
-        : {
-            label: "View",
-            variant: "primary" as const,
-            onClick: () => {
-              useUIStore.getState().openNotificationCenter();
+            {
+              label: "Mute project",
+              variant: "secondary" as const,
+              actionId: "idleTerminalNotify.muteProject",
+              actionArgs: { projectId: project.projectId },
+              onClick: () => {
+                void idleTerminalClient.dismissProject(project.projectId);
+              },
             },
-          };
-
-      const dismissAction = {
-        label: "Mute project",
-        variant: "secondary" as const,
-        onClick: () => {
-          if (single) {
-            void idleTerminalClient.dismissProject(single.projectId);
-          } else {
-            for (const p of projects) {
-              void idleTerminalClient.dismissProject(p.projectId);
-            }
-          }
-        },
-      };
-
-      const title = single ? `Idle terminals in "${single.projectName}"` : "Idle terminals";
-      const message = single
-        ? `${pluralize(single.terminalCount, "terminal")} inactive for ${single.idleMinutes}m`
-        : `${pluralize(projects.length, "project")} have idle terminals`;
-
-      notify({
-        type: "info",
-        title,
-        message,
-        inboxMessage: message,
-        priority: "high",
-        duration: 0,
-        actions: [closeAction, dismissAction],
-        // Single-project notifications carry projectId so the "Mute project"
-        // affordance routes correctly; multi-project omits it to avoid muting
-        // an unrelated project.
-        context: single
-          ? { eventKind: "completed", projectId: single.projectId }
-          : { eventKind: "completed" },
-        coalesce: {
-          key: "idle-terminal-notify:projects",
-          windowMs: 30_000,
-          buildTitle: () => "Idle terminals",
-          buildMessage: (count) => `${pluralize(count, "project")} have idle terminals`,
-          buildInboxMessage: (count) => `${pluralize(count, "project")} have idle terminals`,
-          buildAction: (count) =>
-            count > 1
-              ? {
-                  label: "View",
-                  variant: "primary" as const,
-                  onClick: () => {
-                    useUIStore.getState().openNotificationCenter();
-                  },
-                }
-              : undefined,
-        },
-      });
+          ],
+          context: { projectId: project.projectId },
+        });
+      }
     });
 
     // Latch only after a successful subscribe so a throwing onNotify (e.g. a

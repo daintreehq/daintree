@@ -19,6 +19,9 @@ import { writeFileSync } from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
 
+const MULTI_WINDOW_READY_TIMEOUT = process.env.CI ? T_LONG * 4 : T_LONG * 2;
+const MULTI_WINDOW_SETUP_TIMEOUT = process.env.CI ? T_LONG * 8 : T_LONG * 4;
+
 // Multi-window isolation: per-window services (PortalManager, EventBuffer,
 // MessagePorts) must scope correctly while global singletons (PtyClient,
 // WorkspaceClient) stay shared. The spec opens two BrowserWindows with
@@ -68,6 +71,7 @@ test.describe.serial("Multi-window isolation", () => {
   let window2Page: import("@playwright/test").Page;
 
   test.beforeAll(async () => {
+    test.setTimeout(MULTI_WINDOW_SETUP_TIMEOUT);
     fixtures = createFixtureRepos(2);
 
     ctx = await launchApp();
@@ -82,20 +86,23 @@ test.describe.serial("Multi-window isolation", () => {
     // Window 2: opened with projectPath so the new window auto-opens
     // project B via handleDirectoryOpen — same path `app.newWindow` takes
     // when invoked with an explicit projectPath argument.
-    window2 = await openSecondWindow(app, window1Page, { projectPath: fixtures[1].dir });
-    window2Page = await getWindowPage(app, window2.windowId, T_LONG);
+    window2 = await openSecondWindow(app, window1Page, {
+      projectPath: fixtures[1].dir,
+      timeoutMs: MULTI_WINDOW_READY_TIMEOUT,
+    });
+    window2Page = await getWindowPage(app, window2.windowId, MULTI_WINDOW_READY_TIMEOUT);
 
     // Wait for window 2's sidebar to be ready before any test body runs.
     await window2Page
       .locator('[aria-label="Toggle Sidebar"]')
-      .waitFor({ state: "visible", timeout: T_LONG });
+      .waitFor({ state: "visible", timeout: MULTI_WINDOW_READY_TIMEOUT });
 
     // Re-resolve window 1's page by stable windowId in case the cached
     // WebContentsView was shuffled when window 2 opened. Never use
     // refreshActiveWindow here — it falls back to getAllWindows()[0],
     // which is Z-ordered and would silently reassign window1Page to the
     // newly-focused second window's view.
-    window1Page = await getWindowPage(app, window1Id, T_LONG);
+    window1Page = await getWindowPage(app, window1Id, MULTI_WINDOW_READY_TIMEOUT);
   });
 
   test.afterAll(async () => {
@@ -235,7 +242,7 @@ test.describe.serial("Multi-window isolation", () => {
     // confirm a fresh terminal write still flows end-to-end — proves
     // PtyClient (global) survived and window 2's per-window port routing
     // is intact.
-    window2Page = await getWindowPage(app, window2.windowId, T_LONG);
+    window2Page = await getWindowPage(app, window2.windowId, MULTI_WINDOW_READY_TIMEOUT);
     await focusWindow(app, window2.windowId, window2Page);
 
     const survivorNonce = `mw-survive-${randomUUID()}`;

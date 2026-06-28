@@ -5,6 +5,7 @@ const fullWakeMock = vi.fn();
 const repaintForRevealMock = vi.fn();
 const revealTerminalMock = vi.fn();
 const isFocusedMock = vi.fn();
+const setFocusedMock = vi.fn();
 const logWarnMock = vi.fn();
 const notifyWarmReactivationCompleteMock = vi.fn();
 
@@ -14,6 +15,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     repaintForReveal: repaintForRevealMock,
     revealTerminal: revealTerminalMock,
     isFocused: isFocusedMock,
+    setFocused: setFocusedMock,
   },
 }));
 
@@ -28,6 +30,7 @@ vi.mock("@/utils/warmReactivationGate", () => ({
 let mockActiveWorktreeId: string | null = null;
 let mockPanelIds: string[] = [];
 let mockPanelsById: Record<string, PanelInstance> = {};
+let mockFocusedId: string | null = null;
 let mockHelpTerminalId: string | null = null;
 
 vi.mock("@/store/worktreeStore", () => ({
@@ -38,7 +41,11 @@ vi.mock("@/store/worktreeStore", () => ({
 
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
-    getState: () => ({ panelIds: mockPanelIds, panelsById: mockPanelsById }),
+    getState: () => ({
+      panelIds: mockPanelIds,
+      panelsById: mockPanelsById,
+      focusedId: mockFocusedId,
+    }),
   },
 }));
 
@@ -66,6 +73,7 @@ beforeEach(() => {
   fullWakeMock.mockResolvedValue(undefined);
   repaintForRevealMock.mockReset();
   revealTerminalMock.mockReset();
+  setFocusedMock.mockReset();
   // Default: terminals are paintable on the first attempt.
   revealTerminalMock.mockResolvedValue(true);
   isFocusedMock.mockReset();
@@ -75,6 +83,7 @@ beforeEach(() => {
   mockActiveWorktreeId = null;
   mockPanelIds = [];
   mockPanelsById = {};
+  mockFocusedId = null;
   mockHelpTerminalId = null;
 });
 
@@ -501,6 +510,46 @@ describe("repaintActiveWorktreeTerminals (#10362)", () => {
     expect(revealedIds().sort()).toEqual(["a", "b", "c"]);
   });
 
+  it("reasserts the focused terminal's service focus before reveal so DOM-mode WebGL can pin it", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    const b = panel("b", { worktreeId: "wt-1" });
+    mockPanelIds = ["a", "b"];
+    mockPanelsById = { a, b };
+    mockFocusedId = "b";
+    isFocusedMock.mockImplementation((id: string) => id === "b");
+
+    const callOrder: string[] = [];
+    setFocusedMock.mockImplementation((id: string, isFocused: boolean) => {
+      callOrder.push(`focus:${id}:${isFocused}`);
+    });
+    revealTerminalMock.mockImplementation((id: string) => {
+      callOrder.push(`reveal:${id}`);
+      return Promise.resolve(true);
+    });
+
+    await repaintActiveWorktreeTerminals();
+
+    expect(setFocusedMock).toHaveBeenCalledTimes(1);
+    expect(setFocusedMock).toHaveBeenCalledWith("b", true);
+    expect(callOrder[0]).toBe("focus:b:true");
+    expect(callOrder[1]).toBe("reveal:b");
+  });
+
+  it("does not reassert service focus for a focused id outside the reveal target set", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    const other = panel("other", { worktreeId: "wt-2" });
+    mockPanelIds = ["a", "other"];
+    mockPanelsById = { a, other };
+    mockFocusedId = "other";
+
+    await repaintActiveWorktreeTerminals();
+
+    expect(setFocusedMock).not.toHaveBeenCalled();
+    expect(revealedIds()).toEqual(["a"]);
+  });
+
   it("retries a terminal that isn't paintable yet, then settles once it is", async () => {
     mockActiveWorktreeId = "wt-1";
     const a = panel("a", { worktreeId: "wt-1" });
@@ -519,6 +568,74 @@ describe("repaintActiveWorktreeTerminals (#10362)", () => {
     // the first paintable frame rather than giving up on the initial `false`.
     expect(revealTerminalMock.mock.calls.length).toBeGreaterThanOrEqual(3);
     expect(revealedIds()).toEqual(["a"]);
+  });
+
+  it("aborts the whole reveal sweep when the view is switched away (hidden) mid-sweep", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    const b = panel("b", { worktreeId: "wt-1" });
+    const c = panel("c", { worktreeId: "wt-1" });
+    const d = panel("d", { worktreeId: "wt-1" });
+    mockPanelIds = ["a", "b", "c", "d"];
+    mockPanelsById = { a, b, c, d };
+
+    let visibility: "visible" | "hidden" = "visible";
+    let visibilityHandler: (() => void) | null = null;
+    vi.stubGlobal("document", {
+      get visibilityState() {
+        return visibility;
+      },
+      addEventListener: (evt: string, h: () => void) => {
+        if (evt === "visibilitychange") visibilityHandler = h;
+      },
+      removeEventListener: () => {},
+    });
+    // rAF fires synchronously; the timeout fallback is a no-op for this test.
+    vi.stubGlobal("requestAnimationFrame", (cb: (time: number) => void) => {
+      cb(0);
+      return 1;
+    });
+    vi.stubGlobal("setTimeout", () => 1);
+
+    revealTerminalMock.mockImplementation((id: string) => {
+      // The project is switched away during the first terminal's first attempt.
+      if (id === "a") {
+        visibility = "hidden";
+        visibilityHandler?.();
+      }
+      return Promise.resolve(false); // never paintable → would otherwise retry
+    });
+
+    await repaintActiveWorktreeTerminals();
+
+    // The hidden event latches sweep-wide: the next worker sees it before taking
+    // another target, so the rest of the grid ("b"/"c"/"d") is skipped entirely
+    // rather than each getting one hidden reveal.
+    expect(revealedIds()).toEqual(["a"]);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("does not hang the sweep when requestAnimationFrame never fires (paused view)", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    mockPanelIds = ["a"];
+    mockPanelsById = { a };
+
+    // Paused rAF: registered but its callback is never invoked (backgrounded
+    // WebContentsView). Without the timeout fallback the worker would hang here.
+    vi.stubGlobal("requestAnimationFrame", () => 1);
+    // The timeout fallback (fired synchronously for the test) unblocks the frame.
+    vi.stubGlobal("setTimeout", (cb: () => void) => {
+      cb();
+      return 1;
+    });
+    revealTerminalMock.mockResolvedValue(true);
+
+    await expect(repaintActiveWorktreeTerminals()).resolves.toBeUndefined();
+    expect(revealTerminalMock).toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
   });
 
   it("isolates a per-terminal reveal rejection so the sweep continues", async () => {

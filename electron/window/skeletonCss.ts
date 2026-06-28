@@ -77,11 +77,18 @@ export function resolveInstanceRole(): InstanceRole {
 
 export function resolveE2EPreloadArgs(): string[] {
   const args: string[] = [];
-  if (process.env.DAINTREE_E2E_MODE === "1") args.push(E2E_MODE_ARG);
-  if (process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1") {
+  if (process.env.DAINTREE_E2E_MODE === "1" || process.argv.includes(E2E_MODE_ARG)) {
+    args.push(E2E_MODE_ARG);
+  }
+  if (
+    process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1" ||
+    process.argv.includes(E2E_SKIP_FIRST_RUN_DIALOGS_ARG)
+  ) {
     args.push(E2E_SKIP_FIRST_RUN_DIALOGS_ARG);
   }
-  if (process.env.DAINTREE_E2E_FAULT_MODE === "1") args.push(E2E_FAULT_MODE_ARG);
+  if (process.env.DAINTREE_E2E_FAULT_MODE === "1" || process.argv.includes(E2E_FAULT_MODE_ARG)) {
+    args.push(E2E_FAULT_MODE_ARG);
+  }
   return args;
 }
 
@@ -147,7 +154,8 @@ export function resolveInitialCanvasBackgroundColor(): string {
  */
 export function buildSkeletonCss(
   project?: Pick<Project, "color"> | null,
-  preReadThemeConfig?: Partial<AppThemeConfig>
+  preReadThemeConfig?: Partial<AppThemeConfig>,
+  options?: { instantReveal?: boolean }
 ): string {
   const appState = store.get("appState");
   const sidebarWidth = appState?.sidebarWidth ?? 350;
@@ -224,6 +232,23 @@ export function buildSkeletonCss(
     lines.push("#startup-skeleton .skeleton-sidebar { display: none; }");
   }
 
+  // Project-switch cold starts reveal the incoming view the instant its
+  // skeleton parses (~150ms). That reveal lands well inside index.html's 400ms
+  // Doherty anti-flicker delay (`animation: skeleton-doherty-gate ... 400ms
+  // backwards`), which holds the container at opacity:0 — so without this
+  // override the freshly-revealed view shows a blank themed canvas until the
+  // gate elapses (~480ms) instead of the skeleton it was supposed to show. The
+  // 400ms gate is correct for the INITIAL app launch (suppress a skeleton flash
+  // on sub-threshold loads), but wrong for a switch, where the reveal is already
+  // gated on the skeleton being present. Override only the `animation-delay`
+  // longhand — never the `animation` shorthand — so the 200ms fade and the
+  // reduced-motion `#startup-skeleton { animation: none }` rule both survive
+  // (overriding the delay can't restore an animation-name that reduced-motion
+  // set to none). User-origin `!important` outranks the author-origin shorthand.
+  if (options?.instantReveal) {
+    lines.push("#startup-skeleton { animation-delay: 0ms !important; }");
+  }
+
   return lines.join("\n");
 }
 
@@ -244,9 +269,17 @@ export function insertSkeletonCss(wc: WebContents, css: string): void {
  * set) overrides the theme's native accent tokens so the skeleton paints the
  * project's brand color before React mounts (#9162). Passing `null`/`undefined`
  * (the initial-window path) leaves the resolved scheme untouched.
+ *
+ * Pass `{ instantReveal: true }` for project-switch cold starts to drop the
+ * 400ms Doherty entry delay so the skeleton shows the instant the incoming view
+ * is revealed instead of staying blank behind the gate (see buildSkeletonCss).
  */
-export function injectSkeletonCss(wc: WebContents, project?: Pick<Project, "color"> | null): void {
-  insertSkeletonCss(wc, buildSkeletonCss(project));
+export function injectSkeletonCss(
+  wc: WebContents,
+  project?: Pick<Project, "color"> | null,
+  options?: { instantReveal?: boolean }
+): void {
+  insertSkeletonCss(wc, buildSkeletonCss(project, undefined, options));
 }
 
 /**

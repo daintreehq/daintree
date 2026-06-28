@@ -1,3 +1,5 @@
+import { isE2EFaultMode } from "../setup/runtimeFlags.js";
+
 export interface FaultErrorConfig {
   kind: "error";
   message: string;
@@ -15,7 +17,7 @@ declare global {
   var __daintreeFaultRegistry: Record<string, FaultConfig> | undefined;
 }
 
-export const FAULT_MODE_ENABLED = process.env.DAINTREE_E2E_FAULT_MODE === "1";
+export const FAULT_MODE_ENABLED = isE2EFaultMode;
 
 function ensureRegistry(): Record<string, FaultConfig> {
   if (!globalThis.__daintreeFaultRegistry) {

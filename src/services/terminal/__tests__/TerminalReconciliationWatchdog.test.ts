@@ -95,6 +95,23 @@ function setRenderPaused(managed: ManagedTerminal, paused: boolean): void {
   };
 }
 
+/**
+ * Wire the xterm grid and the fit-addon proposal so the watchdog's geometry
+ * convergence check (#10632) has real numbers. A mismatch models the garbled
+ * "wrong column wrapping" a pane shows after a warm switch-back.
+ */
+function setGrid(
+  managed: ManagedTerminal,
+  grid: { cols: number; rows: number },
+  proposal: { cols: number; rows: number }
+): void {
+  (managed.terminal as unknown as { cols: number; rows: number }).cols = grid.cols;
+  (managed.terminal as unknown as { cols: number; rows: number }).rows = grid.rows;
+  (
+    managed.fitAddon as unknown as { proposeDimensions: () => { cols: number; rows: number } }
+  ).proposeDimensions = () => proposal;
+}
+
 function makeDeps(
   instances: Map<string, ManagedTerminal>,
   overrides: Partial<ReconciliationWatchdogDeps> = {}
@@ -113,8 +130,8 @@ function makeDeps(
     isWebGLActive: vi.fn(() => true),
     shouldHaveWebGL: vi.fn(() => false),
     ensureWebGL: vi.fn(),
-    unhibernate: vi.fn(),
     forceReflow: vi.fn(),
+    reconcileRevealGeometry: vi.fn(() => true),
     isStoreBackgrounded: vi.fn(() => false),
     isStoreHidden: vi.fn(() => false),
     repairStoreVisibility: vi.fn(),
@@ -257,18 +274,6 @@ describe("TerminalReconciliationWatchdog", () => {
   });
 
   describe("repairs", () => {
-    it("unhibernates an on-screen hibernated terminal", () => {
-      instances.set("t1", makeManaged({ isHibernated: true, isVisible: false }));
-      const deps = makeDeps(instances);
-      watchdog = new TerminalReconciliationWatchdog(deps);
-
-      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
-      expect(deps.unhibernate).toHaveBeenCalledWith("t1");
-      // One repair per terminal per tick — visibility waits for the next sweep.
-      expect(deps.setVisible).not.toHaveBeenCalled();
-      expect(logWarn).toHaveBeenCalled();
-    });
-
     it("repairs isVisible=false via setVisible and logs the mismatch", () => {
       instances.set("t1", makeManaged({ isVisible: false }));
       const deps = makeDeps(instances);
@@ -463,7 +468,11 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(deps.forceReflow).toHaveBeenCalledWith(managed.terminal.element);
     });
 
-    it("does not reflow a paused alt-buffer (TUI) terminal", () => {
+    it("reflows a paused alt-buffer (agent TUI) terminal when no synchronized block is open (#10632)", () => {
+      // Regression: the watchdog used to EXCLUDE alt-buffer agents from the
+      // render-pause repair (`!managed.isAltBuffer`), so exactly the agent TUIs
+      // that break on switch-back had no closed-loop recovery. The only real
+      // hazard is a mid-synchronized-block paint, which is guarded separately.
       const managed = makeManaged({ isAltBuffer: true });
       setRenderPaused(managed, true);
       instances.set("t1", managed);
@@ -471,11 +480,11 @@ describe("TerminalReconciliationWatchdog", () => {
       watchdog = new TerminalReconciliationWatchdog(deps);
 
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
-      expect(deps.forceReflow).not.toHaveBeenCalled();
+      expect(deps.forceReflow).toHaveBeenCalledWith(managed.terminal.element);
     });
 
-    it("does not reflow while DEC 2026 synchronized output is active", () => {
-      const managed = makeManaged();
+    it("does not reflow while DEC 2026 synchronized output is active (alt-buffer included)", () => {
+      const managed = makeManaged({ isAltBuffer: true });
       (
         managed.terminal as unknown as { modes: { synchronizedOutputMode: boolean } }
       ).modes.synchronizedOutputMode = true;
@@ -486,6 +495,7 @@ describe("TerminalReconciliationWatchdog", () => {
 
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
       expect(deps.forceReflow).not.toHaveBeenCalled();
+      expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
     });
 
     it("reattaches a missing WebGL context for an eligible terminal", () => {
@@ -504,6 +514,7 @@ describe("TerminalReconciliationWatchdog", () => {
     it("issues no repair when the whole chain is consistent", () => {
       const managed = makeManaged();
       setRenderPaused(managed, false);
+      setGrid(managed, { cols: 120, rows: 40 }, { cols: 120, rows: 40 });
       instances.set("t1", managed);
       const deps = makeDeps(instances);
       watchdog = new TerminalReconciliationWatchdog(deps);
@@ -514,9 +525,112 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(deps.reassertActiveBackendTier).not.toHaveBeenCalled();
       expect(deps.resumeFlush).not.toHaveBeenCalled();
       expect(deps.forceReflow).not.toHaveBeenCalled();
+      expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
       expect(deps.ensureWebGL).not.toHaveBeenCalled();
-      expect(deps.unhibernate).not.toHaveBeenCalled();
       expect(managed.lastWatchdogRepairAt).toBeUndefined();
+    });
+  });
+
+  describe("geometry convergence (#10632)", () => {
+    it("reconciles an on-screen agent TUI whose grid disagrees with the container (garbled wrapping)", () => {
+      // The exact switch-back failure: while backgrounded the container narrowed
+      // (137 → 100 cols) but the alt-buffer agent's xterm grid stayed at the old
+      // width, so its buffer wraps at the wrong column. The watchdog now repairs
+      // this for agent TUIs, which it previously only DIAGNOSED while excluding.
+      const managed = makeManaged({ isAltBuffer: true });
+      setRenderPaused(managed, false);
+      setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+      instances.set("t1", managed);
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).toHaveBeenCalledWith("t1");
+      expect(managed.lastWatchdogRepairAt).toBeGreaterThan(0);
+    });
+
+    it("does not reconcile geometry while a synchronized-output block is open", () => {
+      const managed = makeManaged({ isAltBuffer: true });
+      (
+        managed.terminal as unknown as { modes: { synchronizedOutputMode: boolean } }
+      ).modes.synchronizedOutputMode = true;
+      setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+      instances.set("t1", managed);
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
+    });
+
+    it("caps geometry reconciles per tick at the heavy budget (== REVEAL_CONCURRENCY)", () => {
+      for (let i = 0; i < WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK + 1; i++) {
+        const managed = makeManaged({ isAltBuffer: true });
+        setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+        instances.set(`t${i}`, managed);
+      }
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).toHaveBeenCalledTimes(
+        WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK
+      );
+
+      // The deferred terminal is picked up on the next tick — bounded, not dropped.
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).toHaveBeenCalledTimes(
+        WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK + 1
+      );
+    });
+  });
+
+  describe("reveal-pending guaranteed redraw (#10632)", () => {
+    it("runs the deferred redraw once the host is on-screen and clears the obligation", () => {
+      const managed = makeManaged({ isAltBuffer: true });
+      managed.revealPendingRepair = true;
+      managed.revealPendingGeneration = managed.attachGeneration;
+      setGrid(managed, { cols: 100, rows: 40 }, { cols: 100, rows: 40 });
+      instances.set("t1", managed);
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).toHaveBeenCalledWith("t1");
+      expect(managed.revealPendingRepair).toBe(false);
+      expect(managed.revealPendingGeneration).toBeUndefined();
+    });
+
+    it("keeps the obligation when the reconcile reports an unmeasurable box", () => {
+      const managed = makeManaged({ isAltBuffer: true });
+      managed.revealPendingRepair = true;
+      managed.revealPendingGeneration = managed.attachGeneration;
+      setGrid(managed, { cols: 100, rows: 40 }, { cols: 100, rows: 40 });
+      instances.set("t1", managed);
+      // reconcile fails (box still occluded) → flag must survive for the retry.
+      const deps = makeDeps(instances, { reconcileRevealGeometry: vi.fn(() => false) });
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).toHaveBeenCalledWith("t1");
+      expect(managed.revealPendingRepair).toBe(true);
+    });
+
+    it("defers the reveal-pending redraw while a synchronized-output block is open", () => {
+      const managed = makeManaged({ isAltBuffer: true });
+      managed.revealPendingRepair = true;
+      managed.revealPendingGeneration = managed.attachGeneration;
+      (
+        managed.terminal as unknown as { modes: { synchronizedOutputMode: boolean } }
+      ).modes.synchronizedOutputMode = true;
+      setGrid(managed, { cols: 100, rows: 40 }, { cols: 100, rows: 40 });
+      instances.set("t1", managed);
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
+      expect(managed.revealPendingRepair).toBe(true);
     });
   });
 
@@ -607,7 +721,6 @@ describe("TerminalReconciliationWatchdog", () => {
       // Diagnostic only — no repair side effects.
       expect(deps.setVisible).not.toHaveBeenCalled();
       expect(deps.resumeFlush).not.toHaveBeenCalled();
-      expect(deps.unhibernate).not.toHaveBeenCalled();
     });
 
     it("ignores pointerdowns outside any terminal host element", () => {

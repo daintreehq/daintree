@@ -21,9 +21,19 @@ import type {
   PluginIpcContext,
   PluginIpcHandler,
   PluginSettingsScope,
+  PluginStorageScope,
   PluginToastOptions,
+  PluginQuickPickItem,
+  PluginQuickPickOptions,
   PluginTypedIpcHandler,
   PluginWorktreeSnapshot,
+  PluginWorktreeStatus,
+  PluginAgentSnapshot,
+  PluginFsDirEntry,
+  PluginFsStat,
+  PluginGitStatus,
+  PluginGitCommitResult,
+  PluginProcessHandle,
 } from "../../../shared/types/plugin.js";
 import type {
   FileDecorationProviderDescriptor,
@@ -31,12 +41,16 @@ import type {
   ForgeProviderDescriptor,
   ForgeProviderImpl,
 } from "../../../shared/types/forge.js";
-import type { ActionDispatchResult } from "../../../shared/types/actions.js";
+import type {
+  ActionDispatchResult,
+  PluginActionManifestEntry,
+} from "../../../shared/types/actions.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type {
   PluginHostCallMethod,
   PluginHostNotifyMethod,
   PluginHostToWorkerMessage,
+  PluginWorkerSubscriptionKind,
   PluginWorkerToHostMessage,
 } from "../../../shared/types/pluginDevWorker.js";
 
@@ -45,6 +59,15 @@ type Post = (message: PluginWorkerToHostMessage) => void;
 interface PendingCall {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+  /** Detach the abort listener once the call settles (no-op when no signal was passed). */
+  cleanup?: () => void;
+  /**
+   * When set, {@link PluginDevWorkerHostProxy.dispose} resolves this call with
+   * `grace.value` instead of rejecting it. Used by the imperative UI prompts
+   * (#10522), whose contract is to resolve the dismiss value (undefined/false)
+   * on plugin unload rather than throw.
+   */
+  grace?: { value: unknown };
 }
 
 interface RegisteredHandler {
@@ -65,6 +88,7 @@ export class PluginDevWorkerHostProxy {
   private readonly actionHandlers = new Map<string, ActionHandler>();
   private readonly ipcHandlers = new Map<string, RegisteredHandler>();
   private readonly subscriptions = new Map<string, (payload: unknown) => void>();
+  private readonly fileDecorationProviders = new Map<string, FileDecorationProviderImpl>();
 
   constructor(pluginId: string, post: Post) {
     this.pluginId = pluginId;
@@ -81,12 +105,18 @@ export class PluginDevWorkerHostProxy {
   dispose(): void {
     this.disposed = true;
     for (const pending of this.pendingCalls.values()) {
-      pending.reject(new Error("Plugin dev worker disposed"));
+      pending.cleanup?.();
+      if (pending.grace) {
+        pending.resolve(pending.grace.value);
+      } else {
+        pending.reject(new Error("Plugin dev worker disposed"));
+      }
     }
     this.pendingCalls.clear();
     this.actionHandlers.clear();
     this.ipcHandlers.clear();
     this.subscriptions.clear();
+    this.fileDecorationProviders.clear();
   }
 
   /** Route a message received from main. Returns true if it was consumed. */
@@ -96,6 +126,7 @@ export class PluginDevWorkerHostProxy {
         const pending = this.pendingCalls.get(msg.requestId);
         if (!pending) return true;
         this.pendingCalls.delete(msg.requestId);
+        pending.cleanup?.();
         if (msg.ok) pending.resolve(msg.result);
         else pending.reject(new Error(msg.error));
         return true;
@@ -134,6 +165,19 @@ export class PluginDevWorkerHostProxy {
           throw new Error(`No action handler registered for "${msg.namespacedId}"`);
         }
         const result = await handler(msg.args);
+        this.post({ type: "invoke-result", requestId: msg.requestId, ok: true, result });
+        return;
+      }
+      if (msg.kind === "file-decoration-method") {
+        const impl = this.fileDecorationProviders.get(msg.providerId);
+        if (!impl) {
+          throw new Error(`No file decoration provider registered for "${msg.providerId}"`);
+        }
+        if (msg.method !== "provideDecorations") {
+          throw new Error(`Unknown file decoration provider method "${msg.method}"`);
+        }
+        const [scope, paths] = msg.args as [string, string[]];
+        const result = await impl.provideDecorations(scope, paths);
         this.post({ type: "invoke-result", requestId: msg.requestId, ok: true, result });
         return;
       }
@@ -177,17 +221,71 @@ export class PluginDevWorkerHostProxy {
     return legacy(ctx, ...args);
   }
 
-  private call<T>(method: PluginHostCallMethod, params: unknown): Promise<T> {
+  /**
+   * Like {@link call} but, instead of rejecting when the proxy is disposed
+   * (plugin unload), resolves the pending promise with `graceValue`. Used by the
+   * imperative UI prompts (#10522): their host contract resolves the dismiss
+   * value (undefined / false) on unload rather than throwing.
+   */
+  private callWithGrace<T>(
+    method: PluginHostCallMethod,
+    params: unknown,
+    graceValue: T
+  ): Promise<T> {
+    if (this.disposed) {
+      return Promise.resolve(graceValue);
+    }
+    return this.call<T>(method, params, undefined, { value: graceValue });
+  }
+
+  private call<T>(
+    method: PluginHostCallMethod,
+    params: unknown,
+    signal?: AbortSignal,
+    grace?: { value: unknown }
+  ): Promise<T> {
     if (this.disposed) {
       return Promise.reject(new Error("Plugin dev worker disposed"));
     }
+    // An already-aborted signal rejects before anything crosses the port.
+    if (signal?.aborted) {
+      return Promise.reject(abortError(signal));
+    }
     const requestId = `c${this.nextId++}`;
     return new Promise<T>((resolve, reject) => {
+      let onAbort: (() => void) | undefined;
+      const cleanup = (): void => {
+        if (onAbort && signal) signal.removeEventListener("abort", onAbort);
+      };
       this.pendingCalls.set(requestId, {
         resolve: resolve as (value: unknown) => void,
         reject,
+        cleanup,
+        grace,
       });
-      this.post({ type: "host-call", requestId, method, params });
+      if (signal) {
+        onAbort = (): void => {
+          const pending = this.pendingCalls.get(requestId);
+          if (!pending) return;
+          this.pendingCalls.delete(requestId);
+          cleanup();
+          // Tell main to abort the in-flight host call (AbortSignal itself is not
+          // structured-clone-safe, so the requestId is the cancellation handle).
+          this.post({ type: "host-cancel", requestId });
+          reject(abortError(signal));
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+      try {
+        this.post({ type: "host-call", requestId, method, params });
+      } catch (err) {
+        // A non-structured-clone-safe `params` makes `postMessage` throw
+        // (DataCloneError). Drop the pending entry so it doesn't leak until
+        // dispose, then reject the caller.
+        this.pendingCalls.delete(requestId);
+        cleanup();
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
     });
   }
 
@@ -251,6 +349,9 @@ export class PluginDevWorkerHostProxy {
           },
           `action:${namespacedId}`
         );
+        // Sync structural validation + handler capture happen above (sync throws
+        // still surface at the call site); only the return value is async.
+        return Promise.resolve();
       },
       registerHandler: ((
         channel: string,
@@ -290,6 +391,7 @@ export class PluginDevWorkerHostProxy {
           this.ipcHandlers.set(channel, { handler: schemaOrHandler as PluginIpcHandler });
           this.notify("registerHandler", { channel, hasSchema: false }, `handler:${channel}`);
         }
+        return Promise.resolve();
       }) as PluginHostApi["registerHandler"],
       broadcastToRenderer: (channel, payload) => {
         this.assertActivationOpen("broadcastToRenderer");
@@ -299,46 +401,153 @@ export class PluginDevWorkerHostProxy {
           );
         }
         this.notify("broadcastToRenderer", { channel, payload });
+        return Promise.resolve();
+      },
+      // Post-activation-safe sibling of broadcastToRenderer: no
+      // assertActivationOpen guard, so dev-worker plugins can stream live data
+      // to their panels from timers and subscription callbacks.
+      postToPanel: (channel, payload, panelId) => {
+        if (typeof channel !== "string" || channel.length === 0 || channel.includes(":")) {
+          // Reject (not sync throw): runtime-surface Promise method must keep
+          // validation errors inside the Promise contract, mirroring the
+          // main-side host (#10617). notify() is fire-and-forget/sync, so this
+          // method can't simply be `async`.
+          return Promise.reject(
+            new Error(
+              `Plugin "${this.pluginId}" postToPanel: channel must be a non-empty string without colons: ${String(channel)}`
+            )
+          );
+        }
+        if (panelId !== undefined && panelId !== null) {
+          if (typeof panelId !== "string" || panelId.length === 0) {
+            throw new Error(
+              `Plugin "${this.pluginId}" postToPanel: panelId must be a non-empty string, null, or undefined: ${String(panelId)}`
+            );
+          }
+        }
+        // Forward panelId verbatim (including `undefined`/`null`) — the real
+        // main-side host wraps the envelope and resolves the broadcast-vs-target
+        // routing. Structured clone over the parent-port preserves `undefined`.
+        this.notify("postToPanel", { channel, payload, panelId });
+        return Promise.resolve();
       },
       getActiveWorktree: () =>
         this.call<PluginWorktreeSnapshot | null>("getActiveWorktree", undefined),
       getWorktrees: () => this.call<PluginWorktreeSnapshot[]>("getWorktrees", undefined),
+      getWorktreeStatus: (path, options) =>
+        this.call<PluginWorktreeStatus | null>("getWorktreeStatus", path, options?.signal),
+      getAgentState: () => this.call<PluginAgentSnapshot | null>("getAgentState", undefined),
+      onDidChangeAgentState: (callback) => {
+        this.assertActivationOpen("onDidChangeAgentState");
+        // Subscription wired synchronously; only the disposer is async.
+        const dispose = this.subscribe("agent-state", (payload) =>
+          callback(payload as PluginAgentSnapshot)
+        );
+        return Promise.resolve(dispose);
+      },
       onDidChangeActiveWorktree: (callback) => {
         this.assertActivationOpen("onDidChangeActiveWorktree");
-        return this.subscribe("active-worktree", (payload) =>
+        // Subscription wired synchronously; only the disposer is async.
+        const dispose = this.subscribe("active-worktree", (payload) =>
           callback(payload as PluginWorktreeSnapshot | null)
         );
+        return Promise.resolve(dispose);
       },
-      onDidChangeWorktrees: (callback) => {
+      onDidChangeWorktrees: (callback, options) => {
         this.assertActivationOpen("onDidChangeWorktrees");
-        return this.subscribe("worktrees", (payload) =>
-          callback(payload as PluginWorktreeSnapshot[])
+        // Debounce is applied host-side: the worker forwards `debounceMs` in the
+        // subscribe message and the real host coalesces before pushing events.
+        const dispose = this.subscribe(
+          "worktrees",
+          (payload) => callback(payload as PluginWorktreeSnapshot[]),
+          undefined,
+          undefined,
+          options?.debounceMs
         );
+        return Promise.resolve(dispose);
       },
       registerForgeProvider: (descriptor: ForgeProviderDescriptor, _impl: ForgeProviderImpl) => {
-        // Forge providers require bidirectional impl proxying (callbacks the host
-        // invokes per PR/CI/rate-limit query) not yet supported in dev mode.
+        this.assertActivationOpen("registerForgeProvider");
+        // Forge providers can't run from the worker: `ForgeProviderImpl`'s
+        // required `parseRemote` (the routing gate), URL builders, and
+        // `classifyPushError` are SYNCHRONOUS — the host calls them and uses the
+        // return value immediately — but every worker host call is async over
+        // this MessagePort. A partial async-only proxy would be worse than
+        // honest: the provider would never become routable because
+        // `parseRemote` resolves to a Promise. This is the ONE permanent
+        // dev/prod-identical gap — both run in the worker, so neither supports
+        // it; a fix needs the forge API's sync surface to change.
         console.warn(
-          `[plugin-dev:${this.pluginId}] registerForgeProvider("${descriptor?.id}") is not supported in dev mode — package + install the plugin to test forge providers`
+          `[plugin:${this.pluginId}] registerForgeProvider("${descriptor?.id}") is not supported — forge providers require synchronous host methods (parseRemote, URL builders) that can't cross the worker's async boundary.`
         );
-        return () => {};
+        return Promise.resolve(() => {});
       },
       registerFileDecorationProvider: (
         descriptor: FileDecorationProviderDescriptor,
-        _impl: FileDecorationProviderImpl
+        impl: FileDecorationProviderImpl
       ) => {
-        console.warn(
-          `[plugin-dev:${this.pluginId}] registerFileDecorationProvider("${descriptor?.id}") is not supported in dev mode — package + install the plugin to test decoration providers`
+        this.assertActivationOpen("registerFileDecorationProvider");
+        if (!descriptor || typeof descriptor !== "object") {
+          throw new Error(
+            `Plugin "${this.pluginId}" registerFileDecorationProvider: descriptor must be an object`
+          );
+        }
+        if (typeof descriptor.id !== "string" || descriptor.id.length === 0) {
+          throw new Error(
+            `Plugin "${this.pluginId}" registerFileDecorationProvider: descriptor.id must be a non-empty string`
+          );
+        }
+        if (!impl || typeof impl !== "object" || typeof impl.provideDecorations !== "function") {
+          throw new Error(
+            `Plugin "${this.pluginId}" registerFileDecorationProvider: impl must expose provideDecorations()`
+          );
+        }
+        const providerId = descriptor.id;
+        // Replace semantics mirror the real host: a second register on the same
+        // id overwrites the prior impl held here.
+        this.fileDecorationProviders.set(providerId, impl);
+        this.notify(
+          "registerFileDecorationProvider",
+          { descriptor: { id: providerId, scopes: descriptor.scopes } },
+          `fileDecorationProvider:${providerId}`
         );
-        return () => {};
+        let disposed = false;
+        const dispose = (): void => {
+          if (disposed) return;
+          disposed = true;
+          // Identity-guard the delete so a stale disposer (from a prior register
+          // on the same id that a later register overwrote) can't drop the
+          // currently-active impl — mirrors the real host's registry semantics.
+          if (this.fileDecorationProviders.get(providerId) === impl) {
+            this.fileDecorationProviders.delete(providerId);
+          }
+          this.notify("unregisterFileDecorationProvider", { providerId });
+        };
+        return Promise.resolve(dispose);
       },
       invalidateFileDecorations: (scope, paths) => {
         if (typeof scope !== "string" || scope.length === 0) {
-          throw new Error(
-            `Plugin "${this.pluginId}" invalidateFileDecorations: scope must be a non-empty string`
+          // Reject (not sync throw): runtime-surface Promise method (#10617).
+          return Promise.reject(
+            new Error(
+              `Plugin "${this.pluginId}" invalidateFileDecorations: scope must be a non-empty string`
+            )
           );
         }
         this.notify("invalidateFileDecorations", { scope, paths });
+        return Promise.resolve();
+      },
+      // Post-activation-safe sibling of invalidateFileDecorations: forward the
+      // badge fire-and-forget; the real host re-validates the badge shape.
+      setPanelBadge: (panelId, badge) => {
+        if (typeof panelId !== "string" || panelId.length === 0) {
+          // Reject (not sync throw): runtime-surface Promise method (#10617).
+          return Promise.reject(
+            new Error(`Plugin "${this.pluginId}" setPanelBadge: panelId must be a non-empty string`)
+          );
+        }
+        this.notify("setPanelBadge", { panelId, badge: badge ?? null });
+        return Promise.resolve();
       },
       showToast: (options: PluginToastOptions) =>
         this.call<void>("showToast", {
@@ -347,13 +556,129 @@ export class PluginDevWorkerHostProxy {
           durationMs: options?.durationMs,
         }),
       dispatch: (actionId, args) => this.call<ActionDispatchResult>("dispatch", { actionId, args }),
+      // Built-in action catalog (#10561). list/get relay over the port like
+      // dispatch; canDispatch is derived locally from get() (no extra
+      // round-trip), mirroring the real host. callWithGrace resolves the
+      // empty/absent fallback ([] / null / "restricted") on plugin unload
+      // instead of rejecting, matching the host contract.
+      actions: {
+        list: () => this.callWithGrace<PluginActionManifestEntry[]>("actions.list", undefined, []),
+        get: (actionId) =>
+          this.callWithGrace<PluginActionManifestEntry | null>("actions.get", { actionId }, null),
+        canDispatch: async (actionId) => {
+          // Honor the never-throws contract: a host-side error on the underlying
+          // get() degrades to "restricted" rather than rejecting.
+          let entry: PluginActionManifestEntry | null;
+          try {
+            entry = await this.callWithGrace<PluginActionManifestEntry | null>(
+              "actions.get",
+              { actionId },
+              null
+            );
+          } catch {
+            return "restricted";
+          }
+          if (!entry) return "restricted";
+          if (entry.danger === "confirm") return "confirm";
+          // Fail closed: only an explicit "safe" entry maps to "ok".
+          if (entry.danger === "safe") return "ok";
+          return "restricted";
+        },
+      },
+      // Capability check, consent prompt, active-agent resolution, and the PTY
+      // write all run on the real main-side host — the worker only relays.
+      sendToActiveAgent: (text, options) => this.call<void>("sendToActiveAgent", { text, options }),
+      // Imperative UI prompts (#10522). Post-activation-safe (no
+      // assertActivationOpen): plugins prompt from command handlers. They use
+      // callWithGrace so a plugin unload mid-prompt resolves the dismiss value
+      // (undefined / false) instead of rejecting — matching the host contract.
+      showQuickPick: ((items: PluginQuickPickItem[], options?: PluginQuickPickOptions) =>
+        this.callWithGrace<PluginQuickPickItem | PluginQuickPickItem[] | undefined>(
+          "showQuickPick",
+          { items, options },
+          undefined
+        )) as PluginHostApi["showQuickPick"],
+      showInputBox: (options) =>
+        this.callWithGrace<string | undefined>("showInputBox", { options }, undefined),
+      showConfirm: (options) => this.callWithGrace<boolean>("showConfirm", { options }, false),
       logger: {
         info: (message, fields) => this.notify("logger.info", { message, fields }),
         warn: (message, fields) => this.notify("logger.warn", { message, fields }),
         error: (message, fields) => this.notify("logger.error", { message, fields }),
       },
+      process: {
+        // The real `PluginProcessHandle` lives in main (PluginProcessManager);
+        // `spawn` relays over the port and returns a proxy handle whose id
+        // addresses `kill` / `restart` and the exit/crash subscriptions. `kill`
+        // is sync (a fire-and-forget notify); `restart` awaits the host. Late
+        // exit/crash events ride the existing subscription-event channel.
+        spawn: async (command, options) => {
+          const { id } = await this.call<{ id: string }>("process.spawn", { command, options });
+          return this.buildProcessHandle(id);
+        },
+      },
+      // host.fs request/response methods are fully async, so they relay over the
+      // port to the real (contained, capability-gated) host like settings/get.
+      // `watch` is a host-call that BOTH wires the watcher (rejecting on a
+      // missing capability / out-of-scope path, preserving the in-process
+      // contract) and opens a subscription whose change events arrive over the
+      // subscription-event channel keyed by the same id.
+      fs: {
+        readFile: (filePath, options) =>
+          this.call<string>("fs.readFile", { path: filePath }, options?.signal),
+        writeFile: (filePath, contents) =>
+          this.call<void>("fs.writeFile", { path: filePath, contents }),
+        readdir: (dirPath, options) =>
+          this.call<PluginFsDirEntry[]>("fs.readdir", { path: dirPath }, options?.signal),
+        stat: (targetPath, options) =>
+          this.call<PluginFsStat>("fs.stat", { path: targetPath }, options?.signal),
+        watch: async (paths, callback, options) => {
+          const subscriptionId = `s${this.nextId++}`;
+          // Register the change callback before the call so an event can't race
+          // ahead of the subscription map; tear it down if the watch rejects.
+          this.subscriptions.set(subscriptionId, (payload) => callback(payload as string));
+          try {
+            await this.call<void>("fs.watch", { subscriptionId, paths }, options?.signal);
+          } catch (err) {
+            this.subscriptions.delete(subscriptionId);
+            throw err;
+          }
+          let disposed = false;
+          return () => {
+            if (disposed) return;
+            disposed = true;
+            this.subscriptions.delete(subscriptionId);
+            this.post({ type: "unsubscribe", subscriptionId });
+          };
+        },
+      },
+      git: {
+        status: (worktreePath, options) =>
+          this.call<PluginGitStatus>("git.status", { worktreePath }, options?.signal),
+        diff: (worktreePath, filePath, options) =>
+          this.call<string>("git.diff", { worktreePath, filePath }, options?.signal),
+        add: (worktreePath, paths, options) =>
+          this.call<void>("git.add", { worktreePath, paths }, options?.signal),
+        commit: (worktreePath, options, callOptions) =>
+          this.call<PluginGitCommitResult>(
+            "git.commit",
+            {
+              worktreePath,
+              message: options?.message,
+            },
+            callOptions?.signal
+          ),
+      },
+      clipboard: {
+        writeText: (text) => this.call<void>("clipboard.writeText", { text }),
+        readText: () => this.call<string>("clipboard.readText", undefined),
+      },
       settings: {
-        get: <T = unknown>(key: string, scope: PluginSettingsScope = "user") =>
+        // Forward an omitted scope as `undefined` (not a defaulted "user") so the
+        // real host resolves the key's manifest-declared scope on read (#10586) —
+        // defaulting here would send an explicit "user" that a project-scoped key
+        // rejects.
+        get: <T = unknown>(key: string, scope?: PluginSettingsScope) =>
           this.call<T | undefined>("settings.get", { key, scope }),
         set: <T = unknown>(key: string, value: T, scope: PluginSettingsScope = "user") =>
           this.call<void>("settings.set", { key, value, scope }),
@@ -363,12 +688,35 @@ export class PluginDevWorkerHostProxy {
           scope: PluginSettingsScope = "user"
         ) => {
           this.assertActivationOpen("settings.onDidChange");
-          return this.subscribe(
+          const dispose = this.subscribe(
             "settings",
             (payload) => callback(payload as T | undefined),
             key,
             scope
           );
+          return Promise.resolve(dispose);
+        },
+      },
+      storage: {
+        get: <T = unknown>(key: string, scope: PluginStorageScope = "user") =>
+          this.call<T | undefined>("storage.get", { key, scope }),
+        set: <T = unknown>(key: string, value: T, scope: PluginStorageScope = "user") =>
+          this.call<void>("storage.set", { key, value, scope }),
+        delete: (key: string, scope: PluginStorageScope = "user") =>
+          this.call<void>("storage.delete", { key, scope }),
+        onDidChange: <T = unknown>(
+          key: string,
+          callback: (value: T | undefined) => void,
+          scope: PluginStorageScope = "user"
+        ) => {
+          this.assertActivationOpen("storage.onDidChange");
+          const dispose = this.subscribe(
+            "storage",
+            (payload) => callback(payload as T | undefined),
+            key,
+            scope
+          );
+          return Promise.resolve(dispose);
         },
       },
     };
@@ -376,22 +724,71 @@ export class PluginDevWorkerHostProxy {
   }
 
   private subscribe(
-    kind: "active-worktree" | "worktrees" | "settings",
+    kind: PluginWorkerSubscriptionKind,
     callback: (payload: unknown) => void,
     key?: string,
-    scope?: PluginSettingsScope
+    scope?: PluginSettingsScope | PluginStorageScope,
+    debounceMs?: number
   ): () => void {
     const subscriptionId = `s${this.nextId++}`;
-    this.subscriptions.set(subscriptionId, callback);
-    this.post({ type: "subscribe", subscriptionId, kind, key, scope });
+    return this.openSubscription(
+      { type: "subscribe", subscriptionId, kind, key, scope, debounceMs },
+      callback
+    );
+  }
+
+  /** Register `callback`, post the (fully-formed) subscribe message, and return
+   * an idempotent disposer that drops the callback and posts `unsubscribe`. */
+  private openSubscription(
+    message: Extract<PluginWorkerToHostMessage, { type: "subscribe" }>,
+    callback: (payload: unknown) => void
+  ): () => void {
+    this.subscriptions.set(message.subscriptionId, callback);
+    this.post(message);
     let disposed = false;
     return () => {
       if (disposed) return;
       disposed = true;
-      this.subscriptions.delete(subscriptionId);
-      this.post({ type: "unsubscribe", subscriptionId });
+      this.subscriptions.delete(message.subscriptionId);
+      this.post({ type: "unsubscribe", subscriptionId: message.subscriptionId });
     };
   }
+
+  /** Build a worker-side {@link PluginProcessHandle} proxy for a process the host
+   * spawned on our behalf, addressing it by the host-assigned `id`. */
+  private buildProcessHandle(id: string): PluginProcessHandle {
+    const subscribeLifecycle = (
+      kind: "process-exit" | "process-crash",
+      callback: (info: { exitCode: number | null; signal: string | null }) => void
+    ): (() => void) =>
+      this.openSubscription(
+        { type: "subscribe", subscriptionId: `s${this.nextId++}`, kind, processId: id },
+        (payload) => callback(payload as { exitCode: number | null; signal: string | null })
+      );
+    return {
+      id,
+      kill: () => {
+        // Sync in the public contract — fire-and-forget over the port.
+        this.notify("process.kill", { processId: id });
+      },
+      restart: () => this.call<void>("process.restart", { processId: id }),
+      onExit: (callback) => subscribeLifecycle("process-exit", callback),
+      onCrash: (callback) => subscribeLifecycle("process-crash", callback),
+    };
+  }
+}
+
+/**
+ * Normalize an aborted signal's reason into an `Error` for rejection. Node sets
+ * `signal.reason` to a `DOMException` (name `AbortError`) by default, which is
+ * not an `Error` instance — wrap anything non-Error so callers always get one.
+ */
+function abortError(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason;
+  if (reason instanceof Error) return reason;
+  const err = new Error(typeof reason === "string" ? reason : "The operation was aborted");
+  err.name = "AbortError";
+  return err;
 }
 
 /** Structural guard mirroring `isChannelSchema` from PluginChannelRegistry,

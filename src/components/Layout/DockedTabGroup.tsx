@@ -9,6 +9,7 @@ import {
   PointerSensor,
   TouchSensor,
   type DragEndEvent,
+  type DraggableSyntheticListeners,
   type UniqueIdentifier,
 } from "@dnd-kit/core";
 import {
@@ -21,6 +22,7 @@ import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modi
 import { LayoutGroup, AnimatePresence, m } from "framer-motion";
 import { ChevronDown, CopyPlus } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -77,6 +79,22 @@ interface DockedTabGroupProps {
 }
 
 export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
+  // Forward only the pointer/touch drag listeners SortableDockItem publishes via
+  // DragHandleProvider, so the group chip becomes a real drag source instead of
+  // just grab-cursor styling. The KeyboardSensor's onKeyDown is dropped on
+  // purpose: the chip is its own preview trigger, and dnd-kit's Space/Enter
+  // handler calls preventDefault() to start a keyboard drag, which would
+  // suppress this native <button>'s activation click — the sole keyboard path to
+  // the chip's primary action. (Grid PanelHeader has no such conflict: its drag
+  // surface is a non-interactive <div>.) Keyboard-driven reordering of dock
+  // chips is intentionally out of scope. Computed before the early return below
+  // to satisfy the Rules of Hooks.
+  const dragHandle = useDragHandle();
+  const dragPointerListeners: DraggableSyntheticListeners = dragHandle?.listeners
+    ? Object.fromEntries(
+        Object.entries(dragHandle.listeners).filter(([name]) => name !== "onKeyDown")
+      )
+    : undefined;
   const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
   const openDockTerminal = usePanelStore((s) => s.openDockTerminal);
   const closeDockTerminal = usePanelStore((s) => s.closeDockTerminal);
@@ -542,6 +560,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         <TerminalContextMenu terminalId={activePanel.id} forceLocation="dock">
           <PopoverTrigger asChild>
             <button
+              {...dragPointerListeners}
               data-dock-item=""
               className={cn(
                 "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px]",
@@ -580,6 +599,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   kind={activePanel.kind}
                   chrome={activeChrome}
                   className="w-3.5 h-3.5"
+                  userChosen={!!panelPresetColors.get(activePanel.id)}
                 />
               </div>
               <span className="truncate min-w-[48px] max-w-[140px] font-sans font-medium">
@@ -819,6 +839,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                                   kind={panel.kind ?? "terminal"}
                                   chrome={tabChrome}
                                   className="w-3.5 h-3.5"
+                                  userChosen={!!panelPresetColors.get(panel.id)}
                                 />
                               </span>
                               <span className="truncate">{getBaseTitle(panel.title)}</span>

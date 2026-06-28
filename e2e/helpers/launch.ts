@@ -19,6 +19,13 @@ const ROOT = path.resolve(import.meta.dirname, "../..");
 
 const fallbackGraceMs = 1_500;
 const INITIAL_PROJECT_ID_EXPRESSION = "window.__DAINTREE_INITIAL_PROJECT__?.id ?? null";
+const E2E_MODE_ARG = "--daintree-e2e-mode";
+const E2E_SKIP_FIRST_RUN_DIALOGS_ARG = "--daintree-e2e-skip-first-run-dialogs";
+const E2E_FAULT_MODE_ARG = "--daintree-e2e-fault-mode";
+const E2E_DEFER_RENDERER_LOAD_ARG = "--daintree-e2e-defer-renderer-load";
+const E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE_ARG = "--daintree-e2e-disable-cached-view-cpu-throttle";
+const E2E_CRASH_DUMPS_DIR_ARG = "--daintree-e2e-crash-dumps-dir=";
+const E2E_SIDELOAD_PLUGIN_DIR_ARG = "--daintree-e2e-sideload-plugin-dir=";
 
 export interface AppContext {
   app: ElectronApplication;
@@ -71,10 +78,58 @@ function cleanupMacElectronE2eProcesses(): void {
   try {
     // Kill only e2e-launched Electron processes (matched on `daintree-e2e`
     // user-data-dir). Production Daintree.app and dev sessions are untouched.
+    // The -f full-command-line match catches every helper type (GPU, Renderer,
+    // network-service utility, crashpad_handler) since they all inherit the
+    // --user-data-dir argument.
     execSync('pkill -f "node_modules/electron.*daintree-e2e"', { stdio: "ignore" });
   } catch {
     // Ignore "no matching process" errors.
   }
+}
+
+let exitCleanupHandlersRegistered = false;
+
+// Synchronously reap orphaned e2e Electron helpers. The macOS path matches a
+// daintree-e2e-specific pkill pattern so it's always safe to run; the Windows
+// path is a broad `taskkill /IM electron.exe` with no e2e filter, so restrict
+// it to CI to avoid killing a developer's local dev session.
+function reapOrphanedE2eProcesses(): void {
+  cleanupMacElectronE2eProcesses();
+  if (process.env.CI) cleanupWindowsElectronProcesses();
+}
+
+// Reap orphaned e2e Electron helpers when the Playwright worker is killed
+// before closeApp runs — CI timeout (SIGTERM) or Ctrl+C (SIGINT). Playwright's
+// globalTeardown and worker-fixture teardowns do NOT run on signal-driven
+// termination, so this is the only reliable orphan-reaping path on abnormal
+// exit; without it the network-service, GPU, renderer, and crashpad helpers
+// leak. We deliberately do NOT reap on the normal `exit` event: a clean worker
+// exit already ran closeApp's teardown, and broadcasting a system-wide pkill
+// there could race a sibling project's live Electron when the `full` meta-suite
+// runs buckets concurrently (e2eWorkers:2). Registered once per worker process;
+// the boolean guard makes repeated launchApp calls no-ops.
+export function registerExitCleanupHandlers(): void {
+  if (exitCleanupHandlersRegistered) return;
+  exitCleanupHandlersRegistered = true;
+
+  // A caught signal does not terminate Node on its own — reap, then re-exit
+  // with the conventional 128+signal code so the worker dies with an
+  // identifiable status. process.once means a second Ctrl+C falls through to
+  // Node's default handler and force-terminates.
+  process.once("SIGINT", () => {
+    reapOrphanedE2eProcesses();
+    process.exit(130);
+  });
+  process.once("SIGTERM", () => {
+    reapOrphanedE2eProcesses();
+    process.exit(143);
+  });
+}
+
+// Test-only: reset the one-time guard so unit tests can re-exercise
+// registration. Not used by the harness itself.
+export function __resetExitCleanupHandlersForTest(): void {
+  exitCleanupHandlersRegistered = false;
 }
 
 function wait(ms: number): Promise<void> {
@@ -194,12 +249,29 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
   const attemptTimeout = (_attempt: number) => (isMacOSLocal ? 50_000 : launchTimeout);
   let lastError: unknown = null;
 
+  registerExitCleanupHandlers();
   installTelemetry();
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     beginAttempt(attempt, maxAttempts);
     const userDataDir = options.userDataDir ?? mkdtempSync(path.join(tmpdir(), "daintree-e2e-"));
     const args = [`--user-data-dir=${userDataDir}`, ROOT];
+    args.unshift(E2E_MODE_ARG);
+    if (options.env?.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS !== "0") {
+      args.unshift(E2E_SKIP_FIRST_RUN_DIALOGS_ARG);
+    }
+    if (options.env?.DAINTREE_E2E_FAULT_MODE === "1") {
+      args.unshift(E2E_FAULT_MODE_ARG);
+    }
+    if (options.env?.DAINTREE_E2E_SIDELOAD_PLUGIN_DIR) {
+      args.unshift(`${E2E_SIDELOAD_PLUGIN_DIR_ARG}${options.env.DAINTREE_E2E_SIDELOAD_PLUGIN_DIR}`);
+    }
+    if (isCI) {
+      args.unshift(E2E_DEFER_RENDERER_LOAD_ARG);
+    }
+    if (isWindowsCI) {
+      args.unshift(E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE_ARG);
+    }
 
     if (process.env.CI) {
       // CI runners lack real GPUs — disable GPU to prevent hangs.
@@ -306,6 +378,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
       mkdirSync(crashDumpsDir, { recursive: true });
       mkdirSync(logsDir, { recursive: true });
       launchEnv.DAINTREE_E2E_CRASH_DUMPS_DIR = crashDumpsDir;
+      args.unshift(`${E2E_CRASH_DUMPS_DIR_ARG}${crashDumpsDir}`);
       args.push("--enable-logging=file", `--log-file=${logFile}`);
 
       // Do not pass executablePath here. Playwright only injects its Electron

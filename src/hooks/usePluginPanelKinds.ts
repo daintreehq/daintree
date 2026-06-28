@@ -16,7 +16,7 @@ import { logWarn } from "@/utils/logger";
  * registries in sync with main's authoritative set. Panels using PTY are
  * rendered through `TerminalPane` (the only generic component that can host
  * an extension PTY); non-PTY plugin panels with a `componentPath` set by an
- * `experimental_views` contribution render through `makePluginViewHost`
+ * `views` contribution render through `makePluginViewHost`
  * (#9229), which lazy-imports the plugin's React module over the `plugin://`
  * protocol. Non-PTY plugin panels without a matching view remain
  * `PluginMissingPanel` placeholders.
@@ -81,6 +81,19 @@ export function usePluginPanelKinds(): void {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- registry component type uses unconstrained props
     const hostCache = new Map<string, ComponentType<any>>();
 
+    // View-host entries are keyed `${id}\0${componentPath}` (see below), so a
+    // bare `hostCache.delete(id)` never matches them — that was the leak in
+    // #10512: removed kinds/plugins left their `ComponentType` closures
+    // resident until the hook unmounted. Evict every entry owned by `id`
+    // (the bare key from PTY/no-view paths AND any composite view-host key).
+    const evictHostCache = (id: string): void => {
+      hostCache.delete(id);
+      const prefix = `${id}\0`;
+      for (const key of hostCache.keys()) {
+        if (key.startsWith(prefix)) hostCache.delete(key);
+      }
+    };
+
     const sync = (kinds: PanelKindConfig[]): void => {
       if (disposed) return;
 
@@ -100,7 +113,7 @@ export function usePluginPanelKinds(): void {
         if (!incomingByPlugin.has(pluginId)) {
           for (const id of kindIds) {
             unregisterPanelKindDefinition(id);
-            hostCache.delete(id);
+            evictHostCache(id);
           }
           unregisterPluginPanelKinds(pluginId);
           registeredByPlugin.delete(pluginId);
@@ -119,7 +132,7 @@ export function usePluginPanelKinds(): void {
             if (!incomingIds.has(id)) {
               unregisterPanelKindDefinition(id);
               unregisterPanelKind(id);
-              hostCache.delete(id);
+              evictHostCache(id);
             }
           }
         }
@@ -136,9 +149,9 @@ export function usePluginPanelKinds(): void {
           }
           if (config.hasPty) {
             registerPanelKindDefinition(config.id, TerminalPane);
-            hostCache.delete(config.id);
+            evictHostCache(config.id);
           } else if (config.componentPath) {
-            // Non-PTY plugin panel with a matching `experimental_views`
+            // Non-PTY plugin panel with a matching `views`
             // contribution — render through PluginViewHost (#9229). Cache by
             // (kind id + componentPath) so identity-equal replay snapshots
             // don't churn the component ref and unmount live plugin views.
@@ -162,7 +175,7 @@ export function usePluginPanelKinds(): void {
             // that flipped from `hasPty: true` to `hasPty: false` without a
             // matching view: clear any prior TerminalPane definition.
             unregisterPanelKindDefinition(config.id);
-            hostCache.delete(config.id);
+            evictHostCache(config.id);
           }
         }
 

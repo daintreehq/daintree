@@ -12,6 +12,10 @@ const forgeClientMock = vi.hoisted(() => ({
   getIssueUrl: vi.fn(),
   assignIssue: vi.fn(),
   unassignIssue: vi.fn(),
+  approvePR: vi.fn(),
+  requestChanges: vi.fn(),
+  dismissReview: vi.fn(),
+  requestReviewers: vi.fn(),
   validateToken: vi.fn(),
   getRepoStats: vi.fn(),
   listIssues: vi.fn(),
@@ -153,6 +157,77 @@ describe("forge.* navigation adversarial", () => {
     await expect(
       runAction("forge.assignIssue", { issueNumber: 7, username: "bob" })
     ).rejects.toThrow("No active worktree");
+  });
+
+  it("approvePR forwards cwd, prNumber, and optional body positionally", async () => {
+    const def = setupActions()("forge.approvePR");
+    await def.run({ cwd: "/repo", prNumber: 12, body: "LGTM" }, {} as never);
+    expect(forgeClientMock.approvePR).toHaveBeenCalledWith("/repo", 12, "LGTM");
+  });
+
+  it("approvePR falls back to ctx.activeWorktreePath and passes undefined body", async () => {
+    await runAction("forge.approvePR", { prNumber: 3 }, { activeWorktreePath: "/repo" });
+    expect(forgeClientMock.approvePR).toHaveBeenCalledWith("/repo", 3, undefined);
+  });
+
+  it("approvePR throws when no cwd and no ctx.activeWorktreePath", async () => {
+    await expect(runAction("forge.approvePR", { prNumber: 3 })).rejects.toThrow(
+      "No active worktree"
+    );
+    expect(forgeClientMock.approvePR).not.toHaveBeenCalled();
+  });
+
+  it("requestChanges forwards cwd, prNumber, and body positionally", async () => {
+    const def = setupActions()("forge.requestChanges");
+    await def.run({ cwd: "/repo", prNumber: 4, body: "fix types" }, {} as never);
+    expect(forgeClientMock.requestChanges).toHaveBeenCalledWith("/repo", 4, "fix types");
+  });
+
+  it("requestChanges schema rejects a whitespace-only body (matches the IPC guard)", () => {
+    const def = setupActions()("forge.requestChanges");
+    expect(def.argsSchema?.safeParse({ prNumber: 4, body: "   " }).success).toBe(false);
+    expect(def.argsSchema?.safeParse({ prNumber: 4, body: "real" }).success).toBe(true);
+  });
+
+  it("dismissReview schema rejects a whitespace-only message", () => {
+    const def = setupActions()("forge.dismissReview");
+    expect(def.argsSchema?.safeParse({ prNumber: 5, reviewId: 9, message: "  " }).success).toBe(
+      false
+    );
+  });
+
+  it("requestReviewers schema rejects when neither users nor teams is supplied", () => {
+    const def = setupActions()("forge.requestReviewers");
+    expect(def.argsSchema?.safeParse({ prNumber: 6 }).success).toBe(false);
+    expect(def.argsSchema?.safeParse({ prNumber: 6, users: [], teams: [] }).success).toBe(false);
+    expect(def.argsSchema?.safeParse({ prNumber: 6, users: ["a"] }).success).toBe(true);
+  });
+
+  it("dismissReview forwards cwd, prNumber, reviewId, and message positionally", async () => {
+    const def = setupActions()("forge.dismissReview");
+    await def.run({ cwd: "/repo", prNumber: 5, reviewId: 99, message: "stale" }, {} as never);
+    expect(forgeClientMock.dismissReview).toHaveBeenCalledWith("/repo", 5, 99, "stale");
+  });
+
+  it("requestReviewers forwards cwd, prNumber, and the users/teams object", async () => {
+    const def = setupActions()("forge.requestReviewers");
+    await def.run({ cwd: "/repo", prNumber: 6, users: ["octocat"], teams: ["core"] }, {} as never);
+    expect(forgeClientMock.requestReviewers).toHaveBeenCalledWith("/repo", 6, {
+      users: ["octocat"],
+      teams: ["core"],
+    });
+  });
+
+  it("requestReviewers falls back to ctx.activeWorktreePath", async () => {
+    await runAction(
+      "forge.requestReviewers",
+      { prNumber: 6, users: ["octocat"] },
+      { activeWorktreePath: "/repo" }
+    );
+    expect(forgeClientMock.requestReviewers).toHaveBeenCalledWith("/repo", 6, {
+      users: ["octocat"],
+      teams: undefined,
+    });
   });
 });
 

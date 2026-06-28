@@ -36,6 +36,53 @@ const ForgePageResultSchema = z.object({
   totalCount: z.number().optional(),
 });
 
+// Normalized PR shape returned by getPR/createPR/editPR. Kept loose (provider
+// payload passes through `rawData`) — only the cross-provider fields are typed.
+const ForgePRResultSchema = z.object({
+  number: z.number(),
+  title: z.string(),
+  body: z.string(),
+  state: z.string(),
+  isDraft: z.boolean(),
+  merged: z.boolean(),
+  url: z.string(),
+  baseRef: z.string(),
+  headRef: z.string(),
+  createdAt: z.number().optional(),
+  updatedAt: z.number().optional(),
+});
+
+// Normalized issue returned by the create/close/reopen/edit write actions.
+const ForgeIssueResultSchema = z.object({
+  number: z.number(),
+  title: z.string(),
+  body: z.string(),
+  state: z.string(),
+  url: z.string(),
+  labels: z.array(z.unknown()).optional(),
+  assignees: z.array(z.unknown()).optional(),
+  createdAt: z.number().optional(),
+  updatedAt: z.number().optional(),
+});
+
+const cwdArg = z
+  .string()
+  .optional()
+  .describe("Working directory of the git repo. Defaults to the active worktree path.");
+
+// Label set returned by the add/remove-label write actions.
+const ForgeLabelArrayResultSchema = z.array(
+  z.object({ name: z.string(), color: z.string().optional() })
+);
+
+// Comment returned by the add-comment write action.
+const ForgeCommentResultSchema = z.object({
+  id: z.string(),
+  body: z.string(),
+  url: z.string(),
+  createdAt: z.number(),
+});
+
 // Provider-agnostic forge action surface. Each action calls forgeClient (the
 // provider-agnostic IPC wrapper); provider routing is resolved at the IPC
 // layer in electron/ipc/handlers/forge.ts, so these run() bodies stay
@@ -221,6 +268,133 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
     })
   );
 
+  actions.set("forge.approvePR", () =>
+    defineAction({
+      id: "forge.approvePR",
+      title: "Approve Pull Request",
+      description:
+        "Submit an approving review on a pull request via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `prNumber` (required, positive int); `body` (optional) — an approval comment. Errors when `cwd` is omitted and no worktree is active, when the provider can't approve PRs, or when the forge rejects the review (e.g. approving your own PR).",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      dangerRationale:
+        "Submits an approving review to the remote forge. Retracting it requires dismissing the review.",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: z
+          .string()
+          .optional()
+          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        prNumber: z.number().int().positive().describe("Pull request number to approve"),
+        body: z.string().optional().describe("Optional approval comment"),
+      }),
+      run: async ({ cwd, prNumber, body }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        await forgeClient.approvePR(resolvedCwd, prNumber, body);
+      },
+    })
+  );
+
+  actions.set("forge.requestChanges", () =>
+    defineAction({
+      id: "forge.requestChanges",
+      title: "Request Changes on Pull Request",
+      description:
+        "Submit a request-changes review on a pull request via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `prNumber` (required, positive int); `body` (required) — explains what needs to change. Errors when `cwd` is omitted and no worktree is active, when the provider can't review PRs, or when the forge rejects the review.",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      dangerRationale:
+        "Submits a request-changes review to the remote forge. Blocks the PR until addressed or dismissed.",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: z
+          .string()
+          .optional()
+          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        prNumber: z.number().int().positive().describe("Pull request number to review"),
+        body: z.string().trim().min(1).describe("Explanation of the changes being requested"),
+      }),
+      run: async ({ cwd, prNumber, body }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        await forgeClient.requestChanges(resolvedCwd, prNumber, body);
+      },
+    })
+  );
+
+  actions.set("forge.dismissReview", () =>
+    defineAction({
+      id: "forge.dismissReview",
+      title: "Dismiss Pull Request Review",
+      description:
+        "Dismiss a submitted review on a pull request via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `prNumber` (required, positive int); `reviewId` (required, positive int) — the review to dismiss, obtained from a prior review-thread lookup; `message` (required) — explains the dismissal. Errors when `cwd` is omitted and no worktree is active, or when the provider can't dismiss reviews.",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      dangerRationale: "Dismisses a submitted review on the remote forge. Cannot be undone.",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: z
+          .string()
+          .optional()
+          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        prNumber: z.number().int().positive().describe("Pull request number"),
+        reviewId: z
+          .number()
+          .int()
+          .positive()
+          .describe("Review id to dismiss, from a prior review-thread lookup"),
+        message: z.string().trim().min(1).describe("Reason for dismissing the review"),
+      }),
+      run: async ({ cwd, prNumber, reviewId, message }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        await forgeClient.dismissReview(resolvedCwd, prNumber, reviewId, message);
+      },
+    })
+  );
+
+  actions.set("forge.requestReviewers", () =>
+    defineAction({
+      id: "forge.requestReviewers",
+      title: "Request Pull Request Reviewers",
+      description:
+        "Request reviewers on a pull request via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `prNumber` (required, positive int); `users` (optional) — account logins; `teams` (optional) — team identifiers (GitHub team slugs). Provide at least one user or team. Errors when `cwd` is omitted and no worktree is active, or when the provider can't request reviewers.",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      dangerRationale:
+        "Requests reviewers on the remote forge and notifies them. Undone by removing the request.",
+      scope: "renderer",
+      argsSchema: z
+        .object({
+          cwd: z
+            .string()
+            .optional()
+            .describe("Working directory of the git repo. Defaults to the active worktree path."),
+          prNumber: z.number().int().positive().describe("Pull request number"),
+          users: z
+            .array(z.string().min(1))
+            .optional()
+            .describe("Account logins to request a review from"),
+          teams: z
+            .array(z.string().min(1))
+            .optional()
+            .describe("Team identifiers (e.g. GitHub team slugs) to request a review from"),
+        })
+        .refine((args) => (args.users?.length ?? 0) + (args.teams?.length ?? 0) > 0, {
+          message: "Provide at least one user or team to request a review from",
+        }),
+      run: async ({ cwd, prNumber, users, teams }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        await forgeClient.requestReviewers(resolvedCwd, prNumber, { users, teams });
+      },
+    })
+  );
+
   actions.set("forge.validateToken", () =>
     defineAction({
       id: "forge.validateToken",
@@ -370,6 +544,454 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         const resolvedCwd = cwd ?? ctx.activeWorktreePath;
         if (!resolvedCwd) throw new Error("No active worktree");
         return await forgeClient.getIssue(resolvedCwd, issueNumber);
+      },
+    })
+  );
+
+  actions.set("forge.getPR", () =>
+    defineAction({
+      id: "forge.getPR",
+      title: "Get Pull Request",
+      description:
+        "Fetch a single pull request by its number via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `prNumber` (required, positive int). Returns the normalized forge PR { number, title, body, state ('open'|'closed'|'merged'), isDraft, merged, url, baseRef, headRef, createdAt, updatedAt, ... } or null when not found. Errors when `cwd` is omitted and no worktree is active. Use this before editing or merging a known PR; do NOT page `forge.listPRs` to find one known number.",
+      category: "forge",
+      kind: "query",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: cwdArg,
+        prNumber: z.number().int().positive().describe("Pull request number to fetch"),
+      }),
+      resultSchema: ForgePRResultSchema.nullable(),
+      run: async ({ cwd, prNumber }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        return await forgeClient.getPR(resolvedCwd, prNumber);
+      },
+    })
+  );
+
+  actions.set("forge.createPR", () =>
+    defineAction({
+      id: "forge.createPR",
+      title: "Create pull request",
+      description:
+        "Open a new pull request from `head` into `base` via the active forge provider. Args: `cwd` (optional, defaults to the active worktree path); `head` (source branch, required); `base` (target branch, required); `title` (required); `body` (optional); `draft` (optional). Returns the created normalized PR. Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      dangerRationale:
+        "Opens a pull request on the remote forge — a shared-state mutation reviewers and automation react to.",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: cwdArg,
+        head: z.string().min(1).describe("Source branch the changes come from"),
+        base: z.string().min(1).describe("Target branch the PR merges into"),
+        title: z.string().min(1).describe("Pull request title"),
+        body: z.string().optional().describe("Pull request body (Markdown)"),
+        draft: z.boolean().optional().describe("Open as a draft pull request"),
+      }),
+      resultSchema: ForgePRResultSchema,
+      run: async ({ cwd, head, base, title, body, draft }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        return await forgeClient.createPR(resolvedCwd, { head, base, title, body, draft });
+      },
+    })
+  );
+
+  actions.set("forge.closePR", () =>
+    defineAction({
+      id: "forge.closePR",
+      title: "Close pull request",
+      description:
+        "Close an open pull request without merging, via the active forge provider. Args: `cwd` (optional, defaults to the active worktree path); `prNumber` (required, positive int). Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      dangerRationale:
+        "Closes a pull request on the remote forge — a shared-state change reviewers and automation react to.",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: cwdArg,
+        prNumber: z.number().int().positive().describe("Pull request number to close"),
+      }),
+      run: async ({ cwd, prNumber }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        await forgeClient.closePR(resolvedCwd, prNumber);
+      },
+    })
+  );
+
+  actions.set("forge.reopenPR", () =>
+    defineAction({
+      id: "forge.reopenPR",
+      title: "Reopen pull request",
+      description:
+        "Reopen a previously closed pull request via the active forge provider. Args: `cwd` (optional, defaults to the active worktree path); `prNumber` (required, positive int). Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      dangerRationale:
+        "Reopens a pull request on the remote forge — a shared-state change reviewers and automation react to.",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: cwdArg,
+        prNumber: z.number().int().positive().describe("Pull request number to reopen"),
+      }),
+      run: async ({ cwd, prNumber }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        await forgeClient.reopenPR(resolvedCwd, prNumber);
+      },
+    })
+  );
+
+  actions.set("forge.mergePR", () =>
+    defineAction({
+      id: "forge.mergePR",
+      title: "Merge pull request",
+      description:
+        "Merge a pull request via the active forge provider. Args: `cwd` (optional, defaults to the active worktree path); `prNumber` (required, positive int); `mergeMethod` (optional 'merge'|'squash'|'rebase'); `commitTitle`/`commitMessage` (optional overrides). Irreversible — writes to the shared base branch. Errors when `cwd` is omitted and no worktree is active, or when the PR is not mergeable.",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      dangerRationale:
+        "Merging a pull request is irreversible and writes the change into the shared base branch.",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: cwdArg,
+        prNumber: z.number().int().positive().describe("Pull request number to merge"),
+        mergeMethod: z
+          .enum(["merge", "squash", "rebase"])
+          .optional()
+          .describe("Merge strategy (provider default when omitted)"),
+        commitTitle: z.string().optional().describe("Override the merge commit title"),
+        commitMessage: z.string().optional().describe("Override the merge commit message"),
+      }),
+      run: async (
+        { cwd, prNumber, mergeMethod, commitTitle, commitMessage },
+        ctx: ActionContext
+      ) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        await forgeClient.mergePR(resolvedCwd, prNumber, {
+          mergeMethod,
+          commitTitle,
+          commitMessage,
+        });
+      },
+    })
+  );
+
+  actions.set("forge.createIssue", () =>
+    defineAction({
+      id: "forge.createIssue",
+      title: "Create Issue",
+      description:
+        "Create a new issue via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `title` (required); `body` (optional markdown); `labels` (optional array of label names). Returns the created issue { number, title, body, state, url, ... }. Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: z
+          .string()
+          .optional()
+          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        title: z.string().min(1).describe("Issue title"),
+        body: z.string().optional().describe("Issue body (markdown)"),
+        labels: z.array(z.string()).optional().describe("Label names to apply on creation"),
+      }),
+      examples: [
+        {
+          args: { title: "Crash on startup", body: "Steps to reproduce: ..." },
+          description: "Create an issue in the active worktree's repo",
+        },
+      ],
+      resultSchema: ForgeIssueResultSchema,
+      run: async ({ cwd, title, body, labels }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        return await forgeClient.createIssue(resolvedCwd, { title, body, labels });
+      },
+    })
+  );
+
+  actions.set("forge.convertPRToDraft", () =>
+    defineAction({
+      id: "forge.convertPRToDraft",
+      title: "Convert pull request to draft",
+      description:
+        "Convert an open pull request to a draft via the active forge provider. Args: `cwd` (optional, defaults to the active worktree path); `prNumber` (required, positive int). Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      dangerRationale:
+        "Changes a pull request's review state on the remote forge — reviewers and automation react to it.",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: cwdArg,
+        prNumber: z.number().int().positive().describe("Pull request number to convert to draft"),
+      }),
+      run: async ({ cwd, prNumber }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        await forgeClient.convertPRToDraft(resolvedCwd, prNumber);
+      },
+    })
+  );
+
+  actions.set("forge.closeIssue", () =>
+    defineAction({
+      id: "forge.closeIssue",
+      title: "Close Issue",
+      description:
+        "Close an open issue via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int); `stateReason` (optional, 'completed', 'not_planned', or 'duplicate'). Returns the updated issue. Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      dangerRationale:
+        "Closes an issue on the shared forge — a state change other collaborators see; undoing it requires a deliberate reopen.",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: z
+          .string()
+          .optional()
+          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        issueNumber: z.number().int().positive().describe("Issue number to close"),
+        stateReason: z
+          .enum(["completed", "not_planned", "duplicate"])
+          .optional()
+          .describe("Why the issue is being closed (default: completed)"),
+      }),
+      resultSchema: ForgeIssueResultSchema,
+      run: async ({ cwd, issueNumber, stateReason }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        return await forgeClient.closeIssue(resolvedCwd, issueNumber, stateReason);
+      },
+    })
+  );
+
+  actions.set("forge.markPRReadyForReview", () =>
+    defineAction({
+      id: "forge.markPRReadyForReview",
+      title: "Mark pull request ready for review",
+      description:
+        "Mark a draft pull request ready for review via the active forge provider. Args: `cwd` (optional, defaults to the active worktree path); `prNumber` (required, positive int). Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      dangerRationale:
+        "Changes a pull request's review state on the remote forge, notifying reviewers.",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: cwdArg,
+        prNumber: z.number().int().positive().describe("Pull request number to mark ready"),
+      }),
+      run: async ({ cwd, prNumber }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        await forgeClient.markPRReadyForReview(resolvedCwd, prNumber);
+      },
+    })
+  );
+
+  actions.set("forge.reopenIssue", () =>
+    defineAction({
+      id: "forge.reopenIssue",
+      title: "Reopen Issue",
+      description:
+        "Reopen a closed issue via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int). Returns the updated issue. Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: z
+          .string()
+          .optional()
+          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        issueNumber: z.number().int().positive().describe("Issue number to reopen"),
+      }),
+      resultSchema: ForgeIssueResultSchema,
+      run: async ({ cwd, issueNumber }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        return await forgeClient.reopenIssue(resolvedCwd, issueNumber);
+      },
+    })
+  );
+
+  actions.set("forge.commentOnPR", () =>
+    defineAction({
+      id: "forge.commentOnPR",
+      title: "Comment on pull request",
+      description:
+        "Post a comment on a pull request via the active forge provider. Args: `cwd` (optional, defaults to the active worktree path); `prNumber` (required, positive int); `body` (required comment text). Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      dangerRationale:
+        "Posts a public comment on a pull request that participants are notified about.",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: cwdArg,
+        prNumber: z.number().int().positive().describe("Pull request number to comment on"),
+        body: z.string().min(1).describe("Comment body (Markdown)"),
+      }),
+      run: async ({ cwd, prNumber, body }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        await forgeClient.commentOnPR(resolvedCwd, prNumber, body);
+      },
+    })
+  );
+
+  actions.set("forge.editPR", () =>
+    defineAction({
+      id: "forge.editPR",
+      title: "Edit pull request",
+      description:
+        "Edit a pull request's title and/or body via the active forge provider. Args: `cwd` (optional, defaults to the active worktree path); `prNumber` (required, positive int); `title` (optional); `body` (optional). Provide at least one of title/body. Returns the updated normalized PR. Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      dangerRationale:
+        "Edits a pull request's title/body on the remote forge — a shared-state mutation others see.",
+      scope: "renderer",
+      argsSchema: z
+        .object({
+          cwd: cwdArg,
+          prNumber: z.number().int().positive().describe("Pull request number to edit"),
+          title: z.string().min(1).optional().describe("New pull request title"),
+          body: z.string().optional().describe("New pull request body (Markdown)"),
+        })
+        .refine((v) => v.title !== undefined || v.body !== undefined, {
+          message: "Provide a title or body to edit",
+        }),
+      resultSchema: ForgePRResultSchema,
+      run: async ({ cwd, prNumber, title, body }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        return await forgeClient.editPR(resolvedCwd, prNumber, { title, body });
+      },
+    })
+  );
+
+  actions.set("forge.editIssue", () =>
+    defineAction({
+      id: "forge.editIssue",
+      title: "Edit Issue",
+      description:
+        "Edit an issue's title and/or body via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int); `title` (optional); `body` (optional). Provide at least one of title or body. Only the supplied fields change. Returns the updated issue. Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "command",
+      danger: "confirm",
+      dangerRationale:
+        "Overwrites an issue's title/body on the shared forge — the previous text is not recoverable from git or reflog, so it needs a deliberate confirm.",
+      scope: "renderer",
+      argsSchema: z
+        .object({
+          cwd: z
+            .string()
+            .optional()
+            .describe("Working directory of the git repo. Defaults to the active worktree path."),
+          issueNumber: z.number().int().positive().describe("Issue number to edit"),
+          title: z.string().optional().describe("New issue title"),
+          body: z.string().optional().describe("New issue body (markdown)"),
+        })
+        .refine((v) => v.title !== undefined || v.body !== undefined, {
+          message: "Provide at least one of title or body to edit",
+        }),
+      resultSchema: ForgeIssueResultSchema,
+      run: async ({ cwd, issueNumber, title, body }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        return await forgeClient.editIssue(resolvedCwd, issueNumber, { title, body });
+      },
+    })
+  );
+
+  actions.set("forge.addIssueComment", () =>
+    defineAction({
+      id: "forge.addIssueComment",
+      title: "Add Issue Comment",
+      description:
+        "Add a comment to an issue via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int); `body` (required markdown). Returns the created comment { id, body, url, createdAt }. Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: z
+          .string()
+          .optional()
+          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        issueNumber: z.number().int().positive().describe("Issue number to comment on"),
+        body: z.string().min(1).describe("Comment body (markdown)"),
+      }),
+      resultSchema: ForgeCommentResultSchema,
+      run: async ({ cwd, issueNumber, body }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        return await forgeClient.addIssueComment(resolvedCwd, issueNumber, body);
+      },
+    })
+  );
+
+  actions.set("forge.addIssueLabel", () =>
+    defineAction({
+      id: "forge.addIssueLabel",
+      title: "Add Issue Label",
+      description:
+        "Add a label (by name) to an issue via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int); `label` (required label name). Additive — existing labels are kept. Returns the issue's full label set. Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: z
+          .string()
+          .optional()
+          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        issueNumber: z.number().int().positive().describe("Issue number to label"),
+        label: z.string().min(1).describe("Label name to add"),
+      }),
+      resultSchema: ForgeLabelArrayResultSchema,
+      run: async ({ cwd, issueNumber, label }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        return await forgeClient.addIssueLabel(resolvedCwd, issueNumber, label);
+      },
+    })
+  );
+
+  actions.set("forge.removeIssueLabel", () =>
+    defineAction({
+      id: "forge.removeIssueLabel",
+      title: "Remove Issue Label",
+      description:
+        "Remove a label (by name) from an issue via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int); `label` (required label name). Errors if the label isn't on the issue. Returns the issue's remaining label set. Errors when `cwd` is omitted and no worktree is active.",
+      category: "forge",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        cwd: z
+          .string()
+          .optional()
+          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        issueNumber: z.number().int().positive().describe("Issue number to unlabel"),
+        label: z.string().min(1).describe("Label name to remove"),
+      }),
+      resultSchema: ForgeLabelArrayResultSchema,
+      run: async ({ cwd, issueNumber, label }, ctx: ActionContext) => {
+        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+        if (!resolvedCwd) throw new Error("No active worktree");
+        return await forgeClient.removeIssueLabel(resolvedCwd, issueNumber, label);
       },
     })
   );

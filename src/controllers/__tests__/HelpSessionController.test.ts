@@ -81,7 +81,10 @@ const {
 
 vi.mock("@/config/agents", () => ({
   getAgentConfig: (id: string) =>
-    ({ claude: { name: "Claude", assistantMinVersion: "1.0.0" } })[id],
+    ({
+      claude: { name: "Claude", assistantMinVersion: "1.0.0" },
+      "daintree-assistant": { name: "Daintree Assistant", assistantMinVersion: "1.0.0" },
+    })[id],
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -120,7 +123,7 @@ vi.mock("@/utils/safeFireAndForget", () => ({
   safeFireAndForget: (p: Promise<unknown>) => p,
 }));
 
-import { HelpSessionController } from "../HelpSessionController";
+import { HelpSessionController, loadCustomLaunchFlags } from "../HelpSessionController";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 
@@ -249,6 +252,7 @@ beforeEach(() => {
           markTerminal: vi.fn().mockResolvedValue(undefined),
           provisionSession: vi.fn().mockResolvedValue(null),
           revokeSession: vi.fn().mockResolvedValue(undefined),
+          takePendingHibernation: vi.fn().mockResolvedValue(null),
         },
         helpAssistant: {
           getSettings: vi.fn().mockResolvedValue({ idleHibernateMinutes: 30 }),
@@ -498,6 +502,7 @@ describe("HelpSessionController — syncInputs", () => {
       terminalId: null,
       preferredAgentId: "claude",
       supportedInstalledAgentIds: [],
+      autoLaunchEnabled: true,
       visibilityEpoch: 0,
     });
     expect(ctrl.getSnapshot().assistantVersionTooOld).not.toBeNull();
@@ -509,6 +514,7 @@ describe("HelpSessionController — syncInputs", () => {
       terminalId: null,
       preferredAgentId: "codex",
       supportedInstalledAgentIds: [],
+      autoLaunchEnabled: true,
       visibilityEpoch: 0,
     });
     expect(ctrl.getSnapshot().assistantVersionTooOld).toBeNull();
@@ -528,6 +534,83 @@ describe("HelpSessionController — launch phase FSM", () => {
     expect(ctrl.getSnapshot().phase).toBe("idle");
     expect(ctrl["_isLaunching"]).toBe(false);
     expect(ctrl["_launchGen"]).toBe(genBefore + 1);
+  });
+
+  it("watchdog supersedes a launch stuck on version-checking and surfaces a retryable error", async () => {
+    vi.useFakeTimers();
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    // Hang the first bridge await so the launch can never leave version-checking
+    // — the real-world failure is a CLI version probe that never resolves.
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise(() => {})
+    );
+    try {
+      ctrl.syncInputs({
+        isOpen: true,
+        isReadyToLaunch: true,
+        currentProject: { id: "proj", path: "/repo" },
+        terminalId: null,
+        preferredAgentId: "claude",
+        supportedInstalledAgentIds: ["claude"],
+        autoLaunchEnabled: true,
+        visibilityEpoch: 0,
+      });
+      expect(ctrl.getSnapshot().phase).toBe("version-checking");
+      const genBefore = ctrl["_launchGen"] as number;
+
+      // Below the ceiling the panel is still legitimately loading.
+      await vi.advanceTimersByTimeAsync(89_000);
+      expect(ctrl.getSnapshot().phase).toBe("version-checking");
+      expect(ctrl.getSnapshot().launchError).toBeNull();
+
+      // Past the ceiling the dead-man timer reclaims the stranded FSM.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(ctrl.getSnapshot().phase).toBe("idle");
+      expect(ctrl.getSnapshot().launchError).toEqual(
+        expect.objectContaining({ agentId: "claude", kind: "spawn-failed" })
+      );
+      // Gen bumped so the stalled flow's eventual await resolves into a bail,
+      // and the auto-launch guard is cleared so a retry can re-drive.
+      expect(ctrl["_launchGen"]).toBe(genBefore + 1);
+      expect(ctrl["_hasAutoLaunched"]).toBe(false);
+    } finally {
+      ctrl.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-entrancy guard blocks a current owner but ignores a stale (superseded) one", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: null,
+      supportedInstalledAgentIds: [],
+      autoLaunchEnabled: true,
+      visibilityEpoch: 0,
+    });
+
+    // A launch() owned by the CURRENT generation is genuinely in flight → a
+    // second launch() must be dropped (no gen bump).
+    ctrl["_isLaunching"] = true;
+    ctrl["_isLaunchingGen"] = ctrl["_launchGen"] as number;
+    const genCurrent = ctrl["_launchGen"] as number;
+    ctrl.launch({ agentId: "claude", requestedId: "term-blocked" });
+    expect(ctrl["_launchGen"]).toBe(genCurrent);
+
+    // A guard left by a SUPERSEDED launch (its owner generation is stale, e.g.
+    // a hung flow the auto-launch path bumped past) must not block forever.
+    ctrl["_isLaunching"] = true;
+    ctrl["_isLaunchingGen"] = (ctrl["_launchGen"] as number) - 1;
+    ctrl.launch({ agentId: "claude", requestedId: "term-allowed" });
+    expect(ctrl["_launchGen"]).toBe(genCurrent + 1);
+
+    ctrl.stop();
   });
 
   it("auto-launch enters version-checking synchronously and reaches live on success", async () => {
@@ -553,6 +636,7 @@ describe("HelpSessionController — launch phase FSM", () => {
       terminalId: null,
       preferredAgentId: "claude",
       supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
       visibilityEpoch: 0,
     });
 
@@ -573,6 +657,108 @@ describe("HelpSessionController — launch phase FSM", () => {
       }),
       expect.anything()
     );
+    // The watchdog must be cleared once the launch reaches a terminal state, so
+    // it can never fire 90s later and tear down a healthy live session.
+    expect(ctrl["_launchWatchdogTimer"]).toBeNull();
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    // Non-assistant agents read their .mcp.json / settings from cwd, so they
+    // run in the provisioned session dir, not the project root.
+    expect(vi.mocked(actionService.dispatch)).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ cwd: "/help" }),
+      expect.anything()
+    );
+    ctrl.stop();
+  });
+
+  it("launches the Daintree Assistant in the project root, not the session dir", async () => {
+    // The assistant is env-only (MCP via env, ships its own skills) so it reads
+    // nothing from cwd — it runs in the actual project. Same provision (session
+    // dir "/help") and project ("/repo") as the Claude case above; only the
+    // resolved cwd differs by agent.
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "daintree-assistant";
+    (window.electron.help.provisionSession as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sessionId: "sess-asst",
+      sessionPath: "/help",
+      token: "tok-asst",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    vi.mocked(actionService.dispatch).mockResolvedValue({
+      ok: true,
+      result: { terminalId: "term-asst" },
+    } as never);
+
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "daintree-assistant",
+      supportedInstalledAgentIds: ["daintree-assistant"],
+      autoLaunchEnabled: true,
+      visibilityEpoch: 0,
+    });
+
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().phase).toBe("live");
+    });
+    expect(vi.mocked(actionService.dispatch)).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "daintree-assistant", cwd: "/repo" }),
+      expect.anything()
+    );
+    ctrl.stop();
+  });
+
+  it("binds a resumed session's DAINTREE_PROJECT_ID to the launch project, not live store state", async () => {
+    // Resume path (_spawnResumed): the project identity must come from the
+    // project captured at launch, never live store state — otherwise a project
+    // switch mid-resume makes cwd and DAINTREE_PROJECT_ID disagree. Drive it
+    // with claude (which has a resume config; the assistant has none and always
+    // fresh-launches) and deliberately drift the store's currentProject.
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    helpPanelState.hibernateSessions = {
+      proj: { sessionId: "old-sess", agentId: "claude", cwd: "/help" },
+    };
+    // Store currentProject drifts away from the launch project after capture.
+    projectStoreState.currentProject = { id: "other", path: "/other" };
+    (window.electron.help.provisionSession as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sessionId: "new-sess",
+      sessionPath: "/help",
+      token: "tok-resume",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("term-resumed");
+
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
+      visibilityEpoch: 0,
+    });
+
+    await vi.waitFor(() => {
+      expect(panelStoreState.addPanel).toHaveBeenCalled();
+    });
+    const addPanelArg = (panelStoreState.addPanel as ReturnType<typeof vi.fn>).mock
+      .calls[0]![0] as {
+      cwd?: string;
+      env?: Record<string, string>;
+    };
+    // Claude resumes in the session dir (it owns its .mcp.json there)…
+    expect(addPanelArg.cwd).toBe("/help");
+    // …but its project identity is the launch project, not the drifted store.
+    expect(addPanelArg.env?.DAINTREE_PROJECT_ID).toBe("proj");
     ctrl.stop();
   });
 
@@ -588,6 +774,7 @@ describe("HelpSessionController — launch phase FSM", () => {
       terminalId: null,
       preferredAgentId: "claude",
       supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
       visibilityEpoch: 0,
     });
 
@@ -595,6 +782,68 @@ describe("HelpSessionController — launch phase FSM", () => {
       expect(ctrl.getSnapshot().phase).toBe("idle");
     });
     expect(vi.mocked(actionService.dispatch)).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("does NOT auto-launch when autoLaunchEnabled is false, despite a preferred agent + open ready panel (#10699)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: false,
+      visibilityEpoch: 0,
+    });
+
+    // The auto-launch path writes phase synchronously before its first await,
+    // so an idle phase here proves the consent gate short-circuited it.
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    expect(ctrl["_hasAutoLaunched"]).toBe(false);
+
+    // A visibility-restore epoch bump must not bypass consent either.
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: false,
+      visibilityEpoch: 1,
+    });
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    expect(vi.mocked(actionService.dispatch)).not.toHaveBeenCalled();
+    // No billed work may even begin — the gate must short-circuit before the
+    // session is provisioned, not merely before the terminal is dispatched.
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("does NOT auto-launch a sole installed agent when autoLaunchEnabled is false (#10699)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: null,
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: false,
+      visibilityEpoch: 0,
+    });
+
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    expect(ctrl["_hasAutoLaunched"]).toBe(false);
+    expect(vi.mocked(actionService.dispatch)).not.toHaveBeenCalled();
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
     ctrl.stop();
   });
 
@@ -666,6 +915,7 @@ describe("HelpSessionController — launch phase FSM", () => {
       terminalId: null,
       preferredAgentId: "claude",
       supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
       visibilityEpoch: 0,
     });
 
@@ -673,6 +923,301 @@ describe("HelpSessionController — launch phase FSM", () => {
       expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-leak");
     });
     expect(ctrl.getSnapshot().phase).toBe("idle");
+    ctrl.stop();
+  });
+
+  it("watchdog revokes the provisioned session when agent.launch hangs after provisioning (#10698)", async () => {
+    vi.useFakeTimers();
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    (window.electron.help.provisionSession as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sessionId: "sess-hang",
+      sessionPath: "/help",
+      token: "tok-hang",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    // Provisioning succeeds (the bearer is minted), then agent.launch never
+    // settles — the post-provision stall the watchdog must reclaim. Without the
+    // fix the watchdog reset the phase but left the live token orphaned forever.
+    vi.mocked(actionService.dispatch).mockReturnValue(new Promise(() => {}) as never);
+    try {
+      ctrl.syncInputs({
+        isOpen: true,
+        isReadyToLaunch: true,
+        currentProject: { id: "proj", path: "/repo" },
+        terminalId: null,
+        preferredAgentId: "claude",
+        supportedInstalledAgentIds: ["claude"],
+        autoLaunchEnabled: true,
+        visibilityEpoch: 0,
+      });
+
+      // Let the provision microtask chain settle so the bearer is minted and
+      // agent.launch has been dispatched (and is now hanging).
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(ctrl["_pendingSessionId"]).toBe("sess-hang");
+      // Prove the flow actually reached (and is now hung on) agent.launch, so
+      // the revoke below is exercising the post-provision stall, not an earlier
+      // bail before the bearer was put at risk.
+      expect(vi.mocked(actionService.dispatch)).toHaveBeenCalledWith(
+        "agent.launch",
+        expect.anything(),
+        expect.anything()
+      );
+      expect(window.electron.help.revokeSession).not.toHaveBeenCalled();
+
+      // Past the 90s ceiling the dead-man timer reclaims the stranded FSM and
+      // revokes the orphaned bearer so the token can't outlive the launch.
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-hang");
+      expect(ctrl["_pendingSessionId"]).toBeNull();
+      expect(ctrl.getSnapshot().phase).toBe("idle");
+      expect(ctrl.getSnapshot().launchError).toEqual(
+        expect.objectContaining({ agentId: "claude", kind: "spawn-failed" })
+      );
+    } finally {
+      ctrl.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("a late-rejecting stale launch revokes its own token but spares a newer launch's pending session (#10698)", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    (window.electron.help.provisionSession as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sessionId: "sess-stale",
+      sessionPath: "/help",
+      token: "tok-stale",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    let rejectDispatch: (err: unknown) => void = () => {};
+    vi.mocked(actionService.dispatch).mockReturnValueOnce(
+      new Promise((_, reject) => {
+        rejectDispatch = reject;
+      }) as never
+    );
+
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
+      visibilityEpoch: 0,
+    });
+    await vi.waitFor(() => {
+      expect(ctrl["_pendingSessionId"]).toBe("sess-stale");
+    });
+
+    // A newer launch wins the race and takes ownership of the pending-session
+    // slot while the stale launch's dispatch is still in flight.
+    ctrl["_pendingSessionId"] = "sess-new";
+
+    // The stale launch's dispatch finally rejects. Its catch must revoke ITS
+    // own bearer but must NOT null the newer launch's pending-session guard.
+    rejectDispatch(new Error("late boom"));
+    await vi.waitFor(() => {
+      expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-stale");
+    });
+    expect(ctrl["_pendingSessionId"]).toBe("sess-new");
+    ctrl.stop();
+  });
+});
+
+describe("HelpSessionController — handleViewRevealed (switch-back recovery #10739)", () => {
+  // Drives a preferred-agent auto-launch that hangs on the first bridge await,
+  // leaving the FSM stranded in `version-checking` — the parked-view stall the
+  // watchdog can't reap because its setTimeout is frozen in the LRU cache.
+  function startStuckLaunch(ctrl: HelpSessionController): void {
+    helpPanelState.preferredAgentId = "claude";
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise(() => {})
+    );
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
+      visibilityEpoch: 0,
+    });
+  }
+
+  it("silently reaps a stranded loading-phase launch and re-drives it (no error surfaced)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    startStuckLaunch(ctrl);
+    expect(ctrl.getSnapshot().phase).toBe("version-checking");
+    const genBefore = ctrl["_launchGen"] as number;
+    const folderCallsBefore = (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mock
+      .calls.length;
+
+    ctrl.handleViewRevealed();
+
+    // Re-driven, not left stranded: a fresh launch synchronously re-enters the
+    // loading phase, the auto-launch path ran again, and the generation advanced
+    // (reap + re-drive each bump it).
+    expect(ctrl.getSnapshot().phase).toBe("version-checking");
+    expect(
+      (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mock.calls.length
+    ).toBeGreaterThan(folderCallsBefore);
+    expect(ctrl["_launchGen"]).toBeGreaterThan(genBefore);
+    // Recovery is silent — the user must see the resume, not a failure.
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    expect(notify).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("revokes the minted-but-orphaned pending session token when reaping", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    startStuckLaunch(ctrl);
+    ctrl["_pendingSessionId"] = "sess-orphan";
+
+    ctrl.handleViewRevealed();
+
+    expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-orphan");
+    ctrl.stop();
+  });
+
+  it("is a no-op when a session is already live (no reap, no re-drive)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_patch"]({ phase: "live" });
+    const genBefore = ctrl["_launchGen"] as number;
+
+    ctrl.handleViewRevealed();
+
+    expect(ctrl.getSnapshot().phase).toBe("live");
+    expect(ctrl["_launchGen"]).toBe(genBefore);
+    ctrl.stop();
+  });
+
+  it("is a no-op while idle", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    const genBefore = ctrl["_launchGen"] as number;
+
+    ctrl.handleViewRevealed();
+
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    expect(ctrl["_launchGen"]).toBe(genBefore);
+    ctrl.stop();
+  });
+
+  it("does not reap a hibernating phase (it owns a live terminal mid-shutdown)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_patch"]({ phase: "hibernating" });
+    const genBefore = ctrl["_launchGen"] as number;
+
+    ctrl.handleViewRevealed();
+
+    expect(ctrl.getSnapshot().phase).toBe("hibernating");
+    expect(ctrl["_launchGen"]).toBe(genBefore);
+    ctrl.stop();
+  });
+
+  it("does not reap a manual (non-auto) launch — the _hasAutoLaunched guard protects it", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    // A manual selectAgent() launch never sets `_hasAutoLaunched`; reaping it
+    // would silently discard the user's explicit pick since the re-drive can't
+    // restart it (auto-launch is disabled). Simulate one stranded in provisioning.
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: null,
+      supportedInstalledAgentIds: ["claude", "codex"],
+      autoLaunchEnabled: false,
+      visibilityEpoch: 0,
+    });
+    ctrl["_patch"]({ phase: "provisioning" });
+    ctrl["_hasAutoLaunched"] = false;
+    const genBefore = ctrl["_launchGen"] as number;
+
+    ctrl.handleViewRevealed();
+
+    expect(ctrl.getSnapshot().phase).toBe("provisioning");
+    expect(ctrl["_launchGen"]).toBe(genBefore);
+    ctrl.stop();
+  });
+
+  it("does not surface a launch error when the original hung IPC rejects after the reap", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    // First getFolderPath (the stranded launch) is rejectable; the re-drive's
+    // call hangs so it stays in version-checking after recovery.
+    let rejectFolder: (err: unknown) => void = () => {};
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(
+        new Promise((_, reject) => {
+          rejectFolder = reject;
+        })
+      )
+      .mockReturnValue(new Promise(() => {}));
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
+      visibilityEpoch: 0,
+    });
+    expect(ctrl.getSnapshot().phase).toBe("version-checking");
+
+    // Switch-back reveal reaps the stall (bumping the gen) and re-drives.
+    ctrl.handleViewRevealed();
+    expect(ctrl.getSnapshot().phase).toBe("version-checking");
+
+    // The original hung IPC now rejects — it belongs to a superseded generation,
+    // so it must NOT paint an error banner over the recovered launch.
+    rejectFolder(new Error("late reject"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    expect(notify).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("does not reap a loading phase when a terminal is already bound (reserved-id guard)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    // A newSession/runAnyway launch reserves its terminal slot synchronously, so
+    // _lastInputs.terminalId is non-null even while the FSM is provisioning —
+    // that is not a stranded auto-launch and must not be reaped.
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: "term-live",
+      preferredAgentId: null,
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
+      visibilityEpoch: 0,
+    });
+    ctrl["_patch"]({ phase: "provisioning" });
+    const genBefore = ctrl["_launchGen"] as number;
+
+    ctrl.handleViewRevealed();
+
+    expect(ctrl.getSnapshot().phase).toBe("provisioning");
+    expect(ctrl["_launchGen"]).toBe(genBefore);
+    expect(ctrl.getSnapshot().launchError).toBeNull();
     ctrl.stop();
   });
 });
@@ -836,6 +1381,7 @@ describe("HelpSessionController — session revoked (#10017)", () => {
       terminalId: null,
       preferredAgentId: "claude",
       supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
       visibilityEpoch: 0,
     };
     ctrl["_patch"]({ sessionRevoked: { sessionId: "sess-old", denialKind: "tierMismatch" } });
@@ -1361,6 +1907,7 @@ describe("HelpSessionController — launch error routing", () => {
       terminalId: null,
       preferredAgentId: "claude",
       supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
       visibilityEpoch: 0,
     };
   }
@@ -1553,11 +2100,110 @@ describe("HelpSessionController — launch error routing", () => {
     ).takePendingHibernation = vi.fn().mockResolvedValue(null);
     (actionService.dispatch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("boom"));
 
-    await ctrl["_executeAutoLaunch"](7, "claude", { id: "p1", path: "/repo" });
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
 
     expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-x");
     expect(ctrl["_pendingSessionId"]).toBeNull();
     expect(ctrl.getSnapshot().launchError).toEqual({ agentId: "claude", kind: "spawn-failed" });
+    ctrl.stop();
+  });
+
+  it("preferred-agent auto-launch abandons and relaunches the new agent when preferredAgentId changes mid-dispatch (#10703)", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    (
+      window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
+    ).takePendingHibernation = vi.fn().mockResolvedValue(null);
+    provisionMock()
+      .mockResolvedValueOnce({
+        sessionId: "sess-claude",
+        sessionPath: "/s/claude",
+        token: "tok",
+        mcpUrl: null,
+        windowId: 1,
+      })
+      .mockResolvedValueOnce({
+        sessionId: "sess-codex",
+        sessionPath: "/s/codex",
+        token: "tok",
+        mcpUrl: null,
+        windowId: 1,
+      });
+    // The user switches preferred agent while the claude launch IPC is in
+    // flight; the codex relaunch must then succeed.
+    (actionService.dispatch as ReturnType<typeof vi.fn>).mockImplementation(
+      async (_action: string, args: { agentId: string }) => {
+        if (args.agentId === "claude") {
+          helpPanelState.preferredAgentId = "codex";
+          return { ok: true, result: { terminalId: "term-claude" } };
+        }
+        return { ok: true, result: { terminalId: "term-codex" } };
+      }
+    );
+
+    ctrl.syncInputs({
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "p1", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude", "codex"],
+      autoLaunchEnabled: true,
+      visibilityEpoch: 0,
+    });
+
+    // The relaunch must actually reach the codex agent — the bug this guards
+    // against is the re-eval's launch() being swallowed by the still-held
+    // re-entrancy guard, leaving _hasAutoLaunched stuck and codex unlaunched.
+    await vi.waitFor(() => {
+      expect(helpPanelState.setTerminal).toHaveBeenCalledWith("term-codex", "codex", "sess-codex");
+    });
+    // The superseded claude attempt is cleaned up: orphan terminal removed,
+    // stale session token revoked.
+    expect(panelStoreState.removePanel).toHaveBeenCalledWith("term-claude");
+    expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-claude");
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "codex" }),
+      expect.anything()
+    );
+    expect(ctrl.getSnapshot().phase).toBe("live");
+    ctrl.stop();
+  });
+
+  it("skips the version-too-old banner when preferredAgentId changes during the probe (#10703)", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    ctrl["_hasAutoLaunched"] = true;
+    ctrl["_launchGen"] = 7;
+    // The probe reports claude as too old, but the user switches to codex
+    // before it resolves — the stale "Update Claude" gate must not apply.
+    (window.electron.system.getAgentVersion as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async () => {
+        helpPanelState.preferredAgentId = "codex";
+        return { installedVersion: "0.9.0", latestVersion: "1.2.0" };
+      }
+    );
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    expect(ctrl.getSnapshot().assistantVersionTooOld).toBeNull();
+    // _hasAutoLaunched is released so codex can auto-launch on the next render.
+    expect(ctrl["_hasAutoLaunched"]).toBe(false);
+    // The abandoned claude launch must never have minted a session.
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
     ctrl.stop();
   });
 
@@ -1573,6 +2219,7 @@ describe("HelpSessionController — launch error routing", () => {
       terminalId: null,
       preferredAgentId,
       supportedInstalledAgentIds: ["claude", "codex"],
+      autoLaunchEnabled: true,
       visibilityEpoch: 0,
     });
     ctrl.syncInputs(inputs("claude"));
@@ -1616,7 +2263,12 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
       agentId: "claude",
     };
 
-    await ctrl["_executeAutoLaunch"](7, "claude", { id: "p1", path: "/repo" });
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
 
     // The phase still reached live (the spawn succeeded via --continue) but
     // the resume-banner claim is suppressed because we never had a real id.
@@ -1642,11 +2294,282 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
       agentId: "claude",
     };
 
-    await ctrl["_executeAutoLaunch"](7, "claude", { id: "p1", path: "/repo" });
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
 
     expect(ctrl.getSnapshot().phase).toBe("live");
     expect(ctrl.getSnapshot().showResumeBanner).toBe(true);
     expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1");
+    ctrl.stop();
+  });
+});
+
+describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
+  const provisionMock = () =>
+    window.electron.help.provisionSession as unknown as ReturnType<typeof vi.fn>;
+
+  // #10819: a state-mutating setHibernateSession so the resume block below can
+  // read the entry the early atomic take seeded. The global resetState() leaves
+  // it a pure spy; this writes through to helpPanelState.hibernateSessions.
+  const seedThroughSetHibernate = () => {
+    helpPanelState.setHibernateSession = vi.fn(
+      (projectId: string, entry: { sessionId: string; cwd: string; agentId: string }) => {
+        helpPanelState.hibernateSessions[projectId] = entry;
+      }
+    );
+  };
+
+  it("aborts a resumeOnly launch without provisioning when the atomic take returns null", async () => {
+    // Cold switch-back / cross-window auto-resume. #10819: the atomic take is
+    // hoisted BEFORE provisioning. A null take (another window already won it, or
+    // nothing was captured) must abort before provisionHelpSession runs — that
+    // call displaces the project's existing backend, which is exactly what would
+    // strand the window that legitimately resumed.
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    (
+      window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
+    ).takePendingHibernation = vi.fn().mockResolvedValue(null);
+    helpPanelState.hibernateSessions = {};
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", replaceExisting: true, resumeOnly: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    // Never provisions, so nothing to displace and no session to revoke.
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+    expect(window.electron.help.revokeSession).not.toHaveBeenCalled();
+    expect(ctrl["_pendingSessionId"]).toBeNull();
+    // NEVER fresh-launches, and never spawns a panel.
+    expect(actionService.dispatch).not.toHaveBeenCalledWith(
+      "agent.launch",
+      expect.anything(),
+      expect.anything()
+    );
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+    // Expected no-op: phase falls back to idle, no scary launch error.
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    expect(notify).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("does not provision when the take returns null even if a stale local hibernate entry exists (#10819 secondary race)", async () => {
+    // The resume decision must gate on the main-side atomic take, NOT on the
+    // local persisted hibernateSessions entry. A losing window can still carry a
+    // stale local entry from before; without the take gate it would provision
+    // (and displace the winner) on the strength of that stale entry alone.
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    (
+      window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
+    ).takePendingHibernation = vi.fn().mockResolvedValue(null);
+    helpPanelState.hibernateSessions["p1"] = {
+      sessionId: "stale-123",
+      cwd: "/repo",
+      agentId: "claude",
+    };
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", replaceExisting: true, resumeOnly: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+    expect(window.electron.help.revokeSession).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    ctrl.stop();
+  });
+
+  it("resumes (never fresh-launches) on a resumeOnly launch when the atomic take returns a matching entry", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    seedThroughSetHibernate();
+    helpPanelState.hibernateSessions = {};
+    const takeMock = vi.fn().mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/repo",
+    });
+    (
+      window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
+    ).takePendingHibernation = takeMock;
+    provisionMock().mockResolvedValueOnce({
+      sessionId: "sess-ro2",
+      sessionPath: "/help",
+      token: "tok",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("term-ro");
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", replaceExisting: true, resumeOnly: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    // The take is the gate, and it runs before provisioning displaces anything.
+    expect(takeMock).toHaveBeenCalledWith("p1");
+    const takeOrder = takeMock.mock.invocationCallOrder[0];
+    const provisionOrder = provisionMock().mock.invocationCallOrder[0];
+    expect(takeOrder).toBeDefined();
+    expect(provisionOrder).toBeDefined();
+    expect(takeOrder!).toBeLessThan(provisionOrder!);
+    // The taken entry seeds the local store the resume block reads.
+    expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith("p1", {
+      sessionId: "abc-123",
+      cwd: "/repo",
+      agentId: "claude",
+    });
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "terminal" })
+    );
+    expect(actionService.dispatch).not.toHaveBeenCalledWith(
+      "agent.launch",
+      expect.anything(),
+      expect.anything()
+    );
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1");
+    expect(ctrl.getSnapshot().phase).toBe("live");
+    ctrl.stop();
+  });
+
+  it("aborts before provisioning when the early take's agentId mismatches the launch agent (#10819)", async () => {
+    // The entry was captured for a different agent (the user switched the
+    // preferred agent before the cold restore). The mismatched entry can't be
+    // resumed, so abort before provisioning rather than displace a live backend.
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    helpPanelState.hibernateSessions = {};
+    (
+      window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
+    ).takePendingHibernation = vi.fn().mockResolvedValue({
+      agentId: "codex",
+      agentSessionId: "codex-1",
+      cwd: "/repo",
+    });
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", replaceExisting: true, resumeOnly: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+    expect(window.electron.help.revokeSession).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    ctrl.stop();
+  });
+
+  it("drops the early take and does not provision when the generation is superseded mid-take (#10819)", async () => {
+    // A competing launch bumps _launchGen while the atomic take IPC is in flight.
+    // The stale result must not seed the store or provision — the gen guard after
+    // the take await abandons the launch.
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    seedThroughSetHibernate();
+    helpPanelState.hibernateSessions = {};
+    (
+      window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
+    ).takePendingHibernation = vi.fn().mockImplementation(async () => {
+      ctrl["_launchGen"] = 8; // superseded mid-await
+      return { agentId: "claude", agentSessionId: "abc-123", cwd: "/repo" };
+    });
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", replaceExisting: true, resumeOnly: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    expect(helpPanelState.setHibernateSession).not.toHaveBeenCalled();
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("aborts silently before provisioning when the early take IPC throws (#10819)", async () => {
+    // The early take is a recovery-path credential check; an IPC failure means
+    // "can't prove we won the race", so abort WITHOUT displacing — and without a
+    // scary error banner, mirroring how _seedHibernateFromMain swallows its own
+    // IPC failure.
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    helpPanelState.hibernateSessions = {};
+    (
+      window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
+    ).takePendingHibernation = vi.fn().mockRejectedValue(new Error("ipc down"));
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", replaceExisting: true, resumeOnly: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+    expect(window.electron.help.revokeSession).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    expect(notify).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("still seeds via _seedHibernateFromMain on a non-resumeOnly launch (#10819 invariant)", async () => {
+    // The early-take guard must NOT swallow the normal empty-state launch: a
+    // non-resumeOnly launch still pulls main's pending entry post-provision via
+    // _seedHibernateFromMain and resumes from it.
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    seedThroughSetHibernate();
+    helpPanelState.hibernateSessions = {};
+    const takeMock = vi.fn().mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-9",
+      cwd: "/repo",
+    });
+    (
+      window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
+    ).takePendingHibernation = takeMock;
+    provisionMock().mockResolvedValueOnce({
+      sessionId: "sess-normal",
+      sessionPath: "/help",
+      token: "tok",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("term-normal");
+
+    await ctrl["_executeLaunch"](7, { agentId: "claude" }, { id: "p1", path: "/repo" }, undefined);
+
+    // _seedHibernateFromMain ran (the take is its only caller on this path).
+    expect(takeMock).toHaveBeenCalledWith("p1");
+    expect(panelStoreState.addPanel).toHaveBeenCalled();
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1");
+    expect(ctrl.getSnapshot().phase).toBe("live");
     ctrl.stop();
   });
 });
@@ -1935,5 +2858,45 @@ describe("HelpSessionController — MCP tool activity strip (#9759)", () => {
     expect(a?.toolId).toBe("b");
     expect(a?.durationMs).toBe(25);
     ctrl.stop();
+  });
+});
+
+describe("loadCustomLaunchFlags — model + custom args composition", () => {
+  const getSettings = () => window.electron.helpAssistant.getSettings as ReturnType<typeof vi.fn>;
+
+  it("returns no flags when neither modelId nor customArgs is set", async () => {
+    getSettings().mockResolvedValue({ modelId: "", customArgs: "" });
+    expect(await loadCustomLaunchFlags()).toEqual([]);
+  });
+
+  it("injects --model when modelId is set", async () => {
+    getSettings().mockResolvedValue({ modelId: "claude-sonnet-4-6", customArgs: "" });
+    expect(await loadCustomLaunchFlags()).toEqual(["--model", "claude-sonnet-4-6"]);
+  });
+
+  it("prepends the model flag before custom args so a custom --model wins (last-flag semantics)", async () => {
+    getSettings().mockResolvedValue({ modelId: "sonnet", customArgs: "--model opus --verbose" });
+    expect(await loadCustomLaunchFlags()).toEqual([
+      "--model",
+      "sonnet",
+      "--model",
+      "opus",
+      "--verbose",
+    ]);
+  });
+
+  it("returns only custom args when no model is selected", async () => {
+    getSettings().mockResolvedValue({ modelId: "", customArgs: "--verbose --foo bar" });
+    expect(await loadCustomLaunchFlags()).toEqual(["--verbose", "--foo", "bar"]);
+  });
+
+  it("tolerates absent modelId (legacy settings) and falls back to custom args only", async () => {
+    getSettings().mockResolvedValue({ customArgs: "--verbose" });
+    expect(await loadCustomLaunchFlags()).toEqual(["--verbose"]);
+  });
+
+  it("returns [] when reading settings throws", async () => {
+    getSettings().mockRejectedValue(new Error("ipc down"));
+    expect(await loadCustomLaunchFlags()).toEqual([]);
   });
 });

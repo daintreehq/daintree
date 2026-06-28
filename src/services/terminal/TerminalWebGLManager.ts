@@ -216,6 +216,33 @@ export class TerminalWebGLManager {
   // effect when the fleet flips to DOM.
   private pinnedId: string | null = null;
 
+  // Alt-buffer pins: terminals running a full-screen alt-buffer TUI (vim,
+  // opencode, Gemini CLI, …) stay on WebGL even after the fleet flips to DOM,
+  // exactly like the focus pin. On HiDPI/fractional-scaled displays xterm's DOM
+  // renderer divides a rounded canvas height by the row count, yielding a
+  // fractional CSS cell height; Chromium then pixel-snaps adjacent row
+  // boundaries inconsistently and the near-black terminal background bleeds
+  // through the seams as horizontal "zebra" banding (#10768). WebGL has no such
+  // seam, so keeping alt-buffer panes on it is the primary fix; the DOM
+  // integer-snap in TerminalListenerInstaller is the fallback for panes that
+  // genuinely must use DOM (breaker tripped / hardware unavailable).
+  //
+  // Unlike pinnedId (always exactly one, driven by focus), this is a set:
+  // multiple panes can run alt-buffer TUIs at once. Both categories are honored
+  // identically by isPinned() at every DOM-mode exemption site; they are kept
+  // separate only because their lifecycles differ (focus events vs buffer-mode
+  // changes). Each alt-buffer pin still holds one WebGL context against
+  // Chromium's 16-cap, so this is bounded by how many alt-buffer panes are
+  // visible — far below the cap in practice, and the breaker trip clears them
+  // all (see setHardwareAvailable).
+  private altBufferPinnedIds = new Set<string>();
+
+  // A terminal is exempt from DOM-mode context release while it is the focus
+  // pin or an alt-buffer pin. Both keep one WebGL context attached in DOM mode.
+  private isPinned(id: string): boolean {
+    return id === this.pinnedId || this.altBufferPinnedIds.has(id);
+  }
+
   // xterm shares one module-global TextureAtlas across every terminal with a
   // matching font/theme config. A page-merge (TextureAtlas._mergePages) splices
   // pages and rewrites glyph texturePage indices, but each WebGL renderer keeps
@@ -238,6 +265,16 @@ export class TerminalWebGLManager {
   // atlasResync (see #8080).
   private atlasResyncPending = new Set<string>();
   private atlasResyncRafId: number | null = null;
+  // Re-entrancy guard for runAtlasResync. resetLocalWebGLRenderer re-runs the
+  // renderer's handleResize → _refreshCharAtlas, which SYNCHRONOUSLY re-fires the
+  // onChangeTextureAtlas / onRemoveTextureAtlasCanvas events whose handler
+  // (scheduleAtlasResync) schedules the next resync. Without this guard each
+  // resync schedules the next on the following frame — a self-sustaining 60fps
+  // reset loop that thrashes the renderer (constant redraw / glyph corruption on
+  // heavy-output alt-buffer TUIs like OpenCode, and a general perf drain). True
+  // only for the duration of the reset loop; the re-fire is synchronous, so the
+  // flag is cleared synchronously (finally) — no rAF/timing window is involved.
+  private suppressAtlasResync = false;
 
   setHardwareAvailable(available: boolean): void {
     const wasAvailable = this.hardwareAvailable;
@@ -251,6 +288,17 @@ export class TerminalWebGLManager {
       this.pinnedId = null;
       if (pinned !== null && this.pool.has(pinned)) {
         this.dropPoolEntry(pinned);
+      }
+      // Alt-buffer pins offer no exemption against a breaker trip either —
+      // clear them (and drop any live contexts) before flipToDom so no WebGL
+      // context outlives the trip. flipToDom only skips still-pinned ids, so
+      // the set must be emptied first.
+      const altPinned = [...this.altBufferPinnedIds];
+      this.altBufferPinnedIds.clear();
+      for (const altId of altPinned) {
+        if (this.pool.has(altId)) {
+          this.dropPoolEntry(altId);
+        }
       }
       this.flipToDom();
     }
@@ -272,11 +320,11 @@ export class TerminalWebGLManager {
       this.evaluateMode();
     }
     // In WebGL mode, queue an attach for this id if not already pooled. In
-    // DOM mode only the focus-pinned terminal attaches; other wants are
-    // tracked but wait for the next flip back. attachWithLoadedAddon dedups
-    // via pool.has(id), so a repeat ensure on an already-attached terminal is
-    // a cheap no-op.
-    if (!this.pool.has(id) && (this.mode === "webgl" || id === this.pinnedId)) {
+    // DOM mode only pinned terminals (focus pin or alt-buffer pins) attach;
+    // other wants are tracked but wait for the next flip back.
+    // attachWithLoadedAddon dedups via pool.has(id), so a repeat ensure on an
+    // already-attached terminal is a cheap no-op.
+    if (!this.pool.has(id) && (this.mode === "webgl" || this.isPinned(id))) {
       this.queueAttach(id, managed);
     }
   }
@@ -287,6 +335,12 @@ export class TerminalWebGLManager {
       // re-established by the next focus event.
       this.pinnedId = null;
     }
+    // Deliberately NOT clearing altBufferPinnedIds here: a hidden alt-buffer
+    // pane stays "should be on WebGL" even though its context is dropped below.
+    // Unlike the focus pin (re-armed by the next focus event), nothing re-fires
+    // a buffer-mode transition when the pane is revealed, so the pin must
+    // survive hide/show. Dropping the want + context below is enough; the next
+    // ensureContext on reveal re-attaches because isPinned(id) is still true.
     const wasWanted = this.wants.delete(id);
     this.pendingEnsures.delete(id);
     this.pendingReleases.delete(id);
@@ -330,6 +384,58 @@ export class TerminalWebGLManager {
     // ensureContext stays queued-but-skipped until the want exists, and
     // ensureContext re-queues the pinned id in DOM mode.
     this.queueAttach(id, managed);
+  }
+
+  // Pin a terminal that has entered its alt-buffer so it keeps WebGL through a
+  // fleet DOM-mode flip (see altBufferPinnedIds). Idempotent. In WebGL mode the
+  // pin is bookkeeping only — every want already attaches — and it takes effect
+  // when the fleet next flips to DOM. In DOM mode it attaches one context now
+  // through the same rAF-staggered queue the focus pin uses (#7480). A no-op
+  // when hardware is unavailable: queuePinnedAttach bails, mirroring pinFocus.
+  pinAltBuffer(id: string, managed: ManagedTerminal): void {
+    // When hardware is unavailable the breaker has tripped for the session —
+    // WebGL never comes back, so tracking the pin would only make the watchdog
+    // burn repair slots (shouldHaveActiveWebGL gates on it) for a context that
+    // can never attach. Skip entirely; the DOM integer-snap handles the seam.
+    if (!this.hardwareAvailable) return;
+    if (this.altBufferPinnedIds.has(id)) {
+      // Cancel any in-flight release symmetrically with the first-pin branch
+      // below — flipToDom never queues a release for an already-pinned id, but
+      // keeping both branches identical avoids a use-after-free trap if a
+      // future path ever schedules one.
+      if (this.mode === "dom") {
+        this.pendingReleases.delete(id);
+        this.queuePinnedAttach(id, managed);
+      }
+      return;
+    }
+    this.altBufferPinnedIds.add(id);
+    if (this.mode !== "dom") return;
+    // Cancel any in-flight release of this id (it may have been queued by a
+    // mode flip before the alt-buffer transition landed) and attach.
+    this.pendingReleases.delete(id);
+    this.queuePinnedAttach(id, managed);
+  }
+
+  // Release an alt-buffer pin when the terminal returns to its normal buffer.
+  // In DOM mode its WebGL context is scheduled for release through the paced
+  // drain — unless the terminal is also the focus pin, in which case the focus
+  // pin keeps it attached.
+  unpinAltBuffer(id: string): void {
+    if (!this.altBufferPinnedIds.delete(id)) return;
+    if (this.mode !== "dom") return;
+    if (id === this.pinnedId) return;
+    this.pendingEnsures.delete(id);
+    const entry = this.pool.get(id);
+    if (entry) {
+      this.pendingReleases.set(id, entry.managed);
+      this.scheduleReleaseDrain();
+    }
+  }
+
+  // Test/diagnostic introspection and the watchdog's DOM-mode eligibility check.
+  isAltBufferPinned(id: string): boolean {
+    return this.altBufferPinnedIds.has(id);
   }
 
   // External re-evaluation hook. Threshold changes pushed from the main
@@ -397,6 +503,7 @@ export class TerminalWebGLManager {
     if (this.pinnedId === id) {
       this.pinnedId = null;
     }
+    this.altBufferPinnedIds.delete(id);
     const wasWanted = this.wants.delete(id);
     this.pendingEnsures.delete(id);
     this.pendingReleases.delete(id);
@@ -452,6 +559,7 @@ export class TerminalWebGLManager {
     this.pendingReleases.clear();
     this.wants.clear();
     this.pinnedId = null;
+    this.altBufferPinnedIds.clear();
     if (this.atlasResyncRafId !== null) {
       try {
         cancelAnimationFrame(this.atlasResyncRafId);
@@ -498,9 +606,10 @@ export class TerminalWebGLManager {
       );
       this.hasLoggedModeFlip = true;
     }
-    // Cancel pending attaches — only the focus pin is honored in DOM mode.
+    // Cancel pending attaches — only pinned terminals (focus pin or alt-buffer
+    // pins) are honored in DOM mode.
     for (const id of [...this.pendingEnsures.keys()]) {
-      if (id !== this.pinnedId) {
+      if (!this.isPinned(id)) {
         this.pendingEnsures.delete(id);
       }
     }
@@ -516,12 +625,12 @@ export class TerminalWebGLManager {
       this.pendingDrainScheduled = false;
     }
 
-    // Release active contexts progressively, keeping the focus pin attached.
-    // Each released terminal falls back to xterm's DOM renderer on its next
-    // paint. Visible terminals refresh when their release lands so the
-    // renderer swap is not deferred until output.
+    // Release active contexts progressively, keeping pinned terminals (focus
+    // pin and alt-buffer pins) attached. Each released terminal falls back to
+    // xterm's DOM renderer on its next paint. Visible terminals refresh when
+    // their release lands so the renderer swap is not deferred until output.
     for (const [id, entry] of this.pool) {
-      if (id === this.pinnedId) continue;
+      if (this.isPinned(id)) continue;
       this.pendingReleases.set(id, entry.managed);
     }
     this.scheduleReleaseDrain();
@@ -579,10 +688,11 @@ export class TerminalWebGLManager {
       return;
     }
     // A mode flip during an in-flight drain is honored — flipToDom drops the
-    // queued attaches, except the focus pin which stays valid in DOM mode.
+    // queued attaches, except pinned terminals (focus pin and alt-buffer pins)
+    // which stay valid in DOM mode.
     if (this.mode !== "webgl") {
       for (const id of [...this.pendingEnsures.keys()]) {
-        if (id !== this.pinnedId) {
+        if (!this.isPinned(id)) {
           this.pendingEnsures.delete(id);
         }
       }
@@ -644,9 +754,10 @@ export class TerminalWebGLManager {
     const [id, managed] = next.value;
     this.pendingReleases.delete(id);
 
-    // The pin may have moved onto an id queued for release before the focus
-    // change landed — keep its context.
-    if (id === this.pinnedId) {
+    // A pin may have landed on an id queued for release before the focus or
+    // buffer-mode change registered (focus pin or alt-buffer pin) — keep its
+    // context.
+    if (this.isPinned(id)) {
       if (this.pendingReleases.size > 0) {
         this.scheduleReleaseDrain();
       }
@@ -672,6 +783,9 @@ export class TerminalWebGLManager {
   // Coalesce a burst of onRemoveTextureAtlasCanvas events (one per merged-away
   // page, per co-owner) into a single resync on the next frame.
   private scheduleAtlasResync(id: string): void {
+    // Drop atlas-change events re-fired synchronously by our own reset (see
+    // suppressAtlasResync) — otherwise the resync re-arms itself every frame.
+    if (this.suppressAtlasResync) return;
     this.atlasResyncPending.add(id);
     if (this.atlasResyncRafId !== null) return;
     const rafId = requestAnimationFrame(this.runAtlasResync);
@@ -689,29 +803,38 @@ export class TerminalWebGLManager {
     this.atlasResyncRafId = null;
     const ids = [...this.atlasResyncPending];
     this.atlasResyncPending.clear();
-    for (const id of ids) {
-      const entry = this.pool.get(id);
-      if (!entry) continue;
-      if (
-        !resetLocalWebGLRenderer(
-          entry.addon,
-          entry.managed.terminal.cols,
-          entry.managed.terminal.rows
-        )
-      ) {
-        this.reacquireContext(id, entry);
-        continue;
-      }
-      try {
-        // Re-check identity after local reset: the addon can synchronously
-        // lose context and release itself before we ask xterm to repaint.
-        if (this.pool.get(id) !== entry) continue;
-        if (entry.managed.isOpened && entry.managed.terminal.rows > 0) {
-          entry.managed.terminal.refresh(0, entry.managed.terminal.rows - 1);
+    // Suppress the synchronous atlas-change events that resetLocalWebGLRenderer
+    // re-fires (see suppressAtlasResync) for the whole reset loop, so the resync
+    // cannot schedule itself again. finally guarantees the flag is cleared even
+    // if a reset throws, so a genuine later page-merge still resyncs.
+    this.suppressAtlasResync = true;
+    try {
+      for (const id of ids) {
+        const entry = this.pool.get(id);
+        if (!entry) continue;
+        if (
+          !resetLocalWebGLRenderer(
+            entry.addon,
+            entry.managed.terminal.cols,
+            entry.managed.terminal.rows
+          )
+        ) {
+          this.reacquireContext(id, entry);
+          continue;
         }
-      } catch {
-        // ignore — DOM-renderer fallback or a later WebGL ensure will repaint
+        try {
+          // Re-check identity after local reset: the addon can synchronously
+          // lose context and release itself before we ask xterm to repaint.
+          if (this.pool.get(id) !== entry) continue;
+          if (entry.managed.isOpened && entry.managed.terminal.rows > 0) {
+            entry.managed.terminal.refresh(0, entry.managed.terminal.rows - 1);
+          }
+        } catch {
+          // ignore — DOM-renderer fallback or a later WebGL ensure will repaint
+        }
       }
+    } finally {
+      this.suppressAtlasResync = false;
     }
   };
 
@@ -738,7 +861,7 @@ export class TerminalWebGLManager {
     if (this.pool.get(id) !== entry) return;
     const managed = entry.managed;
     this.dropPoolEntry(id);
-    if (managed.isOpened && this.wants.has(id) && (this.mode === "webgl" || id === this.pinnedId)) {
+    if (managed.isOpened && this.wants.has(id) && (this.mode === "webgl" || this.isPinned(id))) {
       this.queueAttach(id, managed);
     }
   }
@@ -755,12 +878,12 @@ export class TerminalWebGLManager {
     // between when this attach was queued and when the rAF drain landed —
     // refreshMode() is best-effort but the queue can already be in flight.
     // Re-evaluating here flips to DOM and clears pendingEnsures, so the next
-    // drain iteration bails immediately. The focus pin is the exception: it
-    // attaches regardless of the count, since DOM mode keeps exactly one
-    // context on the focused terminal.
+    // drain iteration bails immediately. Pinned terminals are the exception:
+    // the focus pin and alt-buffer pins attach regardless of the count, since
+    // DOM mode keeps one context on each of them.
     if (this.wants.size > getWebglUpperThreshold()) {
       this.evaluateMode();
-      if (id !== this.pinnedId || this.mode !== "dom") return;
+      if (!this.isPinned(id) || this.mode !== "dom") return;
     }
 
     let addon: WebglAddonType | null = null;

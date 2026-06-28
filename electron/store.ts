@@ -24,6 +24,7 @@ import { PLUGIN_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/pluginAudi
 import type { PluginMcpAuditRecord } from "../shared/types/ipc/pluginMcpAudit.js";
 import { PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/pluginMcpAudit.js";
 import type { PluginMcpConsentRecord } from "../shared/types/pluginMcpConsent.js";
+import type { PluginCapabilityConsentRecord } from "../shared/types/pluginCapabilityConsent.js";
 import { PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION } from "../shared/types/ipc/pluginMcp.js";
 import type { ForgeAuditRecord } from "../shared/types/ipc/forge.js";
 import type { RunHistoryRecord } from "../shared/types/ipc/runHistory.js";
@@ -88,6 +89,7 @@ export interface StoreSchema {
     thresholdMinutes: number;
   };
   idleTerminalDismissals: Record<string, number>;
+  idleTerminalNotifiedAt: Record<string, number>;
   appState: {
     activeWorktreeId?: string;
     sidebarWidth: number;
@@ -316,6 +318,18 @@ export interface StoreSchema {
   };
   orchestrationMilestones: Record<string, boolean>;
   shortcutHintCounts: Record<string, number>;
+  /**
+   * One-shot hover-hint keys (`actionId@count`) already shown to the user.
+   * Persisted so keyboard-shortcut teaching tooltips don't reappear every
+   * session. Bounded by `|actionIds| × |HINT_MILESTONES|`.
+   */
+  shortcutHintHoveredKeys?: string[];
+  /**
+   * Project paths for which the "enable forge plugin" recommendation has
+   * already fired or been dismissed. Persisted so the nudge doesn't reappear
+   * on every launch. Bounded by the number of distinct projects opened.
+   */
+  forgeEnableDismissedPaths?: Record<string, true>;
   updateChannel: "stable" | "nightly";
   dismissedUpdateVersion?: string;
   dismissedUpdateAt?: number;
@@ -446,6 +460,17 @@ export interface StoreSchema {
   pluginMcpConfig: {
     maxToolsPerSession: number;
   };
+  /**
+   * Just-in-time (JIT) consent grants for plugin host capabilities (#10524).
+   * Each grant is a `(pluginId, capability)` pair the user approved on first
+   * use of a high-risk host surface (`shell:exec`, `fs:*-write`, `git:write`),
+   * so later calls run without re-prompting. Plaintext, matching the
+   * `pluginMcpConsent` precedent — a grant holds no secret, only the pair and a
+   * timestamp.
+   */
+  pluginCapabilityConsent: {
+    grants?: PluginCapabilityConsentRecord[];
+  };
 }
 
 const storeOptions = {
@@ -474,6 +499,7 @@ const storeOptions = {
       thresholdMinutes: 60,
     },
     idleTerminalDismissals: {},
+    idleTerminalNotifiedAt: {},
     appState: {
       sidebarWidth: 350,
       focusMode: false,
@@ -599,6 +625,8 @@ const storeOptions = {
     },
     orchestrationMilestones: {},
     shortcutHintCounts: {},
+    shortcutHintHoveredKeys: [],
+    forgeEnableDismissedPaths: {},
     updateChannel: "stable" as const,
     lastUpdateCheck: null,
     logLevelOverrides: {},
@@ -621,6 +649,7 @@ const storeOptions = {
     pluginMcpConfig: {
       maxToolsPerSession: PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION,
     },
+    pluginCapabilityConsent: {},
   },
   cwd: process.env.DAINTREE_USER_DATA,
 };

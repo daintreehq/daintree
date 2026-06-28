@@ -80,11 +80,19 @@ describe("RecipeVariablePreview", () => {
     expect(screen.getByText("Resolving at run time")).toBeTruthy();
   });
 
-  it("shows rose unresolved badges in fallback mode for missing context", () => {
+  it("does not show unresolved badges in fallback mode without worktree context", () => {
     renderPreview("Fix {{issue_number}} on {{branch_name}}", undefined);
 
-    const badges = screen.getAllByText(/unresolved/);
-    expect(badges.length).toBe(2);
+    expect(screen.queryByText(/unresolved/)).toBeNull();
+  });
+
+  it("does not flag {{number}} as unresolved during authoring without worktree", () => {
+    const { container } = renderPreview("See {{number}}", undefined);
+
+    expect(screen.queryByText(/unresolved/)).toBeNull();
+    expect(container.querySelector(".bg-category-rose-subtle")).toBeNull();
+    expect(container.querySelector(".bg-category-amber-subtle")).toBeTruthy();
+    expect(screen.getByText("Resolving at run time")).toBeTruthy();
   });
 
   it("treats unknown {{var}} as literal text, not as unresolved", () => {
@@ -102,6 +110,7 @@ describe("RecipeVariablePreview", () => {
     const { container } = renderPreview("See {{number}}", "wt-1");
 
     expect(container.textContent).toContain("#7");
+    expect(screen.queryByText(/unresolved/)).toBeNull();
   });
 
   it("resolves {{number}} to prNumber when issueNumber is absent", () => {

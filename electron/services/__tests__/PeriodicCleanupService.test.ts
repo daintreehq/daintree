@@ -5,13 +5,23 @@ const mockPowerMonitor = vi.hoisted(() => ({
 }));
 
 const mockApp = vi.hoisted(() => ({
-  getPath: vi.fn().mockReturnValue("/fake/userData"),
+  getPath: vi.fn((name: string) => `/fake/${name}`),
 }));
 
 const mockRunScratchCleanup = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockRunAssistantScratchCleanup = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockPruneOldLogs = vi.hoisted(() => vi.fn());
-const mockStoreGet = vi.hoisted(() => vi.fn().mockReturnValue({ logRetentionDays: 30 }));
+const mockPruneHeapSnapshotsAsync = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockPruneAuditByRetention = vi.hoisted(() => vi.fn());
+
+// store.get is key-aware: the log-prune routine reads "privacy", the audit-prune
+// routine reads "helpAssistant". A single flat return value would feed the wrong
+// shape to whichever routine didn't expect it.
+function storeGetByKey(key: string): unknown {
+  if (key === "helpAssistant") return { auditRetention: 7 };
+  return { logRetentionDays: 30 };
+}
+const mockStoreGet = vi.hoisted(() => vi.fn());
 
 vi.mock("electron", () => ({
   app: mockApp,
@@ -28,11 +38,17 @@ vi.mock("../AssistantScratchService.js", () => ({
 
 vi.mock("../../utils/logger.js", () => ({
   pruneOldLogs: mockPruneOldLogs,
+  pruneHeapSnapshotsAsync: mockPruneHeapSnapshotsAsync,
+  MAX_HEAP_SNAPSHOTS: 10,
   logError: vi.fn(),
 }));
 
 vi.mock("../../store.js", () => ({
   store: { get: mockStoreGet },
+}));
+
+vi.mock("../McpServerService.js", () => ({
+  mcpServerService: { pruneAuditByRetention: mockPruneAuditByRetention },
 }));
 
 import { PeriodicCleanupService } from "../PeriodicCleanupService.js";
@@ -44,10 +60,11 @@ describe("PeriodicCleanupService", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.clearAllMocks();
     mockPowerMonitor.getSystemIdleTime.mockReturnValue(120);
-    mockApp.getPath.mockReturnValue("/fake/userData");
+    mockApp.getPath.mockImplementation((name: string) => `/fake/${name}`);
     mockRunScratchCleanup.mockResolvedValue(undefined);
     mockRunAssistantScratchCleanup.mockResolvedValue(undefined);
-    mockStoreGet.mockReturnValue({ logRetentionDays: 30 });
+    mockPruneHeapSnapshotsAsync.mockResolvedValue(undefined);
+    mockStoreGet.mockImplementation(storeGetByKey);
   });
 
   afterEach(() => {
@@ -59,20 +76,23 @@ describe("PeriodicCleanupService", () => {
     expect(mockRunScratchCleanup).not.toHaveBeenCalled();
     expect(mockRunAssistantScratchCleanup).not.toHaveBeenCalled();
     expect(mockPruneOldLogs).not.toHaveBeenCalled();
+    expect(mockPruneHeapSnapshotsAsync).not.toHaveBeenCalled();
   }
 
   function expectAllRoutinesRan() {
     expect(mockRunScratchCleanup).toHaveBeenCalledTimes(1);
     expect(mockRunAssistantScratchCleanup).toHaveBeenCalledTimes(1);
     expect(mockPruneOldLogs).toHaveBeenCalledTimes(1);
+    expect(mockPruneHeapSnapshotsAsync).toHaveBeenCalledTimes(1);
   }
 
-  it("runs all three routines when the system is idle", async () => {
+  it("runs all routines when the system is idle", async () => {
     const service = new PeriodicCleanupService();
     await service.tick();
 
     expectAllRoutinesRan();
     expect(mockPruneOldLogs).toHaveBeenCalledWith("/fake/userData", 30);
+    expect(mockPruneHeapSnapshotsAsync).toHaveBeenCalledWith("/fake/logs", 10);
     service.dispose();
   });
 
@@ -138,12 +158,14 @@ describe("PeriodicCleanupService", () => {
     service.dispose();
   });
 
-  it("skips log pruning when retention is zero", async () => {
+  it("skips log pruning when retention is zero but still prunes heap snapshots", async () => {
     mockStoreGet.mockReturnValue({ logRetentionDays: 0 });
     const service = new PeriodicCleanupService();
     await service.tick();
 
+    // Heap snapshot pruning is count-based, not gated on log retention.
     expect(mockPruneOldLogs).not.toHaveBeenCalled();
+    expect(mockPruneHeapSnapshotsAsync).toHaveBeenCalledWith("/fake/logs", 10);
     service.dispose();
   });
 
@@ -185,5 +207,65 @@ describe("PeriodicCleanupService", () => {
     // A direct tick after dispose is also a no-op.
     await service.tick();
     expectNoRoutinesRan();
+  });
+
+  it("prunes assistant audit logs using the configured retention (#10776)", async () => {
+    mockStoreGet.mockImplementation((key: string) =>
+      key === "helpAssistant" ? { auditRetention: 30 } : { logRetentionDays: 30 }
+    );
+    const service = new PeriodicCleanupService();
+    await service.tick();
+
+    expect(mockPruneAuditByRetention).toHaveBeenCalledWith(30);
+    service.dispose();
+  });
+
+  it("defaults to a 7-day audit retention when the setting is absent (#10776)", async () => {
+    mockStoreGet.mockImplementation((key: string) =>
+      key === "helpAssistant" ? {} : { logRetentionDays: 30 }
+    );
+    const service = new PeriodicCleanupService();
+    await service.tick();
+
+    expect(mockPruneAuditByRetention).toHaveBeenCalledWith(7);
+    service.dispose();
+  });
+
+  it("skips audit pruning when retention is Off (0) (#10776)", async () => {
+    mockStoreGet.mockImplementation((key: string) =>
+      key === "helpAssistant" ? { auditRetention: 0 } : { logRetentionDays: 30 }
+    );
+    const service = new PeriodicCleanupService();
+    await service.tick();
+
+    expect(mockPruneAuditByRetention).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
+  it("skips audit pruning when the stored retention is a corrupt non-number (#10776)", async () => {
+    mockStoreGet.mockImplementation((key: string) =>
+      key === "helpAssistant"
+        ? ({ auditRetention: "7" } as unknown as { auditRetention: number })
+        : { logRetentionDays: 30 }
+    );
+    const service = new PeriodicCleanupService();
+    await service.tick();
+
+    // A stringly-typed value coerces to `"7" > 0 === true`, so guard on the
+    // type, not just the comparison — otherwise prune is a silent no-op.
+    expect(mockPruneAuditByRetention).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
+  it("isolates an audit-prune failure so the other routines still run (#10776)", async () => {
+    mockPruneAuditByRetention.mockImplementation(() => {
+      throw new Error("prune boom");
+    });
+    const service = new PeriodicCleanupService();
+    await service.tick();
+
+    // The throwing audit prune does not prevent the earlier routines.
+    expectAllRoutinesRan();
+    service.dispose();
   });
 });

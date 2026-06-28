@@ -10,6 +10,13 @@ import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { getDevServerConfig } from "./shared/config/devServer";
 import { getDaintreeAppDevCSP, getDaintreeAppProdCSP } from "./shared/config/csp";
+// Source of truth for the host/plugin React contract. The plugin build
+// (@daintreehq/plugin-vite) errors on any React subpath outside this list, and
+// here it drives the injected `<script type="importmap">` — one constant keeps
+// the two sides from drifting (the `react-dom/server` "externalized but
+// unresolved" class of bug). Imported from source (not the built dist) the same
+// way this config already imports from `./shared/*`.
+import { HOST_IMPORTMAP_SPECIFIERS } from "./packages/plugin-vite/src/index";
 import { getFirstRenderPreloadSeeds } from "./shared/config/panelKindRegistry";
 import { computeFirstRenderPreloadFiles } from "./scripts/first-render-closure-lib.mjs";
 
@@ -266,25 +273,17 @@ function cspTransformPlugin(state: ImportMapBuildState): Plugin {
   };
 }
 
-// Specifiers exposed to externalized plugin bundles. Each bare specifier points
-// at the same `vendor-react` chunk because Rolldown bundles `react`, `react-dom`,
-// `scheduler`, and `use-sync-external-store` into one file (see the
-// `vendor-react` codeSplitting group below). Trailing-slash mappings ("react/")
-// can't substitute here — a single chunk file has no subpath structure to
-// concatenate against — so every JSX/React entrypoint plugins might import is
-// listed explicitly. `react/jsx-dev-runtime` is included so the dev-mode JSX
-// transform (used by plugins building with mode=development) resolves to the
-// host React instance instead of bundling a separate copy. `scheduler` is
+// `HOST_IMPORTMAP_SPECIFIERS` (imported from @daintreehq/plugin-vite above) is
+// the set of specifiers exposed to externalized plugin bundles. In production
+// each bare specifier points at the same `vendor-react` chunk because Rolldown
+// bundles `react`, `react-dom`, `scheduler`, and `use-sync-external-store` into
+// one file (see the `vendor-react` codeSplitting group below). Trailing-slash
+// mappings ("react/") can't substitute — a single chunk file has no subpath
+// structure to concatenate against — so every JSX/React entrypoint plugins
+// might import is listed explicitly in the shared constant. `scheduler` is
 // internal to React and not exposed because no documented plugin path imports
-// it directly; if that changes, add it here and to the plugin-vite externals
-// regex in lockstep.
-const HOST_IMPORTMAP_SPECIFIERS = [
-  "react",
-  "react/jsx-runtime",
-  "react/jsx-dev-runtime",
-  "react-dom",
-  "react-dom/client",
-] as const;
+// it directly; if that changes, add it to the shared constant (plugin-vite),
+// which keeps the externals regex and this import map in lockstep by design.
 
 const HOST_APP_ORIGIN = "app://daintree";
 
@@ -377,6 +376,69 @@ function hostImportMapPlugin(state: ImportMapBuildState): Plugin {
         sidecarPath,
         JSON.stringify({ scriptSrcHashes: [state.scriptSrcHash] }, null, 2) + "\n"
       );
+    },
+  };
+}
+
+// Prefix for the dev-only virtual modules that re-export the host's React. Each
+// `HOST_IMPORTMAP_SPECIFIERS` entry gets one (`…/react`, `…/react-dom/client`,
+// …). Vite serves a resolved virtual id at `/@id/<id>` in dev, so that URL is
+// stable across runs — unlike the optimized-dep path (`/node_modules/.vite/
+// deps/react.js?v=<hash>`), whose hash changes per optimize pass and can't be
+// referenced statically from an import map.
+const DEV_HOST_REACT_PREFIX = "virtual:daintree-host-react/";
+
+// Dev counterpart to hostImportMapPlugin. In production the import map points
+// plugin bundles at the hashed `vendor-react` chunk; in dev that chunk doesn't
+// exist (Vite serves React from the module graph), so a sideloaded plugin view
+// that externalizes React has nothing to resolve `react` against and fails to
+// mount (#10514). This plugin closes that gap: it injects an import map into the
+// dev index.html mapping each host specifier to a stable virtual module that
+// re-exports the host's React. Because the virtual module's own `import` is
+// resolved by Vite server-side (not via the browser import map), it lands on the
+// exact React instance the host uses — one instance shared with every plugin,
+// same guarantee as production. Serve-only; the dev CSP carries `'unsafe-inline'`
+// so the inline `<script type="importmap">` needs no hash.
+function hostImportMapDevPlugin(): Plugin {
+  return {
+    name: "host-import-map-dev",
+    apply: "serve",
+    resolveId(id) {
+      if (id.startsWith(DEV_HOST_REACT_PREFIX)) return id;
+      return null;
+    },
+    load(id) {
+      if (!id.startsWith(DEV_HOST_REACT_PREFIX)) return null;
+      const specifier = id.slice(DEV_HOST_REACT_PREFIX.length);
+      const target = JSON.stringify(specifier);
+      // `export *` carries the named exports (`useState`, `jsx`, …); the
+      // computed default keeps `import React from "react"` working without a
+      // direct `export { default }` that would throw for subpaths (e.g.
+      // jsx-runtime) that have no own default export.
+      return (
+        `import * as m from ${target};\n` +
+        `export * from ${target};\n` +
+        `export default m.default ?? m;\n`
+      );
+    },
+    transformIndexHtml(_html, ctx) {
+      if (!ctx.server) return;
+      const importMapPayload = {
+        imports: Object.fromEntries(
+          HOST_IMPORTMAP_SPECIFIERS.map((specifier) => [
+            specifier,
+            `/@id/${DEV_HOST_REACT_PREFIX}${specifier}`,
+          ])
+        ),
+      };
+      return [
+        {
+          tag: "script",
+          attrs: { type: "importmap" },
+          injectTo: "head-prepend",
+          children: JSON.stringify(importMapPayload),
+        },
+      ];
     },
   };
 }
@@ -776,6 +838,7 @@ export default defineConfig(({ command, mode }) => {
       }),
       tailwindcss(),
       hostImportMapPlugin(importMapState),
+      hostImportMapDevPlugin(),
       cspTransformPlugin(importMapState),
       compilerReportPlugin,
       rendererBundleSizePlugin(),

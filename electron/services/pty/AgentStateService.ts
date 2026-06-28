@@ -15,7 +15,18 @@ import {
 import type { AgentActivityObservationResult } from "./AgentActivityTemperature.js";
 import type { TerminalInfo } from "./types.js";
 import { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
+import { checkResultsEqual, detectCheckResult } from "./CheckResultDetector.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
+import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
+
+// States where the agent has just settled out of "working" — the moment a
+// just-finished check's summary lines sit at the tail of the semantic buffer.
+const CHECK_SETTLE_STATES: ReadonlySet<AgentState> = new Set([
+  "idle",
+  "waiting",
+  "completed",
+  "exited",
+]);
 
 // Hysteresis tunables. Window is conservative — long enough to absorb
 // sub-second flip races (timeout/heuristic firing right after input/output)
@@ -278,6 +289,13 @@ export class AgentStateService {
 
     // Build and validate state change payload BEFORE mutating terminal state.
     const timestamp = getStateChangeTimestamp();
+
+    // Parse a structured check result from recent output as the agent settles
+    // out of "working". Only a NEW (changed) result is attached to the event,
+    // so working↔waiting flapping doesn't spam identical updates (issue #10682).
+    // Stored on the terminal AFTER validation succeeds (see the commit block).
+    const newCheckResult = this.detectCheckResultOnSettle(terminal, newState, event, timestamp);
+
     const stateChangePayload = {
       agentId: effectiveAgentId,
       state: newState,
@@ -295,6 +313,17 @@ export class AgentStateService {
       ...((newState === "completed" || newState === "exited") && sessionTokens != null
         ? { sessionTokens }
         : {}),
+      // Carry exit metadata on the settling event itself so subscribers learn
+      // pass/fail synchronously with the state transition. The exit event is
+      // the only AgentEvent that holds an exit code; pattern/timeout-driven
+      // completions have none. Signal is the raw node-pty value (no 128+signum
+      // POSIX decode — wrong on Windows, lesson #7028).
+      ...((newState === "completed" || newState === "exited") && event.type === "exit"
+        ? {
+            exitCode: event.code,
+            ...(event.signal !== undefined ? { exitSignal: event.signal } : {}),
+          }
+        : {}),
       ...(temperature
         ? {
             temperature: temperature.temperature,
@@ -302,6 +331,7 @@ export class AgentStateService {
             changedChars: temperature.changedChars,
           }
         : {}),
+      ...(newCheckResult ? { lastCheckResult: newCheckResult } : {}),
     };
 
     const validatedStateChange = AgentStateChangedSchema.safeParse(stateChangePayload);
@@ -328,6 +358,15 @@ export class AgentStateService {
     terminal.agentState = newState;
     terminal.lastStateChange = timestamp;
 
+    // Persist the parsed check result post-validation (#10682). A respawn
+    // starts a new session, so any prior run's result is dropped — even though
+    // the old summary may still sit in the semantic buffer.
+    if (event.type === "respawn") {
+      terminal.lastCheckResult = undefined;
+    } else if (newCheckResult) {
+      terminal.lastCheckResult = newCheckResult;
+    }
+
     // Refresh the hysteresis lock only when a high-confidence transition
     // actually crosses the active/passive boundary. Lifecycle events clear
     // the lock to prevent cross-session leakage.
@@ -350,6 +389,34 @@ export class AgentStateService {
     this.emitTerminalActivity(terminal);
 
     return true;
+  }
+
+  /**
+   * Parse the recent semantic buffer for a test/lint/build summary as the agent
+   * settles out of "working" (issue #10682). Pure read — the caller stores the
+   * result post-validation. Returns it ONLY when it differs from the stored
+   * result, so the event carries it just once and the original `ranAt` is
+   * preserved across repeat detections of the same run. Skips respawns, whose
+   * buffer still holds the prior session's (now irrelevant) summary.
+   */
+  private detectCheckResultOnSettle(
+    terminal: TerminalInfo,
+    newState: AgentState,
+    event: AgentEvent,
+    timestamp: number
+  ): TerminalCheckResult | undefined {
+    if (event.type === "respawn") return undefined;
+    if (!CHECK_SETTLE_STATES.has(newState)) return undefined;
+
+    const detected = detectCheckResult(terminal.semanticBuffer.join("\n"), timestamp);
+    if (!detected) return undefined;
+
+    if (checkResultsEqual(terminal.lastCheckResult, detected)) {
+      // Same check as last time — keep the original timestamp, emit nothing new.
+      return undefined;
+    }
+
+    return detected;
   }
 
   /**

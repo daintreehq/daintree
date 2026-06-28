@@ -8,6 +8,7 @@ import { usePaletteStore } from "@/store/paletteStore";
 import { notify } from "@/lib/notify";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import type { Project, Scratch } from "@shared/types";
+import type { ProjectStatusMap } from "@shared/types/ipc/project";
 import { projectClient, scratchClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
@@ -187,8 +188,30 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   useEffect(() => {
     if (!isOpen) return;
-    void loadProjects();
     void loadScratches();
+    // Pull a fresh agent-status snapshot on open so rows show live status
+    // immediately instead of waiting for the next passive broadcast, which
+    // would otherwise leave them falling back to a stale relative timestamp.
+    void loadProjects()
+      .then(() => {
+        const ids = useProjectStore.getState().projects.map((p) => p.id);
+        if (ids.length === 0) return;
+        return projectClient.getBulkStats(ids).then((bulk) => {
+          const map: ProjectStatusMap = {};
+          for (const [id, entry] of Object.entries(bulk)) {
+            map[id] = {
+              activeAgentCount: entry.activeAgentCount,
+              waitingAgentCount: entry.waitingAgentCount,
+              processCount: entry.processCount,
+            };
+          }
+          useProjectStatsStore.getState().setStats(map);
+        });
+      })
+      .catch(() => {
+        // Project load or stats refresh failed; rows fall back to the relative
+        // timestamp. This background freshness pull must never surface an error.
+      });
   }, [isOpen, loadProjects, loadScratches]);
 
   const searchableProjects = useMemo<SearchableProject[]>(() => {

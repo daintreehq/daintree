@@ -97,15 +97,15 @@ export const createAddPanelActions = (
   get: Get
 ): Pick<PanelRegistrySlice, "addPanel"> => ({
   addPanel: async (options) => {
-    // Panel limit enforcement (Tier 2: confirmation, Tier 3: hard block)
+    // Panel limit enforcement: only the hard ceiling blocks a single-panel add.
+    // The confirm band (>= confirmationLimit) is intentionally non-blocking —
+    // adding a panel is reversible (one-click close), so the step-throttled
+    // `TerminalCountWarning` banner (shown from `softWarningLimit` upward, with
+    // no upper bound) is the right calibration, not a focus-stealing modal. The
+    // blocking confirm survives only for batch spawns (`preflightSpawnBatchLimit`),
+    // where the blast radius of many panels at once warrants it. See #10547.
     if (!options.bypassLimits) {
-      const {
-        softWarningLimit,
-        confirmationLimit,
-        hardLimit,
-        warningsDisabled,
-        requestConfirmation,
-      } = usePanelLimitStore.getState();
+      const { softWarningLimit, confirmationLimit, hardLimit } = usePanelLimitStore.getState();
       const globalCount = countNonTrashTerminals(get());
       const tier = evaluatePanelLimit(globalCount, {
         softWarningLimit,
@@ -123,27 +123,6 @@ export const createAddPanelActions = (
         });
         return null;
       }
-
-      if (tier === "confirm" && !warningsDisabled) {
-        // Pass `null` for memory rather than blocking the dialog on a metrics
-        // IPC — same call `preflightSpawnBatchLimit` makes; the dialog renders
-        // without the memory hint, never waits on it.
-        const confirmed = await requestConfirmation(globalCount, null);
-        if (!confirmed) return null;
-
-        // Re-check count after confirmation in case panels were closed during the dialog
-        const postConfirmCount = countNonTrashTerminals(get());
-        if (postConfirmCount >= hardLimit) {
-          notify({
-            type: "warning",
-            priority: "high",
-            title: "Panel limit reached",
-            message: `Maximum of ${hardLimit} panels reached. Close some panels before adding new ones.`,
-            duration: 5000,
-          });
-          return null;
-        }
-      }
     }
 
     const requestedKind = options.kind ?? "terminal";
@@ -158,7 +137,13 @@ export const createAddPanelActions = (
       // hard ceiling has already been enforced upstream by `panelLimitStore`.
       const location = options.location || "grid";
       const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
-      const isInActiveWorktree = (options.worktreeId ?? null) === (activeWorktreeId ?? null);
+      // When activeWorktreeId is null (worktree store not yet hydrated — common
+      // during a project switch), treat the panel as being in the active worktree
+      // to avoid incorrectly backgrounding it. Mirrors the PTY branch guard
+      // below; without it a non-PTY plugin panel spawned mid-switch is
+      // mis-backgrounded (#10512).
+      const isInActiveWorktree =
+        activeWorktreeId === null || (options.worktreeId ?? null) === (activeWorktreeId ?? null);
       const shouldBackground = location === "dock" || (location === "grid" && !isInActiveWorktree);
       const runtimeStatus: TerminalRuntimeStatus = shouldBackground ? "background" : "running";
 
@@ -703,6 +688,10 @@ export const createAddPanelActions = (
           agentPresetId: options.agentPresetId,
           agentPresetColor: options.agentPresetColor,
           originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
+          // Launch-time context for the daintree-assistant pinned session
+          // (#10647). Threaded straight through; the main-process handler only
+          // consumes it for that agent and ignores it otherwise.
+          actionContext: options.actionContext,
         });
 
         // Promote spawnStatus to "ready" once the PTY is live. If the panel was
@@ -764,10 +753,24 @@ export const createAddPanelActions = (
           const _current = state.panelsById[id];
           if (!_current || !isPtyPanel(_current) || _current.spawnStatus !== "spawning")
             return state;
+          // A launched agent that fails to start never produces a PTY exit, so
+          // its optimistic agentState would stay stuck (e.g. "working"). Mark it
+          // "exited" so terminal.list / terminal.getStatus report the crash
+          // instead of a phantom running agent (#10816). Plain shells have no
+          // launchAgentId and keep agentState undefined.
+          const agentPatch = _current.launchAgentId
+            ? { agentState: "exited" as const, lastStateChange: Date.now() }
+            : {};
           return {
             panelsById: {
               ...state.panelsById,
-              [id]: { ..._current, spawnStatus: "failed", spawnError, runtimeStatus: "error" },
+              [id]: {
+                ..._current,
+                spawnStatus: "failed",
+                spawnError,
+                runtimeStatus: "error",
+                ...agentPatch,
+              },
             },
           };
         });

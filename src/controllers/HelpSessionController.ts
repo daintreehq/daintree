@@ -22,6 +22,7 @@ import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
 import { buildResumeCommand, buildResumeLatestCommand } from "@shared/types/agentSettings";
 import { resolveDaintreeMcpTier } from "@shared/types/project";
 import type { SnapshotInfo } from "@shared/types/ipc/git";
+import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 
 const HIBERNATE_VALID_MINUTES: readonly number[] = [0, 15, 30, 60, 120];
 const DEFAULT_HIBERNATE_MINUTES = 30;
@@ -230,6 +231,12 @@ export interface HelpSessionInputs {
   terminalId: string | null;
   preferredAgentId: string | null;
   supportedInstalledAgentIds: readonly string[];
+  /**
+   * User consent to auto-launch a billed session when the panel opens (#10699).
+   * False until the user explicitly starts the assistant once; auto-launch is
+   * fully suppressed while false, so revealing the panel never bills a session.
+   */
+  autoLaunchEnabled: boolean;
   /** Bumped each time the panel becomes visible — re-evaluates auto-launch. */
   visibilityEpoch: number;
 }
@@ -253,6 +260,25 @@ export interface HelpLaunchOptions {
   replaceExisting?: boolean;
   /** True when called from the controller's auto-launch decision path. */
   isAutoLaunch?: boolean;
+  /**
+   * True when this auto-launch was initiated for the user's explicitly
+   * preferred agent (not the sole-installed-agent fallback). Enables the
+   * stale-agent guards that silently abandon — and re-evaluate — the launch
+   * if `preferredAgentId` changes out from under it mid-flight (version probe
+   * or dispatch). The single-installed-agent path leaves this false so a
+   * preference set mid-launch never aborts it.
+   */
+  preferredAgentLaunch?: boolean;
+  /**
+   * Resume-only intent (cold switch-back / cross-window auto-resume, #10815).
+   * The launch must restore a captured session or do nothing — it must NEVER
+   * fall through to a fresh `agent.launch`. If the resume block finds no pending
+   * entry (already taken, agentId mismatch, or another window won the atomic
+   * take), the flow aborts cleanly without spawning a blank session that would
+   * displace a backend another window just resumed. Silent on the
+   * nothing-to-resume case — no user-facing launch error.
+   */
+  resumeOnly?: boolean;
 }
 
 interface HelpSessionRef {
@@ -407,14 +433,21 @@ async function checkAssistantVersion(
   return result.status === "too-old" ? result.block : null;
 }
 
-async function loadCustomLaunchFlags(): Promise<string[]> {
+// Exported for unit coverage of the model/customArgs flag composition.
+export async function loadCustomLaunchFlags(): Promise<string[]> {
   try {
     const settings = await window.electron.helpAssistant.getSettings();
+    const flags: string[] = [];
+    // The model picker injects `--model <id>` first so a `--model` typed into
+    // custom args still wins (CLIs are last-flag-wins on repeated `--model`),
+    // keeping custom args the advanced override.
+    const modelId = settings.modelId?.trim();
+    if (modelId) flags.push("--model", modelId);
     const raw = settings.customArgs?.trim();
-    if (!raw) return [];
-    return raw.split(/\s+/).filter(Boolean);
+    if (raw) flags.push(...raw.split(/\s+/).filter(Boolean));
+    return flags;
   } catch (err) {
-    logError("Failed to load helpAssistant customArgs", err);
+    logError("Failed to load helpAssistant launch flags", err);
     return [];
   }
 }
@@ -553,6 +586,11 @@ export class HelpSessionController {
   private _started = false;
   private _launchGen = 0;
   private _isLaunching = false;
+  // Generation of the launch() that currently owns `_isLaunching`. The flow
+  // releases the guard only when it still owns this token, so a stale unwind
+  // can't drop a newer launch's guard, and a non-launch() supersession (the
+  // auto-launch path bumping the gen) still lets the owner release.
+  private _isLaunchingGen = -1;
   private _hasAutoLaunched = false;
   private _pendingSessionId: string | null = null;
   private _pendingNewTerminalId: string | null = null;
@@ -573,6 +611,18 @@ export class HelpSessionController {
   private _checkAgainCooldownTimer: ReturnType<typeof setTimeout> | null = null;
   private _checkAgainCooldownFired = false;
   private _checkAgainProbeSettled = false;
+  /**
+   * Dead-man timer for an in-flight launch. The launch FSM resets its loading
+   * phase in a `finally` that only runs once the awaited IPCs settle — so a
+   * never-settling bridge call (e.g. a hung CLI version probe) would otherwise
+   * strand the panel on "Checking version…"/"Provisioning…" indefinitely. If a
+   * launch hasn't reached a terminal state within `LAUNCH_WATCHDOG_MS`, this
+   * supersedes it and surfaces a retryable error instead of an infinite
+   * skeleton. The ceiling is generous (provision+launch legitimately runs
+   * 6–45s) so it only fires on a genuine stall.
+   */
+  private _launchWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly LAUNCH_WATCHDOG_MS = 90_000;
   /**
    * Once-per-terminal-id guard for the auto-snapshot pre-flight. Stores the
    * terminal id we last took a snapshot for so React 19 StrictMode's
@@ -709,6 +759,10 @@ export class HelpSessionController {
     this._clearSnapshotBannerTimer();
     this._clearGrantEndedTimer();
     this._clearCheckAgainCooldownTimer();
+    this._clearLaunchWatchdog();
+    // Release the re-entrancy guard on teardown so a same-instance start() after
+    // a never-settled launch (StrictMode remount) isn't permanently blocked.
+    this._isLaunching = false;
     // Bumping the gen invalidates any in-flight launch so its post-await
     // checkpoints bail. Live store state is left intact so a StrictMode
     // synthetic unmount doesn't tear down the user's session; explicit
@@ -783,6 +837,59 @@ export class HelpSessionController {
     this.clearMcpActivity();
     this._clearGrantState();
     this._clearOutcomeAlert();
+  }
+
+  /**
+   * Recover a launch stranded by a project switch-back (#10739). Each project
+   * runs in its own `WebContentsView`; switching away parks it in the LRU cache,
+   * where Chromium throttles/freezes timers and microtasks. A launch caught
+   * mid-flight leaves the FSM in a loading phase, but the dead-man watchdog
+   * (`_armLaunchWatchdog`) is a `setTimeout` that doesn't fire while parked, so
+   * it can't reap the stall — and auto-launch is short-circuited while hidden,
+   * so switching *back* never re-drives it. The loading skeleton then sticks
+   * forever. We key off the same explicit `app:view-revealed` main-process
+   * signal `useResetSwitchOverlayOnReveal` uses (a bare DOM `visibilitychange`
+   * is unreliable for a cached-view reveal).
+   *
+   * On reveal, silently reap a stuck loading-phase launch exactly as the
+   * watchdog would — minus `_surfaceLaunchError`, since we re-drive immediately
+   * and the user should see recovery, not a failure — then re-evaluate
+   * auto-launch. The empty-state launch resumes the hibernated session via the
+   * resume command, so this reconnects and re-drives the existing session
+   * rather than starting a fresh one.
+   *
+   * `hibernating` is excluded: that phase owns a live terminal with a graceful
+   * shutdown in flight, not a stuck loader. A non-null bound `terminalId` is
+   * also excluded — a live terminal (or a synchronously-reserved `newSession`/
+   * `runAnyway` slot) is not a stranded auto-launch and must not be reaped.
+   */
+  handleViewRevealed(): void {
+    const phase = this._snapshot.phase;
+    const isStuckLaunch = phase !== "idle" && phase !== "live" && phase !== "hibernating";
+    // Only reap the AUTO-launch path. A manual `selectAgent()` launch doesn't set
+    // `_hasAutoLaunched`, and the re-drive below can't restart it (`_maybeAutoLaunch`
+    // short-circuits on `!autoLaunchEnabled`), so reaping it would silently discard
+    // the user's explicit pick. Leaving it alone lets its own watchdog reap it (with
+    // a retryable error) once the view un-parks, or the thawed IPC complete it.
+    if (isStuckLaunch && this._hasAutoLaunched && (this._lastInputs?.terminalId ?? null) === null) {
+      // Supersede the stranded flow so its in-flight awaits bail at their next
+      // gen-check (`_abandonInFlightLaunch`); clear the re-entrancy guard so the
+      // re-drive below isn't dropped; revoke the minted-but-orphaned bearer; and
+      // drop the phase to idle so the loading skeleton clears.
+      this._launchGen++;
+      this._isLaunching = false;
+      this._hasAutoLaunched = false;
+      this._clearLaunchWatchdog();
+      this._revokePendingSession();
+      this._resetPhase();
+    }
+    // Re-drive: auto-launch short-circuits while hidden, so a launch interrupted
+    // by the switch is never restarted on return. Now that the view is the
+    // foreground again, re-evaluate from the last synced inputs. `_maybeAutoLaunch`
+    // guards on `document.hidden`/`isOpen`/`terminalId`/`_hasAutoLaunched`, so a
+    // live or already-bound session is a no-op.
+    const inputs = this._lastInputs;
+    if (inputs) this._maybeAutoLaunch({ ...inputs });
   }
 
   /**
@@ -893,10 +1000,21 @@ export class HelpSessionController {
     const inputs = this._lastInputs;
     const launchAgentId = options.agentId;
     if (!inputs?.isReadyToLaunch || !inputs?.currentProject) {
-      notifyLaunchFailed(launchAgentId, "Project state is still loading. Try again.");
+      // A resume-only auto-resume is silent best-effort recovery — the renderer
+      // re-fires once state is ready (#10815), so dropping it here must not raise
+      // a scary "still loading" error. Every other caller surfaces it.
+      if (!options.resumeOnly) {
+        notifyLaunchFailed(launchAgentId, "Project state is still loading. Try again.");
+      }
       return;
     }
-    if (this._isLaunching) return;
+    // Block only while a launch() that is STILL the current generation owns the
+    // guard. If the owning launch was superseded (its generation is stale) but
+    // never unwound — e.g. a hung IPC, or the preferred-agent auto-launch path
+    // bumping the gen without owning `_isLaunching` — its orphaned guard must
+    // not block every future launch. The watchdog reaps the phase; this keeps
+    // the re-entrancy guard from outliving the flow that set it.
+    if (this._isLaunching && this._isLaunchingGen === this._launchGen) return;
 
     const launchProject = inputs.currentProject;
     this._isLaunching = true;
@@ -912,6 +1030,10 @@ export class HelpSessionController {
     const launchContext = actionService.getContext();
 
     const gen = ++this._launchGen;
+    // Tie the re-entrancy guard to this generation so only the launch() that
+    // set it releases it (see `_executeLaunch`'s finally) — a flow superseded
+    // by a newer launch() must not drop the newer guard.
+    this._isLaunchingGen = gen;
     const replaceExisting = options.replaceExisting === true;
     const reservedId = options.requestedId ?? null;
     let presetEnv: Record<string, string> | undefined;
@@ -1133,6 +1255,7 @@ export class HelpSessionController {
   cancelLaunch(): void {
     this._launchGen++;
     this._isLaunching = false;
+    this._clearLaunchWatchdog();
     this._resetPhase();
   }
 
@@ -1199,6 +1322,41 @@ export class HelpSessionController {
 
   private _resetPhase(): void {
     this._patch({ phase: "idle" });
+  }
+
+  /**
+   * Arm the launch dead-man timer for generation `gen`. If the launch is still
+   * in a loading phase when it fires, a bridge call has hung past the ceiling:
+   * bump `_launchGen` so the stalled flow's later gen-checks bail, clear the
+   * re-entrancy guards, reset the phase, and surface a retryable launch error.
+   * A superseded or already-settled launch is a no-op.
+   */
+  private _armLaunchWatchdog(gen: number, agentId: string): void {
+    this._clearLaunchWatchdog();
+    this._launchWatchdogTimer = setTimeout(() => {
+      this._launchWatchdogTimer = null;
+      if (gen !== this._launchGen) return;
+      const phase = this._snapshot.phase;
+      if (phase === "idle" || phase === "live") return;
+      // Supersede the stranded flow so its in-flight await resolves into a
+      // gen-mismatch bail instead of patching stale state back in.
+      this._launchGen++;
+      this._hasAutoLaunched = false;
+      this._isLaunching = false;
+      // The gen-check above proves we still own `_pendingSessionId`, so a
+      // post-provision hang doesn't strand the minted bearer. Revoke it
+      // before resetting — otherwise the token outlives the launch forever.
+      this._revokePendingSession();
+      this._resetPhase();
+      this._surfaceLaunchError(agentId, "spawn-failed");
+    }, this.LAUNCH_WATCHDOG_MS);
+  }
+
+  private _clearLaunchWatchdog(): void {
+    if (this._launchWatchdogTimer) {
+      clearTimeout(this._launchWatchdogTimer);
+      this._launchWatchdogTimer = null;
+    }
   }
 
   private _armCheckAgainCooldownTimer(): void {
@@ -1812,6 +1970,10 @@ export class HelpSessionController {
   }
 
   private _maybeAutoLaunch(inputs: HelpSessionInputs): void {
+    // Consent gate first (#10699): with no explicit opt-in, opening the panel
+    // must never start a billed session. Placed ahead of the visibility check
+    // so a visibilityEpoch re-arm can't bypass consent on a restore.
+    if (!inputs.autoLaunchEnabled) return;
     if (typeof document !== "undefined" && document.hidden) return;
     if (!inputs.isOpen) return;
     if (!inputs.isReadyToLaunch) return;
@@ -1820,14 +1982,16 @@ export class HelpSessionController {
     if (this._hasAutoLaunched) return;
 
     if (inputs.preferredAgentId) {
-      const launchAgentId = inputs.preferredAgentId;
-      const launchProject = inputs.currentProject;
       this._hasAutoLaunched = true;
-      const gen = ++this._launchGen;
-      // Snapshot focus synchronously before the async launch — see launch().
-      const launchContext = actionService.getContext();
-      safeFireAndForget(this._executeAutoLaunch(gen, launchAgentId, launchProject, launchContext), {
-        context: "Auto-launching preferred help agent",
+      // Route through launch() like the sole-installed-agent path below, so the
+      // re-entrancy guard (_isLaunching/_isLaunchingGen) and FSM live in one
+      // place. `preferredAgentLaunch` arms the stale-agent guards that abandon
+      // and re-evaluate if the preference changes mid-flight (#10703).
+      this.launch({
+        agentId: inputs.preferredAgentId,
+        isAutoLaunch: true,
+        preferredAgentLaunch: true,
+        replaceExisting: true,
       });
       return;
     }
@@ -1848,7 +2012,8 @@ export class HelpSessionController {
     launchAgentId: string,
     hibernated: { sessionId: string; cwd: string },
     session: HelpSessionRef | null,
-    folderPath: string
+    folderPath: string,
+    launchProject: HelpProjectRef
   ): Promise<ResumeSpawnResult | null> {
     const customLaunchFlags = await loadCustomLaunchFlags();
     const flags = customLaunchFlags.length > 0 ? customLaunchFlags : undefined;
@@ -1859,9 +2024,18 @@ export class HelpSessionController {
       : buildResumeLatestCommand(launchAgentId, flags);
     if (!command) return null;
 
-    const cwd = session?.sessionPath ?? hibernated.cwd ?? folderPath;
-    const projectId = useProjectStore.getState().currentProject?.id ?? null;
-    const env = buildHelpEnv(session, projectId, launchAgentId);
+    // The Daintree Assistant runs in the project root (env-only MCP, ships its
+    // own skills, reads nothing from cwd) — never the session dir or the
+    // captured hibernation cwd. Other help agents resume in the session dir
+    // that owns their config files.
+    const cwd = isAssistantOnlyAgentId(launchAgentId)
+      ? launchProject.path
+      : (session?.sessionPath ?? hibernated.cwd ?? folderPath);
+    // Bind the resumed session's project identity to the project captured at
+    // launch, not live store state — otherwise a project switch mid-resume
+    // could make cwd (the captured project) and DAINTREE_PROJECT_ID disagree.
+    // Mirrors the fresh-launch path, which passes `launchProject.id`.
+    const env = buildHelpEnv(session, launchProject.id, launchAgentId);
 
     const newId = await usePanelStore.getState().addPanel({
       kind: "terminal",
@@ -1886,224 +2060,6 @@ export class HelpSessionController {
     return { panelId: newId, resumeKind };
   }
 
-  private async _executeAutoLaunch(
-    gen: number,
-    launchAgentId: string,
-    launchProject: HelpProjectRef,
-    launchContext?: ActionContext
-  ): Promise<void> {
-    let session: HelpSessionRef | null = null;
-    // Tracks whether the launch reached its terminal-bound success state. The
-    // finally resets the phase to idle on any non-success exit (error, bail)
-    // that is still the current generation, so the loading skeleton never
-    // sticks; a superseded generation leaves the phase to its new owner.
-    let reached = false;
-    // Clear any prior failure banner up front so a retry immediately drops the
-    // stale error while the new attempt is in flight.
-    this._patch({ launchError: null });
-    try {
-      this._patch({ phase: "version-checking" });
-      const folderPath = await window.electron.help.getFolderPath();
-      if (gen !== this._launchGen) {
-        this._abandonInFlightLaunch(null, session, { resetAutoLaunch: true });
-        return;
-      }
-      if (!folderPath) {
-        this._hasAutoLaunched = false;
-        this._surfaceLaunchError(launchAgentId, "folder-unavailable");
-        return;
-      }
-
-      const launchAgentName = getAgentConfig(launchAgentId)?.name ?? launchAgentId;
-      const versionBlock = await checkAssistantVersion(
-        launchAgentId,
-        launchAgentName,
-        this._hasBlockedThisSession
-      );
-      if (gen !== this._launchGen) {
-        this._abandonInFlightLaunch(null, session, { resetAutoLaunch: true });
-        return;
-      }
-      if (versionBlock) {
-        // Stale-agent guard: skip the block if the user changed
-        // preferredAgentId while the probe was in flight — the new
-        // agent's empty state shouldn't be covered by an "Update Claude"
-        // message that no longer applies.
-        if (useHelpPanelStore.getState().preferredAgentId !== launchAgentId) {
-          this._hasAutoLaunched = false;
-          return;
-        }
-        this._hasAutoLaunched = false;
-        this._hasBlockedThisSession = true;
-        this._patch({ assistantVersionTooOld: versionBlock });
-        return;
-      }
-      this._hasBlockedThisSession = false;
-      this._patch({ assistantVersionTooOld: null, phase: "provisioning" });
-
-      const outcome = await provisionHelpSession(launchProject, launchAgentId, launchContext);
-      if (gen !== this._launchGen) {
-        if (outcome.ok) session = outcome.session;
-        this._abandonInFlightLaunch(null, session, { resetAutoLaunch: true });
-        return;
-      }
-      if (!outcome.ok) {
-        this._hasAutoLaunched = false;
-        this._surfaceLaunchError(launchAgentId, provisionFailureKind(outcome.code));
-        return;
-      }
-      session = outcome.session;
-      this._pendingSessionId = session.sessionId;
-      this._patch({ phase: "launching" });
-      const cwd = session.sessionPath;
-      const env = buildHelpEnv(session, launchProject.id, launchAgentId);
-
-      // Seed hibernate from main's pending-hibernation store BEFORE the
-      // local lookup — this is what carries the conversation across LRU
-      // eviction / window close where the renderer-side hibernate timer
-      // couldn't capture before its view was destroyed. Passing `gen` lets
-      // the helper drop the pulled entry if a discarding action (e.g.
-      // "+ New session") supersedes this launch mid-IPC.
-      await this._seedHibernateFromMain(launchProject.id, gen);
-      if (gen !== this._launchGen) {
-        this._abandonInFlightLaunch(null, session, { resetAutoLaunch: true });
-        return;
-      }
-      const hibernated = useHelpPanelStore.getState().hibernateSessions[launchProject.id];
-      if (hibernated && hibernated.agentId === launchAgentId) {
-        const resumed = await this._spawnResumed(launchAgentId, hibernated, session, folderPath);
-        if (gen !== this._launchGen) {
-          if (resumed) usePanelStore.getState().removePanel(resumed.panelId);
-          this._abandonInFlightLaunch(null, session, { resetAutoLaunch: true });
-          return;
-        }
-        if (resumed) {
-          // Stale-launch guard: handleClose may have revoked the pending
-          // session while addPanel was in flight.
-          const expectedSessionId = session.sessionId;
-          if (this._pendingSessionId !== expectedSessionId) {
-            usePanelStore.getState().removePanel(resumed.panelId);
-            this._hasAutoLaunched = false;
-            return;
-          }
-          useHelpPanelStore.getState().clearHibernateSession(launchProject.id);
-          useHelpPanelStore
-            .getState()
-            .setTerminal(resumed.panelId, launchAgentId, session.sessionId);
-          this._pendingSessionId = null;
-          window.electron.help.markTerminal(resumed.panelId).catch((err) => {
-            logError("Failed to mark help terminal", err);
-          });
-          reached = true;
-          this._patch({ phase: "live" });
-          // Only claim a specific-session restore when we actually had a
-          // specific session id — the latest-conversation heuristic
-          // (`--continue` / `resume --last`) may or may not have found a
-          // prior session, and the renderer cannot tell from outside.
-          if (resumed.resumeKind === "specific") {
-            this._patch({ showResumeBanner: true });
-            this._armResumeBannerAutoDismiss();
-          }
-          return;
-        }
-        // Resume failed — drop the stale entry so we don't loop, then fall
-        // through to fresh launch using the already-provisioned session.
-        useHelpPanelStore.getState().clearHibernateSession(launchProject.id);
-      }
-
-      const customLaunchFlags = await loadCustomLaunchFlags();
-      if (gen !== this._launchGen) {
-        this._abandonInFlightLaunch(null, session, { resetAutoLaunch: true });
-        return;
-      }
-
-      const result = await actionService.dispatch<{ terminalId: string | null }>(
-        "agent.launch",
-        {
-          agentId: launchAgentId,
-          location: "overlay",
-          cwd,
-          excludeFromPersistence: true,
-          removeOnExit: true,
-          ...(env && { env }),
-          ...(customLaunchFlags.length > 0 && { agentLaunchFlags: customLaunchFlags }),
-        },
-        { source: "user" }
-      );
-      if (gen !== this._launchGen) {
-        if (result.ok && result.result?.terminalId) {
-          usePanelStore.getState().removePanel(result.result.terminalId);
-        }
-        this._abandonInFlightLaunch(null, session, { resetAutoLaunch: true });
-        return;
-      }
-
-      // Stale-launch guard: if the user changed preferredAgentId while the
-      // IPC was in flight, drop the result and clean up the spawned panel
-      // rather than reviving a stale terminal.
-      const currentPreferred = useHelpPanelStore.getState().preferredAgentId;
-      if (currentPreferred !== launchAgentId) {
-        if (result.ok && result.result?.terminalId) {
-          usePanelStore.getState().removePanel(result.result.terminalId);
-        }
-        revokeHelpSession(session?.sessionId ?? null);
-        this._pendingSessionId = null;
-        this._hasAutoLaunched = false;
-        // The preference changed mid-launch, so re-evaluate against the
-        // current inputs rather than waiting on an incidental re-render to
-        // re-fire the effect — the new preferred agent should auto-launch
-        // now. Earlier this was driven solely by the next syncInputs render,
-        // which a transient phase re-render could consume before this reset
-        // landed, swallowing the relaunch. Read `preferredAgentId` straight
-        // from the store (not the possibly-stale `_lastInputs`) so the re-eval
-        // launches the agent that actually superseded this one, never looping
-        // on the old agent.
-        if (this._lastInputs) {
-          this._maybeAutoLaunch({ ...this._lastInputs, preferredAgentId: currentPreferred });
-        }
-        return;
-      }
-
-      if (!result.ok || !result.result?.terminalId) {
-        this._hasAutoLaunched = false;
-        revokeHelpSession(session?.sessionId ?? null);
-        this._pendingSessionId = null;
-        logError("Help auto-launch failed", { agentId: launchAgentId, result });
-        this._surfaceLaunchError(launchAgentId, "spawn-failed");
-        return;
-      }
-
-      const expectedSessionId = session?.sessionId ?? null;
-      if (expectedSessionId && this._pendingSessionId !== expectedSessionId) {
-        usePanelStore.getState().removePanel(result.result.terminalId);
-        this._hasAutoLaunched = false;
-        return;
-      }
-
-      useHelpPanelStore
-        .getState()
-        .setTerminal(result.result.terminalId, launchAgentId, session?.sessionId ?? null);
-      this._pendingSessionId = null;
-      reached = true;
-      this._patch({ phase: "live" });
-      window.electron.help.markTerminal(result.result.terminalId).catch((err) => {
-        logError("Failed to mark help terminal", err);
-      });
-    } catch (err) {
-      logError("HelpPanel: auto-launch threw", err);
-      this._hasAutoLaunched = false;
-      // Mirror _executeLaunch's catch: an unexpected throw past the
-      // provision step (e.g. agent.launch rejecting) leaves a live session
-      // token with no bound terminal. Revoke it, clear the pending-session
-      // guard, and surface the failure so the panel isn't left silently empty.
-      revokeHelpSession(session?.sessionId ?? null);
-      this._pendingSessionId = null;
-      this._surfaceLaunchError(launchAgentId, "spawn-failed");
-    } finally {
-      if (gen === this._launchGen && !reached) this._resetPhase();
-    }
-  }
-
   private async _executeLaunch(
     gen: number,
     options: HelpLaunchOptions,
@@ -2115,12 +2071,19 @@ export class HelpSessionController {
     const reservedId = options.requestedId ?? null;
     const resetAutoLaunch = options.isAutoLaunch === true;
     let session: HelpSessionRef | null = null;
-    // See `_executeAutoLaunch`: the finally drops the phase back to idle on a
-    // non-success exit that's still the current generation.
+    // The finally drops the phase back to idle on a non-success exit that's
+    // still the current generation, so the loading skeleton never sticks.
     let reached = false;
+    // Set by the preferred-agent stale guard when the preference changed
+    // mid-flight: the re-launch for the now-current agent must run AFTER the
+    // finally releases `_isLaunching`, or launch()'s re-entrancy guard would
+    // see this generation still holding it and silently drop the relaunch
+    // (#10703) — leaving `_hasAutoLaunched` stuck and blocking all auto-launch.
+    let pendingReEval: HelpSessionInputs | null = null;
     // Clear any prior failure banner up front so a retry immediately drops the
     // stale error while the new attempt is in flight.
     this._patch({ launchError: null });
+    this._armLaunchWatchdog(gen, launchAgentId);
     try {
       // reservedId paths (newSession/runAnyway) skip the version gate, so they
       // open straight at "provisioning"; the empty-state flow starts at the
@@ -2158,6 +2121,17 @@ export class HelpSessionController {
           return;
         }
         if (versionBlock) {
+          // Stale-agent guard (preferred-agent auto-launch only): skip the
+          // block if the user changed preferredAgentId while the probe was in
+          // flight — the new agent's empty state shouldn't be covered by an
+          // "Update X" message that no longer applies.
+          if (
+            options.preferredAgentLaunch === true &&
+            useHelpPanelStore.getState().preferredAgentId !== launchAgentId
+          ) {
+            this._hasAutoLaunched = false;
+            return;
+          }
           this._hasAutoLaunched = false;
           this._hasBlockedThisSession = true;
           this._patch({ assistantVersionTooOld: versionBlock });
@@ -2165,6 +2139,38 @@ export class HelpSessionController {
         }
         this._hasBlockedThisSession = false;
         this._patch({ assistantVersionTooOld: null, phase: "provisioning" });
+      }
+
+      // #10819: resume-only intent must claim the pending-hibernation entry
+      // BEFORE provisioning. `provisionHelpSession` calls `displacePriorSessions`
+      // in main, which revokes/kills the project's existing assistant backend. In
+      // a multi-window cold-restore race, both windows would provision (and so
+      // displace each other) before reaching the `resumeOnly` abort below, leaving
+      // both with no live backend. The atomic `takePendingHibernation` is the
+      // single-winner gate: a null take (lost the race, or nothing captured) or an
+      // agentId mismatch aborts before any displacement. The seeded local-store
+      // entry then drives the normal resume block; `_seedHibernateFromMain` is
+      // skipped for this path since the take already happened.
+      if (options.resumeOnly && !reservedId && !options.seedPrompt) {
+        let earlyPending: { agentId: string; agentSessionId: string; cwd: string } | null = null;
+        try {
+          earlyPending = await window.electron.help.takePendingHibernation(launchProject.id);
+        } catch (err) {
+          logError("HelpPanel: resumeOnly early hibernation take failed", err);
+        }
+        if (gen !== this._launchGen) {
+          this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
+          return;
+        }
+        if (!earlyPending || earlyPending.agentId !== launchAgentId) {
+          this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
+          return;
+        }
+        useHelpPanelStore.getState().setHibernateSession(launchProject.id, {
+          sessionId: earlyPending.agentSessionId,
+          cwd: earlyPending.cwd,
+          agentId: earlyPending.agentId,
+        });
       }
 
       const outcome = await provisionHelpSession(launchProject, launchAgentId, launchContext);
@@ -2188,7 +2194,14 @@ export class HelpSessionController {
         this._pendingSessionId = session.sessionId;
       }
       this._patch({ phase: "launching" });
-      const cwd = session.sessionPath;
+      // The Daintree Assistant is env-only (MCP via DAINTREE_MCP_* env vars)
+      // and ships its own skills, so it reads nothing from cwd. Run it in the
+      // project root so its file tools and the terminal's file-link resolution
+      // operate on the actual project; other help agents stay in the session
+      // dir that owns their .mcp.json / settings. `launchProject` is the exact
+      // project this session was provisioned for, so cwd can't drift to a
+      // different project the user switched to mid-launch.
+      const cwd = isAssistantOnlyAgentId(launchAgentId) ? launchProject.path : session.sessionPath;
       const helpEnv = buildHelpEnv(session, launchProject.id, launchAgentId);
       const env: Record<string, string> | undefined =
         helpEnv || presetEnv ? { ...(presetEnv ?? {}), ...(helpEnv ?? {}) } : undefined;
@@ -2200,14 +2213,28 @@ export class HelpSessionController {
         // eviction-captured entry is available to the lookup below. The
         // helper checks `gen` after its IPC await so a superseded launch
         // doesn't write a stale entry back into helpPanelStore.
-        await this._seedHibernateFromMain(launchProject.id, gen);
-        if (gen !== this._launchGen) {
-          this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
-          return;
+        //
+        // #10819: the `resumeOnly` path already performed the atomic
+        // `takePendingHibernation` before provisioning and seeded the local
+        // store from it, so re-seeding here is skipped — a second take would
+        // return null (the entry is consumed) and clear nothing, but running it
+        // is wasteful and misleading.
+        if (!options.resumeOnly) {
+          await this._seedHibernateFromMain(launchProject.id, gen);
+          if (gen !== this._launchGen) {
+            this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
+            return;
+          }
         }
         const hibernated = useHelpPanelStore.getState().hibernateSessions[launchProject.id];
         if (hibernated && hibernated.agentId === launchAgentId && folderPath) {
-          const resumed = await this._spawnResumed(launchAgentId, hibernated, session, folderPath);
+          const resumed = await this._spawnResumed(
+            launchAgentId,
+            hibernated,
+            session,
+            folderPath,
+            launchProject
+          );
           if (gen !== this._launchGen) {
             if (resumed) usePanelStore.getState().removePanel(resumed.panelId);
             this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
@@ -2243,6 +2270,21 @@ export class HelpSessionController {
         }
       }
 
+      // #10815: resume-only intent (cold switch-back / cross-window auto-resume).
+      // The resume block above returns on a successful resume; reaching here means
+      // there was nothing to resume — no captured entry, an agentId mismatch, a
+      // missing folder, or another window won the atomic `takePendingHibernation`.
+      // NEVER fall through to a fresh `agent.launch`: that would displace a backend
+      // another window just resumed (single-backend invariant + HelpSessionService
+      // revoke) or replace the user's conversation with a blank session. Release
+      // the provisioned session and bail silently — the finally resets the phase,
+      // and no `_surfaceLaunchError` fires (this is an expected no-op, not a
+      // failure the user should see).
+      if (options.resumeOnly) {
+        this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
+        return;
+      }
+
       const customLaunchFlags = await loadCustomLaunchFlags();
       if (gen !== this._launchGen) {
         this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
@@ -2274,6 +2316,35 @@ export class HelpSessionController {
         }
         this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
         return;
+      }
+
+      // Stale-launch guard (preferred-agent auto-launch only): if the user
+      // changed preferredAgentId while the IPC was in flight, drop the result
+      // and clean up the spawned panel rather than reviving a stale terminal,
+      // then re-evaluate against the now-current preference. Read it straight
+      // from the store (not the possibly-stale `_lastInputs`) so the re-eval
+      // launches the agent that actually superseded this one, never looping on
+      // the old agent.
+      if (options.preferredAgentLaunch === true) {
+        const currentPreferred = useHelpPanelStore.getState().preferredAgentId;
+        if (currentPreferred !== launchAgentId) {
+          if (result.ok && result.result?.terminalId) {
+            usePanelStore.getState().removePanel(result.result.terminalId);
+          }
+          revokeHelpSession(session?.sessionId ?? null);
+          if (this._pendingSessionId === session?.sessionId) {
+            this._pendingSessionId = null;
+          }
+          this._hasAutoLaunched = false;
+          // Defer the relaunch to the finally so it runs after `_isLaunching`
+          // is released (see `pendingReEval`). Read preferredAgentId straight
+          // from the store so the re-eval targets the agent that superseded
+          // this one, never looping on the old agent.
+          if (this._lastInputs) {
+            pendingReEval = { ...this._lastInputs, preferredAgentId: currentPreferred };
+          }
+          return;
+        }
       }
 
       if (!result.ok || !result.result?.terminalId) {
@@ -2323,21 +2394,48 @@ export class HelpSessionController {
         logError("Failed to mark help terminal", err);
       });
     } catch (error) {
+      // Revoking the orphaned session token is always safe — it's this flow's
+      // own session regardless of supersession. Everything else mutates shared
+      // launch state and must only run when THIS launch still owns the
+      // generation: a stale rejection (the original hung IPC failing *after* a
+      // reveal-reap, watchdog, or newer launch bumped the gen) would otherwise
+      // clobber the successfully re-driven launch — a false error banner over a
+      // recovered session, or `_hasAutoLaunched` cleared into a duplicate launch.
+      const ownsGen = gen === this._launchGen;
+      revokeHelpSession(session?.sessionId ?? null);
       if (reservedId) {
-        this._pendingNewTerminalId = null;
-        useHelpPanelStore.getState().clearTerminal();
-        revokeHelpSession(session?.sessionId ?? null);
+        if (ownsGen) {
+          this._pendingNewTerminalId = null;
+          useHelpPanelStore.getState().clearTerminal();
+        }
         logError(options.force ? "Help run-anyway failed" : "Help new-session failed", error);
       } else {
-        this._hasAutoLaunched = false;
-        revokeHelpSession(session?.sessionId ?? null);
-        this._pendingSessionId = null;
+        if (ownsGen) {
+          this._hasAutoLaunched = false;
+          if (this._pendingSessionId === session?.sessionId) {
+            this._pendingSessionId = null;
+          }
+        }
         logError("Help select-agent launch failed", error);
       }
-      this._surfaceLaunchError(launchAgentId, "spawn-failed");
+      if (ownsGen) this._surfaceLaunchError(launchAgentId, "spawn-failed");
     } finally {
-      this._isLaunching = false;
-      if (gen === this._launchGen && !reached) this._resetPhase();
+      // Release the re-entrancy guard only if THIS launch() still owns it —
+      // clearing it unconditionally let a stale unwind drop a newer launch's
+      // guard and admit a concurrent third launch (#10693 review). A
+      // non-launch() supersession (auto-launch bumping the gen) leaves the token
+      // intact, so this owner still releases.
+      if (this._isLaunchingGen === gen) this._isLaunching = false;
+      // Watchdog + phase are owned by the current launch generation — a
+      // superseding launch has already armed/reset its own.
+      if (gen === this._launchGen) {
+        this._clearLaunchWatchdog();
+        if (!reached) this._resetPhase();
+      }
+      // Preference changed mid-flight: re-evaluate now that the guard is
+      // released so the now-current preferred agent can auto-launch instead of
+      // waiting on an incidental render to re-fire the effect.
+      if (pendingReEval) this._maybeAutoLaunch(pendingReEval);
     }
   }
 }

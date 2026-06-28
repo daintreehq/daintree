@@ -257,6 +257,35 @@ describe("optimistic panel spawn (#5789)", () => {
     expect(failed?.spawnError?.code).toBe("UNKNOWN");
     expect(failed?.spawnError?.message).toBe("spawn boom");
     expect(failed?.runtimeStatus).toBe("error");
+    // A launched agent that fails to start never produces a PTY exit, so mark it
+    // "exited" so terminal.list / terminal.getStatus report the crash rather
+    // than a phantom running agent (#10816).
+    expect(failed?.agentState).toBe("exited");
+  });
+
+  it("leaves agentState undefined when a plain-shell spawn fails (#10816)", async () => {
+    const { terminalClient } = (await import("@/clients")) as unknown as {
+      terminalClient: { spawn: ReturnType<typeof vi.fn> };
+    };
+    terminalClient.spawn.mockImplementationOnce(async () => {
+      throw new Error("shell boom");
+    });
+
+    const { addPanel } = usePanelStore.getState();
+    await addPanel({
+      kind: "terminal",
+      command: "bash",
+      requestedId: "shell-fail",
+      cwd: "/",
+      bypassLimits: true,
+    });
+
+    await drainMicrotasks();
+
+    const failed = usePanelStore.getState().panelsById["shell-fail"] as PtyPanelData | undefined;
+    expect(failed?.spawnStatus).toBe("failed");
+    // No launchAgentId — it was never an agent, so it must not gain an agent state.
+    expect(failed?.agentState).toBeUndefined();
   });
 
   it("marks reconnect panels as 'ready' without calling spawn", async () => {

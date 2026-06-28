@@ -261,6 +261,15 @@ index 0000000..abcdef1
 +line1
 +line2`;
 
+const DELETED_FILE_DIFF = `diff --git a/gone.ts b/gone.ts
+deleted file mode 100644
+index abcdef1..0000000
+--- a/gone.ts
++++ /dev/null
+@@ -1,2 +0,0 @@
+-line1
+-line2`;
+
 describe("DiffViewer centered split", () => {
   it("uses the centered-split scroll system for two-column split diffs", () => {
     const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="split" />));
@@ -288,7 +297,18 @@ describe("DiffViewer centered split", () => {
   it("keeps the native scroller for single-side added-file diffs", () => {
     const { container } = render(wrap(<DiffViewer diff={ADDED_FILE_DIFF} viewType="split" />));
 
+    // Add files are single-column ("monotonous") in react-diff-view, so they take
+    // the horizontal-scroll fallback path rather than the two-column centered split.
     expect(container.querySelector(".diff-file-centered")).toBeNull();
+    expect(container.querySelector(".diff-file-scroll")).not.toBeNull();
+    expect(screen.queryByTestId("diff-hscrollbar")).toBeNull();
+  });
+
+  it("keeps the native scroller for single-side deleted-file diffs", () => {
+    const { container } = render(wrap(<DiffViewer diff={DELETED_FILE_DIFF} viewType="split" />));
+
+    expect(container.querySelector(".diff-file-centered")).toBeNull();
+    expect(container.querySelector(".diff-file-scroll")).not.toBeNull();
     expect(screen.queryByTestId("diff-hscrollbar")).toBeNull();
   });
 
@@ -318,6 +338,36 @@ describe("DiffViewer centered split", () => {
     // Predominantly vertical gestures stay with the vertical scroller.
     fireEvent.wheel(region!, { deltaX: 5, deltaY: 50 });
     expect(bar.scrollLeft).toBe(50);
+  });
+});
+
+describe("DiffViewer wrap attribute", () => {
+  // data-wrap drives the [data-wrap="true"] CSS rules (soft-wrap on) versus the
+  // base white-space: pre rule (no-wrap + horizontal scroll). The attribute must
+  // track wrapLines for every diff type, including the single-side add/delete
+  // files that take the fallback scroll path.
+  it("omits data-wrap when wrapLines is unset, for added-file diffs", () => {
+    const { container } = render(wrap(<DiffViewer diff={ADDED_FILE_DIFF} viewType="split" />));
+
+    const root = container.querySelector(".diff-viewer");
+    expect(root).not.toBeNull();
+    expect(root?.hasAttribute("data-wrap")).toBe(false);
+  });
+
+  it("sets data-wrap=true when wrapLines is on, for added-file diffs", () => {
+    const { container } = render(
+      wrap(<DiffViewer diff={ADDED_FILE_DIFF} viewType="split" wrapLines />)
+    );
+
+    expect(container.querySelector(".diff-viewer")?.getAttribute("data-wrap")).toBe("true");
+  });
+
+  it("sets data-wrap=true when wrapLines is on, for deleted-file diffs", () => {
+    const { container } = render(
+      wrap(<DiffViewer diff={DELETED_FILE_DIFF} viewType="split" wrapLines />)
+    );
+
+    expect(container.querySelector(".diff-viewer")?.getAttribute("data-wrap")).toBe("true");
   });
 });
 
@@ -613,5 +663,97 @@ describe("DiffViewer gutter CSS contract (#10422)", () => {
     const cssText = readFileSync(join(__dirname, "..", "DiffViewer.css"), "utf8");
     expect(cssText).toMatch(/\.diff-viewer\s+\.diff-gutter\s*\{[^}]*white-space:\s*nowrap/);
     expect(cssText).toMatch(/\.diff-viewer\s+\.diff-line-number\s*\{[^}]*white-space:\s*nowrap/);
+  });
+});
+
+// The no-wrap behavior on the fallback (add/delete) scroll path and the
+// word-boundary behavior in wrap-on mode are CSS-only and can't be exercised by
+// jsdom (no layout engine), so guard the load-bearing declarations against an
+// accidental revert to react-diff-view's vendor break-all/break-word defaults
+// (the original #10623 bug). Same readFileSync pattern as the #10422 guard.
+describe("DiffViewer wrap CSS contract (#10623)", () => {
+  it("resets the vendor wrap defaults on the base .diff-code rule", () => {
+    const cssText = readFileSync(join(__dirname, "..", "DiffViewer.css"), "utf8");
+    expect(cssText).toMatch(/\.diff-viewer\s+\.diff-code\s*\{[^}]*white-space:\s*pre[;\s}]/);
+    expect(cssText).toMatch(/\.diff-viewer\s+\.diff-code\s*\{[^}]*word-break:\s*normal/);
+    expect(cssText).toMatch(/\.diff-viewer\s+\.diff-code\s*\{[^}]*overflow-wrap:\s*normal/);
+  });
+
+  it("breaks at word boundaries (not mid-token) in wrap-on mode", () => {
+    const cssText = readFileSync(join(__dirname, "..", "DiffViewer.css"), "utf8");
+    // Strip comments so the negative break-all assertion checks declarations
+    // only — the rule's own comment explains why break-all was dropped.
+    const declarations = cssText
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .match(/\.diff-viewer\[data-wrap="true"\]\s+\.diff-code\s*\{[^}]*\}/)?.[0];
+    expect(declarations).toBeTruthy();
+    expect(declarations).toMatch(/word-break:\s*normal/);
+    expect(declarations).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(declarations).not.toMatch(/word-break:\s*break-all/);
+    // The screenshot regression is specifically pre-wrap with overflow-wrap: normal:
+    // soft-wrap on, but long unbreakable runs can't break, so a Markdown table that
+    // overflows the fixed wrap column collapses to one token per line. Guard the
+    // exact degenerate value, not just the absence of break-all.
+    expect(declarations).not.toMatch(/overflow-wrap:\s*normal/);
+  });
+
+  it("never enables soft-wrap anywhere in the sheet without a way to break long runs", () => {
+    // Broader than the single rule above: any rule that turns soft-wrapping on
+    // (white-space: pre-wrap) under the fixed-width wrap table must also let an
+    // unbreakable run break, or it reopens #10623. Guards future rules too, not
+    // just today's [data-wrap] one.
+    const withoutComments = readFileSync(join(__dirname, "..", "DiffViewer.css"), "utf8").replace(
+      /\/\*[\s\S]*?\*\//g,
+      ""
+    );
+    // Match innermost declaration blocks ({ ... } with no nested braces) so the
+    // invariant still holds for a soft-wrap rule nested inside an @media block.
+    const softWrapRules = (withoutComments.match(/\{[^{}]*\}/g) ?? []).filter((rule) =>
+      /white-space:\s*pre-wrap/.test(rule)
+    );
+    expect(softWrapRules.length).toBeGreaterThan(0);
+    for (const rule of softWrapRules) {
+      const canBreakLongRuns =
+        /overflow-wrap:\s*(anywhere|break-word)/.test(rule) ||
+        /word-break:\s*(break-all|break-word)/.test(rule);
+      expect(canBreakLongRuns).toBe(true);
+    }
+  });
+});
+
+// refractor's Markdown grammar tags table-row tokens with class="token table …".
+// Tailwind ships `.table { display: table }`, so without an inline reset those
+// inline syntax tokens become block-level table boxes and a one-line Markdown
+// table row stacks to one token per line once the (post-paint) token pass lands
+// — the whole diff appears to "collapse". jsdom can't lay out row heights, but it
+// DOES resolve the `display` cascade, so render the colliding token and assert
+// the real DiffViewer.css pins it back to inline against a present `.table`
+// utility. The no-reset render proves the harness exercises the real collision,
+// so the positive case can't silently false-pass.
+describe("DiffViewer token CSS contract (Tailwind display-utility collision)", () => {
+  function computeTokenDisplay(diffViewerCss: string): string {
+    const style = document.createElement("style");
+    // `.table { display: table }` is Tailwind's colliding utility; refractor puts
+    // `class="token table …"` on Markdown table tokens.
+    style.textContent = `.table { display: table; }\n${diffViewerCss}`;
+    document.head.appendChild(style);
+    document.body.innerHTML =
+      '<div class="diff-viewer"><table class="diff"><tbody><tr>' +
+      '<td class="diff-code diff-code-insert">' +
+      '<span id="tok" class="token table table-data">x</span>' +
+      "</td></tr></tbody></table></div>";
+    const display = getComputedStyle(document.getElementById("tok")!).display;
+    document.body.innerHTML = "";
+    style.remove();
+    return display;
+  }
+
+  it("keeps Markdown table tokens inline despite Tailwind's .table utility", () => {
+    // Sanity: with no DiffViewer reset, Tailwind's `.table` wins and the token
+    // computes block-level `table` — the bug, and proof the harness hits it.
+    expect(computeTokenDisplay("")).toBe("table");
+    // With the real stylesheet the reset pins the token back to inline.
+    const css = readFileSync(join(__dirname, "..", "DiffViewer.css"), "utf8");
+    expect(computeTokenDisplay(css)).toBe("inline");
   });
 });

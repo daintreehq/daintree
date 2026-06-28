@@ -188,16 +188,18 @@ describe("useForgeTokenHealth", () => {
     expect(useNotificationHistoryStore.getState().unreadCount).toBe(0);
   });
 
-  it("keeps a single active row when the toolbar's notify() supersedes the backstop", async () => {
+  it("keeps a single active row when a higher-priority notify() with the same supersedeKey arrives", async () => {
     renderHook(() => useForgeTokenHealth());
     await act(async () => {});
 
     act(() => healthListener?.(payload("unhealthy")));
     await act(async () => {});
 
-    // Drive the toolbar's expiry-notification path through the real notify()
-    // so this exercises supersedeKey forwarding end-to-end, not a hand-rolled
-    // addEntry that could mask a notify() regression.
+    // Emit a high-priority notification sharing the supersedeKey through the
+    // real notify() so this exercises supersedeKey forwarding end-to-end, not a
+    // hand-rolled addEntry that could mask a notify() regression. (The toolbar
+    // toast that used to do this was removed; the supersede mechanic it relied
+    // on still must hold for any future same-key emitter.)
     act(() => {
       notify({
         type: "warning",
@@ -276,11 +278,75 @@ describe("useForgeTokenHealth", () => {
     act(() => healthListener?.(payload("unhealthy")));
     await act(async () => {});
     act(() => healthListener?.(payload("healthy")));
+    await act(async () => {});
     act(() => healthListener?.(payload("unhealthy")));
     await act(async () => {});
 
+    // Two distinct "token expired" warning rows were written — one per failure
+    // cycle. (A recovery "token validated" row sits between them, also sharing
+    // the supersedeKey, so filter by title to assert the re-arm specifically.)
+    const expired = useNotificationHistoryStore
+      .getState()
+      .entries.filter((e) => e.title === "GitHub token expired");
+    expect(expired).toHaveLength(2);
+  });
+
+  it("emits an inbox-only recovery row on the unhealthy → healthy transition", async () => {
+    renderHook(() => useForgeTokenHealth());
+    await act(async () => {});
+
+    act(() => healthListener?.(payload("unhealthy")));
+    await act(async () => {});
+    act(() => healthListener?.(payload("healthy")));
+    await act(async () => {});
+
+    const recovery = useNotificationHistoryStore
+      .getState()
+      .entries.find((e) => e.title === "GitHub token validated");
+    expect(recovery).toBeDefined();
+    expect(recovery?.type).toBe("success");
+    expect(recovery?.supersedeKey).toBe(SUPERSEDE_KEY);
+    // Inbox-only acknowledgement: never a toast, never bumps the badge.
+    expect(recovery?.seenAsToast).toBe(false);
+    expect(recovery?.countable).toBe(false);
+    expect(useNotificationHistoryStore.getState().unreadCount).toBe(0);
+
+    // The recovery row supersedes the warning, leaving one active row.
+    const active = useNotificationHistoryStore
+      .getState()
+      .entries.filter((e) => e.supersedeKey === SUPERSEDE_KEY && !e.archivedAt);
+    expect(active).toHaveLength(1);
+    expect(active[0]?.title).toBe("GitHub token validated");
+  });
+
+  it("does not emit a recovery row for a healthy state with no prior failure", async () => {
+    renderHook(() => useForgeTokenHealth());
+    await act(async () => {});
+
+    act(() => healthListener?.(payload("healthy")));
+    await act(async () => {});
+
     const entries = useNotificationHistoryStore.getState().entries;
-    expect(entries.filter((e) => e.supersedeKey === SUPERSEDE_KEY)).toHaveLength(2);
+    expect(entries.filter((e) => e.supersedeKey === SUPERSEDE_KEY)).toHaveLength(0);
+  });
+
+  it("does not emit a recovery row when unmounted before the async notify runs", async () => {
+    const { unmount } = renderHook(() => useForgeTokenHealth());
+    await act(async () => {});
+
+    act(() => healthListener?.(payload("unhealthy")));
+    await act(async () => {});
+
+    // Recovery fires async (awaits resolveProviderMeta). Unmount sets the
+    // cancelled flag before the listener's then() runs, so no row appears.
+    act(() => healthListener?.(payload("healthy")));
+    unmount();
+    await act(async () => {});
+
+    const recovery = useNotificationHistoryStore
+      .getState()
+      .entries.find((e) => e.title === "GitHub token validated");
+    expect(recovery).toBeUndefined();
   });
 
   it("replays initial state on mount via getTokenHealth for the resolved provider", async () => {

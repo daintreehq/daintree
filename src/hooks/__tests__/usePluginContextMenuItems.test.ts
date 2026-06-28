@@ -226,13 +226,101 @@ describe("usePluginContextMenuItems", () => {
     expect(result.current.map((e) => e.item.label)).toEqual(["ForB"]);
   });
 
-  it("cleans up the push subscription on unmount", async () => {
+  it("shares one pull and one subscription across multiple mounted instances", async () => {
+    const { usePluginContextMenuItems } = await import("../usePluginContextMenuItems");
+    renderHook(() => usePluginContextMenuItems("terminal"));
+    renderHook(() => usePluginContextMenuItems("worktree"));
+    renderHook(() => usePluginContextMenuItems("file"));
+
+    await waitFor(() => expect(onContextMenuItemsChangedMock).toHaveBeenCalledTimes(1));
+    expect(contextMenuItemsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not tear down the shared subscription when an instance unmounts", async () => {
     const cleanupMock = vi.fn();
     onContextMenuItemsChangedMock.mockReturnValue(cleanupMock);
     const { usePluginContextMenuItems } = await import("../usePluginContextMenuItems");
-    const { unmount } = renderHook(() => usePluginContextMenuItems("terminal"));
+    const a = renderHook(() => usePluginContextMenuItems("terminal"));
+    renderHook(() => usePluginContextMenuItems("worktree"));
 
-    unmount();
-    expect(cleanupMock).toHaveBeenCalled();
+    a.unmount();
+    // The store owns the subscription for the renderer's lifetime — unmounting a
+    // consumer must not unsubscribe, or remaining/future consumers go stale.
+    expect(cleanupMock).not.toHaveBeenCalled();
+  });
+
+  it("each mounted consumer independently filters one shared push", async () => {
+    let emit:
+      | ((p: {
+          items: Array<{ pluginId: string; item: ContextMenuContribution }>;
+          complete: boolean;
+        }) => void)
+      | null = null;
+    onContextMenuItemsChangedMock.mockImplementation(
+      (
+        cb: (p: {
+          items: Array<{ pluginId: string; item: ContextMenuContribution }>;
+          complete: boolean;
+        }) => void
+      ) => {
+        emit = cb;
+        return () => {};
+      }
+    );
+    const { usePluginContextMenuItems } = await import("../usePluginContextMenuItems");
+    const term = renderHook(() => usePluginContextMenuItems("terminal"));
+    const wt = renderHook(() => usePluginContextMenuItems("worktree"));
+    const file = renderHook(() => usePluginContextMenuItems("file"));
+
+    await waitFor(() => expect(emit).not.toBeNull());
+    act(() => {
+      emit!({
+        items: [
+          entry("acme", "T", "terminal"),
+          entry("acme", "W", "worktree"),
+          entry("acme", "F", "file"),
+        ],
+        complete: true,
+      });
+    });
+
+    expect(term.result.current.map((e) => e.item.label)).toEqual(["T"]);
+    expect(wt.result.current.map((e) => e.item.label)).toEqual(["W"]);
+    expect(file.result.current.map((e) => e.item.label)).toEqual(["F"]);
+  });
+
+  it("a remounted consumer sees current data without a second subscription", async () => {
+    let emit:
+      | ((p: {
+          items: Array<{ pluginId: string; item: ContextMenuContribution }>;
+          complete: boolean;
+        }) => void)
+      | null = null;
+    onContextMenuItemsChangedMock.mockImplementation(
+      (
+        cb: (p: {
+          items: Array<{ pluginId: string; item: ContextMenuContribution }>;
+          complete: boolean;
+        }) => void
+      ) => {
+        emit = cb;
+        return () => {};
+      }
+    );
+    const { usePluginContextMenuItems } = await import("../usePluginContextMenuItems");
+    const first = renderHook(() => usePluginContextMenuItems("terminal"));
+    await waitFor(() => expect(emit).not.toBeNull());
+    first.unmount();
+
+    // A push lands through the retained listener while no consumer is mounted —
+    // mirrors an LRU-evicted view's state advancing before it restores.
+    act(() => {
+      emit!({ items: [entry("acme", "Live", "terminal")], complete: true });
+    });
+
+    const second = renderHook(() => usePluginContextMenuItems("terminal"));
+    expect(second.result.current.map((e) => e.item.label)).toEqual(["Live"]);
+    // No re-subscription: the module-level listener was never torn down.
+    expect(onContextMenuItemsChangedMock).toHaveBeenCalledTimes(1);
   });
 });

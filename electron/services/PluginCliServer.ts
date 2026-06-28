@@ -1,18 +1,33 @@
 import net from "node:net";
 import path from "node:path";
 import fs from "node:fs/promises";
+import crypto from "node:crypto";
 import { z } from "zod";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { getCliSocketPath } from "../../shared/utils/cliSocketPath.js";
+import {
+  getCliSocketPath,
+  getCliControlFilePath,
+  writeCliControlFile,
+  removeCliControlFile,
+} from "../../shared/utils/cliSocketPath.js";
 
 /**
  * Local control socket that lets the `daintree-plugin` CLI drive a running
  * Daintree instance for `install` / `uninstall` (F32). The CLI connects over a
  * Unix domain socket (`~/.daintree/cli.sock`) or a Windows named pipe
- * (`\\.\pipe\daintree-cli`) and exchanges newline-delimited JSON frames:
+ * (`\\.\pipe\daintree-cli-<random>`) and exchanges newline-delimited JSON frames:
  *
- *   request:  { "id": <string|number>, "method": <string>, "params"?: <object> }
+ *   request:  { "id": <string|number>, "method": <string>, "params"?: <object>, "token": <string> }
  *   response: { "id": <id>, "result": <value> }  |  { "id": <id>, "error": { "message": <string> } }
+ *
+ * Every frame must carry the per-launch `token` the host advertises in its
+ * control-discovery file (#10518). The 0700 socket dir already limits the Unix
+ * socket to the same user, but a same-user process is exactly the attacker the
+ * token raises the bar against, and on Windows the named pipe's default ACL is
+ * broad — the token (readable only from the user-owned control file) is what
+ * authenticates the peer there. Validated with `timingSafeEqual` before any
+ * method dispatches; an unauthenticated frame gets an error and the socket is
+ * destroyed.
  *
  * Every CLI install/uninstall routes through the SAME handler functions the IPC
  * surface uses, so the path/magic-byte/`.dntr` guards and the scoped-name check
@@ -23,11 +38,12 @@ import { getCliSocketPath } from "../../shared/utils/cliSocketPath.js";
 
 const MAX_FRAME_BYTES = 64 * 1024;
 
-/** Request envelope. `params` shape is validated per-method. */
+/** Request envelope. `params` shape is validated per-method; `token` is the auth gate. */
 const RequestSchema = z.object({
   id: z.union([z.string(), z.number()]),
   method: z.string().min(1),
   params: z.unknown().optional(),
+  token: z.string().optional(),
 });
 
 const InstallParamsSchema = z
@@ -46,9 +62,17 @@ const UninstallParamsSchema = z.object({
   deleteSettings: z.boolean().optional(),
 });
 
+const DevParamsSchema = z.object({
+  pluginId: z.string().min(1),
+});
+
 export interface PluginCliServerHandlers {
   install: (params: { path?: string; url?: string }) => Promise<unknown>;
   uninstall: (params: { pluginId: string; deleteSettings?: boolean }) => Promise<void>;
+  /** Load + activate a dev plugin the CLI symlinked into the plugins root. */
+  devStart: (params: { pluginId: string }) => Promise<void>;
+  /** Unload a dev plugin when the CLI's `dev` session stops. */
+  devStop: (params: { pluginId: string }) => Promise<void>;
 }
 
 export interface PluginCliServerConfig {
@@ -56,12 +80,25 @@ export interface PluginCliServerConfig {
   /** Resolves once the host is ready to accept install/uninstall calls. */
   waitForReady: () => Promise<void>;
   handlers: PluginCliServerHandlers;
+  /**
+   * Where to write the control-discovery file (socket path + auth token).
+   * Defaults to {@link getCliControlFilePath}; tests point it at a temp file so
+   * they never clobber the real `~/.daintree/cli-control.json`.
+   */
+  controlFilePath?: string;
+  /**
+   * Per-launch auth token clients must echo on every frame. Defaults to a fresh
+   * 256-bit random hex string; injectable so tests can assert the auth gate.
+   */
+  authToken?: string;
 }
 
 export interface PluginCliServer {
   listen: () => Promise<void>;
   close: () => Promise<void>;
   readonly socketPath: string;
+  /** The token a client must present on every frame (advertised via the control file). */
+  readonly authToken: string;
 }
 
 // Re-exported from `shared/utils/cliSocketPath.ts` so the host and the
@@ -84,12 +121,28 @@ function writeResponse(socket: net.Socket, payload: Record<string, unknown>): vo
 }
 
 /**
+ * Constant-time token comparison. Rejects a missing/empty token up front and
+ * length-guards before `timingSafeEqual` (which throws on unequal-length
+ * buffers) — the length check is not itself a timing leak since the token length
+ * is fixed and public.
+ */
+function tokenIsValid(provided: string | undefined, expected: string): boolean {
+  if (!provided) return false;
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+/**
  * Create (but do not yet bind) a CLI control server. `listen()` awaits
  * `waitForReady()` before binding so no request is serviced before the host
  * can honor it; `close()` tears the socket down and removes the on-disk file.
  */
 export function createPluginCliServer(config: PluginCliServerConfig): PluginCliServer {
   const { socketPath, waitForReady, handlers } = config;
+  const controlFilePath = config.controlFilePath ?? getCliControlFilePath();
+  const authToken = config.authToken ?? crypto.randomBytes(32).toString("hex");
 
   async function dispatchMethod(method: string, params: unknown): Promise<unknown> {
     switch (method) {
@@ -104,12 +157,26 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
         await handlers.uninstall(p);
         return { status: "ok" };
       }
+      case "plugin.dev.start": {
+        const p = DevParamsSchema.parse(params ?? {});
+        await handlers.devStart(p);
+        return { status: "ok" };
+      }
+      case "plugin.dev.stop": {
+        const p = DevParamsSchema.parse(params ?? {});
+        await handlers.devStop(p);
+        return { status: "ok" };
+      }
       default:
         throw new Error(`Unknown method: ${method}`);
     }
   }
 
-  async function dispatchFrame(socket: net.Socket, line: string): Promise<void> {
+  async function dispatchFrame(
+    socket: net.Socket,
+    line: string,
+    conn: { terminated: boolean }
+  ): Promise<void> {
     const trimmed = line.trim();
     if (trimmed.length === 0) return;
 
@@ -127,7 +194,22 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
       return;
     }
 
-    const { id, method, params } = req.data;
+    const { id, method, params, token } = req.data;
+
+    // Authenticate before dispatching anything (#10518). An unauthenticated peer
+    // gets a single error frame, then the connection is closed — no method (not
+    // even plugin.ping) runs. `conn.terminated` makes the data loop drop every
+    // subsequent frame on this connection so it genuinely can't be probed
+    // frame-by-frame (the auth check above is synchronous, so the flag is set
+    // before the data loop inspects it). `end()` (not `destroy()`) flushes the
+    // error frame before the FIN so the client sees why it was rejected.
+    if (!tokenIsValid(token, authToken)) {
+      conn.terminated = true;
+      writeResponse(socket, { id, error: { message: "Unauthorized: invalid or missing token" } });
+      socket.end();
+      return;
+    }
+
     try {
       const result = await dispatchMethod(method, params);
       writeResponse(socket, { id, result });
@@ -145,9 +227,12 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
     socket.setEncoding("utf8");
     let buffer = "";
     let overflowed = false;
+    // Flipped synchronously by dispatchFrame on an auth failure so no further
+    // frame on this connection is ever processed.
+    const conn = { terminated: false };
 
     socket.on("data", (chunk: string) => {
-      if (overflowed) return;
+      if (overflowed || conn.terminated) return;
       buffer += chunk;
       if (buffer.length > MAX_FRAME_BYTES) {
         overflowed = true;
@@ -161,7 +246,10 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
         buffer = buffer.slice(newlineIndex + 1);
         // Fire concurrently — each response carries its own id so the client
         // matches replies; install/uninstall serialize on the plugin lock.
-        void dispatchFrame(socket, frame);
+        void dispatchFrame(socket, frame, conn);
+        // The auth check inside dispatchFrame runs synchronously, so an auth
+        // failure on this frame has already set `terminated` — stop draining.
+        if (conn.terminated) return;
         newlineIndex = buffer.indexOf("\n");
       }
     });
@@ -203,6 +291,10 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
     if (fileSocket) {
       await fs.chmod(socketPath, 0o600);
     }
+    // Advertise the bound path + auth token only after the socket is live, so a
+    // racing CLI never reads a control file pointing at a not-yet-listening
+    // endpoint. The file itself is written owner-only (0700 dir / 0600 file).
+    await writeCliControlFile(controlFilePath, { socketPath, token: authToken });
     server = srv;
   }
 
@@ -217,12 +309,16 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
     }
     openSockets.clear();
     await new Promise<void>((resolve) => srv.close(() => resolve()));
+    // Remove the discovery file first so a CLI started during teardown sees
+    // "not running" instead of dialing a dead socket — but only if it's still
+    // ours (a concurrent instance may have taken over the file).
+    await removeCliControlFile(controlFilePath, authToken);
     if (isFileSocket(socketPath)) {
       await fs.rm(socketPath, { force: true }).catch(() => {});
     }
   }
 
-  return { listen, close, socketPath };
+  return { listen, close, socketPath, authToken };
 }
 
 // ── Process-wide singleton wiring ──────────────────────────────────────────
@@ -240,8 +336,18 @@ export async function startPluginCliServer(): Promise<void> {
   const { handleInstallFromPath, handleInstallFromUrl, handleUninstall } =
     await import("../ipc/handlers/plugin.js");
 
+  // On Windows the named pipe can't carry a restrictive DACL from pure node, so
+  // its default ACL is broad. Randomize the pipe name per launch (#10518) so it
+  // isn't a fixed, predictable target; the CLI discovers the real name from the
+  // control file rather than hardcoding it. The token gate is still the actual
+  // authentication. An explicit DAINTREE_CLI_SOCKET override is honored as-is.
+  const socketPath =
+    process.platform === "win32" && !process.env.DAINTREE_CLI_SOCKET
+      ? `\\\\.\\pipe\\daintree-cli-${crypto.randomUUID()}`
+      : getCliSocketPath();
+
   const server = createPluginCliServer({
-    socketPath: getCliSocketPath(),
+    socketPath,
     waitForReady: () => pluginService.waitForInit(),
     handlers: {
       install: ({ path: installPath, url }) => {
@@ -251,6 +357,11 @@ export async function startPluginCliServer(): Promise<void> {
         return Promise.reject(new Error("install requires exactly one of 'path' or 'url'"));
       },
       uninstall: ({ pluginId, deleteSettings }) => handleUninstall(pluginId, deleteSettings),
+      devStart: ({ pluginId }) => pluginService.loadDevPlugin(pluginId),
+      devStop: ({ pluginId }) => {
+        pluginService.unloadPlugin(pluginId);
+        return Promise.resolve();
+      },
     },
   });
   // Only claim the singleton once the socket is actually bound — if listen()

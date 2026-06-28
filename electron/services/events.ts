@@ -533,12 +533,18 @@ export type DaintreeEventMap = {
     waitingReason?: import("../../shared/types/agent.js").WaitingReason;
     sessionCost?: number;
     sessionTokens?: number;
+    /** Process exit code on completed/exited transitions; null on a signal kill with no numeric code. */
+    exitCode?: number | null;
+    /** Raw OS signal number on completed/exited transitions, when applicable. */
+    exitSignal?: number;
     /** Live activity-temperature reading at the moment the transition was committed. */
     temperature?: number;
     /** Heat impulse that drove the live temperature sample. */
     heatAdded?: number;
     /** Number of changed characters in the most recent sample. */
     changedChars?: number;
+    /** Parsed test/lint/build result captured at this transition (#10682). Best-effort, not an authoritative exit code. */
+    lastCheckResult?: import("../../shared/types/checkResult.js").TerminalCheckResult;
   }>;
 
   /**

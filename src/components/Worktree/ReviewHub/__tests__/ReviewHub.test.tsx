@@ -2580,21 +2580,19 @@ describe("ReviewHub", () => {
       await waitFor(() => expect(screen.queryByTestId("review-hub-push-error")).toBeNull());
     });
 
-    it("renders the banner with the unknown reason when push rejects (throws)", async () => {
+    it("renders the banner with the classified reason when push rejects (throws)", async () => {
       pushMock.mockRejectedValueOnce(new Error("Could not resolve host: github.com"));
 
       await triggerCommitAndPush();
 
       const banner = await screen.findByTestId("review-hub-push-error");
-      expect(banner.getAttribute("data-reason")).toBe("unknown");
+      expect(banner.getAttribute("data-reason")).toBe("network-unavailable");
       // "Push failed" appears exactly once — the title prepends it, so the
       // unknown message must not repeat it.
       expect(banner.textContent?.match(/Push failed/gi) ?? []).toHaveLength(1);
+      expect(banner.textContent).toMatch(/internet connection/i);
       expect(screen.queryByTestId("review-hub-push-error-details")).toBeNull();
-      fireEvent.click(screen.getByTestId("review-hub-push-error-toggle"));
-      expect(screen.getByTestId("review-hub-push-error-details").textContent).toBe(
-        "Could not resolve host: github.com"
-      );
+      expect(screen.queryByTestId("review-hub-push-error-toggle")).toBeNull();
     });
 
     it("updates the banner when a retry fails with a different reason", async () => {
@@ -3415,17 +3413,21 @@ describe("ReviewHub", () => {
       renderOpen();
       await waitFor(() => screen.getByPlaceholderText("Commit message…"));
 
-      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      const getTextarea = () =>
+        screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
 
-      focusTextareaAt(textarea, 0);
-      fireEvent.keyDown(textarea, { key: "ArrowUp" });
-      await waitFor(() => expect(textarea.value).toBe("feat: most recent commit"), {
+      focusTextareaAt(getTextarea(), 0);
+      fireEvent.keyDown(getTextarea(), { key: "ArrowUp" });
+      await waitFor(() => expect(getTextarea().value).toBe("feat: most recent commit"), {
         timeout: 3000,
       });
 
+      const textarea = getTextarea();
       focusTextareaAt(textarea, textarea.value.length);
       fireEvent.keyDown(textarea, { key: "ArrowUp" });
-      await waitFor(() => expect(textarea.value).toBe("fix: older commit"), { timeout: 3000 });
+      await waitFor(() => expect(getTextarea().value).toBe("fix: older commit"), {
+        timeout: 3000,
+      });
     });
 
     it("ArrowDown unwinds through history and restores original draft", async () => {

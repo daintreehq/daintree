@@ -11,10 +11,14 @@ const setMcpRegistry = vi.hoisted(() => vi.fn());
 let migrationCurrentVersion = 1;
 let migrationShouldThrow = false;
 let mockLogRetentionDays: number | undefined = 30;
-const { pruneOldLogs, pruneOldLogsAsync } = vi.hoisted(() => ({
-  pruneOldLogs: vi.fn(),
-  pruneOldLogsAsync: vi.fn(),
-}));
+const { pruneOldLogs, pruneOldLogsAsync, pruneHeapSnapshots, pruneHeapSnapshotsAsync } = vi.hoisted(
+  () => ({
+    pruneOldLogs: vi.fn(),
+    pruneOldLogsAsync: vi.fn(),
+    pruneHeapSnapshots: vi.fn(),
+    pruneHeapSnapshotsAsync: vi.fn(),
+  })
+);
 const {
   pluginMcpHydrate,
   getPluginMcpAuditService,
@@ -79,6 +83,9 @@ vi.mock("../../store.js", () => ({
 vi.mock("../../utils/logger.js", () => ({
   pruneOldLogs,
   pruneOldLogsAsync,
+  pruneHeapSnapshots,
+  pruneHeapSnapshotsAsync,
+  MAX_HEAP_SNAPSHOTS: 10,
   logError: vi.fn(),
   logWarn: vi.fn(),
   logInfo: vi.fn(),
@@ -136,8 +143,12 @@ vi.mock("../../setup/openFileInstall.js", () => ({
   activateOpenFileInstaller,
 }));
 
+const hibernationServiceMock = vi.hoisted(() => ({
+  setProjectViewManagersProvider: vi.fn(),
+}));
+
 vi.mock("../../services/HibernationService.js", () => ({
-  initializeHibernationService: vi.fn(),
+  initializeHibernationService: vi.fn(() => hibernationServiceMock),
   getHibernationService: () => ({ stop: vi.fn(), hibernateUnderMemoryPressure: vi.fn() }),
 }));
 
@@ -233,6 +244,7 @@ vi.mock("../../services/HelpSessionService.js", () => ({
     setMcpRegistry,
     setPendingHibernationStore: vi.fn(),
     setPtyClient: vi.fn(),
+    startOrphanSweep: vi.fn(),
     validateToken: vi.fn(),
     gcStaleSessions: vi.fn(async () => {}),
   },
@@ -263,7 +275,7 @@ vi.mock("../deferredInitQueue.js", () => ({
 }));
 
 vi.mock("electron", () => ({
-  app: { exit: vi.fn(), getPath: vi.fn(() => "/tmp/userData") },
+  app: { exit: vi.fn(), getPath: vi.fn((name: string) => `/tmp/${name}`) },
   dialog: { showErrorBox: vi.fn() },
   session: { defaultSession: { clearCache: vi.fn(), clearStorageData: vi.fn() } },
 }));
@@ -282,6 +294,8 @@ describe("initGlobalServices task ordering", () => {
     setMcpRegistry.mockReset();
     pruneOldLogs.mockReset();
     pruneOldLogsAsync.mockReset();
+    pruneHeapSnapshots.mockReset();
+    pruneHeapSnapshotsAsync.mockReset();
     pluginMcpHydrate.mockClear();
     getPluginMcpAuditService.mockClear();
     getPluginMcpConsentService.mockClear();
@@ -374,6 +388,24 @@ describe("initGlobalServices task ordering", () => {
     run!();
 
     expect(registerCommandsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("wires a lazy ProjectViewManager provider into HibernationService (#10668)", async () => {
+    hibernationServiceMock.setProjectViewManagersProvider.mockClear();
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    const run = registeredTaskRuns.get("hibernation-service");
+    expect(run).toBeDefined();
+    expect(hibernationServiceMock.setProjectViewManagersProvider).not.toHaveBeenCalled();
+
+    run!();
+
+    expect(hibernationServiceMock.setProjectViewManagersProvider).toHaveBeenCalledTimes(1);
+    const provider = hibernationServiceMock.setProjectViewManagersProvider.mock.calls[0][0];
+    expect(typeof provider).toBe("function");
+    // Lazy: re-reads the registry on each call rather than capturing a snapshot.
+    expect(provider()).toEqual([]);
   });
 
   it("registers monitor tasks before resource-profile-service so the profile reads ready data", async () => {
@@ -649,6 +681,9 @@ describe("initGlobalServices task ordering", () => {
     // The async twin replaces the sync version in the deferred drain so the
     // fs scan no longer blocks the main-process event loop (#10325).
     expect(pruneOldLogs).not.toHaveBeenCalled();
+    // Heap snapshots live in app.getPath("logs"), a different dir from
+    // userData/logs, and are bounded by count (#10728).
+    expect(pruneHeapSnapshotsAsync).toHaveBeenCalledWith("/tmp/logs", 10);
   });
 
   it("prune-old-logs task delegates retentionDays 0 to pruneOldLogsAsync (which skips internally)", async () => {

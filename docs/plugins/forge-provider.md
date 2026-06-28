@@ -6,13 +6,13 @@ The first-party GitHub plugin (`plugins/builtin/github/`) is the canonical worke
 
 ## Before you start
 
+- **A forge provider must be a built-in (in-process) plugin.** External `.dntr` plugins run in a worker process where every host call crosses an async `MessagePort`, but `ForgeProviderImpl`'s routing gate (`parseRemote`), URL builders, and `classifyPushError` are **synchronous** — the host calls them and uses the return value immediately. A worker can't satisfy that contract, so `host.registerForgeProvider` from a worker plugin logs a warning and returns a no-op disposer (`electron/services/plugin/pluginDevWorkerHostProxy.ts`). This is a permanent architectural gap, identical in dev and prod; a fix would require the forge API's synchronous surface to change. Everything below assumes a built-in under `plugins/builtin/`.
 - Read the [architecture reference](../architecture/forge-provider-abstraction.md). It explains the thin-interface-plus-capabilities model, the `rawData` escape hatch, and the state-normalization rule. The rest of this page assumes that context.
 - Skim `shared/types/forge.ts`. It is the source of truth for every signature — `ForgeProviderImpl`, the domain objects (`Issue`, `PR`, `RepoRef`, …), the capability sub-interfaces, and the manifest types. When the prose here and `forge.ts` disagree, `forge.ts` wins.
-- Decide whether you're shipping a built-in (lands in `plugins/builtin/`, loaded by `PluginService`) or an external plugin (distributed as a `.dntr`). The runtime contract is identical; only the directory and distribution differ.
 
 ## Scaffold the plugin
 
-External plugins start from the scaffolder — see [Getting started](./getting-started.md). A built-in lives under `plugins/builtin/{forge}/` and mirrors the GitHub layout:
+A forge provider lives under `plugins/builtin/{forge}/` and mirrors the GitHub layout:
 
 ```
 plugins/builtin/gitea/
@@ -65,7 +65,7 @@ Add a `forgeProviders` contribution to `plugin.json`. Daintree reads this eagerl
 | `matches` | yes | List of exact hostnames. The host extracts the hostname from the project's git remote (HTTPS, SSH, and SCP-form `git@host:owner/repo.git` URLs all handled), lowercases and trims it, then matches it for **exact string equality** against each entry. Matching is case-insensitive and strips a leading `www.` from both the remote hostname and each pattern before comparing — but there is still no glob, wildcard, or suffix matching. List every distinct hostname your forge serves (e.g. a self-hosted instance and its CI mirror) as separate entries. First matching provider wins. |
 | `capabilities` | no | Informational hints driving the Preferences "supports: …" display only. The host does **not** gate behavior on this array — see [Add optional capabilities](#add-optional-capabilities). |
 | `settingsScopeRef` | no | ID prefix in this plugin's `settings` contributions, used to group provider settings. |
-| `viewRefs` | no | IDs of `experimental_views` contributions shown under this provider's panel section. |
+| `viewRefs` | no | IDs of `views` contributions shown under this provider's panel section. |
 
 The `forgeProviders` contribution point is also documented in [Contribution points](./contribution-points.md#forge-providers).
 
@@ -107,8 +107,8 @@ Return the disposer `registerForgeProvider` hands back. `descriptor.id` must mat
 | `buildIssuesUrl(repo, opts?)` | `string` | Optional `{ query, state }` filter. |
 | `buildPRsUrl(repo, opts?)` | `string` | — |
 | `buildCommitsUrl(repo, branch?)` | `string` | — |
-| `assignIssue(repo, n, user)` | `Promise<void>` | Throw `"Not supported"` if your forge can't assign. |
-| `unassignIssue(repo, n, user)` | `Promise<void>` | Base method, paired with `assignIssue`. Throw `"Not supported"` if your forge can't unassign. |
+| `assignIssue(repo, n, user)` | `Promise<void>` | Reject (throw) if your forge can't assign. |
+| `unassignIssue(repo, n, user)` | `Promise<void>` | Base method, paired with `assignIssue`. Reject (throw) if your forge can't unassign. |
 | `validateToken(token)` | `Promise<AuthValidation>` | Validate an arbitrary token (used by the token-entry UI before storing it). |
 | `getRateLimit?()` | `Promise<RateLimitInfo>` | Optional. Project your transport's rate-limit signal into the uniform shape. `null` per dimension the provider doesn't report. |
 
@@ -144,6 +144,16 @@ Every returned shape has a `rawData: unknown` field. Put the verbatim transport 
 
 A first-party read of `rawData` is an interface-review signal — it means a field is missing from the typed surface and should be promoted there (or behind a capability), not papered over by reaching into `rawData`. Treat that as feedback on the interface, not a workaround.
 
+## Error handling
+
+The host is a thin dispatcher — it does **no retry, backoff, or circuit-breaking** around provider calls. Every method runs once; if it throws, the rejection surfaces to the caller (and ultimately the user) as-is. Own auth, network, and rate-limit handling inside your transport: retry transient failures yourself, project the provider's rate-limit signal through `getRateLimit`, and let definitive failures reject.
+
+A few conventions keep behavior predictable across providers:
+
+- **Not-found is `null`, not a throw.** `getIssue` / `getPR` return `null` when the resource doesn't exist; reserve throwing for genuine errors (auth, transport, malformed responses).
+- **Unsupported mutations reject.** `forge.ts` describes the convention as throwing `"Not supported"`, but that exact string is **not enforced** — it's advisory. The GitHub built-in throws full `Error` objects with descriptive messages (e.g. `"GitHub token not configured. Set it in Settings."`), and any clear rejection signals non-support to the host. Throw an `Error` whose message explains the limitation; don't reach for the literal string.
+- **Push errors get a stable code.** Implement the optional `classifyPushError?(stderr)` hook to map raw `git push` stderr to a provider-stable `PushErrorClassification` (auth, protected-branch, non-fast-forward, …), so the host can render a uniform recovery affordance instead of dumping raw stderr. Return `null` for stderr you can't classify.
+
 ## Add optional capabilities
 
 Anything that doesn't converge across forges is a capability — a sibling field on the impl, present only when supported:
@@ -165,6 +175,26 @@ The capability sub-interfaces are `ReviewCapability`, `ApprovalCapability`, `Rel
 
 The manifest's `capabilities` array is informational only — it drives the Preferences "supports: …" label. Actual behavior gates on whether the capability field is present at runtime, which keeps the displayed claim honest even if the manifest is stale.
 
+## Local / offline providers
+
+Not every provider talks to a network forge. A provider backed by on-disk files or a local CLI has no token to store and no remote to authenticate against — the auth surface (`getCredentials` / `validateCredentials` / `validateToken`) is dead weight you still have to satisfy. Two pieces make that ergonomic:
+
+- **`kind: "local"` on the manifest contribution.** A display-only signal — the host never gates auth or routing on it. Preferences uses it to label the provider "No configuration needed" rather than showing it as unconfigured. (`kind` defaults to `"network"`; it is frozen at 1.0 and otherwise inert.)
+- **`localAuthStubs` from `@daintreehq/plugin-sdk`.** Spread it into your impl to satisfy the three auth methods with no-ops: `getCredentials → null`, `validateCredentials → { valid: true }`, `validateToken → { valid: true }`.
+
+```ts
+import { localAuthStubs } from "@daintreehq/plugin-sdk";
+
+export const localNotesProvider: ForgeProviderImpl = {
+  ...localAuthStubs, // getCredentials / validateCredentials / validateToken
+  parseRemote,
+  listIssues,
+  // …the rest of the base surface…
+};
+```
+
+A local provider typically reads the project on disk rather than a remote. Use `repo.projectPath` for that: the host injects it as the absolute path to the project root (the main worktree) when it resolves a ref for a concrete project. It is optional — absent on synthetic refs the host builds without a project — so read it defensively (`if (repo.projectPath) …`). A network provider simply ignores the field.
+
 ## Expose the provider's CLI to the assistant
 
 The Daintree Assistant runs forge CLIs inside an allowlist at `help/.claude/settings.json`. The `allow` list already grants `Bash(gh *)`, `Bash(glab *)` (GitLab), and `Bash(tea *)` (Gitea); the `deny` list blocks the destructive create/merge mutations for each (e.g. `Bash(glab mr create*)`, `Bash(glab mr merge*)`, `Bash(tea pulls merge*)`).
@@ -181,13 +211,13 @@ Mirror the GitHub provider's `__tests__/` coverage. A new provider ships unit te
 - **`getRateLimit`** — if you implement it, the provider's rate-limit transport projects into `RateLimitInfo` correctly, including the `null`-per-dimension case.
 - **`validateCredentials` / `validateToken`** — valid, expired, and missing-token paths.
 
-External plugins use `@daintreehq/plugin-testing` (`createMockHost`) — see [Development loop → Testing](./dev-loop.md#testing). Built-ins follow the existing `plugins/builtin/github/main/__tests__/` patterns and run in the main test suite.
+Forge providers are built-in only, so their tests follow the existing `plugins/builtin/github/main/__tests__/` patterns and run in the main test suite — there's no worker-mock path to exercise here.
 
 ## Ship checklist
 
 - [ ] `contributes.forgeProviders[]` entry in `plugin.json`, with `matches` listing every exact hostname your forge serves
 - [ ] `activate()` returns `host.registerForgeProvider({ id }, impl)`
-- [ ] All base `ForgeProviderImpl` methods implemented; unsupported mutations throw `"Not supported"`
+- [ ] All base `ForgeProviderImpl` methods implemented; unsupported mutations reject with a clear error
 - [ ] `state` normalized and `rawState` preserved on every `Issue`/`PR`
 - [ ] Verbatim transport node in `rawData`; no first-party reads of it
 - [ ] Optional capabilities present only when supported; consumers probe with truthiness

@@ -310,9 +310,9 @@ describe("registerReviewDecorationProvider", () => {
     mockGetPRReviewThreads.mockReset();
   });
 
-  it("invalidates only PR-linked scopes on the first event", () => {
+  it("invalidates only PR-linked scopes on the first event", async () => {
     const { host, emit } = makeRegisterHost();
-    registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
+    await registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
 
     emit([makeWorktree("/linked", 42), unlinkedWorktree("/plain")]);
 
@@ -320,9 +320,9 @@ describe("registerReviewDecorationProvider", () => {
     expect(host.invalidateFileDecorations).toHaveBeenCalledWith("worktree-diff:/linked");
   });
 
-  it("skips invalidation when linkage is unchanged within the TTL", () => {
+  it("skips invalidation when linkage is unchanged within the TTL", async () => {
     const { host, emit } = makeRegisterHost();
-    registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
+    await registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
 
     emit([makeWorktree("/linked", 42)]);
     emit([makeWorktree("/linked", 42)]);
@@ -331,9 +331,9 @@ describe("registerReviewDecorationProvider", () => {
     expect(host.invalidateFileDecorations).toHaveBeenCalledTimes(1);
   });
 
-  it("invalidates when the linked PR number changes", () => {
+  it("invalidates when the linked PR number changes", async () => {
     const { host, emit } = makeRegisterHost();
-    registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
+    await registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
 
     emit([makeWorktree("/linked", 42)]);
     emit([makeWorktree("/linked", 43)]);
@@ -341,9 +341,9 @@ describe("registerReviewDecorationProvider", () => {
     expect(host.invalidateFileDecorations).toHaveBeenCalledTimes(2);
   });
 
-  it("invalidates when a PR linkage is removed", () => {
+  it("invalidates when a PR linkage is removed", async () => {
     const { host, emit } = makeRegisterHost();
-    registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
+    await registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
 
     emit([makeWorktree("/linked", 42)]);
     emit([unlinkedWorktree("/linked")]);
@@ -352,9 +352,9 @@ describe("registerReviewDecorationProvider", () => {
     expect(host.invalidateFileDecorations).toHaveBeenLastCalledWith("worktree-diff:/linked");
   });
 
-  it("invalidates an unchanged linkage again once the TTL elapses", () => {
+  it("invalidates an unchanged linkage again once the TTL elapses", async () => {
     const { host, emit } = makeRegisterHost();
-    registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
+    await registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
     try {
       emit([makeWorktree("/linked", 42)]);
@@ -370,9 +370,9 @@ describe("registerReviewDecorationProvider", () => {
     }
   });
 
-  it("invalidates an unchanged linkage within the TTL after a manual cache clear", () => {
+  it("invalidates an unchanged linkage within the TTL after a manual cache clear", async () => {
     const { host, emit } = makeRegisterHost();
-    registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
+    await registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
 
     emit([makeWorktree("/linked", 42)]);
     emit([makeWorktree("/linked", 42)]);
@@ -385,7 +385,7 @@ describe("registerReviewDecorationProvider", () => {
 
   it("serves linkage from the event-fed cache without a snapshot round-trip", async () => {
     const { host, emit, getProvider } = makeRegisterHost();
-    registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
+    await registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
     emit([makeWorktree("/some/path", 42)]);
     mockGetPRReviewThreads.mockResolvedValueOnce({ "src/a.ts": 2 });
 
@@ -400,7 +400,7 @@ describe("registerReviewDecorationProvider", () => {
     (host.getWorktrees as ReturnType<typeof vi.fn>).mockResolvedValue([
       makeWorktree("/some/path", 42),
     ]);
-    registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
+    await registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
     mockGetPRReviewThreads.mockResolvedValueOnce({ "src/a.ts": 1 });
 
     const result = await getProvider().provideDecorations("worktree-diff:/some/path", ["src/a.ts"]);

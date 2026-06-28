@@ -106,3 +106,64 @@ describe("runSmokeFunctionalChecks", () => {
     expect(wc.executeJavaScript).not.toHaveBeenCalled();
   });
 });
+
+describe("runSmokeStabilitySoak", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("continues when a transient readiness probe times out and later recovers", async () => {
+    const wc = createWebContents(false);
+    wc.executeJavaScript
+      .mockImplementationOnce(() => new Promise(() => undefined))
+      .mockResolvedValueOnce("complete");
+    mockGetAppWebContents.mockReturnValue(wc as unknown as WebContents);
+
+    const { runSmokeStabilitySoak } = await import("../smokeTest.js");
+
+    await expect(
+      runSmokeStabilitySoak({} as BrowserWindow, () => false, {
+        durationMs: 2,
+        stepMs: 1,
+        probeTimeoutMs: 1,
+        maxConsecutiveProbeTimeouts: 1,
+      })
+    ).resolves.toBeUndefined();
+    expect(wc.executeJavaScript).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails when readiness probe timeouts exceed the consecutive threshold", async () => {
+    const wc = createWebContents(false);
+    wc.executeJavaScript.mockImplementation(() => new Promise(() => undefined));
+    mockGetAppWebContents.mockReturnValue(wc as unknown as WebContents);
+
+    const { runSmokeStabilitySoak } = await import("../smokeTest.js");
+
+    await expect(
+      runSmokeStabilitySoak({} as BrowserWindow, () => false, {
+        durationMs: 2,
+        stepMs: 1,
+        probeTimeoutMs: 1,
+        maxConsecutiveProbeTimeouts: 1,
+      })
+    ).rejects.toThrow("Renderer readiness probe timed out during soak");
+    expect(wc.executeJavaScript).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails immediately on unexpected document readiness states", async () => {
+    const wc = createWebContents(false);
+    wc.executeJavaScript.mockResolvedValue("loading");
+    mockGetAppWebContents.mockReturnValue(wc as unknown as WebContents);
+
+    const { runSmokeStabilitySoak } = await import("../smokeTest.js");
+
+    await expect(
+      runSmokeStabilitySoak({} as BrowserWindow, () => false, {
+        durationMs: 1,
+        stepMs: 1,
+        probeTimeoutMs: 5,
+      })
+    ).rejects.toThrow("unexpected document.readyState: loading");
+    expect(wc.executeJavaScript).toHaveBeenCalledOnce();
+  });
+});

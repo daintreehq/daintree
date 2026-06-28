@@ -53,7 +53,6 @@ describe("WebGL lease through tier transitions", () => {
 
     mockDeps = {
       getInstance: vi.fn(() => mockManagedTerminal as ManagedTerminal),
-      wakeAndRestore: vi.fn(() => Promise.resolve({ ok: true, replayedMainBuffer: true })),
       onTierApplied: onTierApplied as RendererPolicyDeps["onTierApplied"],
     };
 
@@ -237,13 +236,20 @@ describe("onTierApplied handler — WebGL manager integration", () => {
   function simulateOnTierApplied(id: string, tier: TerminalRefreshTier, m: ManagedTerminal) {
     if (!m.runtimeAgentId) return;
 
+    // Mirrors wantsWebGLAtTier: an off-screen pane never wants WebGL, even an
+    // agent at an eligible tier (#10671).
     if (
-      tier === TerminalRefreshTier.FOCUSED ||
-      tier === TerminalRefreshTier.BURST ||
-      tier === TerminalRefreshTier.VISIBLE
+      m.isVisible &&
+      (tier === TerminalRefreshTier.FOCUSED ||
+        tier === TerminalRefreshTier.BURST ||
+        tier === TerminalRefreshTier.VISIBLE)
     ) {
       webGLManager.ensureContext(id, m);
     } else if (!m.isVisible) {
+      // This model intentionally omits the production webGLHideTimer dwell
+      // guard (TerminalInstanceService.onTierApplied) — the lease suite covers
+      // pure tier→WebGL mapping; hide-dwell timing lives in
+      // webglVisibility.test.ts, which drives the real service.
       const hadWebGL = webGLManager.isActive(id);
       webGLManager.releaseContext(id);
       if (hadWebGL && m.terminal.rows > 0) {

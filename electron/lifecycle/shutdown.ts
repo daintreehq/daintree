@@ -22,6 +22,7 @@ import { getHibernationService } from "../services/HibernationService.js";
 import { getIdleTerminalNotificationService } from "../services/IdleTerminalNotificationService.js";
 import { getSystemSleepService } from "../services/SystemSleepService.js";
 import { getOsDndService } from "../services/OsDndService.js";
+import { isE2EMode } from "../setup/runtimeFlags.js";
 import {
   agentConnectivityService,
   getServiceConnectivityRegistry,
@@ -84,9 +85,7 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
     }
 
     const canShowDialog =
-      process.env.DAINTREE_E2E_MODE !== "1" &&
-      !isSignalShutdown() &&
-      deps.windowRegistry?.getPrimary()?.browserWindow != null;
+      !isE2EMode && !isSignalShutdown() && deps.windowRegistry?.getPrimary()?.browserWindow != null;
 
     if (isConfirmingQuit) {
       event.preventDefault();

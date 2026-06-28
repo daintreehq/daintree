@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { globby } from "globby";
-import { execa } from "execa";
 import {
   packPluginArchiveFromFiles,
   isExcludedArchiveEntry,
   verifyPluginArchive,
 } from "../../../../electron/services/PluginArchive.js";
+import { runViteBuild } from "../lib/viteBuild.js";
 import { runValidate } from "./validate.js";
 
 export interface PackageOptions {
@@ -29,6 +29,8 @@ interface MinimalManifest {
   version: string;
   main?: string;
   contributes?: {
+    views?: Array<{ componentPath?: string }>;
+    /** @deprecated Renamed to `views` in the 1.0 freeze; still honored here. */
     experimental_views?: Array<{ componentPath?: string }>;
   };
 }
@@ -47,23 +49,12 @@ function protectedDirs(manifest: MinimalManifest): string[] {
     if (top && top !== "." && top !== "..") dirs.add(top);
   };
   add(manifest.main);
-  for (const view of manifest.contributes?.experimental_views ?? []) {
+  for (const view of manifest.contributes?.views ??
+    manifest.contributes?.experimental_views ??
+    []) {
     add(view.componentPath);
   }
   return [...dirs];
-}
-
-async function runViteBuild(dir: string): Promise<void> {
-  const binName = process.platform === "win32" ? "vite.cmd" : "vite";
-  const bin = path.join(dir, "node_modules", ".bin", binName);
-  try {
-    await fs.access(bin);
-  } catch {
-    throw new Error(
-      `Couldn't find Vite at ${bin}. Run npm install in the plugin directory, or pass --skip-build.`
-    );
-  }
-  await execa(bin, ["build"], { cwd: dir, stdio: "inherit" });
 }
 
 /**

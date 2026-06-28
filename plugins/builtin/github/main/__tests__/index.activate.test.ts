@@ -52,27 +52,27 @@ describe("github plugin activate", () => {
     gitHubAuthMock.getTokenVersion.mockReturnValue(0);
   });
 
-  it("initializes token storage before registering the forge provider", () => {
+  it("initializes token storage before registering the forge provider", async () => {
     const host = makeHost();
     const order: string[] = [];
     gitHubAuthMock.initializeStorage.mockImplementation(() => order.push("storage"));
     vi.mocked(host.registerForgeProvider).mockImplementation(() => {
       order.push("provider");
-      return vi.fn();
+      return Promise.resolve(vi.fn());
     });
 
-    activate(host);
+    await activate(host);
 
     expect(order).toEqual(["storage", "provider"]);
   });
 
-  it("returns synchronously even while a stored-token validate hangs (#10325)", () => {
+  it("returns synchronously even while a stored-token validate hangs (#10325)", async () => {
     gitHubAuthMock.getToken.mockReturnValue("tok-123");
     // A validate() that never resolves models a slow/offline network — it must
     // be floated, never awaited, so activation cannot stall on it.
     gitHubAuthMock.validate.mockReturnValue(new Promise<never>(() => {}));
 
-    const dispose = activate(makeHost());
+    const dispose = await activate(makeHost());
 
     expect(typeof dispose).toBe("function");
     expect(gitHubAuthMock.validate).toHaveBeenCalledWith("tok-123");
@@ -111,7 +111,7 @@ describe("github plugin activate", () => {
       scopes: ["repo"],
     });
 
-    activate(makeHost());
+    await activate(makeHost());
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(gitHubAuthMock.setValidatedUserInfo).toHaveBeenCalledWith(
@@ -126,7 +126,7 @@ describe("github plugin activate", () => {
     gitHubAuthMock.getToken.mockReturnValue("tok-123");
     gitHubAuthMock.validate.mockResolvedValue({ valid: false });
 
-    activate(makeHost());
+    await activate(makeHost());
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(updateForgeCredentialsMock).toHaveBeenCalledWith(expect.any(String), {
@@ -136,7 +136,7 @@ describe("github plugin activate", () => {
   });
 
   it("skips the credential push and validation when no token is stored", async () => {
-    activate(makeHost());
+    await activate(makeHost());
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(gitHubAuthMock.validate).not.toHaveBeenCalled();

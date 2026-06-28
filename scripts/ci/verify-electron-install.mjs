@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { existsSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import process from "node:process";
+import { setTimeout as sleep } from "node:timers/promises";
 
 const require = createRequire(import.meta.url);
 
@@ -21,17 +22,28 @@ function resolveElectronPath() {
   return electronPath;
 }
 
-function repairElectronInstall(packageRoot) {
-  rmSync(join(packageRoot, "dist"), { recursive: true, force: true });
-  rmSync(join(packageRoot, "path.txt"), { force: true });
+const REPAIR_ATTEMPTS = 3;
 
-  const result = spawnSync(process.execPath, [join(packageRoot, "install.js")], {
-    stdio: "inherit",
-    env: process.env,
-  });
+async function repairElectronInstall(packageRoot) {
+  for (let attempt = 1; attempt <= REPAIR_ATTEMPTS; attempt += 1) {
+    rmSync(join(packageRoot, "dist"), { recursive: true, force: true });
+    rmSync(join(packageRoot, "path.txt"), { force: true });
 
-  if (result.status !== 0) {
-    throw new Error(`electron install.js exited with code ${result.status ?? "null"}`);
+    console.log(`[verify-electron-install] Repair attempt ${attempt}/${REPAIR_ATTEMPTS}`);
+    const result = spawnSync(process.execPath, [join(packageRoot, "install.js")], {
+      stdio: "inherit",
+      env: process.env,
+    });
+
+    if (result.status === 0) {
+      return;
+    }
+
+    if (attempt === REPAIR_ATTEMPTS) {
+      throw new Error(`electron install.js exited with code ${result.status ?? "null"}`);
+    }
+
+    await sleep(2 ** (attempt - 1) * 1_000);
   }
 }
 
@@ -46,7 +58,7 @@ try {
       error instanceof Error ? error.message : String(error)
     }`
   );
-  repairElectronInstall(packageRoot);
+  await repairElectronInstall(packageRoot);
   const electronPath = resolveElectronPath();
   console.log(`[verify-electron-install] Electron repaired: ${electronPath}`);
 }

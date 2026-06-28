@@ -1276,6 +1276,25 @@ describe("TerminalResizeController", () => {
       expect(managed.fitAddon.fit).not.toHaveBeenCalled();
     });
 
+    it("does NOT reflow a live alt-screen TUI even when the grid drifted (OpenCode clobber regression)", () => {
+      const managed = createManagedTerminal();
+      managed.isAltBuffer = true;
+      // Same stale-grid setup as above (box proposes 100x30, grid is 80x24): a
+      // main-buffer pane gets reflowed, but an alt-screen pane must be left
+      // untouched — an out-of-band xterm resize mangles its absolutely-positioned
+      // frame (the "settled OpenCode goes weird on click" corruption, #10632).
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+
+      const controller = makeController(managed);
+      const ok = controller.reconcileGeometryFresh("term-1");
+
+      // Reports success so the reveal repaint does not retry-loop, but resizes
+      // neither xterm nor the PTY.
+      expect(ok).toBe(true);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+    });
+
     it("ignores an active resize lock without clearing it (the reveal exception)", () => {
       const managed = createManagedTerminal();
       managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
@@ -1411,6 +1430,81 @@ describe("TerminalResizeController", () => {
       const controller = makeController(undefined);
       expect(controller.reconcileGeometryFresh("term-1")).toBe(false);
       expect(resizeMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("background resize lock replay + custom TTL", () => {
+    function makeManagedWithMetrics() {
+      const managed = createManagedTerminal();
+      managed.isFocused = false;
+      managed.isVisible = false;
+      managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
+      });
+      return managed;
+    }
+
+    function makeCtl(managed: ReturnType<typeof createManagedTerminal>) {
+      return new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: { flushForTerminal: vi.fn(), resetForTerminal: vi.fn() } as any,
+      });
+    }
+
+    it("stashes a background resize that lands while the resize lock is held instead of dropping it", () => {
+      const managed = makeManagedWithMetrics();
+      const controller = makeCtl(managed);
+
+      controller.lockResize("term-1", true);
+      const result = controller.resizePtyOnly("term-1", 1600, 800);
+
+      // Locked: the PTY is not resized now, but the geometry is preserved.
+      expect(result).toBeNull();
+      expect(resizeMock).not.toHaveBeenCalled();
+      expect(managed.pendingBackgroundResize).toEqual({ width: 1600, height: 800 });
+    });
+
+    it("replays the stashed background resize when the lock releases", () => {
+      const managed = makeManagedWithMetrics();
+      const controller = makeCtl(managed);
+
+      controller.lockResize("term-1", true);
+      controller.resizePtyOnly("term-1", 1600, 800);
+      expect(resizeMock).not.toHaveBeenCalled();
+
+      controller.lockResize("term-1", false);
+
+      // The held geometry is delivered to the PTY once on unlock, stash cleared.
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 160, 40);
+      expect(managed.pendingBackgroundResize).toBeUndefined();
+    });
+
+    it("releasing the lock with no stashed resize is a no-op", () => {
+      const managed = makeManagedWithMetrics();
+      const controller = makeCtl(managed);
+
+      controller.lockResize("term-1", true);
+      controller.lockResize("term-1", false);
+
+      expect(resizeMock).not.toHaveBeenCalled();
+      expect(managed.pendingBackgroundResize).toBeUndefined();
+    });
+
+    it("honors a custom lock TTL longer than the default", () => {
+      const managed = makeManagedWithMetrics();
+      const controller = makeCtl(managed);
+
+      // 10s custom TTL — the project-switch suppression window.
+      controller.lockResize("term-1", true, 10_000);
+
+      // Past the 5s default lock TTL, a custom-TTL lock is still held.
+      vi.advanceTimersByTime(6_000);
+      expect(controller.isResizeLocked("term-1")).toBe(true);
+
+      // Past the 10s custom TTL, the lock has expired.
+      vi.advanceTimersByTime(4_001);
+      expect(controller.isResizeLocked("term-1")).toBe(false);
     });
   });
 });

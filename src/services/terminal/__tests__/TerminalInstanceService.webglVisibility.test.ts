@@ -55,10 +55,17 @@ type WebGLVisibilityService = {
   setVisible: (id: string, visible: boolean, expectedGeneration?: number) => void;
   destroy: (id: string) => void;
   applyRendererPolicy: (id: string, tier: TerminalRefreshTier) => void;
+  applyAgentPromotion: (id: string, agentId: string) => void;
   webGLManager: {
     isActive: (id: string) => boolean;
     ensureContext: (id: string, managed: unknown) => void;
     releaseContext: (id: string) => void;
+    getMode: () => "webgl" | "dom";
+    getPinnedId: () => string | null;
+    getWantsSize: () => number;
+    pinAltBuffer: (id: string, managed: unknown) => void;
+    unpinAltBuffer: (id: string) => void;
+    isAltBufferPinned: (id: string) => boolean;
   };
 };
 
@@ -122,7 +129,6 @@ function makeMockManaged(overrides: Record<string, unknown> = {}) {
     restoreGeneration: 0,
     isSerializedRestoreInProgress: false,
     deferredOutput: [] as Array<string | Uint8Array>,
-    hibernationTimer: undefined as ReturnType<typeof setTimeout> | undefined,
     webGLRestoreTimer: undefined as number | undefined,
     webGLHideTimer: undefined as number | undefined,
     isInputLocked: false,
@@ -472,5 +478,292 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
     // shouldRestoreWebGL re-checks eligibility in the timer callback,
     // so the deferred restore must not fire after demotion.
     expect(service.webGLManager.isActive("t1")).toBe(false);
+  });
+
+  // #10671: off-screen agent terminals must not register a fleet-wide WebGL
+  // want. The want set is per project view, so enough hidden streaming agents
+  // would trip the count-based mode switch and drop the visible fleet to DOM.
+  it("hidden agent at BURST tier does not acquire WebGL (#10671)", () => {
+    const managed = makeMockManaged({
+      isVisible: false,
+      lastAppliedTier: TerminalRefreshTier.VISIBLE,
+      getRefreshTier: () => TerminalRefreshTier.VISIBLE,
+    });
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+    // A PTY write while off-screen drives the pane to BURST. The tier still
+    // applies (backpressure cadence), but the want must not be registered.
+    service.applyRendererPolicy("t1", TerminalRefreshTier.BURST);
+
+    expect(service.webGLManager.isActive("t1")).toBe(false);
+    expect(managed.lastAppliedTier).toBe(TerminalRefreshTier.BURST);
+  });
+
+  it("visible agent at BURST tier still acquires WebGL (no regression)", () => {
+    const managed = makeMockManaged({
+      isVisible: true,
+      lastAppliedTier: TerminalRefreshTier.FOCUSED,
+      getRefreshTier: () => TerminalRefreshTier.FOCUSED,
+    });
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+    service.applyRendererPolicy("t1", TerminalRefreshTier.BURST);
+
+    expect(service.webGLManager.isActive("t1")).toBe(true);
+  });
+
+  it("applyAgentPromotion on a hidden terminal does not acquire WebGL (#10671)", () => {
+    const managed = makeMockManaged({
+      isVisible: false,
+      runtimeAgentId: undefined,
+      launchAgentId: undefined,
+      lastAppliedTier: TerminalRefreshTier.VISIBLE,
+      getRefreshTier: () => TerminalRefreshTier.VISIBLE,
+    });
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+    service.applyAgentPromotion("t1", "claude");
+
+    expect(managed.runtimeAgentId).toBe("claude");
+    expect(service.webGLManager.isActive("t1")).toBe(false);
+  });
+
+  it("applyAgentPromotion on a visible terminal acquires WebGL", () => {
+    const managed = makeMockManaged({
+      isVisible: true,
+      runtimeAgentId: undefined,
+      launchAgentId: undefined,
+      lastAppliedTier: TerminalRefreshTier.VISIBLE,
+      getRefreshTier: () => TerminalRefreshTier.VISIBLE,
+    });
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+    service.applyAgentPromotion("t1", "claude");
+
+    expect(service.webGLManager.isActive("t1")).toBe(true);
+  });
+
+  it("hidden agent revealed via setVisible(true) re-acquires WebGL (#10671)", () => {
+    const managed = makeMockManaged({
+      isVisible: false,
+      lastAppliedTier: TerminalRefreshTier.VISIBLE,
+      getRefreshTier: () => TerminalRefreshTier.VISIBLE,
+    });
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+    // Off-screen: even at an eligible tier the want is withheld.
+    service.applyRendererPolicy("t1", TerminalRefreshTier.BURST);
+    expect(service.webGLManager.isActive("t1")).toBe(false);
+
+    // Reveal re-acquires through the debounced restore path.
+    service.setVisible("t1", true);
+    vi.advanceTimersByTime(100);
+    expect(service.webGLManager.isActive("t1")).toBe(true);
+  });
+
+  it("hidden agent streaming at BURST keeps WebGL through the hide dwell, then releases (#10671)", () => {
+    // A visible agent that goes off-screen mid-stream must keep its context for
+    // the WEBGL_HIDE_DWELL_MS window (anti-churn for hide→show toggles) even
+    // though wantsWebGLAtTier now returns false off-screen — the webGLHideTimer
+    // guard in onTierApplied preserves the dwell instead of releasing on the
+    // next write's tier apply.
+    const managed = makeMockManaged({
+      isVisible: true,
+      lastAppliedTier: TerminalRefreshTier.FOCUSED,
+      getRefreshTier: () => TerminalRefreshTier.FOCUSED,
+    });
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+    service.webGLManager.ensureContext("t1", managed);
+    expect(service.webGLManager.isActive("t1")).toBe(true);
+
+    service.setVisible("t1", false);
+
+    // Streaming continues while off-screen — drives BURST during the dwell.
+    service.applyRendererPolicy("t1", TerminalRefreshTier.BURST);
+    vi.advanceTimersByTime(499);
+    expect(service.webGLManager.isActive("t1")).toBe(true);
+
+    // Dwell elapses — context released, no longer consuming the fleet budget.
+    vi.advanceTimersByTime(1);
+    expect(service.webGLManager.isActive("t1")).toBe(false);
+  });
+
+  it("hidden streaming agents do not inflate the fleet want count or flip to DOM (#10671)", () => {
+    // The literal #10671 scenario: a handful of visible agents plus many hidden
+    // background-worktree agents all streaming at BURST. Pre-fix, each hidden
+    // agent registered a want; 3 visible + 15 hidden = 18 wants would exceed the
+    // upper threshold and flip the whole fleet to DOM. Post-fix, only the
+    // visible agents contribute wants, so the fleet stays in WebGL.
+    for (let i = 0; i < 3; i++) {
+      const id = `vis-${i}`;
+      service.instances.set(
+        id,
+        makeMockManaged({
+          isVisible: true,
+          lastAppliedTier: TerminalRefreshTier.FOCUSED,
+          getRefreshTier: () => TerminalRefreshTier.FOCUSED,
+        }) as unknown as Record<string, unknown>
+      );
+      service.applyRendererPolicy(id, TerminalRefreshTier.BURST);
+    }
+
+    for (let i = 0; i < 15; i++) {
+      const id = `hid-${i}`;
+      service.instances.set(
+        id,
+        makeMockManaged({
+          isVisible: false,
+          lastAppliedTier: TerminalRefreshTier.VISIBLE,
+          getRefreshTier: () => TerminalRefreshTier.VISIBLE,
+        }) as unknown as Record<string, unknown>
+      );
+      service.applyRendererPolicy(id, TerminalRefreshTier.BURST);
+    }
+
+    expect(service.webGLManager.getWantsSize()).toBe(3);
+    expect(service.webGLManager.getMode()).toBe("webgl");
+    for (let i = 0; i < 3; i++) {
+      expect(service.webGLManager.isActive(`vis-${i}`)).toBe(true);
+    }
+  });
+
+  it("agent promoted while hidden re-acquires WebGL only after reveal (#10671)", () => {
+    const managed = makeMockManaged({
+      isVisible: false,
+      runtimeAgentId: undefined,
+      launchAgentId: undefined,
+      lastAppliedTier: TerminalRefreshTier.VISIBLE,
+      getRefreshTier: () => TerminalRefreshTier.VISIBLE,
+    });
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+    // Background detection promotes the off-screen pane — want is withheld.
+    service.applyAgentPromotion("t1", "claude");
+    expect(managed.runtimeAgentId).toBe("claude");
+    expect(service.webGLManager.isActive("t1")).toBe(false);
+
+    // Reveal drives the debounced restore, which now passes the visibility gate.
+    service.setVisible("t1", true);
+    vi.advanceTimersByTime(100);
+    expect(service.webGLManager.isActive("t1")).toBe(true);
+  });
+
+  describe("WebGL DOM-mode fallback eligibility (W3)", () => {
+    function callShouldRestore(managed: unknown): boolean {
+      return (
+        service as unknown as { shouldRestoreWebGL: (m: unknown) => boolean }
+      ).shouldRestoreWebGL(managed);
+    }
+    function callShouldHaveActive(managed: unknown): boolean {
+      return (
+        service as unknown as { shouldHaveActiveWebGL: (m: unknown) => boolean }
+      ).shouldHaveActiveWebGL(managed);
+    }
+
+    it("keeps a non-pinned DOM pane RESTORE-eligible so it stays in the manager's wants set", () => {
+      vi.spyOn(service.webGLManager, "getMode").mockReturnValue("dom");
+      vi.spyOn(service.webGLManager, "getPinnedId").mockReturnValue("pinned-other");
+      const managed = makeMockManaged({ id: "t1" });
+
+      // The reveal/visibility restore path must still call ensureContext for this
+      // pane — that keeps it in `wants`, so a later focus change can pin+attach it
+      // immediately instead of waiting on the watchdog.
+      expect(callShouldRestore(managed)).toBe(true);
+    });
+
+    it("withholds WATCHDOG repair for a non-pinned pane while in DOM-mode fallback", () => {
+      vi.spyOn(service.webGLManager, "getMode").mockReturnValue("dom");
+      vi.spyOn(service.webGLManager, "getPinnedId").mockReturnValue("pinned-other");
+      const managed = makeMockManaged({ id: "t1" });
+
+      // In DOM mode the manager only ever attaches the pinned pane; the watchdog
+      // must not burn a heavy-repair slot retrying a context it will never get.
+      expect(callShouldHaveActive(managed)).toBe(false);
+    });
+
+    it("still repairs the focus-pinned pane while in DOM-mode fallback", () => {
+      vi.spyOn(service.webGLManager, "getMode").mockReturnValue("dom");
+      vi.spyOn(service.webGLManager, "getPinnedId").mockReturnValue("t1");
+      const managed = makeMockManaged({ id: "t1" });
+
+      expect(callShouldHaveActive(managed)).toBe(true);
+    });
+
+    it("still repairs an alt-buffer-pinned pane while in DOM-mode fallback (#10768)", () => {
+      vi.spyOn(service.webGLManager, "getMode").mockReturnValue("dom");
+      vi.spyOn(service.webGLManager, "getPinnedId").mockReturnValue("pinned-other");
+      vi.spyOn(service.webGLManager, "isAltBufferPinned").mockReturnValue(true);
+      const managed = makeMockManaged({ id: "t1" });
+
+      // Alt-buffer pins keep a context in DOM mode just like the focus pin, so
+      // the watchdog must treat a missing context as a real fault to repair.
+      expect(callShouldHaveActive(managed)).toBe(true);
+    });
+
+    it("does not withhold watchdog repair outside DOM-mode fallback", () => {
+      vi.spyOn(service.webGLManager, "getMode").mockReturnValue("webgl");
+      vi.spyOn(service.webGLManager, "getPinnedId").mockReturnValue("pinned-other");
+      const managed = makeMockManaged({ id: "t1" });
+
+      expect(callShouldHaveActive(managed)).toBe(true);
+    });
+  });
+
+  describe("alt-buffer pin wiring (#10768)", () => {
+    function handleBufferModeChange(id: string, isAltBuffer: boolean): void {
+      (
+        service as unknown as {
+          handleBufferModeChange: (id: string, isAltBuffer: boolean) => void;
+        }
+      ).handleBufferModeChange(id, isAltBuffer);
+    }
+
+    it("entering the alt-buffer pins the terminal in the WebGL manager", () => {
+      const managed = makeMockManaged({ id: "t1" });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+      const pinSpy = vi.spyOn(service.webGLManager, "pinAltBuffer");
+
+      handleBufferModeChange("t1", true);
+
+      expect(pinSpy).toHaveBeenCalledWith("t1", managed);
+      expect(service.webGLManager.isAltBufferPinned("t1")).toBe(true);
+    });
+
+    it("returning to the normal buffer unpins the terminal", () => {
+      const managed = makeMockManaged({ id: "t1" });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+      const unpinSpy = vi.spyOn(service.webGLManager, "unpinAltBuffer");
+
+      handleBufferModeChange("t1", true);
+      handleBufferModeChange("t1", false);
+
+      expect(unpinSpy).toHaveBeenCalledWith("t1");
+      expect(service.webGLManager.isAltBufferPinned("t1")).toBe(false);
+    });
+  });
+
+  describe("shouldRestoreWebGL — trust DOM visibility on reveal (W1)", () => {
+    function callShouldRestore(managed: unknown, opts?: { trustDomVisibility?: boolean }): boolean {
+      return (
+        service as unknown as {
+          shouldRestoreWebGL: (m: unknown, o?: { trustDomVisibility?: boolean }) => boolean;
+        }
+      ).shouldRestoreWebGL(managed, opts);
+    }
+
+    it("withholds restore for a stale isVisible=false pane by default", () => {
+      const managed = makeMockManaged({ id: "t1", isVisible: false });
+      expect(callShouldRestore(managed)).toBe(false);
+    });
+
+    it("restores a stale isVisible=false pane when DOM truth is trusted (reveal path)", () => {
+      const managed = makeMockManaged({ id: "t1", isVisible: false });
+      // repaintForReveal proves the pane on-screen from DOM truth before it
+      // reattaches WebGL, so a stale reactive isVisible=false must not veto the
+      // want — otherwise non-focused agent panes sit on the DOM renderer (mangled
+      // block glyphs) until the watchdog heals (#10632 item 4 / W1). The guard is
+      // threaded through wantsWebGLAtTier, which gates on isVisible too.
+      expect(callShouldRestore(managed, { trustDomVisibility: true })).toBe(true);
+    });
   });
 });

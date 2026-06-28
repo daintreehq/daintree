@@ -197,13 +197,18 @@ jobs:
 
       - name: Build app
         run: npm run build:e2e
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
       - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
+        run: node scripts/ci/npm-install-retry.mjs -g @anthropic-ai/claude-code
+
+      - name: Repair Claude Code native binary
+        run: node scripts/ci/repair-claude-code-install.mjs
 
       - name: Install OpenCode
         if: inputs.suite == 'online'
-        run: npm install -g opencode-ai
+        run: node scripts/ci/npm-install-retry.mjs -g opencode-ai
 
       - name: Configure Claude Code (macOS/Linux)
         if: runner.os != 'Windows'

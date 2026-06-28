@@ -258,11 +258,18 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     const wasPendingRestart = plugin.pendingRestart;
 
     setPending((prev) => new Set(prev).add(id));
-    // Optimistic flip: a single toggle always flips both the desired state and
-    // the running/desired mismatch, so `pendingRestart` simply inverts.
+    // Optimistic flip. For session-fixed user plugins a single toggle flips both
+    // the desired state and the running/desired mismatch, so `pendingRestart`
+    // inverts. Built-ins transition live (#9304) — `setEnabled` reconciles
+    // running and desired state immediately, so their authoritative
+    // `pendingRestart` stays false; inverting it flashes a false "restart
+    // required" badge until the next refresh (#10512). Match the authoritative
+    // value by holding built-ins at false.
     setPlugins((prev) =>
       prev.map((p) =>
-        p.manifest.name === id ? { ...p, disabled: !next, pendingRestart: !p.pendingRestart } : p
+        p.manifest.name === id
+          ? { ...p, disabled: !next, pendingRestart: p.isBuiltin ? false : !p.pendingRestart }
+          : p
       )
     );
     try {

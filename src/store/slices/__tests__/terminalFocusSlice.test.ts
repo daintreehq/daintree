@@ -5,6 +5,7 @@ import type { PtyPanelData } from "@shared/types/panel";
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     wake: vi.fn(),
+    wakeForFocus: vi.fn(),
   },
 }));
 
@@ -1206,6 +1207,28 @@ describe("TerminalFocusSlice - setFocused ping gating", () => {
     expect(pingSpy).not.toHaveBeenCalled();
     state.setFocused("term-2", false);
     expect(pingSpy).not.toHaveBeenCalled();
+  });
+
+  it("routes a focus move through wakeForFocus (never a destructive wake on a live grid pane)", () => {
+    state.setFocused("term-1");
+    expect(terminalInstanceService.wakeForFocus).toHaveBeenCalledWith("term-1");
+
+    vi.mocked(terminalInstanceService.wakeForFocus).mockClear();
+    state.setFocused("term-2");
+    expect(terminalInstanceService.wakeForFocus).toHaveBeenCalledWith("term-2");
+  });
+
+  it("does NOT re-wake when re-focusing the already-focused terminal", () => {
+    // A wake reset()+replays the serialized buffer. Re-focusing a live
+    // foreground terminal (clicking the xterm while the pane hybrid input held
+    // focus) must not trigger that, or the redundant replay clobbers the live
+    // buffer and collapses an alt-screen TUI like OpenCode.
+    state.setFocused("term-1");
+    vi.mocked(terminalInstanceService.wakeForFocus).mockClear();
+
+    state.setFocused("term-1");
+
+    expect(terminalInstanceService.wakeForFocus).not.toHaveBeenCalled();
   });
 });
 

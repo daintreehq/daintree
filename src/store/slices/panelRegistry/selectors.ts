@@ -1,10 +1,13 @@
 import {
   isBrowserPanel,
+  isBuiltInPanelKind,
   isDevPreviewPanel,
   isPtyPanel,
   isReviewPanel,
   type PanelInstance,
+  type PanelKind,
 } from "@shared/types/panel";
+import { isRegisteredPanelKind } from "@shared/config/panelKindRegistry";
 
 let _prevById: Record<string, PanelInstance> | null = null;
 let _prevIds: string[] | null = null;
@@ -44,6 +47,63 @@ export function getNarrowPanel(
   if (isReviewPanel(panel)) return panel;
   if (isPtyPanel(panel)) return panel;
   return undefined;
+}
+
+/**
+ * Render-eligibility predicate for grid membership: should this carrier entry
+ * appear in the user-visible panel grid?
+ *
+ * Distinct from `getNarrowPanel`, which is the type-narrowing read path for
+ * callers that need the built-in `PanelInstance` discriminated union (fleet /
+ * terminal queries) and deliberately drops plugin kinds. The grid's
+ * membership/emptiness gate needs the broader question — and plugin-contributed
+ * kinds ARE renderable: `GridPanel` resolves them to a `PluginViewHost` (when
+ * the kind is registered) or a `PluginMissingPanel` placeholder (when the
+ * plugin is temporarily disabled). Filtering them out here is exactly the bug
+ * behind #10512 (plugin panels silently dropped → grid shows the empty state).
+ *
+ * Eligible when:
+ *  - the kind is built-in (always renderable), OR
+ *  - the kind is a registered plugin kind (plugin enabled), OR
+ *  - the panel carries a `pluginId` or a dotted kind — the disabled-plugin
+ *    escape hatch (#5636): the grid still renders a `PluginMissingPanel`
+ *    placeholder rather than vanishing the panel entirely.
+ *
+ * Sync and side-effect free — safe to call inside Zustand selectors and memos.
+ */
+export function isPanelRenderEligible(panel: PanelInstance): boolean {
+  // Widen to the open `PanelKind`: the carrier types `panel.kind` as only the
+  // built-in discriminants, but plugin panels are cast into the carrier with a
+  // dotted plugin-kind string at runtime, so the plugin branches below are NOT
+  // statically dead — read the kind as the open union to keep them live.
+  const kind: PanelKind = panel.kind ?? "terminal";
+  return (
+    isBuiltInPanelKind(kind) ||
+    isRegisteredPanelKind(kind) ||
+    Boolean(panel.pluginId) ||
+    kind.includes(".")
+  );
+}
+
+/**
+ * Grid-membership read path: return the carrier entry for `id` when it should
+ * render in the grid (built-in OR plugin kind), else `undefined`. Mirror of
+ * `getNarrowPanel`'s signature so grid list-builders can swap one for the other.
+ *
+ * Built-in panels are returned via `getNarrowPanel` (already the carrier
+ * `PanelInstance`); plugin panels — which `getNarrowPanel` drops — are returned
+ * as-is from the carrier (typed `Record<string, PanelInstance>`). `GridPanel`
+ * resolves the actual component from the panel-kind definition registry.
+ */
+export function getRenderablePanel(
+  panelsById: Record<string, PanelInstance>,
+  id: string
+): PanelInstance | undefined {
+  const narrowed = getNarrowPanel(panelsById, id);
+  if (narrowed) return narrowed;
+  const panel = panelsById[id];
+  if (!panel) return undefined;
+  return isPanelRenderEligible(panel) ? panel : undefined;
 }
 
 let _prevNarrowById: Record<string, PanelInstance> | null = null;

@@ -29,6 +29,11 @@ import type {
   RepoMetadata,
   ListOptions,
   ForgeUser,
+  ForgeLabel,
+  IssueComment,
+  CreateIssueInput,
+  EditIssueInput,
+  IssueCloseReason,
   ReviewThread,
   ForgeTokenHealthState,
   RateLimitDetails,
@@ -239,7 +244,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     trash(id: string): Promise<void>;
     restore(id: string): Promise<boolean>;
     setActivityTier(id: string, tier: PtyHostActivityTier, pollingIntervalMs?: number): void;
-    wake(id: string): Promise<{ state: string | null; warnings?: string[] }>;
     acknowledgeData(id: string, length: number): void;
     getForProject(projectId: string): Promise<BackendTerminalInfo[]>;
     getAvailableTerminals(): Promise<BackendTerminalInfo[]>;
@@ -304,7 +308,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onRestoreScrollback(callback: (data: { terminalIds: string[] }) => void): () => void;
     restartService(): Promise<void>;
     onReclaimMemory(callback: () => void): () => void;
-    onAccelerateHibernation(callback: (data: { level: 1 | 2 }) => void): () => void;
   };
   files: {
     search(payload: FileSearchPayload): Promise<FileSearchResult>;
@@ -432,6 +435,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * visibilitychange/resume ran while the view was still occluded.
      */
     onViewRevealed(callback: () => void): () => void;
+    onViewCached(callback: () => void): () => void;
   };
   // menu is generated — see GeneratedElectronAPI.
   logs: {
@@ -448,9 +452,18 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       message: string,
       context?: Record<string, unknown>
     ): Promise<void>;
+    writeBatch(
+      entries: Array<{
+        level: "debug" | "info" | "warn" | "error";
+        message: string;
+        context?: Record<string, unknown>;
+      }>
+    ): Promise<void>;
+    getDefaultLevel(): Promise<string>;
     getLevelOverrides(): Promise<Record<string, string>>;
     setLevelOverrides(overrides: Record<string, string>): Promise<{ success: boolean }>;
     clearLevelOverrides(): Promise<{ success: boolean }>;
+    onLevelOverridesChanged(callback: (overrides: Record<string, string>) => void): () => void;
     getRegistry(): Promise<string[]>;
   };
   errors: {
@@ -921,6 +934,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     reloadIgnoringCache(webContentsId: number, panelId: string): Promise<void>;
     /** Read the current scroll position from Blink layout — works on frozen pages */
     getScrollPosition(webContentsId: number): Promise<number>;
+    /** Capture the panel's webview viewport as a PNG, returned base64-encoded */
+    captureScreenshot(
+      panelId: string
+    ): Promise<{ pngBase64: string; width: number; height: number }>;
     /** Read Chromium navigation history for the webview */
     getNavigationHistory(
       webContentsId: number
@@ -1279,6 +1296,70 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     assignIssue(payload: { cwd: string; issueNumber: number; username: string }): Promise<void>;
     /** Unassign a user from an issue via the resolved forge provider. */
     unassignIssue(payload: { cwd: string; issueNumber: number; username: string }): Promise<void>;
+    /** Create a new issue via the resolved forge provider, returning the created issue. */
+    createIssue(payload: { cwd: string; input: CreateIssueInput }): Promise<Issue>;
+    /** Close an open issue via the resolved forge provider, returning the updated issue. */
+    closeIssue(payload: {
+      cwd: string;
+      issueNumber: number;
+      stateReason?: IssueCloseReason;
+    }): Promise<Issue>;
+    /** Reopen a closed issue via the resolved forge provider, returning the updated issue. */
+    reopenIssue(payload: { cwd: string; issueNumber: number }): Promise<Issue>;
+    /** Edit an issue's title and/or body via the resolved forge provider, returning the updated issue. */
+    editIssue(payload: { cwd: string; issueNumber: number; input: EditIssueInput }): Promise<Issue>;
+    /** Add a comment to an issue via the resolved forge provider, returning the created comment. */
+    addIssueComment(payload: {
+      cwd: string;
+      issueNumber: number;
+      body: string;
+    }): Promise<IssueComment>;
+    /** Add a label (by name) to an issue, returning the issue's full label set. */
+    addIssueLabel(payload: {
+      cwd: string;
+      issueNumber: number;
+      label: string;
+    }): Promise<ForgeLabel[]>;
+    /** Remove a label (by name) from an issue, returning the issue's remaining label set. */
+    removeIssueLabel(payload: {
+      cwd: string;
+      issueNumber: number;
+      label: string;
+    }): Promise<ForgeLabel[]>;
+    /**
+     * Approve a pull request via the resolved provider's `reviews` capability.
+     * `body` is an optional approval comment. Rejects when the provider lacks
+     * the capability or the forge refuses (e.g. approving your own PR).
+     */
+    approvePR(payload: { cwd: string; prNumber: number; body?: string }): Promise<void>;
+    /**
+     * Submit a request-changes review on a pull request via the resolved
+     * provider's `reviews` capability. `body` is required — it explains what
+     * needs to change.
+     */
+    requestChanges(payload: { cwd: string; prNumber: number; body: string }): Promise<void>;
+    /**
+     * Dismiss a submitted review on a pull request via the resolved provider's
+     * `reviews` capability. `reviewId` identifies the review (obtained from a
+     * prior review-thread lookup); `message` explains the dismissal.
+     */
+    dismissReview(payload: {
+      cwd: string;
+      prNumber: number;
+      reviewId: number;
+      message: string;
+    }): Promise<void>;
+    /**
+     * Request reviewers on a pull request via the resolved provider's `reviews`
+     * capability. `users` are account logins; `teams` are team identifiers
+     * (GitHub team slugs). At least one must be non-empty.
+     */
+    requestReviewers(payload: {
+      cwd: string;
+      prNumber: number;
+      users?: string[];
+      teams?: string[];
+    }): Promise<void>;
     /**
      * Validate a token against a specific forge provider, identified by its
      * canonical `{pluginId}.{contributionId}` id. The Test button in the
@@ -1411,6 +1492,35 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getRateLimitDetails(payload: { cwd: string }): Promise<RateLimitDetails | null>;
     /** Open a single PR in the system browser via the resolved forge provider. */
     openPR(payload: { cwd: string; prNumber: number }): Promise<void>;
+    /** Open a new pull request from `head` into `base` via the resolved forge provider. */
+    createPR(payload: {
+      cwd: string;
+      head: string;
+      base: string;
+      title: string;
+      body?: string;
+      draft?: boolean;
+    }): Promise<PR>;
+    /** Close an open pull request without merging. */
+    closePR(payload: { cwd: string; prNumber: number }): Promise<void>;
+    /** Reopen a previously closed pull request. */
+    reopenPR(payload: { cwd: string; prNumber: number }): Promise<void>;
+    /** Merge a pull request with the optional strategy/commit overrides. Irreversible. */
+    mergePR(payload: {
+      cwd: string;
+      prNumber: number;
+      mergeMethod?: "merge" | "squash" | "rebase";
+      commitTitle?: string;
+      commitMessage?: string;
+    }): Promise<void>;
+    /** Convert an open pull request to a draft. */
+    convertPRToDraft(payload: { cwd: string; prNumber: number }): Promise<void>;
+    /** Mark a draft pull request ready for review. */
+    markPRReadyForReview(payload: { cwd: string; prNumber: number }): Promise<void>;
+    /** Post a comment on a pull request. */
+    commentOnPR(payload: { cwd: string; prNumber: number; body: string }): Promise<void>;
+    /** Edit a pull request's title and/or body via the resolved forge provider. */
+    editPR(payload: { cwd: string; prNumber: number; title?: string; body?: string }): Promise<PR>;
     /** Provider-keyed stats + first-page push after a fresh network poll. */
     onRepoStatsAndPageUpdated(callback: (data: ForgeRepoStatsAndPagePayload) => void): () => void;
     /** Provider-keyed count-only stats push (cheap background poll path). */
@@ -1520,6 +1630,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: import("./mcpServer.js").McpTurnOutcomeAlertPayload) => void
     ): () => void;
   };
+  // All help methods (incl. reportPanelOpen + peekPendingHibernation, which
+  // surfaces `panelWasOpen` for cold switch-back auto-resume) come from
+  // GeneratedElectronAPI (#10815).
+  help: GeneratedElectronAPI["help"];
   // helpAssistant is generated — see GeneratedElectronAPI.
   mcpBridge: {
     /** Listen for manifest requests from main process */
@@ -1573,8 +1687,49 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       requestId: string;
       result: import("../actions.js").ActionDispatchResult;
     }): void;
+    /**
+     * Listen for plugin built-in action-catalog requests from the main process (a
+     * plugin calling `host.actions.list()`, #10561). Reply with
+     * {@link sendActionsListResponse}, correlated by `requestId`.
+     */
+    onActionsListRequest(callback: (payload: { requestId: string }) => void): () => void;
+    /** Send the projected built-in action catalog back to the main process. */
+    sendActionsListResponse(payload: {
+      requestId: string;
+      entries: import("../actions.js").PluginActionManifestEntry[];
+    }): void;
+    /**
+     * Listen for plugin single-action lookup requests from the main process (a
+     * plugin calling `host.actions.get(id)` / `host.actions.canDispatch(id)`,
+     * #10561). Reply with {@link sendActionsGetResponse}, correlated by `requestId`.
+     */
+    onActionsGetRequest(
+      callback: (payload: { requestId: string; actionId: string }) => void
+    ): () => void;
+    /** Send the single projected action entry (or null) back to the main process. */
+    sendActionsGetResponse(payload: {
+      requestId: string;
+      entry: import("../actions.js").PluginActionManifestEntry | null;
+    }): void;
+    /**
+     * Listen for imperative plugin UI-prompt requests from the main process (a
+     * plugin calling `host.showQuickPick`/`showInputBox`/`showConfirm`, #10522).
+     * Reply with {@link sendUiPromptResponse}, correlated by `promptId`.
+     */
+    onUiPromptRequest(
+      callback: (payload: import("../pluginUiPrompt.js").PluginUiPromptRequest) => void
+    ): () => void;
+    /** Send the user's answer to a plugin UI prompt back to the main process. */
+    sendUiPromptResponse(payload: import("../pluginUiPrompt.js").PluginUiPromptResponse): void;
+    /**
+     * Listen for cancel signals (plugin unloaded mid-prompt): dismiss the open
+     * dialog and resolve the queued promise with the dismiss value.
+     */
+    onUiPromptCancel(
+      callback: (payload: import("../pluginUiPrompt.js").PluginUiPromptCancel) => void
+    ): () => void;
   };
-  // list / toolbarButtons / menuItems / validateActionIds / get|register|
+  // list / toolbarButtons / validateActionIds / get|register|
   // unregisterAction / getPanelKinds / getForgeProviders / getDecorations
   // come from GeneratedElectronAPI; invoke + on are variadic plugin RPC
   // helpers that aren't expressible through IpcInvokeMap, and the on*
@@ -1589,7 +1744,26 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     getDroppedFilePath(file: File): string;
     invoke(pluginId: string, channel: string, ...args: unknown[]): Promise<unknown>;
+    /**
+     * Subscribe to broadcast pushes for `(pluginId, channel)` — every
+     * `host.postToPanel(channel, payload)` (no panelId) and
+     * `host.broadcastToRenderer` push. Returns a cleanup. Per-instance pushes
+     * (`postToPanel(channel, payload, panelId)`) are delivered via {@link onPanel}.
+     */
     on(pluginId: string, channel: string, callback: (payload: unknown) => void): () => void;
+    /**
+     * Subscribe to per-instance pushes for `(pluginId, channel)` targeted at a
+     * single `panelId` via `host.postToPanel(channel, payload, panelId)` (#10618),
+     * so sibling instances of the same panel kind don't receive each other's
+     * pushes. Broadcast pushes (no panelId) are NOT delivered here — use
+     * {@link on} for those. Returns a cleanup.
+     */
+    onPanel(
+      pluginId: string,
+      channel: string,
+      panelId: string,
+      callback: (payload: unknown) => void
+    ): () => void;
     /** Subscribe to plugin-action registry changes. Returns a cleanup. */
     onActionsChanged(
       callback: (payload: { actions: import("../plugin.js").PluginActionDescriptor[] }) => void
@@ -1607,6 +1781,22 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onDecorationsChanged(
       callback: (payload: { scope: string; paths?: string[] }) => void
     ): () => void;
+    /**
+     * Subscribe to plugin panel-badge changes (#10585). The callback fires with
+     * one plugin's COMPLETE current badge map (`panelId → badge`); an empty map
+     * clears that plugin's badges. Returns a cleanup.
+     */
+    onPanelBadgesChanged(
+      callback: (payload: {
+        pluginId: string;
+        badges: Record<string, import("../plugin.js").PluginPanelBadge>;
+      }) => void
+    ): () => void;
+    /**
+     * Subscribe to plugin-unload badge clears (#10585). Fires with the unloaded
+     * plugin's id so the renderer drops all of its panel badges. Returns a cleanup.
+     */
+    onPanelBadgesCleared(callback: (payload: { pluginId: string }) => void): () => void;
     /**
      * Subscribe to `daintree://` deep-link intents (#9559). Fires when the OS
      * hands the app a deep link; the callback opens the Plugin Manager. Returns
@@ -1630,16 +1820,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onToolbarButtonsChanged(
       callback: (payload: {
         buttons: import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[];
-        complete: boolean;
-      }) => void
-    ): () => void;
-    /** Subscribe to plugin menu item registry changes. Returns a cleanup. */
-    onMenuItemsChanged(
-      callback: (payload: {
-        items: Array<{
-          pluginId: string;
-          item: import("../plugin.js").MenuItemContribution;
-        }>;
         complete: boolean;
       }) => void
     ): () => void;
@@ -1847,7 +2027,15 @@ export interface HelpAssistantSettings {
   bypassPermissions: boolean;
   /** How long to retain help-session audit logs. 7 = 7 days, 30 = 30 days, 0 = off. Defaults to 7. */
   auditRetention: HelpAssistantAuditRetention;
-  /** Whitespace-separated CLI flags appended at assistant launch (e.g. "--model sonnet"). Defaults to "". */
+  /**
+   * Model the assistant launches with, injected as `--model <id>` ahead of
+   * {@link customArgs} so a `--model` in custom args still wins as the advanced
+   * override. Empty string means "use the CLI's default model" (no flag).
+   * Model IDs are agent-specific, so this is reset whenever the agent changes.
+   * Defaults to "".
+   */
+  modelId: string;
+  /** Whitespace-separated CLI flags appended at assistant launch (advanced override). Defaults to "". */
   customArgs: string;
   /**
    * Minutes the assistant panel must be continuously hidden before its PTY is
@@ -1855,16 +2043,43 @@ export interface HelpAssistantSettings {
    * idle hibernation. Defaults to 30.
    */
   idleHibernateMinutes: HelpAssistantIdleHibernateMinutes;
+  /**
+   * Enable the Daintree Assistant's own full-fidelity debug log for new
+   * sessions, by setting `DAINTREE_ASSISTANT_DEBUG_LOG=1` in the spawn env.
+   * Only the `daintree-assistant` backend reads this var (per-session trace to
+   * `~/.daintree/logs`); it is a no-op for other assistant agents. Defaults to false.
+   */
+  debugLogging: boolean;
 }
 
-/** One per-tool grant currently active for the pinned help session. */
+/**
+ * One grant currently active for the pinned help session. Covers both the
+ * per-tool "Approve once" grants (`kind: "per-tool"`) and the native
+ * session-scoped automation grants (`kind: "native"`, #10648). Native grants
+ * carry a multi-tool allowlist and a use ceiling; the native-only fields are
+ * absent on per-tool grants.
+ */
 export interface HelpSessionActiveGrant {
-  /** Dotted `BuiltInActionId` the grant authorizes (e.g. `terminal.kill`). */
+  /**
+   * For per-tool grants, the dotted `BuiltInActionId` authorized (e.g.
+   * `terminal.kill`). For native grants, `"*"` — the authorized tools are
+   * listed in {@link allowedTools}.
+   */
   toolId: string;
   /** Absolute epoch millis when the grant expires without refresh. */
   expiresAt: number;
   /** TTL the grant was minted with, in milliseconds. */
   ttlMs: number;
+  /** Discriminates the grant kind. Defaults to `"per-tool"` when absent. */
+  kind?: "per-tool" | "native";
+  /** Stable UUID of a native grant — the revoke target. Native grants only. */
+  grantId?: string;
+  /** Dotted `BuiltInActionId`s a native grant authorizes. Native grants only. */
+  allowedTools?: string[];
+  /** Use ceiling a native grant was minted with. Native grants only. */
+  maxUses?: number;
+  /** Uses left on a native grant. Native grants only. */
+  remainingUses?: number;
 }
 
 /**

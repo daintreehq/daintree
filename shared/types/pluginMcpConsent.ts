@@ -1,3 +1,5 @@
+import type { PluginCapability } from "./plugin.js";
+
 /**
  * Danger tier for a plugin-initiated MCP tool call. Mirrors the D0–D3 audit
  * vocabulary documented in CLAUDE.md ("Destructive Action Tiers") and
@@ -24,7 +26,7 @@ export type PluginMcpDangerTier = "D0" | "D1" | "D2" | "D3";
 export interface PluginMcpToolIdentity {
   /** Contributing plugin id (`manifest.name`). */
   pluginId: string;
-  /** Server id from `contributes.experimental_mcpServers[].id`. */
+  /** Server id from `contributes.mcpServers[].id`. */
   serverId: string;
   /** Tool name as advertised by the server's `tools/list`. */
   toolName: string;
@@ -47,11 +49,22 @@ export interface PluginMcpToolIdentity {
  * - `schemaHash` is over the JSON-stringified `inputSchema` with keys sorted
  *   lexicographically (via `stableArgsSha256`'s normaliser). A schema mutation
  *   changes the call surface — re-prompt is mandatory.
+ * - `annotationHash` is over the three tier-influencing `ToolAnnotations`
+ *   hints (`readOnlyHint`, `destructiveHint`, `openWorldHint`), null-normalised
+ *   and key-sorted. A server flipping `readOnlyHint: true` → `destructiveHint:
+ *   true` raises the danger tier without touching the description or schema;
+ *   folding the triple into the fingerprint forces re-consent on that flip.
+ *   Only the three tier-relevant fields are hashed — future SDK annotation
+ *   fields must not produce spurious re-prompts. The empty string is a legacy
+ *   sentinel (see `PluginMcpConsentStore.normalizeRecord`): records pinned
+ *   before this field existed carry `""`, which never matches a real 64-char
+ *   digest and therefore re-prompts on the next lookup.
  */
 export interface PluginMcpToolFingerprint {
   rawHash: string;
   displayHash: string;
   schemaHash: string;
+  annotationHash: string;
 }
 
 /**
@@ -80,6 +93,11 @@ export interface PluginMcpConsentRecord {
  *   regardless of whether the displayed text looks the same.
  * - `schema-changed` — pin exists, raw matches, but the input schema mutated.
  *   The call surface changed — re-prompt.
+ * - `annotation-changed` — pin exists, raw and schema match, but the
+ *   tier-influencing annotation hints (`readOnlyHint` / `destructiveHint` /
+ *   `openWorldHint`) mutated. The advertised danger surface changed — re-prompt.
+ *   Also fires for legacy pins minted before `annotationHash` existed (their
+ *   `""` sentinel never matches a real digest).
  * - `revoked` — the user explicitly revoked this pin; prompt with the
  *   "previously revoked" framing.
  */
@@ -88,6 +106,7 @@ export type PluginMcpConsentLookup =
   | { kind: "first-use" }
   | { kind: "raw-changed"; previousPin: PluginMcpConsentRecord }
   | { kind: "schema-changed"; previousPin: PluginMcpConsentRecord }
+  | { kind: "annotation-changed"; previousPin: PluginMcpConsentRecord }
   | { kind: "revoked" };
 
 /**
@@ -112,7 +131,35 @@ export type PluginMcpConsentReason =
   | "first-use"
   | "raw-changed"
   | "schema-changed"
+  | "annotation-changed"
   | "revoked"
   | "explicit-confirm";
+
+/**
+ * Display-safe consent prompt pushed from main to the renderer over the typed
+ * event bus (`plugin-mcp:consent-request`) when a `tools/call` requires user
+ * approval. Every field is renderer-safe: `descriptionDisplay` is ANSI/OSC
+ * stripped and `argsSummary` is pre-redacted in main — raw description bytes,
+ * raw args, and the input schema never cross this boundary. The renderer
+ * enqueues it into the consent dialog FIFO and replies via
+ * `plugin-mcp:resolve-consent`, correlated by `requestId`.
+ */
+export interface PluginMcpConsentRequestEvent {
+  /** Correlation id for the matching `plugin-mcp:resolve-consent` reply. */
+  requestId: string;
+  pluginId: string;
+  serverId: string;
+  toolName: string;
+  /** Human-readable plugin display name (manifest `displayName ?? name`). */
+  pluginDisplayName: string;
+  /** Tool description, ANSI/OSC stripped, ready to render verbatim. */
+  descriptionDisplay: string;
+  /** Sanitised, single-level args preview for D2+ tiers. Empty when no args. */
+  argsSummary: string;
+  dangerTier: PluginMcpDangerTier;
+  /** Plugin's manifest `capabilities[]` list — surfaced for transparency. */
+  declaredCapabilities: readonly PluginCapability[];
+  reason: PluginMcpConsentReason;
+}
 
 export const PLUGIN_MCP_CONSENT_SCHEMA_VERSION = 1;

@@ -176,6 +176,27 @@ describe("exclusion patterns", () => {
     expect(r2.valid).toBe(true);
     if (r2.valid) expect(r2.entryCount).toBe(4);
   });
+
+  it("excludes dev-only files (package.json, lockfile, tsconfig, configs) when packing", async () => {
+    const sourceDir = path.join(tmpDir, "source");
+    await createFixture(sourceDir, {
+      "plugin.json": JSON.stringify(validManifest()),
+      "dist/index.js": "module.exports = {};",
+      "package.json": JSON.stringify({ name: "leaky", dependencies: {} }),
+      "package-lock.json": "{}",
+      "tsconfig.json": "{}",
+      "vite.config.ts": "export default {};",
+      "README.md": "# keep me",
+    });
+
+    const archivePath = path.join(tmpDir, "out.dntr");
+    await packPluginArchive(sourceDir, archivePath);
+
+    const result = await verifyPluginArchive(archivePath);
+    expect(result.valid).toBe(true);
+    // plugin.json, dist/index.js, README.md — the dev files are dropped.
+    if (result.valid) expect(result.entryCount).toBe(3);
+  });
 });
 
 describe("packPluginArchive", () => {
@@ -339,7 +360,8 @@ describe("verifyPluginArchive", () => {
         validManifest({
           main: "dist/index.js",
           contributes: {
-            experimental_views: [
+            panels: [{ id: "panel-view", name: "Panel View", iconId: "panel", color: "#000000" }],
+            views: [
               {
                 id: "panel-view",
                 name: "Panel View",
@@ -372,7 +394,8 @@ describe("verifyPluginArchive", () => {
         validManifest({
           main: "dist/index.js",
           contributes: {
-            experimental_views: [
+            panels: [{ id: "panel-view", name: "Panel View", iconId: "panel", color: "#000000" }],
+            views: [
               {
                 id: "panel-view",
                 name: "Panel View",
@@ -408,6 +431,22 @@ describe("verifyPluginArchive", () => {
     const result = await verifyPluginArchive(archivePath);
     expect(result.valid).toBe(false);
     if (!result.valid) expect(result.error).toContain("entry limit");
+  });
+
+  it("rejects a crafted dev file disguised with a ./ prefix", async () => {
+    // `./package.json` must not slip past the dev-file exclusion via the leading
+    // dot — normalizePath strips it so the guard (and the raw-name check) catch it.
+    const archivePath = path.join(tmpDir, "dotslash.dntr");
+    await fs.writeFile(
+      archivePath,
+      buildRawZip([
+        { name: "plugin.json", content: JSON.stringify(validManifest()) },
+        { name: "./package.json", content: JSON.stringify({ name: "leaky" }) },
+      ])
+    );
+
+    const result = await verifyPluginArchive(archivePath);
+    expect(result.valid).toBe(false);
   });
 
   it("rejects an archive with a duplicate normalized entry name", async () => {
@@ -552,5 +591,32 @@ describe("isExcludedArchiveEntry (shared CLI exclusion predicate)", () => {
     expect(isExcludedArchiveEntry("plugin.json")).toBe(false);
     expect(isExcludedArchiveEntry("dist/index.js")).toBe(false);
     expect(isExcludedArchiveEntry("icons/logo.svg")).toBe(false);
+  });
+
+  it("excludes root-level package metadata, lockfiles, and tsconfig", () => {
+    expect(isExcludedArchiveEntry("package.json")).toBe(true);
+    expect(isExcludedArchiveEntry("package-lock.json")).toBe(true);
+    expect(isExcludedArchiveEntry("npm-shrinkwrap.json")).toBe(true);
+    expect(isExcludedArchiveEntry("yarn.lock")).toBe(true);
+    expect(isExcludedArchiveEntry("pnpm-lock.yaml")).toBe(true);
+    expect(isExcludedArchiveEntry("bun.lock")).toBe(true);
+    expect(isExcludedArchiveEntry("bun.lockb")).toBe(true);
+    expect(isExcludedArchiveEntry("tsconfig.json")).toBe(true);
+    expect(isExcludedArchiveEntry("tsconfig.build.json")).toBe(true);
+  });
+
+  it("excludes root-level build configs", () => {
+    expect(isExcludedArchiveEntry("vite.config.ts")).toBe(true);
+    expect(isExcludedArchiveEntry("vite.config.server.ts")).toBe(true);
+    expect(isExcludedArchiveEntry("tsup.config.mjs")).toBe(true);
+    expect(isExcludedArchiveEntry("vitest.config.js")).toBe(true);
+  });
+
+  it("scopes dev-file exclusions to the archive root", () => {
+    // A plugin may legitimately ship config/JSON inside its built output —
+    // only root-level dev metadata leaks the author's environment.
+    expect(isExcludedArchiveEntry("dist/app.config.js")).toBe(false);
+    expect(isExcludedArchiveEntry("dist/package.json")).toBe(false);
+    expect(isExcludedArchiveEntry("assets/tsconfig.json")).toBe(false);
   });
 });

@@ -7,7 +7,7 @@ import { SystemRequirementsSection } from "./SystemRequirementsSection";
 import { AGENT_REGISTRY } from "@/config/agents";
 import { BrandMark } from "@/components/icons";
 import { AgentCard } from "@/components/agents/AgentCard";
-import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import { useAgentSettingsStore } from "@/store";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { cliAvailabilityClient } from "@/clients";
@@ -28,7 +28,7 @@ import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
 
-const AGENT_ORDER = BUILT_IN_AGENT_IDS;
+const AGENT_ORDER = LAUNCHABLE_AGENT_IDS;
 
 const daintreeScheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === "daintree")!;
 const bondiScheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === "bondi")!;
@@ -176,7 +176,7 @@ function ThemeMockup({ scheme }: { scheme: AppColorScheme }) {
 // Tier arrays for the agents step — featured agents get prominent display,
 // the rest fall into "More agents". New built-in agents automatically land in MORE_AGENT_IDS.
 export const FEATURED_AGENT_IDS: readonly string[] = ["claude", "gemini", "codex"];
-export const MORE_AGENT_IDS: readonly string[] = BUILT_IN_AGENT_IDS.filter(
+export const MORE_AGENT_IDS: readonly string[] = LAUNCHABLE_AGENT_IDS.filter(
   (id) => !(FEATURED_AGENT_IDS as readonly string[]).includes(id)
 );
 

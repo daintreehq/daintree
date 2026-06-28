@@ -27,6 +27,7 @@
  */
 
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { getIsE2EDisableCachedViewCpuThrottle } from "../setup/runtimeFlags.js";
 
 const EXPECTED_CDP_ERRORS = [
   "Target closed",
@@ -62,7 +63,7 @@ async function setLifecycleState(
 }
 
 async function setCpuThrottlingRate(wc: Electron.WebContents, rate: number): Promise<void> {
-  if (process.env.DAINTREE_E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE === "1") return;
+  if (getIsE2EDisableCachedViewCpuThrottle()) return;
   if (wc.isDestroyed()) return;
   try {
     ensureAttached(wc);

@@ -51,6 +51,14 @@ interface HelpPanelState {
   agentId: string | null;
   preferredAgentId: string | null;
   /**
+   * User consent to auto-launch a billed agent session when the panel opens.
+   * Defaults to false so opening the panel never starts (and bills) a session
+   * without an explicit user action (#10699). The first-run "Start assistant"
+   * CTA and starter-prompt chips flip this true, so subsequent opens resume the
+   * auto-launch convenience the user has now opted into.
+   */
+  autoLaunchEnabled: boolean;
+  /**
    * Set at rehydration when a persisted preferredAgentId was dropped because the
    * agent is no longer an assistant backend (CLI uninstalled or demoted from
    * tier:"stable"). Transient (never persisted) — drives a one-shot banner so
@@ -89,6 +97,7 @@ interface HelpPanelActions {
   setTerminal: (terminalId: string, agentId: string, sessionId: string | null) => void;
   clearTerminal: () => void;
   setPreferredAgent: (agentId: string | null) => void;
+  setAutoLaunchEnabled: (enabled: boolean) => void;
   clearDroppedPreferredAgent: () => void;
   dismissIntro: () => void;
   markConversationStarted: () => void;
@@ -112,6 +121,7 @@ const initialState: HelpPanelState = {
   terminalId: null,
   agentId: null,
   preferredAgentId: null,
+  autoLaunchEnabled: false,
   droppedPreferredAgentId: null,
   sessionId: null,
   introDismissed: false,
@@ -190,6 +200,8 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
       setPreferredAgent: (agentId) =>
         set({ preferredAgentId: agentId, droppedPreferredAgentId: null }),
 
+      setAutoLaunchEnabled: (enabled) => set({ autoLaunchEnabled: enabled }),
+
       clearDroppedPreferredAgent: () => set({ droppedPreferredAgentId: null }),
 
       dismissIntro: () => set({ introDismissed: true }),
@@ -242,11 +254,12 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
     {
       name: "help-panel-storage",
       storage: createDebouncedSafeJSONStorage(300),
-      version: 4,
+      version: 5,
       migrate: (persistedState) => persistedState as HelpPanelState & HelpPanelActions,
       partialize: (state) => ({
         width: state.width,
         preferredAgentId: state.preferredAgentId,
+        autoLaunchEnabled: state.autoLaunchEnabled,
         introDismissed: state.introDismissed,
         hibernateSessions: state.hibernateSessions,
       }),
@@ -277,6 +290,11 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
           preferredAgentId: isAssistantSupportedAgentId(persisted.preferredAgentId)
             ? persisted.preferredAgentId
             : null,
+          // Default false for everyone, including returning users (v4 had no
+          // such field) — the issue is surprise billing, so preserving the old
+          // auto-launch for existing installs would preserve the reported bug.
+          // A malformed (non-boolean) stored value normalizes to false too.
+          autoLaunchEnabled: persisted.autoLaunchEnabled === true,
           droppedPreferredAgentId,
           introDismissed:
             typeof persisted.introDismissed === "boolean"
@@ -293,5 +311,5 @@ registerPersistedStore({
   storeId: "helpPanelStore",
   store: useHelpPanelStore,
   persistedStateType:
-    "Pick<HelpPanelState, 'width' | 'preferredAgentId' | 'introDismissed' | 'hibernateSessions'>",
+    "Pick<HelpPanelState, 'width' | 'preferredAgentId' | 'autoLaunchEnabled' | 'introDismissed' | 'hibernateSessions'>",
 });

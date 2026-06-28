@@ -211,7 +211,10 @@ export interface HardwareInfo {
 
 /** Summary of real app memory metrics from app.getAppMetrics() */
 export interface AppMetricsSummary {
+  /** Aggregate working-set across Daintree's Electron processes, in MB. 0 when unavailable. */
   totalMemoryMB: number;
+  /** Set when the metric could not be read; the renderer should suppress the value rather than show 0. */
+  unavailable?: true;
 }
 
 /** Per-process metrics entry from app.getAppMetrics() */
@@ -235,6 +238,10 @@ export interface HeapStats {
 export interface DiagnosticsInfo {
   uptimeSeconds: number;
   eventLoopP99Ms: number;
+  /** Total physical RAM (MB) from os.totalmem(); omitted when unreadable. */
+  systemTotalMB?: number;
+  /** Available physical RAM (MB) — free (+ purgeable on macOS) from process.getSystemMemoryInfo(); omitted when unreadable. */
+  systemAvailableMB?: number;
 }
 
 /** Payload returned by the review collection IPC. */

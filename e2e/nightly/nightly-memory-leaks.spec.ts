@@ -171,7 +171,6 @@ interface WebGLState {
   wantsSize: number;
   active: boolean;
   mode: string;
-  hibernated: boolean;
 }
 
 async function getWebGLState(page: Page, panelId: string): Promise<WebGLState | null> {
@@ -197,17 +196,6 @@ async function promoteToAgent(page: Page, panelId: string): Promise<boolean> {
     },
     { id: panelId, agentId: WEBGL_AGENT_ID }
   );
-}
-
-async function hibernateTerminal(page: Page, panelId: string): Promise<boolean> {
-  return page.evaluate((id) => {
-    const fn = (
-      window as unknown as {
-        __daintreeHibernateTerminalForE2E?: (panelId: string) => boolean;
-      }
-    ).__daintreeHibernateTerminalForE2E;
-    return typeof fn === "function" ? fn(id) : false;
-  }, panelId);
 }
 
 // Open a terminal, promote it to a WebGL-eligible agent terminal, and wait for
@@ -326,53 +314,6 @@ test.describe.serial("Nightly: xterm WebGL dispose leak (#9540)", () => {
     const growthMB = toMB(final!.usedJSHeapSize - baseline!.usedJSHeapSize);
     console.log(
       `[webgl-close] final: ${toMB(final!.usedJSHeapSize).toFixed(2)} MB, growth: ${growthMB.toFixed(2)} MB`
-    );
-
-    expect(growthMB).toBeLessThan(WEBGL_HEAP_THRESHOLD_MB);
-  });
-
-  test("Terminal graph released after hibernate (WebGL)", async () => {
-    skipWithoutGpu();
-    test.setTimeout(600_000);
-    const { window } = webglCtx;
-
-    await test.step("warmup cycles", async () => {
-      for (let i = 0; i < WEBGL_WARMUP_CYCLES; i++) {
-        const id = await openAgentTerminalWithWebGL(window);
-        expect(await hibernateTerminal(window, id)).toBe(true);
-        await closePanel(window, id);
-        await window.waitForTimeout(500);
-      }
-      await window.waitForTimeout(2000);
-    });
-
-    const baseline = await measureRendererMemory(window, { forceGc: true });
-    expect(baseline, "performance.memory available in renderer").not.toBeNull();
-    console.log(`[webgl-hibernate] baseline: ${toMB(baseline!.usedJSHeapSize).toFixed(2)} MB`);
-
-    await test.step(`run ${WEBGL_CYCLE_COUNT} open/promote/hibernate cycles`, async () => {
-      for (let i = 0; i < WEBGL_CYCLE_COUNT; i++) {
-        const id = await openAgentTerminalWithWebGL(window);
-        const wantsBefore = (await getWebGLState(window, id))?.wantsSize ?? 0;
-        // hibernate() calls terminal.dispose() — the path that leaked the graph.
-        expect(await hibernateTerminal(window, id)).toBe(true);
-        await expect
-          .poll(async () => (await getWebGLState(window, id))?.active ?? true, {
-            timeout: T_MEDIUM,
-          })
-          .toBe(false);
-        const wantsAfter = (await getWebGLState(window, id))?.wantsSize ?? -1;
-        expect(wantsAfter).toBeLessThan(wantsBefore);
-        await closePanel(window, id);
-        await window.waitForTimeout(300);
-      }
-    });
-
-    await window.waitForTimeout(2000);
-    const final = await measureRendererMemory(window, { forceGc: true });
-    const growthMB = toMB(final!.usedJSHeapSize - baseline!.usedJSHeapSize);
-    console.log(
-      `[webgl-hibernate] final: ${toMB(final!.usedJSHeapSize).toFixed(2)} MB, growth: ${growthMB.toFixed(2)} MB`
     );
 
     expect(growthMB).toBeLessThan(WEBGL_HEAP_THRESHOLD_MB);

@@ -20,6 +20,21 @@ const fakeImpl = vi.hoisted(() => ({
   buildPRUrl: vi.fn(),
   assignIssue: vi.fn(),
   unassignIssue: vi.fn(),
+  createPR: vi.fn(),
+  closePR: vi.fn(),
+  reopenPR: vi.fn(),
+  mergePR: vi.fn(),
+  convertPRToDraft: vi.fn(),
+  markPRReadyForReview: vi.fn(),
+  commentOnPR: vi.fn(),
+  editPR: vi.fn(),
+  createIssue: vi.fn(),
+  closeIssue: vi.fn(),
+  reopenIssue: vi.fn(),
+  editIssue: vi.fn(),
+  addIssueComment: vi.fn(),
+  addIssueLabel: vi.fn(),
+  removeIssueLabel: vi.fn(),
   validateToken: vi.fn(),
   classifyPushError: vi.fn(),
   listIssues: vi.fn(),
@@ -28,6 +43,13 @@ const fakeImpl = vi.hoisted(() => ({
   getPR: vi.fn(),
   getRepoMetadata: vi.fn(),
   repoStats: { getRepoStats: vi.fn() },
+  reviews: {
+    getReviewThreads: vi.fn(),
+    approvePR: vi.fn(),
+    requestChanges: vi.fn(),
+    dismissReview: vi.fn(),
+    requestReviewers: vi.fn(),
+  },
 }));
 
 const resolveForCwdMock = vi.hoisted(() => vi.fn());
@@ -126,6 +148,29 @@ describe("forge handlers — rate limiting", () => {
     });
     fakeImpl.assignIssue.mockResolvedValue(undefined);
     fakeImpl.unassignIssue.mockResolvedValue(undefined);
+    const fakePR = {
+      number: 1,
+      title: "PR",
+      body: "",
+      state: "open",
+      rawState: "open",
+      isDraft: false,
+      merged: false,
+      url: "https://fake.test/acme/widgets/pulls/1",
+      baseRef: "main",
+      headRef: "feature",
+      createdAt: 0,
+      updatedAt: 0,
+      rawData: null,
+    };
+    fakeImpl.createPR.mockResolvedValue(fakePR);
+    fakeImpl.closePR.mockResolvedValue(undefined);
+    fakeImpl.reopenPR.mockResolvedValue(undefined);
+    fakeImpl.mergePR.mockResolvedValue(undefined);
+    fakeImpl.convertPRToDraft.mockResolvedValue(undefined);
+    fakeImpl.markPRReadyForReview.mockResolvedValue(undefined);
+    fakeImpl.commentOnPR.mockResolvedValue(undefined);
+    fakeImpl.editPR.mockResolvedValue(fakePR);
     fakeImpl.validateToken.mockResolvedValue({ valid: true, username: "user", avatarUrl: null });
     fakeImpl.classifyPushError.mockReturnValue(null);
     fakeImpl.listIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
@@ -205,6 +250,138 @@ describe("forge handlers — rate limiting", () => {
         handler({}, { cwd: "/tmp/project", issueNumber: 42, username: "octocat" })
       ).rejects.toThrow("Rate limit exceeded");
       expect(fakeImpl.assignIssue).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("PR write family (forge:*-pr)", () => {
+    it("createPR uses mutation limits (5, 10_000) and dispatches to the provider", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_CREATE_PR);
+      await handler({}, { cwd: "/tmp/project", head: "feature", base: "main", title: "T" });
+
+      expect(checkRateLimitMock).toHaveBeenCalledWith(CHANNELS.FORGE_CREATE_PR, 5, 10_000);
+      expect(fakeImpl.createPR).toHaveBeenCalledWith(repoRef, {
+        head: "feature",
+        base: "main",
+        title: "T",
+      });
+    });
+
+    it("createPR rejects an invalid head before resolving the provider", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_CREATE_PR);
+      await expect(
+        handler({}, { cwd: "/tmp/project", head: "", base: "main", title: "T" })
+      ).rejects.toThrow(/head branch/i);
+      expect(fakeImpl.createPR).not.toHaveBeenCalled();
+    });
+
+    it("mergePR uses mutation limits and forwards the strategy", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_MERGE_PR);
+      await handler({}, { cwd: "/tmp/project", prNumber: 7, mergeMethod: "squash" });
+
+      expect(checkRateLimitMock).toHaveBeenCalledWith(CHANNELS.FORGE_MERGE_PR, 5, 10_000);
+      expect(fakeImpl.mergePR).toHaveBeenCalledWith(repoRef, 7, { mergeMethod: "squash" });
+    });
+
+    it("mergePR rejects an invalid merge method", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_MERGE_PR);
+      await expect(
+        handler({}, { cwd: "/tmp/project", prNumber: 7, mergeMethod: "fast-forward" })
+      ).rejects.toThrow(/merge method/i);
+      expect(fakeImpl.mergePR).not.toHaveBeenCalled();
+    });
+
+    it("closePR / reopenPR / draft toggles / comment dispatch with the PR number", async () => {
+      await getInvokeHandler(CHANNELS.FORGE_CLOSE_PR)({}, { cwd: "/p", prNumber: 3 });
+      await getInvokeHandler(CHANNELS.FORGE_REOPEN_PR)({}, { cwd: "/p", prNumber: 3 });
+      await getInvokeHandler(CHANNELS.FORGE_CONVERT_PR_TO_DRAFT)({}, { cwd: "/p", prNumber: 3 });
+      await getInvokeHandler(CHANNELS.FORGE_MARK_PR_READY_FOR_REVIEW)(
+        {},
+        { cwd: "/p", prNumber: 3 }
+      );
+      await getInvokeHandler(CHANNELS.FORGE_COMMENT_ON_PR)(
+        {},
+        { cwd: "/p", prNumber: 3, body: "hi" }
+      );
+
+      expect(fakeImpl.closePR).toHaveBeenCalledWith(repoRef, 3);
+      expect(fakeImpl.reopenPR).toHaveBeenCalledWith(repoRef, 3);
+      expect(fakeImpl.convertPRToDraft).toHaveBeenCalledWith(repoRef, 3);
+      expect(fakeImpl.markPRReadyForReview).toHaveBeenCalledWith(repoRef, 3);
+      expect(fakeImpl.commentOnPR).toHaveBeenCalledWith(repoRef, 3, "hi");
+    });
+
+    it("commentOnPR rejects an empty body", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_COMMENT_ON_PR);
+      await expect(handler({}, { cwd: "/p", prNumber: 3, body: "  " })).rejects.toThrow(
+        /body is required/i
+      );
+      expect(fakeImpl.commentOnPR).not.toHaveBeenCalled();
+    });
+
+    it("editPR requires at least one of title/body", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_EDIT_PR);
+      await expect(handler({}, { cwd: "/p", prNumber: 3 })).rejects.toThrow(/title or body/i);
+      expect(fakeImpl.editPR).not.toHaveBeenCalled();
+    });
+
+    it("editPR forwards only the provided fields", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_EDIT_PR);
+      await handler({}, { cwd: "/p", prNumber: 3, title: "New" });
+      expect(fakeImpl.editPR).toHaveBeenCalledWith(repoRef, 3, { title: "New" });
+    });
+  });
+
+  describe("write-op input validation", () => {
+    it("rejects a blank editIssue title before touching the provider", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_EDIT_ISSUE);
+
+      await expect(
+        handler({}, { cwd: "/tmp/project", issueNumber: 1, input: { title: "   " } })
+      ).rejects.toThrow(/title cannot be blank/i);
+      expect(fakeImpl.editIssue).not.toHaveBeenCalled();
+    });
+
+    it("rejects an editIssue with neither title nor body", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_EDIT_ISSUE);
+
+      await expect(handler({}, { cwd: "/tmp/project", issueNumber: 1, input: {} })).rejects.toThrow(
+        /title or body/i
+      );
+      expect(fakeImpl.editIssue).not.toHaveBeenCalled();
+    });
+
+    it("rejects an invalid closeIssue state reason", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_CLOSE_ISSUE);
+
+      await expect(
+        handler({}, { cwd: "/tmp/project", issueNumber: 1, stateReason: "bogus" })
+      ).rejects.toThrow(/state reason/i);
+      expect(fakeImpl.closeIssue).not.toHaveBeenCalled();
+    });
+
+    it("accepts 'duplicate' as a closeIssue state reason", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_CLOSE_ISSUE);
+
+      await handler({}, { cwd: "/tmp/project", issueNumber: 1, stateReason: "duplicate" });
+      expect(fakeImpl.closeIssue).toHaveBeenCalledWith(expect.anything(), 1, "duplicate");
+    });
+
+    it("rejects a blank addIssueComment body", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_ADD_ISSUE_COMMENT);
+
+      await expect(
+        handler({}, { cwd: "/tmp/project", issueNumber: 1, body: "  " })
+      ).rejects.toThrow(/comment body is required/i);
+      expect(fakeImpl.addIssueComment).not.toHaveBeenCalled();
+    });
+
+    it("rejects a blank addIssueLabel name", async () => {
+      const handler = getInvokeHandler(CHANNELS.FORGE_ADD_ISSUE_LABEL);
+
+      await expect(
+        handler({}, { cwd: "/tmp/project", issueNumber: 1, label: "  " })
+      ).rejects.toThrow(/label name is required/i);
+      expect(fakeImpl.addIssueLabel).not.toHaveBeenCalled();
     });
   });
 
@@ -360,8 +537,102 @@ describe("forge handlers — rate limiting", () => {
         maxCalls: 5,
         invoke: (h) => h({}, { cwd, issueNumber: 1, username: "octocat" }),
       },
+      // review-write ops: 3/10s (more conservative than assign — higher blast radius)
+      {
+        channel: CHANNELS.FORGE_APPROVE_PR,
+        maxCalls: 3,
+        invoke: (h) => h({}, { cwd, prNumber: 1 }),
+      },
+      {
+        channel: CHANNELS.FORGE_REQUEST_CHANGES,
+        maxCalls: 3,
+        invoke: (h) => h({}, { cwd, prNumber: 1, body: "please fix" }),
+      },
+      {
+        channel: CHANNELS.FORGE_DISMISS_REVIEW,
+        maxCalls: 3,
+        invoke: (h) => h({}, { cwd, prNumber: 1, reviewId: 1, message: "stale" }),
+      },
+      {
+        channel: CHANNELS.FORGE_REQUEST_REVIEWERS,
+        maxCalls: 3,
+        invoke: (h) => h({}, { cwd, prNumber: 1, users: ["octocat"] }),
+      },
+      // issue-write ops: 5/10s (matches the mutation tier — assign-issue)
+      {
+        channel: CHANNELS.FORGE_CREATE_ISSUE,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, input: { title: "New issue" } }),
+      },
+      {
+        channel: CHANNELS.FORGE_CLOSE_ISSUE,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, issueNumber: 1 }),
+      },
+      {
+        channel: CHANNELS.FORGE_REOPEN_ISSUE,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, issueNumber: 1 }),
+      },
+      {
+        channel: CHANNELS.FORGE_EDIT_ISSUE,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, issueNumber: 1, input: { title: "Updated" } }),
+      },
+      {
+        channel: CHANNELS.FORGE_ADD_ISSUE_COMMENT,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, issueNumber: 1, body: "Looks good" }),
+      },
+      {
+        channel: CHANNELS.FORGE_ADD_ISSUE_LABEL,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, issueNumber: 1, label: "bug" }),
+      },
+      {
+        channel: CHANNELS.FORGE_REMOVE_ISSUE_LABEL,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, issueNumber: 1, label: "bug" }),
+      },
       // open-PR: 20/10s (matches forge:open-issue)
       { channel: CHANNELS.FORGE_OPEN_PR, maxCalls: 20, invoke: (h) => h({}, { cwd, prNumber: 1 }) },
+      // PR write family: 5/10s (matches the mutation tier — assign-issue)
+      {
+        channel: CHANNELS.FORGE_CREATE_PR,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, head: "feature", base: "main", title: "T" }),
+      },
+      { channel: CHANNELS.FORGE_CLOSE_PR, maxCalls: 5, invoke: (h) => h({}, { cwd, prNumber: 1 }) },
+      {
+        channel: CHANNELS.FORGE_REOPEN_PR,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, prNumber: 1 }),
+      },
+      {
+        channel: CHANNELS.FORGE_MERGE_PR,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, prNumber: 1 }),
+      },
+      {
+        channel: CHANNELS.FORGE_CONVERT_PR_TO_DRAFT,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, prNumber: 1 }),
+      },
+      {
+        channel: CHANNELS.FORGE_MARK_PR_READY_FOR_REVIEW,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, prNumber: 1 }),
+      },
+      {
+        channel: CHANNELS.FORGE_COMMENT_ON_PR,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, prNumber: 1, body: "hi" }),
+      },
+      {
+        channel: CHANNELS.FORGE_EDIT_PR,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, prNumber: 1, title: "New" }),
+      },
       // capability reads: 10/10s (matches github:get-repo-stats family)
       { channel: CHANNELS.FORGE_GET_REPO_STATS, maxCalls: 10, invoke: (h) => h({}, { cwd }) },
       { channel: CHANNELS.FORGE_GET_FIRST_PAGE_CACHE, maxCalls: 10, invoke: (h) => h({}, { cwd }) },
@@ -407,12 +678,12 @@ describe("forge handlers — rate limiting", () => {
       },
     ];
 
-    it("registers all forge channels (25 rate-limited + 2 unrated probes)", () => {
-      expect(specs).toHaveLength(25);
+    it("registers all forge channels (44 rate-limited + 2 unrated probes)", () => {
+      expect(specs).toHaveLength(44);
       // FORGE_GET_CURRENT_USER and FORGE_GET_TOKEN_HEALTH are intentionally
       // unrated replay/identity probes with no checkRateLimit, so they register
       // handlers but stay out of `specs`.
-      expect(ipcMainMock.handle).toHaveBeenCalledTimes(27);
+      expect(ipcMainMock.handle).toHaveBeenCalledTimes(46);
     });
 
     it.each(specs)(

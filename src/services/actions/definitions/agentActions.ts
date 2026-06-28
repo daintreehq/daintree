@@ -12,6 +12,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { AGENT_REGISTRY } from "@/config/agents";
+import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import type { ActionId } from "@shared/types/actions";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
@@ -153,6 +154,11 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     .nullable();
 
   for (const [id, config] of Object.entries(AGENT_REGISTRY)) {
+    // Assistant-only agents (e.g. daintree-assistant) have no direct-launch
+    // action — they're never spawned as a standalone agent, only used by the
+    // Daintree Assistant overlay. Skipping registration keeps them out of the
+    // action palette and the MCP action manifest.
+    if (isAssistantOnlyAgentId(id)) continue;
     const actionId = `agent.${id}` as ActionId;
     actions.set(actionId, () => ({
       id: actionId,
@@ -371,7 +377,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.getState",
     title: "Get Agent State",
     description:
-      "Look up the live state of an agent by its agent id. Args: `agentId` (required) — agent id such as 'claude' or 'codex', as seen in `terminal.list` entries' `agentId` field. Returns { agentId, state, waitingReason ('prompt'|'question', non-null only when state is 'waiting'), lastTransitionAt, terminalId, found }. Never errors — an unknown agent returns found:false with null fields. Do NOT use this to enumerate terminals — use `terminal.list` or `terminal.getStatus`.",
+      "Look up the live state of an agent by its agent id. Args: `agentId` (required) — agent id such as 'claude' or 'codex', as seen in `terminal.list` entries' `agentId` field. Returns { agentId, state, waitingReason ('prompt'|'question', non-null only when state is 'waiting'), lastTransitionAt, exitCode (number|null — set once the PTY has exited, null while running or on a signal kill; read alongside `state` to tell pass from fail), spawnedAt, terminalId, found }. Never errors — an unknown agent returns found:false with null fields. Do NOT use this to enumerate terminals — use `terminal.list` or `terminal.getStatus`.",
     category: "agent",
     kind: "query",
     danger: "safe",
@@ -395,6 +401,11 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       state: z.string().nullable(),
       waitingReason: z.string().nullable(),
       lastTransitionAt: z.number().nullable(),
+      // Process exit code once the agent's PTY has exited; null while running or
+      // when signal-terminated with no numeric code. Disambiguate via `state`.
+      exitCode: z.number().int().nullable(),
+      // Wall-clock spawn timestamp (ms) for duration reasoning; null if unknown.
+      spawnedAt: z.number().nullable(),
       terminalId: z.string().nullable(),
       found: z.boolean(),
     }),
@@ -414,6 +425,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
             state: panel.agentState ?? null,
             waitingReason: panel.agentState === "waiting" ? (panel.waitingReason ?? null) : null,
             lastTransitionAt: panel.lastStateChange ?? null,
+            exitCode: panel.exitCode ?? null,
+            spawnedAt: panel.startedAt ?? null,
             terminalId: panel.id,
             found: true,
           };
@@ -424,6 +437,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         state: null,
         waitingReason: null,
         lastTransitionAt: null,
+        exitCode: null,
+        spawnedAt: null,
         terminalId: null,
         found: false,
       };

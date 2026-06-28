@@ -21,7 +21,7 @@ import {
   usePreferencesStore,
   useTwoPaneSplitStore,
 } from "@/store";
-import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import { getNarrowPanel, getRenderablePanel } from "@/store/slices/panelRegistry/selectors";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -63,6 +63,7 @@ import {
 import { MenuActionSourceContext } from "@/components/ui/menu-source";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { getEffectiveAgentIds } from "@shared/config/agentRegistry";
+import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import {
   subscribeToPluginAgentRegistry,
   getPluginAgentRegistrySnapshot,
@@ -405,8 +406,11 @@ export function useContentGridContext({
     const result: PanelInstance[] = [];
     for (const id of gridPanelIds) {
       if (closingIds.has(id)) continue;
-      const narrowed = getNarrowPanel(byId, id);
-      if (narrowed) result.push(narrowed);
+      // Render-eligibility (not type-narrowing): plugin-contributed kinds must
+      // count as grid members so they render and don't leave `isEmpty` stuck
+      // true (#10512). `getNarrowPanel` alone drops them.
+      const renderable = getRenderablePanel(byId, id);
+      if (renderable) result.push(renderable);
     }
     return result.length === 0 ? EMPTY_TERMINALS : result;
   }, [gridPanelIds, closingIds]);
@@ -714,6 +718,8 @@ export function useContentGridContext({
     // getEffectiveAgentIds/getAgentConfig read the merged (incl. plugin) registry (#9879).
     void pluginAgentRegistry;
     const agents: DockLaunchAgent[] = getEffectiveAgentIds()
+      // Assistant-only agents are never offered in the grid launch menu.
+      .filter((id) => !isAssistantOnlyAgentId(id))
       .filter((id) => !gridSelectedAgentIds || gridSelectedAgentIds.has(id))
       .map((id) => {
         const config = getAgentConfig(id);
@@ -955,7 +961,7 @@ export function useContentGridContext({
       .slice(0, 2)
       .map((g) => {
         const raw = getTabGroupPanels(g.id, "grid")[0];
-        return raw ? getNarrowPanel(byId, raw.id) : undefined;
+        return raw ? getRenderablePanel(byId, raw.id) : undefined;
       })
       .filter((p): p is PanelInstance => p !== undefined);
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
@@ -1014,7 +1020,7 @@ export function useContentGridContext({
     if (!maximizedGroup) return [];
     const byId = panelStoreApi.getState().panelsById;
     return getTabGroupPanels(maximizedGroup.id, "grid")
-      .map((raw) => getNarrowPanel(byId, raw.id))
+      .map((raw) => getRenderablePanel(byId, raw.id))
       .filter((p): p is PanelInstance => p !== undefined);
   }, [getTabGroupPanels, maximizedGroup]);
   const maximizedGroupFocusTarget = useMemo(
@@ -1109,13 +1115,14 @@ export function useContentGridContext({
   );
 
   // Wrap the store's getTabGroupPanels (returns carrier shape) so the
-  // context surface exposes PanelInstance[] — narrowed via getNarrowPanel at
-  // call time so callers never touch the carrier shape.
+  // context surface exposes PanelInstance[] — resolved via getRenderablePanel
+  // at call time so callers never touch the carrier shape AND plugin-contributed
+  // kinds stay in the rendered set (#10512).
   const getTabGroupPanelsMapped = useCallback(
     (groupId: string, location?: TabGroupLocation): PanelInstance[] => {
       const byId = panelStoreApi.getState().panelsById;
       return getTabGroupPanels(groupId, location)
-        .map((raw) => getNarrowPanel(byId, raw.id))
+        .map((raw) => getRenderablePanel(byId, raw.id))
         .filter((p): p is PanelInstance => p !== undefined);
     },
     [getTabGroupPanels]

@@ -24,7 +24,9 @@ vi.mock("node:child_process", () => ({
 vi.mock("../hardenedGit.js", () => ({
   HARDENED_GIT_CONFIG: mockHardenedGitConfig,
   buildHardenedGitEnv: mockBuildHardenedGitEnv,
-  GIT_BLOCK_TIMEOUT_MS: 30_000,
+  // Mocked to a tiny value so the hang-timeout test (which sleeps past this
+  // constant to observe the kill) runs in milliseconds, not the real 30s.
+  GIT_BLOCK_TIMEOUT_MS: 50,
 }));
 
 import { checkIgnoredPaths } from "../gitCheckIgnore.js";

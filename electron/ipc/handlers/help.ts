@@ -119,6 +119,33 @@ async function handleRevokeSession(sessionId: string): Promise<void> {
   await helpSessionService.revokeSession(sessionId);
 }
 
+async function handlePeekPendingHibernation(
+  ctx: import("../types.js").IpcContext,
+  projectId: string
+): Promise<{
+  agentId: string;
+  agentSessionId: string;
+  cwd: string;
+  // #10815: in-memory-only flag stamped on eviction capture. Drives the
+  // renderer's pull-on-mount cold switch-back auto-resume; disk-loaded
+  // prior-session entries lack it (→ false) so app restart never auto-resumes.
+  panelWasOpen: boolean;
+} | null> {
+  if (typeof projectId !== "string" || !projectId) return null;
+  // Same cross-project guard as the take handler below: a pending entry holds
+  // an agent's resume token, so refuse reads for any project other than the
+  // one bound to this renderer's webContents.
+  if (!ctx.projectId || ctx.projectId !== projectId) {
+    console.warn(
+      "[help] peekPendingHibernation: projectId mismatch — refusing cross-project read",
+      { requested: projectId, fromView: ctx.projectId, webContentsId: ctx.webContentsId }
+    );
+    return null;
+  }
+  const { helpSessionService } = await getHelpSessionService();
+  return helpSessionService.peekPendingHibernation(projectId);
+}
+
 async function handleTakePendingHibernation(
   ctx: import("../types.js").IpcContext,
   projectId: string
@@ -145,6 +172,29 @@ async function handleTakePendingHibernation(
   return helpSessionService.takePendingHibernation(projectId);
 }
 
+async function handleReportPanelOpen(
+  ctx: import("../types.js").IpcContext,
+  projectId: string,
+  isOpen: boolean
+): Promise<void> {
+  if (typeof projectId !== "string" || !projectId) return;
+  if (typeof isOpen !== "boolean") return;
+  // Same cross-project guard as the hibernation handlers: only the renderer
+  // bound to this project's webContents may report its panel state. A
+  // mismatched report would let one view's open-state drive another's
+  // cold-resume decision (#10815).
+  if (!ctx.projectId || ctx.projectId !== projectId) {
+    console.warn("[help] reportPanelOpen: projectId mismatch — refusing cross-project report", {
+      requested: projectId,
+      fromView: ctx.projectId,
+      webContentsId: ctx.webContentsId,
+    });
+    return;
+  }
+  const { helpSessionService } = await getHelpSessionService();
+  helpSessionService.reportPanelOpen(projectId, isOpen);
+}
+
 export const helpNamespace = defineIpcNamespace({
   name: "help",
   ops: {
@@ -160,11 +210,19 @@ export const helpNamespace = defineIpcNamespace({
       handleGetPinnedActionContext,
       { withContext: true }
     ),
+    peekPendingHibernation: op(
+      HELP_METHOD_CHANNELS.peekPendingHibernation,
+      handlePeekPendingHibernation,
+      { withContext: true }
+    ),
     takePendingHibernation: op(
       HELP_METHOD_CHANNELS.takePendingHibernation,
       handleTakePendingHibernation,
       { withContext: true }
     ),
+    reportPanelOpen: op(HELP_METHOD_CHANNELS.reportPanelOpen, handleReportPanelOpen, {
+      withContext: true,
+    }),
   },
 });
 

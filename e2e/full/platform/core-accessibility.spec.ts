@@ -297,13 +297,15 @@ test.describe.serial("Core: Accessibility", () => {
           const before = await getGridPanelCount(window);
           await window.keyboard.press(`${mod}+Alt+t`);
           await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
-          await window
-            .locator(SEL.terminal.xtermRows)
-            .first()
-            .waitFor({ state: "visible", timeout: T_LONG });
+          const panel = window.locator(SEL.panel.gridPanel).nth(before);
+          await panel.locator(SEL.terminal.xtermRows).waitFor({
+            state: "visible",
+            timeout: T_LONG,
+          });
+          await window.waitForTimeout(T_SETTLE);
 
           // Click into the terminal so xterm's textarea holds focus.
-          await window.locator(SEL.panel.gridPanel).first().locator(SEL.terminal.xtermRows).click();
+          await panel.locator(SEL.terminal.xtermRows).click();
           await expect
             .poll(async () => (await getActiveElementInfo(window))?.isTerminal ?? false, {
               timeout: T_LONG,
@@ -319,6 +321,7 @@ test.describe.serial("Core: Accessibility", () => {
             })
             .toBe(true);
 
+          await window.waitForTimeout(T_SETTLE);
           await window.keyboard.press("F6");
           await expect
             .poll(async () => (await getActiveElementInfo(window))?.isTerminal ?? false, {
@@ -327,7 +330,6 @@ test.describe.serial("Core: Accessibility", () => {
             .toBe(false);
 
           // Clean up via the close button (Cmd+W quits on the last panel).
-          const panel = window.locator(SEL.panel.gridPanel).first();
           await panel.locator(SEL.panel.close).first().click({ force: true });
           await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(before);
         });

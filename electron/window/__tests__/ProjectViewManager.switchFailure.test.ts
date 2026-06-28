@@ -23,15 +23,23 @@ interface MockWc {
   _fireOnce: (event: string, ...args: unknown[]) => void;
 }
 
-function createMockWebContents(opts?: { autoFinishLoad?: boolean }): MockWc {
+function createMockWebContents(opts?: {
+  autoFinishLoad?: boolean;
+  bootstrapProjectId?: string | null;
+}): MockWc {
   const id = nextWebContentsId++;
   const handlers = new Map<string, Handler[]>();
   const autoFinish = opts?.autoFinishLoad ?? true;
+  const bootstrapProjectId = opts?.bootstrapProjectId ?? null;
 
   const wc: MockWc = {
     id,
     isDestroyed: vi.fn(() => false),
-    executeJavaScript: vi.fn(() => Promise.resolve()),
+    executeJavaScript: vi.fn((code?: string) =>
+      String(code ?? "").includes("__DAINTREE_INITIAL_PROJECT__")
+        ? Promise.resolve(bootstrapProjectId)
+        : Promise.resolve()
+    ),
     loadURL: vi.fn(() => Promise.resolve()),
     focus: vi.fn(),
     invalidate: vi.fn(),
@@ -72,7 +80,12 @@ let wcQueue: MockWc[] = [];
 vi.mock("electron", () => {
   function MockWebContentsView() {
     const wc = wcQueue.shift();
-    return { webContents: wc, setBounds: vi.fn(), setBackgroundColor: vi.fn() };
+    return {
+      webContents: wc,
+      setBounds: vi.fn(),
+      setBackgroundColor: vi.fn(),
+      setVisible: vi.fn(),
+    };
   }
   return {
     app: { isPackaged: false, commandLine: { appendSwitch: vi.fn() } },
@@ -331,7 +344,10 @@ describe("ProjectViewManager — switch failure rollback", () => {
 
   it("switchChain continues after rollback — second switch succeeds", async () => {
     const failWc = createMockWebContents({ autoFinishLoad: false });
-    const succeedWc = createMockWebContents({ autoFinishLoad: true });
+    const succeedWc = createMockWebContents({
+      autoFinishLoad: true,
+      bootstrapProjectId: "proj-c",
+    });
     wcQueue.push(failWc, succeedWc);
 
     const first = manager.switchTo("proj-b", "/path/b");
@@ -350,14 +366,15 @@ describe("ProjectViewManager — switch failure rollback", () => {
   });
 
   it("only settles once when multiple events fire", async () => {
-    const wc = createMockWebContents({ autoFinishLoad: false });
+    const wc = createMockWebContents({ autoFinishLoad: false, bootstrapProjectId: "proj-b" });
     wcQueue.push(wc);
 
     const p = manager.switchTo("proj-b", "/path/b");
     await vi.advanceTimersByTimeAsync(0);
 
-    // Fire did-finish-load first (success)
+    // Fire did-finish-load first (success), then let the async bootstrap check settle.
     wc._fireOnce("did-finish-load");
+    await vi.advanceTimersByTimeAsync(0);
 
     // Then fire preload-error (should be ignored by settle guard)
     wc._fireOnce("preload-error", {}, "/test/preload.cjs", new Error("Should be ignored"));
@@ -366,5 +383,76 @@ describe("ProjectViewManager — switch failure rollback", () => {
     await vi.advanceTimersByTimeAsync(1);
     const result = await p;
     expect(result.isNew).toBe(true);
+  });
+
+  it("rejects when the renderer finishes on the wrong internal page without project bootstrap", async () => {
+    const wrongPageWc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(wrongPageWc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+
+    await vi.advanceTimersByTimeAsync(0);
+    wrongPageWc._fireOnce("did-finish-load");
+
+    const err = await errPromise;
+    expect(err.message).toContain("Project view loaded without project bootstrap");
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(wrongPageWc.close).toHaveBeenCalled();
+    expect(notifyError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ source: "project-switch" })
+    );
+  });
+
+  it("rejects when the renderer bootstraps a different project than requested", async () => {
+    const wrongProjectWc = createMockWebContents({
+      autoFinishLoad: false,
+      bootstrapProjectId: "proj-c",
+    });
+    wcQueue.push(wrongProjectWc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+
+    await vi.advanceTimersByTimeAsync(0);
+    wrongProjectWc._fireOnce("did-finish-load");
+
+    const err = await errPromise;
+    expect(err.message).toContain("Project view loaded without project bootstrap");
+    expect(err.message).toContain("got proj-c");
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(wrongProjectWc.close).toHaveBeenCalled();
+    expect(notifyError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ source: "project-switch" })
+    );
+  });
+
+  it("rolls back when the bootstrap check rejects (webContents destroyed mid-verify)", async () => {
+    const destroyedWc = createMockWebContents({ autoFinishLoad: false });
+    // The bootstrap probe rejects rather than resolving — mirrors executeJavaScript
+    // throwing "Object has been destroyed" if the view is torn down mid-check.
+    destroyedWc.executeJavaScript.mockImplementation((code?: string) =>
+      String(code ?? "").includes("__DAINTREE_INITIAL_PROJECT__")
+        ? Promise.reject(new Error("Object has been destroyed"))
+        : Promise.resolve()
+    );
+    wcQueue.push(destroyedWc);
+
+    const p = manager.switchTo("proj-b", "/path/b");
+    const errPromise = expectRejection(p);
+
+    await vi.advanceTimersByTimeAsync(0);
+    destroyedWc._fireOnce("did-finish-load");
+
+    const err = await errPromise;
+    expect(err.message).toBe("Object has been destroyed");
+    expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(destroyedWc.close).toHaveBeenCalled();
+    expect(notifyError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ source: "project-switch" })
+    );
   });
 });

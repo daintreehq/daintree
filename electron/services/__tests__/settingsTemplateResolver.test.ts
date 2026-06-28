@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   resolveSettingsTemplates,
+  substituteSettingsTemplates,
   SettingTemplateError,
   type PluginSettingsApi,
 } from "../settingsTemplateResolver.js";
@@ -283,5 +284,45 @@ describe("resolveSettingsTemplates", () => {
       expect(caught!.message).not.toContain("decrypt");
       expect(caught!.message).not.toContain("sk-live-secret");
     });
+  });
+});
+
+describe("substituteSettingsTemplates", () => {
+  it("substitutes each unique id once via the resolve callback", async () => {
+    const resolve = vi.fn(async (id: string) => ({ apiToken: "sk-1", orgId: "org-2" })[id] ?? "");
+    const result = await substituteSettingsTemplates(
+      "--token ${settings:apiToken} --org ${settings:orgId} --again ${settings:apiToken}",
+      resolve
+    );
+    expect(result).toBe("--token sk-1 --org org-2 --again sk-1");
+    // apiToken appears twice but is resolved once (dedup), orgId once → 2 calls.
+    expect(resolve).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns the input unchanged (and never calls resolve) when no template is present", async () => {
+    const resolve = vi.fn(async () => "x");
+    const result = await substituteSettingsTemplates("acme --interactive", resolve);
+    expect(result).toBe("acme --interactive");
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("propagates an error thrown by resolve (caller decides unset-means-error)", async () => {
+    const resolve = vi.fn(async (id: string) => {
+      if (id === "missing") throw new SettingTemplateError("acme.plugin", id);
+      return "ok";
+    });
+    await expect(
+      substituteSettingsTemplates("${settings:present} ${settings:missing}", resolve)
+    ).rejects.toThrow(SettingTemplateError);
+  });
+
+  it("leaves near-miss syntax untouched", async () => {
+    const resolve = vi.fn(async () => "x");
+    const result = await substituteSettingsTemplates(
+      "$settings:foo ${settings:} ${other:foo}",
+      resolve
+    );
+    expect(result).toBe("$settings:foo ${settings:} ${other:foo}");
+    expect(resolve).not.toHaveBeenCalled();
   });
 });

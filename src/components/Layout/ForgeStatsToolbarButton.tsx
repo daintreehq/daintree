@@ -21,7 +21,6 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useRepositoryStats } from "@/hooks/useRepositoryStats";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
-import { useForgeTokenExpiryNotification } from "@/hooks/useForgeTokenExpiryNotification";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { useBuiltinView } from "@/registry/builtinRendererRegistry";
 import { ForgeStatusIndicator, type ForgeStatusIndicatorStatus } from "./ForgeStatusIndicator";
@@ -137,8 +136,6 @@ export const ForgeStatsToolbarButton = memo(
     const DropdownView = useBuiltinView<ForgeStatsDropdownProps>(
       providerEntry?.contribution.slots?.statsDropdown ?? ""
     );
-
-    useForgeTokenExpiryNotification(isTokenError);
 
     // Drives the tooltip aging copy ("updated 3m ago") without per-component
     // intervals — the ticker is shared, paused on hidden tabs, and tears down
@@ -1093,7 +1090,7 @@ export const ForgeStatsToolbarButton = memo(
                     }
                     className="flex h-full w-7 shrink-0 items-center justify-center text-muted-foreground"
                   >
-                    <Clock className="h-3.5 w-3.5 opacity-80" aria-hidden />
+                    <Clock className="h-3.5 w-3.5 text-text-muted" aria-hidden />
                   </div>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="px-0 py-0">

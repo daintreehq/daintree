@@ -2,7 +2,16 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { systemClient } from "@/clients";
 import { usePanelStore } from "@/store/panelStore";
+import { flushConsoleCaptureBuffer, useConsoleCaptureStore } from "@/store/consoleCaptureStore";
 import { isBrowserPanel, isDevPreviewPanel } from "@shared/types/panel";
+
+const getConsoleMessagesArgsSchema = z
+  .object({
+    terminalId: z.string().optional(),
+    level: z.enum(["log", "info", "warning", "error"]).optional(),
+    limit: z.number().int().positive().max(500).optional(),
+  })
+  .optional();
 
 function readBrowserUrl(id: string | undefined): string | undefined {
   if (!id) return undefined;
@@ -62,10 +71,48 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     run: async (args: unknown) => {
       const { url, terminalId } = args as { url: string; terminalId?: string };
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
-      if (!targetId) return;
+      // No silent no-op: a no-target dispatch used to return `undefined`, which
+      // ActionService wraps as `{ ok: true }` — a false success that left plugin
+      // callers unable to detect that nothing navigated. Throw so the failure is
+      // explicit. Use `browser.openUrl` to open-or-focus a panel when none exists.
+      if (!targetId) {
+        throw new Error("No browser panel: pass terminalId or focus a browser panel first");
+      }
       window.dispatchEvent(
         new CustomEvent("daintree:browser-navigate", { detail: { id: targetId, url } })
       );
+    },
+  }));
+
+  actions.set("browser.openUrl", () => ({
+    id: "browser.openUrl",
+    title: "Open URL in Browser",
+    description: "Open a URL in a browser panel, reusing an existing one or creating a new one",
+    category: "browser",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["web", "navigate", "panel", "tab"],
+    argsSchema: z.object({ url: z.string() }),
+    run: async (args: unknown) => {
+      const { url } = args as { url: string };
+      const store = usePanelStore.getState();
+      const existing = store.panelIds
+        .map((id) => store.panelsById[id])
+        .find((panel) => panel && isBrowserPanel(panel));
+      if (existing) {
+        store.setBrowserUrl(existing.id, url);
+        store.activateTerminal(existing.id);
+        return;
+      }
+      // Omit focusPolicy so the store resolves "auto" vs "preserve" via its MCP
+      // focus-suppression guard (#9035) — never steal focus from a typing user.
+      const newId = await store.addPanel({ kind: "browser", browserUrl: url });
+      // addPanel returns null when the hard panel limit is reached (the store
+      // raises its own toast). Throw so callers don't get a false { ok: true }.
+      if (!newId) {
+        throw new Error("Could not open browser panel: panel limit reached");
+      }
     },
   }));
 
@@ -192,19 +239,37 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     id: "browser.captureScreenshot",
     palette: { mode: "hidden" },
     title: "Capture Browser Screenshot",
-    description: "Capture a screenshot of the browser viewport and copy to clipboard",
+    description: "Capture a screenshot of the focused browser panel and return it as a PNG image",
     category: "browser",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
-      if (!targetId) return;
-      window.dispatchEvent(
-        new CustomEvent("daintree:browser-capture-screenshot", { detail: { id: targetId } })
-      );
+      // No silent no-op: returning `undefined` here would make ActionService
+      // report `{ ok: true }` with no image, leaving an MCP caller unable to
+      // tell that nothing was captured. Throw so the failure is explicit.
+      if (!targetId) {
+        throw new Error("No browser panel: pass terminalId or focus a browser panel first");
+      }
+      const shot = await window.electron.webview.captureScreenshot(targetId);
+      // Preserve the user-facing "copy to clipboard" affordance for keybinding /
+      // toolbar dispatch; agent (MCP) calls receive the bytes in the result and
+      // must not clobber the user's clipboard.
+      if (ctx?.dispatchSource !== "agent") {
+        try {
+          const binary = atob(shot.pngBase64);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          await window.electron.clipboard.writeImage(bytes);
+        } catch {
+          // Clipboard write is a best-effort side-effect — the captured image is
+          // still returned to the caller even if the copy fails.
+        }
+      }
+      return shot;
     },
   }));
 
@@ -245,6 +310,83 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       window.dispatchEvent(
         new CustomEvent("daintree:browser-clear-console", { detail: { id: targetId } })
       );
+    },
+  }));
+
+  actions.set("browser.getConsoleMessages", () => ({
+    id: "browser.getConsoleMessages",
+    palette: { mode: "hidden" },
+    title: "Get Browser Console Messages",
+    description:
+      "Read captured console output (logs, warnings, errors, and stack traces) from a dev preview panel. Returns the most recent messages plus error/warning counts so an agent can inspect runtime issues without opening the console UI.",
+    category: "browser",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    mcpOutputSchema: true,
+    argsSchema: getConsoleMessagesArgsSchema,
+    resultSchema: z.object({
+      paneId: z.string(),
+      messages: z.array(
+        z.object({
+          id: z.number(),
+          paneId: z.string(),
+          level: z.enum(["log", "info", "warning", "error"]),
+          cdpType: z.string(),
+          summaryText: z.string(),
+          args: z.array(z.unknown()),
+          stackTrace: z.unknown().optional(),
+          groupDepth: z.number(),
+          timestamp: z.number(),
+          navigationGeneration: z.number(),
+          category: z.string().optional(),
+        })
+      ),
+      counts: z.object({ errorCount: z.number(), warnCount: z.number() }),
+    }),
+    run: async (args: unknown) => {
+      const { terminalId, level, limit } = getConsoleMessagesArgsSchema.parse(args) ?? {};
+      const panelStore = usePanelStore.getState();
+      const targetId = terminalId ?? panelStore.focusedId;
+      if (!targetId) {
+        throw new Error("No dev preview panel: pass terminalId or focus a dev preview panel first");
+      }
+      // Only dev preview panels capture console output (via
+      // useDevPreviewConsoleCapture); guard so a wrong-kind target returns an
+      // explicit error rather than a misleading empty result.
+      const panel = panelStore.panelsById[targetId];
+      if (!panel || !isDevPreviewPanel(panel)) {
+        throw new Error(
+          "Console capture is only available for dev preview panels; target a dev preview panel"
+        );
+      }
+      // Commit rows still buffered for the current animation frame so a read
+      // immediately after a log isn't missed (mirrors markStale()).
+      flushConsoleCaptureBuffer();
+      const store = useConsoleCaptureStore.getState();
+      let rows = store.getMessages(targetId);
+      if (level) {
+        rows = rows.filter((row) => row.level === level);
+      }
+      if (limit !== undefined && rows.length > limit) {
+        rows = rows.slice(rows.length - limit);
+      }
+      // Strip renderer-only UI fields (isStale, timeLabel, isGroupHeader);
+      // return only the serialized wire fields an agent can act on.
+      const messages = rows.map((row) => ({
+        id: row.id,
+        paneId: row.paneId,
+        level: row.level,
+        cdpType: row.cdpType,
+        summaryText: row.summaryText,
+        args: row.args,
+        stackTrace: row.stackTrace,
+        groupDepth: row.groupDepth,
+        timestamp: row.timestamp,
+        navigationGeneration: row.navigationGeneration,
+        category: row.category,
+      }));
+      return { paneId: targetId, messages, counts: store.getCounts(targetId) };
     },
   }));
 

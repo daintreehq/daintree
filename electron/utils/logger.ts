@@ -218,6 +218,11 @@ export function resetLoggerStateForTesting(): void {
   trackedLogFile = null;
   trackedLogSize = -1;
   bytesSinceSizeRefresh = 0;
+  // Drop any buffered async writes so a deferred flush can't bleed into the
+  // next test (an already-scheduled setImmediate finds an empty buffer).
+  pendingLogLines = [];
+  pendingLogBytes = 0;
+  asyncFlushScheduled = false;
   loggerRegistry.clear();
   levelOverrides.clear();
   defaultLevel = IS_DEBUG_BOOT ? "debug" : "info";
@@ -285,6 +290,101 @@ export async function pruneOldLogsAsync(
       }
     } catch {
       // Directory read failed or doesn't exist — non-fatal
+    }
+  }
+}
+
+/**
+ * Cap on retained `*.heapsnapshot` files in `app.getPath("logs")`. V8's
+ * `setHeapSnapshotNearHeapLimit` (main, pty-host, workspace-host, watchdog) dumps
+ * 55–60 MB snapshots there on near-OOM; with frequent OOM restarts they accumulate
+ * unbounded (#10728). 10 ≈ 600 MB and leaves room for all processes to each emit a
+ * full set without dropping the freshest diagnostics.
+ */
+export const MAX_HEAP_SNAPSHOTS = 10;
+
+const HEAP_SNAPSHOT_EXT = ".heapsnapshot";
+
+/**
+ * Count-based prune of V8 heap snapshots in `logsDir` (= `app.getPath("logs")`).
+ * Keeps the `maxCount` newest `*.heapsnapshot` files by mtime and deletes the
+ * rest. Time-based pruning (like {@link pruneOldLogs}) is the wrong model here —
+ * each snapshot is ~55 MB and old dumps have no diagnostic value once superseded.
+ * Strictly filters by extension so sibling logs (daintree.log, crash reports) are
+ * never touched. Missing/unreadable dir and per-file unlink failures are no-ops.
+ */
+export function pruneHeapSnapshots(logsDir: string, maxCount: number): void {
+  if (maxCount < 0) return;
+  if (!existsSync(logsDir)) return;
+
+  try {
+    const snapshots: { path: string; mtimeMs: number }[] = [];
+    for (const file of readdirSync(logsDir)) {
+      if (!file.endsWith(HEAP_SNAPSHOT_EXT)) continue;
+      try {
+        const filePath = join(logsDir, file);
+        const stats = statSync(filePath);
+        if (stats.isFile()) {
+          snapshots.push({ path: filePath, mtimeMs: stats.mtimeMs });
+        }
+      } catch {
+        // Skip locked or inaccessible files
+      }
+    }
+
+    if (snapshots.length <= maxCount) return;
+
+    snapshots.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    for (const { path } of snapshots.slice(maxCount)) {
+      try {
+        unlinkSync(path);
+      } catch {
+        // Skip locked or inaccessible files
+      }
+    }
+  } catch {
+    // Directory read failed — non-fatal
+  }
+}
+
+/**
+ * Async twin of {@link pruneHeapSnapshots}. Uses `fs/promises` so the scan/delete
+ * pass yields to the event loop instead of blocking it. Use this from async
+ * contexts (deferred-init queue, periodic cleanup); keep the sync version for the
+ * synchronous DiskSpaceMonitor critical-edge handler.
+ */
+export async function pruneHeapSnapshotsAsync(logsDir: string, maxCount: number): Promise<void> {
+  if (maxCount < 0) return;
+
+  const snapshots: { path: string; mtimeMs: number }[] = [];
+  try {
+    const handle = await fsp.opendir(logsDir);
+    for await (const dirent of handle) {
+      // dirent.isFile() does not follow symlinks; the logs dir never contains
+      // symlinks, so this matches the sync twin while avoiding an extra stat.
+      if (!dirent.isFile()) continue;
+      if (!dirent.name.endsWith(HEAP_SNAPSHOT_EXT)) continue;
+      try {
+        const filePath = join(logsDir, dirent.name);
+        const stats = await fsp.stat(filePath);
+        snapshots.push({ path: filePath, mtimeMs: stats.mtimeMs });
+      } catch {
+        // Skip locked or inaccessible files
+      }
+    }
+  } catch {
+    // Directory read failed or doesn't exist — non-fatal
+    return;
+  }
+
+  if (snapshots.length <= maxCount) return;
+
+  snapshots.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  for (const { path } of snapshots.slice(maxCount)) {
+    try {
+      await fsp.unlink(path);
+    } catch {
+      // Skip locked or inaccessible files
     }
   }
 }
@@ -402,6 +502,16 @@ export function setLogLevelOverrides(overrides: Record<string, string>): void {
 
 export function getLogLevelOverrides(): Record<string, LogOverrideLevel> {
   return Object.fromEntries(levelOverrides.entries());
+}
+
+/**
+ * The effective floor applied when no override matches — `"debug"` under
+ * debug-boot (`NODE_ENV=development` / `DAINTREE_DEBUG`), else `"info"`. The
+ * renderer mirrors this so its pre-IPC gate matches what main would accept for
+ * an unmatched logger (`resolveEffectiveLevel`'s final fallback).
+ */
+export function getDefaultLogLevel(): LogOverrideLevel {
+  return defaultLevel;
 }
 
 export function isValidLogOverrideLevel(value: unknown): value is LogOverrideLevel {
@@ -528,6 +638,28 @@ const loggerStringify = configure({ bigint: false });
 
 const SENSITIVE_KEY_PATTERNS = ["secret", "token", "password", "key"];
 
+// Bounds for `redactSensitiveData`. Context objects are deep-cloned into the
+// 500-entry in-memory ring (LogBuffer); without caps a single stack trace,
+// diff, or worktree snapshot accumulates unbounded. These clamp per-entry cost
+// — depth × array-items × string-chars ≈ 200KB worst case — mirroring the
+// per-field clamping runHistoryLog applies to its persisted records.
+const MAX_REDACT_DEPTH = 5;
+const MAX_REDACT_STRING_CHARS = 2000;
+const MAX_REDACT_ARRAY_ITEMS = 20;
+
+// Scrub content-based secrets BEFORE clamping. The downstream `scrubSecrets`
+// in `writeToLogFile` runs on the already-clamped value, so a secret straddling
+// the `MAX_REDACT_STRING_CHARS` boundary would have its high-entropy tail sliced
+// off here first, leaving a surviving prefix too short for the scrubber to match
+// — leaking the leading bytes to disk. Scrubbing first is exactly the upstream
+// ordering `shared/utils/secretScrubber.ts` documents as mandatory (it applies
+// no pre-truncation itself for this reason). Only then do we length-clamp.
+function clampLogString(value: string): string {
+  const scrubbed = scrubSecrets(value);
+  if (scrubbed.length <= MAX_REDACT_STRING_CHARS) return scrubbed;
+  return `${scrubbed.slice(0, MAX_REDACT_STRING_CHARS)}[…+${scrubbed.length - MAX_REDACT_STRING_CHARS}]`;
+}
+
 function safeStringify(value: unknown): string {
   try {
     return loggerStringify(
@@ -560,6 +692,22 @@ let trackedLogFile: string | null = null;
 let trackedLogSize = -1;
 let bytesSinceSizeRefresh = 0;
 
+// Async batched file logging (#10769). A per-line `appendFileSync` on the main
+// thread is the dominant event-loop stall under multi-agent load: a single
+// workspace-host `worktree-update` fans out to several sync writes through the
+// event bus, and a busy session issues hundreds of log lines per second — each
+// 0.2–20ms incl. the periodic rotation `statSync`. Non-error lines are buffered
+// and flushed once per event-loop turn with a single async `appendFile`,
+// collapsing N syscalls into 1 and keeping the write off the synchronous hot
+// path. ERROR lines stay synchronous (see `writeToLogFile`) so they survive a
+// crash, matching the eager-import sync-fs rationale at the top of this file.
+const ASYNC_FLUSH_MAX_PENDING_BYTES = 256 * 1024;
+let pendingLogLines: string[] = [];
+let pendingLogBytes = 0;
+let asyncFlushScheduled = false;
+let asyncFlushInFlight: Promise<void> | null = null;
+let exitFlushRegistered = false;
+
 function rotateIfNeededTracked(logFile: string): boolean {
   if (
     trackedLogSize < 0 ||
@@ -576,40 +724,156 @@ function rotateIfNeededTracked(logFile: string): boolean {
   return true;
 }
 
+/** Ensure the log directory exists; re-stat on the next write if the path moved. */
+function ensureLogDir(logFile: string): void {
+  if (logFile !== trackedLogFile) {
+    mkdirSync(getLogDirectory(), { recursive: true });
+    trackedLogFile = logFile;
+    trackedLogSize = -1;
+  }
+}
+
+function recordWrittenBytes(bytes: number): void {
+  trackedLogSize += bytes;
+  bytesSinceSizeRefresh += bytes;
+}
+
+/** Synchronously append `data` to the active log file, honoring rotation. */
+function appendSync(data: string, bytes: number): void {
+  const logFile = getLogFilePath();
+  ensureLogDir(logFile);
+  if (!rotateIfNeededTracked(logFile)) return;
+  appendFileSync(logFile, data, "utf8");
+  recordWrittenBytes(bytes);
+}
+
+/**
+ * Drain buffered lines synchronously. Used as a memory safety valve when a
+ * synchronous burst never yields to the flush timer, and on process exit for
+ * best-effort durability of buffered non-error lines.
+ */
+function flushPendingLogsSync(): void {
+  if (pendingLogLines.length === 0) return;
+  const data = pendingLogLines.join("");
+  const bytes = pendingLogBytes;
+  pendingLogLines = [];
+  pendingLogBytes = 0;
+  try {
+    appendSync(data, bytes);
+  } catch {
+    trackedLogFile = null;
+  }
+}
+
+function scheduleAsyncFlush(): void {
+  if (!exitFlushRegistered) {
+    exitFlushRegistered = true;
+    process.once("exit", () => {
+      try {
+        flushPendingLogsSync();
+      } catch {
+        // Process is exiting — nothing more we can do.
+      }
+    });
+  }
+  if (asyncFlushScheduled) return;
+  asyncFlushScheduled = true;
+  setImmediate(runAsyncFlush);
+}
+
+function runAsyncFlush(): void {
+  asyncFlushScheduled = false;
+  if (asyncFlushInFlight) return; // the in-flight drain loops until empty
+  asyncFlushInFlight = drainPendingLogs().finally(() => {
+    asyncFlushInFlight = null;
+    // A line buffered after the loop's last check still needs a flush.
+    if (pendingLogLines.length > 0) scheduleAsyncFlush();
+  });
+}
+
+async function drainPendingLogs(): Promise<void> {
+  while (pendingLogLines.length > 0) {
+    const data = pendingLogLines.join("");
+    const bytes = pendingLogBytes;
+    pendingLogLines = [];
+    pendingLogBytes = 0;
+    try {
+      const logFile = getLogFilePath();
+      ensureLogDir(logFile);
+      if (!rotateIfNeededTracked(logFile)) continue;
+      await fsp.appendFile(logFile, data, "utf8");
+      recordWrittenBytes(bytes);
+    } catch {
+      // Re-ensure the directory and re-stat on the next write.
+      trackedLogFile = null;
+    }
+  }
+}
+
+/** Test-only: resolve once all buffered log lines have been written to disk. */
+export async function flushLogFileWritesForTesting(): Promise<void> {
+  if (!asyncFlushInFlight && pendingLogLines.length > 0) {
+    asyncFlushScheduled = false;
+    asyncFlushInFlight = drainPendingLogs().finally(() => {
+      asyncFlushInFlight = null;
+    });
+  }
+  while (asyncFlushInFlight) {
+    await asyncFlushInFlight;
+    if (pendingLogLines.length > 0 && !asyncFlushInFlight) {
+      asyncFlushInFlight = drainPendingLogs().finally(() => {
+        asyncFlushInFlight = null;
+      });
+    }
+  }
+}
+
 function writeToLogFile(level: string, message: string, contextStr: string): void {
   if (!ENABLE_FILE_LOGGING) return;
   if (getWritesSuppressed()) return;
 
-  try {
-    const logFile = getLogFilePath();
-    const timestamp = new Date().toISOString();
-    const logLine = scrubSecrets(
-      `[${timestamp}] [${level}] ${message}${contextStr ? ` ${contextStr}` : ""}\n`
-    );
+  const timestamp = new Date().toISOString();
+  const logLine = scrubSecrets(
+    `[${timestamp}] [${level}] ${message}${contextStr ? ` ${contextStr}` : ""}\n`
+  );
+  const bytes = Buffer.byteLength(logLine, "utf8");
 
-    if (logFile !== trackedLogFile) {
-      mkdirSync(getLogDirectory(), { recursive: true });
-      trackedLogFile = logFile;
-      trackedLogSize = -1;
+  if (level === "ERROR") {
+    // Errors are written synchronously so they survive a crash. Flush any
+    // buffered lines first so the on-disk order matches emit order. Ordering is
+    // best-effort: a batch already handed to an in-flight async flush has left
+    // the buffer and may interleave with this sync write — crash safety for the
+    // error line takes priority over strict ordering in that rare window.
+    try {
+      const data = pendingLogLines.length > 0 ? pendingLogLines.join("") + logLine : logLine;
+      const total = pendingLogBytes + bytes;
+      pendingLogLines = [];
+      pendingLogBytes = 0;
+      appendSync(data, total);
+    } catch {
+      trackedLogFile = null;
     }
+    return;
+  }
 
-    if (!rotateIfNeededTracked(logFile)) {
-      return;
-    }
-    appendFileSync(logFile, logLine, "utf8");
-    const bytes = Buffer.byteLength(logLine, "utf8");
-    trackedLogSize += bytes;
-    bytesSinceSizeRefresh += bytes;
-  } catch (_error) {
-    // Re-ensure the directory and re-stat on the next write.
-    trackedLogFile = null;
+  pendingLogLines.push(logLine);
+  pendingLogBytes += bytes;
+  // Bound memory if a synchronous burst never yields to the flush timer.
+  if (pendingLogBytes >= ASYNC_FLUSH_MAX_PENDING_BYTES) {
+    flushPendingLogsSync();
+  } else {
+    scheduleAsyncFlush();
   }
 }
 
 function redactSensitiveData(
   obj: Record<string, unknown>,
-  visited = new WeakSet<object>()
+  visited = new WeakSet<object>(),
+  depth = 0
 ): Record<string, unknown> {
+  if (depth >= MAX_REDACT_DEPTH) {
+    return "[MaxDepth]" as unknown as Record<string, unknown>;
+  }
   if (visited.has(obj)) {
     return "[Circular]" as unknown as Record<string, unknown>;
   }
@@ -623,10 +887,12 @@ function redactSensitiveData(
       SENSITIVE_KEY_PATTERNS.some((pattern) => lowerKey.includes(pattern))
     ) {
       result[key] = "[redacted]";
+    } else if (typeof value === "string") {
+      result[key] = clampLogString(value);
     } else if (Array.isArray(value)) {
-      result[key] = redactArrayWithCycleDetection(value, visited);
+      result[key] = redactArrayWithCycleDetection(value, visited, depth + 1);
     } else if (value !== null && typeof value === "object") {
-      result[key] = redactSensitiveData(value as Record<string, unknown>, visited);
+      result[key] = redactSensitiveData(value as Record<string, unknown>, visited, depth + 1);
     } else {
       result[key] = value;
     }
@@ -634,24 +900,40 @@ function redactSensitiveData(
   return result;
 }
 
-function redactArrayWithCycleDetection(arr: unknown[], visited: WeakSet<object>): unknown[] {
+function redactArrayWithCycleDetection(
+  arr: unknown[],
+  visited: WeakSet<object>,
+  depth: number
+): unknown[] {
+  if (depth >= MAX_REDACT_DEPTH) {
+    return ["[MaxDepth]"];
+  }
   if (visited.has(arr)) {
     return "[Circular]" as unknown as unknown[];
   }
   visited.add(arr);
 
-  return arr.map((item) => {
+  const capped = arr.length > MAX_REDACT_ARRAY_ITEMS;
+  const items = capped ? arr.slice(0, MAX_REDACT_ARRAY_ITEMS) : arr;
+  const mapped = items.map((item) => {
     if (item === null) {
       return item;
     }
+    if (typeof item === "string") {
+      return clampLogString(item);
+    }
     if (Array.isArray(item)) {
-      return redactArrayWithCycleDetection(item, visited);
+      return redactArrayWithCycleDetection(item, visited, depth + 1);
     }
     if (typeof item === "object") {
-      return redactSensitiveData(item as Record<string, unknown>, visited);
+      return redactSensitiveData(item as Record<string, unknown>, visited, depth + 1);
     }
     return item;
   });
+  if (capped) {
+    mapped.push(`[...${arr.length - MAX_REDACT_ARRAY_ITEMS} more]`);
+  }
+  return mapped;
 }
 
 function emit(source: string, level: LogLevel, message: string, context?: LogContext): void {
@@ -695,14 +977,15 @@ function emitError(source: string, message: string, error?: unknown, context?: L
   });
 
   sendLogToRenderer(entry);
-  writeToLogFile("ERROR", message, safeStringify(safeContext));
+  // Stringify the merged, redacted context once and share it between the file
+  // and console transports — `safeContext` already folds in `errorDetails`, so
+  // the console path no longer re-serializes/re-scrubs the error and context
+  // separately (and now inherits key-redaction it previously skipped).
+  const contextStr = safeStringify(safeContext);
+  writeToLogFile("ERROR", message, contextStr);
 
   if (!IS_TEST) {
-    console.error(
-      `[ERROR] [${source}] ${scrubSecrets(message)}`,
-      errorDetails ? scrubSecrets(safeStringify(errorDetails)) : "",
-      context ? scrubSecrets(safeStringify(context)) : ""
-    );
+    console.error(`[ERROR] [${source}] ${scrubSecrets(message)}`, scrubSecrets(contextStr));
   }
 }
 

@@ -1,5 +1,5 @@
 /**
- * Terminal snapshot handlers - getSerializedState, wake, getInfo.
+ * Terminal snapshot handlers - getSerializedState, getInfo.
  */
 
 import { z } from "zod";
@@ -18,20 +18,6 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
   if (!ptyClient) {
     return () => {};
   }
-
-  const handleTerminalWake = async (
-    id: string
-  ): Promise<{ state: string | null; warnings?: string[] }> => {
-    try {
-      if (typeof id !== "string" || !id) {
-        throw new Error("Invalid terminal ID: must be a non-empty string");
-      }
-      return await ptyClient.wakeTerminal(id);
-    } catch (error) {
-      const errorMessage = formatErrorMessage(error, "Failed to wake terminal");
-      throw new Error(`Failed to wake terminal: ${errorMessage}`);
-    }
-  };
 
   const handleTerminalGetSerializedState = async (terminalId: string): Promise<string | null> => {
     try {
@@ -471,7 +457,6 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
   const namespace = defineIpcNamespace({
     name: "terminalSnapshots",
     ops: {
-      wake: op(CHANNELS.TERMINAL_WAKE, handleTerminalWake),
       getSerializedState: op(
         CHANNELS.TERMINAL_GET_SERIALIZED_STATE,
         handleTerminalGetSerializedState

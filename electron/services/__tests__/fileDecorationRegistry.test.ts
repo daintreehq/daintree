@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FileDecoration, FileDecorationProviderImpl } from "../../../shared/types/forge.js";
 import {
   clearFileDecorationImplRegistry,
@@ -114,5 +114,88 @@ describe("fileDecorationRegistry", () => {
     registerFileDecorationProviders("p", [{ id: "a", scopes: ["*"] }]);
     registerFileDecorationProviders("p", []);
     expect(getRegisteredFileDecorationProviders()).toEqual([]);
+  });
+});
+
+describe("fileDecorationRegistry — scope collision diagnostic", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it("warns when two different plugins declare the same exact scope, naming both", () => {
+    registerFileDecorationProviders("first.plugin", [
+      { id: "a", scopes: ["worktree-files:/repo"] },
+    ]);
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    registerFileDecorationProviders("second.plugin", [
+      { id: "b", scopes: ["worktree-files:/repo"] },
+    ]);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const msg = String(warnSpy.mock.calls[0]?.[0] ?? "");
+    expect(msg).toContain("first.plugin");
+    expect(msg).toContain("second.plugin");
+    expect(msg).toContain("worktree-files:/repo");
+  });
+
+  it("does not block registration — both providers remain registered after a collision", () => {
+    registerFileDecorationProviders("first.plugin", [
+      { id: "a", scopes: ["worktree-files:/repo"] },
+    ]);
+    registerFileDecorationProviders("second.plugin", [
+      { id: "b", scopes: ["worktree-files:/repo"] },
+    ]);
+    const ids = getRegisteredFileDecorationProviders().map((r) => r.pluginId);
+    expect(new Set(ids)).toEqual(new Set(["first.plugin", "second.plugin"]));
+  });
+
+  it("does not warn when the same plugin re-registers (hot-reload replaces its own entry)", () => {
+    registerFileDecorationProviders("acme.plugin", [{ id: "a", scopes: ["worktree-files:/repo"] }]);
+    registerFileDecorationProviders("acme.plugin", [{ id: "a", scopes: ["worktree-files:/repo"] }]);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not warn on wildcard/exact coexistence (broad and narrow are intentional)", () => {
+    registerFileDecorationProviders("broad.plugin", [{ id: "a", scopes: ["worktree-files:*"] }]);
+    registerFileDecorationProviders("narrow.plugin", [
+      { id: "b", scopes: ["worktree-files:/repo"] },
+    ]);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("warns once per colliding scope, not per existing contribution", () => {
+    registerFileDecorationProviders("first.plugin", [
+      { id: "a", scopes: ["worktree-files:/repo"] },
+      { id: "b", scopes: ["worktree-files:/repo"] },
+    ]);
+    registerFileDecorationProviders("second.plugin", [
+      { id: "c", scopes: ["worktree-files:/repo"] },
+    ]);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("warns once per colliding existing plugin (attributing each distinct pair)", () => {
+    registerFileDecorationProviders("first.plugin", [
+      { id: "a", scopes: ["worktree-files:/repo"] },
+    ]);
+    registerFileDecorationProviders("second.plugin", [
+      { id: "b", scopes: ["worktree-files:/repo"] },
+    ]);
+    warnSpy.mockClear();
+    // third collides with both already-registered plugins — one warning each so
+    // every colliding pair is named, none silently folded away.
+    registerFileDecorationProviders("third.plugin", [
+      { id: "c", scopes: ["worktree-files:/repo"] },
+    ]);
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+    const named = warnSpy.mock.calls.map((c: unknown[]) => String(c[0] ?? "")).join("\n");
+    expect(named).toContain("first.plugin");
+    expect(named).toContain("second.plugin");
   });
 });

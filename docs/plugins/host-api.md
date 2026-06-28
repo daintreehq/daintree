@@ -27,6 +27,8 @@ The returned cleanup function (if any) runs when the plugin is unloaded — duri
 
 **Error handling:** if `activate` throws, the plugin fails to load and the error is logged to the main process console plus surfaced as a toast. Other plugins continue loading.
 
+**Partial-activation rollback:** if `activate` throws after it has already registered some handlers, actions, or subscriptions, the host rolls all of them back automatically — the rollback is synchronous and host-owned, so you have no cleanup responsibility for a failed activation. A user-installed plugin gets the same guarantee from its worker being torn down on the failure. Don't try to undo your own registrations in a `catch` inside `activate`; just let the error propagate.
+
 ## `PluginHostApi`
 
 ```ts
@@ -34,50 +36,99 @@ interface PluginHostApi {
   readonly pluginId: string;
 
   // Action / command registration
-  registerAction(descriptor: PluginActionContribution, handler: ActionHandler): void;
+  registerAction(descriptor: PluginActionContribution, handler: ActionHandler): Promise<void>;
 
   // IPC
   registerHandler<TArgs, TResult>(
     channel: string,
     schema: PluginChannelSchema<TArgs, TResult>,
     handler: PluginTypedIpcHandler<TArgs, TResult>
-  ): void;
-  registerHandler(channel: string, handler: PluginIpcHandler): void;
-  broadcastToRenderer(channel: string, payload: unknown): void;
+  ): Promise<void>;
+  registerHandler(channel: string, handler: PluginIpcHandler): Promise<void>;
+  broadcastToRenderer(channel: string, payload: unknown): Promise<void>;
+
+  // Post-activation push into your panels
+  postToPanel(channel: string, payload: unknown, panelId?: string | null): Promise<void>;
 
   // Worktree observation
   getActiveWorktree(): Promise<PluginWorktreeSnapshot | null>;
   getWorktrees(): Promise<PluginWorktreeSnapshot[]>;
+  getWorktreeStatus(path: string): Promise<PluginWorktreeStatus | null>;
   onDidChangeActiveWorktree(
     callback: (snapshot: PluginWorktreeSnapshot | null) => void
-  ): () => void;
-  onDidChangeWorktrees(callback: (snapshots: PluginWorktreeSnapshot[]) => void): () => void;
+  ): Promise<() => void>;
+  onDidChangeWorktrees(
+    callback: (snapshots: PluginWorktreeSnapshot[]) => void
+  ): Promise<() => void>;
+
+  // Agent observation — gated on the `agent:read` capability
+  getAgentState(): Promise<PluginAgentSnapshot | null>;
+  onDidChangeAgentState(callback: (snapshot: PluginAgentSnapshot) => void): Promise<() => void>;
 
   // Forge / file-decoration providers
-  registerForgeProvider(descriptor: ForgeProviderDescriptor, impl: ForgeProviderImpl): () => void;
+  registerForgeProvider(
+    descriptor: ForgeProviderDescriptor,
+    impl: ForgeProviderImpl
+  ): Promise<() => void>;
   registerFileDecorationProvider(
     descriptor: FileDecorationProviderDescriptor,
     impl: FileDecorationProviderImpl
-  ): () => void;
-  invalidateFileDecorations(scope: string, paths?: string[]): void;
+  ): Promise<() => void>;
+  invalidateFileDecorations(scope: string, paths?: string[]): Promise<void>;
 
-  // Action dispatch
-  dispatch(actionId: string, args?: unknown): Promise<ActionDispatchResult>;
+  // Panel title-chrome badge
+  setPanelBadge(panelId: string, badge: PluginPanelBadge | null): Promise<void>;
 
-  // Settings
+  // Action dispatch + catalog
+  dispatch(actionId: ActionId, args?: unknown): Promise<ActionDispatchResult>;
+  readonly actions: PluginHostActionsApi;
+
+  // Agent input — gated on the `agent:input` capability
+  sendToActiveAgent(text: string, options?: { submit?: boolean }): Promise<void>;
+
+  // Settings (user-facing, schema-declared) + private storage (machine-owned)
   readonly settings: SettingsApi;
+  readonly storage: StorageApi;
 
   // Diagnostics
   readonly logger: PluginLogger;
 
   // UI helpers
   showToast(options: PluginToastOptions): Promise<void>;
+  showQuickPick(
+    items: PluginQuickPickItem[],
+    options?: PluginQuickPickOptions
+  ): Promise<PluginQuickPickItem | PluginQuickPickItem[] | undefined>;
+  showInputBox(options?: PluginInputBoxOptions): Promise<string | undefined>;
+  showConfirm(options: PluginConfirmOptions): Promise<boolean>;
+
+  // Managed child processes — gated on the `shell:exec` capability
+  readonly process: PluginProcessApi;
+
+  // Host-mediated, scope-contained filesystem and git
+  readonly fs: PluginFsApi;
+  readonly git: PluginGitApi;
+
+  // Host-mediated OS clipboard — gated on `clipboard:read` / `clipboard:write`
+  readonly clipboard: PluginClipboardApi;
 }
 ```
 
 The authoritative definition is in `shared/types/plugin.ts` in the Daintree repo.
 
-The `register*` methods (`registerAction`, `registerHandler`, `registerForgeProvider`, `registerFileDecorationProvider`) plus `broadcastToRenderer` are revoke-guarded — they must be called during `activate()` and throw once the host is revoked. `invalidateFileDecorations`, `showToast`, `dispatch`, and `logger` are deliberately NOT revoke-guarded: plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op after unload.
+Nearly every host method now returns a Promise — the API became fully async in the move to the out-of-process worker model, so `registerAction`, `postToPanel`, `setPanelBadge`, and the rest resolve `Promise<void>`, and the subscription methods resolve `Promise<() => void>`. Always `await` a registration before assuming it took effect, and `await` the subscription methods to get the disposer. The synchronous `logger` accessor is the lone exception — its `info`/`warn`/`error` calls return `void`.
+
+The revoke-guarded methods — `registerAction`, `registerHandler`, `broadcastToRenderer`, `registerForgeProvider`, `registerFileDecorationProvider`, `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, and `settings.onDidChange` — must be called during `activate()` and throw once the host is revoked. Subscribing counts as an activation-window operation even though the callback fires later: register all your subscriptions during `activate()`, then react to them for the plugin's lifetime. `postToPanel`, `setPanelBadge`, `getActiveWorktree`, `getWorktrees`, `getWorktreeStatus`, `getAgentState`, `invalidateFileDecorations`, `showToast`, `dispatch`, `sendToActiveAgent`, `process.spawn`, `fs.*`, `git.*`, `settings.get`/`settings.set`, and `logger` are deliberately NOT revoke-guarded: plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op (or, for `process.spawn`/`fs.*`/`git.*`, a rejection) after unload. This split is the load-bearing distinction between the activation-window registration surface and the live runtime surface — `postToPanel` is the canonical post-activation push: a plugin's `activate()` subscribes once (revoke-guarded `registerHandler`/worktree subscriptions), then streams live data into its panels with `postToPanel` for the rest of its lifetime.
+
+**Where validation errors surface.** The two groups report errors differently. A revoke-guarded activation-window method (`registerAction`, `registerHandler`, the subscriptions) throws synchronously at the call site on a bad descriptor or a revoked host — wrap the `activate()` body in `try`/`catch` if you want to handle it. The post-activation runtime-surface methods (`postToPanel`, `setPanelBadge`, `invalidateFileDecorations`, `broadcastToRenderer` on an invalid channel) instead reject the returned Promise rather than throwing synchronously, so handle their validation errors with `await` + `.catch()`:
+
+```ts
+await host.postToPanel("build-status", status).catch((err) => host.logger.error(String(err)));
+```
+
+A liveness no-op (the plugin already unloaded) still resolves cleanly — only a genuine validation error (empty channel, malformed badge shape) rejects.
+
+This split is encoded in the type surface, not just in prose: the revoke-guarded host methods are factored into a `PluginActivationApi` sub-interface that `PluginHostApi extends` (`settings.onDidChange` stays on `SettingsApi`, since the `settings` accessor itself is post-activation-safe). Each revoke-guarded method also carries a `@throws` JSDoc tag describing the revoke condition, so it shows up on hover in your editor. The `host` passed to `activate()` stays typed as the full `PluginHostApi` (every method is callable during activation); `PluginActivationApi` is exported from `@daintreehq/plugin-sdk` for the narrower case where you want a helper to accept only the registration window and have the post-activation methods be statically absent.
 
 ## `registerAction`
 
@@ -107,14 +158,13 @@ host.registerAction(
 registerAction(
   descriptor: PluginActionContribution,
   handler: ActionHandler
-): void;
+): Promise<void>;
 ```
 
 **Rules:**
 
 - `descriptor.id` must NOT include the plugin prefix — Daintree adds it. The above registers as `acme.linear-planner.plan-from-issue` at runtime (assuming your plugin is `acme.linear-planner`).
 - `descriptor.danger` accepts `"safe"` or `"confirm"`. `"restricted"` is reserved for Daintree's internal use and rejected.
-- Agents invoking a `"confirm"` action must include `{ confirmed: true }` in the dispatch options, per the [action system](../architecture/action-system.md).
 - Calling `registerAction` with a previously-registered ID replaces the existing registration.
 
 Unregistered automatically on plugin unload.
@@ -134,13 +184,14 @@ host.broadcastToRenderer("sync-status", { status: "syncing" });
 ```
 
 ```ts
-// renderer side (in a view component) — useHostChannel ships under the
-// @daintreehq/plugin-sdk/react subpath, which is Planned (F15/F36) and has no
-// exports in v1. See "React hooks" below.
+// renderer side (in a view component) — useHostChannel resolves when the view is
+// bundled with @daintreehq/plugin-vite (the SDK is bundled into your output; it is
+// NOT served by the host import map). In a raw, un-bundled plugin:// view, call
+// window.electron.plugin.invoke(pluginId, "sync-now", args) directly. See "React hooks" below.
 import { useHostChannel } from "@daintreehq/plugin-sdk/react";
 
-const invoke = useHostChannel();
-const result = await invoke("sync-now", {});
+const { invoke } = useHostChannel<SyncArgs, SyncResult>(pluginId, "sync-now");
+const result = await invoke({});
 ```
 
 **Channel naming rules:**
@@ -151,6 +202,34 @@ const result = await invoke("sync-now", {});
 Handlers are unregistered on plugin unload.
 
 **Typed overload (preferred for new code):** pass a `PluginChannelSchema` with Zod `args`/`result` schemas and a `requires` capability list. The host rejects registration if any `requires` capability is missing from `manifest.capabilities` (fail-closed at the registration boundary). At dispatch, args are `safeParse`d before the handler runs and the result is `safeParse`d before returning to the renderer — schema failures throw with a `SCHEMA_ERROR:` prefix, missing capabilities throw with a `PERMISSION_REQUIRED:` prefix, and the renderer-side `useHostChannel` hook discriminates on those prefixes. The untyped overload above does no host-side validation and is retained only for plugins that haven't migrated to per-channel schemas.
+
+## `postToPanel`
+
+The post-activation-safe push channel: stream live data from your `main` into every renderer subscribed to `(pluginId, channel)`, without the renderer falling back to `invoke()` polling.
+
+```ts
+// main side — from a timer, poll, or subscription callback (NOT just activate)
+setInterval(async () => {
+  const status = await fetchBuildStatus();
+  host.postToPanel("build-status", status);
+}, 5000);
+```
+
+```ts
+// renderer side (in a view component) — usePluginEvent resolves when the view is
+// bundled with @daintreehq/plugin-vite. In a raw, un-bundled plugin:// view, call
+// window.electron.plugin.on(pluginId, "build-status", cb) directly; it returns an
+// unsubscribe function. See "React hooks" below.
+import { usePluginEvent } from "@daintreehq/plugin-sdk/react";
+
+usePluginEvent<BuildStatus>(pluginId, "build-status", (status) => {
+  setBuildStatus(status);
+});
+```
+
+`postToPanel` is the post-activation sibling of `broadcastToRenderer`: it fans out over the exact same `plugin:{pluginId}:{channel}` transport, but unlike the revoke-guarded activation broadcast it stays callable for the plugin's whole lifetime. Use `broadcastToRenderer` for a one-shot push during `activate()`; use `postToPanel` for everything pushed afterward (the common case). `channel` must be a non-empty string without colons — an invalid channel rejects the returned Promise so authoring mistakes surface loudly (catch it with `await … .catch()`). It is membership-gated, not revoke-guarded: once the plugin is unloaded it becomes a silent no-op. There is no delivery acknowledgement — it is fire-and-forget; a panel that isn't mounted simply doesn't receive the payload. This is the push half of the renderer SDK; the pull half is `useHostChannel` (request/response over `registerHandler`).
+
+**Targeting a single panel instance.** `postToPanel(channel, payload, panelId?)` takes an optional third argument. Omit it (or pass `null`) to broadcast to every open instance of the panel kind — every renderer subscribed via `window.electron.plugin.on(pluginId, channel, …)` / `usePluginEvent` receives the payload. Pass a non-empty `panelId` string to target one instance: only the renderer subscribed via `window.electron.plugin.onPanel(pluginId, channel, panelId, …)` (or the SDK's `usePluginPanelEvent`) receives it, so two open instances of the same panel kind no longer both get every push. An empty-string `panelId` is rejected. Inside a bundled view, `usePluginEvent` already filters to its own `panelId` automatically; the raw `plugin.onPanel(pluginId, channel, panelId, callback)` bridge requires you to pass the `panelId` explicitly.
 
 ## Worktree observation
 
@@ -166,8 +245,8 @@ if (active) {
 // All worktrees across all projects
 const all = await host.getWorktrees();
 
-// Subscribe to changes
-const dispose = host.onDidChangeActiveWorktree((snapshot) => {
+// Subscribe to changes (await the disposer — the subscription methods are async)
+const dispose = await host.onDidChangeActiveWorktree((snapshot) => {
   if (snapshot) console.log(`Active worktree changed: ${snapshot.name}`);
 });
 
@@ -188,6 +267,7 @@ interface PluginWorktreeSnapshot {
   readonly aheadCount?: number;
   readonly behindCount?: number;
   readonly linked: PluginWorktreeLinked | null;
+  readonly status: PluginWorktreeStatus | null;
   readonly mood?: "stable" | "active" | "stale" | "error";
   readonly lastActivityTimestamp?: number | null;
   readonly createdAt?: number;
@@ -216,16 +296,46 @@ interface PluginWorktreeLinkedPR {
 
 `linked` is a provider-agnostic projection of the worktree's linked forge resources (issue and/or PR), or `null` when none is linked. It replaces the removed GitHub-shaped `issueNumber` / `issueTitle` / `prNumber` / `prUrl` / `prState` / `prTitle` fields — route through `linked.providerId` and the shared `ResourceRef` shape instead.
 
+`status` is a changed-file / git-status projection of the worktree, or `null` when the host hasn't polled a status yet:
+
+```ts
+interface PluginWorktreeStatus {
+  readonly files: readonly PluginWorktreeStatusFile[];
+  readonly changedFileCount: number;
+  readonly counts: Readonly<Record<PluginWorktreeFileState, number>>;
+}
+
+interface PluginWorktreeStatusFile {
+  readonly path: string; // relative to the worktree root, as git reports it
+  readonly state: PluginWorktreeFileState;
+}
+
+type PluginWorktreeFileState = "added" | "modified" | "deleted" | "untracked" | "renamed";
+```
+
+It projects the host's already-polled worktree changes (the same data driving the dashboard) — reading it does NOT shell out to a fresh `git status`. The internal git vocabulary is collapsed to the five states above (copied → `added`, conflicted → `modified`, ignored dropped); `files` is sorted by path and the whole projection is frozen. For richer ad-hoc status — staged vs. unstaged, diffs — use `host.git` (below), which runs a real query against the worktree.
+
 All snapshots are frozen — attempting to mutate one throws. Fields are an explicit allowlist; adding a new field requires a Daintree SDK release.
 
 Subscriptions registered during `activate` — before Daintree's worktree service is ready — are queued and replayed once the service comes online. Your callback never misses events.
+
+### `getWorktreeStatus`
+
+```ts
+const status = await host.getWorktreeStatus("/Users/me/project/.worktrees/feature-x");
+if (status) {
+  console.log(`${status.changedFileCount} changed`, status.counts.modified, "modified");
+}
+```
+
+Returns the same `PluginWorktreeStatus` carried on `PluginWorktreeSnapshot.status` for the worktree at the given absolute `path`, or `null` when no worktree matches or the host hasn't polled a status yet. Use it when you have a path in hand (e.g. from a context-menu dispatch arg) and don't want to scan `getWorktrees()`. Like the snapshot field it reads the host's already-polled status — it never triggers a fresh `git status`. It is NOT revoke-guarded: callable from timers and subscription callbacks, degrading to `null` once the plugin is unloaded.
 
 ## `registerForgeProvider`
 
 Binds a runtime `ForgeProviderImpl` to a descriptor declared in `contributes.forgeProviders`.
 
 ```ts
-const dispose = host.registerForgeProvider({ id: "linear", name: "Linear" }, impl);
+const dispose = await host.registerForgeProvider({ id: "linear", name: "Linear" }, impl);
 ```
 
 **Rules:**
@@ -242,10 +352,11 @@ For the end-to-end walkthrough — manifest entry, implementing `ForgeProviderIm
 Binds a runtime `FileDecorationProviderImpl` to a descriptor declared in `contributes.fileDecorationProviders`.
 
 ```ts
-const dispose = host.registerFileDecorationProvider({ id: "linear-status" }, impl);
+const dispose = await host.registerFileDecorationProvider({ id: "linear-status" }, impl);
 
-// Later, from a subscription callback or timer:
-host.invalidateFileDecorations("worktree", ["src/foo.ts"]);
+// Later, from a subscription callback or timer. `scope` must match one of the
+// provider's manifest-declared `scopes` (e.g. "worktree-diff:*"):
+await host.invalidateFileDecorations("worktree-diff:main", ["src/foo.ts"]);
 ```
 
 **Rules:**
@@ -266,6 +377,36 @@ if (!result.ok) {
 ```
 
 Args are validated against the action's `argsSchema` by `ActionService`; the host does not re-validate. Actions classified `danger: "restricted"` reject with `RESTRICTED`; `danger: "confirm"` actions return `CONFIRMATION_REQUIRED` — plugins cannot bypass confirm-gating (there is no `confirmed` flag). `dispatch` is NOT revoke-guarded; once the plugin is unloaded it returns `{ ok: false, error: { code: "PLUGIN_UNLOADED" } }` without dispatching.
+
+## `actions` — built-in action catalog
+
+Discover what `dispatch` accepts and pre-flight a call, instead of hardcoding action ids and hoping. Projects Daintree's `ActionService` manifest to plugins.
+
+```ts
+const all = await host.actions.list(); // every dispatchable action (slim entries)
+const entry = await host.actions.get("git.commit"); // single lookup, or null
+if ((await host.actions.canDispatch("git.commit")) === "confirm") {
+  // warn the user before dispatch triggers a confirm prompt
+}
+```
+
+`list()` and `get(id)` mirror `ActionService.list()`/`get()`: `danger: "restricted"` actions are filtered out, so a plugin only ever sees `"safe"` or `"confirm"` entries (`get` returns `null` for an unknown or restricted id). `canDispatch(id)` returns `"ok"` for a safe action, `"confirm"` for one `dispatch` would reject with `CONFIRMATION_REQUIRED`, and `"restricted"` for an unknown or restricted id — use it to warn before you trigger a confirm dialog. `actions` is NOT revoke-guarded; after unload `list()` resolves `[]` and `get()` resolves `null`.
+
+## `sendToActiveAgent` — inject text into the active agent
+
+Send text to the currently-active agent terminal. Gated on the `agent:input` capability. This is the **sanctioned injection path** — the raw `terminal.sendCommand` action is closed to plugin dispatch, so plugins stop reinventing brittle `terminal.list` selection heuristics.
+
+```ts
+// Stage text for the user to review (default — no Enter appended):
+await host.sendToActiveAgent("Summarize the failing test and propose a fix.");
+
+// Run it immediately:
+await host.sendToActiveAgent("/compact", { submit: true });
+```
+
+The host resolves the target itself, preferring the focused/visible agent terminal, then a `waiting` agent, then the most recently active agent terminal in the active project. `options.submit` defaults to `false` — the **stage-only**, default-safe mode: the text is pasted into the agent's input for the user to review and submit, with no Enter appended. Pass `{ submit: true }` to append Enter and execute immediately.
+
+First use raises a just-in-time consent prompt (like `shell:exec`); a granted consent covers later calls. `sendToActiveAgent` is NOT revoke-guarded — call it from timers and subscription callbacks — but it becomes a no-op once the plugin is unloaded. It throws `PERMISSION_REQUIRED:` if the plugin did not declare `agent:input` or the user denies consent, and `NO_ACTIVE_AGENT:` if no agent terminal is available to receive the input.
 
 ## `logger`
 
@@ -290,15 +431,32 @@ const token = await host.settings.get<string>("linear.apiToken");
 // Update
 await host.settings.set("linear.defaultTeam", "engineering");
 
-// Subscribe to changes
-const dispose = host.settings.onDidChange("linear.apiToken", (newValue) => {
+// Subscribe to changes (await the disposer)
+const dispose = await host.settings.onDidChange("linear.apiToken", (newValue) => {
   reconnect(newValue);
 });
 ```
 
 Scope defaults to `"user"`. `project` scope resolves the active project at call time, so it tracks project switches: `get` returns `undefined` and `set` throws when no project is active. `set` rejects `undefined` and non-JSON-serializable values; when the manifest declares `contributes.settings`, an undeclared key is rejected. `onDidChange` fires only on in-process writes — edits made to the JSON file by other processes don't fire until the plugin reloads.
 
-**Storage:** values are stored as plaintext JSON at `~/.daintree/plugin-settings/{pluginId}.json` (user scope) or `<projectRoot>/.daintree/plugin-settings/{pluginId}.json` (project scope), with `chmod 0o600` applied on POSIX. There is deliberately no OS-keychain integration (#9167) — `secret`-typed settings are kept out of logs and error reports, but they are NOT encrypted at rest. Do not store secrets that must survive disk compromise.
+**Storage:** values are stored as JSON at `~/.daintree/plugin-settings/{pluginId}.json` (user scope) or `<projectRoot>/.daintree/plugin-settings/{pluginId}.json` (project scope), with `chmod 0o600` applied on POSIX. `secret`-typed settings (#9167) are encrypted at rest through the OS keychain (macOS Keychain / Windows DPAPI / Linux libsecret-kwallet via Electron `safeStorage`) by default — the value is persisted as a tagged ciphertext envelope, and the `host.settings.get`/`set` API shape is unchanged (encryption is transparent to your plugin). When no keychain is available (e.g. a headless Linux box without a secret service), `secret` settings fall back to plaintext and the settings UI says so honestly. Non-secret settings are stored as plaintext JSON. Don't rely on the plaintext fallback for secrets that must survive disk compromise on an unconfigured host.
+
+## `storage` — private key/value storage
+
+The machine-owned counterpart to `settings`: persist a plugin's own working state without declaring every key in `contributes.settings` and without it surfacing in the settings UI.
+
+```ts
+await host.storage.set("lastSyncCursor", cursor); // scope defaults to "user"
+const cursor = await host.storage.get<string>("lastSyncCursor");
+await host.storage.delete("lastSyncCursor");
+
+// Per-worktree state that tracks the active worktree:
+await host.storage.set("draft", text, "worktree");
+```
+
+Three scopes — `"user"` (default), `"project"`, `"worktree"` — stored as plaintext JSON at `~/.daintree/plugin-storage/{pluginId}.json`, `<projectRoot>/.daintree/plugin-storage/{pluginId}.json`, or `<worktreePath>/.daintree/plugin-storage/{pluginId}.json` (`chmod 0o600` on POSIX). **No secret encryption — never store credentials here** (use a `type: "secret"` setting for those). The `"project"` / `"worktree"` scopes resolve the active project / worktree at call time: `get` and `delete` are a no-op (returning `undefined` / void) and `set` throws when no project / worktree is active. `set` rejects `undefined` and non-JSON-serializable values. `onDidChange(key, cb, scope?)` fires on in-process writes only and is the one revoke-guarded member — subscribe during `activate()`. The rest of `storage` is NOT revoke-guarded.
+
+**Reads stay fresh across a scope switch.** Storage is read through a per-path cache, but the host keeps it coherent for you. When the active worktree changes, the host invalidates the cache for `"worktree"`-scoped entries, so the next `get` reads the new worktree's file rather than a stale value. `"project"` scope is implicitly fresh — a different project resolves to a different file path, hence a different cache entry — and `"user"` scope is process-global and never evicted. You never have to manage cache invalidation yourself.
 
 ## `showToast`
 
@@ -314,35 +472,156 @@ The host prefixes `message` with your plugin id (`{pluginId}: {message}`) so use
 
 Toasts route through Daintree's standard `notify()` path, so quiet-hours and inbox-history semantics apply. The rate-limit bucket is scoped per plugin and type, so a noisy plugin can't suppress another plugin's toasts (or system toasts). Audit your toasts against the four-question checklist (timely, helpful, not already visible, ignorable) — the host delivers what you ask for, it doesn't second-guess. There's no "sticky" or "action required" toast type — for persistent UI, register a panel view instead.
 
-## React hooks — `@daintreehq/plugin-sdk/react` — _Planned (F15/F36)_
-
-The `@daintreehq/plugin-sdk/react` subpath is reserved for F15/F36 and ships no exports in v1. The hooks below describe the intended surface; the renderer implementations exist in Daintree's `src/hooks/` but are not yet wired into the SDK subpath. Do not import from this path in a v1 plugin — it resolves to an empty module.
-
-Import path lives separately so non-view code doesn't pull React into the main-process bundle.
+## `process` — managed child processes
 
 ```ts
-import {
-  useWorktree,
-  useWorktrees,
-  useSetting,
-  useHostChannel,
-  useCommand,
-} from "@daintreehq/plugin-sdk/react";
+const handle = await host.process.spawn("npm", {
+  args: ["run", "dev"],
+  cwd: "/path/to/project", // defaults to the active worktree, then the host cwd
+  env: { PORT: "5173" }, // merged over the host environment
+});
+
+handle.onExit(({ exitCode, signal }) =>
+  host.logger.info("dev server exited", { exitCode, signal })
+);
+handle.onCrash(({ exitCode, signal }) =>
+  host.showToast({ message: "Dev server crashed", type: "error" })
+);
+
+// later — restart on file change, or tear down
+await handle.restart();
+handle.kill();
 ```
 
-- `useWorktree()` — currently-active worktree as a reactive value. Re-renders on change.
-- `useWorktrees()` — full worktree list.
-- `useSetting<T>(id)` — reactive setting value with setter.
-- `useHostChannel()` — returns an `invoke(channel, payload)` function bound to the plugin.
-- `useCommand(id)` — returns a function that dispatches the given command.
+`host.process` lets a process- or task-orchestrator plugin (dev server, CI runner, watcher) spawn and supervise real child processes instead of hijacking a user terminal. It is the **first host method gated on a declared capability**: a `spawn` from a plugin that did not declare `shell:exec` rejects with a `PERMISSION_REQUIRED:` error — unlike the disclosure-first capabilities, this one is enforced at runtime. Argv is passed verbatim (no shell, so no shell-injection surface).
 
-Hooks follow standard React rules — call them at the top of a component, don't call conditionally.
+The returned `PluginProcessHandle` carries `id`, `kill()` (clean `SIGTERM`, then `SIGKILL` after a grace period), `restart()` (respawns with the same command/args/cwd/env, reusing the id and bumping a restart counter), and `onExit`/`onCrash` lifecycle subscriptions carrying the real exit code/signal — `onCrash` fires only on an unexpected (non-zero / signalled) exit you did not request. The child's stdout/stderr stream to your panels over `postToPanel("process", …)` keyed by the handle id; subscribe with `plugin.on(pluginId, "process")` in your view and discriminate on the event `kind` (`stdout` / `stderr` / `exit` / `crash`).
+
+Every spawned process is tied to your plugin's lifetime: on unload/disable/revoke the host SIGTERMs (then SIGKILLs) every outstanding process — a dev server can't leak past a reload. A per-plugin concurrency cap bounds how many processes can run at once; a `spawn` past the cap rejects rather than queueing. `process.spawn` is NOT revoke-guarded — call it from timers and subscription callbacks — but once the plugin unloads it rejects rather than spawning. Spawns are recorded in the plugin audit trail so process execution stays observable. The child does **not** inherit Daintree's full environment — only an allowlist of essentials (`PATH`, locale, temp, OS basics) plus whatever you pass in `env`, so the main process's tokens never leak to a `shell:exec` child; pass anything else the command needs explicitly. `cwd` is a process concern, not an `fs` scope — it is not contained to `scopes.fs.allowedPaths` (it defaults to the active worktree).
+
+## `fs` — host-mediated, scope-contained filesystem
+
+```ts
+const text = await host.fs.readFile("/Users/me/.acme/data/notes.md");
+await host.fs.writeFile("/Users/me/.acme/data/out.json", JSON.stringify(result));
+const entries = await host.fs.readdir("/Users/me/.acme/data");
+const meta = await host.fs.stat("/Users/me/.acme/data/notes.md");
+
+const dispose = await host.fs.watch(["/Users/me/.acme/data"], (changedPath) => {
+  host.logger.info("file changed", { changedPath });
+});
+// dispose() tears the watcher down; it is also torn down automatically on unload.
+```
+
+`host.fs` is a sanctioned, contained, audited filesystem path. Every argument is resolved against your declared `scopes.fs.allowedPaths` and realpath-contained to one of those roots — a `..` traversal or a symlink that escapes a root is rejected with a `PATH_NOT_ALLOWED:` error, mirroring the `plugin://` protocol handler's discipline. This is the **runtime enforcement of `scopes.fs.allowedPaths`** (previously advisory). Reads gate on `fs:project-read` / `fs:user-data-read`, writes on `fs:project-write` / `fs:user-data-write`; a missing capability rejects with a `PERMISSION_REQUIRED:` error. Unlike the app's `files.read` IPC, `readFile` carries **no 500KB / binary cap** — it is a deliberate plugin API. Writes are recorded in the audit trail, and `watch` watchers are torn down on unload. `host.fs` is NOT revoke-guarded — call it from timers and subscription callbacks.
+
+**Honest scope note:** `host.fs` gates the host-mediated path only. Your `main` is still un-sandboxed Node code (it runs in the plugin worker with full filesystem privileges) and can call raw `node:fs` directly, which the host cannot intercept until the sandbox/trust model changes (D3). `host.fs` gives a contained, audited path; it does not seal the un-mediated one.
+
+## `git` — host-mediated git, scoped to a worktree
+
+```ts
+const status = await host.git.status("/Users/me/project"); // worktree inside allowedPaths
+const diff = await host.git.diff("/Users/me/project", "src/index.ts");
+
+await host.git.add("/Users/me/project", ["src/index.ts"]);
+const { commit, preview } = await host.git.commit("/Users/me/project", {
+  message: "fix: typo", // REQUIRED — the host refuses an empty/derived message
+});
+// `preview` is the real staged diff the host computed before committing.
+```
+
+`host.git` is scoped to a worktree your plugin may access — the `worktreePath` must resolve inside your `scopes.fs.allowedPaths` (same realpath containment as `host.fs`). It is implemented over Daintree's existing hardened git layer, not a reinvented one. Reads (`status`, `diff`) gate on `git:read`; mutations (`add`, `commit`) on `git:write` (and `commit` additionally requires `git:read`, since it returns the staged diff as its preview). Any pathspec you pass to `add` or `diff` must be **worktree-relative** — an absolute path, a `..` segment, or `:`-prefixed git pathspec magic is rejected with a `PATH_NOT_ALLOWED:` error, because git would otherwise resolve those against the whole repository and escape the contained worktree. `commit` enforces the **change-preview safeguard at the host layer** (incident #7880 / destructive-action tier D2): it refuses without an explicit non-empty `message` — there is no silent fallback to a derived commit message — and it computes the real staged diff as a preview before mutating, returned on the result so your UI can surface it. Mutations are recorded in the audit trail. `host.git` is NOT revoke-guarded.
+
+## `clipboard` — host-mediated OS clipboard
+
+Text-only read/write of the OS clipboard, gated on `clipboard:read` / `clipboard:write`. Runs in the main process, so it works from a headless plugin (no renderer or focused document required).
+
+```ts
+await host.clipboard.writeText("acme.linear-planner synced 12 issues"); // clipboard:write
+const text = await host.clipboard.readText(); // clipboard:read
+```
+
+`writeText` rejects with a `PAYLOAD_TOO_LARGE:` prefix when the text exceeds 8 MiB by UTF-8 byte count (mirroring the renderer IPC clipboard guard). `readText` resolves to `""` when the clipboard is empty or holds non-text content (image, file list) — it never rejects on content type. A call without the matching capability rejects with a `PERMISSION_REQUIRED:` error. `host.clipboard` is NOT revoke-guarded.
+
+## React hooks — `@daintreehq/plugin-sdk/react`
+
+The `@daintreehq/plugin-sdk/react` subpath carries the renderer hooks for plugin view components. It is a separate import path so non-view code (your `main`) doesn't pull React into the main-process bundle. The runtime implementations live in Daintree's `src/hooks/` — the renderer's home, where the `window.electron` ambient global is in scope — and are re-exported verbatim by the SDK so plugin authors and the host share one implementation.
+
+**These hooks resolve only in a bundled view.** `@daintreehq/plugin-vite` bundles the SDK into your plugin output, so the hooks ship inside your bundle. The host import map serves only React specifiers — it has no `@daintreehq/plugin-sdk/react` entry — so a raw, un-bundled `plugin://` view that bare-imports this subpath fails at runtime with an unresolved specifier. For hand-authored views without the build preset, use the `window.electron.plugin` bridge directly ([Raw ESM views](#raw-esm-views--windowelectronplugin) below) — it is exactly what these hooks wrap.
+
+```ts
+import { useHostChannel, usePluginEvent } from "@daintreehq/plugin-sdk/react";
+```
+
+### `useHostChannel` — request/response (the pull half)
+
+```ts
+const { invoke, loading, error } = useHostChannel<SyncArgs, SyncResult>(pluginId, "sync-now");
+
+// later, e.g. in a click handler:
+const result = await invoke({ team: "engineering" });
+```
+
+`useHostChannel(pluginId, channel)` binds a single-flight `invoke(args)` to your plugin's `registerHandler(channel, …)`. It resolves with the validated channel result on success, or `undefined` when the host rejected the call (the rejection surfaces on `error`, never throws out of `invoke`). `loading` reflects the latest call only; if you fire a second `invoke` before the first resolves, the stale earlier call is dropped so concurrent invocations stay coherent. When the typed `registerHandler` overload rejects with a `SCHEMA_ERROR:` / `PERMISSION_REQUIRED:` prefix, that surfaces on `error` for the renderer to discriminate.
+
+### `usePluginEvent` — subscription (the push half)
+
+```ts
+usePluginEvent<BuildStatus>(pluginId, "build-status", (status) => {
+  setBuildStatus(status);
+});
+```
+
+`usePluginEvent(pluginId, channel, handler)` subscribes over `window.electron.plugin.on` to every payload your `main` pushes via `host.postToPanel(channel, payload)` (or a one-shot `broadcastToRenderer` during activation). The handler is kept ref-stable, so passing an inline closure does not re-subscribe on every render; the subscription is torn down automatically on unmount. Payloads arrive untyped over IPC — `TPayload` narrows the call site, the hook does no runtime validation (the plugin owns the shape it pushes, mirroring `useHostChannel`'s host-owns-validation contract).
+
+Together these are the two halves of the panel ↔ main channel: `useHostChannel` pulls on demand, `usePluginEvent` receives pushes. Both follow standard React rules — call them at the top of a component, never conditionally.
+
+### Raw ESM views — `window.electron.plugin`
+
+A hand-authored `plugin://` view that doesn't go through `@daintreehq/plugin-vite` can't bare-import `@daintreehq/plugin-sdk/react` (the host import map doesn't serve it). Use the host bridge directly — it is the same transport the hooks above wrap.
+
+```ts
+// Subscription (the push half) — mirrors usePluginEvent. Returns a () => void
+// disposer; wire it into a useEffect cleanup so the listener is torn down on unmount.
+const off = window.electron.plugin.on(pluginId, "build-status", (status) => {
+  setBuildStatus(status as BuildStatus);
+});
+// later: off();
+
+// Request/response (the pull half) — mirrors useHostChannel's invoke().
+const result = await window.electron.plugin.invoke(pluginId, "sync-now", { team: "engineering" });
+```
+
+`window.electron.plugin.on(pluginId, channel, callback)` subscribes to every payload your `main` pushes via `host.postToPanel(channel, payload)` (or a one-shot `broadcastToRenderer` during activation) and returns a `() => void` disposer. `window.electron.plugin.invoke(pluginId, channel, ...args)` calls your `registerHandler(channel, …)` and resolves with its result. Payloads and results arrive untyped over IPC — cast at the call site (the bundled hooks do the same; the plugin owns the shape it pushes). Prefer the hooks when you bundle with `@daintreehq/plugin-vite`; reach for this bridge only when authoring a raw ESM module.
 
 ## Disposables
 
 Anything that takes a callback and returns a cleanup function follows the VS Code-style Disposable pattern. You can safely ignore the return value — the plugin's disposal cascade cleans everything up on unload. If you need explicit control (e.g., unsubscribe from a worktree change listener after a one-shot reaction), keep the reference and call it.
 
+**Throwing listeners are quarantined.** A listener callback you pass to `onDidChangeAgentState`, `storage.onDidChange`, or `settings.onDidChange` runs inside the host's event dispatch. If it throws (synchronously or by rejecting), the host logs the failure with a running counter (`1/3`, `2/3`, …) and keeps the subscription alive. After three _consecutive_ failures it auto-unsubscribes the listener so a broken or adversarial callback can't spam the log forever. A single successful invocation resets the counter to zero, so a listener that fails only intermittently is never removed. Dispatch is fire-and-forget — a throw never propagates back into the host's own work or another plugin's listeners.
+
 See [Architecture → Lifecycle](./architecture.md#lifecycle) for how disposal works internally.
+
+## Testing against a mock host
+
+`createMockHost` (in-repo at `shared/testing/createMockHost.ts`) returns a `PluginHostApi` that mirrors production validation and capability gating, so a unit test can run your `activate()` (and your handlers) against a faithful host and assert what it called. It validates the same things the real host does — `showToast` message/type/`durationMs` bounds, `setPanelBadge` shape, `postToPanel`/`broadcastToRenderer` channel format, and `showQuickPick` item arrays — so a malformed call fails the test the way it would fail in the app.
+
+```ts
+import { createMockHost } from "../../shared/testing/createMockHost";
+
+const host = createMockHost({ capabilities: ["agent:read"], hasActiveAgent: false });
+await activate(host);
+
+// Recorded calls are exposed for assertions:
+expect(host.registeredActions).toHaveLength(1);
+expect(host.postToPanelCalls[0]).toMatchObject({ channel: "build-status" });
+
+// Capability gating matches production: getAgentState needs `agent:read`,
+// sendToActiveAgent needs `agent:input`.
+await expect(host.sendToActiveAgent("hi")).rejects.toThrow(/PERMISSION_REQUIRED/);
+```
+
+Pass `capabilities` to restrict the declared capability set (the default is permissive — `agent:read` + `agent:input`) and assert the `PERMISSION_REQUIRED` rejection a plugin missing one would hit; pass `hasActiveAgent: false` to assert the `NO_ACTIVE_AGENT` rejection from `sendToActiveAgent`. The recording arrays (`registeredActions`, `registeredHandlers`, `postToPanelCalls`, `shownToasts`, `setPanelBadgeCalls`, `showQuickPickCalls`, and the rest) capture every host call in order.
 
 ## What's not exposed
 
@@ -350,7 +629,17 @@ Deliberately not part of the host API:
 
 - Direct access to other plugins' state or registered handlers.
 - Access to the active user's AI-provider API keys. If a plugin needs AI calls, the user configures keys separately in settings or the plugin ships its own `secret` setting.
-- Direct Electron main-process APIs (fs, net, child_process). You can import Node modules normally in plugin code, but the host doesn't pass them through.
+- Full control of the active AI agent's runtime — driving, pausing, or reading back an agent session, and bridging plugin MCP into a driven agent — remains decision-gated (D1/rule #4100); see [the freeze plan](./freeze-plan.md). The one sanctioned exception is text injection: [`host.sendToActiveAgent`](#sendtoactiveagent--inject-text-into-the-active-agent) (gated on `agent:input`, JIT consent, stage-only by default) sends input to the active agent terminal. For everything else, `dispatch` into existing actions is the path.
+- An inbound webhook / host-side HTTP fetch surface for receiving external callbacks. Deferred pending a decision; see [the freeze plan](./freeze-plan.md).
+- Raw Electron main-process APIs are not _passed through_ the host — but the contained, audited equivalents are: `host.process` (managed child processes, gated on `shell:exec`), `host.fs` (scope-contained filesystem), and `host.git` (worktree-scoped git). You can still `import` Node modules directly in plugin code; the host doesn't intercept that until the sandbox decision (D3), so the host-mediated surfaces are the contained, audited path, not a seal on the in-process one.
 - Daintree's internal event bus. Only the specific subscriptions listed above are exposed. Broad event access would tie plugins to internal shape changes we want to be free to make.
 
 If you have a legitimate need that isn't covered, open an issue with the use case.
+
+## Process model and memory
+
+User-installed plugins — whether sideloaded, installed from a `.dntr` or URL, or `dev`-linked — run **out-of-process** in a `utilityProcess.fork` worker (#10526). Your `main` executes in a child process with its own module realm; the host bridges every `host.*` call and registration over a MessagePort. This is what makes teardown clean: when a plugin is unloaded (uninstall, disable, or dev reload), the host runs the full disposal cascade — IPC handlers, actions, forge and file-decoration providers, worktree subscriptions, and the cleanup function your `activate()` returned — and then **kills the worker**, so the plugin's entire module realm (module-scope `let`/`const` bindings, import-time singletons, stray timers or connections) is reclaimed. There is no ESM module-cache leak and no module-scope state surviving across a reload; dev hot-reload works for exactly this reason.
+
+You should still keep teardown-able work inside `activate()` and its returned cleanup rather than module scope — that's the disposal contract — but you are not paying a per-reload memory penalty for getting it wrong, because the worker is discarded wholesale.
+
+The one behavior to design around: **`registerForgeProvider` is a no-op out-of-process.** A forge provider's `parseRemote` and URL builders are synchronous and can't cross the async MessagePort, so forge providers are usable only by Daintree's **built-in** plugins — the exception to the worker model. Built-ins activate in-process via `import()` because they're trusted, app-bundled, and never unloaded. (An in-process built-in module is never evicted from V8's cache, but since built-ins are never uninstalled that residue is inert.) See [Architecture → Activation](./architecture.md#activation).

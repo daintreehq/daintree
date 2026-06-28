@@ -72,6 +72,16 @@ describe("createActionDefinitions", () => {
     expect(actions.has("forge.listIssues")).toBe(true);
   });
 
+  it("registers a launch action for launchable agents but not assistant-only agents (#10634)", async () => {
+    const actions = await createRegistry();
+
+    // Launchable built-in agents get a direct-launch action...
+    expect(actions.has("agent.claude" as any)).toBe(true);
+    // ...but the assistant-only daintree-assistant is never launchable, so no
+    // action is registered (keeps it out of the action palette and MCP manifest).
+    expect(actions.has("agent.daintree-assistant" as any)).toBe(false);
+  });
+
   it("registers all BUILT_IN_ACTION_IDS entries", async () => {
     const actions = await createRegistry();
 

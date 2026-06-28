@@ -10,12 +10,8 @@ import type {
 import type { AgentSettings } from "@shared/types/agentSettings";
 import type { WorktreeState } from "@shared/types";
 import type { AgentPreset } from "@/config/agents";
-import {
-  type TerminalRestoreTask,
-  RESTORE_SPAWN_BATCH_SIZE,
-  RESTORE_SPAWN_BATCH_DELAY_MS,
-  delay,
-} from "./batchScheduler";
+import type { ResourceProfile } from "@shared/types/resourceProfile";
+import { type TerminalRestoreTask, getRestoreBatchParams, delay } from "./batchScheduler";
 import { reconnectWithTimeout } from "./reconnectManager";
 import {
   inferKind,
@@ -52,6 +48,22 @@ export interface PanelRestoreContext {
   worktreesPromise: Promise<WorktreeState[] | null>;
   restoreTerminalOrder?: RestoreTerminalOrderFn;
   safeMode: boolean;
+  /**
+   * Saved id of the panel the user last had on screen (the head of the
+   * per-project MRU list, see #10527). A matching PTY panel jumps to the front
+   * of the restore queue ahead of the active-worktree priority tier, so the
+   * terminal the user was actually looking at reconnects first instead of
+   * waiting behind background batches. `undefined` (no MRU, or a non-terminal
+   * MRU head) degrades cleanly to the existing worktree/recency ordering.
+   */
+  visiblePanelId?: string;
+  /**
+   * Active resource profile, read once by the caller (#10528). Scales the
+   * staggered PTY restore batch size and inter-batch delay via
+   * `getRestoreBatchParams` so capable machines restore faster. Defaults to
+   * `balanced` when omitted.
+   */
+  resourceProfile?: ResourceProfile;
   logHydrationInfo: (message: string, context?: Record<string, unknown>) => void;
 }
 
@@ -101,11 +113,18 @@ export async function restorePanelsPhase(
     worktreesPromise,
     restoreTerminalOrder,
     safeMode,
+    visiblePanelId,
+    resourceProfile,
     logHydrationInfo,
   } = ctx;
 
   const restoreTasks: TerminalRestoreTask[] = [];
   const savedIdToRestoredId = new Map<string, string>();
+  // Adaptive staggered-restore params scaled to the machine's resource
+  // profile (#10528). One source of truth for both the background and orphan
+  // PTY phases below.
+  const { batchSize: restoreBatchSize, delayMs: restoreBatchDelayMs } =
+    getRestoreBatchParams(resourceProfile);
 
   if (savedPanels && savedPanels.length > 0) {
     // Build a single-pass map of worktreeId → highest lastActiveAt across saved
@@ -150,7 +169,6 @@ export async function restorePanelsPhase(
         Number.isFinite(saved.lastActiveAt) &&
         (saved.lastActiveAt ?? 0) > 0 &&
         saved.lastActiveAt === maxLastActiveAtByWorktree.get(saved.worktreeId);
-      const priority = isActiveWorktree || isMostRecentInOtherWorktree ? 0 : 1;
 
       // Determine isPty at task-build time so we can partition tasks
       // for concurrent (non-PTY) vs staggered (PTY) execution.
@@ -162,6 +180,14 @@ export async function restorePanelsPhase(
         const inferredKind = inferKind(saved);
         taskIsPty = inferredKind === "assistant" ? false : panelKindHasPty(inferredKind);
       }
+
+      // The panel the user last had on screen (per-project MRU head, #10527)
+      // jumps to a dedicated priority `-1` tier ahead of the active-worktree
+      // queue, so the terminal they were actually looking at reconnects first.
+      // Gated on `taskIsPty`: the `-1` tier only reorders PTY spawning, so a
+      // visible non-PTY panel stays on the concurrent non-PTY path.
+      const isVisible = taskIsPty && visiblePanelId !== undefined && saved.id === visiblePanelId;
+      const priority = isVisible ? -1 : isActiveWorktree || isMostRecentInOtherWorktree ? 0 : 1;
 
       const capturedIndex = savedIndex;
       panelTasks.push({
@@ -379,6 +405,7 @@ export async function restorePanelsPhase(
     // do synchronous Zustand mutations with no IPC), then PTY panels restore
     // with priority ordering and staggered batching to throttle process spawning.
     const nonPtyTasks = panelTasks.filter((t) => !t.isPty);
+    const ptyVisibleTasks = panelTasks.filter((t) => t.isPty && t.priority === -1);
     const ptyPriorityTasks = panelTasks.filter((t) => t.isPty && t.priority === 0);
     const ptyBackgroundTasks = panelTasks.filter((t) => t.isPty && t.priority === 1);
 
@@ -401,32 +428,54 @@ export async function restorePanelsPhase(
       });
     }
 
-    // Restore priority PTY panels sequentially (active worktree, for instant
-    // interactivity). Batched so the sequential `await`s — which normally break
-    // React 19 auto-batching and cause one render per panel — collapse into a
-    // single store commit at phase end.
-    if (ptyPriorityTasks.length > 0) {
+    // Restore the visible panel first (#10527). The terminal the user last had
+    // on screen reconnects ahead of the active-worktree tier so it is
+    // interactive the instant the grid paints, instead of waiting behind
+    // background batches. At most one task here (a single MRU head), but
+    // filtered like the others to stay robust; batched to match the rest.
+    if (ptyVisibleTasks.length > 0) {
       await withHydrationBatch(async () => {
-        for (const task of ptyPriorityTasks) {
+        for (const task of ptyVisibleTasks) {
           try {
             await task.execute();
           } catch (error) {
-            logWarn("Failed to restore priority panel", { error });
+            logWarn("Failed to restore visible panel", { error });
           }
         }
+      });
+    }
+
+    // Restore priority PTY panels in parallel (active worktree + each other
+    // worktree's last-focused panel, for instant interactivity). The main
+    // process serializes the spawn IPC anyway, so firing them concurrently
+    // only removes the renderer-side sequential `await` latency ((N-1)×RTT)
+    // without adding OS-level spawn pressure (#10528). The single
+    // `withHydrationBatch` wrapper collapses all N addPanel mutations into one
+    // store commit; a rejection in one task never blocks the others.
+    if (ptyPriorityTasks.length > 0) {
+      await withHydrationBatch(async () => {
+        await Promise.allSettled(
+          ptyPriorityTasks.map(async (task) => {
+            try {
+              await task.execute();
+            } catch (error) {
+              logWarn("Failed to restore priority panel", { error });
+            }
+          })
+        );
       });
     }
 
     // Restore background PTY panels in staggered batches. Each batch is its own
     // hydration batch: we still want staggered spawning to throttle PTY pressure,
     // but within a batch the N panels commit in one render rather than N.
-    // N background panels -> ceil(N / RESTORE_SPAWN_BATCH_SIZE) renders instead of N.
+    // N background panels -> ceil(N / restoreBatchSize) renders instead of N.
     if (ptyBackgroundTasks.length > 0) {
       logHydrationInfo(
-        `Staggering ${ptyBackgroundTasks.length} background PTY panel(s) in batches of ${RESTORE_SPAWN_BATCH_SIZE}`
+        `Staggering ${ptyBackgroundTasks.length} background PTY panel(s) in batches of ${restoreBatchSize}`
       );
-      for (let i = 0; i < ptyBackgroundTasks.length; i += RESTORE_SPAWN_BATCH_SIZE) {
-        const batch = ptyBackgroundTasks.slice(i, i + RESTORE_SPAWN_BATCH_SIZE);
+      for (let i = 0; i < ptyBackgroundTasks.length; i += restoreBatchSize) {
+        const batch = ptyBackgroundTasks.slice(i, i + restoreBatchSize);
         await withHydrationBatch(async () => {
           await Promise.allSettled(
             batch.map(async (task) => {
@@ -438,8 +487,8 @@ export async function restorePanelsPhase(
             })
           );
         });
-        if (i + RESTORE_SPAWN_BATCH_SIZE < ptyBackgroundTasks.length) {
-          await delay(RESTORE_SPAWN_BATCH_DELAY_MS);
+        if (i + restoreBatchSize < ptyBackgroundTasks.length) {
+          await delay(restoreBatchDelayMs);
         }
       }
     }
@@ -538,13 +587,13 @@ export async function restorePanelsPhase(
     // Same staggered-batch pattern as the background PTY phase: one hydration
     // batch per spawn batch so orphan restores commit once per batch rather
     // than once per terminal.
-    for (let i = 0; i < orphanedTerminals.length; i += RESTORE_SPAWN_BATCH_SIZE) {
-      const batch = orphanedTerminals.slice(i, i + RESTORE_SPAWN_BATCH_SIZE);
+    for (let i = 0; i < orphanedTerminals.length; i += restoreBatchSize) {
+      const batch = orphanedTerminals.slice(i, i + restoreBatchSize);
       await withHydrationBatch(async () => {
         await Promise.allSettled(batch.map(restoreOrphan));
       });
-      if (i + RESTORE_SPAWN_BATCH_SIZE < orphanedTerminals.length) {
-        await delay(RESTORE_SPAWN_BATCH_DELAY_MS);
+      if (i + restoreBatchSize < orphanedTerminals.length) {
+        await delay(restoreBatchDelayMs);
       }
     }
   }

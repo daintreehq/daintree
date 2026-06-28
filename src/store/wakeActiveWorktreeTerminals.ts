@@ -11,18 +11,16 @@ const WAKE_CONCURRENCY = 2;
  * Wake every grid terminal in the active worktree (#7999, #8562).
  *
  * Called on cached `WebContentsView` reactivation (project view activation
- * via Electron 41 `addChildView`). The pty-host headless mirror keeps
- * receiving every byte regardless of tier, so the authoritative buffer is
- * always current — but the renderer's xterm.js buffer accumulates only what
- * arrives over the active stream. After the view returns, the missed range
- * needs to be pulled from the headless mirror via the `wake-terminal` IPC
- * and applied via `restoreFromSerialized`.
+ * via Electron 41 `addChildView`). With hibernation removed the renderer
+ * stays fully live in the background — the pty-host streams every byte
+ * regardless of tier, so the xterm.js buffer is already current on return.
+ * The reveal is therefore a repaint + geometry re-fit, not a snapshot pull.
  *
  * Uses `terminalInstanceService.fullWakeForVisibilityRestore(id)` rather
- * than `wake(id)` because `wake()` only triggers buffer restore +
- * xterm.refresh — visible panes were left with stale geometry and missing
- * recent output until the user clicked each pane (#8562). The full sequence
- * also runs `applyDeferredResize`, `forceXtermReflow`, `handlePostWake`, and
+ * than `wake(id)` because the full sequence re-fits geometry that the
+ * backgrounded view could not measure — visible panes were otherwise left
+ * with stale geometry until the user clicked each pane (#8562). It runs
+ * `applyDeferredResize`, `forceXtermReflow`, `handlePostWake`, and
  * `dataBuffer.resumeFlush`. Going through `applyRendererPolicy(VISIBLE)`
  * would no-op on tier equality (the backgrounded view's terminals stay at
  * VISIBLE), so the full-wake method bypasses the policy.
@@ -109,6 +107,18 @@ function prioritizeFocusedFirst(targets: string[]): void {
   }
 }
 
+/**
+ * Re-assert the service-level focus bit for the store-focused terminal without
+ * moving DOM focus. In DOM-mode WebGL fallback, `TerminalInstanceService.setFocused`
+ * is the path that restores the single focused WebGL pin; a warm project reveal
+ * can otherwise leave the pane on the DOM renderer until the user clicks it.
+ */
+function reassertFocusedWebGLPin(targets: string[]): void {
+  const focusedId = usePanelStore.getState().focusedId;
+  if (!focusedId || !targets.includes(focusedId)) return;
+  terminalInstanceService.setFocused(focusedId, true);
+}
+
 async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
   const targets = collectActiveWorktreeTerminalTargets();
 
@@ -163,9 +173,29 @@ const REVEAL_CONCURRENCY = 2;
 // intermittent reveal into a reliable one.
 const REVEAL_CONFIRM_PAINTS = 2;
 
+// rAF is paused for a backgrounded/occluded WebContentsView, so its callback can
+// never fire there. Race it against a timeout so a worker awaiting a frame can't
+// hang the reveal sweep forever (and later resume stale to interleave with the
+// next reveal). In the normal foreground case the real frame (~16ms) always wins
+// well before the fallback.
+const NEXT_FRAME_FALLBACK_MS = 250;
+
 function nextFrame(): Promise<void> {
   if (typeof requestAnimationFrame !== "function") return Promise.resolve();
-  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (): void => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    requestAnimationFrame(done);
+    if (typeof setTimeout === "function") setTimeout(done, NEXT_FRAME_FALLBACK_MS);
+  });
+}
+
+function isDocumentHidden(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
 }
 
 /**
@@ -174,9 +204,15 @@ function nextFrame(): Promise<void> {
  * across separate frames to defeat the compositor/observer present-race that
  * otherwise leaves the first paint un-stuck. Bounded by {@link MAX_REVEAL_FRAMES}.
  */
-async function revealUntilStable(id: string): Promise<void> {
+async function revealUntilStable(id: string, isAborted: () => boolean): Promise<void> {
   let painted = 0;
   for (let frame = 0; frame < MAX_REVEAL_FRAMES && painted < REVEAL_CONFIRM_PAINTS; frame++) {
+    // The view may have been switched away (detached → hidden) since the sweep
+    // started or during a frame yield. Stop before touching a hidden view — the
+    // switch-back starts a fresh sweep. The caller latches the same flag for the
+    // worker pool, so a single hidden event abandons the WHOLE sweep, not just
+    // this terminal.
+    if (isAborted()) return;
     let paintable: boolean;
     try {
       paintable = await terminalInstanceService.revealTerminal(id);
@@ -222,20 +258,42 @@ export async function repaintActiveWorktreeTerminals(): Promise<void> {
   const targets = collectActiveWorktreeTerminalTargets();
   if (targets.length === 0) return;
 
+  // A click fixes DOM-mode WebGL fallback because focus pins a single context.
+  // Re-establish that pin on reveal without stealing DOM focus from the user.
+  reassertFocusedWebGLPin(targets);
+
   // Reveal the pane the user is reading first — the rest stagger in behind it.
   prioritizeFocusedFirst(targets);
 
-  let cursor = 0;
-  const worker = async (): Promise<void> => {
-    while (cursor < targets.length) {
-      const id = targets[cursor++];
-      if (id) await revealUntilStable(id);
-    }
+  // Abort the whole sweep if the view is switched away (detached → hidden) at any
+  // point: continuing would repaint a now-hidden view, and the switch-back starts
+  // a fresh sweep. Latched on the first hidden event, so a rapid hidden→visible
+  // flip still abandons this (now superseded) sweep rather than letting a
+  // post-await visibility sample miss the transition.
+  let aborted = isDocumentHidden();
+  const onVisibilityChange = (): void => {
+    if (isDocumentHidden()) aborted = true;
   };
-  const workerCount = Math.min(REVEAL_CONCURRENCY, targets.length);
-  const workers: Promise<void>[] = [];
-  for (let i = 0; i < workerCount; i++) {
-    workers.push(worker());
+  const canListen =
+    typeof document !== "undefined" && typeof document.addEventListener === "function";
+  if (canListen) document.addEventListener("visibilitychange", onVisibilityChange);
+
+  try {
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (cursor < targets.length) {
+        if (aborted) return;
+        const id = targets[cursor++];
+        if (id) await revealUntilStable(id, () => aborted);
+      }
+    };
+    const workerCount = Math.min(REVEAL_CONCURRENCY, targets.length);
+    const workers: Promise<void>[] = [];
+    for (let i = 0; i < workerCount; i++) {
+      workers.push(worker());
+    }
+    await Promise.all(workers);
+  } finally {
+    if (canListen) document.removeEventListener("visibilitychange", onVisibilityChange);
   }
-  await Promise.all(workers);
 }

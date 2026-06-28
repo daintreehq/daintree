@@ -1,12 +1,24 @@
 import os from "node:os";
+import { getIsE2EMode } from "../setup/runtimeFlags.js";
 
 const GIB = 1024 ** 3;
 
 export function computeDefaultCachedViews(totalMemBytes: number): number {
-  if (!Number.isFinite(totalMemBytes) || totalMemBytes <= 0) return 1;
-  if (totalMemBytes >= 64 * GIB) return 3;
-  if (totalMemBytes >= 32 * GIB) return 2;
-  return 1;
+  // The cap counts the active view, so N means N-1 warm background views.
+  // Frozen+invisible cached renderers (setVisible(false) releases their GPU
+  // tile textures) are cheap enough to keep more around, and evictStaleViews()
+  // still drops to 1 when free RAM is genuinely low — so a higher default keeps
+  // rapid project switching warm without unbounded memory growth. The tiers
+  // scale with RAM so capable machines keep a realistic rotation hot: a cold
+  // start reloads a renderer (~100–500 MB) and reads as a multi-hundred-ms
+  // pause, whereas a cached "warm swap" reveals in ~60 ms, so every extra warm
+  // view converts a cold switch into an instant one. Capped at the cache
+  // ceiling (5) honored by isValidCachedProjectViews / setCachedViewLimit.
+  if (!Number.isFinite(totalMemBytes) || totalMemBytes <= 0) return 2;
+  if (totalMemBytes >= 64 * GIB) return 5;
+  if (totalMemBytes >= 32 * GIB) return 4;
+  if (totalMemBytes >= 16 * GIB) return 3;
+  return 2;
 }
 
 export function isValidCachedProjectViews(value: unknown): value is number {
@@ -23,7 +35,7 @@ export function effectiveCachedProjectViews(
   opts: EffectiveCachedProjectViewsOptions = {}
 ): number {
   if (isValidCachedProjectViews(stored)) return stored;
-  const isE2E = opts.isE2E ?? process.env.DAINTREE_E2E_MODE === "1";
+  const isE2E = opts.isE2E ?? getIsE2EMode();
   if (isE2E) return 4;
   const totalMemBytes = opts.totalMemBytes ?? os.totalmem();
   return computeDefaultCachedViews(totalMemBytes);

@@ -136,6 +136,7 @@ export const config: AgentConfig = {
     args: (sessionId: string) => ["-s", sessionId],
     quitCommand: "/quit",
     sessionIdPattern: "opencode -s ([\\w-]+)",
+    resumeLatestArgs: ["--continue"],
   },
   authCheck: {
     // OpenCode v1.4.6+ uses XDG-compliant config paths on all platforms

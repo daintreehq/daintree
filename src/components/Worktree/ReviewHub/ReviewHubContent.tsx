@@ -77,6 +77,7 @@ import { systemClient } from "@/clients/systemClient";
 import { forgeClient } from "@/clients/forgeClient";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { classifyGitError } from "@shared/utils/gitOperationErrors";
 import {
   type DiffMode,
   type PushBannerCta,
@@ -1097,11 +1098,12 @@ export function ReviewHubContent({
       const errFields = readGitErrorFields(err);
       const isRateLimited =
         isClientAppError(err) && (err as { code?: string }).code === "RATE_LIMITED";
+      const rawMessage = isRateLimited
+        ? "Too many push attempts in a short window — wait a moment and try again."
+        : formatErrorMessage(err, "Failed to push");
       setPushError({
-        reason: errFields.gitReason ?? "unknown",
-        rawMessage: isRateLimited
-          ? "Too many push attempts in a short window — wait a moment and try again."
-          : formatErrorMessage(err, "Failed to push"),
+        reason: errFields.gitReason ?? classifyGitError(rawMessage),
+        rawMessage,
         leaseSha: errFields.leaseSha,
         branchName: errFields.branchName,
       });
@@ -1172,9 +1174,10 @@ export function ReviewHubContent({
       // A rebase that halts on conflicts surfaces as `conflict-unresolved`;
       // surface it through the same banner so the user sees the next step.
       const errFields = readGitErrorFields(err);
+      const rawMessage = formatErrorMessage(err, "Failed to pull and rebase");
       setPushError({
-        reason: errFields.gitReason ?? "unknown",
-        rawMessage: formatErrorMessage(err, "Failed to pull and rebase"),
+        reason: errFields.gitReason ?? classifyGitError(rawMessage),
+        rawMessage,
       });
       // Refresh in case the rebase started and left files in conflict.
       await refresh();
@@ -1193,9 +1196,10 @@ export function ReviewHubContent({
   const handleForcePushError = useCallback((err: unknown) => {
     setForcePushDialogOpen(false);
     const errFields = readGitErrorFields(err);
+    const rawMessage = formatErrorMessage(err, "Failed to force push");
     setPushError({
-      reason: errFields.gitReason ?? "unknown",
-      rawMessage: formatErrorMessage(err, "Failed to force push"),
+      reason: errFields.gitReason ?? classifyGitError(rawMessage),
+      rawMessage,
     });
   }, []);
 

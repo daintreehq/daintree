@@ -28,6 +28,7 @@ export function registerCrashRecoveryHandlers(): () => void {
         const ok = service.restoreBackup(action.panelIds);
         if (ok) {
           service.setPanelFilter(action.panelIds);
+          service.clearPendingCrash();
         } else {
           // Propagate the failure to the renderer. `restoreBackup` returns
           // false for: no parseable snapshot, zero-match panel filter, no
@@ -41,6 +42,7 @@ export function registerCrashRecoveryHandlers(): () => void {
         }
       } else {
         service.resetToFresh();
+        service.clearPendingCrash();
       }
     })
   );

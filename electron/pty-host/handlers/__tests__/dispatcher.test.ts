@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createPtyHostMessageDispatcher } from "../index.js";
 import type { HostContext } from "../types.js";
+import { clearPluginAgentRegistryForTests } from "../../../../shared/config/pluginAgentRegistry.js";
+import { getEffectiveAgentConfig } from "../../../../shared/config/agentRegistry.js";
 
 function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
   const ptyManager = {
@@ -169,6 +171,86 @@ describe("createPtyHostMessageDispatcher", () => {
       id: "term-1",
       state: "payload",
     });
+  });
+
+  it("mirrors the plugin-agent registry into this process (#10587)", () => {
+    clearPluginAgentRegistryForTests();
+    try {
+      const ctx = makeCtx();
+      const dispatch = createPtyHostMessageDispatcher(ctx);
+
+      // Before the sync, the pty-host process has no knowledge of the agent.
+      expect(getEffectiveAgentConfig("plugin-agent")).toBeUndefined();
+
+      dispatch({
+        type: "set-plugin-agent-registry",
+        registry: {
+          "plugin-agent": {
+            id: "plugin-agent",
+            name: "Plugin Agent",
+            command: "plugin-agent",
+            color: "#3366ff",
+            iconId: "terminal",
+            supportsContextInjection: false,
+            detection: { primaryPatterns: ["thinking"] },
+          },
+        },
+      });
+
+      // After the sync, getEffectiveAgentConfig resolves the agent and its
+      // detection patterns — exactly what the activity monitor needs at spawn.
+      const config = getEffectiveAgentConfig("plugin-agent");
+      expect(config).toBeDefined();
+      expect(config?.detection?.primaryPatterns).toEqual(["thinking"]);
+    } finally {
+      clearPluginAgentRegistryForTests();
+    }
+  });
+
+  it("replaces the plugin-agent registry wholesale on a later sync (#10587)", () => {
+    clearPluginAgentRegistryForTests();
+    try {
+      const ctx = makeCtx();
+      const dispatch = createPtyHostMessageDispatcher(ctx);
+      const entry = (id: string) => ({
+        id,
+        name: id,
+        command: id,
+        color: "#3366ff",
+        iconId: "terminal",
+        supportsContextInjection: false,
+      });
+
+      dispatch({ type: "set-plugin-agent-registry", registry: { "plugin-a": entry("plugin-a") } });
+      expect(getEffectiveAgentConfig("plugin-a")).toBeDefined();
+
+      // A subsequent sync (e.g. plugin A unloaded, plugin B loaded) replaces the
+      // snapshot wholesale — the absent agent is gone.
+      dispatch({ type: "set-plugin-agent-registry", registry: { "plugin-b": entry("plugin-b") } });
+      expect(getEffectiveAgentConfig("plugin-a")).toBeUndefined();
+      expect(getEffectiveAgentConfig("plugin-b")).toBeDefined();
+    } finally {
+      clearPluginAgentRegistryForTests();
+    }
+  });
+
+  it("ignores a malformed plugin-agent registry shape without crashing (#10587)", () => {
+    clearPluginAgentRegistryForTests();
+    try {
+      const ctx = makeCtx();
+      const dispatch = createPtyHostMessageDispatcher(ctx);
+      // null and array are not valid Record shapes — the handler must no-op them
+      // rather than corrupt the snapshot.
+      expect(() =>
+        dispatch({ type: "set-plugin-agent-registry", registry: null as never })
+      ).not.toThrow();
+      expect(() =>
+        dispatch({ type: "set-plugin-agent-registry", registry: [] as never })
+      ).not.toThrow();
+      expect(getEffectiveAgentConfig("anything")).toBeUndefined();
+    } finally {
+      clearPluginAgentRegistryForTests();
+    }
   });
 
   it("returns a promise for handlers that perform real async work", async () => {

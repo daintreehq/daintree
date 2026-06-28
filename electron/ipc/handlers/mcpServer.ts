@@ -16,7 +16,9 @@ import type {
   McpAuditRecord,
   McpAuditStats,
   McpIssueGrantResult,
+  McpIssueNativeGrantResult,
   McpLogRecord,
+  McpRevokeNativeGrantResult,
   McpRevokeSessionGrantsResult,
   McpRuntimeSnapshot,
   McpServerStatusSnapshot,
@@ -259,6 +261,59 @@ export const mcpServerNamespace = defineIpcNamespace({
         }
         const svc = await getMcpServerService();
         return svc.revokeSessionGrants(sessionId, ctx.webContentsId);
+      },
+      { withContext: true }
+    ),
+    issueNativeGrant: op(
+      MCP_SERVER_METHOD_CHANNELS.issueNativeGrant,
+      async (
+        ctx,
+        payload: {
+          helpSessionId: string;
+          allowedTools: string[];
+          maxUses?: number;
+          ttlMs?: number;
+        }
+      ): Promise<McpIssueNativeGrantResult> => {
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid payload");
+        }
+        const { helpSessionId, allowedTools, maxUses, ttlMs } = payload;
+        if (typeof helpSessionId !== "string" || !helpSessionId) {
+          throw new Error("Invalid helpSessionId");
+        }
+        if (!Array.isArray(allowedTools)) {
+          throw new Error("Invalid allowedTools");
+        }
+        if (maxUses !== undefined && typeof maxUses !== "number") {
+          throw new Error("Invalid maxUses");
+        }
+        if (ttlMs !== undefined && typeof ttlMs !== "number") {
+          throw new Error("Invalid ttlMs");
+        }
+        const svc = await getMcpServerService();
+        // Same caller-pin invariant as `issueGrant` — only the renderer that
+        // minted the session can approve native grants for it.
+        return svc.issueNativeGrant(
+          helpSessionId,
+          { allowedTools, maxUses, ttlMs },
+          ctx.webContentsId
+        );
+      },
+      { withContext: true }
+    ),
+    revokeNativeGrant: op(
+      MCP_SERVER_METHOD_CHANNELS.revokeNativeGrant,
+      async (ctx, payload: { grantId: string }): Promise<McpRevokeNativeGrantResult> => {
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid payload");
+        }
+        const { grantId } = payload;
+        if (typeof grantId !== "string" || !grantId) {
+          throw new Error("Invalid grantId");
+        }
+        const svc = await getMcpServerService();
+        return svc.revokeNativeGrant(grantId, ctx.webContentsId);
       },
       { withContext: true }
     ),

@@ -5,6 +5,9 @@ import {
   initializeLogger,
   getLogFilePath,
   pruneOldLogsAsync,
+  pruneHeapSnapshots,
+  pruneHeapSnapshotsAsync,
+  MAX_HEAP_SNAPSHOTS,
   logInfo,
   logWarn,
   logError,
@@ -12,6 +15,7 @@ import {
   ROTATION_MAX_SIZE,
   ROTATION_MAX_FILES,
   resetLoggerStateForTesting,
+  flushLogFileWritesForTesting,
   createLogger,
   setLogLevelOverrides,
   getLogLevelOverrides,
@@ -45,7 +49,10 @@ beforeEach(() => {
   process.env.DAINTREE_USER_DATA = TEST_LOG_DIR;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Drain any buffered async writes to the test dir before tearing it down so a
+  // deferred flush can't race the cleanup and write to a fallback path.
+  await flushLogFileWritesForTesting();
   resetLoggerStateForTesting();
   resetWritesSuppressedForTesting();
   delete process.env.DAINTREE_USER_DATA;
@@ -138,16 +145,17 @@ describe("logger", () => {
   });
 
   describe("rotateLogsIfNeeded", () => {
-    it("does not rotate when file size is below threshold", () => {
+    it("does not rotate when file size is below threshold", async () => {
       initializeLogger(TEST_LOG_DIR);
       logInfo("Small log entry");
+      await flushLogFileWritesForTesting();
 
       const logFile = getLogFilePath();
       expect(existsSync(logFile)).toBe(true);
       expect(existsSync(join(TEST_LOG_DIR, "logs", "daintree.log.1"))).toBe(false);
     });
 
-    it("rotates log file when size exceeds threshold", () => {
+    it("rotates log file when size exceeds threshold", async () => {
       const logFile = join(TEST_LOG_DIR, "logs", "daintree.log");
       mkdirSync(join(TEST_LOG_DIR, "logs"), { recursive: true });
       const largeLine = `[2026-01-01T00:00:00.000Z] [INFO] ${"x".repeat(1024)}`;
@@ -158,6 +166,7 @@ describe("logger", () => {
 
       initializeLogger(TEST_LOG_DIR);
       logInfo("This should trigger rotation");
+      await flushLogFileWritesForTesting();
 
       expect(existsSync(logFile)).toBe(true);
       const rotatedFile = join(TEST_LOG_DIR, "logs", "daintree.log.1");
@@ -170,7 +179,7 @@ describe("logger", () => {
       expect(currentContent).toContain("This should trigger rotation");
     });
 
-    it("shuffles rotated files correctly", () => {
+    it("shuffles rotated files correctly", async () => {
       const logFile = join(TEST_LOG_DIR, "logs", "daintree.log");
       mkdirSync(join(TEST_LOG_DIR, "logs"), { recursive: true });
       const largeLine = `[2026-01-01T00:00:00.000Z] [INFO] ${"x".repeat(1024)}`;
@@ -185,6 +194,7 @@ describe("logger", () => {
 
       initializeLogger(TEST_LOG_DIR);
       logInfo("Trigger rotation");
+      await flushLogFileWritesForTesting();
 
       expect(existsSync(join(TEST_LOG_DIR, "logs", "daintree.log.1"))).toBe(true);
       expect(existsSync(join(TEST_LOG_DIR, "logs", "daintree.log.2"))).toBe(true);
@@ -198,7 +208,7 @@ describe("logger", () => {
       expect(file3Content).toContain("Rotated file 2");
     });
 
-    it("deletes oldest rotated file when max files exceeded", () => {
+    it("deletes oldest rotated file when max files exceeded", async () => {
       const logFile = join(TEST_LOG_DIR, "logs", "daintree.log");
       mkdirSync(join(TEST_LOG_DIR, "logs"), { recursive: true });
       const largeLine = `[2026-01-01T00:00:00.000Z] [INFO] ${"x".repeat(1024)}`;
@@ -213,6 +223,7 @@ describe("logger", () => {
 
       initializeLogger(TEST_LOG_DIR);
       logInfo("Trigger rotation");
+      await flushLogFileWritesForTesting();
 
       expect(existsSync(join(TEST_LOG_DIR, "logs", `daintree.log.${ROTATION_MAX_FILES + 1}`))).toBe(
         false
@@ -230,17 +241,19 @@ describe("logger", () => {
   });
 
   describe("disk pressure suppression", () => {
-    it("does not append to the log file when writes are suppressed", () => {
+    it("does not append to the log file when writes are suppressed", async () => {
       initializeLogger(TEST_LOG_DIR);
       const logFile = getLogFilePath();
 
       logInfo("baseline write before suppression");
+      await flushLogFileWritesForTesting();
       const beforeSize = existsSync(logFile) ? readFileSync(logFile, "utf8").length : 0;
       expect(beforeSize).toBeGreaterThan(0);
 
       setWritesSuppressed(true);
       logInfo("suppressed entry should not reach disk");
       logWarn("another suppressed entry");
+      await flushLogFileWritesForTesting();
 
       const afterSize = readFileSync(logFile, "utf8").length;
       expect(afterSize).toBe(beforeSize);
@@ -249,7 +262,7 @@ describe("logger", () => {
       expect(content).not.toContain("another suppressed entry");
     });
 
-    it("resumes writing once disk pressure clears", () => {
+    it("resumes writing once disk pressure clears", async () => {
       initializeLogger(TEST_LOG_DIR);
       const logFile = getLogFilePath();
 
@@ -258,10 +271,82 @@ describe("logger", () => {
 
       setWritesSuppressed(false);
       logInfo("written after recovery");
+      await flushLogFileWritesForTesting();
 
       const content = readFileSync(logFile, "utf8");
       expect(content).not.toContain("dropped during suppression");
       expect(content).toContain("written after recovery");
+    });
+  });
+
+  describe("async batched file writes (#10769)", () => {
+    it("buffers non-error lines until flushed", async () => {
+      initializeLogger(TEST_LOG_DIR);
+      const logFile = getLogFilePath();
+
+      logInfo("buffered line");
+      // Not yet on disk — the write is deferred off the synchronous hot path.
+      const beforeFlush = existsSync(logFile) ? readFileSync(logFile, "utf8") : "";
+      expect(beforeFlush).not.toContain("buffered line");
+
+      await flushLogFileWritesForTesting();
+      expect(readFileSync(logFile, "utf8")).toContain("buffered line");
+    });
+
+    it("writes error lines synchronously without a flush (crash safety)", () => {
+      initializeLogger(TEST_LOG_DIR);
+      const logFile = getLogFilePath();
+
+      logError("immediate error", new Error("boom"));
+      // Readable right away — errors bypass the async buffer.
+      expect(readFileSync(logFile, "utf8")).toContain("immediate error");
+    });
+
+    it("flushes buffered lines ahead of a synchronous error so on-disk order matches emit order", () => {
+      initializeLogger(TEST_LOG_DIR);
+      const logFile = getLogFilePath();
+
+      logInfo("first buffered");
+      logError("then error", new Error("boom"));
+      // The error path drains the buffer before its own sync write.
+      const content = readFileSync(logFile, "utf8");
+      expect(content).toContain("first buffered");
+      expect(content).toContain("then error");
+      expect(content.indexOf("first buffered")).toBeLessThan(content.indexOf("then error"));
+    });
+
+    it("flushes buffered lines via the scheduled setImmediate (not just the test helper)", async () => {
+      initializeLogger(TEST_LOG_DIR);
+      const logFile = getLogFilePath();
+
+      logInfo("scheduled line");
+      // Poll for the write to land without calling the test-only drain — proves
+      // the production setImmediate→drain scheduling path actually writes. The
+      // async appendFile completes off the threadpool, so its arrival isn't
+      // bounded by a fixed number of ticks; poll until it shows up.
+      const deadline = Date.now() + 2000;
+      let content = "";
+      while (Date.now() < deadline) {
+        content = existsSync(logFile) ? readFileSync(logFile, "utf8") : "";
+        if (content.includes("scheduled line")) break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      expect(content).toContain("scheduled line");
+    });
+
+    it("coalesces a burst of lines into the file after a single flush", async () => {
+      initializeLogger(TEST_LOG_DIR);
+      const logFile = getLogFilePath();
+
+      for (let i = 0; i < 50; i++) {
+        logInfo(`burst line ${i}`);
+      }
+      await flushLogFileWritesForTesting();
+
+      const content = readFileSync(logFile, "utf8");
+      expect(content).toContain("burst line 0");
+      expect(content).toContain("burst line 49");
     });
   });
 
@@ -368,19 +453,21 @@ describe("logger", () => {
     const GITHUB_PAT = `ghp_${"A".repeat(40)}`;
     const ANTHROPIC_KEY = `sk-ant-${"a".repeat(95)}`;
 
-    it("scrubs secrets in the message before writing to the log file", () => {
+    it("scrubs secrets in the message before writing to the log file", async () => {
       initializeLogger(TEST_LOG_DIR);
       logInfo(`auth header set with token ${GITHUB_PAT}`);
+      await flushLogFileWritesForTesting();
 
       const content = readFileSync(getLogFilePath(), "utf8");
       expect(content).toContain("[REDACTED]");
       expect(content).not.toContain(GITHUB_PAT);
     });
 
-    it("scrubs secrets that appear in the context payload", () => {
+    it("scrubs secrets that appear in the context payload", async () => {
       initializeLogger(TEST_LOG_DIR);
       // SENSITIVE_KEYS doesn't catch arbitrary string fields — pattern scrub is the safety net
       logInfo("request received", { traceLine: `Bearer ${"x".repeat(40)}` });
+      await flushLogFileWritesForTesting();
 
       const content = readFileSync(getLogFilePath(), "utf8");
       expect(content).toContain("Bearer [REDACTED]");
@@ -389,11 +476,175 @@ describe("logger", () => {
 
     it("scrubs secrets from error.message when logging via logError", () => {
       initializeLogger(TEST_LOG_DIR);
+      // Errors are written synchronously (crash-safety path) — no flush needed.
       logError("auth failure", new Error(`bad key ${ANTHROPIC_KEY}`));
 
       const content = readFileSync(getLogFilePath(), "utf8");
       expect(content).toContain("[REDACTED]");
       expect(content).not.toContain(ANTHROPIC_KEY);
+    });
+
+    it("does not leak a secret straddling the context string-length cap", async () => {
+      initializeLogger(TEST_LOG_DIR);
+      // Place a recognizable GitHub PAT so its BODY straddles the 2000-char
+      // clamp boundary: 1979 filler chars + a space (the `\b` the pattern's
+      // leading anchor needs) put `ghp_` at char 1980, so the 40-char body
+      // occupies chars 1984–2023 and the cut at char 2000 lands ~16 chars into
+      // the token. If the clamp ran before content-scrubbing, truncation would
+      // sever the high-entropy tail and leave a `ghp_AAA…` prefix too short for
+      // the scrubber to match — leaking the secret's leading bytes. Scrub-
+      // before-clamp must redact the whole token first, so neither the full
+      // token nor any recognizable prefix survives.
+      const token = `ghp_${"A".repeat(40)}`;
+      logInfo("long trace", { traceLine: `${"x".repeat(1979)} ${token}` });
+      await flushLogFileWritesForTesting();
+
+      const content = readFileSync(getLogFilePath(), "utf8");
+      // The full token must never appear on disk.
+      expect(content).not.toContain(token);
+      // Nor may any leading prefix of the secret survive the clamp: the
+      // `ghp_` sigil and the body bytes preceding the cut must be gone, not
+      // merely the dropped tail. A surviving `ghp_AAA…` prefix is the leak.
+      expect(content).not.toMatch(/ghp_A+/);
+      // The scrubber ran on the value before truncation, redacting the secret.
+      expect(content).toContain("[REDACTED]");
+    });
+
+    it("preserves merged context fields while redacting sensitive keys in logError", () => {
+      initializeLogger(TEST_LOG_DIR);
+      logError("request failed", new Error("boom"), { requestId: "r1", token: "secret123" });
+
+      const content = readFileSync(getLogFilePath(), "utf8");
+      // Legitimate context survives the emitError dedup...
+      expect(content).toContain("r1");
+      expect(content).toContain("boom");
+      // ...and the sensitive key is still redacted, never raw.
+      expect(content).not.toContain("secret123");
+      expect(content).toContain("[redacted]");
+    });
+  });
+
+  describe("redactSensitiveData bounds", () => {
+    beforeEach(() => {
+      logBuffer.clear();
+    });
+
+    function lastContext(): Record<string, unknown> | undefined {
+      const entries = logBuffer.getAll();
+      return entries[entries.length - 1]?.context as Record<string, unknown> | undefined;
+    }
+
+    it("truncates long string values and the dropped count accounts for the whole string", () => {
+      const original = "a".repeat(5000);
+      logInfo("trace captured", { stack: original });
+
+      const stack = lastContext()?.stack as string;
+      const match = stack.match(/^(a+)\[…\+(\d+)\]$/);
+      expect(match).not.toBeNull();
+      const keptLength = match![1].length;
+      const dropped = Number(match![2]);
+      // Invariant: kept prefix + reported dropped count === original length.
+      expect(keptLength + dropped).toBe(original.length);
+      expect(stack.length).toBeLessThan(original.length);
+    });
+
+    it("leaves short string values untouched", () => {
+      logInfo("ok", { note: "short value" });
+      expect(lastContext()?.note).toBe("short value");
+    });
+
+    it("replaces objects nested beyond the depth limit with a sentinel", () => {
+      let node: Record<string, unknown> = { leaf: "value" };
+      for (let i = 0; i < 12; i++) {
+        node = { child: node };
+      }
+      logInfo("deep", node);
+
+      // Walk down until the recursion was cut; the sentinel must appear before
+      // we reach the original 12-deep leaf.
+      let current: unknown = lastContext();
+      let walked = 0;
+      while (
+        current !== null &&
+        typeof current === "object" &&
+        "child" in (current as Record<string, unknown>)
+      ) {
+        current = (current as Record<string, unknown>).child;
+        walked++;
+        if (walked > 20) break;
+      }
+      expect(current).toBe("[MaxDepth]");
+      expect(walked).toBeLessThan(12);
+    });
+
+    it("caps long arrays and the remaining-count marker matches what was dropped", () => {
+      const items = Array.from({ length: 50 }, (_, i) => `item-${i}`);
+      logInfo("list", { items });
+
+      const capped = lastContext()?.items as unknown[];
+      const marker = capped[capped.length - 1] as string;
+      const match = marker.match(/^\[\.\.\.(\d+) more\]$/);
+      expect(match).not.toBeNull();
+      const dropped = Number(match![1]);
+      const kept = capped.length - 1;
+      // Invariant: kept items + reported dropped count === original length.
+      expect(kept + dropped).toBe(items.length);
+      expect(capped.length).toBeLessThan(items.length);
+    });
+
+    it("truncates long string values inside arrays", () => {
+      const original = "b".repeat(5000);
+      logInfo("array strings", { lines: [original] });
+
+      const lines = lastContext()?.lines as string[];
+      expect(lines[0]).toMatch(/^b+\[…\+\d+\]$/);
+      expect(lines[0].length).toBeLessThan(original.length);
+    });
+
+    it("still redacts sensitive keys even when their value is long", () => {
+      logInfo("auth", { token: "x".repeat(5000) });
+      expect(lastContext()?.token).toBe("[redacted]");
+    });
+
+    it("stops recursion through deeply nested arrays without overflowing", () => {
+      let value: unknown = "leaf";
+      for (let i = 0; i < 20; i++) {
+        value = [value];
+      }
+      expect(() => logInfo("nested arrays", { value })).not.toThrow();
+
+      // Walk down the nested arrays; the sentinel must appear before the leaf.
+      let current: unknown = lastContext()?.value;
+      let walked = 0;
+      while (Array.isArray(current) && current[0] !== "[MaxDepth]") {
+        current = current[0];
+        walked++;
+        if (walked > 30) break;
+      }
+      expect(Array.isArray(current) ? current[0] : current).toBe("[MaxDepth]");
+      expect(walked).toBeLessThan(20);
+    });
+
+    it("keeps an array at the exact cap whole but marks one beyond it", () => {
+      logInfo("at cap", { items: Array.from({ length: 20 }, (_, i) => i) });
+      const atCap = lastContext()?.items as unknown[];
+      expect(atCap).toHaveLength(20);
+      expect(atCap[atCap.length - 1]).toBe(19);
+
+      logBuffer.clear();
+      logInfo("over cap", { items: Array.from({ length: 21 }, (_, i) => i) });
+      const overCap = lastContext()?.items as unknown[];
+      expect(overCap).toHaveLength(21);
+      expect(overCap[overCap.length - 1]).toBe("[...1 more]");
+    });
+
+    it("keeps a string at the exact char cap but marks one beyond it", () => {
+      logInfo("at cap", { note: "a".repeat(2000) });
+      expect(lastContext()?.note).toBe("a".repeat(2000));
+
+      logBuffer.clear();
+      logInfo("over cap", { note: "a".repeat(2001) });
+      expect(lastContext()?.note).toBe(`${"a".repeat(2000)}[…+1]`);
     });
   });
 
@@ -446,6 +697,121 @@ describe("logger", () => {
       await expect(pruneOldLogsAsync(TEST_LOG_DIR, 30)).resolves.toBeUndefined();
 
       expect(existsSync(nestedDir)).toBe(true);
+    });
+  });
+
+  describe.each([
+    [
+      "pruneHeapSnapshots (sync)",
+      (dir: string, max: number) => Promise.resolve(pruneHeapSnapshots(dir, max)),
+    ],
+    ["pruneHeapSnapshotsAsync", (dir: string, max: number) => pruneHeapSnapshotsAsync(dir, max)],
+  ])("%s", (_label, prune) => {
+    // Heap snapshots land directly in app.getPath("logs"), so the prune target
+    // is the dir itself — not a userData base with logs/ + debug/ subdirs.
+    const snapDir = join(TEST_LOG_DIR, "heap");
+    const MINUTE_MS = 60 * 1000;
+
+    function seedSnapshot(name: string, ageMinutes: number): string {
+      mkdirSync(snapDir, { recursive: true });
+      const filePath = join(snapDir, name);
+      writeFileSync(filePath, "x");
+      const mtimeSeconds = (Date.now() - ageMinutes * MINUTE_MS) / 1000;
+      utimesSync(filePath, mtimeSeconds, mtimeSeconds);
+      return filePath;
+    }
+
+    it("keeps the newest maxCount snapshots and deletes the rest", async () => {
+      // Ages 1..6 minutes — older = larger ageMinutes.
+      const files = Array.from({ length: 6 }, (_, i) =>
+        seedSnapshot(`Heap.2026.${i}.heapsnapshot`, i + 1)
+      );
+
+      await prune(snapDir, 3);
+
+      // Newest 3 (ages 1,2,3 → indices 0,1,2) survive; oldest 3 deleted.
+      expect(existsSync(files[0])).toBe(true);
+      expect(existsSync(files[1])).toBe(true);
+      expect(existsSync(files[2])).toBe(true);
+      expect(existsSync(files[3])).toBe(false);
+      expect(existsSync(files[4])).toBe(false);
+      expect(existsSync(files[5])).toBe(false);
+    });
+
+    it("is a no-op when the snapshot count is at or below maxCount", async () => {
+      const a = seedSnapshot("Heap.a.heapsnapshot", 1);
+      const b = seedSnapshot("Heap.b.heapsnapshot", 2);
+
+      await prune(snapDir, 3);
+
+      expect(existsSync(a)).toBe(true);
+      expect(existsSync(b)).toBe(true);
+    });
+
+    it("never touches files without the .heapsnapshot extension", async () => {
+      const log = seedSnapshot("daintree.log", 100);
+      const looksClose = seedSnapshot("heap.heapsnapshot.log", 100);
+      const txt = seedSnapshot("notes.txt", 100);
+      // Enough real snapshots to force deletion past maxCount.
+      const snaps = Array.from({ length: 4 }, (_, i) =>
+        seedSnapshot(`Heap.${i}.heapsnapshot`, i + 1)
+      );
+
+      await prune(snapDir, 1);
+
+      // Non-snapshot siblings always survive regardless of age/count.
+      expect(existsSync(log)).toBe(true);
+      expect(existsSync(looksClose)).toBe(true);
+      expect(existsSync(txt)).toBe(true);
+      // Only the single newest snapshot remains.
+      expect(existsSync(snaps[0])).toBe(true);
+      expect(existsSync(snaps[1])).toBe(false);
+      expect(existsSync(snaps[2])).toBe(false);
+      expect(existsSync(snaps[3])).toBe(false);
+    });
+
+    it("ignores subdirectories that end in .heapsnapshot", async () => {
+      mkdirSync(snapDir, { recursive: true });
+      const dirNamedLikeSnapshot = join(snapDir, "weird.heapsnapshot");
+      mkdirSync(dirNamedLikeSnapshot, { recursive: true });
+      const realSnaps = Array.from({ length: 3 }, (_, i) =>
+        seedSnapshot(`Heap.${i}.heapsnapshot`, i + 1)
+      );
+
+      await prune(snapDir, 1);
+
+      expect(existsSync(dirNamedLikeSnapshot)).toBe(true);
+      expect(existsSync(realSnaps[0])).toBe(true);
+      expect(existsSync(realSnaps[1])).toBe(false);
+      expect(existsSync(realSnaps[2])).toBe(false);
+    });
+
+    it("is idempotent across repeated runs", async () => {
+      const files = Array.from({ length: 5 }, (_, i) =>
+        seedSnapshot(`Heap.${i}.heapsnapshot`, i + 1)
+      );
+
+      await prune(snapDir, 2);
+      await prune(snapDir, 2);
+
+      expect(existsSync(files[0])).toBe(true);
+      expect(existsSync(files[1])).toBe(true);
+      expect(existsSync(files[2])).toBe(false);
+    });
+
+    it("resolves without throwing when the directory does not exist", async () => {
+      const missing = join(TEST_LOG_DIR, "no-such-dir");
+      await expect(prune(missing, MAX_HEAP_SNAPSHOTS)).resolves.toBeUndefined();
+    });
+
+    it("does not delete anything when maxCount is negative", async () => {
+      const a = seedSnapshot("Heap.a.heapsnapshot", 1);
+      const b = seedSnapshot("Heap.b.heapsnapshot", 2);
+
+      await prune(snapDir, -1);
+
+      expect(existsSync(a)).toBe(true);
+      expect(existsSync(b)).toBe(true);
     });
   });
 });

@@ -20,7 +20,7 @@ let fixtureDir: string;
 let fixtureCleanup: (() => void) | undefined;
 
 function uniqueMarker(): string {
-  return `TRASH_MARKER_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  return `TM_${Date.now().toString(36).slice(-6)}_${Math.random().toString(36).slice(2, 6)}`;
 }
 
 async function openTerminal(window: AppContext["window"]): Promise<void> {

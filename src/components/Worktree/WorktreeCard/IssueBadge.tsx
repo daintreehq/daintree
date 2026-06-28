@@ -87,7 +87,7 @@ export function IssueBadge({
             className={cn(
               "shrink-0",
               isHeadline ? "w-3.5 h-3.5" : "w-3 h-3",
-              missingCredential ? "grayscale opacity-50" : "text-pr-open"
+              missingCredential ? "text-text-muted" : "text-pr-open"
             )}
             aria-hidden="true"
           />

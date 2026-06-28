@@ -8,8 +8,12 @@ export function serializeTerminal(id: string, terminalInfo: TerminalInfo): strin
   if (terminalInfo.preservedSnapshot !== undefined) {
     return terminalInfo.preservedSnapshot;
   }
+  // Non-preserved disposed terminal — disposeHeadless() clears the addon. No
+  // snapshot to produce; return null without logging a spurious error.
+  const addon = terminalInfo.serializeAddon;
+  if (!addon) return null;
   try {
-    return terminalInfo.serializeAddon!.serialize();
+    return addon.serialize();
   } catch (error) {
     console.error(`[TerminalProcess] Failed to serialize terminal ${id}:`, error);
     return null;
@@ -23,17 +27,26 @@ export async function serializeTerminalAsync(
   if (terminalInfo.preservedSnapshot !== undefined) {
     return terminalInfo.preservedSnapshot;
   }
+  // Non-preserved disposed terminal — disposeHeadless() clears both fields
+  // together. No snapshot to produce; return null without logging a spurious
+  // error. Snap to locals so the guard and every dereference stay consistent.
+  const headless = terminalInfo.headlessTerminal;
+  const addon = terminalInfo.serializeAddon;
+  if (!headless || !addon) return null;
   try {
-    const lineCount = terminalInfo.headlessTerminal!.buffer.active.length;
+    const lineCount = headless.buffer.active.length;
     const serializerService = getTerminalSerializerService();
 
     if (serializerService.shouldUseAsync(lineCount)) {
+      // The serialize callback runs on a later tick; disposeHeadless() may clear
+      // the addon in between. Re-check identity so a disposed terminal yields
+      // null instead of throwing (which would re-log a spurious failure).
       return await serializerService.serializeAsync(id, () =>
-        terminalInfo.serializeAddon!.serialize()
+        terminalInfo.serializeAddon === addon ? addon.serialize() : null
       );
     }
 
-    return terminalInfo.serializeAddon!.serialize();
+    return addon.serialize();
   } catch (error) {
     console.error(`[TerminalProcess] Failed to serialize terminal ${id}:`, error);
     return null;

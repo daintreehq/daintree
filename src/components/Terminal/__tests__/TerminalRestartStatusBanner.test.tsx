@@ -131,7 +131,7 @@ describe("TerminalRestartStatusBanner", () => {
       expect(description.textContent).not.toMatch(/expired|you lost|agent closed/i);
     });
 
-    it("uses role=alert without aria-live for an assertive interrupt", () => {
+    it("uses role=status with a polite live region (toned down per #10823)", () => {
       render(
         <TerminalRestartStatusBanner
           variant={{ type: "session-resume-unavailable" }}
@@ -139,25 +139,28 @@ describe("TerminalRestartStatusBanner", () => {
           onDismiss={vi.fn()}
         />
       );
-      const region = screen.getByRole("alert");
-      expect(region.hasAttribute("aria-live")).toBe(false);
+      const region = screen.getByRole("status");
+      expect(region.getAttribute("aria-live")).toBe("polite");
+      expect(region.getAttribute("aria-atomic")).toBe("true");
+      // No longer an assertive alert.
+      expect(screen.queryByRole("alert")).toBeNull();
     });
 
-    it("exposes a verb-noun recovery action that calls onRestart", () => {
-      const onRestart = vi.fn();
+    it("has no restart action — the terminal already relaunched fresh (#10823)", () => {
       render(
         <TerminalRestartStatusBanner
           variant={{ type: "session-resume-unavailable" }}
-          onRestart={onRestart}
+          onRestart={vi.fn()}
           onDismiss={vi.fn()}
         />
       );
-      const button = screen.getByRole("button", { name: /start new session/i });
-      fireEvent.click(button);
-      expect(onRestart).toHaveBeenCalledOnce();
+      expect(screen.queryByRole("button", { name: /start new session/i })).toBeNull();
+      expect(screen.queryByRole("button", { name: /restart session/i })).toBeNull();
+      // Dismiss is the only control.
+      expect(screen.getAllByRole("button")).toHaveLength(1);
     });
 
-    it("has no dismiss control — the banner is the recovery surface", () => {
+    it("has a dismiss control that calls onDismiss (#10823)", () => {
       const onDismiss = vi.fn();
       render(
         <TerminalRestartStatusBanner
@@ -166,7 +169,9 @@ describe("TerminalRestartStatusBanner", () => {
           onDismiss={onDismiss}
         />
       );
-      expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+      const button = screen.getByRole("button", { name: "Dismiss" });
+      fireEvent.click(button);
+      expect(onDismiss).toHaveBeenCalledOnce();
     });
   });
 });

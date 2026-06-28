@@ -175,6 +175,8 @@ export interface AgentPreset {
   inlineMode?: boolean;
   /** Optional brand color (CSS hex) used to tint the agent icon for this preset */
   color?: string;
+  /** Optional free-form panel/button title; falls back to `name` when unset */
+  displayTitle?: string;
   /**
    * Ordered list of preset IDs to try when this preset's provider becomes
    * unavailable (connection errors, hard auth failures). Each entry must be
@@ -298,8 +300,11 @@ export interface AssistantSupports {
    * - `"project-config"`: written to per-session config files (e.g. Claude's
    *   `.mcp.json` plus `.claude/settings.json` overlay).
    * - `"cli-flags"`: passed as `-c key=value` flags at spawn time (e.g. Codex).
+   * - `"env-only"`: connection details are passed purely through PTY env vars
+   *   the agent reads itself (`DAINTREE_MCP_URL`, `DAINTREE_MCP_TOKEN`, …) —
+   *   no config file written, no CLI flags (e.g. Daintree Assistant).
    */
-  mcpInjection: "project-config" | "cli-flags";
+  mcpInjection: "project-config" | "cli-flags" | "env-only";
   /**
    * Whether the agent reads a session-dir settings overlay that bakes in
    * permissions / project-MCP trust (e.g. Claude's `.claude/settings.json`
@@ -558,6 +563,7 @@ import { config as kimiConfig } from "./agents/kimi.js";
 import { config as interpreterConfig } from "./agents/interpreter.js";
 import { config as mistralConfig } from "./agents/mistral.js";
 import { config as kiroConfig } from "./agents/kiro.js";
+import { config as daintreeAssistantConfig } from "./agents/daintree-assistant.js";
 
 // Built-in agent registry. Per-agent configs live in `./agents/<id>.ts`
 // (mirroring `src/services/actions/definitions/`). When adding a new agent,
@@ -605,6 +611,7 @@ export const AGENT_REGISTRY: Record<BuiltInAgentId, AgentConfig> = {
   interpreter: interpreterConfig,
   mistral: mistralConfig,
   kiro: kiroConfig,
+  "daintree-assistant": daintreeAssistantConfig,
 };
 
 export function getAgentIds(): string[] {

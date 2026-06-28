@@ -2,7 +2,6 @@ import { broadcastToRenderer } from "../../ipc/utils.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getPluginPanelKinds } from "../../../shared/config/panelKindRegistry.js";
 import { getAllPluginToolbarButtonConfigs } from "../../../shared/config/toolbarButtonRegistry.js";
-import { getPluginMenuItems } from "../pluginMenuRegistry.js";
 import { getPluginKeybindings } from "../pluginKeybindingRegistry.js";
 import { getPluginContextMenuItems } from "../pluginContextMenuRegistry.js";
 import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
@@ -19,9 +18,9 @@ interface PluginContributionBroadcasterDeps {
 
 /**
  * Owns the coalesced per-tick microtask broadcasts for actions, panel kinds,
- * toolbar buttons, menu items, keybindings, and context-menu items, plus the
- * cold-start {@link pushSnapshotTo} replay. Reads only the global registry
- * getters and emits via {@link broadcastToRenderer}.
+ * toolbar buttons, keybindings, and context-menu items, plus the cold-start
+ * {@link pushSnapshotTo} replay. Reads only the global registry getters and
+ * emits via {@link broadcastToRenderer}.
  */
 export class PluginContributionBroadcaster {
   private readonly deps: PluginContributionBroadcasterDeps;
@@ -48,31 +47,24 @@ export class PluginContributionBroadcaster {
    * partial/growing snapshot (concurrent load + deferred init) and must not.
    */
   private toolbarButtonsBroadcastComplete = false;
-  /**
-   * Same coalescing rationale as {@link toolbarButtonsBroadcastPending}. Menu
-   * items are mutated only from `loadPlugin()` / `unloadPlugin()`, so the two
-   * call sites invoke {@link scheduleMenuItemsBroadcast} directly.
-   */
-  private menuItemsBroadcastPending = false;
-  /** Mirrors {@link toolbarButtonsBroadcastComplete} for menu items. */
-  private menuItemsBroadcastComplete = false;
   private keybindingsBroadcastPending = false;
   private keybindingsBroadcastComplete = false;
   /**
-   * Same coalescing rationale as {@link menuItemsBroadcastPending}. Context-menu
-   * items are mutated only from `loadPlugin()` / `unloadPlugin()`, so the two
-   * call sites invoke {@link scheduleContextMenuItemsBroadcast} directly.
+   * Same coalescing rationale as {@link toolbarButtonsBroadcastPending}.
+   * Context-menu items are mutated only from `loadPlugin()` / `unloadPlugin()`,
+   * so the two call sites invoke {@link scheduleContextMenuItemsBroadcast}
+   * directly.
    */
   private contextMenuItemsBroadcastPending = false;
-  /** Mirrors {@link menuItemsBroadcastComplete} for context-menu items. */
+  /** Mirrors {@link toolbarButtonsBroadcastComplete} for context-menu items. */
   private contextMenuItemsBroadcastComplete = false;
   /**
-   * Same coalescing rationale as {@link menuItemsBroadcastPending}. Plugin
+   * Same coalescing rationale as {@link toolbarButtonsBroadcastPending}. Plugin
    * agents are mutated only from `loadPlugin()` / `unloadPlugin()`, so the two
    * call sites invoke {@link scheduleAgentsBroadcast} directly.
    */
   private agentsBroadcastPending = false;
-  /** Mirrors {@link menuItemsBroadcastComplete} for plugin agents. */
+  /** Mirrors {@link toolbarButtonsBroadcastComplete} for plugin agents. */
   private agentsBroadcastComplete = false;
 
   constructor(deps: PluginContributionBroadcasterDeps) {
@@ -149,31 +141,6 @@ export class PluginContributionBroadcaster {
     });
   }
 
-  /**
-   * Same shape as {@link scheduleToolbarButtonsBroadcast}; see that method for
-   * the coalescing and `complete`-OR-accumulation rationale.
-   */
-  scheduleMenuItemsBroadcast(complete: boolean): void {
-    if (this.deps.isDisposed()) return;
-    if (complete) this.menuItemsBroadcastComplete = true;
-    if (this.menuItemsBroadcastPending) return;
-    this.menuItemsBroadcastPending = true;
-    queueMicrotask(() => {
-      this.menuItemsBroadcastPending = false;
-      const drained = this.menuItemsBroadcastComplete;
-      this.menuItemsBroadcastComplete = false;
-      if (this.deps.isDisposed()) return;
-      this.broadcastPluginMenuItems(drained);
-    });
-  }
-
-  private broadcastPluginMenuItems(complete: boolean): void {
-    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
-      name: "plugin:menu-items-changed",
-      payload: { items: getPluginMenuItems(), complete },
-    });
-  }
-
   scheduleKeybindingsBroadcast(complete: boolean): void {
     if (this.deps.isDisposed()) return;
     if (complete) this.keybindingsBroadcastComplete = true;
@@ -192,8 +159,8 @@ export class PluginContributionBroadcaster {
   }
 
   /**
-   * Same shape as {@link scheduleMenuItemsBroadcast}; see that method for the
-   * coalescing and `complete`-OR-accumulation rationale.
+   * Same shape as {@link scheduleToolbarButtonsBroadcast}; see that method for
+   * the coalescing and `complete`-OR-accumulation rationale.
    */
   scheduleContextMenuItemsBroadcast(complete: boolean): void {
     if (this.deps.isDisposed()) return;
@@ -217,8 +184,8 @@ export class PluginContributionBroadcaster {
   }
 
   /**
-   * Same shape as {@link scheduleMenuItemsBroadcast}; see that method for the
-   * coalescing and `complete`-OR-accumulation rationale. Plugin agents are
+   * Same shape as {@link scheduleToolbarButtonsBroadcast}; see that method for
+   * the coalescing and `complete`-OR-accumulation rationale. Plugin agents are
    * mutated only from `loadPlugin()` / `unloadPlugin()`.
    */
   scheduleAgentsBroadcast(complete: boolean): void {
@@ -272,10 +239,6 @@ export class PluginContributionBroadcaster {
       {
         name: "plugin:toolbar-buttons-changed",
         payload: { buttons: getAllPluginToolbarButtonConfigs(), complete: false },
-      },
-      {
-        name: "plugin:menu-items-changed",
-        payload: { items: getPluginMenuItems(), complete: false },
       },
       {
         name: "plugin:keybindings-changed",

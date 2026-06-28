@@ -52,6 +52,7 @@ vi.mock("../../utils.js", () => utilsMock);
 
 const mcpServiceMock = vi.hoisted(() => ({
   getHelpSessionLiveStatus: vi.fn(),
+  pruneAuditByRetention: vi.fn(),
 }));
 
 vi.mock("../../../services/McpServerService.js", () => ({ mcpServerService: mcpServiceMock }));
@@ -81,8 +82,10 @@ describe("registerHelpAssistantHandlers", () => {
       tier: "action",
       bypassPermissions: false,
       auditRetention: 7,
+      modelId: "",
       customArgs: "",
       idleHibernateMinutes: 30,
+      debugLogging: false,
     });
   });
 
@@ -102,8 +105,10 @@ describe("registerHelpAssistantHandlers", () => {
       tier: "system",
       bypassPermissions: true,
       auditRetention: 30,
+      modelId: "",
       customArgs: "",
       idleHibernateMinutes: 30,
+      debugLogging: false,
     });
   });
 
@@ -163,6 +168,27 @@ describe("registerHelpAssistantHandlers", () => {
     expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.docSearch", false);
     expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.bypassPermissions", true);
     expect(storeMock.set).toHaveBeenCalledTimes(2);
+  });
+
+  it("persists debugLogging and rejects a non-boolean value", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { debugLogging: true });
+    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.debugLogging", true);
+
+    storeMock.set.mockClear();
+    await handler(null, { debugLogging: "yes" as unknown as boolean });
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("returns a stored debugLogging=true over the default", async () => {
+    storeMock.get.mockReturnValue({ debugLogging: true });
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
+
+    const result = await handler(null);
+    expect(result).toMatchObject({ debugLogging: true });
   });
 
   it("persists tier when set to a valid value", async () => {
@@ -233,6 +259,49 @@ describe("registerHelpAssistantHandlers", () => {
     expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.auditRetention", 30);
   });
 
+  it("applies the new retention window to the MCP audit rings on a valid write (#10776)", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { auditRetention: 30 });
+    // Pruning is fired-and-forgotten after the await-import resolves — drain
+    // the microtask/timer queue before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mcpServiceMock.pruneAuditByRetention).toHaveBeenCalledWith(30);
+  });
+
+  it("forwards the Off value (0) to the audit rings so pruning is disabled (#10776)", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { auditRetention: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mcpServiceMock.pruneAuditByRetention).toHaveBeenCalledWith(0);
+  });
+
+  it("does not prune when the auditRetention value is rejected (#10776)", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { auditRetention: 90 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+    expect(mcpServiceMock.pruneAuditByRetention).not.toHaveBeenCalled();
+  });
+
+  it("does not prune when auditRetention is absent from the patch (#10776)", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { docSearch: false });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mcpServiceMock.pruneAuditByRetention).not.toHaveBeenCalled();
+  });
+
   it("rejects boolean fields that are not actually booleans", async () => {
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
@@ -274,8 +343,10 @@ describe("registerHelpAssistantHandlers", () => {
       tier: "action",
       bypassPermissions: false,
       auditRetention: 7,
+      modelId: "",
       customArgs: "",
       idleHibernateMinutes: 30,
+      debugLogging: false,
     });
   });
 
@@ -458,6 +529,125 @@ describe("registerHelpAssistantHandlers", () => {
 
     const result = await handler(null);
     expect(result).toMatchObject({ customArgs: "--model sonnet" });
+  });
+
+  it("persists a valid modelId", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { modelId: "claude-sonnet-4-6" });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith(
+      "helpAssistant.modelId",
+      "claude-sonnet-4-6"
+    );
+  });
+
+  it("persists an empty modelId so the user can clear back to the CLI default", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { modelId: "" });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelId", "");
+  });
+
+  it("trims surrounding whitespace from modelId", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { modelId: "  gpt-5.5  " });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelId", "gpt-5.5");
+  });
+
+  it("rejects a modelId with internal whitespace (not a single token)", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { modelId: "claude sonnet" });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("rejects a modelId with an internal tab rather than collapsing it", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    // A tab is a control char; stripping-before-checking would silently coerce
+    // this to "claudesonnet". It must be rejected as a non-single-token value.
+    await handler(null, { modelId: "claude\tsonnet" });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("accepts a modelId exactly at the 200-char cap unchanged", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    const exact = "m".repeat(200);
+    await handler(null, { modelId: exact });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelId", exact);
+  });
+
+  it("rejects a modelId that would inject a bare flag (leading dash)", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { modelId: "--dangerously-skip-permissions" });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("rejects a modelId containing shell metacharacters", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { modelId: "sonnet;rm -rf /" });
+    await handler(null, { modelId: "$(whoami)" });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("rejects a modelId that is not a string", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { modelId: 42 as unknown as string });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("caps modelId length at 200 characters", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, { modelId: "m".repeat(250) });
+
+    const call = storeMock.set.mock.calls[0];
+    expect(call?.[0]).toBe("helpAssistant.modelId");
+    expect((call?.[1] as string).length).toBe(200);
+  });
+
+  it("loads a valid stored modelId from the store", async () => {
+    storeMock.get.mockReturnValue({ modelId: "claude-opus-4-8" });
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
+
+    const result = await handler(null);
+    expect(result).toMatchObject({ modelId: "claude-opus-4-8" });
+  });
+
+  it("sanitizes a corrupted stored modelId back to the empty-string default", async () => {
+    storeMock.get.mockReturnValue({
+      modelId: "sonnet;rm -rf /" as unknown as string,
+    });
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
+
+    const result = await handler(null);
+    expect(result).toMatchObject({ modelId: "" });
   });
 });
 

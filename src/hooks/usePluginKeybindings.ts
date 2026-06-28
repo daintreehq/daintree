@@ -7,7 +7,7 @@ import type { PluginKeybindingDescriptor } from "@shared/types/plugin";
 /**
  * Registers plugin-contributed keybindings into the KeybindingService.
  *
- * Pattern: pull-on-mount + push-authoritative (mirrors usePluginMenuItems).
+ * Pattern: pull-on-mount + push-authoritative (mirrors usePluginToolbarButtons).
  *
  * - On mount, pulls current plugin keybindings via `plugin.keybindings()`.
  * - Subscribes to `onKeybindingsChanged` for authoritative push updates.

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { markAuditedHandlerFailure } from "../../../utils/pluginAuditMarker.js";
 
 const mockDispatchHandler = vi.fn();
 const mockListPlugins = vi.fn();
@@ -12,6 +13,7 @@ const mockCheckForUpdate = vi.fn();
 const mockListPluginActions = vi.fn();
 const mockRegisterPluginAction = vi.fn();
 const mockUnregisterPluginAction = vi.fn();
+const mockActivatePluginForView = vi.fn();
 
 vi.mock("../../../services/PluginService.js", () => ({
   pluginService: {
@@ -24,6 +26,7 @@ vi.mock("../../../services/PluginService.js", () => ({
     listPluginActions: (...args: unknown[]) => mockListPluginActions(...args),
     registerPluginAction: (...args: unknown[]) => mockRegisterPluginAction(...args),
     unregisterPluginAction: (...args: unknown[]) => mockUnregisterPluginAction(...args),
+    activatePluginForView: (...args: unknown[]) => mockActivatePluginForView(...args),
     // No-op for tests that don't care about implicit activation; the IPC
     // handler awaits it before resolving the impl set.
     activatePluginsForFileDecorationScope: vi.fn().mockResolvedValue(undefined),
@@ -63,8 +66,9 @@ vi.mock("../../../services/fileDecorationRegistry.js", () => ({
 }));
 
 const mockAuditAppend = vi.fn();
+const mockAuditClear = vi.fn();
 vi.mock("../../../services/PluginActionAuditService.js", () => ({
-  getPluginActionAuditService: () => ({ append: mockAuditAppend }),
+  getPluginActionAuditService: () => ({ append: mockAuditAppend, clear: mockAuditClear }),
 }));
 
 const mockIpcMainHandle = vi.fn();
@@ -90,6 +94,7 @@ vi.mock("electron", () => ({
 
 import { registerPluginHandlers } from "../plugin.js";
 import { _resetIpcGuardForTesting, markIpcSecurityReady } from "../../ipcGuard.js";
+import { PluginInvokeOwnershipError } from "../../../services/plugin/PluginInvokeErrors.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -111,7 +116,7 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(32);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(35);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:install", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:set-enabled", expect.any(Function));
@@ -128,7 +133,6 @@ describe("registerPluginHandlers", () => {
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:check-for-update", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:invoke", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:toolbar-buttons", expect.any(Function));
-    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:menu-items", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:keybindings", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith(
       "plugin:context-menu-items",
@@ -145,6 +149,10 @@ describe("registerPluginHandlers", () => {
       expect.any(Function)
     );
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:panel-kinds-get", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:activate-for-view",
+      expect.any(Function)
+    );
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:agents-get", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith(
       "plugin:forge-providers-get",
@@ -189,6 +197,9 @@ describe("registerPluginHandlers", () => {
       "plugin:settings-reveal-secret",
       expect.any(Function)
     );
+    // The renderer-side menu-items IPC surface was removed (#10465) — the native
+    // app menu is the wired surface. Guard against accidental re-introduction.
+    expect(mockIpcMainHandle).not.toHaveBeenCalledWith("plugin:menu-items", expect.any(Function));
   });
 
   it("throws before registering any handler when invoked before enforceIpcSenderValidation", () => {
@@ -206,7 +217,6 @@ describe("registerPluginHandlers", () => {
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:install-from-path");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:invoke");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:toolbar-buttons");
-    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:menu-items");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:validate-action-ids");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:actions-get");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:actions-register");
@@ -290,6 +300,22 @@ describe("registerPluginHandlers", () => {
     ) => unknown;
   }
 
+  it("PLUGIN_ACTIVATE_FOR_VIEW resolves on success and throws the cause on failure (#10618)", async () => {
+    const handler = getHandler("plugin:activate-for-view");
+
+    // Success: the handler resolves void (#6020 — IPC handlers return void on
+    // success rather than an { ok } envelope) so the renderer proceeds to import.
+    mockActivatePluginForView.mockResolvedValueOnce({ ok: true });
+    await expect(handler({}, "acme.demo.viewer")).resolves.toBeUndefined();
+    expect(mockActivatePluginForView).toHaveBeenCalledWith("acme.demo.viewer");
+
+    // Failure: the handler throws so the IPC call rejects and the renderer's
+    // PluginViewHost surfaces the real activation cause. The thrown message
+    // carries the underlying error text.
+    mockActivatePluginForView.mockResolvedValueOnce({ ok: false, error: "activate-boom" });
+    await expect(handler({}, "acme.demo.viewer")).rejects.toThrow(/activate-boom/);
+  });
+
   it("PLUGIN_INSTALL_FROM_FILE returns cancelled when the picker is dismissed", async () => {
     mockShowOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
     const handler = getHandler("plugin:install-from-file");
@@ -331,6 +357,66 @@ describe("registerPluginHandlers", () => {
       errors: [{ code: "archive_invalid", message: "Only .dntr files can be installed" }],
     });
     expect(mockInstallPlugin).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_PICK_PATH returns the chosen directory path", async () => {
+    mockShowOpenDialog.mockResolvedValue({ canceled: false, filePaths: ["/Users/x/notes"] });
+    const handler = getHandler("plugin:pick-path");
+    const result = await handler({ sender: { id: 1 } }, "acme.notes", { kind: "directory" });
+    expect(result).toBe("/Users/x/notes");
+    const opts = mockShowOpenDialog.mock.calls[0]![0] as { properties: string[] };
+    expect(opts.properties).toEqual(["openDirectory"]);
+  });
+
+  it("PLUGIN_PICK_PATH returns null when the picker is dismissed", async () => {
+    mockShowOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
+    const handler = getHandler("plugin:pick-path");
+    const result = await handler({ sender: { id: 1 } }, "acme.notes", { kind: "file" });
+    expect(result).toBeNull();
+  });
+
+  it("PLUGIN_PICK_PATH passes file filters and openFile for a file pick", async () => {
+    mockShowOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
+    const handler = getHandler("plugin:pick-path");
+    await handler({ sender: { id: 1 } }, "acme.notes", {
+      kind: "file",
+      filters: [{ name: "Docs", extensions: ["json", "md"] }],
+    });
+    const opts = mockShowOpenDialog.mock.calls[0]![0] as {
+      properties: string[];
+      filters: Array<{ extensions: string[] }>;
+    };
+    expect(opts.properties).toEqual(["openFile"]);
+    expect(opts.filters[0]!.extensions).toEqual(["json", "md"]);
+  });
+
+  it("PLUGIN_PICK_PATH rejects an invalid pluginId", async () => {
+    const handler = getHandler("plugin:pick-path");
+    await expect(
+      handler({ sender: { id: 1 } }, "not a scoped name", { kind: "directory" })
+    ).rejects.toThrow(/scoped plugin name/);
+    expect(mockShowOpenDialog).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_PATH_EXISTS resolves true for an existing path and false for a missing one", async () => {
+    const handler = getHandler("plugin:path-exists");
+    const present = join(tmpdir(), `plugin-path-exists-${process.pid}.tmp`);
+    await writeFile(present, "x");
+    try {
+      await expect(handler({ sender: { id: 1 } }, "acme.notes", present)).resolves.toBe(true);
+      await expect(
+        handler({ sender: { id: 1 } }, "acme.notes", join(tmpdir(), "definitely-missing-xyz"))
+      ).resolves.toBe(false);
+    } finally {
+      await rm(present, { force: true });
+    }
+  });
+
+  it("PLUGIN_PATH_EXISTS resolves false for a non-absolute path instead of throwing", async () => {
+    const handler = getHandler("plugin:path-exists");
+    await expect(handler({ sender: { id: 1 } }, "acme.notes", "relative/path")).resolves.toBe(
+      false
+    );
   });
 
   it("PLUGIN_INSTALL_FROM_URL rejects an empty URL without claiming not-implemented", async () => {
@@ -953,6 +1039,81 @@ describe("registerPluginHandlers", () => {
     expect(typeof record.durationMs).toBe("number");
   });
 
+  it("PLUGIN_INVOKE does not re-audit a failure already recorded at the dispatch boundary (#10463)", async () => {
+    // dispatchHandler now audits handler throws itself and marks the error.
+    // The outer handler must skip its own append to avoid a double record,
+    // while still rethrowing so the renderer sees the failure.
+    const marked = new Error("handler exploded");
+    markAuditedHandlerFailure(marked);
+    mockDispatchHandler.mockRejectedValue(marked);
+
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    const trustedEvent = {
+      senderFrame: { url: "app://daintree/" },
+      sender: { id: 1 },
+    };
+    await expect(invokeHandler(trustedEvent, "p", "ch", "arg1")).rejects.toBe(marked);
+    expect(mockAuditAppend).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INVOKE audits an ownership rejection as restricted with a forensic hash (#10462)", async () => {
+    // A trusted sender that targets an unloaded pluginId is a denied
+    // invocation, not a handler failure — it must be classified "restricted"
+    // (grouping with the untrusted-sender path) while still hashing the args,
+    // since the frame already passed the origin-trust check.
+    mockDispatchHandler.mockRejectedValue(
+      new PluginInvokeOwnershipError("acme.missing", "get-data")
+    );
+
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    const trustedEvent = {
+      senderFrame: { url: "app://daintree/" },
+      sender: { id: 5 },
+    };
+    await expect(invokeHandler(trustedEvent, "acme.missing", "get-data", "arg1")).rejects.toThrow(
+      'plugin:invoke rejected: plugin "acme.missing" is not loaded'
+    );
+    expect(mockAuditAppend).toHaveBeenCalledTimes(1);
+    const record = mockAuditAppend.mock.calls[0][0];
+    expect(record).toMatchObject({
+      pluginId: "acme.missing",
+      actionId: "get-data",
+      recordType: "ipc-invoke",
+      channel: "plugin:invoke",
+      result: "restricted",
+    });
+    // Sender was trusted, so unlike the untrusted-URL path the args ARE hashed.
+    expect(record.argsHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("PLUGIN_INVOKE keeps a genuine dispatch error classified as error, not restricted (#10462)", async () => {
+    // Regression guard: only ownership rejections become "restricted" — an
+    // ordinary handler failure for a loaded plugin must stay "error".
+    mockDispatchHandler.mockRejectedValue(new Error("handler exploded"));
+
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    const trustedEvent = {
+      senderFrame: { url: "app://daintree/" },
+      sender: { id: 6 },
+    };
+    await expect(invokeHandler(trustedEvent, "acme.loaded", "get-data", "arg1")).rejects.toThrow(
+      "handler exploded"
+    );
+    expect(mockAuditAppend.mock.calls[0][0]).toMatchObject({ result: "error" });
+  });
+
   it("PLUGIN_INVOKE audit hash discriminates by arg content (#9240)", async () => {
     // The whole point of the hash on `ipc-invoke` records is forensic
     // grouping: distinct args MUST produce distinct hashes, otherwise the
@@ -1095,6 +1256,43 @@ describe("registerPluginHandlers", () => {
     );
 
     expect(mockDispatchHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("PLUGIN_CLEAR_AUDIT_LOG clears the log for a trusted first-party sender", async () => {
+    const handler = getHandler("plugin:clear-audit-log");
+    await handler({ senderFrame: { url: "app://daintree/" }, sender: { id: 1 } });
+    expect(mockAuditClear).toHaveBeenCalledTimes(1);
+    // A trusted clear is the legitimate path — no restricted record is written.
+    expect(mockAuditAppend).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_CLEAR_AUDIT_LOG rejects an untrusted sender and leaves the log intact", async () => {
+    const handler = getHandler("plugin:clear-audit-log");
+    await expect(
+      handler({ senderFrame: { url: "https://evil.com/attack.html" }, sender: { id: 1 } })
+    ).rejects.toThrow("untrusted sender");
+    // The forensic trail must survive the rejected wipe...
+    expect(mockAuditClear).not.toHaveBeenCalled();
+    // ...and the attempt itself is recorded as a restricted ipc-invoke.
+    expect(mockAuditAppend).toHaveBeenCalledTimes(1);
+    const record = mockAuditAppend.mock.calls[0]![0];
+    expect(record).toMatchObject({
+      recordType: "ipc-invoke",
+      channel: "plugin:clear-audit-log",
+      result: "restricted",
+    });
+    expect(record.errorMessage).toContain("untrusted sender");
+    // The attacker-controlled URL is captured (capped) for forensics.
+    expect(record.errorMessage).toContain("evil.com");
+  });
+
+  it("PLUGIN_CLEAR_AUDIT_LOG rejects when senderFrame is missing and does not clear", async () => {
+    const handler = getHandler("plugin:clear-audit-log");
+    await expect(handler({ senderFrame: null, sender: { id: 1 } })).rejects.toThrow(
+      "untrusted sender"
+    );
+    expect(mockAuditClear).not.toHaveBeenCalled();
+    expect(mockAuditAppend).toHaveBeenCalledTimes(1);
   });
 });
 

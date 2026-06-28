@@ -181,7 +181,9 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           DEBUG: electron-builder,electron-notarize*,electron-osx-sign*
+          NODE_OPTIONS: "--max-old-space-size=6144"
           npm_config_build_from_source: "true"
+          DAINTREE_SKIP_NOTARIZATION: ${{ inputs.skip_notarization && 'true' || 'false' }}
         run: |
           npm run build
           # Hard security gate (#9148) — fail before packaging if any E2E

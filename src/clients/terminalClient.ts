@@ -55,34 +55,6 @@ const tierChangedCallbacks = new Set<(id: string, tier: "active" | "background")
 // `onStatus` subscribers as the IPC path. No ACK, no byte accounting — pulses.
 const terminalStatusCallbacks = new Set<(data: TerminalStatusPayload) => void>();
 
-// Wake requests ride the per-window port so the serialized snapshot crosses
-// one process boundary (host → renderer) instead of being structured-cloned
-// twice through Main. Correlated by requestId; rejected entries fall back to
-// the IPC wake in `terminalClient.wake`.
-interface WakeResponse {
-  state: string | null;
-  warnings?: string[];
-  /** Port path only: buffer unchanged since this pane's last faithful sync. */
-  noChange?: boolean;
-}
-const pendingPortWakes = new Map<
-  string,
-  { resolve: (r: WakeResponse) => void; reject: (e: Error) => void; timeoutId: number }
->();
-let wakeRequestCounter = 0;
-// Generous bound — the host always answers a wake (even a failed serialize
-// responds with a null state), so this only fires when the host or port is
-// gone without a close event.
-const WAKE_PORT_TIMEOUT_MS = 15_000;
-
-function rejectPendingPortWakes(reason: string): void {
-  for (const pending of pendingPortWakes.values()) {
-    window.clearTimeout(pending.timeoutId);
-    pending.reject(new Error(reason));
-  }
-  pendingPortWakes.clear();
-}
-
 // Sampled keystroke→echo probe (DAINTREE_PERF_CAPTURE only): ~1/32 port
 // writes stamp performance.now(); the next port data chunk for the same
 // terminal closes the pair as INPUT_ECHO_LATENCY. Pairs older than 250ms are
@@ -119,19 +91,6 @@ function installPortDataHandler(port: MessagePort): void {
       // Host-pushed tier reconciliation — no ACK, no byte accounting.
       for (const cb of tierChangedCallbacks) {
         cb(msg.id, msg.tier);
-      }
-      return;
-    }
-    if (msg?.type === "wake-result" && typeof msg.requestId === "string") {
-      const pending = pendingPortWakes.get(msg.requestId);
-      if (pending) {
-        pendingPortWakes.delete(msg.requestId);
-        window.clearTimeout(pending.timeoutId);
-        pending.resolve({
-          state: msg.state ?? null,
-          warnings: msg.warnings,
-          noChange: msg.noChange === true,
-        });
       }
       return;
     }
@@ -199,9 +158,6 @@ function installPortDataHandler(port: MessagePort): void {
 
 function activatePort(port: MessagePort): void {
   if (messagePort) {
-    // Closing our own end won't fire this side's close listener — settle
-    // in-flight wakes now so they fall back to the IPC path.
-    rejectPendingPortWakes("port replaced");
     messagePort.close();
   }
   messagePort = port;
@@ -209,7 +165,6 @@ function activatePort(port: MessagePort): void {
   port.addEventListener("close", () => {
     if (messagePort === port) {
       messagePort = null;
-      rejectPendingPortWakes("port closed");
     }
   });
   port.start();
@@ -485,48 +440,6 @@ export const terminalClient = {
   },
 
   /**
-   * Request a wake snapshot. Prefers the per-window MessagePort (the host
-   * serializes and answers on the same port, skipping both Main-process
-   * structured clones of the scrollback); falls back to the IPC invoke when
-   * the port is missing or fails mid-flight. `canSkipUnchanged` asserts the
-   * caller's pane currently reflects its last applied snapshot plus every
-   * port chunk received since, letting the host answer `noChange` instead of
-   * serializing when nothing mutated the buffer. Port path only — the IPC
-   * fallback always serializes.
-   */
-  wake: async (id: string, opts?: { canSkipUnchanged?: boolean }): Promise<WakeResponse> => {
-    const port = messagePort;
-    if (port) {
-      try {
-        return await new Promise<WakeResponse>((resolve, reject) => {
-          const requestId = `wake-${++wakeRequestCounter}`;
-          const timeoutId = window.setTimeout(() => {
-            pendingPortWakes.delete(requestId);
-            reject(new Error("wake-result timeout"));
-          }, WAKE_PORT_TIMEOUT_MS);
-          pendingPortWakes.set(requestId, { resolve, reject, timeoutId });
-          try {
-            port.postMessage({
-              type: "wake",
-              id,
-              requestId,
-              canSkipUnchanged: opts?.canSkipUnchanged === true,
-            });
-          } catch (error) {
-            pendingPortWakes.delete(requestId);
-            window.clearTimeout(timeoutId);
-            if (messagePort === port) messagePort = null;
-            reject(error instanceof Error ? error : new Error(String(error)));
-          }
-        });
-      } catch (error) {
-        logWarn("[TerminalClient] MessagePort wake failed, falling back to IPC", { error });
-      }
-    }
-    return window.electron.terminal.wake(id);
-  },
-
-  /**
    * Acknowledge processed data bytes to the backend (Flow Control — IPC path).
    */
   acknowledgeData: (id: string, length: number): void => {
@@ -568,13 +481,13 @@ export const terminalClient = {
 
   /**
    * Drain the entire pending port-ack FIFO for a terminal as one batched ack.
-   * Called when held ingest bytes are discarded without ever reaching xterm
-   * (hibernation reset, post-replay discard on wake) — the pty-host's
-   * queuedBytes ledger still counts them, so dropping the queue without
-   * acking leaves a permanent deficit that degrades every backpressure pause
-   * to the 10s safety timeout (#9910). The FIFO entry is always deleted, even
-   * when the port is gone or postMessage throws: stale entries would be
-   * re-summed into phantom acks on the next discard.
+   * Called when a queued port chunk is dropped without ever reaching xterm
+   * (renderer-side destroy without a prior kill — project close, LRU
+   * eviction) — the pty-host's queuedBytes ledger still counts them, so
+   * dropping the queue without acking leaves a permanent deficit that degrades
+   * every backpressure pause to the 10s safety timeout (#9910). The FIFO entry
+   * is always deleted, even when the port is gone or postMessage throws: stale
+   * entries would be re-summed into phantom acks on the next discard.
    */
   discardPortAcks: (id: string): void => {
     const queue = pendingPortAckBytes.get(id);

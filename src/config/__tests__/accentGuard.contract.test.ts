@@ -130,6 +130,9 @@ const DURABLE_ALLOWLIST = new Set([
   // ProjectSwitcherPalette selected-row left-edge accent stripe (single primary anchor per active focus region)
   "src/components/Project/ProjectSwitcherPalette.tsx",
 
+  // PluginQuickPickDialog selected-row left-edge accent stripe (single primary anchor per active focus region)
+  "src/components/Plugin/PluginQuickPickDialog.tsx",
+
   // PluginManagerView selected-row left-edge accent stripe in the master-detail
   // list, plus the detail subtab active-tab underline (single primary anchor per
   // active focus region)

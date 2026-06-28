@@ -13,7 +13,31 @@ const NETWORK_FAILURE_JITTER_MS = 30_000;
 const REPO_NOT_FOUND_FIRST_FETCH_TTL_MS = 5 * 60_000;
 const TRANSIENT_FAILURE_TTL_MS = 60_000;
 const TRANSIENT_FAILURE_JITTER_MS = 30_000;
-const AUTH_FAILURE_TTL_MS = Number.POSITIVE_INFINITY;
+
+/**
+ * Exponential backoff windows applied to auth-class fetch failures, indexed by
+ * consecutive failure count (clamped to the last entry once exhausted). A bad
+ * token or revoked credential resolves on its own only when the user re-auths,
+ * but a transient credential-helper hiccup or a one-off 401 clears by itself —
+ * so we auto-retry on a widening schedule instead of suspending the repo's
+ * fetch forever. Hourly steady state stays well clear of GitHub's secondary
+ * rate-limit ceiling.
+ */
+const AUTH_FAILURE_BACKOFF_SCHEDULE_MS = [5 * 60_000, 15 * 60_000, 30 * 60_000, 60 * 60_000];
+/**
+ * Consecutive auth failures before the failure is treated as confirmed. Until
+ * then the per-card "Forge authentication failed" stripe stays suppressed (the
+ * card shows the softer transient state) so a single blip doesn't alarm every
+ * worktree. The first three failures span ~20min (5+15) before escalation.
+ */
+const AUTH_FAILURE_CONFIRM_RETRIES = 3;
+/**
+ * Backoff window for forge secondary-rate-limit failures. Long on purpose —
+ * retrying soon extends the limit window — but finite, so fetching resumes
+ * automatically once the throttle clears.
+ */
+const RATE_LIMIT_FAILURE_TTL_MS = 45 * 60_000;
+const RATE_LIMIT_FAILURE_JITTER_MS = 15 * 60_000;
 
 /** Failure categories with distinct retry semantics. */
 type FetchFailureKind = "auth" | "network" | "repo-not-found-first" | "transient";
@@ -22,6 +46,18 @@ interface FetchFailureEntry {
   kind: FetchFailureKind;
   reason: GitOperationReason;
   retryAt: number;
+  /**
+   * Consecutive auth-class failures observed for this repo. Drives the backoff
+   * schedule and the confirmation threshold. Only set on `kind: "auth"` entries;
+   * reset to undefined when a fetch succeeds (the entry is cleared).
+   */
+  authRetryCount?: number;
+  /**
+   * True once an auth-class failure has persisted past
+   * `AUTH_FAILURE_CONFIRM_RETRIES`. Gates the per-card auth stripe and the
+   * one-shot escalation callback. Only meaningful on `kind: "auth"` entries.
+   */
+  confirmed?: boolean;
 }
 
 interface RepoState {
@@ -35,6 +71,14 @@ interface RepoState {
 
 export interface RepoFetchCoordinatorCallbacks {
   onFetchSuccess?: (worktreeId: string) => void;
+  /**
+   * Fired once per repo when an auth-class fetch failure persists past
+   * `AUTH_FAILURE_CONFIRM_RETRIES` — i.e. the credential is genuinely broken,
+   * not a transient blip. Used to surface a single escalation toast instead of
+   * the per-card stripe. Fires only on the unconfirmed→confirmed transition;
+   * `clearAuthFailures()` resets the state so a later re-confirmation re-fires.
+   */
+  onAuthFailureConfirmed?: (commonDir: string, reason: GitOperationReason) => void;
 }
 
 export interface FetchOptions {
@@ -85,10 +129,18 @@ export interface FetchResult {
  *   - `git fetch` has no native timeout. A stalled connection can sit forever
  *     even with the lowSpeedLimit/lowSpeedTime config. Solution: an
  *     AbortController armed with a 60s timeout per fetch.
- *   - Auth failures must NOT auto-retry — repeated bad-token attempts trigger
- *     GitHub secondary rate limits. Solution: indefinite suspension cleared
- *     only by `clearAuthFailures()` (called when the user signs in / rotates
- *     a token).
+ *   - Auth failures auto-retry on a widening exponential backoff
+ *     (`AUTH_FAILURE_BACKOFF_SCHEDULE_MS`) rather than suspending forever — a
+ *     transient 401/credential-helper blip recovers on its own, and a genuinely
+ *     broken token still gets retried hourly. The per-card auth stripe stays
+ *     suppressed until the failure is `confirmed` (past
+ *     `AUTH_FAILURE_CONFIRM_RETRIES`), at which point `onAuthFailureConfirmed`
+ *     fires once so the renderer can show a single escalation toast.
+ *     `clearAuthFailures()` (user sign-in / token rotation / manual retry)
+ *     drops the suspension immediately.
+ *   - Forge secondary rate limits (HTTP 403 with a `secondary rate limit`
+ *     sideband) are classified separately from auth failures and backed off on
+ *     a long but finite window so fetching resumes once the throttle clears.
  *   - Network blips and "repository-not-found-on-first-fetch" should retry
  *     after a short window. After at least one prior success, a 404 is more
  *     likely a permission revocation masked as 404 (GitHub does this) — treat
@@ -126,30 +178,12 @@ export class RepoFetchCoordinator {
 
     const state = this.getOrCreateState(commonDir);
 
-    if (!opts.force && state.failure) {
-      const failure = state.failure;
-      if (failure.kind === "auth") {
-        return {
-          status: "skipped",
-          skipReason: "auth-suspended",
-          reason: failure.reason,
-          lastFetchedAt: state.lastSuccessfulFetch,
-          authFailed: true,
-          networkFailed: false,
-        };
-      }
-      if (Date.now() < failure.retryAt) {
-        return {
-          status: "skipped",
-          skipReason: "in-failure-window",
-          reason: failure.reason,
-          lastFetchedAt: state.lastSuccessfulFetch,
-          authFailed: false,
-          // Skipping inside the retry window means a transient failure is
-          // still cached — keep the "Couldn't reach origin" tooltip up.
-          networkFailed: true,
-        };
-      }
+    if (!opts.force) {
+      const skip = this.failureSkipResult(state);
+      // Inside the backoff window we skip; once it elapses, fall through and
+      // re-attempt. Auth-class failures auto-retry on a widening schedule
+      // rather than suspending the repo's fetch indefinitely.
+      if (skip) return skip;
     }
 
     const recent = this.recentSuccessResult(state, opts.force === true);
@@ -245,6 +279,31 @@ export class RepoFetchCoordinator {
     };
   }
 
+  /**
+   * Skip result for a repo still inside its failure backoff window — `null`
+   * once the window elapses (so the caller re-attempts the fetch). Shared by
+   * the pre-queue check and the post-chain re-check so a burst of sibling
+   * fetches that all queue before the first failure lands still collapses to a
+   * single git invocation once that failure is cached.
+   */
+  private failureSkipResult(state: RepoState): FetchResult | null {
+    const failure = state.failure;
+    if (!failure || Date.now() >= failure.retryAt) return null;
+    const isAuth = failure.kind === "auth";
+    return {
+      status: "skipped",
+      skipReason: isAuth ? "auth-suspended" : "in-failure-window",
+      reason: failure.reason,
+      lastFetchedAt: state.lastSuccessfulFetch,
+      // Only surface the per-card auth stripe once the failure is confirmed
+      // (several retries exhausted). Pre-confirmation auth failures show the
+      // softer transient "Couldn't reach origin" tooltip instead, so a single
+      // blip doesn't alarm every worktree card.
+      authFailed: isAuth && failure.confirmed === true,
+      networkFailed: isAuth ? failure.confirmed !== true : true,
+    };
+  }
+
   private getOrCreateState(commonDir: string): RepoState {
     let state = this.states.get(commonDir);
     if (!state) {
@@ -274,6 +333,14 @@ export class RepoFetchCoordinator {
     const recent = this.recentSuccessResult(stateAtStart, opts.force === true);
     if (recent) {
       return recent;
+    }
+    // Same dedup for failures: once the first sibling in a burst caches a
+    // failure, the rest skip instead of each spawning another git fetch (and
+    // re-incrementing the auth retry count). Force fetches still bypass this —
+    // their same-window failures are coalesced in `buildAuthFailureEntry`.
+    if (opts.force !== true) {
+      const skip = this.failureSkipResult(stateAtStart);
+      if (skip) return skip;
     }
 
     const controller = new AbortController();
@@ -308,16 +375,18 @@ export class RepoFetchCoordinator {
       if (!state || state.generation !== generationAtStart) {
         return { status: "skipped", skipReason: "stale-generation" };
       }
-      state.failure = this.classifyForCache(reason, state.lastSuccessfulFetch, error);
-      const isAuth = state.failure.kind === "auth";
+      state.failure = this.classifyForCache(reason, commonDir, state, error);
+      const failure = state.failure;
+      const isAuth = failure.kind === "auth";
       return {
         status: "failed",
         reason,
         lastFetchedAt: state.lastSuccessfulFetch,
-        authFailed: isAuth,
-        // Auth-class failures use `authFailed`; everything else surfaces as
-        // a transient "Couldn't reach origin" tooltip line.
-        networkFailed: !isAuth,
+        // Auth-class failures only raise the per-card stripe once confirmed;
+        // until then (and for every non-auth failure) the softer transient
+        // "Couldn't reach origin" tooltip line carries the signal.
+        authFailed: isAuth && failure.confirmed === true,
+        networkFailed: isAuth ? failure.confirmed !== true : true,
       };
     } finally {
       clearTimeout(timeout);
@@ -335,24 +404,36 @@ export class RepoFetchCoordinator {
 
   private classifyForCache(
     reason: GitOperationReason,
-    lastSuccessfulFetch: number | null,
+    commonDir: string,
+    state: RepoState,
     error: unknown
   ): FetchFailureEntry {
     const now = Date.now();
     if (reason === "auth-failed") {
-      return { kind: "auth", reason, retryAt: now + AUTH_FAILURE_TTL_MS };
+      return this.buildAuthFailureEntry(reason, commonDir, state, now);
     }
     if (reason === "repository-not-found") {
       // After at least one prior success, a 404 from origin almost always
-      // indicates GitHub's "404 instead of 403" permission masking. Treat as
-      // auth-failed so we don't hammer with retries.
-      if (lastSuccessfulFetch !== null) {
-        return { kind: "auth", reason, retryAt: now + AUTH_FAILURE_TTL_MS };
+      // indicates GitHub's "404 instead of 403" permission masking. Treat it
+      // on the same auth backoff/confirmation path so we don't hammer retries.
+      if (state.lastSuccessfulFetch !== null) {
+        return this.buildAuthFailureEntry(reason, commonDir, state, now);
       }
       return {
         kind: "repo-not-found-first",
         reason,
         retryAt: now + REPO_NOT_FOUND_FIRST_FETCH_TTL_MS,
+      };
+    }
+    if (reason === "rate-limited") {
+      // Forge secondary rate limits clear on their own; back off a long while
+      // (not the short network window) so retrying doesn't extend the limit.
+      // Bucketed as "transient" so OS-wake / reconnect `clearNetworkFailures()`
+      // also drops it — a fresh session shouldn't stay throttled.
+      return {
+        kind: "transient",
+        reason,
+        retryAt: now + RATE_LIMIT_FAILURE_TTL_MS + Math.random() * RATE_LIMIT_FAILURE_JITTER_MS,
       };
     }
     if (reason === "network-unavailable") {
@@ -378,6 +459,51 @@ export class RepoFetchCoordinator {
       kind: "transient",
       reason,
       retryAt: now + Math.random() * window,
+    };
+  }
+
+  /**
+   * Build (or advance) the auth-class failure entry. Increments the consecutive
+   * retry count off the prior auth entry, schedules the next attempt on the
+   * exponential backoff ladder, and marks the failure `confirmed` once it
+   * persists past the threshold — firing `onAuthFailureConfirmed` exactly once
+   * on the unconfirmed→confirmed transition.
+   */
+  private buildAuthFailureEntry(
+    reason: GitOperationReason,
+    commonDir: string,
+    state: RepoState,
+    now: number
+  ): FetchFailureEntry {
+    const prior = state.failure?.kind === "auth" ? state.failure : null;
+    // A failure observed while the prior backoff window is still open belongs
+    // to the SAME retry round — concurrent sibling fetches and force-retries
+    // (which bypass the failure-cache skip) all land here within milliseconds.
+    // Counting each would confirm the failure on a single burst instead of
+    // across retries over time, re-alarming every card. Keep the prior entry
+    // unchanged so the count only advances once per elapsed backoff window.
+    if (prior && now < prior.retryAt) {
+      return prior;
+    }
+    const authRetryCount = (prior?.authRetryCount ?? 0) + 1;
+    const stepIndex = Math.min(authRetryCount - 1, AUTH_FAILURE_BACKOFF_SCHEDULE_MS.length - 1);
+    const confirmed = authRetryCount >= AUTH_FAILURE_CONFIRM_RETRIES;
+    const wasConfirmed = prior?.confirmed === true;
+    if (confirmed && !wasConfirmed) {
+      // Notify on the transition only. Wrapped defensively — a throwing
+      // observer must not abort building the failure entry below.
+      try {
+        this.callbacks.onAuthFailureConfirmed?.(commonDir, reason);
+      } catch {
+        // Observer threw — swallow; the failure cache must stay consistent.
+      }
+    }
+    return {
+      kind: "auth",
+      reason,
+      retryAt: now + AUTH_FAILURE_BACKOFF_SCHEDULE_MS[stepIndex],
+      authRetryCount,
+      confirmed,
     };
   }
 

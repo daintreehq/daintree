@@ -17,56 +17,26 @@ describe("Agent Classification Matrix", () => {
   });
 
   describe("Agent terminals should be classified correctly", () => {
-    it("should enable analysis for terminal launched with launchAgentId", async () => {
-      const id = randomUUID();
-      manager.spawn(id, {
-        cwd: process.cwd(),
-        cols: 80,
-        rows: 24,
-        launchAgentId: "claude",
-      });
+    it.each(["claude", "gemini", "codex"] as const)(
+      "should enable analysis for terminal launched with launchAgentId=%s",
+      async (launchAgentId) => {
+        const id = randomUUID();
+        manager.spawn(id, {
+          cwd: process.cwd(),
+          cols: 80,
+          rows: 24,
+          launchAgentId,
+        });
 
-      await sleep(100);
+        await sleep(100);
 
-      const terminal = manager.getTerminal(id);
-      expect(terminal).toBeDefined();
-      expect(terminal?.analysisEnabled).toBe(true);
-      expect(terminal?.agentState).toBeDefined();
-    }, 10000);
-
-    it("should enable analysis for terminal launched with launchAgentId=gemini", async () => {
-      const id = randomUUID();
-      manager.spawn(id, {
-        cwd: process.cwd(),
-        cols: 80,
-        rows: 24,
-        launchAgentId: "gemini",
-      });
-
-      await sleep(100);
-
-      const terminal = manager.getTerminal(id);
-      expect(terminal).toBeDefined();
-      expect(terminal?.analysisEnabled).toBe(true);
-      expect(terminal?.agentState).toBeDefined();
-    }, 10000);
-
-    it("should enable analysis for terminal launched with launchAgentId=codex", async () => {
-      const id = randomUUID();
-      manager.spawn(id, {
-        cwd: process.cwd(),
-        cols: 80,
-        rows: 24,
-        launchAgentId: "codex",
-      });
-
-      await sleep(100);
-
-      const terminal = manager.getTerminal(id);
-      expect(terminal).toBeDefined();
-      expect(terminal?.analysisEnabled).toBe(true);
-      expect(terminal?.agentState).toBeDefined();
-    }, 10000);
+        const terminal = manager.getTerminal(id);
+        expect(terminal).toBeDefined();
+        expect(terminal?.analysisEnabled).toBe(true);
+        expect(terminal?.agentState).toBeDefined();
+      },
+      10000
+    );
   });
 
   describe("Shell terminals should NOT be classified as agents", () => {

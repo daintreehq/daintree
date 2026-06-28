@@ -36,7 +36,6 @@ import {
   Mic,
   MicOff,
   Minimize2,
-  Moon,
   OctagonX,
   PanelBottomClose,
   PanelTopClose,
@@ -379,13 +378,6 @@ export function TerminalContextMenu({
         case "background":
           void actionService.dispatch(
             "terminal.background",
-            { terminalId },
-            { source: sourceRef.current }
-          );
-          break;
-        case "hibernate":
-          void actionService.dispatch(
-            "terminal.hibernate",
             { terminalId },
             { source: sourceRef.current }
           );
@@ -879,15 +871,6 @@ export function TerminalContextMenu({
             <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
             Send to background
           </ContextMenuItem>
-          {hasPty && (
-            <ContextMenuItem
-              disabled={isHibernated || terminalHasRunningAgentSession(terminal)}
-              onSelect={() => handleAction("hibernate")}
-            >
-              <Moon className={ICON_CLASS} aria-hidden="true" />
-              Sleep terminal
-            </ContextMenuItem>
-          )}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("trash")}>
             <Trash2 className={ICON_CLASS} aria-hidden="true" />

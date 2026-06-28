@@ -5,6 +5,7 @@ import reactCompiler from "eslint-plugin-react-compiler";
 import unicorn from "eslint-plugin-unicorn";
 import prettier from "eslint-config-prettier";
 import structuredTestSkipAnnotations from "./scripts/eslint-rules/structured-test-skip-annotations.js";
+import iconOpacityDimming from "./scripts/eslint-rules/icon-opacity-dimming.js";
 
 export default tseslint.config(
   // Base JS recommended rules
@@ -1097,6 +1098,21 @@ export default tseslint.config(
     },
   },
 
+  // Icon dimming — icons must use a solid theme token (text-text-muted), never
+  // opacity-* utilities or grayscale, which composite differently on each theme
+  // background. Scoped to icon elements only. See #10458.
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    plugins: {
+      "icon-opacity-dimming": {
+        rules: { "no-icon-opacity-dimming": iconOpacityDimming },
+      },
+    },
+    rules: {
+      "icon-opacity-dimming/no-icon-opacity-dimming": "error",
+    },
+  },
+
   // Prettier must be last to override conflicting rules
   prettier,
 
@@ -1125,6 +1141,11 @@ export default tseslint.config(
       // and binding.gyp aren't part of the TypeScript build graph; they're
       // packaged build infrastructure (analogous to scripts/).
       "electron/native/**",
+      // Sample plugin view assets are hand-authored, browser-ready ESM served
+      // verbatim over `plugin://` (bare `react` resolved via the host import
+      // map). They're test fixtures, not part of the TS build graph — like
+      // packages/*/dist (#10512).
+      "plugins/sample/*/view/**",
     ],
   }
 );

@@ -193,18 +193,71 @@ export function registerWorktreeContextActions(
   actions.set("worktree.compareDiff", () =>
     defineAction({
       id: "worktree.compareDiff",
-      title: "Compare Worktrees",
-      description: "Open cross-worktree diff comparison to review changes between two branches",
+      title: "Compare Worktree Diff",
+      description:
+        "Compare two worktrees and return the list of files that differ between their branches. Args: `worktreeId` (optional — the left/base side; defaults to the focused or active worktree), `compareToWorktreeId` (required — the right side to compare against), `useMergeBase` (optional — three-dot/PR-accurate range), `ignoreWhitespace` (optional). Returns { branch1, branch2, files } where each file has path, oldPath?, status, insertions, deletions. Read-only; does not open any UI. For a single file's full diff, call `git.getFileDiff` afterwards.",
       category: "worktree",
-      kind: "command",
+      kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
+      argsSchema: z.object({
+        worktreeId: z.string().optional(),
+        compareToWorktreeId: z.string(),
+        useMergeBase: z.boolean().optional(),
+        ignoreWhitespace: z.boolean().optional(),
+      }),
+      resultSchema: z.object({
+        branch1: z.string(),
+        branch2: z.string(),
+        files: z.array(
+          z.object({
+            path: z.string(),
+            oldPath: z.string().optional(),
+            status: z.string(),
+            insertions: z.number().nullable(),
+            deletions: z.number().nullable(),
+          })
+        ),
+      }),
+      mcpOutputSchema: true,
+      mcpAnnotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
       run: async (args, ctx: ActionContext) => {
-        const worktreeId = args?.worktreeId;
-        const targetWorktreeId =
-          worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId ?? null;
-        useWorktreeSelectionStore.getState().openCrossWorktreeDiff(targetWorktreeId);
+        const leftId = args.worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId ?? null;
+        if (!leftId) {
+          throw new Error(
+            "No base worktree to compare from. Pass `worktreeId` or focus a worktree first."
+          );
+        }
+        const rightId = args.compareToWorktreeId;
+
+        const worktrees = getCurrentViewStore().getState().worktrees;
+        const left = worktrees.get(leftId);
+        if (!left) {
+          throw new Error(`Worktree not found: ${leftId}`);
+        }
+        const right = worktrees.get(rightId);
+        if (!right) {
+          throw new Error(`Worktree not found: ${rightId}`);
+        }
+        if (!left.branch) {
+          throw new Error(`Worktree '${leftId}' has no branch (detached HEAD); cannot compare.`);
+        }
+        if (!right.branch) {
+          throw new Error(`Worktree '${rightId}' has no branch (detached HEAD); cannot compare.`);
+        }
+
+        const res = await window.electron.git.compareWorktrees(
+          left.path,
+          left.branch,
+          right.branch,
+          undefined,
+          args.useMergeBase,
+          args.ignoreWhitespace
+        );
+        if (typeof res === "string") {
+          throw new Error("Unexpected diff string from worktree comparison; expected a file list.");
+        }
+        return res;
       },
     })
   );

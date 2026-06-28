@@ -19,7 +19,9 @@ import {
   getUiAnimationDuration,
   getUiTransitionDuration,
   PANEL_MINIMIZE_DURATION,
+  PANEL_MINIMIZE_EASING,
   PANEL_RESTORE_DURATION,
+  PANEL_RESTORE_EASING,
   TERMINAL_ANIMATION_DURATION,
   UI_ANIMATION_DURATION,
   UI_DOHERTY_THRESHOLD,
@@ -320,4 +322,36 @@ describe("discrete-feedback easing CSS contract", () => {
       expect(block).not.toMatch(/animation-timing-function\s*:/);
     }
   );
+});
+
+describe("panel-motion-tier CSS contract (#10704)", () => {
+  // The asymmetric assistant slide uses --duration-120 + --ease-panel-minimize
+  // from the @theme block. These cross-check the CSS tokens against the JS
+  // constants in animationUtils.ts (two separate sources of truth), so a silent
+  // drift in either layer fails here rather than shipping a desynced curve.
+  const css = readFileSync(resolve(__dirname, "../../index.css"), "utf8");
+
+  it("--duration-120 token matches PANEL_MINIMIZE_DURATION", () => {
+    const match = css.match(/--duration-120\s*:\s*([^;]+);/);
+    expect(match).not.toBeNull();
+    expect(match?.[1]?.trim()).toBe(`${PANEL_MINIMIZE_DURATION}ms`);
+  });
+
+  it("--ease-panel-minimize token matches PANEL_MINIMIZE_EASING", () => {
+    const match = css.match(/--ease-panel-minimize\s*:\s*([^;]+);/);
+    expect(match).not.toBeNull();
+    expect(match?.[1]?.trim()).toBe(PANEL_MINIMIZE_EASING);
+  });
+
+  it("--duration-200 token matches PANEL_RESTORE_DURATION (enter side)", () => {
+    const match = css.match(/--duration-200\s*:\s*([^;]+);/);
+    expect(match).not.toBeNull();
+    expect(match?.[1]?.trim()).toBe(`${PANEL_RESTORE_DURATION}ms`);
+  });
+
+  it("--ease-out-expo token matches PANEL_RESTORE_EASING (enter side)", () => {
+    const match = css.match(/--ease-out-expo\s*:\s*([^;]+);/);
+    expect(match).not.toBeNull();
+    expect(match?.[1]?.trim()).toBe(PANEL_RESTORE_EASING);
+  });
 });

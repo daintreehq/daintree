@@ -17,15 +17,17 @@ vi.mock("@/clients", () => ({
   },
   systemClient: {
     getAppMetrics: vi.fn(),
+    getHardwareInfo: vi.fn(),
     getProcessMetrics: vi.fn(),
     getHeapStats: vi.fn(),
     getDiagnosticsInfo: vi.fn(),
   },
 }));
 
+const statsStoreState: { stats: Record<string, { processCount: number }> } = { stats: {} };
 vi.mock("@/store/projectStatsStore", () => ({
   useProjectStatsStore: {
-    getState: () => ({ stats: {} }),
+    getState: () => statsStoreState,
   },
 }));
 
@@ -36,10 +38,25 @@ vi.mock("@/components/ui/popover", () => ({
 }));
 
 import { projectClient, systemClient } from "@/clients";
+import type { Project } from "@shared/types";
 import { ProjectResourceBadge } from "../ProjectResourceBadge";
 
 const mockGetAll = vi.mocked(projectClient.getAll);
 const mockGetAppMetrics = vi.mocked(systemClient.getAppMetrics);
+const mockGetHardwareInfo = vi.mocked(systemClient.getHardwareInfo);
+
+function makeProject(overrides: Partial<Project> = {}): Project {
+  return {
+    id: "proj-1",
+    name: "Test Project",
+    path: "/tmp/test",
+    emoji: "🚀",
+    color: "blue",
+    status: "active",
+    lastOpened: 0,
+    ...overrides,
+  };
+}
 
 describe("ProjectResourceBadge — visibility-aware polling", () => {
   let originalHidden: boolean;
@@ -80,6 +97,12 @@ describe("ProjectResourceBadge — visibility-aware polling", () => {
     mockGetAll.mockResolvedValue([]);
     mockGetAppMetrics.mockReset();
     mockGetAppMetrics.mockResolvedValue({ totalMemoryMB: 100 });
+    mockGetHardwareInfo.mockReset();
+    mockGetHardwareInfo.mockResolvedValue({
+      totalMemoryBytes: 8 * 1024 * 1024 * 1024,
+      logicalCpuCount: 8,
+    });
+    statsStoreState.stats = {};
   });
 
   afterEach(() => {
@@ -162,6 +185,64 @@ describe("ProjectResourceBadge — visibility-aware polling", () => {
       await Promise.resolve();
     });
     expect(mockGetAll.mock.calls.length).toBeGreaterThan(callsAfterRestore);
+  });
+
+  it("probes hardware info once at mount to scale thresholds to the machine", async () => {
+    render(<ProjectResourceBadge />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockGetHardwareInfo).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not crash polling when hardware info probe rejects", async () => {
+    mockGetHardwareInfo.mockRejectedValue(new Error("no hw"));
+
+    render(<ProjectResourceBadge />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Badge still polls stats using the fallback thresholds.
+    expect(mockGetAll.mock.calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("renders the running-project count and memory once a project is active", async () => {
+    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
+    statsStoreState.stats = { p1: { processCount: 1 } };
+    mockGetAppMetrics.mockResolvedValue({ totalMemoryMB: 290 });
+
+    const { container } = render(<ProjectResourceBadge />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain("1 project active");
+    expect(container.textContent).toContain("290MB");
+  });
+
+  it("suppresses the value (stays hidden) when metrics are unavailable", async () => {
+    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
+    statsStoreState.stats = { p1: { processCount: 1 } };
+    mockGetAppMetrics.mockResolvedValue({ totalMemoryMB: 0, unavailable: true });
+
+    const { container } = render(<ProjectResourceBadge />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // No misleading "0MB"; the badge withholds the reading entirely.
+    expect(container.textContent ?? "").not.toContain("0MB");
+    expect(container.textContent ?? "").not.toContain("project active");
   });
 
   it("removes visibility listener on unmount", () => {

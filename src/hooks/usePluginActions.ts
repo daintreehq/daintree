@@ -179,14 +179,19 @@ function toSyntheticDefinition(
       try {
         return await window.electron.plugin.invoke(pluginId, id, args);
       } catch (err) {
-        // ActionService.dispatch already catches this rejection and returns
-        // `{ ok: false }` so the *contract* is intact — this branch exists to
-        // turn the silent failure into a user-visible toast. `isDisposed`
-        // gates the notify so an in-flight invoke that resolves after the
-        // hook unmounts (HMR, window close, project switch) can't surface a
-        // stale toast for an action the user can no longer see. We swallow
-        // the error after notifying because surfacing a second failure path
-        // (via rethrow → ActionService) would double-route the same event.
+        // Surface the failure as a user-visible toast, then rethrow so
+        // `ActionService.dispatch` returns `{ ok: false }` instead of treating
+        // the swallowed rejection as a successful run. Returning `undefined`
+        // here would let ActionService emit an `action:dispatched` *success*
+        // event, producing a misleading `success` audit record on top of the
+        // genuine `error` record the main-side dispatch boundary already wrote
+        // (#10463/#10476). Rethrowing keeps a single accurate audit row.
+        //
+        // `isDisposed` gates the notify so an in-flight invoke that resolves
+        // after the hook unmounts (HMR, window close, project switch) can't
+        // surface a stale toast for an action the user can no longer see. The
+        // command palette suppresses its own generic failure toast for plugin
+        // actions (see `useActionPalette`) so the rethrow can't double-toast.
         if (!isDisposed()) {
           // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
           notify({
@@ -196,7 +201,7 @@ function toSyntheticDefinition(
           });
         }
         logWarn(`[PluginActions] Plugin action "${id}" threw`, { error: err });
-        return undefined;
+        throw err;
       }
     },
   };

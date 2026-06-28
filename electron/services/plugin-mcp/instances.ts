@@ -4,10 +4,12 @@ import { PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../../../shared/types/ipc/
 import { PluginMcpAuditService } from "./PluginMcpAuditService.js";
 import { PluginMcpConsentService } from "./PluginMcpConsentService.js";
 import { PluginMcpConsentStore } from "./PluginMcpConsentStore.js";
+import { PluginMcpRateLimiter } from "./PluginMcpRateLimiter.js";
 
 let auditInstance: PluginMcpAuditService | null = null;
 let consentStoreInstance: PluginMcpConsentStore | null = null;
 let consentServiceInstance: PluginMcpConsentService | null = null;
+let rateLimiterInstance: PluginMcpRateLimiter | null = null;
 
 /**
  * Plugin-MCP inbound audit log singleton. Config flags are wired to the
@@ -70,11 +72,26 @@ export function getPluginMcpConsentService(): PluginMcpConsentService {
   return consentServiceInstance;
 }
 
+/**
+ * Plugin-MCP per-server `tools/call` rate limiter singleton. Throttles dispatch
+ * before consent so a runaway model loop can't spam approval prompts or the
+ * supervised subprocess. Constructed lazily — an install with no plugin-MCP
+ * traffic never allocates it.
+ */
+export function getPluginMcpRateLimiter(): PluginMcpRateLimiter {
+  if (!rateLimiterInstance) {
+    rateLimiterInstance = new PluginMcpRateLimiter();
+  }
+  return rateLimiterInstance;
+}
+
 /** Test-only escape hatch — drops every singleton so the next call rebuilds them. */
 export function _resetPluginMcpServicesForTest(): void {
   auditInstance?._resetForTest();
   consentStoreInstance?._resetForTest();
+  rateLimiterInstance?._resetForTest();
   auditInstance = null;
   consentStoreInstance = null;
   consentServiceInstance = null;
+  rateLimiterInstance = null;
 }

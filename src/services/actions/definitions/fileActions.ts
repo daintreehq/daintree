@@ -15,6 +15,29 @@ const viewArgsSchema = z.object({
   col: z.number().int().positive().optional().describe("1-based column to scroll to."),
 });
 
+const openDiffArgsSchema = z.object({
+  path: z.string().describe("Absolute or repo-relative file path to diff."),
+  worktreePath: z
+    .string()
+    .optional()
+    .describe(
+      "Worktree root the diff is computed against. Falls back to the current project path when omitted."
+    ),
+  status: z
+    .enum([
+      "modified",
+      "added",
+      "deleted",
+      "untracked",
+      "renamed",
+      "copied",
+      "ignored",
+      "conflicted",
+    ])
+    .optional()
+    .describe("Git status of the path; defaults to `modified` when omitted."),
+});
+
 const openInEditorArgsSchema = z.object({
   path: z.string(),
   line: z.number().int().positive().optional(),
@@ -51,6 +74,33 @@ export function registerFileActions(actions: ActionRegistry, _callbacks: ActionC
       window.dispatchEvent(
         new CustomEvent("daintree:view-file", {
           detail: { path, rootPath, line, col },
+        })
+      );
+    },
+  }));
+
+  actions.set("file.openDiff", () => ({
+    id: "file.openDiff",
+    title: "Open Diff",
+    description:
+      "Open a file's working-tree diff in the in-app side-by-side diff viewer. Args: `path` (required) — absolute or repo-relative file path; `worktreePath` (optional) — worktree root the diff is computed against (defaults to the current project path); `status` (optional git status, defaults to `modified`). Returns nothing (fires the diff-viewer event). Use `file.view` for a read-only file view without a diff.",
+    category: "files",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: openDiffArgsSchema,
+    examples: [
+      {
+        args: { path: "src/services/ActionService.ts" },
+        description: "Open the working-tree diff for a modified file",
+      },
+    ],
+    run: async (args: unknown) => {
+      const { path, worktreePath, status } = openDiffArgsSchema.parse(args);
+      const resolvedWorktreePath = worktreePath ?? useProjectStore.getState().currentProject?.path;
+      window.dispatchEvent(
+        new CustomEvent("daintree:view-diff", {
+          detail: { path, worktreePath: resolvedWorktreePath, status: status ?? "modified" },
         })
       );
     },

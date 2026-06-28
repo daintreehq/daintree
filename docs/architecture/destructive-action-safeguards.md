@@ -121,6 +121,8 @@ Columns:
 | `fleet.kill` | **confirm** (updated #7881) | yes (internal confirm) | Boolean via dispatch | local-irreversible | armed terminals | D1 | Leave | — |
 | `fleet.trash` | **confirm** (updated #7881) | yes (internal confirm; threshold 5+) | Boolean via dispatch | local-irreversible (scrollback lost) | armed terminals | D1 | Leave; consider lowering threshold to 3+ in a follow-up | TBD |
 | `fleet.armMatchingFilter` / `fleet.armFocused` / `fleet.armAll` | safe | n/a | n/a | reversible (disarm) | armed set | D0 | Leave | — |
+| `terminal.arm` | safe | n/a — agent/MCP-exposed broadcast-set edit, `palette: { mode: "hidden" }` (user arming goes through the fleet ribbon `toggleId`/`armAll`) | n/a | reversible (`terminal.disarm`/`terminal.disarmAll`) | armed set | D0 | Leave — arming only edits which terminals receive the _next_ broadcast input; it mutates nothing on its own and is fully reversible by disarming, so it carries no confirm gate (the earlier #10695 agent-dispatch confirm was removed as over-heavy for a light, reversible interaction). Echoes the resulting armed set in its result | — |
+| `terminal.disarm` / `terminal.disarmAll` (#10695) | safe | n/a — agent/MCP-exposed de-escalation, no confirm | n/a | reversible (re-arm) | armed set | D0 | Leave — disarming is the recovery path; gating it would make an accidentally-armed fleet harder to clear. Both echo the resulting armed set in their result | — |
 | `fleet.saveNamedFleet` | safe | n/a | n/a | reversible (delete fleet) | one saved fleet | D0 | Leave | — |
 | `fleet.recallNamedFleet` | safe | n/a | n/a | reversible (re-arm) | armed set | D0 | Leave | — |
 | `fleet.deleteNamedFleet` | **confirm** (updated #8023) | yes (`ConfirmDialog` hoisted to `FleetArmingRibbon`, outside the dropdown tree) | Boolean via dispatch | local-irreversible (settings entry gone) | one saved fleet | D1 | Done (#8023) — confirm state lifted above the Radix `DropdownMenu` so the dialog survives the menu closing (#2828) | — |
@@ -141,13 +143,15 @@ Columns:
 
 ### GitHub-side
 
-The current forge action set is read-only (`forge.openIssues`, `forge.listPRs`, etc.) plus token validation. Credential save/clear now goes through the `forge:set-credential` / `forge:clear-credential` IPC surface (or the GitHub plugin's direct client calls), not `ActionService`. No PR merge, no issue close, no comment-post is wired through `ActionService` yet.
+The forge action set now exposes issue write operations to MCP agents (#10653) alongside the read-only queries and token validation. Credential save/clear still goes through the `forge:set-credential` / `forge:clear-credential` IPC surface (or the GitHub plugin's direct client calls), not `ActionService`. PR merge and dismiss-review remain unwired.
 
 | Action / call site | Current | UI confirm | Consent in breadcrumb | Reversibility | Blast | Tier | Recommendation | Follow-up |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `forge.validateToken` / credential save & clear (direct IPC, see above) | safe | n/a | n/a | reversible (re-enter) | local credential | D0 | Leave | — |
 | `forge.openPR` / `forge.openIssue` / `forge.openCommits` / list / get queries | safe | n/a | n/a | reversible (navigation only) | navigation | D0 | Leave | — |
-| Merge PR / close issue / dismiss review (future) | n/a — not yet exposed via UI | n/a | n/a | shared-state | one PR or issue on origin | D2 | When wired, must be `danger:"confirm"` from day one and ship with target-naming preview | open as needed |
+| `forge.createIssue` / `forge.reopenIssue` / `forge.addIssueComment` / `forge.addIssueLabel` / `forge.removeIssueLabel` | safe | n/a | n/a | additive or reversible (re-add label, re-close, delete comment) | one issue on origin | D0–D1 | Leave | — |
+| `forge.closeIssue` / `forge.editIssue` (#10653) | `danger:"confirm"` | n/a — agent/MCP-only, no user-side dispatch | gated on `confirmed:true` for agent dispatch | shared-state (close hides work; edit overwrites body with no git/reflog copy) | one issue on origin | D2 | Leave — BYPASS_WIRED (agent-dispatch gate, no UI dialog) | — |
+| Merge PR / dismiss review (future) | n/a — not yet exposed | n/a | n/a | shared-state | one PR on origin | D2 | When wired, must be `danger:"confirm"` from day one and ship with target-naming preview | open as needed |
 
 ### Recipes / plugins
 

@@ -175,6 +175,38 @@ Rebuild failures (1/5):
       expect(classifyFailure(stderr)).toBe("transient");
     });
 
+    it("treats node-gyp undici connect timeouts as retryable infrastructure failures", () => {
+      const stderr = `
+ConnectTimeoutError: Connect Timeout Error (attempted addresses: 104.18.17.205:443, timeout: 10000ms)
+    at onConnectTimeout (D:\\a\\daintree\\daintree\\node_modules\\node-gyp\\node_modules\\undici\\lib\\core\\connect.js:237:24) {
+  code: 'UND_ERR_CONNECT_TIMEOUT',
+  [Symbol(undici.error.UND_ERR_CONNECT_TIMEOUT)]: true
+}
+
+Postinstall failures (1):
+  node-pty: node-gyp failed to rebuild 'D:\\a\\daintree\\daintree\\node_modules\\node-pty'
+`;
+      expect(classifyFailure(stderr)).toBe("transient");
+    });
+
+    it("treats node-gyp aggregate network timeouts as retryable infrastructure failures", () => {
+      const stderr = `
+AggregateError [ETIMEDOUT]:
+    at internalConnectMultiple (node:net:1134:18) {
+  code: 'ETIMEDOUT',
+  [errors]: [
+    Error: connect ETIMEDOUT 104.18.17.205:443,
+    Error: connect ENETUNREACH 2606:4700::6812:10cd:443 - Local (:::0)
+  ]
+}
+
+Postinstall failures (2):
+  node-pty: node-gyp failed to rebuild '/home/runner/work/daintree/daintree/node_modules/node-pty'
+  win-job-object: node-gyp failed to rebuild '/home/runner/work/daintree/daintree/electron/native/win-job-object'
+`;
+      expect(classifyFailure(stderr)).toBe("transient");
+    });
+
     it("handles case-insensitive matching", () => {
       expect(classifyFailure("Gyp Err! build failed\neconnreset\n")).toBe("deterministic");
     });
@@ -194,7 +226,7 @@ Rebuild failures (1/5):
     });
 
     it("covers every transient override pattern", () => {
-      expect(TRANSIENT_OVERRIDE_PATTERNS).toHaveLength(1);
+      expect(TRANSIENT_OVERRIDE_PATTERNS).toHaveLength(3);
     });
 
     it("has no overlap between deterministic and transient patterns", () => {

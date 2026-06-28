@@ -1,0 +1,39 @@
+{
+  "name": "@daintreehq/plugin-testing",
+  "version": "0.1.0",
+  "description": "In-memory PluginHostApi mock for unit-testing Daintree plugins without booting Electron.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "prepare": "tsup"
+  },
+  "peerDependencies": {
+    "@daintreehq/plugin-sdk": "^0.1.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.0",
+    "zod": "^4.3.6"
+  }
+}

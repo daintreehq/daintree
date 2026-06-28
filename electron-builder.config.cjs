@@ -158,6 +158,12 @@ module.exports = async function () {
       // electron-builder's smart-unpack detection.
       "node_modules/@parcel/watcher/**/*",
       "node_modules/@parcel/watcher-*/**/*",
+      // Built-in plugins may bundle `bin/`/`mcp/` scripts spawned via node-pty,
+      // which uses native OS spawn and bypasses Electron's ASAR filesystem patch
+      // — a `./bin/*.mjs` packed inside app.asar ENOENTs at spawn time. Unpack
+      // the whole built-in plugin tree so those `./`-relative paths resolve on
+      // the real filesystem (#10579). Sample plugins are excluded from `files`.
+      "dist-electron/plugins/builtin/**/*",
     ],
     electronFuses: {
       runAsNode: false,

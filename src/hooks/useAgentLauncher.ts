@@ -62,6 +62,32 @@ function sanitizeTerminalName(raw: string): string {
   return out.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Resolve the worktree a launch should target. When a `targetWorktreeId` is
+ * supplied but matches no known worktree (and the worktree map has finished
+ * loading), this throws instead of returning null so the failure surfaces as a
+ * real error to callers — notably the MCP `agent.launch` path, where a silent
+ * null was serialized as a terminal-less success and triggered client retry
+ * loops (#10812). The thrown message lists the available IDs so a model client
+ * can self-correct. Before the map is initialized we cannot assert "not found",
+ * so we fall through and let the caller use its cwd fallbacks.
+ */
+export function resolveLaunchWorktree<T>(
+  targetWorktreeId: string | null | undefined,
+  worktreeMap: Map<string, T>,
+  isInitialized: boolean
+): T | null {
+  const targetWorktree = targetWorktreeId ? worktreeMap.get(targetWorktreeId) : undefined;
+  if (targetWorktreeId && !targetWorktree && isInitialized) {
+    throw new Error(
+      `Worktree '${targetWorktreeId}' not found. Available worktree IDs: ${
+        [...worktreeMap.keys()].join(", ") || "none"
+      }`
+    );
+  }
+  return targetWorktree ?? null;
+}
+
 export interface LaunchAgentOptions {
   location?: AddPanelOptions["location"];
   cwd?: string;
@@ -154,14 +180,22 @@ export function resolveAgentLaunchBaseCommand(
     detail.state !== "installed"
       ? detail.resolvedPath?.trim()
       : undefined;
-  if (!resolvedPath) return registryCommand;
+
+  // When there's no availability-resolved path, fall back to the registry
+  // command. A bare PATH binary name (built-in agents) passes through unchanged.
+  // A plugin-contributed command resolved to an absolute path (#10560) is
+  // escaped like a resolved path so spaces in the plugin dir — e.g. macOS's
+  // "Application Support" — don't split the spawned command string.
+  const effective = resolvedPath ?? registryCommand;
+  const isPathLike = effective.includes("/") || effective.includes("\\");
+  if (!resolvedPath && !isPathLike) return registryCommand;
 
   const useWindows = platform ? platform === "windows" : isWindows();
   if (useWindows) {
-    return `& ${escapePowerShellSingleQuoted(resolvedPath)}`;
+    return `& ${escapePowerShellSingleQuoted(effective)}`;
   }
 
-  return escapeShellArgOptional(resolvedPath, "posix");
+  return escapeShellArgOptional(effective, "posix");
 }
 
 async function getCurrentLaunchCliDetail(agentId: string): Promise<AgentCliDetail | undefined> {
@@ -270,12 +304,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
 
       try {
         const targetWorktreeId = launchOptions?.worktreeId ?? activeWorktreeId;
-        const targetWorktree = targetWorktreeId ? worktreeMap.get(targetWorktreeId) : null;
-
-        if (targetWorktreeId && !targetWorktree && isInitialized) {
-          console.warn(`Worktree ${targetWorktreeId} not found, cannot launch agent`);
-          return null;
-        }
+        const targetWorktree = resolveLaunchWorktree(targetWorktreeId, worktreeMap, isInitialized);
 
         const cwd =
           launchOptions?.cwd ??
@@ -498,7 +527,22 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           return null;
         }
 
-        const presetTitle = isAgent && preset ? preset.name : title;
+        // Preset title: an explicit `displayTitle` wins verbatim; otherwise
+        // compose the agent name with the preset in brackets ("Claude [Z.ai]")
+        // so the active preset is visible next to the agent name. Pinned as
+        // "custom" below so the agent-detected title sync can't overwrite it
+        // with the bare agent name.
+        let presetTitle = title;
+        let hasPresetTitle = false;
+        if (isAgent && preset) {
+          const presetName = preset.name?.trim();
+          if (presetName) {
+            hasPresetTitle = true;
+            presetTitle = preset.displayTitle?.trim()
+              ? preset.displayTitle
+              : `${title} [${presetName}]`;
+          }
+        }
         // A caller-supplied name overrides the computed title and pins it so
         // agent detection can't rewrite it. Strip control characters (an LLM
         // assistant could emit newlines/ANSI/tabs) and collapse whitespace so
@@ -508,7 +552,9 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         const trimmedName = launchOptions?.name
           ? sanitizeTerminalName(launchOptions.name)
           : undefined;
-        const customTitle = trimmedName ? { titleMode: "custom" as const } : {};
+        // Pin any non-default title (caller name OR preset) as "custom" so the
+        // agent-detected title sync (computeDefaultTitle) can't clobber it.
+        const customTitle = trimmedName || hasPresetTitle ? { titleMode: "custom" as const } : {};
         const spawnedBy = launchOptions?.spawnedBy;
         const focusPolicy =
           launchOptions?.focusPolicy ?? (isMcpSpawnFocusSuppressed() ? "preserve" : undefined);

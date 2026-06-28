@@ -51,6 +51,11 @@ declare global {
       args?: unknown,
       options?: { source?: string; confirmed?: boolean }
     ) => unknown;
+    __daintreeHybridInputE2E?: {
+      setText: (terminalId: string, text: string) => boolean;
+      getText: (terminalId: string) => string | null;
+      listIds?: () => string[];
+    };
     /** E2E-only notification driver, attached by `src/lib/e2eNotificationBackdoor.ts` under DAINTREE_E2E_MODE. */
     __daintreeNotificationsE2E?: NotificationsE2EApi;
   }

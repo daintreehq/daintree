@@ -95,10 +95,16 @@ export interface ActionContext {
   /**
    * The dispatch source for the in-flight `run()` call. Set by
    * `ActionService.dispatch` from the resolved {@link ActionSource} before
-   * invoking the definition. A read-only contextual signal (never a security
-   * gate): plugin synthetic actions read it to skip their own confirm dialog
-   * when `"agent"`, since the MCP bridge has already confirmed and would
-   * otherwise double-prompt.
+   * invoking the definition — it is written from the canonical `source`
+   * (overwriting any `contextOverride.dispatchSource`), so a definition can
+   * trust it within an ActionService dispatch and callers cannot spoof it.
+   * Two read patterns: plugin synthetic actions skip their own confirm dialog
+   * when `"agent"` (the MCP bridge already confirmed, avoiding a double-prompt);
+   * and an action whose danger is conditional on its args (e.g. a safe worktree
+   * action that only spawns recipe terminals when given a `recipeId`) may reject
+   * the `"plugin"` source for that conditional effect, mirroring the static gate
+   * `recipe.run` carries. It is not a general authorization mechanism — don't
+   * use it to grant capabilities one source otherwise lacks.
    */
   dispatchSource?: ActionSource;
 }
@@ -118,6 +124,18 @@ export interface ActionDefinition<
   kind: ActionKind;
   danger: ActionDanger;
   scope: ActionScope;
+  /**
+   * When true, dispatches with `source: "plugin"` are rejected by
+   * `ActionService` with a `RESTRICTED` error, regardless of `danger`. Use this
+   * to keep an action available to user / agent (MCP) dispatch while closing it
+   * to the plugin `host.dispatch(...)` path — e.g. `terminal.sendCommand`, whose
+   * text-injection effect belongs behind the `agent:input` capability and the
+   * first-class `host.sendToActiveAgent(...)` API rather than the ungated `safe`
+   * built-in side door (#10558). `danger`-based gating is the wrong tool here:
+   * `confirm` would force an elicitation prompt on every agent/MCP call, and
+   * `restricted` would block agents too.
+   */
+  denyPluginDispatch?: boolean;
   argsSchema?: S;
   resultSchema?: z.ZodType<Result>;
   isEnabled?: (ctx: ActionContext) => boolean;
@@ -317,3 +335,53 @@ export interface ActionFrecencyEntry {
   score: number;
   lastAccessedAt: number;
 }
+
+/**
+ * Slim, IPC-safe projection of {@link ActionManifestEntry} exposed to plugins
+ * via `host.actions.list()` / `host.actions.get()` (#10561). Deliberately drops
+ * the fields that have no meaning across the plugin boundary: palette state
+ * (`paletteHidden`/`paletteRedirectTo`/…), live renderer-context state
+ * (`enabled`/`disabledReason`), the MCP-internal classification (`name`,
+ * `mcpVisibility`, `mcpAnnotations`, `band`), and `pluginId`. Every field is a
+ * plain JSON value so the entry survives Electron's structured-clone IPC
+ * boundary unchanged.
+ */
+export interface PluginActionManifestEntry {
+  /** The action id to pass to `host.dispatch()`. */
+  id: ActionId;
+  title: string;
+  description: string;
+  category: string;
+  kind: ActionKind;
+  /**
+   * Base danger classification. `host.dispatch()` rejects `"confirm"` actions
+   * with `CONFIRMATION_REQUIRED` (plugins cannot bypass the prompt) and never
+   * exposes `"restricted"` actions in the catalog — so a listed entry is always
+   * `"safe"` or `"confirm"`. Use `host.actions.canDispatch(id)` for a pre-flight
+   * check before triggering.
+   */
+  danger: ActionDanger;
+  /** JSON Schema for the action's args, or undefined when it takes none. */
+  inputSchema?: Record<string, unknown>;
+  /** True when the action's schema rejects an empty args object. */
+  requiresArgs: boolean;
+  /** Synonyms / alternative mental-model terms, when the action declares them. */
+  keywords?: string[];
+  /** Concrete usage examples pairing args with a short description. */
+  examples?: readonly ActionExample[];
+  /** Human-readable rationale for a non-`safe` danger rating. */
+  dangerRationale?: string;
+}
+
+/**
+ * Pre-flight verdict from `host.actions.canDispatch(id)` (#10561), letting a
+ * plugin detect a confirm-gated or unavailable action before calling
+ * `host.dispatch()`:
+ * - `"ok"` — a `danger:"safe"` action; `dispatch()` proceeds without a prompt.
+ * - `"confirm"` — a `danger:"confirm"` action; `dispatch()` returns
+ *   `CONFIRMATION_REQUIRED` (plugins cannot pre-confirm). The plugin should warn
+ *   the user or route through an interactive sibling action.
+ * - `"restricted"` — the action is `danger:"restricted"`, unknown, or otherwise
+ *   not exposed to plugins; `dispatch()` would return `RESTRICTED` / `NOT_FOUND`.
+ */
+export type PluginCanDispatchResult = "ok" | "confirm" | "restricted";

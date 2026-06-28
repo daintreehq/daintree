@@ -5,6 +5,7 @@ import { runValidate } from "./commands/validate.js";
 import { runPackage } from "./commands/package.js";
 import { runInstall } from "./commands/install.js";
 import { runUninstall } from "./commands/uninstall.js";
+import { runDev } from "./commands/dev.js";
 
 function fail(message: string): never {
   console.error(message);
@@ -22,13 +23,25 @@ program
   .command("new")
   .argument("[name]", "plugin name (also the directory)")
   .description("Scaffold a new plugin project")
-  .action(async (name?: string) => {
-    try {
-      await runNew(name);
-    } catch (err) {
-      fail((err as Error).message);
+  .option("--publisher <publisher>", "publisher segment (e.g. acme)")
+  .option("--template <template>", "command | view | mcp | full")
+  .option("--yes", "non-interactive: accept defaults, skip prompts (requires name + --publisher)")
+  .action(
+    async (
+      name: string | undefined,
+      opts: { publisher?: string; template?: string; yes?: boolean }
+    ) => {
+      try {
+        await runNew(name, {
+          publisher: opts.publisher,
+          template: opts.template,
+          yes: opts.yes,
+        });
+      } catch (err) {
+        fail((err as Error).message);
+      }
     }
-  });
+  );
 
 program
   .command("validate")
@@ -111,9 +124,14 @@ program
 
 program
   .command("dev")
-  .description("Start the hot-reload dev loop (not yet available — planned for F32b)")
-  .action(() => {
-    fail("The hot-reload dev loop isn't available yet — planned for a later release (F32b).");
+  .description("Start the hot-reload dev loop for the current plugin")
+  .option("--skip-build", "skip the initial Vite build (the watcher still rebuilds on save)")
+  .action(async (opts: { skipBuild?: boolean }) => {
+    try {
+      await runDev({ skipBuild: opts.skipBuild });
+    } catch (err) {
+      fail((err as Error).message);
+    }
   });
 
 program.parseAsync(process.argv).catch((err) => {

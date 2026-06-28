@@ -2,6 +2,7 @@ import type * as pty from "node-pty";
 import type { Terminal as HeadlessTerminal } from "@xterm/headless";
 import type { SerializeAddon } from "@xterm/addon-serialize";
 import type { AgentState, AgentId, WaitingReason } from "../../../shared/types/agent.js";
+import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
 import type { PanelKind, PanelTitleMode } from "../../../shared/types/panel.js";
 import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
@@ -82,8 +83,17 @@ export interface TerminalPublicState {
   agentModelId?: string;
   /** Resolved argv passed to pty.spawn() at launch time (for diagnostics) */
   spawnArgs?: string[];
-  /** Exit code from the PTY process (set on clean exit) */
+  /** Exit code from the PTY process (set on any exit, preserved or not) */
   exitCode?: number;
+  /** Raw OS signal number that terminated the PTY process, when applicable. */
+  exitSignal?: number;
+  /**
+   * Parsed test/lint/build result from the most recently observed check
+   * summary (issue #10682). Best-effort, not an authoritative exit code — see
+   * `TerminalCheckResult`. Updated in `AgentStateService` on settling
+   * transitions; ephemeral (not persisted).
+   */
+  lastCheckResult?: TerminalCheckResult;
   /** Worktree the terminal was spawned in; used when persisting agent session history */
   worktreeId?: string;
   /** Last non-useless title observed from xterm OSC updates (renderer-synced) */
@@ -148,24 +158,16 @@ export interface TerminalInfo extends TerminalPublicState {
   /**
    * Monotonic count of buffer mutations: PTY output chunks (bumped at the
    * pty-host routing site), resize reflows, and the preserved-snapshot
-   * capture. Compared against `wakeSyncedEpochByWindow` so a wake can prove
-   * "nothing changed since this window's last faithful view" and skip the
-   * full serialize/replay. Runtime-only; not persisted, not crossed over IPC.
+   * capture. Runtime-only; not persisted, not crossed over IPC. Vestigial: the
+   * only reader was the wake no-change short-circuit, removed with the rest of
+   * the hibernation/wake teardown — kept as a write-only counter for now.
    */
   contentEpoch: number;
   /**
-   * Per-window `contentEpoch` at the last faithful sync: a chunk accepted by
-   * that window's port batcher, or a wake snapshot served on its port (the
-   * latter captured pre-serialize and only while no headless writes are
-   * pending, so the snapshot provably covers the recorded epoch). Entries are
-   * dropped on window disconnect. Runtime-only.
-   */
-  wakeSyncedEpochByWindow?: Map<number, number>;
-  /**
    * Headless xterm writes issued but whose parse callback hasn't fired yet.
-   * A wake only serve-marks `wakeSyncedEpochByWindow` when this is 0 —
-   * otherwise the snapshot could omit an arrived-but-unparsed tail that the
-   * epoch already counts. Runtime-only.
+   * Runtime-only. Vestigial: the only reader was the wake serialize path,
+   * removed with the hibernation/wake teardown — kept as a write-only counter
+   * (the same write callback also drives `noteAgentOutputActivity`).
    */
   pendingHeadlessWrites?: number;
 }

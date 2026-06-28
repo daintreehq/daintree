@@ -1,6 +1,6 @@
 import { useId, useState, useRef, useEffect } from "react";
 import type { ComponentPropsWithoutRef, KeyboardEvent, ReactNode } from "react";
-import { RotateCcw } from "lucide-react";
+import { Check, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export interface ChoiceboxOption<T extends string = string> {
@@ -8,6 +8,10 @@ export interface ChoiceboxOption<T extends string = string> {
   label: string;
   description?: string;
   disabled?: boolean;
+  /** Subordinate annotation shown after the label, e.g. the value an inherit slot resolves to. */
+  resolvedLabel?: string;
+  /** Renders the option as a softer, subordinate slot (e.g. a reset/inherit default). */
+  muted?: boolean;
 }
 
 interface SettingsChoiceboxProps<T extends string = string> extends Omit<
@@ -32,7 +36,7 @@ interface SettingsChoiceboxProps<T extends string = string> extends Omit<
 const CARD_BASE_CLASSES =
   "flex-1 px-3 py-2 rounded-[var(--radius-md)] border text-sm text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2";
 
-const CARD_SELECTED_CLASSES = "border-border-strong bg-overlay-medium text-daintree-text";
+const CARD_SELECTED_CLASSES = "border-border-strong bg-overlay-subtle text-daintree-text shadow-sm";
 
 const CARD_UNSELECTED_CLASSES =
   "border-daintree-border bg-daintree-bg text-text-secondary hover:border-daintree-text/30 hover:text-daintree-text disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-daintree-border disabled:hover:text-text-secondary";
@@ -212,10 +216,28 @@ export function SettingsChoicebox<T extends string = string>({
                 isOptionDisabled && "opacity-50 cursor-not-allowed"
               )}
             >
-              <div className="font-medium">{option.label}</div>
-              {option.description && (
-                <div className="text-xs text-text-muted mt-0.5">{option.description}</div>
-              )}
+              <div className="flex items-start gap-2">
+                <Check
+                  className={cn("w-4 h-4 shrink-0 mt-0.5", !isSelected && "invisible")}
+                  aria-hidden="true"
+                />
+                <div className="min-w-0 flex-1">
+                  <div className={option.muted ? "font-normal" : "font-medium"}>
+                    {option.label}
+                    {option.resolvedLabel && (
+                      <>
+                        {" "}
+                        <span className="text-xs font-normal text-text-muted">
+                          {option.resolvedLabel}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  {option.description && (
+                    <div className="text-xs text-text-muted mt-0.5">{option.description}</div>
+                  )}
+                </div>
+              </div>
             </button>
           );
         })}

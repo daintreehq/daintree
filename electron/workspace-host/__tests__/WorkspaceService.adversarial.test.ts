@@ -1,6 +1,8 @@
 import { EventEmitter } from "events";
+import { existsSync } from "fs";
 import { resolve as pathResolve } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { createHardenedGit } from "../../utils/hardenedGit.js";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
 
@@ -122,6 +124,29 @@ describe("WorkspaceService adversarial", () => {
         error: "Corrupted worktree metadata",
       })
     );
+  });
+
+  it("fails loadProject before any git call when the project root was deleted (#10663)", async () => {
+    // The project directory was removed/moved externally before this load.
+    vi.mocked(existsSync).mockReturnValueOnce(false);
+
+    await service.loadProject("req-missing", "/missing/path");
+
+    expect(sentEvents).toContainEqual(
+      expect.objectContaining({
+        type: "load-project-result",
+        requestId: "req-missing",
+        success: false,
+        error: "Project directory does not exist: /missing/path",
+      })
+    );
+    // The guard must fire before any git instance is constructed for the dead
+    // path — otherwise the polling loops keep retrying it and spam WARN logs.
+    expect(createHardenedGit).not.toHaveBeenCalled();
+    // `projectRootPath` must stay null: if the guard were moved after the
+    // assignment the failure event would still fire, but the dead path would
+    // be primed and the polling loops would resume. Pin the ordering.
+    expect(service["projectRootPath"]).toBeNull();
   });
 
   it("returns a failure when git worktree add hits index.lock contention", async () => {

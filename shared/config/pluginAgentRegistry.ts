@@ -65,18 +65,42 @@ export function getPluginAgentRegistrySnapshot(): Record<string, AgentConfig> {
   return snapshot;
 }
 
-function contributionToAgentConfig(contribution: PluginAgentContribution): AgentConfig {
-  // Minimal tier: surface only the launch-relevant fields. `detection` is
-  // validated at the manifest gate but deliberately not mapped here — the
-  // full-tracking tier wires it into the PTY matcher separately.
+/**
+ * Resolve a plugin-relative `./` command to an absolute path against the
+ * plugin's install dir so node-pty can spawn it (node-pty resolves the command
+ * before switching cwd, so a relative path would ENOENT). A bare PATH name
+ * (e.g. "claude") is returned unchanged. Done with a pure separator-aware join
+ * rather than `node:path` so this module stays safe to bundle in the renderer
+ * (which imports it via `agentRegistry`); the manifest schema
+ * (`AgentContributionSchema.command`) already guarantees the relative form is
+ * POSIX (`./seg/seg`) with no backslashes or `..` traversal segments.
+ */
+function resolvePluginAgentCommand(command: string, pluginDir?: string): string {
+  if (!pluginDir || !command.startsWith("./")) return command;
+  const sep = pluginDir.includes("\\") && !pluginDir.includes("/") ? "\\" : "/";
+  const base = pluginDir.endsWith(sep) ? pluginDir.slice(0, -1) : pluginDir;
+  return base + sep + command.slice(2).split("/").join(sep);
+}
+
+function contributionToAgentConfig(
+  contribution: PluginAgentContribution,
+  pluginDir?: string
+): AgentConfig {
+  // Surface the launch-relevant fields plus the optional output-pattern
+  // `detection` block (#10587) so a contributed agent can drive the
+  // working/waiting/completed UI. Mapped explicitly (not spread) so no other
+  // contribution field can leak onto the resolved config. `detection` is
+  // forwarded only when present, keeping the field absent for the common
+  // launch-only case.
   return {
     id: contribution.id,
     name: contribution.name,
-    command: contribution.command,
+    command: resolvePluginAgentCommand(contribution.command, pluginDir),
     args: contribution.args,
     color: contribution.color,
     iconId: contribution.iconId,
     supportsContextInjection: contribution.supportsContextInjection ?? false,
+    ...(contribution.detection ? { detection: contribution.detection } : {}),
   };
 }
 
@@ -109,11 +133,14 @@ function rebuildSnapshot(): void {
 /**
  * Register the agents one plugin contributes. Replaces any prior set for the
  * same `pluginId` (idempotent reload). Pass an empty array to clear the
- * plugin's entries. Main-process only.
+ * plugin's entries. `pluginDir` is the plugin's install dir; when provided, a
+ * `./`-prefixed command is resolved to an absolute path against it (see
+ * {@link resolvePluginAgentCommand}). Main-process only.
  */
 export function registerPluginAgents(
   pluginId: string,
-  contributions: PluginAgentContribution[]
+  contributions: PluginAgentContribution[],
+  pluginDir?: string
 ): void {
   if (typeof pluginId !== "string" || pluginId.length === 0) return;
   if (!Array.isArray(contributions) || contributions.length === 0) {
@@ -122,7 +149,7 @@ export function registerPluginAgents(
   }
   const agents = new Map<string, AgentConfig>();
   for (const contribution of contributions) {
-    agents.set(contribution.id, Object.freeze(contributionToAgentConfig(contribution)));
+    agents.set(contribution.id, Object.freeze(contributionToAgentConfig(contribution, pluginDir)));
   }
   byPlugin.set(pluginId, agents);
   rebuildSnapshot();
@@ -155,6 +182,22 @@ export function setPluginAgentRegistry(record: Record<string, AgentConfig>): voi
   if (next === snapshot) return;
   snapshot = next;
   notifyRegistryListeners();
+}
+
+/**
+ * Reverse lookup: which plugin contributed `agentId`? Iterates {@link byPlugin},
+ * so it is **main-process only** — the renderer mirrors a flat {@link snapshot}
+ * with no per-plugin tracking and must never call this. Returns the first plugin
+ * declaring the id (matching the first-registered-wins resolution in
+ * {@link rebuildSnapshot}), or `undefined` for a built-in / unknown agent. Used
+ * by the terminal spawn handler to gate `${settings:*}` resolution on
+ * plugin-contributed agents only (#10619).
+ */
+export function getPluginIdForAgent(agentId: string): string | undefined {
+  for (const [pluginId, agents] of byPlugin) {
+    if (agents.has(agentId)) return pluginId;
+  }
+  return undefined;
 }
 
 /** Test-isolation helper: clear the per-plugin map, snapshot, and subscribers. */

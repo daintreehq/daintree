@@ -119,14 +119,19 @@ type PaintGateOutcome = "signal" | "hard-timeout" | "cancelled";
 interface PaintGate {
   webContentsId: number;
   /**
-   * Which renderer signal releases this gate. Cold-start gates wait on the
-   * one-shot `APP_VIEW_PAINTED` (`"painted"`); warm-reactivation gates wait on
-   * the re-fireable `APP_VIEW_WARM_PAINTED` (`"warm-painted"`), because a cached
+   * Which renderer signal releases this gate. Cold-start gates normally wait on
+   * the one-shot `APP_VIEW_PAINTED` (`"painted"`); fast cold switches instead
+   * wait on the earlier one-shot `APP_SKELETON_PARSED` (`"skeleton-painted"`)
+   * so the themed first-paint skeleton reveals in hundreds of ms rather than
+   * after the full React cold boot. Warm-reactivation gates wait on the
+   * re-fireable `APP_VIEW_WARM_PAINTED` (`"warm-painted"`), because a cached
    * view's V8 context already fired its one-shot painted signal on first load
    * and will never re-emit it (#9679). The discriminator keeps a stray signal of
-   * the wrong kind from releasing the bridge early.
+   * the wrong kind from releasing the bridge early; `signalViewPainted` also
+   * releases a `"skeleton-painted"` gate as a fallback (a committed React frame
+   * is a strict superset of the skeleton having parsed).
    */
-  releaseChannel: "painted" | "warm-painted";
+  releaseChannel: "painted" | "warm-painted" | "skeleton-painted";
   /**
    * The view that was visible when the gate opened — still attached during the
    * wait. This may be a registered project view or the unbound welcome view on
@@ -173,6 +178,19 @@ interface ViewEntry {
    * signals carry the preload cost that was paid when the view cold-started.
    */
   preloadEvalDurationMs?: number;
+}
+
+/** Safe-scalar view inventory entry for the diagnostics export (#10500). */
+export interface ViewInventoryEntry {
+  projectId: string;
+  /** Raw path; sanitized by the diagnostics collector's redactDeep pass. */
+  projectPath: string;
+  /** webContents id, or -1 if the view was destroyed mid-read. */
+  webContentsId: number;
+  state: "loading" | "active" | "cached";
+  lastUsed: number;
+  /** Epoch ms of the project's most recent eviction, if it was ever evicted. */
+  evictedAt?: number;
 }
 
 export interface ProjectViewManagerOptions {
@@ -310,6 +328,23 @@ export class ProjectViewManager {
       const outgoing = this.pendingPaintGate?.outgoingView;
       if (outgoing && !outgoing.webContents.isDestroyed() && outgoing !== view) {
         outgoing.setBounds({ x: 0, y: 0, width, height });
+      }
+      // Defensive (#10806): an orphaned view briefly attached behind the active
+      // one (a cancelled paint gate or a destroyView race outside switchChain)
+      // never receives bounds updates and drifts to a stale x-offset — two
+      // toolbars rendered side by side. Sync every other attached child so any
+      // stray duplicate overlaps the active view exactly until
+      // pruneOrphanedChildren detaches it.
+      for (const child of win.contentView.children as WebContentsView[]) {
+        if (child === view || child === outgoing) continue;
+        const childWc = child.webContents;
+        if (!childWc || childWc.isDestroyed()) continue;
+        // Only sync project views. Non-project children (PortalManager parks
+        // hidden portal tabs at OFFSCREEN_BOUNDS while still attached, the
+        // unbound welcome view, devtools) own their own bounds — forcing them
+        // to full-window here would yank a hidden portal onscreen on resize.
+        if (!this.webContentsToProject.has(childWc.id)) continue;
+        child.setBounds({ x: 0, y: 0, width, height });
       }
       this.scheduleBackgroundResizeNotify();
     };
@@ -527,6 +562,13 @@ export class ProjectViewManager {
       if (cachedIntent) {
         this.deliverFocusIntent(cached.view, cachedIntent);
       }
+      // Sweep any outgoing view a cancelled gate or destroyView race left
+      // attached behind this one (#10806). Never throws past this point.
+      try {
+        this.pruneOrphanedChildren();
+      } catch (error) {
+        console.error("[ProjectViewManager] pruneOrphanedChildren threw:", error);
+      }
       return { view: cached.view, isNew: false };
     }
 
@@ -587,6 +629,38 @@ export class ProjectViewManager {
     // a profile push between gate creation and log emission.
     const softMs = this.paintGateTimeoutMs;
     const hardMs = Math.max(this.paintGateHardTimeoutMs, softMs);
+
+    // Reveal the incoming view as soon as its themed first-paint skeleton
+    // (`#startup-skeleton`, injected in createView) is parsed into the DOM —
+    // signalled early by `public/skeleton-ready.js` via APP_SKELETON_PARSED,
+    // well before React mounts — rather than holding the outgoing project on
+    // screen for the entire React cold boot. The skeleton is an opaque themed
+    // cover over the view's themed canvas background (setBackgroundColor in
+    // createView, #9573), so this preserves the anti-flash guarantee while
+    // cutting perceived cold-switch latency from ~1.5–4s to a few hundred ms.
+    //
+    // EXCEPTION: when a focus intent is pending we must keep waiting for the
+    // real React paint. The focus-intent IPC listener isn't mounted until React
+    // commits, so delivering it into a bare pre-React skeleton would be dropped
+    // (#4670). Those (rare) switches keep the legacy `"painted"` gating verbatim.
+    const hasPendingFocusIntent = this.pendingFocusIntent?.projectId === projectId;
+    const coldReleaseChannel: "painted" | "skeleton-painted" = hasPendingFocusIntent
+      ? "painted"
+      : "skeleton-painted";
+    if (coldReleaseChannel === "skeleton-painted") {
+      // Scoped, one-shot receiver for THIS view's skeleton-parsed send. Mirrors
+      // createWindow's initial-window skeleton gate, whose listener is bound to
+      // the main app webContents and never sees a project-switch view. Optional-
+      // chained because the unit-test WebContents mock has no `.ipc`; those
+      // tests drive `signalSkeletonPainted()` directly instead. A superseding
+      // switch cancels the gate, after which this fire is a harmless no-op
+      // (signalSkeletonPainted matches on the pending gate's webContentsId).
+      const skeletonWcId = view.webContents.id;
+      view.webContents.ipc?.once(CHANNELS.APP_SKELETON_PARSED, () => {
+        this.signalSkeletonPainted(skeletonWcId);
+      });
+    }
+
     const paintGatePromise = this.waitForPaint(
       view.webContents.id,
       outgoingView,
@@ -597,8 +671,10 @@ export class ProjectViewManager {
         logWarn("projectview.paintgate.softtimeout", {
           projectId,
           waitedMs: softMs,
+          releaseChannel: coldReleaseChannel,
         });
-      }
+      },
+      { releaseChannel: coldReleaseChannel }
     );
 
     let visibleAt: number;
@@ -620,9 +696,12 @@ export class ProjectViewManager {
       // the CDP session on an uninitialised frame host (Chromium 146).
       void unfreezeWebContents(view.webContents);
 
-      // Wait for the renderer to confirm React has committed its first
-      // structural paint (sent via `APP_VIEW_PAINTED` after a double-rAF in
-      // `notifyViewPainted`). Two-phase: the soft timeout above is observable
+      // Wait for the incoming view to signal readiness. On the fast path that
+      // is APP_SKELETON_PARSED (themed skeleton parsed, channel
+      // `"skeleton-painted"`); on the focus-intent path it is APP_VIEW_PAINTED
+      // (React committed its first structural paint after a double-rAF in
+      // `notifyViewPainted`, channel `"painted"`), and `signalViewPainted` is
+      // the fallback for both. Two-phase: the soft timeout above is observable
       // but never user-visible; only the hard timeout below detaches the
       // outgoing view as a last resort when the renderer is stuck or crashed.
       const gateResult = await paintGatePromise;
@@ -650,19 +729,34 @@ export class ProjectViewManager {
         visibleMs: Math.round(visibleAt - coldStartAt),
         loadToPaintMs: Math.round(visibleAt - loadFinishedAt),
         paintGateOutcome: gateResult,
+        // Which paint-gate channel this cold switch was armed with:
+        // `skeleton-painted` (fast path — revealed on the themed skeleton) vs
+        // `painted` (focus-intent path — held for the full React paint). Lets
+        // telemetry separate fast-path switches from the focus-intent path and
+        // measure each one's `visibleMs` independently. A `skeleton-painted`
+        // gate may still be released by the `signalViewPainted` fallback when
+        // the skeleton signal is missed; this reflects the strategy chosen, not
+        // which signal ultimately fired.
+        gateChannel: coldReleaseChannel,
       });
 
-      // Deliver pending focus intent only when the renderer has confirmed
-      // first paint. On hard timeout the renderer may be stuck or
-      // unresponsive — dropping the intent is safer than firing into a
-      // partially-mounted view (the subscriber is registered before
-      // `notifyViewPainted`, but a hard timeout means we have no positive
-      // evidence of that). The intent is always consumed (cleared)
-      // regardless of outcome to prevent a later unrelated switch from
-      // picking up a stale focus.
-      const coldIntent = this.consumePendingFocusIntent(projectId);
-      if (coldIntent && gateResult === "signal") {
-        this.deliverFocusIntent(view, coldIntent);
+      // Focus intent is delivered ONLY on the `"painted"` path — the focus-
+      // intent switches that armed for the real React paint, where the
+      // renderer's focus-on-activate listener is guaranteed mounted. On the fast
+      // skeleton path we never armed for an intent; if one was set mid-flight
+      // (a repeated focusNextWaitingGlobal landing during the switch) we must
+      // NOT consume it here — delivering into a bare pre-React skeleton would
+      // drop it (#4670), and consuming-without-delivering would lose it
+      // entirely. Leaving it pending lets the queued/next same-project switch
+      // deliver it once React is mounted (intents are project-keyed, so an
+      // unrelated switch can't pick it up). On the painted path the intent is
+      // still consumed on every outcome (incl. hard timeout) so a stale focus
+      // can't leak forward.
+      if (coldReleaseChannel === "painted") {
+        const coldIntent = this.consumePendingFocusIntent(projectId);
+        if (coldIntent && gateResult === "signal") {
+          this.deliverFocusIntent(view, coldIntent);
+        }
       }
     } catch (loadError) {
       // Cold-start failed before the swap happened — outgoing view is still
@@ -682,13 +776,34 @@ export class ProjectViewManager {
         // to the still-visible previous project view instead of falling
         // through to the bare BrowserWindow's webContents.
         registerAppView(this.win, previousEntry.view);
+        // If the failure landed after the outgoing view was already
+        // deactivated (which now marks it invisible), restore its visibility
+        // so the rolled-back active view is composited again.
+        try {
+          previousEntry.view.setVisible(true);
+        } catch {
+          // non-critical
+        }
         previousEntry.state = "active";
         previousEntry.lastUsed = Date.now();
+        // Re-fire the view-ready hook so per-view IPC helpers re-bind to the
+        // rolled-back active view, matching the load/reload path that normally
+        // fires it for the active view.
+        this.onViewReady?.(previousEntry.view.webContents);
       } else if (unboundOutgoingView && !unboundOutgoingView.webContents.isDestroyed()) {
         // Same rollback requirement for first-run/unbound windows: the visible
         // welcome view is not a project entry, but IPC helpers still need
         // getAppWebContents() to resolve to it after a failed first switch.
         registerAppView(this.win, unboundOutgoingView);
+      }
+
+      // Sweep any orphan that leaked before this failed switch (#10806). The
+      // rollback above restores the previous view as active; prune removes any
+      // other stray project view still attached behind it. Best-effort.
+      try {
+        this.pruneOrphanedChildren();
+      } catch (pruneError) {
+        console.error("[ProjectViewManager] pruneOrphanedChildren threw:", pruneError);
       }
 
       notifyError(loadError, { source: "project-switch" });
@@ -708,6 +823,14 @@ export class ProjectViewManager {
         this.evictStaleViews("lru");
       }
     });
+
+    // Sweep any outgoing view a cancelled gate or destroyView race left
+    // attached behind this one (#10806). Never throws past this point.
+    try {
+      this.pruneOrphanedChildren();
+    } catch (error) {
+      console.error("[ProjectViewManager] pruneOrphanedChildren threw:", error);
+    }
 
     return { view, isNew: true };
   }
@@ -734,7 +857,7 @@ export class ProjectViewManager {
     outgoingProjectId: string | null,
     onSoftTimeout?: () => void,
     options?: {
-      releaseChannel?: "painted" | "warm-painted";
+      releaseChannel?: "painted" | "warm-painted" | "skeleton-painted";
       softMs?: number;
       hardMs?: number;
     }
@@ -794,14 +917,41 @@ export class ProjectViewManager {
 
   /**
    * Renderer-driven gate release. Called from the `APP_VIEW_PAINTED` IPC
-   * handler with the webContentsId of the renderer that just painted. A
-   * mismatch (e.g. signal arriving after a superseding switch already moved
-   * on) is silently ignored.
+   * handler with the webContentsId of the renderer that just painted. Releases
+   * a cold `"painted"` gate and ALSO a `"skeleton-painted"` early-reveal gate:
+   * React having committed its first frame is a strict superset of the skeleton
+   * having parsed, so this is the fallback that still detaches the bridge if the
+   * one-shot `APP_SKELETON_PARSED` was somehow missed (degrading to today's
+   * behaviour, never worse). Warm gates own a distinct re-fireable channel and
+   * are left for `signalWarmViewPainted`. A mismatch (e.g. a signal arriving
+   * after a superseding switch already moved on) is silently ignored.
    */
   signalViewPainted(webContentsId: number): void {
     const gate = this.pendingPaintGate;
     if (!gate) return;
-    if (gate.releaseChannel !== "painted") return;
+    if (gate.releaseChannel === "warm-painted") return;
+    if (gate.webContentsId !== webContentsId) return;
+    gate.resolve("signal");
+  }
+
+  /**
+   * Early-reveal gate release. Called when an incoming cold-start view's
+   * `APP_SKELETON_PARSED` fires — i.e. its themed first-paint skeleton
+   * (`#startup-skeleton`, injected in `createView`) is in the DOM, well before
+   * React mounts. Releasing here lets the outgoing view detach and the branded
+   * skeleton show in hundreds of ms instead of holding the old project on
+   * screen for the full ~1.5–4s React cold boot. The skeleton is an opaque
+   * themed cover over the view's themed canvas background, so the anti-flash
+   * guarantee (no blank-canvas frame) is preserved. Only releases a gate
+   * explicitly armed for the skeleton channel; a stray signal arriving with a
+   * cold `"painted"` or warm gate pending (or no gate) is ignored, so the
+   * scoped renderer fire is a safe no-op when main isn't bridging an early
+   * reveal.
+   */
+  signalSkeletonPainted(webContentsId: number): void {
+    const gate = this.pendingPaintGate;
+    if (!gate) return;
+    if (gate.releaseChannel !== "skeleton-painted") return;
     if (gate.webContentsId !== webContentsId) return;
     gate.resolve("signal");
   }
@@ -851,6 +1001,17 @@ export class ProjectViewManager {
     return this.activeProjectId;
   }
 
+  /**
+   * Project whose view is the still-visible anti-flash bridge of an open paint
+   * gate. During a cold switch `activeProjectId` is already the incoming
+   * project, but the outgoing project's view stays on-screen until the gate
+   * settles — so it is non-evictable for the same reason as the active view.
+   * Eviction paths must skip both (mirrors the LRU guard in `evictStaleViews`).
+   */
+  getOutgoingBridgeProjectId(): string | null {
+    return this.pendingPaintGate?.outgoingProjectId ?? null;
+  }
+
   getActiveView(): WebContentsView | null {
     if (!this.activeProjectId) return null;
     return this.views.get(this.activeProjectId)?.view ?? null;
@@ -879,6 +1040,46 @@ export class ProjectViewManager {
 
   getAllViews(): ViewEntry[] {
     return Array.from(this.views.values());
+  }
+
+  /**
+   * Safe-scalar projection of the per-project view inventory for the
+   * diagnostics export (#10500). Unlike {@link getAllViews}, never exposes the
+   * live WebContentsView — only the project id, webContentsId, lifecycle state,
+   * last-used time, and (when previously evicted) the eviction timestamp.
+   * `projectPath` is returned raw; the diagnostics collector's final
+   * `redactDeep` pass sanitizes it, keeping path redaction in one place.
+   */
+  getViewInventory(): ViewInventoryEntry[] {
+    const out: ViewInventoryEntry[] = [];
+    for (const entry of this.views.values()) {
+      let webContentsId = -1;
+      try {
+        if (!entry.view.webContents.isDestroyed()) {
+          webContentsId = entry.view.webContents.id;
+        }
+      } catch {
+        // View torn down mid-read — leave webContentsId as -1.
+      }
+      const evictedAt = this.evictionTimestamps.get(entry.projectId);
+      out.push({
+        projectId: entry.projectId,
+        projectPath: entry.projectPath,
+        webContentsId,
+        state: entry.state,
+        lastUsed: entry.lastUsed,
+        ...(evictedAt !== undefined ? { evictedAt } : {}),
+      });
+    }
+    return out;
+  }
+
+  /** Cache-policy snapshot companion to {@link getViewInventory} (#10500). */
+  getCacheConfig(): { maxCachedViews: number; activeProjectId: string | null } {
+    return {
+      maxCachedViews: this.maxCachedViews,
+      activeProjectId: this.activeProjectId,
+    };
   }
 
   getAllWebContentsIds(): number[] {
@@ -1039,15 +1240,17 @@ export class ProjectViewManager {
     }
   }
 
-  destroyView(projectId: string): void {
+  /** Returns true if a cached view existed for the project and was torn down. */
+  destroyView(projectId: string): boolean {
     const entry = this.views.get(projectId);
-    if (!entry) return;
+    if (!entry) return false;
 
     if (this.activeProjectId === projectId) {
       this.activeProjectId = null;
     }
 
     this.cleanupEntry(projectId);
+    return true;
   }
 
   dispose(): void {
@@ -1104,6 +1307,16 @@ export class ProjectViewManager {
     } catch {
       // View may not be attached
     }
+    // Mark the parked view invisible so Chromium's compositor releases its GPU
+    // tile textures (VRAM) and macOS WindowServer stops compositing it. Removal
+    // from the hierarchy alone leaves stacked offscreen views being composited;
+    // setVisible(false) is what actually makes a frozen-but-alive cached view
+    // cheap to retain. Reactivation restores visibility in activateView().
+    try {
+      current.view.setVisible(false);
+    } catch {
+      // non-critical
+    }
     current.state = "cached";
     current.lastUsed = Date.now();
 
@@ -1113,6 +1326,16 @@ export class ProjectViewManager {
       // Mark cached so visible-only broadcasts (log batches) skip this
       // renderer — pushed messages have no backpressure once throttled/frozen.
       registerCachedViewWebContents(current.view.webContents);
+      // Tell the renderer it's being cached so it cancels any in-flight wake/
+      // repaint rAFs and reveal backstops scheduled for the view it's leaving —
+      // otherwise those fire against a now-occluded/frozen view, or survive to
+      // run stale work on the next reactivation. Sent before the CPU throttle so
+      // the renderer can still process it.
+      try {
+        current.view.webContents.send(CHANNELS.APP_VIEW_CACHED);
+      } catch {
+        // ignore — a destroyed/closing renderer has nothing to cancel
+      }
       // Close live producer ports BEFORE applying CPU throttle. Once throttled,
       // Chromium can freeze the renderer after ~5 min hidden or under memory
       // pressure; any messages still posted by main/utility processes
@@ -1192,8 +1415,66 @@ export class ProjectViewManager {
     }
   }
 
+  /**
+   * Defensive sweep for orphaned project views still attached to
+   * `contentView.children` (#10806). The warm/cold anti-flash bridge skips
+   * `deactivateEntry(previousEntry)` whenever the paint gate resolves
+   * `"cancelled"` or `activeProjectId` no longer matches the switch target —
+   * the latter happens when `HibernationService.destroyView` runs outside
+   * `switchChain` and nulls `activeProjectId` mid-gate. A superseding switch
+   * only tears down its own `previousEntry`, so an earlier outgoing view can
+   * stay attached behind the newly active one, compositing two renderers at
+   * once (the duplicated forge toolbar). Called on each switch's success path —
+   * after the gate has settled and `pendingPaintGate` is already null — so it
+   * detaches any project view that is neither the active view nor an in-flight
+   * gate's outgoing bridge. Known live entries are parked as reusable cached
+   * views via `deactivateEntry` (preserving cleanup handlers, #6085); stray
+   * children the registry no longer tracks are simply removed.
+   */
+  private pruneOrphanedChildren(): void {
+    if (this.win.isDestroyed()) return;
+    const activeView = this.getActiveView();
+    const gateOutgoing = this.pendingPaintGate?.outgoingView ?? null;
+    // Snapshot — removeChildView/deactivateEntry mutate contentView.children.
+    const children = [...this.win.contentView.children] as WebContentsView[];
+    for (const child of children) {
+      if (child === activeView || child === gateOutgoing) continue;
+      const wc = child.webContents;
+      // Unbound/welcome views (not in webContentsToProject) own their own
+      // teardown via detachUnboundOutgoingView — never prune them here.
+      if (!wc || wc.isDestroyed() || !this.webContentsToProject.has(wc.id)) continue;
+      const projectId = this.webContentsToProject.get(wc.id) ?? null;
+      // Belt-and-suspenders: never detach the active project's view even if
+      // getActiveView() returned null (e.g. a destroyView race nulled
+      // activeProjectId but left the entry mid-teardown).
+      if (projectId !== null && projectId === this.activeProjectId) continue;
+      const entry = projectId ? this.views.get(projectId) : undefined;
+      try {
+        if (entry && entry.state !== "cached") {
+          this.deactivateEntry(entry);
+        } else {
+          this.win.contentView.removeChildView(child);
+        }
+        logWarn("projectview.orphan-pruned", { projectId });
+      } catch (error) {
+        console.error("[ProjectViewManager] pruneOrphanedChildren failed:", error);
+      }
+    }
+  }
+
   private activateView(entry: ViewEntry, insertBehind = false): void {
     registerAppView(this.win, entry.view);
+
+    // Restore visibility BEFORE unfreezing: deactivateEntry() called
+    // setVisible(false) to release this view's GPU tile textures while cached.
+    // The compositor must know the view is visible again before the "active"
+    // CDP lifecycle command lands, so first paint after wake targets a live
+    // layer rather than a discarded one.
+    try {
+      entry.view.setVisible(true);
+    } catch {
+      // non-critical
+    }
 
     if (!entry.view.webContents.isDestroyed()) {
       unregisterCachedViewWebContents(entry.view.webContents.id);
@@ -1279,11 +1560,15 @@ export class ProjectViewManager {
   ): number {
     let totalKb = 0;
     this.forEachGuest(hostWc, (guest) => {
-      const getPid = (guest as { getOSProcessId?: () => number }).getOSProcessId;
-      if (typeof getPid !== "function") return;
-      const pid = getPid.call(guest);
-      if (typeof pid !== "number" || pid <= 0) return;
-      totalKb += memoryByPid.get(pid) ?? 0;
+      try {
+        const getPid = (guest as { getOSProcessId?: () => number }).getOSProcessId;
+        if (typeof getPid !== "function") return;
+        const pid = getPid.call(guest);
+        if (typeof pid !== "number" || pid <= 0) return;
+        totalKb += memoryByPid.get(pid) ?? 0;
+      } catch {
+        // Guest telemetry is best-effort; keep the host sample intact.
+      }
     });
     return totalKb;
   }
@@ -1401,7 +1686,12 @@ export class ProjectViewManager {
         settle(() => reject(new Error("View load timed out")));
       }, LOAD_TIMEOUT_MS);
 
-      const onFinish = () => settle(() => resolve());
+      const onFinish = () => {
+        void this.verifyProjectBootstrap(wc, projectId).then(
+          () => settle(() => resolve()),
+          (error) => settle(() => reject(error))
+        );
+      };
       const onFail = (_event: Electron.Event, errorCode: number, errorDescription: string) =>
         settle(() => reject(new Error(`View load failed: ${errorDescription} (${errorCode})`)));
       const onPreloadError = (_event: Electron.Event, _preloadPath: string, error: Error) =>
@@ -1425,7 +1715,12 @@ export class ProjectViewManager {
       wc.once("dom-ready", () => {
         if (wc.isDestroyed()) return;
         const project = projectStore.getProjectById(projectId);
-        injectSkeletonCss(wc, project);
+        // instantReveal drops index.html's 400ms Doherty entry delay: a cold
+        // switch reveals on APP_SKELETON_PARSED (~150ms), which lands inside
+        // that delay, so without this the revealed view shows a blank themed
+        // canvas instead of the skeleton until ~480ms. The gate stays in place
+        // for the initial app launch (createWindow.ts), where it belongs.
+        injectSkeletonCss(wc, project, { instantReveal: true });
         injectSkeletonProjectIdentity(wc, project);
       });
 
@@ -1454,6 +1749,22 @@ export class ProjectViewManager {
         wc.loadURL(url).catch((err) => onLoadURLReject(err, url));
       }
     });
+  }
+
+  private async verifyProjectBootstrap(wc: Electron.WebContents, projectId: string): Promise<void> {
+    const loadedProjectId = await wc.executeJavaScript(
+      "globalThis.__DAINTREE_INITIAL_PROJECT__?.id ?? null"
+    );
+    // The production expression above always returns a string or null. Some
+    // unit-test WebContents mocks return undefined for unmodelled scripts;
+    // leave those legacy mocks neutral while still rejecting real missing
+    // bootstrap state (null) and wrong-project bootstraps.
+    if (loadedProjectId === undefined) return;
+    if (loadedProjectId !== projectId) {
+      throw new Error(
+        `Project view loaded without project bootstrap for ${projectId}; got ${String(loadedProjectId)}`
+      );
+    }
   }
 
   private updateViewBounds(view: WebContentsView): void {
@@ -1901,12 +2212,21 @@ export class ProjectViewManager {
 
     const onSpawnResult = () => void seed();
     const onHostCrash = () => void seed();
+    // Drop a terminal from the freeze-seed maps when it exits, so a dead
+    // terminal can't leave a stale project/agent-state entry that keeps
+    // hasActiveAgent() reporting a phantom active agent for its project.
+    const onTerminalExit = (id: string) => {
+      this.projectByTerminal.delete(id);
+      this.agentStateByTerminal.delete(id);
+    };
     ptyClient.on("spawn-result", onSpawnResult);
     ptyClient.on("host-crash", onHostCrash);
+    ptyClient.on("exit", onTerminalExit);
 
     this.agentCacheCleanup.push(offStateChanged);
     this.agentCacheCleanup.push(() => ptyClient.off("spawn-result", onSpawnResult));
     this.agentCacheCleanup.push(() => ptyClient.off("host-crash", onHostCrash));
+    this.agentCacheCleanup.push(() => ptyClient.off("exit", onTerminalExit));
 
     return seed();
   }

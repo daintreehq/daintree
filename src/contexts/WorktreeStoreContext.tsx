@@ -632,6 +632,36 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       })
     );
 
+    // Confirmed forge-auth failure — a background fetch's credential is
+    // genuinely broken (it survived several auto-retries). The host emits this
+    // once per repo instead of flagging every worktree card, so we raise a
+    // single escalation toast pointing at the forge settings. Transient blips
+    // during the retry window never reach here (they show the softer
+    // per-card "couldn't reach origin" tooltip instead).
+    cleanups.push(
+      worktreePort.onEvent("fetch-auth-failure-confirmed", () => {
+        notify({
+          type: "error",
+          title: "Forge authentication failed",
+          message:
+            "Background fetches are paused because your code forge credentials were rejected. Sign in again to resume.",
+          action: {
+            label: "Open settings",
+            actionId: "app.settings.openTab",
+            onClick: () => {
+              void actionService.dispatch(
+                "app.settings.openTab",
+                { tab: "code-forge" },
+                { source: "user" }
+              );
+            },
+          },
+          supersedeKey: "forge-auth-failure-confirmed",
+          context: { eventKind: "git" },
+        });
+      })
+    );
+
     // Topology-watcher-dark/recovered — the worktree list may have silently
     // drifted. The store flag drives the Tier-1 pip; arming/clearing the 30s
     // Tier-3 escalation is shared with the hydration path (#9908).
@@ -768,11 +798,62 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       if (repaintRafId !== null) cancelAnimationFrame(repaintRafId);
     });
 
+    // Timed redraw backstop: the single frame-sweep repaint above is bounded to
+    // ~160ms (MAX_REVEAL_FRAMES) and then never retries. That window falls
+    // before the compositor presents the now-foreground view, before xterm's
+    // IntersectionObserver un-pauses the renderer as the view un-occludes, and
+    // entirely inside the 5s project-switch resize lock — exactly when a repaint
+    // can't stick. A manual Redraw works ONLY because the user clicks it seconds
+    // later, after all three resolve. Replicate that without the click: re-run
+    // the same cheap, idempotent, lock-exempt repaint on a fixed timer cadence so
+    // a late-settling view is corrected on its own. Each pass is visibility- and
+    // box-guarded down the stack (repaintForReveal / reconcileGeometryFresh), so
+    // extra passes are near-no-ops — better too many redraws than a garbled pane.
+    // Kept deliberately lean: 1s catches the common compositor/layout/observer
+    // settle, 3s catches a late straggler. The hard guarantee past the 10s
+    // project-switch resize suppression is owned by the service-side
+    // suppression-clear redraw (suppressResizesDuringProjectSwitch), so the
+    // cadence stops well before it rather than piling on redundant passes.
+    const REVEAL_BACKSTOP_DELAYS_MS = [1000, 3000];
+    let backstopTimers: ReturnType<typeof setTimeout>[] = [];
+    function clearRevealBackstops() {
+      for (const timer of backstopTimers) clearTimeout(timer);
+      backstopTimers = [];
+    }
+    cleanups.push(clearRevealBackstops);
+
     const offViewRevealed = window.electron?.app?.onViewRevealed?.(() => {
       if (document.visibilityState !== "visible") return;
       scheduleRepaint();
+      // Cancel any backstops still pending from a prior switch so rapid
+      // back-and-forth switching can't stack passes, then arm this switch's.
+      clearRevealBackstops();
+      for (const delay of REVEAL_BACKSTOP_DELAYS_MS) {
+        backstopTimers.push(
+          setTimeout(() => {
+            // Re-checked here AND inside scheduleRepaint's rAF: if the user
+            // switched away again the view is hidden and this no-ops.
+            if (document.visibilityState === "visible") scheduleRepaint();
+          }, delay)
+        );
+      }
     });
     if (offViewRevealed) cleanups.push(offViewRevealed);
+
+    const offViewCached = window.electron?.app?.onViewCached?.(() => {
+      clearRevealBackstops();
+      if (wakeRafId !== null) {
+        cancelAnimationFrame(wakeRafId);
+        wakeRafId = null;
+        wakePending = false;
+      }
+      if (repaintRafId !== null) {
+        cancelAnimationFrame(repaintRafId);
+        repaintRafId = null;
+        repaintPending = false;
+      }
+    });
+    if (offViewCached) cleanups.push(offViewCached);
 
     // Missed-event guard: if the view is already visible by the time this
     // listener installs (fast cached reactivation), the visibilitychange

@@ -1,10 +1,11 @@
 /**
- * Reserved entry point for `@daintreehq/plugin-sdk/react`.
+ * Public renderer-SDK type surface for `@daintreehq/plugin-sdk/react`.
  *
- * Holds renderer-facing SDK types only; the runtime implementations live in
- * `src/hooks/` and are wired into the eventual `@daintreehq/plugin-sdk/react`
- * subpath when the SDK is extracted into its own package (F15/F36). Until
- * then, plugin authors can reference these types through the host bundle.
+ * The runtime hooks (`useHostChannel`, `usePluginEvent`) live in `src/hooks/`
+ * — the renderer's canonical home, where the `window.electron` ambient global
+ * is in scope — and are re-exported verbatim by `packages/plugin-sdk/src/react`
+ * so plugin authors and the host bundle share one implementation. These types
+ * carry the public signatures; the package's declaration build inlines them.
  */
 
 /**
@@ -19,3 +20,12 @@ export interface UseHostChannelResult<TArgs, TResult> {
   loading: boolean;
   error: Error | null;
 }
+
+/**
+ * Handler signature for `usePluginEvent(pluginId, channel, handler)`. Receives
+ * each payload pushed by the plugin's main-side `host.postToPanel(channel,
+ * payload)`. Payloads arrive untyped over IPC; `TPayload` narrows the call site
+ * — the hook performs no runtime validation (the plugin owns the shape it
+ * pushes, mirroring `useHostChannel`'s host-owns-validation contract).
+ */
+export type PluginEventHandler<TPayload> = (payload: TPayload) => void;

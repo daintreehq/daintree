@@ -15,6 +15,14 @@ import { ContentFadeIn } from "@/components/ui/ContentFadeIn";
 import type { PanelComponentProps } from "@/panels/registry";
 import { logWarn } from "@/utils/logger";
 
+/**
+ * Upper bound on a single `plugin://` view import before the host gives up and
+ * surfaces the ErrorBoundary's retry. Generous enough to cover a cold protocol
+ * handler start; short enough that a genuinely wedged load doesn't strand the
+ * user on an indefinite skeleton (#10512).
+ */
+const PLUGIN_VIEW_IMPORT_TIMEOUT_MS = 10_000;
+
 function isPluginViewModule(mod: unknown): mod is { default: ComponentType<PanelViewProps> } {
   if (mod === null || typeof mod !== "object") return false;
   const candidate = (mod as { default?: unknown }).default;
@@ -75,7 +83,45 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
 
   const createLazyView = (): LazyExoticComponent<ComponentType<PanelViewProps>> =>
     lazy<ComponentType<PanelViewProps>>(async () => {
-      const mod: unknown = await import(/* @vite-ignore */ componentPath!);
+      // Race the `plugin://` import against a timeout. A wedged protocol load
+      // (handler hang, never-resolving fetch) would otherwise sit behind
+      // Suspense forever — the ErrorBoundary only catches rejections, never a
+      // pending promise. Rejecting on timeout routes through Suspense to the
+      // boundary's "Try again", and because the race lives inside the factory a
+      // retry (a fresh `createLazyView()`) restarts the timer cleanly (#10512).
+      // The activation + import sequence shares one timeout so a stalled
+      // `activate()` surfaces the same recovery path as a stalled import.
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      const mod: unknown = await Promise.race([
+        (async () => {
+          // Implicit lazy activation (#10523): force the owning plugin to
+          // `activate()` before importing its module, so handlers it registers
+          // during activate() are live when the view first renders. Optional
+          // chaining keeps the host working in test environments without
+          // `window.electron`. `activateForView` is a no-op once the plugin is
+          // already activated.
+          //
+          // On activation failure the IPC call now REJECTS with the real cause
+          // (#10618: the handler throws an AppError) — the `await` rethrows it
+          // here, before `import()`, so the ErrorBoundary shows why activation
+          // failed (e.g. a manifest collision or an activate() throw) instead of
+          // the generic import timeout the module load would otherwise produce
+          // once its handlers never bound.
+          await window.electron?.plugin?.activateForView?.(kindId);
+          return import(/* @vite-ignore */ componentPath!);
+        })().finally(() => {
+          if (timeoutId !== undefined) clearTimeout(timeoutId);
+        }),
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(
+              new Error(
+                `Plugin "${pluginId}" view module at ${componentPath} timed out after ${PLUGIN_VIEW_IMPORT_TIMEOUT_MS}ms`
+              )
+            );
+          }, PLUGIN_VIEW_IMPORT_TIMEOUT_MS);
+        }),
+      ]);
       if (!isPluginViewModule(mod)) {
         throw new Error(
           `Plugin "${pluginId}" view module at ${componentPath} did not export a default React component`
@@ -140,6 +186,11 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
     }, []);
 
     const handleReset = (): void => {
+      // Abort the outgoing view's signal before swapping in a fresh controller —
+      // the prior view instance is being discarded on retry, so any fetches or
+      // subscriptions it tied to `disposeSignal` must cancel now rather than
+      // linger until the whole host unmounts (#10512 review).
+      controller.abort();
       // Fresh controller for the retry so the new lazy import sees an unaborted
       // signal; the mirror effect propagates it to controllerRef for teardown.
       setController(new AbortController());
@@ -156,7 +207,12 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
       >
         <Suspense fallback={<BrowserPaneSkeleton label={`Loading ${displayName}`} />}>
           <ContentFadeIn className="flex flex-col h-full w-full">
-            <LazyView panelId={props.id} pluginId={pluginId!} disposeSignal={controller.signal} />
+            <LazyView
+              panelId={props.id}
+              pluginId={pluginId!}
+              disposeSignal={controller.signal}
+              initialArgs={props.extensionState}
+            />
           </ContentFadeIn>
         </Suspense>
       </ErrorBoundary>

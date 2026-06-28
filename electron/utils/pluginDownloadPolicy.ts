@@ -1,3 +1,4 @@
+import dns from "node:dns/promises";
 import type { net as ElectronNet } from "electron";
 import { MAX_DNTR_BYTES } from "./pluginArchiveConstants.js";
 import { isPrivateOrLoopbackHostname } from "../schemas/plugin.js";
@@ -58,13 +59,48 @@ export function urlHasCredentials(parsed: URL): boolean {
  * or a structured rejection reason the caller maps to its own error vocabulary.
  * `private-redirect` means a hop's `Location` resolved to a private/loopback/
  * link-local host and the chain was abandoned before the body was read.
+ * `private-host` means a hop's hostname *resolved via DNS* to a private/
+ * loopback/link-local IP (the DNS-rebinding case the literal-host check misses).
+ * `insecure-protocol` means a hop wasn't `https:` — e.g. a redirect that
+ * downgrades `https→http`, which would deliver the archive over cleartext.
  */
 export type GuardedFetchResult =
   | { ok: true; response: Response }
-  | { ok: false; reason: "private-redirect" | "too-many-redirects" };
+  | {
+      ok: false;
+      reason: "private-redirect" | "private-host" | "insecure-protocol" | "too-many-redirects";
+    };
 
 /** Spec-aligned cap (RFC 7231 recommends a limit; browsers default to ~20). */
 const MAX_REDIRECT_HOPS = 5;
+
+/**
+ * Resolve `hostname` and report whether ANY answer is a private/loopback/
+ * link-local IP. Closes the DNS-rebinding TOCTOU the literal-host guard can't
+ * see: a public name that answers with `127.0.0.1` / `169.254.169.254` (cloud
+ * metadata) / RFC1918 at connect time would otherwise stream straight into the
+ * archive parser. `all: true` returns every A/AAAA record, so a split-horizon
+ * answer can't sneak one private address past a public one.
+ *
+ * Resolution *failure* is not a private-host signal — return false and let
+ * `net.fetch` surface the real network error in the caller's vocabulary.
+ *
+ * A hairline TOCTOU remains: `net.fetch` re-resolves DNS independently, so a
+ * TTL-0 record flipped between this lookup and the connect could still differ.
+ * Pinning the resolved IP into the connection is the only way to fully close it,
+ * which Electron's net stack doesn't expose without a custom resolver; this
+ * check shrinks the window to that sub-millisecond race for the local-attacker
+ * threat model the SSRF guard targets.
+ */
+async function resolvesToPrivateAddress(hostname: string): Promise<boolean> {
+  let records: Array<{ address: string }>;
+  try {
+    records = await dns.lookup(hostname, { all: true });
+  } catch {
+    return false;
+  }
+  return records.some((r) => isPrivateOrLoopbackHostname(r.address));
+}
 
 /**
  * `net.fetch` with manual redirect following so EVERY hop's host is revalidated
@@ -73,11 +109,13 @@ const MAX_REDIRECT_HOPS = 5;
  * (SSRF). Following manually lets us reject a private `Location` before the body
  * is ever read.
  *
- * This is a literal-host guard only — a DNS-rebinding TOCTOU remains (a public
- * hostname that resolves to a private address at connect time is not caught
- * here, since `net.fetch` resolves DNS internally). That residual is the same
- * gap documented on the manifest `allowedUrls` validator and is out of scope
- * for download-time validation; full mitigation needs a custom resolver.
+ * Beyond the literal-host check, every hop's hostname is resolved via DNS and
+ * the resolved IP is re-validated through {@link resolvesToPrivateAddress} —
+ * closing the DNS-rebinding TOCTOU where a public hostname answers with a
+ * private/loopback/link-local address at connect time (cloud-metadata SSRF).
+ * A sub-millisecond residual remains because `net.fetch` re-resolves DNS itself;
+ * see {@link resolvesToPrivateAddress} for why full closure needs a custom
+ * resolver Electron's net stack doesn't expose.
  *
  * The caller still owns the timeout/size signal — it's threaded through every
  * hop via `init.signal`. Non-redirect responses (including the final 2xx and
@@ -90,6 +128,26 @@ export async function fetchWithPrivateHostGuard(
 ): Promise<GuardedFetchResult> {
   let currentUrl = url;
   for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
+    // Parse the current hop once to enforce two invariants before connecting:
+    // (1) it must stay https — a redirect that downgrades to http would deliver
+    // the archive over cleartext (MITM-substitutable); (2) re-validate the
+    // RESOLVED IP, not just the literal host, since a public hostname can answer
+    // with a private/loopback address at connect time (DNS rebinding). The
+    // literal-host guard below catches a private `Location`; this catches a
+    // private *resolution* of the current hop.
+    let parsedHop: URL | null = null;
+    try {
+      parsedHop = new URL(currentUrl);
+    } catch {
+      // `currentUrl` is the caller's input or a parsed `Location`; an
+      // unparseable value is defensive-only and just skips these pre-checks.
+    }
+    if (parsedHop && parsedHop.protocol !== "https:") {
+      return { ok: false, reason: "insecure-protocol" };
+    }
+    if (parsedHop && (await resolvesToPrivateAddress(parsedHop.hostname))) {
+      return { ok: false, reason: "private-host" };
+    }
     const response = await netFetch(currentUrl, { ...init, redirect: "manual" });
     // Electron surfaces a manual-mode redirect as an opaqueredirect/3xx with a
     // populated Location header; a normal response has no Location to follow.

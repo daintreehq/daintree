@@ -41,7 +41,7 @@ What the **host** abstracts inside this layer is deliberately _minimal_. Mainstr
 | State enum normalization | partial — see below | preserves `rawState` |
 | Rate-limit reporting | uniform shape | parses per-provider transport |
 
-The host does NOT abstract: review thread shape, approval workflows, CI graphs, merge strategies, label semantics, security alerts, or anything provider-exclusive. Plugins surface those via `experimental_views`-contributed panels rendering their own React components.
+The host does NOT abstract: review thread shape, approval workflows, CI graphs, merge strategies, label semantics, security alerts, or anything provider-exclusive. Plugins surface those via `views`-contributed panels rendering their own React components.
 
 ## Contribution Point: `forgeProviders`
 
@@ -82,7 +82,7 @@ The optional `settingsScopeRef` / `viewRefs` fields are part of the schema but t
 | `matches` | yes | Exact hostnames for git remote URLs; first matching provider wins. Matching is case-insensitive and strips a leading `www.` from both the remote URL hostname and each entry. Glob, wildcard, suffix, and regular-expression patterns are not supported. |
 | `capabilities` | no | Free-form strings the host does not interpret. UI consumers query them to decide what affordances to surface. Suggested vocabulary: `issues`, `pulls`, `reviews`, `approvals`, `merge-trains`, `required-checks`, `draft-prs`, `assignees`, `releases`, `project-boards`, `milestones`. |
 | `settingsScopeRef` | no | ID prefix in this plugin's `settings` contributions—used to group provider settings under one heading. |
-| `viewRefs` | no | IDs of `experimental_views` contributions that should appear under this provider's panel section. |
+| `viewRefs` | no | IDs of `views` contributions that should appear under this provider's panel section. |
 
 Eager registration (manifest-driven) populates the Preferences UI and remote-routing table before any plugin code runs. The implementation handler is bound lazily on first use, matching the existing contribution-point lifecycle in `electron/services/PluginService.ts`.
 
@@ -370,7 +370,7 @@ Each step is a separate PR. The contract is allowed to evolve while GitHub is be
 - **Federation / ForgeFed actor URLs.** Pattern matching is hostname-based; ActivityPub actor matching is not in scope.
 - **A "forge auth" UI panel owned by the host.** Each plugin renders its own auth section.
 - **A normalized review-thread shape.** Reviews diverge too much across providers. Plugins ship their own review-thread UI under a `ReviewCapability` interface that returns provider-shaped data.
-- **MCP-as-forge-provider.** MCP servers can coexist alongside (a provider plugin can also ship an `experimental_mcpServers` contribution for agent use), but MCP is not the primary IDE data path.
+- **MCP-as-forge-provider.** MCP servers can coexist alongside (a provider plugin can also ship an `mcpServers` contribution for agent use), but MCP is not the primary IDE data path.
 - **Removing GitHub.** GitHub stays as a built-in plugin. The goal is decoupling, not eviction.
 
 ## Trade-offs

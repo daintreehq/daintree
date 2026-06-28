@@ -8,11 +8,11 @@ import type {
 } from "@/../../shared/types/toolbar";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
-import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS, LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 
 const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = [
   "agent-tray",
-  ...(BUILT_IN_AGENT_IDS as unknown as ToolbarButtonId[]),
+  ...(LAUNCHABLE_AGENT_IDS as unknown as ToolbarButtonId[]),
   "terminal",
   "browser",
   "dev-server",

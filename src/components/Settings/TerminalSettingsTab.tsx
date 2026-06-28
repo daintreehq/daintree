@@ -86,7 +86,7 @@ const SCROLLBACK_OPTIONS = [
 ] as const;
 
 const CACHED_VIEWS_OPTIONS = [
-  { value: 1, label: "1 project", description: "Default" },
+  { value: 1, label: "1 project", description: "Minimal" },
   { value: 2, label: "2 projects", description: "Balanced" },
   { value: 3, label: "3 projects", description: "Balanced" },
   { value: 4, label: "4 projects", description: "More cache" },
@@ -453,7 +453,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
           <SettingsSwitchCard
             icon={AlertTriangle}
             title="Panel warnings"
-            subtitle="Show warning banner and confirmation dialog when panel count is high"
+            subtitle="Show warning banners as you open more panels; batch spawns confirm past the limit"
             isEnabled={!panelLimits.warningsDisabled}
             onChange={() => setWarningsDisabled(!panelLimits.warningsDisabled)}
             ariaLabel="Panel Warnings Toggle"
@@ -482,7 +482,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
             <SettingsNumberInput
               label="Confirmation Required"
-              description="Require explicit confirmation before adding panels beyond this count."
+              description="Confirm before a batch spawn (recipe or worktree spin-up) pushes the panel count beyond this number."
               min={4}
               max={100}
               value={panelLimits.confirmationLimit}
@@ -531,7 +531,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
           icon={Layers}
           title="Cached project views"
           id="terminal-cached-project-views"
-          description="Number of project views to keep loaded in memory. Lower values save memory; switching to an evicted project takes ~500ms to reload."
+          description="Number of project views to keep loaded in memory. Higher values keep more projects warm so switching back is near-instant; lower values save memory. The default scales with your RAM."
         >
           <div
             className="grid grid-cols-5 gap-3"

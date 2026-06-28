@@ -20,7 +20,12 @@ const registryMock = vi.hoisted(() => ({
 
 vi.mock("../../forgeProviderRegistry.js", () => registryMock);
 
-import { buildStoredCredentials } from "../forgeCredentialUtils.js";
+import {
+  buildStoredCredentials,
+  credentialFieldsFor,
+  pickPrimaryValue,
+} from "../forgeCredentialUtils.js";
+import type { CredentialField } from "../../../../shared/types/forge.js";
 
 function registerGiteaProvider() {
   registryMock.getRegisteredForgeProviders.mockReturnValue([
@@ -141,5 +146,61 @@ describe("buildStoredCredentials", () => {
   it("returns null for an empty or invalid provider id", () => {
     registerGiteaProvider();
     expect(buildStoredCredentials("")).toBeNull();
+  });
+});
+
+// The save path (forge:set-credential in forgeSettings.ts) and the replay path
+// (buildStoredCredentials) now share these exported helpers, so the value
+// passed to validateToken and the value replayed into setCredentials are
+// guaranteed identical. These lock the single-primary selection rule directly.
+describe("pickPrimaryValue", () => {
+  const passwordSecond: CredentialField[] = [
+    { id: "baseUrl", label: "Base URL", type: "text" },
+    { id: "token", label: "API token", type: "password" },
+  ];
+
+  it("prefers the password-typed field regardless of declaration order", () => {
+    const record = { baseUrl: "https://gitea.example.com", token: "secret" };
+    expect(pickPrimaryValue(passwordSecond, record)).toBe("secret");
+  });
+
+  it("falls back to the first declared field when none is a password field", () => {
+    const fields: CredentialField[] = [
+      { id: "user", label: "User", type: "text" },
+      { id: "host", label: "Host", type: "text" },
+    ];
+    expect(pickPrimaryValue(fields, { user: "alice", host: "h" })).toBe("alice");
+  });
+
+  it("falls back to the first record value when no fields are declared", () => {
+    expect(pickPrimaryValue([], { apiKey: "lone" })).toBe("lone");
+  });
+
+  it("returns an empty string when the primary field is missing from the record", () => {
+    expect(pickPrimaryValue(passwordSecond, { baseUrl: "https://gitea.example.com" })).toBe("");
+  });
+
+  it("agrees with buildStoredCredentials on the same fixture (one source of truth)", () => {
+    registerGiteaProvider();
+    const record = { token: "secret-token", baseUrl: "https://gitea.example.com" };
+    storeMock._data["forgeCredentials"] = { "acme.gitea": JSON.stringify(record) };
+
+    const replayed = buildStoredCredentials("acme.gitea");
+    const direct = pickPrimaryValue(credentialFieldsFor("acme.gitea"), record);
+    expect(replayed).toEqual({ kind: "bearer", value: direct });
+  });
+});
+
+describe("credentialFieldsFor", () => {
+  it("returns the registered provider's declared fields", () => {
+    registerGiteaProvider();
+    expect(credentialFieldsFor("acme.gitea")).toEqual([
+      { id: "token", label: "API token", type: "password" },
+      { id: "baseUrl", label: "Base URL", type: "text" },
+    ]);
+  });
+
+  it("returns an empty array for an unregistered provider", () => {
+    expect(credentialFieldsFor("nope.missing")).toEqual([]);
   });
 });

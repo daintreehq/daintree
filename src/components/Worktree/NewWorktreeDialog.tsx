@@ -11,6 +11,7 @@ import { worktreeClient, forgeClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { notify } from "@/lib/notify";
+import { mutateCacheEntries } from "@/lib/forgeResourceCache";
 import { systemClient } from "@/clients/systemClient";
 import { useRecipeStore } from "@/store/recipeStore";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
@@ -560,6 +561,7 @@ export function NewWorktreeDialog({
     const snapBranches = branches;
     const snapAssignToSelf = assignWorktreeToSelf;
     const snapCurrentUser = currentUser;
+    const snapCurrentUserAvatar = currentUserAvatar;
     const snapBaseBranch = baseBranch;
     // Anchor the sidebar placeholder by the path the host will normalize to as
     // the worktree id. Relative paths can't anchor a placeholder because the
@@ -625,17 +627,70 @@ export function NewWorktreeDialog({
         useWorktreeSelectionStore.getState().setPendingWorktree(worktreeId);
         useWorktreeSelectionStore.getState().selectWorktree(worktreeId);
 
-        if (!snapUseExisting && snapIssue && snapAssignToSelf && snapCurrentUser) {
+        // Skip when the selected issue already lists the current user as an
+        // assignee: the assign call would be a no-op and the resulting Undo
+        // would strip a pre-existing assignment this flow never created.
+        if (
+          !snapUseExisting &&
+          snapIssue &&
+          snapAssignToSelf &&
+          snapCurrentUser &&
+          !snapIssue.assignees.some((a) => a.login === snapCurrentUser)
+        ) {
           try {
             await forgeClient.assignIssue(rootPath, snapIssue.number, snapCurrentUser);
             const assignIssueNumber = snapIssue.number;
             const assignUsername = snapCurrentUser;
+            // Optimistically patch every cached issue-list slot so the open
+            // issues dropdown reflects the assignment immediately instead of
+            // waiting ~30s for the next SWR revalidate (#10529). Provider-
+            // agnostic: only touches the renderer cache through the forge
+            // abstraction. The forge refresh remains the correctness backstop.
+            const patchAssigneeCache = (assigned: boolean): void => {
+              mutateCacheEntries(rootPath, "issue", (entry) => {
+                let changed = false;
+                const items = entry.items.map((item) => {
+                  // `assignees` exists only on Issue, so this `in` check narrows
+                  // the Issue|PR union safely and skips any non-issue slot.
+                  if (!("assignees" in item) || item.number !== assignIssueNumber) return item;
+                  const hasUser = item.assignees.some((a) => a.login === assignUsername);
+                  if (assigned) {
+                    if (hasUser) return item;
+                    changed = true;
+                    return {
+                      ...item,
+                      assignees: [
+                        ...item.assignees,
+                        { login: assignUsername, avatarUrl: snapCurrentUserAvatar, rawData: null },
+                      ],
+                    };
+                  }
+                  if (!hasUser) return item;
+                  changed = true;
+                  return {
+                    ...item,
+                    assignees: item.assignees.filter((a) => a.login !== assignUsername),
+                  };
+                });
+                return changed ? { ...entry, items } : null;
+              });
+            };
+            // A cache-layer throw must not masquerade as an assignment failure:
+            // the server-side assign already succeeded by this point.
+            try {
+              patchAssigneeCache(true);
+            } catch (cacheErr) {
+              logError("Failed to patch issue cache after self-assign", cacheErr);
+            }
             const undoFiredRef = { current: false };
             const undoOnClick = (): void => {
               if (undoFiredRef.current) return;
               undoFiredRef.current = true;
               void forgeClient
                 .unassignIssue(rootPath, assignIssueNumber, assignUsername)
+                .then(() => {
+                  patchAssigneeCache(false);
+                })
                 .catch((err: unknown) => {
                   // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
                   notify({

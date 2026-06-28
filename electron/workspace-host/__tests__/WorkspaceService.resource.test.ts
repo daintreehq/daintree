@@ -902,92 +902,30 @@ describe("WorkspaceService.runResourceAction", () => {
   // --- Timeout differences: provision/teardown=300s, resume/pause=120s ---
 
   describe("timeout values", () => {
-    it("uses 300s timeout for provision", async () => {
-      createAndRegisterMonitor();
-      await setupConfig({
-        resource: { provision: ["long-running-cmd"] },
-      });
-      await setupSpawn(0);
+    // We verify the timeout indirectly: runResourceAction must forward the
+    // per-action timeoutMs to lifecycleService.runCommands.
+    it.each([
+      { action: "provision", command: "long-running-cmd", timeoutMs: 300_000 },
+      { action: "teardown", command: "cleanup-cmd", timeoutMs: 300_000 },
+      { action: "resume", command: "start-cmd", timeoutMs: 120_000 },
+      { action: "pause", command: "stop-cmd", timeoutMs: 120_000 },
+    ] as const)(
+      "uses a $timeoutMs ms timeout for $action",
+      async ({ action, command, timeoutMs }) => {
+        createAndRegisterMonitor();
+        await setupConfig({ resource: { [action]: [command] } });
+        await setupSpawn(0);
 
-      // We verify the timeout indirectly: the runCommands call is made with timeoutMs.
-      // Spy on lifecycleService.runCommands to capture the timeoutMs argument.
-      const runCommandsSpy = vi.spyOn(service["lifecycleService"], "runCommands");
+        const runCommandsSpy = vi.spyOn(service["lifecycleService"], "runCommands");
 
-      await service.runResourceAction("req-t1", "/test/worktree", "provision");
+        await service.runResourceAction(`req-${action}`, "/test/worktree", action);
 
-      expect(runCommandsSpy).toHaveBeenCalledWith(
-        ["long-running-cmd"],
-        expect.objectContaining({ timeoutMs: 300_000 })
-      );
-    });
-
-    it("uses 300s timeout for teardown", async () => {
-      createAndRegisterMonitor();
-      await setupConfig({
-        resource: { teardown: ["cleanup-cmd"] },
-      });
-      await setupSpawn(0);
-
-      const runCommandsSpy = vi.spyOn(service["lifecycleService"], "runCommands");
-
-      await service.runResourceAction("req-t2", "/test/worktree", "teardown");
-
-      expect(runCommandsSpy).toHaveBeenCalledWith(
-        ["cleanup-cmd"],
-        expect.objectContaining({ timeoutMs: 300_000 })
-      );
-    });
-
-    it("uses 120s timeout for resume", async () => {
-      createAndRegisterMonitor();
-      await setupConfig({
-        resource: { resume: ["start-cmd"] },
-      });
-      await setupSpawn(0);
-
-      const runCommandsSpy = vi.spyOn(service["lifecycleService"], "runCommands");
-
-      await service.runResourceAction("req-t3", "/test/worktree", "resume");
-
-      expect(runCommandsSpy).toHaveBeenCalledWith(
-        ["start-cmd"],
-        expect.objectContaining({ timeoutMs: 120_000 })
-      );
-    });
-
-    it("uses 120s timeout for pause", async () => {
-      createAndRegisterMonitor();
-      await setupConfig({
-        resource: { pause: ["stop-cmd"] },
-      });
-      await setupSpawn(0);
-
-      const runCommandsSpy = vi.spyOn(service["lifecycleService"], "runCommands");
-
-      await service.runResourceAction("req-t4", "/test/worktree", "pause");
-
-      expect(runCommandsSpy).toHaveBeenCalledWith(
-        ["stop-cmd"],
-        expect.objectContaining({ timeoutMs: 120_000 })
-      );
-    });
-
-    it("falls back to default when specific action not in timeouts", async () => {
-      createAndRegisterMonitor();
-      await setupConfig({
-        resource: { resume: ["start-cmd"] },
-      });
-      await setupSpawn(0);
-
-      const runCommandsSpy = vi.spyOn(service["lifecycleService"], "runCommands");
-
-      await service.runResourceAction("req-t5", "/test/worktree", "resume");
-
-      expect(runCommandsSpy).toHaveBeenCalledWith(
-        ["start-cmd"],
-        expect.objectContaining({ timeoutMs: 120_000 })
-      );
-    });
+        expect(runCommandsSpy).toHaveBeenCalledWith(
+          [command],
+          expect.objectContaining({ timeoutMs })
+        );
+      }
+    );
   });
 
   // --- Idempotent provision logic ---

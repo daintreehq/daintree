@@ -131,6 +131,7 @@ const devWorkerMock = vi.hoisted(() => {
     pluginId: string;
     pluginDir: string;
     bundlePath: string;
+    mode?: "dev" | "prod";
   }
   const instances: MockPluginDevWorkerHost[] = [];
   const bridges: MockPluginDevWorkerMainBridge[] = [];
@@ -146,11 +147,56 @@ const devWorkerMock = vi.hoisted(() => {
       instances.push(this);
     }
   }
+  // The real worker forks a child that imports the plugin bundle, runs
+  // `activate(host)`, and reports the outcome via `onActivationResult`. vitest
+  // can't fork, so the mock bridge does that import + activate in-process
+  // against the real host and drives the same callback — exercising
+  // PluginService's activation/provenance wiring without a worker. (#10526)
+  interface MockBridgeDeps {
+    workerHost: { opts: DevWorkerOpts };
+    host: unknown;
+    onActivationResult?: (
+      result: { ok: true } | { ok: false; error: string; stack?: string }
+    ) => void;
+  }
   class MockPluginDevWorkerMainBridge {
-    deps: unknown;
-    waitForActivation = vi.fn(async () => undefined);
-    dispose = vi.fn();
-    constructor(deps: unknown) {
+    deps: MockBridgeDeps;
+    private cleanup: (() => void) | null = null;
+    waitForActivation = vi.fn(async () => {
+      const bundlePath = this.deps.workerHost?.opts?.bundlePath;
+      const onResult = this.deps.onActivationResult;
+      if (!bundlePath) {
+        onResult?.({ ok: true });
+        return;
+      }
+      const { pathToFileURL } = await import("node:url");
+      const { formatErrorMessage } = await import("../../../shared/utils/errorMessage.js");
+      try {
+        const mod = (await import(pathToFileURL(bundlePath).href)) as { activate?: unknown };
+        if (typeof mod.activate === "function") {
+          const result = await (mod.activate as (h: unknown) => unknown)(this.deps.host);
+          if (typeof result === "function") this.cleanup = result as () => void;
+        }
+        onResult?.({ ok: true });
+      } catch (err) {
+        // Mirror the worker entry's failure shaping (formatErrorMessage + raw
+        // Error stack) so provenance records match the real path.
+        onResult?.({
+          ok: false,
+          error: formatErrorMessage(err, "activate() threw"),
+          stack: err instanceof Error ? err.stack : undefined,
+        });
+      }
+    });
+    dispose = vi.fn(() => {
+      try {
+        this.cleanup?.();
+      } catch {
+        // best-effort
+      }
+      this.cleanup = null;
+    });
+    constructor(deps: MockBridgeDeps) {
       this.deps = deps;
       bridges.push(this);
     }
@@ -167,6 +213,16 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 
 import { z } from "zod";
 import { PluginService } from "../PluginService.js";
+import { events } from "../events.js";
+import { PluginProcessManager, type ManagedChildProcess } from "../plugin/PluginProcessManager.js";
+import {
+  getPluginCapabilityConsentService,
+  _resetPluginCapabilityServicesForTest,
+} from "../plugin-capability/instances.js";
+import { getPluginActionAuditService } from "../PluginActionAuditService.js";
+import { setPtyClientRef } from "../../window/serviceRefs.js";
+import { isAuditedHandlerFailure } from "../../utils/pluginAuditMarker.js";
+import { PluginInvokeOwnershipError } from "../plugin/PluginInvokeErrors.js";
 import { getPluginManifestSchema, isPrivateOrLoopbackHostname } from "../../schemas/plugin.js";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
@@ -447,6 +503,7 @@ describe("PluginManifestSchema capabilities field", () => {
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("agent:invoke");
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("agent:read");
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("agent:register");
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("agent:input");
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("git:read");
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("git:write");
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("clipboard:read");
@@ -454,9 +511,9 @@ describe("PluginManifestSchema capabilities field", () => {
     expect(BUILT_IN_PLUGIN_CAPABILITIES).toContain("shell:exec");
   });
 
-  it("BUILT_IN_PLUGIN_CAPABILITIES has exactly 13 unique entries", () => {
-    expect(BUILT_IN_PLUGIN_CAPABILITIES).toHaveLength(13);
-    expect(new Set(BUILT_IN_PLUGIN_CAPABILITIES).size).toBe(13);
+  it("BUILT_IN_PLUGIN_CAPABILITIES has exactly 14 unique entries", () => {
+    expect(BUILT_IN_PLUGIN_CAPABILITIES).toHaveLength(14);
+    expect(new Set(BUILT_IN_PLUGIN_CAPABILITIES).size).toBe(14);
   });
 
   it("rejects null capabilities value", () => {
@@ -690,6 +747,18 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
     const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
+        // settingsScopeRef / viewRefs are cross-validated against the manifest's
+        // own settings/views (#10620), and each referenced view needs a matching
+        // panel id — declare them so this stays a positive case.
+        panels: [
+          { id: "github-issues", name: "Issues", iconId: "eye", color: "#abc" },
+          { id: "github-prs", name: "PRs", iconId: "eye", color: "#abc" },
+        ],
+        settings: [{ id: "github", type: "string", label: "GitHub" }],
+        views: [
+          { id: "github-issues", name: "Issues", componentPath: "./issues.js", location: "panel" },
+          { id: "github-prs", name: "PRs", componentPath: "./prs.js", location: "panel" },
+        ],
         forgeProviders: [
           {
             id: "github",
@@ -842,20 +911,105 @@ describe("PluginManifestSchema contributes strict validation", () => {
     }
   });
 
-  it("rejects old unprefixed views key inside contributes", () => {
+  it("accepts the stable views key inside contributes (#10466)", () => {
     const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
-      contributes: { views: [{ id: "v", name: "V", componentPath: "./v.js", location: "panel" }] },
+      contributes: {
+        // A view needs a matching panel id (view_panel_ref_unknown, #10620).
+        panels: [{ id: "v", name: "V", iconId: "eye", color: "#abc" }],
+        views: [{ id: "v", name: "V", componentPath: "./v.js", location: "panel" }],
+      },
     });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.views).toHaveLength(1);
+    }
   });
 
-  it("rejects old unprefixed mcpServers key inside contributes", () => {
+  it("accepts the stable mcpServers key inside contributes (#10466)", () => {
     const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: { mcpServers: [{ id: "svc", name: "Svc", command: "node" }] },
     });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.mcpServers).toHaveLength(1);
+    }
+  });
+
+  it("migrates the deprecated experimental_views alias to the stable views key (#10466)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: {
+        // A view needs a matching panel id (view_panel_ref_unknown, #10620).
+        panels: [{ id: "v", name: "V", iconId: "eye", color: "#abc" }],
+        experimental_views: [{ id: "v", name: "V", componentPath: "./v.js", location: "panel" }],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.views).toHaveLength(1);
+      // The deprecated key is stripped from the parsed output — no
+      // `experimental_*` field survives in the frozen contract.
+      expect("experimental_views" in result.data.contributes).toBe(false);
+    }
+  });
+
+  it("migrates the deprecated experimental_mcpServers alias to the stable mcpServers key (#10466)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: {
+        experimental_mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.mcpServers).toHaveLength(1);
+      expect("experimental_mcpServers" in result.data.contributes).toBe(false);
+    }
+  });
+
+  it("prefers the canonical key over a deprecated alias when both are present (#10466)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: {
+        // The surviving canonical view needs a matching panel id (#10620).
+        panels: [{ id: "canonical", name: "Canonical", iconId: "eye", color: "#abc" }],
+        views: [{ id: "canonical", name: "Canonical", componentPath: "./c.js", location: "panel" }],
+        experimental_views: [
+          { id: "legacy", name: "Legacy", componentPath: "./l.js", location: "panel" },
+        ],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.views).toHaveLength(1);
+      expect(result.data.contributes.views[0]?.id).toBe("canonical");
+      expect("experimental_views" in result.data.contributes).toBe(false);
+    }
+  });
+
+  it("treats an explicit empty canonical array as canonical and does not adopt the alias (#10466)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: {
+        views: [],
+        experimental_views: [
+          { id: "legacy", name: "Legacy", componentPath: "./l.js", location: "panel" },
+        ],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.views).toHaveLength(0);
+    }
+  });
+
+  it("produces a clean error rather than throwing when contributes is not an object (#10466)", () => {
+    for (const bad of [null, [], 42, "x"]) {
+      const result = getPluginManifestSchema(false).safeParse({ ...validBase, contributes: bad });
+      expect(result.success).toBe(false);
+    }
   });
 
   it("rejects an arbitrary unknown key inside contributes", () => {
@@ -870,8 +1024,8 @@ describe("PluginManifestSchema contributes strict validation", () => {
     const result = getPluginManifestSchema(false).safeParse({ ...validBase, contributes: {} });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.contributes.experimental_views).toEqual([]);
-      expect(result.data.contributes.experimental_mcpServers).toEqual([]);
+      expect(result.data.contributes.views).toEqual([]);
+      expect(result.data.contributes.mcpServers).toEqual([]);
     }
   });
 
@@ -982,6 +1136,29 @@ describe("PluginService", () => {
     expect(plugins).toHaveLength(2);
     const names = plugins.map((p) => p.manifest.name).sort();
     expect(names).toEqual(["acme.good-1", "acme.good-2"]);
+  });
+
+  it("deep-freezes the stored manifest as an immutability invariant (#10477)", async () => {
+    await writePlugin("frozen", {
+      name: "acme.frozen",
+      version: "1.0.0",
+      contributes: {
+        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const stored = (
+      service as unknown as { plugins: Map<string, { manifest: unknown }> }
+    ).plugins.get("acme.frozen")?.manifest as { contributes: { panels: unknown[] } } | undefined;
+    expect(stored).toBeDefined();
+    // Deep freeze: top level and nested contribution arrays/objects are sealed.
+    expect(Object.isFrozen(stored)).toBe(true);
+    expect(Object.isFrozen(stored!.contributes)).toBe(true);
+    expect(Object.isFrozen(stored!.contributes.panels)).toBe(true);
+    expect(Object.isFrozen(stored!.contributes.panels[0])).toBe(true);
   });
 
   it("is idempotent — second initialize is a no-op", async () => {
@@ -1123,6 +1300,7 @@ describe("PluginService", () => {
       "fs:user-data-write",
       "agent:invoke",
       "agent:register",
+      "agent:input",
     ])("reports confirm for the flat-elevated capability %s", async (capability) => {
       await writePlugin("flat", {
         name: "acme.flat",
@@ -1294,7 +1472,7 @@ describe("PluginService", () => {
             id: "btn",
             label: "Btn",
             iconId: "icon",
-            actionId: "test.action",
+            actionId: "acme.default-priority.action",
           },
         ],
       },
@@ -1431,7 +1609,7 @@ describe("PluginService manifest command contributions (#9281)", () => {
         },
       },
       {
-        "plan.ts": `export default async (args) => ({ ok: true, args })`,
+        "plan.js": `export default async (args) => ({ ok: true, args })`,
       }
     );
 
@@ -1501,7 +1679,7 @@ describe("PluginService manifest command contributions (#9281)", () => {
         },
       },
       {
-        "broken.ts": `export const named = 1`,
+        "broken.js": `export const named = 1`,
       }
     );
 
@@ -1513,8 +1691,9 @@ describe("PluginService manifest command contributions (#9281)", () => {
     ).rejects.toThrow(/no callable default export/);
   });
 
-  it("probes extensions in order .ts → .tsx → .js → .mjs", async () => {
-    // When both .ts and .js exist, .ts wins.
+  it("probes extensions in order .js → .mjs and ignores a .ts sibling", async () => {
+    // The resolver now only probes built handler modules (.js, .mjs); a .ts or
+    // .tsx sibling is never picked. When both .js and .mjs exist, .js wins.
     await writePluginWithSrc(
       "cmd-order",
       {
@@ -1534,8 +1713,10 @@ describe("PluginService manifest command contributions (#9281)", () => {
         },
       },
       {
-        "pick.ts": `export default () => "ts-wins"`,
-        "pick.js": `export default () => "js-loses"`,
+        // A .ts sibling must NOT be probed — if it were, it would shadow .js.
+        "pick.ts": `export default () => "ts-not-probed"`,
+        "pick.js": `export default () => "js-wins"`,
+        "pick.mjs": `export default () => "mjs-loses"`,
       }
     );
 
@@ -1548,7 +1729,7 @@ describe("PluginService manifest command contributions (#9281)", () => {
       ctx("acme.cmd-order"),
       []
     );
-    expect(result).toBe("ts-wins");
+    expect(result).toBe("js-wins");
   });
 
   it("surfaces a loadError when a manifest command collides with a built-in id", async () => {
@@ -2028,6 +2209,10 @@ describe("PluginService built-in plugin loading", () => {
       const notifyForgeProviderRegistryUpdated = vi.fn();
       service.setWorkspaceClient({
         notifyForgeProviderRegistryUpdated,
+        // The real WorkspaceClient is an EventEmitter; the service-level
+        // worktree-scope cache eviction listener (#10621) wires through on/off.
+        on: vi.fn(),
+        off: vi.fn(),
       } as never);
 
       await service.setEnabled("daintree.forgey", false);
@@ -2343,6 +2528,31 @@ describe("Plugin IPC handler registration", () => {
     ).rejects.toThrow("No plugin handler registered for acme.test-plugin:unknown");
   });
 
+  it("dispatchHandler rejects an unknown pluginId with PluginInvokeOwnershipError (#10462)", async () => {
+    await expect(
+      service.dispatchHandler("acme.unknown-plugin", "get-data", makeCtx("acme.unknown-plugin"), [])
+    ).rejects.toThrow(PluginInvokeOwnershipError);
+  });
+
+  it("dispatchHandler does not activate when the pluginId is not loaded (#10462)", async () => {
+    // The ownership guard must fire before activation, so impersonating an
+    // unloaded plugin can never trigger any plugin code to run.
+    const activateSpy = vi.spyOn(service, "activatePlugin");
+    await expect(
+      service.dispatchHandler("acme.unknown-plugin", "get-data", makeCtx("acme.unknown-plugin"), [])
+    ).rejects.toBeInstanceOf(PluginInvokeOwnershipError);
+    expect(activateSpy).not.toHaveBeenCalled();
+  });
+
+  it("dispatchHandler treats an unknown channel on a loaded plugin as a normal error, not an ownership rejection (#10462)", async () => {
+    // Regression guard: the ownership rejection keys on the pluginId being
+    // loaded, not on whether the channel resolves — a real plugin with a bad
+    // channel must still surface the generic handler error.
+    await expect(
+      service.dispatchHandler("acme.test-plugin", "unknown", makeCtx("acme.test-plugin"), [])
+    ).rejects.not.toBeInstanceOf(PluginInvokeOwnershipError);
+  });
+
   it("registering same (pluginId, channel) twice overwrites the handler", async () => {
     const handler1 = vi.fn().mockReturnValue("first");
     const handler2 = vi.fn().mockReturnValue("second");
@@ -2400,6 +2610,120 @@ describe("Plugin IPC handler registration", () => {
       []
     );
     expect(result).toBe("sync-result");
+  });
+
+  describe("dispatchHandler failure auditing (#10463)", () => {
+    it("audits a throwing typed-channel handler as an ipc-invoke error record", async () => {
+      const appendSpy = vi
+        .spyOn(getPluginActionAuditService(), "append")
+        .mockImplementation(() => {});
+      try {
+        const boom = new Error("handler exploded");
+        service.registerHandler("acme.test-plugin", "get-data", vi.fn().mockRejectedValue(boom));
+
+        await expect(
+          service.dispatchHandler("acme.test-plugin", "get-data", makeCtx("acme.test-plugin"), [
+            { q: "x" },
+          ])
+        ).rejects.toBe(boom);
+
+        expect(appendSpy).toHaveBeenCalledTimes(1);
+        const record = appendSpy.mock.calls[0][0];
+        expect(record).toMatchObject({
+          pluginId: "acme.test-plugin",
+          actionId: "get-data",
+          recordType: "ipc-invoke",
+          channel: "get-data",
+          result: "error",
+        });
+        expect(record.errorMessage).toContain("handler exploded");
+        expect(typeof record.durationMs).toBe("number");
+        expect(record.argsHash).toMatch(/^[0-9a-f]{64}$/);
+        // The error is marked so the outer plugin:invoke catch won't re-audit.
+        expect(isAuditedHandlerFailure(boom)).toBe(true);
+      } finally {
+        appendSpy.mockRestore();
+      }
+    });
+
+    it("audits a successful typed-channel handler as an ipc-invoke success record (#10517)", async () => {
+      const appendSpy = vi
+        .spyOn(getPluginActionAuditService(), "append")
+        .mockImplementation(() => {});
+      try {
+        service.registerHandler("acme.test-plugin", "get-data", vi.fn().mockResolvedValue("ok"));
+        const result = await service.dispatchHandler(
+          "acme.test-plugin",
+          "get-data",
+          makeCtx("acme.test-plugin"),
+          ["a"]
+        );
+        expect(result).toBe("ok");
+        expect(appendSpy).toHaveBeenCalledTimes(1);
+        const record = appendSpy.mock.calls[0][0];
+        expect(record).toMatchObject({
+          pluginId: "acme.test-plugin",
+          actionId: "get-data",
+          recordType: "ipc-invoke",
+          channel: "get-data",
+          result: "success",
+        });
+        expect(record.errorMessage).toBe("");
+        expect(record.argsHash).toMatch(/^[0-9a-f]{64}$/);
+        expect(typeof record.durationMs).toBe("number");
+      } finally {
+        appendSpy.mockRestore();
+      }
+    });
+
+    it("does not audit schema/no-handler errors (owned by the IPC boundary)", async () => {
+      const appendSpy = vi
+        .spyOn(getPluginActionAuditService(), "append")
+        .mockImplementation(() => {});
+      try {
+        await expect(
+          service.dispatchHandler("acme.test-plugin", "missing", makeCtx("acme.test-plugin"), [])
+        ).rejects.toThrow("No plugin handler registered");
+        expect(appendSpy).not.toHaveBeenCalled();
+      } finally {
+        appendSpy.mockRestore();
+      }
+    });
+
+    it("rethrows the original error even when it is frozen (marker can't attach)", async () => {
+      const appendSpy = vi
+        .spyOn(getPluginActionAuditService(), "append")
+        .mockImplementation(() => {});
+      try {
+        const frozen = Object.freeze(new Error("handler exploded"));
+        service.registerHandler("acme.test-plugin", "get-data", vi.fn().mockRejectedValue(frozen));
+        // The marker can't be written onto a frozen error; the original error
+        // must still surface (not a TypeError from the failed assignment).
+        await expect(
+          service.dispatchHandler("acme.test-plugin", "get-data", makeCtx("acme.test-plugin"), [])
+        ).rejects.toBe(frozen);
+        expect(appendSpy).toHaveBeenCalledTimes(1);
+        expect(isAuditedHandlerFailure(frozen)).toBe(false);
+      } finally {
+        appendSpy.mockRestore();
+      }
+    });
+
+    it("never lets an audit append failure mask the handler error", async () => {
+      const appendSpy = vi.spyOn(getPluginActionAuditService(), "append").mockImplementation(() => {
+        throw new Error("audit store corrupt");
+      });
+      try {
+        const boom = new Error("handler exploded");
+        service.registerHandler("acme.test-plugin", "get-data", vi.fn().mockRejectedValue(boom));
+        await expect(
+          service.dispatchHandler("acme.test-plugin", "get-data", makeCtx("acme.test-plugin"), [])
+        ).rejects.toBe(boom);
+        expect(appendSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        appendSpy.mockRestore();
+      }
+    });
   });
 
   describe("dispatchHandler args validation", () => {
@@ -2866,6 +3190,40 @@ describe("Plugin IPC handler registration", () => {
       ).rejects.toThrow(/^SCHEMA_ERROR: result for channel "broken" failed validation/);
     });
 
+    it("does NOT emit a success audit when the result schema rejects (#10517)", async () => {
+      // The success record is written only after result-schema validation
+      // passes — a host-side schema rejection of a handler that otherwise ran
+      // must never be logged as a successful dispatch.
+      const appendSpy = vi
+        .spyOn(getPluginActionAuditService(), "append")
+        .mockImplementation(() => {});
+      try {
+        const schema = {
+          args: z.object({}).passthrough(),
+          result: z.object({ count: z.number() }),
+        };
+        typedService.registerHandler(
+          "acme.typed",
+          "broken",
+          schema,
+          vi.fn(async () => ({ count: "nope" as unknown as number }))
+        );
+
+        await expect(
+          typedService.dispatchHandler("acme.typed", "broken", makeCtx("acme.typed"), [{}])
+        ).rejects.toThrow(/^SCHEMA_ERROR:/);
+
+        // No success record from the inner dispatch boundary (the schema
+        // rejection is owned by the outer plugin:invoke boundary instead).
+        const successCalls = appendSpy.mock.calls.filter(
+          (c) => (c[0] as { result?: string }).result === "success"
+        );
+        expect(successCalls).toHaveLength(0);
+      } finally {
+        appendSpy.mockRestore();
+      }
+    });
+
     it("rejects registration with PERMISSION_REQUIRED when a required capability is not declared", () => {
       const schema = {
         args: z.object({}),
@@ -3206,8 +3564,10 @@ describe("engines.daintree compatibility gate", () => {
       engines: { daintree: "^1.0.0" },
       contributes: {
         panels: [{ id: "p", name: "P", iconId: "i", color: "#000" }],
-        toolbarButtons: [{ id: "b", label: "B", iconId: "i", actionId: "x.y" }],
-        menuItems: [{ label: "L", actionId: "x.y", location: "terminal" }],
+        toolbarButtons: [
+          { id: "b", label: "B", iconId: "i", actionId: "acme.skip-side-effects.act" },
+        ],
+        menuItems: [{ label: "L", actionId: "acme.skip-side-effects.act", location: "terminal" }],
       },
     });
 
@@ -3353,8 +3713,10 @@ describe("Plugin unload lifecycle", () => {
       version: "1.0.0",
       contributes: {
         panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
-        toolbarButtons: [{ id: "btn", label: "Btn", iconId: "icon", actionId: "x.y" }],
-        menuItems: [{ label: "L", actionId: "x.y", location: "terminal" }],
+        toolbarButtons: [
+          { id: "btn", label: "Btn", iconId: "icon", actionId: "acme.unloadable.act" },
+        ],
+        menuItems: [{ label: "L", actionId: "acme.unloadable.act", location: "terminal" }],
       },
     });
 
@@ -3397,9 +3759,11 @@ describe("Plugin unload lifecycle", () => {
 
     service.unloadPlugin("acme.handler-host");
 
+    // After unload the plugin leaves `this.plugins`, so the ownership guard
+    // (#10462) now short-circuits dispatch before the handler lookup.
     await expect(
       service.dispatchHandler("acme.handler-host", "ping", makeCtx("acme.handler-host"), [])
-    ).rejects.toThrow("No plugin handler registered for acme.handler-host:ping");
+    ).rejects.toThrow('plugin:invoke rejected: plugin "acme.handler-host" is not loaded');
   });
 
   it("unloadPlugin is a no-op when the plugin is not loaded", async () => {
@@ -3455,7 +3819,7 @@ describe("Plugin unload lifecycle", () => {
 
     try {
       await service.initialize();
-      await service.activateStartupFinishedPlugins();
+      await service.activatePlugin("acme.sync-init");
       expect((globalThis as { __pluginInitObserved?: boolean }).__pluginInitObserved).toBe(true);
     } finally {
       delete (globalThis as { __pluginInitCheck?: unknown }).__pluginInitCheck;
@@ -3502,6 +3866,9 @@ type CreateHostShape = (pluginId: string) => {
       typedHandler?: (...args: unknown[]) => unknown
     ) => void;
     broadcastToRenderer: (channel: string, payload: unknown) => void;
+    postToPanel: (channel: string, payload: unknown, panelId?: string | null) => Promise<void>;
+    setPanelBadge: (panelId: string, badge: unknown) => Promise<void>;
+    invalidateFileDecorations: (scope: string, paths?: string[]) => Promise<void>;
     registerForgeProvider: (descriptor: { id: string }, impl: unknown) => () => void;
   };
   revoke: () => void;
@@ -3539,8 +3906,11 @@ describe("createHost (plugin activation API)", () => {
 
     broadcastToRendererMock.mockClear();
     host.broadcastToRenderer("status", { ok: true });
+    // Wrapped in the per-instance envelope (panelId: null = broadcast) so the
+    // preload dispatcher sees the same shape for every push over this transport.
     expect(broadcastToRendererMock).toHaveBeenCalledWith("plugin:acme.bcast-test:status", {
-      ok: true,
+      panelId: null,
+      payload: { ok: true },
     });
   });
 
@@ -3597,6 +3967,404 @@ describe("createHost (plugin activation API)", () => {
     expect(() => host.registerForgeProvider({ id: "github" }, {})).toThrow(
       /host revoked: registerForgeProvider/
     );
+  });
+
+  it("host.postToPanel fans out to the plugin:{pluginId}:{channel} subscriber channel", async () => {
+    await writePlugin("post-test", { name: "acme.post-test", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.post-test"
+    );
+
+    broadcastToRendererMock.mockClear();
+    host.postToPanel("tick", { count: 3 });
+    // Same transport as the renderer-side window.electron.plugin.on subscription
+    // (`plugin:${pluginId}:${channel}`), so a subscribed panel receives the push.
+    // No panelId → broadcast envelope (panelId: null).
+    expect(broadcastToRendererMock).toHaveBeenCalledWith("plugin:acme.post-test:tick", {
+      panelId: null,
+      payload: { count: 3 },
+    });
+  });
+
+  it("host.postToPanel targets a single instance when given a panelId", async () => {
+    await writePlugin("post-target", { name: "acme.post-target", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.post-target"
+    );
+
+    broadcastToRendererMock.mockClear();
+    host.postToPanel("tick", { count: 7 }, "panel-a");
+    // The panelId rides in the envelope so the preload dispatcher fans out only
+    // to the onPanel("panel-a") subscriber, not to sibling instances (#10618).
+    expect(broadcastToRendererMock).toHaveBeenCalledWith("plugin:acme.post-target:tick", {
+      panelId: "panel-a",
+      payload: { count: 7 },
+    });
+  });
+
+  it("host.postToPanel rejects an empty-string panelId", async () => {
+    await writePlugin("post-bad-panel", { name: "acme.post-bad-panel", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.post-bad-panel"
+    );
+
+    broadcastToRendererMock.mockClear();
+    // An empty string would silently match no subscriber — surface it loudly
+    // rather than coercing to a broadcast.
+    expect(() => host.postToPanel("tick", { n: 1 }, "")).toThrow(/postToPanel: panelId/);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    // null is an explicit broadcast and must NOT throw.
+    expect(() => host.postToPanel("tick", { n: 2 }, null)).not.toThrow();
+    expect(broadcastToRendererMock).toHaveBeenCalledWith("plugin:acme.post-bad-panel:tick", {
+      panelId: null,
+      payload: { n: 2 },
+    });
+  });
+
+  it("host.postToPanel remains callable AFTER the activation host is revoked", async () => {
+    await writePlugin("post-postact", { name: "acme.post-postact", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host, revoke } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.post-postact"
+    );
+
+    // Revoke the activation window — broadcastToRenderer is now closed, but
+    // postToPanel (its post-activation-safe sibling) must keep delivering so a
+    // plugin can stream from timers/polls long after activate() resolves.
+    revoke();
+    expect(() => host.broadcastToRenderer("x", null)).toThrow(/host revoked/);
+
+    broadcastToRendererMock.mockClear();
+    expect(() => host.postToPanel("tick", { n: 1 })).not.toThrow();
+    expect(broadcastToRendererMock).toHaveBeenCalledWith("plugin:acme.post-postact:tick", {
+      panelId: null,
+      payload: { n: 1 },
+    });
+  });
+
+  it("host.postToPanel rejects empty or colon-bearing channels", async () => {
+    await writePlugin("post-reject", { name: "acme.post-reject", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.post-reject"
+    );
+
+    broadcastToRendererMock.mockClear();
+    // Validation errors must REJECT (not throw synchronously) so a plugin can
+    // `.catch()` a non-awaited call — the promise-based error contract (#10617).
+    // A sync throw would escape the Promise and force a try/catch wrapper.
+    await expect(host.postToPanel("bad:channel", null)).rejects.toThrow(/postToPanel: channel/);
+    await expect(host.postToPanel("", null)).rejects.toThrow(/postToPanel: channel/);
+    // Calling without awaiting must not throw synchronously — the rejection is
+    // delivered through the returned promise, catchable via `.catch()`.
+    let caught: unknown;
+    const pending = host.postToPanel("also:bad", null).catch((err) => {
+      caught = err;
+    });
+    await pending;
+    expect(caught).toBeInstanceOf(Error);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("host.postToPanel silently no-ops once the plugin is unloaded", async () => {
+    await writePlugin("post-unloaded", { name: "acme.post-unloaded", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.post-unloaded"
+    );
+
+    service.unloadPlugin("acme.post-unloaded");
+
+    broadcastToRendererMock.mockClear();
+    expect(() => host.postToPanel("tick", { n: 1 })).not.toThrow();
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("host.setPanelBadge rejects an invalid panelId or badge shape (#10617)", async () => {
+    await writePlugin("badge-reject", { name: "acme.badge-reject", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.badge-reject"
+    );
+
+    broadcastToRendererMock.mockClear();
+    // Empty panelId and a malformed badge must reject through the Promise, not
+    // throw synchronously — the runtime-surface error contract (#10617).
+    await expect(host.setPanelBadge("", { kind: "dot" })).rejects.toThrow(/setPanelBadge: panelId/);
+    await expect(host.setPanelBadge("panel-1", { kind: "bogus" })).rejects.toThrow(
+      /setPanelBadge: invalid badge/
+    );
+    // Non-awaited call is catchable, never a sync throw.
+    let caught: unknown;
+    await host.setPanelBadge("", null).catch((err) => {
+      caught = err;
+    });
+    expect(caught).toBeInstanceOf(Error);
+    // A rejected setPanelBadge has no side effect: no badge-changed broadcast.
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("host.setPanelBadge silently no-ops once the plugin is unloaded (#10617)", async () => {
+    await writePlugin("badge-unloaded", { name: "acme.badge-unloaded", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.badge-unloaded"
+    );
+    service.unloadPlugin("acme.badge-unloaded");
+
+    // Liveness no-op stays a silent resolve even with an otherwise-invalid badge.
+    await expect(host.setPanelBadge("", { kind: "bogus" })).resolves.toBeUndefined();
+  });
+
+  it("host.invalidateFileDecorations rejects an empty scope (#10617)", async () => {
+    await writePlugin("deco-reject", { name: "acme.deco-reject", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.deco-reject"
+    );
+
+    // Empty scope rejects at the first guard, before the declared-scope check —
+    // through the Promise, not a sync throw (#10617).
+    await expect(host.invalidateFileDecorations("")).rejects.toThrow(
+      /invalidateFileDecorations: scope/
+    );
+    // A non-empty but undeclared scope rejects at the second guard, also through
+    // the Promise (this plugin declares no fileDecorationProviders).
+    await expect(host.invalidateFileDecorations("acme.deco-reject:*")).rejects.toThrow(
+      /is not covered by any declared/
+    );
+  });
+
+  it("host.invalidateFileDecorations silently no-ops once the plugin is unloaded (#10617)", async () => {
+    await writePlugin("deco-unloaded", { name: "acme.deco-unloaded", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.deco-unloaded"
+    );
+    service.unloadPlugin("acme.deco-unloaded");
+
+    await expect(host.invalidateFileDecorations("")).resolves.toBeUndefined();
+  });
+});
+
+type ProcessHostShape = (pluginId: string) => {
+  host: {
+    process: {
+      spawn: (
+        command: string,
+        options?: { args?: string[]; cwd?: string; env?: Record<string, string> }
+      ) => Promise<{
+        id: string;
+        kill: () => void;
+        restart: () => Promise<void>;
+        onExit: (
+          cb: (info: { exitCode: number | null; signal: string | null }) => void
+        ) => () => void;
+        onCrash: (
+          cb: (info: { exitCode: number | null; signal: string | null }) => void
+        ) => () => void;
+      }>;
+    };
+  };
+  revoke: () => void;
+};
+
+function makeFakeChild() {
+  const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+  const killSignals: Array<NodeJS.Signals | undefined> = [];
+  const child: ManagedChildProcess = {
+    pid: 9999,
+    stdout: null,
+    stderr: null,
+    kill(signal) {
+      killSignals.push(signal);
+      return true;
+    },
+    on: ((event: string, listener: (...args: never[]) => void) => {
+      const arr = listeners.get(event) ?? [];
+      arr.push(listener as (...args: unknown[]) => void);
+      listeners.set(event, arr);
+      return child;
+    }) as ManagedChildProcess["on"],
+  };
+  return { child, killSignals };
+}
+
+describe("createHost — host.process (managed processes, #9234)", () => {
+  // JIT capability consent (#10524) gates the first shell:exec spawn. Auto-approve
+  // without pinning so the spawn-path assertions run without a renderer; the
+  // dedicated consent tests cover the prompt/denial branch. The no-capability
+  // test below rejects before consent is even consulted, so it is unaffected.
+  beforeEach(() => {
+    getPluginCapabilityConsentService().setConsentBridge(async () => "approved-once");
+  });
+  afterEach(() => {
+    _resetPluginCapabilityServicesForTest();
+  });
+
+  it("rejects spawn from a plugin without the shell:exec capability", async () => {
+    await writePlugin("proc-nocap", { name: "acme.proc-nocap", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
+      "acme.proc-nocap"
+    );
+
+    await expect(host.process.spawn("node", { args: ["x.js"] })).rejects.toThrow(
+      /PERMISSION_REQUIRED.*shell:exec/
+    );
+  });
+
+  it("spawns through the manager when shell:exec is declared", async () => {
+    await writePlugin("proc-cap", {
+      name: "acme.proc-cap",
+      version: "1.0.0",
+      capabilities: ["shell:exec"],
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const fakes: ReturnType<typeof makeFakeChild>[] = [];
+    const manager = new PluginProcessManager({
+      streamSink: () => {},
+      spawner: () => {
+        const fake = makeFakeChild();
+        fakes.push(fake);
+        return fake.child;
+      },
+      killGraceMs: 10,
+    });
+    service._setProcessManagerForTests(manager);
+
+    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
+      "acme.proc-cap"
+    );
+
+    const handle = await host.process.spawn("node", { args: ["server.js"], cwd: "/repo" });
+    expect(typeof handle.id).toBe("string");
+    expect(fakes).toHaveLength(1);
+    expect(manager.runningCount("acme.proc-cap")).toBe(1);
+  });
+
+  it("blocks the spawn and never reaches the manager when consent is denied (#10524)", async () => {
+    await writePlugin("proc-deny", {
+      name: "acme.proc-deny",
+      version: "1.0.0",
+      capabilities: ["shell:exec"],
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const spawner = vi.fn(() => makeFakeChild().child);
+    const manager = new PluginProcessManager({ streamSink: () => {}, spawner, killGraceMs: 10 });
+    service._setProcessManagerForTests(manager);
+    getPluginCapabilityConsentService().setConsentBridge(async () => "rejected");
+
+    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
+      "acme.proc-deny"
+    );
+
+    await expect(host.process.spawn("node", { args: ["server.js"] })).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+    expect(spawner).not.toHaveBeenCalled();
+    expect(manager.runningCount("acme.proc-deny")).toBe(0);
+  });
+
+  it("does not spend a consent prompt on an invalid spawn that fails validation (#10524)", async () => {
+    await writePlugin("proc-invalid", {
+      name: "acme.proc-invalid",
+      version: "1.0.0",
+      capabilities: ["shell:exec"],
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const bridge = vi.fn(async () => "approved-and-pin" as const);
+    getPluginCapabilityConsentService().setConsentBridge(bridge);
+
+    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
+      "acme.proc-invalid"
+    );
+
+    // An empty command fails validation; the prompt must NOT fire (else a plugin
+    // could bank a silent grant via a deliberately-doomed call).
+    await expect(host.process.spawn("")).rejects.toThrow(/non-empty string/);
+    expect(bridge).not.toHaveBeenCalled();
+  });
+
+  it("kills outstanding processes when the plugin is unloaded", async () => {
+    await writePlugin("proc-unload", {
+      name: "acme.proc-unload",
+      version: "1.0.0",
+      capabilities: ["shell:exec"],
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const fakes: ReturnType<typeof makeFakeChild>[] = [];
+    const manager = new PluginProcessManager({
+      streamSink: () => {},
+      spawner: () => {
+        const fake = makeFakeChild();
+        fakes.push(fake);
+        return fake.child;
+      },
+      killGraceMs: 10,
+    });
+    service._setProcessManagerForTests(manager);
+
+    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
+      "acme.proc-unload"
+    );
+    await host.process.spawn("sleep", { args: ["100"] });
+    expect(manager.runningCount("acme.proc-unload")).toBe(1);
+
+    service.unloadPlugin("acme.proc-unload");
+
+    // The unload teardown SIGTERMs the outstanding process.
+    expect(fakes[0]!.killSignals).toContain("SIGTERM");
+  });
+
+  it("denies a spawn from a plugin that has already been unloaded", async () => {
+    await writePlugin("proc-gone", {
+      name: "acme.proc-gone",
+      version: "1.0.0",
+      capabilities: ["shell:exec"],
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
+      "acme.proc-gone"
+    );
+    service.unloadPlugin("acme.proc-gone");
+
+    await expect(host.process.spawn("node")).rejects.toThrow(/no longer loaded/);
   });
 });
 
@@ -4085,6 +4853,294 @@ describe("createHost — dispatch", () => {
   });
 });
 
+type ActionsHostShape = (pluginId: string) => {
+  host: {
+    actions: {
+      list: () => Promise<import("../../../shared/types/actions.js").PluginActionManifestEntry[]>;
+      get: (
+        actionId: string
+      ) => Promise<import("../../../shared/types/actions.js").PluginActionManifestEntry | null>;
+      canDispatch: (
+        actionId: string
+      ) => Promise<import("../../../shared/types/actions.js").PluginCanDispatchResult>;
+    };
+  };
+  revoke: () => void;
+};
+
+/** Read the request payload from the most recent `webContents.send` for `channel`. */
+function lastRequestFor(
+  wc: FakeWebContents,
+  channel: string
+): { requestId: string } & Record<string, unknown> {
+  const call = [...wc.send.mock.calls].reverse().find((c) => c[0] === channel);
+  if (!call) throw new Error(`no ${channel} send recorded`);
+  return call[1] as { requestId: string } & Record<string, unknown>;
+}
+
+describe("createHost — actions catalog (#10561)", () => {
+  beforeEach(() => {
+    ipcMainMock._reset();
+    setActiveWebContents(null);
+  });
+
+  it("list() round-trips through the renderer and resolves with the projected entries", async () => {
+    const wc = makeFakeWebContents(21);
+    setActiveWebContents(wc);
+    await writePlugin("actions-list", { name: "acme.actions-list", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ActionsHostShape }).createHost(
+      "acme.actions-list"
+    );
+
+    const pending = host.actions.list();
+    const req = lastRequestFor(wc, CHANNELS.PLUGIN_ACTIONS_LIST_REQUEST);
+    expect(typeof req.requestId).toBe("string");
+
+    const entries = [
+      { id: "terminal.new", title: "New terminal", danger: "safe", requiresArgs: false },
+    ];
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_ACTIONS_LIST_RESPONSE,
+      { sender: { id: 21 } },
+      { requestId: req.requestId, entries }
+    );
+
+    await expect(pending).resolves.toEqual(entries);
+  });
+
+  it("list() returns [] without a round-trip once the plugin is unloaded", async () => {
+    const wc = makeFakeWebContents(21);
+    setActiveWebContents(wc);
+    await writePlugin("actions-list-unload", {
+      name: "acme.actions-list-unload",
+      version: "1.0.0",
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ActionsHostShape }).createHost(
+      "acme.actions-list-unload"
+    );
+
+    service.unloadPlugin("acme.actions-list-unload");
+    await expect(host.actions.list()).resolves.toEqual([]);
+    expect(wc.send).not.toHaveBeenCalled();
+  });
+
+  it("list() resolves [] when no renderer is available", async () => {
+    setActiveWebContents(null);
+    await writePlugin("actions-list-norender", {
+      name: "acme.actions-list-norender",
+      version: "1.0.0",
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ActionsHostShape }).createHost(
+      "acme.actions-list-norender"
+    );
+
+    await expect(host.actions.list()).resolves.toEqual([]);
+  });
+
+  it("get() resolves the matching entry, and a missing/absent reply resolves null", async () => {
+    const wc = makeFakeWebContents(22);
+    setActiveWebContents(wc);
+    await writePlugin("actions-get", { name: "acme.actions-get", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ActionsHostShape }).createHost(
+      "acme.actions-get"
+    );
+
+    // Known id → entry.
+    const knownPending = host.actions.get("terminal.new");
+    const knownReq = lastRequestFor(wc, CHANNELS.PLUGIN_ACTIONS_GET_REQUEST);
+    expect(knownReq.actionId).toBe("terminal.new");
+    const entry = {
+      id: "terminal.new",
+      title: "New terminal",
+      danger: "safe",
+      requiresArgs: false,
+    };
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE,
+      { sender: { id: 22 } },
+      { requestId: knownReq.requestId, entry }
+    );
+    await expect(knownPending).resolves.toEqual(entry);
+
+    // Unknown id → renderer replies with a null entry.
+    const missingPending = host.actions.get("does.not.exist");
+    const missingReq = lastRequestFor(wc, CHANNELS.PLUGIN_ACTIONS_GET_REQUEST);
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE,
+      { sender: { id: 22 } },
+      { requestId: missingReq.requestId, entry: null }
+    );
+    await expect(missingPending).resolves.toBeNull();
+  });
+
+  it("canDispatch() derives ok/confirm/restricted from the projected danger", async () => {
+    const wc = makeFakeWebContents(23);
+    setActiveWebContents(wc);
+    await writePlugin("actions-can", { name: "acme.actions-can", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ActionsHostShape }).createHost(
+      "acme.actions-can"
+    );
+
+    const replyGet = (entry: unknown): void => {
+      const req = lastRequestFor(wc, CHANNELS.PLUGIN_ACTIONS_GET_REQUEST);
+      ipcMainMock._emit(
+        CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE,
+        { sender: { id: 23 } },
+        { requestId: req.requestId, entry }
+      );
+    };
+
+    // safe → "ok"
+    const okPending = host.actions.canDispatch("worktree.createWithRecipe");
+    replyGet({ id: "worktree.createWithRecipe", danger: "safe", requiresArgs: false });
+    await expect(okPending).resolves.toBe("ok");
+
+    // confirm → "confirm" (the recipe.run vs createWithRecipe asymmetry is now observable)
+    const confirmPending = host.actions.canDispatch("recipe.run");
+    replyGet({ id: "recipe.run", danger: "confirm", requiresArgs: false });
+    await expect(confirmPending).resolves.toBe("confirm");
+
+    // absent entry (unknown or restricted-and-projected-away) → "restricted"
+    const restrictedPending = host.actions.canDispatch("some.restricted.action");
+    replyGet(null);
+    await expect(restrictedPending).resolves.toBe("restricted");
+
+    // fail closed: an unexpected danger value is NOT treated as dispatchable
+    const bogusPending = host.actions.canDispatch("some.bogus.action");
+    replyGet({ id: "some.bogus.action", danger: "bogus", requiresArgs: false });
+    await expect(bogusPending).resolves.toBe("restricted");
+  });
+
+  it("ignores a catalog response from an unexpected sender id (cross-window guard)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const wc = makeFakeWebContents(25);
+    setActiveWebContents(wc);
+    await writePlugin("actions-guard", { name: "acme.actions-guard", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ActionsHostShape }).createHost(
+      "acme.actions-guard"
+    );
+
+    const pending = host.actions.get("terminal.new");
+    const req = lastRequestFor(wc, CHANNELS.PLUGIN_ACTIONS_GET_REQUEST);
+    warnSpy.mockClear();
+
+    // Wrong sender — must be ignored and warned about, leaving the request pending.
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE,
+      { sender: { id: 999 } },
+      { requestId: req.requestId, entry: { id: "terminal.new", danger: "safe" } }
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("unexpected sender"));
+
+    // Correct sender — resolves with the real entry.
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE,
+      { sender: { id: 25 } },
+      { requestId: req.requestId, entry: { id: "terminal.new", danger: "safe" } }
+    );
+    await expect(pending).resolves.toMatchObject({ id: "terminal.new" });
+    warnSpy.mockRestore();
+  });
+
+  it("resolves concurrent list + get independently regardless of response order", async () => {
+    const wc = makeFakeWebContents(26);
+    setActiveWebContents(wc);
+    await writePlugin("actions-concurrent", {
+      name: "acme.actions-concurrent",
+      version: "1.0.0",
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ActionsHostShape }).createHost(
+      "acme.actions-concurrent"
+    );
+
+    const listPending = host.actions.list();
+    const getPending = host.actions.get("terminal.new");
+    const listReq = lastRequestFor(wc, CHANNELS.PLUGIN_ACTIONS_LIST_REQUEST);
+    const getReq = lastRequestFor(wc, CHANNELS.PLUGIN_ACTIONS_GET_REQUEST);
+
+    // Deliver the get response BEFORE the list response — the shared pending map
+    // keyed by requestId must not let one resolve the other.
+    const entry = { id: "terminal.new", danger: "safe", requiresArgs: false };
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE,
+      { sender: { id: 26 } },
+      { requestId: getReq.requestId, entry }
+    );
+    const entries = [{ id: "app.openSettings", danger: "safe", requiresArgs: false }];
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_ACTIONS_LIST_RESPONSE,
+      { sender: { id: 26 } },
+      { requestId: listReq.requestId, entries }
+    );
+
+    await expect(getPending).resolves.toEqual(entry);
+    await expect(listPending).resolves.toEqual(entries);
+  });
+
+  it("canDispatch() returns 'restricted' without a round-trip once the plugin is unloaded", async () => {
+    const wc = makeFakeWebContents(23);
+    setActiveWebContents(wc);
+    await writePlugin("actions-can-unload", {
+      name: "acme.actions-can-unload",
+      version: "1.0.0",
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ActionsHostShape }).createHost(
+      "acme.actions-can-unload"
+    );
+
+    service.unloadPlugin("acme.actions-can-unload");
+    await expect(host.actions.canDispatch("terminal.new")).resolves.toBe("restricted");
+    expect(wc.send).not.toHaveBeenCalled();
+  });
+
+  it("dispose() drains a pending catalog request with its fallback and removes the listener", async () => {
+    const wc = makeFakeWebContents(24);
+    setActiveWebContents(wc);
+    await writePlugin("actions-dispose", { name: "acme.actions-dispose", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ActionsHostShape }).createHost(
+      "acme.actions-dispose"
+    );
+
+    const pendingList = host.actions.list();
+    expect(ipcMainMock._listenerCount(CHANNELS.PLUGIN_ACTIONS_LIST_RESPONSE)).toBe(1);
+
+    service.dispose();
+
+    await expect(pendingList).resolves.toEqual([]);
+    expect(ipcMainMock.removeListener).toHaveBeenCalledWith(
+      CHANNELS.PLUGIN_ACTIONS_LIST_RESPONSE,
+      expect.any(Function)
+    );
+  });
+});
+
 describe("createHost — registerForgeProvider", () => {
   function forgeManifest(
     name: string,
@@ -4114,7 +5170,7 @@ describe("createHost — registerForgeProvider", () => {
 
     vi.mocked(registerForgeProviderImpl).mockClear();
     const impl = { tag: "impl-a" };
-    host.registerForgeProvider({ id: "github" }, impl);
+    await host.registerForgeProvider({ id: "github" }, impl);
     expect(registerForgeProviderImpl).toHaveBeenCalledWith("acme.forge-host", "github", impl);
   });
 
@@ -4129,7 +5185,7 @@ describe("createHost — registerForgeProvider", () => {
 
     vi.mocked(unregisterForgeProviderImpl).mockClear();
     const impl = { tag: "impl" };
-    const dispose = host.registerForgeProvider({ id: "github" }, impl);
+    const dispose = await host.registerForgeProvider({ id: "github" }, impl);
     dispose();
     dispose(); // idempotent — only the first call should propagate
     expect(unregisterForgeProviderImpl).toHaveBeenCalledTimes(1);
@@ -4192,8 +5248,8 @@ describe("createHost — registerForgeProvider", () => {
 
     const impl1 = { tag: "first" };
     const impl2 = { tag: "second" };
-    const dispose1 = host.registerForgeProvider({ id: "github" }, impl1);
-    host.registerForgeProvider({ id: "github" }, impl2);
+    const dispose1 = await host.registerForgeProvider({ id: "github" }, impl1);
+    await host.registerForgeProvider({ id: "github" }, impl2);
 
     // Calling the older disposer must pass the older impl so the registry
     // can decline to clear an already-overwritten entry. The registry side
@@ -4226,7 +5282,7 @@ describe("createHost — registerForgeProvider", () => {
       "acme.forge-flush"
     );
     const impl = { tag: "impl" };
-    host.registerForgeProvider({ id: "github" }, impl);
+    await host.registerForgeProvider({ id: "github" }, impl);
 
     vi.mocked(unregisterForgeProviderImpl).mockClear();
     service.unloadPlugin("acme.forge-flush");
@@ -4249,7 +5305,7 @@ describe("createHost — registerForgeProvider", () => {
     );
 
     const setCredentials = vi.fn();
-    host.registerForgeProvider({ id: "github" }, { setCredentials });
+    await host.registerForgeProvider({ id: "github" }, { setCredentials });
 
     expect(setCredentials).toHaveBeenCalledWith({ kind: "bearer", value: "stored-secret" });
   });
@@ -4286,7 +5342,7 @@ describe("createHost — registerForgeProvider", () => {
     );
 
     const setCredentials = vi.fn();
-    host.registerForgeProvider({ id: "github" }, { setCredentials });
+    await host.registerForgeProvider({ id: "github" }, { setCredentials });
 
     expect(setCredentials).toHaveBeenCalledWith({ kind: "bearer", value: "stored-secret" });
   });
@@ -4322,7 +5378,7 @@ describe("createHost — registerForgeProvider", () => {
       throw new Error("boom");
     });
     // A plugin's setCredentials throwing must not propagate out of binding.
-    const dispose = host.registerForgeProvider({ id: "github" }, { setCredentials });
+    const dispose = await host.registerForgeProvider({ id: "github" }, { setCredentials });
     expect(setCredentials).toHaveBeenCalled();
     expect(typeof dispose).toBe("function");
   });
@@ -4459,7 +5515,15 @@ describe("Plugin action registry", () => {
     expect(action?.effectiveDanger).toBe("confirm"); // host raised it
   });
 
-  it.each(["shell:exec", "git:write", "fs:project-write", "fs:user-data-write", "agent:invoke"])(
+  it.each([
+    "shell:exec",
+    "git:write",
+    "fs:project-write",
+    "fs:user-data-write",
+    "agent:invoke",
+    "agent:register",
+    "agent:input",
+  ])(
     "raises a self-declared 'safe' action to confirm when the manifest grants %s",
     async (capability) => {
       const name = `acme.perm-${capability.replace(/[^a-z]/g, "-")}`;
@@ -4858,6 +5922,75 @@ describe("createHost — registerAction", () => {
     expect(result).toBe("ran");
   });
 
+  it("audits a throwing action handler as an action-dispatch error record (#10463)", async () => {
+    const appendSpy = vi
+      .spyOn(getPluginActionAuditService(), "append")
+      .mockImplementation(() => {});
+    try {
+      const boom = new Error("action exploded");
+      const { host } = getHost("acme.act-test");
+      host.registerAction(descriptor(), () => {
+        throw boom;
+      });
+
+      await expect(
+        service.dispatchHandler(
+          "acme.act-test",
+          "acme.act-test.plan-from-issue",
+          makeCtx("acme.act-test"),
+          [{ issue: 7 }]
+        )
+      ).rejects.toBe(boom);
+
+      expect(appendSpy).toHaveBeenCalledTimes(1);
+      const record = appendSpy.mock.calls[0][0];
+      expect(record).toMatchObject({
+        pluginId: "acme.act-test",
+        actionId: "acme.act-test.plan-from-issue",
+        recordType: "action-dispatch",
+        result: "error",
+      });
+      expect(record.errorMessage).toContain("action exploded");
+      expect(record.argsHash).toMatch(/^[0-9a-f]{64}$/);
+      // Marked so the outer plugin:invoke catch won't record a duplicate.
+      expect(isAuditedHandlerFailure(boom)).toBe(true);
+    } finally {
+      appendSpy.mockRestore();
+    }
+  });
+
+  it("audits a successful action handler as an action-dispatch success record (#10517)", async () => {
+    const appendSpy = vi
+      .spyOn(getPluginActionAuditService(), "append")
+      .mockImplementation(() => {});
+    try {
+      const { host } = getHost("acme.act-test");
+      host.registerAction(descriptor(), () => "done");
+
+      const result = await service.dispatchHandler(
+        "acme.act-test",
+        "acme.act-test.plan-from-issue",
+        makeCtx("acme.act-test"),
+        [{ issue: 7 }]
+      );
+      expect(result).toBe("done");
+
+      expect(appendSpy).toHaveBeenCalledTimes(1);
+      const record = appendSpy.mock.calls[0][0];
+      expect(record).toMatchObject({
+        pluginId: "acme.act-test",
+        actionId: "acme.act-test.plan-from-issue",
+        recordType: "action-dispatch",
+        result: "success",
+      });
+      expect(record.errorMessage).toBe("");
+      expect(record.argsHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(typeof record.durationMs).toBe("number");
+    } finally {
+      appendSpy.mockRestore();
+    }
+  });
+
   it("rejects calls after the host is revoked", () => {
     const { host, revoke } = getHost("acme.act-test");
     revoke();
@@ -5074,6 +6207,8 @@ describe("createHost — registerAction", () => {
     service.unloadPlugin("acme.act-test");
 
     expect(service.listPluginActions()).toEqual([]);
+    // Once unloaded the plugin is no longer in `this.plugins`, so the ownership
+    // guard (#10462) rejects the dispatch before the action lookup runs.
     await expect(
       service.dispatchHandler(
         "acme.act-test",
@@ -5081,9 +6216,7 @@ describe("createHost — registerAction", () => {
         makeCtx("acme.act-test"),
         [{}]
       )
-    ).rejects.toThrow(
-      "No plugin handler registered for acme.act-test:acme.act-test.plan-from-issue"
-    );
+    ).rejects.toThrow('plugin:invoke rejected: plugin "acme.act-test" is not loaded');
   });
 });
 
@@ -5127,50 +6260,6 @@ describe("Plugin panel kind registry broadcast", () => {
       (call) => (call[1] as { name?: unknown })?.name === "plugin:panel-kinds-changed"
     );
     expect(panelKindBroadcasts).toHaveLength(0);
-  });
-});
-
-describe("Plugin menu items broadcast", () => {
-  it("coalesces load + unload in the same tick into a single broadcast with complete=true", async () => {
-    // Schedule a non-complete (load) broadcast followed by a complete (unload)
-    // broadcast in the same synchronous tick. The OR-accumulation invariant
-    // means the single coalesced broadcast must carry complete=true so the
-    // renderer treats it as authoritative.
-    const service = new PluginService();
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (service as any).broadcaster.scheduleMenuItemsBroadcast(false);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (service as any).broadcaster.scheduleMenuItemsBroadcast(true);
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    const menuItemsBroadcasts = broadcastToRendererMock.mock.calls.filter(
-      (call) => (call[1] as { name?: unknown })?.name === "plugin:menu-items-changed"
-    );
-    expect(menuItemsBroadcasts).toHaveLength(1);
-    expect(
-      (menuItemsBroadcasts[0]?.[1] as { payload: { complete: boolean } }).payload.complete
-    ).toBe(true);
-
-    service.dispose();
-  });
-
-  it("dispose() drops a menu items broadcast scheduled before disposal", async () => {
-    const service = new PluginService();
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (service as any).broadcaster.scheduleMenuItemsBroadcast(true);
-    service.dispose();
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    const menuItemsBroadcasts = broadcastToRendererMock.mock.calls.filter(
-      (call) => (call[1] as { name?: unknown })?.name === "plugin:menu-items-changed"
-    );
-    expect(menuItemsBroadcasts).toHaveLength(0);
   });
 });
 
@@ -5376,6 +6465,12 @@ describe("Plugin worktree host API", () => {
     aheadCount?: number;
     issueNumber?: number;
     lastActivityTimestamp?: number | null;
+    worktreeChanges?: {
+      worktreeId: string;
+      rootPath: string;
+      changes: Array<{ path: string; status: string; insertions: null; deletions: null }>;
+      changedFileCount: number;
+    };
     _secret?: string;
   };
 
@@ -5408,6 +6503,7 @@ describe("Plugin worktree host API", () => {
     broadcastToRenderer: (c: string, p: unknown) => void;
     getActiveWorktree: () => Promise<unknown>;
     getWorktrees: () => Promise<unknown[]>;
+    getWorktreeStatus: (path: string) => Promise<unknown>;
     onDidChangeActiveWorktree: (cb: (s: unknown) => void) => () => void;
     onDidChangeWorktrees: (cb: (list: unknown[]) => void) => () => void;
   };
@@ -5460,6 +6556,48 @@ describe("Plugin worktree host API", () => {
     expect(list.every((s) => Object.isFrozen(s))).toBe(true);
   });
 
+  it("getWorktreeStatus returns the changed-file projection for the matching path", async () => {
+    const { host } = await setup([
+      mkSnap({ id: "a", isCurrent: false }),
+      mkSnap({
+        id: "b",
+        isCurrent: true,
+        worktreeChanges: {
+          worktreeId: "b",
+          rootPath: "/tmp/b",
+          changes: [
+            { path: "src/x.ts", status: "modified", insertions: null, deletions: null },
+            { path: "src/y.ts", status: "untracked", insertions: null, deletions: null },
+          ],
+          changedFileCount: 2,
+        },
+      }),
+    ]);
+
+    const status = (await host.getWorktreeStatus("/tmp/b")) as {
+      changedFileCount: number;
+      files: Array<{ path: string; state: string }>;
+    } | null;
+    expect(status).not.toBeNull();
+    expect(status!.changedFileCount).toBe(2);
+    expect(status!.files).toEqual([
+      { path: "src/x.ts", state: "modified" },
+      { path: "src/y.ts", state: "untracked" },
+    ]);
+    expect(Object.isFrozen(status)).toBe(true);
+  });
+
+  it("getWorktreeStatus returns null when no worktree matches the path", async () => {
+    const { host } = await setup([mkSnap({ id: "a", isCurrent: true })]);
+    expect(await host.getWorktreeStatus("/tmp/does-not-exist")).toBeNull();
+  });
+
+  it("getWorktreeStatus returns null when the matched worktree has no polled changes", async () => {
+    const { host } = await setup([mkSnap({ id: "a", isCurrent: true })]);
+    // /tmp/a exists but carries no worktreeChanges → null, not an empty status.
+    expect(await host.getWorktreeStatus("/tmp/a")).toBeNull();
+  });
+
   it("getActiveWorktree returns null when WorkspaceClient is not wired", async () => {
     await writePlugin("wt-nowsc", { name: "acme.wt-nowsc", version: "1.0.0" });
     const service = new PluginService(tmpDir);
@@ -5480,7 +6618,7 @@ describe("Plugin worktree host API", () => {
 
     // Subscribe during "activate" window (before revoke), as a real plugin would.
     const cb = vi.fn();
-    const dispose = host.onDidChangeActiveWorktree(cb);
+    const dispose = await host.onDidChangeActiveWorktree(cb);
     revoke();
 
     client.setStates([mkSnap({ id: "b", isCurrent: true, branch: "dev" })]);
@@ -5505,7 +6643,7 @@ describe("Plugin worktree host API", () => {
     ]);
 
     const cb = vi.fn();
-    host.onDidChangeWorktrees(cb);
+    await host.onDidChangeWorktrees(cb);
     revoke();
 
     client.emit("worktree-update", {
@@ -5523,8 +6661,8 @@ describe("Plugin worktree host API", () => {
 
     const cbA = vi.fn();
     const cbB = vi.fn();
-    const disposeA = host.onDidChangeActiveWorktree(cbA);
-    host.onDidChangeActiveWorktree(cbB);
+    const disposeA = await host.onDidChangeActiveWorktree(cbA);
+    await host.onDidChangeActiveWorktree(cbB);
     revoke();
 
     disposeA();
@@ -5541,16 +6679,21 @@ describe("Plugin worktree host API", () => {
 
     const cb1 = vi.fn();
     const cb2 = vi.fn();
-    host.onDidChangeActiveWorktree(cb1);
-    host.onDidChangeWorktrees(cb2);
+    await host.onDidChangeActiveWorktree(cb1);
+    await host.onDidChangeWorktrees(cb2);
     revoke();
 
-    expect(client.listenerCount("worktree-activated")).toBe(1);
+    // worktree-activated carries an extra service-level listener: the #10621
+    // cache-eviction subscription wired in setWorkspaceClient (independent of any
+    // plugin). worktree-update has only the plugin's listener.
+    expect(client.listenerCount("worktree-activated")).toBe(2);
     expect(client.listenerCount("worktree-update")).toBe(1);
 
     service.unloadPlugin("acme.wt-host");
 
-    expect(client.listenerCount("worktree-activated")).toBe(0);
+    // The plugin's listeners are flushed; the service-level eviction listener on
+    // worktree-activated survives the unload (it's torn down only on dispose).
+    expect(client.listenerCount("worktree-activated")).toBe(1);
     expect(client.listenerCount("worktree-update")).toBe(0);
 
     client.emit("worktree-activated", { worktreeId: "x", projectPath: "/p" });
@@ -5577,7 +6720,7 @@ describe("Plugin worktree host API", () => {
   it("callbacks do not fire after unloadPlugin even if the client emits again", async () => {
     const { service, host, client, revoke } = await setup();
     const cb = vi.fn();
-    host.onDidChangeActiveWorktree(cb);
+    await host.onDidChangeActiveWorktree(cb);
     revoke();
 
     service.unloadPlugin("acme.wt-host");
@@ -5602,14 +6745,16 @@ describe("Plugin worktree host API", () => {
     ).createHost("acme.wt-boot");
 
     const cb = vi.fn();
-    host.onDidChangeActiveWorktree(cb);
+    await host.onDidChangeActiveWorktree(cb);
     revoke();
 
     // Now the client becomes available — subscriptions must be replayed.
     const client = createMockClient([mkSnap({ id: "b", isCurrent: true, branch: "dev" })]);
     (service as unknown as { setWorkspaceClient: (c: unknown) => void }).setWorkspaceClient(client);
 
-    expect(client.listenerCount("worktree-activated")).toBe(1);
+    // One replayed plugin subscription plus the service-level cache-eviction
+    // listener that setWorkspaceClient always attaches (#10621).
+    expect(client.listenerCount("worktree-activated")).toBe(2);
 
     client.emit("worktree-activated", { worktreeId: "b", projectPath: "/p" });
     await vi.waitFor(() => expect(cb).toHaveBeenCalledTimes(1));
@@ -5628,14 +6773,16 @@ describe("Plugin worktree host API", () => {
     ).createHost("acme.wt-boot2");
 
     const cb = vi.fn();
-    const dispose = host.onDidChangeActiveWorktree(cb);
+    const dispose = await host.onDidChangeActiveWorktree(cb);
     revoke();
     dispose();
 
     const client = createMockClient([mkSnap({ id: "a", isCurrent: true })]);
     (service as unknown as { setWorkspaceClient: (c: unknown) => void }).setWorkspaceClient(client);
 
-    expect(client.listenerCount("worktree-activated")).toBe(0);
+    // The disposed plugin subscription does not replay; only the service-level
+    // cache-eviction listener that setWorkspaceClient attaches remains (#10621).
+    expect(client.listenerCount("worktree-activated")).toBe(1);
     client.emit("worktree-activated", { worktreeId: "a", projectPath: "/p" });
     await new Promise((r) => setTimeout(r, 10));
     expect(cb).not.toHaveBeenCalled();
@@ -5648,7 +6795,7 @@ describe("Plugin worktree host API", () => {
     ]);
 
     const cb = vi.fn();
-    host.onDidChangeWorktrees(cb);
+    await host.onDidChangeWorktrees(cb);
     revoke();
 
     client.setStates([mkSnap({ id: "a", isCurrent: true })]);
@@ -5663,7 +6810,7 @@ describe("Plugin worktree host API", () => {
     const { host, client, revoke } = await setup([mkSnap({ id: "a", isCurrent: true })]);
 
     const cb = vi.fn();
-    const dispose = host.onDidChangeWorktrees(cb);
+    const dispose = await host.onDidChangeWorktrees(cb);
     revoke();
     expect(client.listenerCount("worktree-update")).toBe(1);
     expect(client.listenerCount("worktree-removed")).toBe(1);
@@ -5701,6 +6848,7 @@ describe("Plugin worktree host API", () => {
       "mood",
       "name",
       "path",
+      "status",
       "worktreeId",
     ];
     expect(Object.keys(active).sort()).toEqual(expected);
@@ -5716,6 +6864,510 @@ describe("Plugin worktree host API", () => {
     ]) {
       expect(removed in active).toBe(false);
     }
+  });
+});
+
+describe("Plugin agent-state host API (#10521)", () => {
+  type AgentHost = {
+    pluginId: string;
+    getAgentState: () => Promise<unknown>;
+    onDidChangeAgentState: (cb: (s: unknown) => void) => Promise<() => void>;
+  };
+
+  /**
+   * Load a plugin with the given capabilities and build a host for it. The
+   * `agent:read`-gated methods read declared capabilities off the loaded
+   * manifest, so the capability must be present on disk before initialize().
+   */
+  async function setupAgentHost(
+    capabilities: string[]
+  ): Promise<{ service: PluginService; host: AgentHost; revoke: () => void }> {
+    await writePlugin("agent-host", {
+      name: "acme.agent-host",
+      version: "1.0.0",
+      capabilities,
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    const { host, revoke } = (
+      service as unknown as {
+        createHost: (id: string) => { host: AgentHost; revoke: () => void };
+      }
+    ).createHost("acme.agent-host");
+    return { service, host, revoke };
+  }
+
+  function emitState(
+    over: Partial<{
+      agentId: string;
+      state: string;
+      previousState: string;
+      waitingReason: string;
+      sessionCost: number;
+      sessionTokens: number;
+      timestamp: number;
+    }> = {}
+  ): void {
+    events.emit("agent:state-changed", {
+      state: "working",
+      previousState: "idle",
+      trigger: "output",
+      confidence: 1,
+      timestamp: 1000,
+      ...over,
+    } as never);
+  }
+
+  it("getAgentState rejects with PERMISSION_REQUIRED when agent:read is not declared", async () => {
+    const { host } = await setupAgentHost([]);
+    await expect(host.getAgentState()).rejects.toThrow(/PERMISSION_REQUIRED/);
+  });
+
+  it("onDidChangeAgentState throws PERMISSION_REQUIRED when agent:read is not declared", async () => {
+    const { host } = await setupAgentHost([]);
+    // The capability guard throws synchronously before returning the disposer
+    // promise (same shape as onDidChangeWorktrees).
+    expect(() => host.onDidChangeAgentState(() => {})).toThrow(/PERMISSION_REQUIRED/);
+  });
+
+  it("getAgentState returns null before any agent state change is observed", async () => {
+    const { host } = await setupAgentHost(["agent:read"]);
+    expect(await host.getAgentState()).toBeNull();
+  });
+
+  it("onDidChangeAgentState delivers a frozen projected snapshot on state-changed", async () => {
+    const { host } = await setupAgentHost(["agent:read"]);
+    const received: Array<Record<string, unknown>> = [];
+    await host.onDidChangeAgentState((s) => received.push(s as Record<string, unknown>));
+
+    emitState({
+      agentId: "agent-1",
+      state: "waiting",
+      previousState: "working",
+      waitingReason: "question",
+      timestamp: 4242,
+    });
+
+    expect(received).toHaveLength(1);
+    const snap = received[0];
+    expect(snap.agentId).toBe("agent-1");
+    expect(snap.state).toBe("waiting");
+    expect(snap.previousState).toBe("working");
+    expect(snap.running).toBe(true);
+    expect(snap.waitingReason).toBe("question");
+    expect(snap.timestamp).toBe(4242);
+    expect(Object.isFrozen(snap)).toBe(true);
+  });
+
+  it("getAgentState returns the last projected snapshot after a state change", async () => {
+    const { host } = await setupAgentHost(["agent:read"]);
+    await host.onDidChangeAgentState(() => {});
+
+    emitState({ agentId: "agent-2", state: "completed", previousState: "working", timestamp: 99 });
+
+    const snap = (await host.getAgentState()) as Record<string, unknown>;
+    expect(snap).not.toBeNull();
+    expect(snap.agentId).toBe("agent-2");
+    expect(snap.state).toBe("completed");
+    expect(snap.running).toBe(false);
+  });
+
+  it("derives running=true only for working/waiting/directing", async () => {
+    const { host } = await setupAgentHost(["agent:read"]);
+    const received: Array<Record<string, unknown>> = [];
+    await host.onDidChangeAgentState((s) => received.push(s as Record<string, unknown>));
+
+    for (const state of ["idle", "working", "waiting", "directing", "completed", "exited"]) {
+      emitState({ state, previousState: "idle" });
+    }
+
+    const byState = new Map(received.map((s) => [s.state as string, s.running as boolean]));
+    expect(byState.get("idle")).toBe(false);
+    expect(byState.get("working")).toBe(true);
+    expect(byState.get("waiting")).toBe(true);
+    expect(byState.get("directing")).toBe(true);
+    expect(byState.get("completed")).toBe(false);
+    expect(byState.get("exited")).toBe(false);
+  });
+
+  it("the snapshot omits internal routing ids and activity-detector internals", async () => {
+    const { host } = await setupAgentHost(["agent:read"]);
+    const received: Array<Record<string, unknown>> = [];
+    await host.onDidChangeAgentState((s) => received.push(s as Record<string, unknown>));
+
+    events.emit("agent:state-changed", {
+      agentId: "agent-3",
+      state: "working",
+      previousState: "idle",
+      trigger: "output",
+      confidence: 0.9,
+      cwd: "/secret/path",
+      terminalId: "term-internal",
+      worktreeId: "wt-internal",
+      temperature: 42,
+      heatAdded: 7,
+      changedChars: 3,
+      timestamp: 1,
+    } as never);
+
+    const snap = received[0];
+    for (const leaked of [
+      "terminalId",
+      "worktreeId",
+      "cwd",
+      "trigger",
+      "confidence",
+      "temperature",
+      "heatAdded",
+      "changedChars",
+    ]) {
+      expect(leaked in snap).toBe(false);
+    }
+    expect(Object.keys(snap).sort()).toEqual([
+      "agentId",
+      "previousState",
+      "running",
+      "state",
+      "timestamp",
+    ]);
+  });
+
+  it("the disposer stops further callbacks and is safe to call twice", async () => {
+    const { host } = await setupAgentHost(["agent:read"]);
+    const received: unknown[] = [];
+    const dispose = await host.onDidChangeAgentState((s) => received.push(s));
+
+    emitState({ state: "working" });
+    expect(received).toHaveLength(1);
+
+    dispose();
+    dispose(); // double-dispose must not throw
+    emitState({ state: "idle" });
+    expect(received).toHaveLength(1);
+  });
+
+  it("unloading the plugin disposes the subscription and stops callbacks", async () => {
+    const { service, host } = await setupAgentHost(["agent:read"]);
+    const received: unknown[] = [];
+    await host.onDidChangeAgentState((s) => received.push(s));
+
+    emitState({ state: "working" });
+    expect(received).toHaveLength(1);
+
+    (service as unknown as { unloadPlugin: (id: string) => void }).unloadPlugin("acme.agent-host");
+
+    emitState({ state: "idle" });
+    expect(received).toHaveLength(1);
+  });
+
+  it("getAgentState returns null (not an error) after the plugin is unloaded", async () => {
+    const { service, host } = await setupAgentHost(["agent:read"]);
+    await host.onDidChangeAgentState(() => {});
+    emitState({ agentId: "a-pre", state: "working", previousState: "idle" });
+    expect(await host.getAgentState()).not.toBeNull();
+
+    (service as unknown as { unloadPlugin: (id: string) => void }).unloadPlugin("acme.agent-host");
+
+    // declaredCapabilities() returns [] post-unload, so a capability check first
+    // would mis-throw PERMISSION_REQUIRED — the liveness check must win.
+    expect(await host.getAgentState()).toBeNull();
+  });
+
+  it("getAgentState stays null when events fire but the plugin never subscribed", async () => {
+    const { host } = await setupAgentHost(["agent:read"]);
+    emitState({ state: "working", previousState: "idle" });
+    // No subscription means no handler caches the snapshot — the host keeps no
+    // pre-subscription history.
+    expect(await host.getAgentState()).toBeNull();
+  });
+
+  it("getAgentState inside the callback observes the just-delivered snapshot", async () => {
+    const { host } = await setupAgentHost(["agent:read"]);
+    let insidePromise: Promise<unknown> | null = null;
+    await host.onDidChangeAgentState(() => {
+      insidePromise = host.getAgentState();
+    });
+
+    emitState({ agentId: "a9", state: "working", previousState: "idle" });
+
+    const inside = (await insidePromise) as Record<string, unknown> | null;
+    expect(inside).not.toBeNull();
+    expect(inside?.agentId).toBe("a9");
+  });
+
+  it("multiple subscriptions from the same plugin dispose independently", async () => {
+    const { host } = await setupAgentHost(["agent:read"]);
+    const a: unknown[] = [];
+    const b: unknown[] = [];
+    const disposeA = await host.onDidChangeAgentState((s) => a.push(s));
+    await host.onDidChangeAgentState((s) => b.push(s));
+
+    emitState({ state: "working" });
+    expect(a).toHaveLength(1);
+    expect(b).toHaveLength(1);
+
+    disposeA();
+    emitState({ state: "idle" });
+    expect(a).toHaveLength(1); // disposed — no more deliveries
+    expect(b).toHaveLength(2); // still active
+  });
+
+  it("onDidChangeAgentState throws once the host is revoked", async () => {
+    const { host, revoke } = await setupAgentHost(["agent:read"]);
+    revoke();
+    expect(() => host.onDidChangeAgentState(() => {})).toThrow(/host revoked/);
+  });
+});
+
+describe("Plugin agent-input host API (#10558)", () => {
+  type FakeTerminal = {
+    id: string;
+    projectId?: string;
+    agentState?: string;
+    detectedAgentId?: string;
+    launchAgentId?: string;
+    lastOutputTime?: number;
+    activityTier?: "active" | "background";
+    hasPty?: boolean;
+  };
+  type AgentInputHost = {
+    pluginId: string;
+    sendToActiveAgent: (text: string, options?: { submit?: boolean }) => Promise<void>;
+  };
+  type FakePtyClient = {
+    submit: ReturnType<typeof vi.fn>;
+    stage: ReturnType<typeof vi.fn>;
+    getActiveProjectId: () => string | null;
+    getAllTerminalsAsync: () => Promise<FakeTerminal[]>;
+  };
+
+  function installFakePtyClient(
+    terminals: FakeTerminal[],
+    activeProjectId: string | null = null
+  ): FakePtyClient {
+    const fake: FakePtyClient = {
+      submit: vi.fn(),
+      stage: vi.fn(),
+      getActiveProjectId: () => activeProjectId,
+      getAllTerminalsAsync: () => Promise.resolve(terminals),
+    };
+    setPtyClientRef(fake as never);
+    return fake;
+  }
+
+  async function setupInputHost(
+    capabilities: string[]
+  ): Promise<{ service: PluginService; host: AgentInputHost }> {
+    await writePlugin("agent-input", {
+      name: "acme.agent-input",
+      version: "1.0.0",
+      capabilities,
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    const { host } = (
+      service as unknown as { createHost: (id: string) => { host: AgentInputHost } }
+    ).createHost("acme.agent-input");
+    return { service, host };
+  }
+
+  beforeEach(() => {
+    // Auto-approve JIT consent so the write-path assertions run without a
+    // renderer; the denial branch is covered explicitly below.
+    getPluginCapabilityConsentService().setConsentBridge(async () => "approved-once");
+  });
+  afterEach(() => {
+    _resetPluginCapabilityServicesForTest();
+    setPtyClientRef(null);
+  });
+
+  it("rejects with PERMISSION_REQUIRED when agent:input is not declared", async () => {
+    const fake = installFakePtyClient([
+      { id: "t1", detectedAgentId: "claude", agentState: "waiting", hasPty: true },
+    ]);
+    const { host } = await setupInputHost(["agent:read"]);
+    await expect(host.sendToActiveAgent("hello")).rejects.toThrow(
+      /PERMISSION_REQUIRED.*agent:input/
+    );
+    expect(fake.submit).not.toHaveBeenCalled();
+    expect(fake.stage).not.toHaveBeenCalled();
+  });
+
+  it("rejects empty text before consulting consent", async () => {
+    installFakePtyClient([{ id: "t1", detectedAgentId: "claude", hasPty: true }]);
+    const consent = getPluginCapabilityConsentService();
+    const bridge = vi.fn(async () => "approved-once" as const);
+    consent.setConsentBridge(bridge);
+    const { host } = await setupInputHost(["agent:input"]);
+    await expect(host.sendToActiveAgent("")).rejects.toThrow(/non-empty/);
+    expect(bridge).not.toHaveBeenCalled();
+  });
+
+  it("rejects whitespace-only text without banking consent or writing (#10558)", async () => {
+    const fake = installFakePtyClient([
+      { id: "t1", detectedAgentId: "claude", agentState: "waiting", hasPty: true },
+    ]);
+    const bridge = vi.fn(async () => "approved-once" as const);
+    getPluginCapabilityConsentService().setConsentBridge(bridge);
+    const { host } = await setupInputHost(["agent:input"]);
+    await expect(host.sendToActiveAgent("\n")).rejects.toThrow(/non-empty/);
+    await expect(host.sendToActiveAgent("   ", { submit: true })).rejects.toThrow(/non-empty/);
+    expect(bridge).not.toHaveBeenCalled();
+    expect(fake.stage).not.toHaveBeenCalled();
+    expect(fake.submit).not.toHaveBeenCalled();
+  });
+
+  it("stages (no Enter) by default when submit is omitted", async () => {
+    const fake = installFakePtyClient([
+      { id: "t1", detectedAgentId: "claude", agentState: "waiting", hasPty: true },
+    ]);
+    const { host } = await setupInputHost(["agent:input"]);
+    await host.sendToActiveAgent("draft prompt");
+    expect(fake.stage).toHaveBeenCalledWith("t1", "draft prompt");
+    expect(fake.submit).not.toHaveBeenCalled();
+  });
+
+  it("submits (with Enter) when submit:true", async () => {
+    const fake = installFakePtyClient([
+      { id: "t1", detectedAgentId: "claude", agentState: "waiting", hasPty: true },
+    ]);
+    const { host } = await setupInputHost(["agent:input"]);
+    await host.sendToActiveAgent("run it", { submit: true });
+    expect(fake.submit).toHaveBeenCalledWith("t1", "run it");
+    expect(fake.stage).not.toHaveBeenCalled();
+  });
+
+  it("prefers a focused/visible agent over a backgrounded waiting agent", async () => {
+    const fake = installFakePtyClient([
+      {
+        id: "bg",
+        detectedAgentId: "claude",
+        agentState: "waiting",
+        activityTier: "background",
+        lastOutputTime: 100,
+        hasPty: true,
+      },
+      {
+        id: "focused",
+        launchAgentId: "claude",
+        agentState: "working",
+        activityTier: "active",
+        lastOutputTime: 50,
+        hasPty: true,
+      },
+    ]);
+    const { host } = await setupInputHost(["agent:input"]);
+    await host.sendToActiveAgent("x");
+    expect(fake.stage).toHaveBeenCalledWith("focused", "x");
+  });
+
+  it("falls back to most-recently-active agent when none are focused/waiting", async () => {
+    const fake = installFakePtyClient([
+      {
+        id: "old",
+        detectedAgentId: "claude",
+        agentState: "idle",
+        lastOutputTime: 10,
+        hasPty: true,
+      },
+      {
+        id: "new",
+        detectedAgentId: "claude",
+        agentState: "idle",
+        lastOutputTime: 99,
+        hasPty: true,
+      },
+    ]);
+    const { host } = await setupInputHost(["agent:input"]);
+    await host.sendToActiveAgent("x");
+    expect(fake.stage).toHaveBeenCalledWith("new", "x");
+  });
+
+  it("scopes selection to the active project when one is set", async () => {
+    const fake = installFakePtyClient(
+      [
+        {
+          id: "other",
+          detectedAgentId: "claude",
+          projectId: "p2",
+          lastOutputTime: 999,
+          hasPty: true,
+        },
+        { id: "mine", detectedAgentId: "claude", projectId: "p1", lastOutputTime: 1, hasPty: true },
+      ],
+      "p1"
+    );
+    const { host } = await setupInputHost(["agent:input"]);
+    await host.sendToActiveAgent("x");
+    expect(fake.stage).toHaveBeenCalledWith("mine", "x");
+  });
+
+  it("never crosses into another project's terminals (#10558)", async () => {
+    const fake = installFakePtyClient(
+      [
+        {
+          id: "other",
+          detectedAgentId: "claude",
+          projectId: "p2",
+          lastOutputTime: 999,
+          hasPty: true,
+        },
+      ],
+      "p1"
+    );
+    const { host } = await setupInputHost(["agent:input"]);
+    await expect(host.sendToActiveAgent("x")).rejects.toThrow(/NO_ACTIVE_AGENT/);
+    expect(fake.stage).not.toHaveBeenCalled();
+  });
+
+  it("excludes exited, completed, and non-agent terminals", async () => {
+    const fake = installFakePtyClient([
+      { id: "noagent", agentState: "idle", hasPty: true },
+      { id: "exited", detectedAgentId: "claude", agentState: "exited", hasPty: true },
+      { id: "completed", detectedAgentId: "claude", agentState: "completed", hasPty: true },
+      { id: "dead", detectedAgentId: "claude", agentState: "idle", hasPty: false },
+      {
+        id: "live",
+        detectedAgentId: "claude",
+        agentState: "idle",
+        lastOutputTime: 5,
+        hasPty: true,
+      },
+    ]);
+    const { host } = await setupInputHost(["agent:input"]);
+    await host.sendToActiveAgent("x");
+    expect(fake.stage).toHaveBeenCalledWith("live", "x");
+  });
+
+  it("throws NO_ACTIVE_AGENT when no eligible agent terminal exists", async () => {
+    const fake = installFakePtyClient([
+      { id: "noagent", agentState: "idle", hasPty: true },
+      { id: "exited", detectedAgentId: "claude", agentState: "exited", hasPty: true },
+    ]);
+    const { host } = await setupInputHost(["agent:input"]);
+    await expect(host.sendToActiveAgent("x")).rejects.toThrow(/NO_ACTIVE_AGENT/);
+    expect(fake.stage).not.toHaveBeenCalled();
+  });
+
+  it("blocks the write when consent is denied", async () => {
+    const fake = installFakePtyClient([
+      { id: "t1", detectedAgentId: "claude", agentState: "waiting", hasPty: true },
+    ]);
+    getPluginCapabilityConsentService().setConsentBridge(async () => "rejected");
+    const { host } = await setupInputHost(["agent:input"]);
+    await expect(host.sendToActiveAgent("x")).rejects.toThrow(/PERMISSION_REQUIRED/);
+    expect(fake.stage).not.toHaveBeenCalled();
+    expect(fake.submit).not.toHaveBeenCalled();
+  });
+
+  it("becomes a no-op after the plugin is unloaded", async () => {
+    const fake = installFakePtyClient([
+      { id: "t1", detectedAgentId: "claude", agentState: "waiting", hasPty: true },
+    ]);
+    const { service, host } = await setupInputHost(["agent:input"]);
+    (service as unknown as { unloadPlugin: (id: string) => void }).unloadPlugin("acme.agent-input");
+    await expect(host.sendToActiveAgent("x")).resolves.toBeUndefined();
+    expect(fake.stage).not.toHaveBeenCalled();
   });
 });
 
@@ -5740,7 +7392,7 @@ describe("reserved contribution point warnings", () => {
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
-        experimental_views: [
+        views: [
           {
             id: "main",
             name: "Main",
@@ -5763,19 +7415,19 @@ describe("reserved contribution point warnings", () => {
       })
     );
     const viewWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
-      String(call[0]).includes("experimental_views")
+      String(call[0]).includes(": views ")
     );
     expect(viewWarnings).toHaveLength(0);
   });
 
-  it("warns and skips an experimental_views entry with no matching panel id", async () => {
+  it("rejects the whole manifest when a views entry has no matching panel id (#10620)", async () => {
     await writePlugin("orphan", {
       name: "acme.orphan",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
-        experimental_views: [
+        views: [
           {
             id: "ghost",
             name: "Ghost",
@@ -5789,29 +7441,25 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
-    expect(registerPanelKind).toHaveBeenCalledTimes(1);
-    expect(registerPanelKind).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "acme.orphan.main" })
-    );
-    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      componentPath?: string;
-    };
-    expect(panelCall.componentPath).toBeUndefined();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Plugin "acme.orphan": experimental_views entry "ghost" has no matching contributes.panels entry'
-      )
+    // An orphan view (id matches no panel) is now a hard manifest error
+    // (view_panel_ref_unknown superRefine), so the plugin never loads — no
+    // panel kind is registered and the failure surfaces as an invalid manifest.
+    expect(service.listPlugins()).toHaveLength(0);
+    expect(registerPanelKind).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid manifest in orphan"),
+      expect.anything()
     );
   });
 
-  it("warns and skips a sidebar-location view entry until the sidebar host ships", async () => {
+  it("rejects the whole manifest when a view targets the unimplemented sidebar location (#10464)", async () => {
     await writePlugin("sidebar", {
       name: "acme.sidebar",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
-        experimental_views: [
+        views: [
           {
             id: "main",
             name: "Main",
@@ -5825,25 +7473,25 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
-    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      componentPath?: string;
-    };
-    expect(panelCall.componentPath).toBeUndefined();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Plugin "acme.sidebar": experimental_views entry "main" has location "sidebar" which is not yet implemented'
-      )
+    // `location: "sidebar"` fails ViewContributionSchema at parse time, so the
+    // manifest is invalid and the plugin never loads — no panel kind, no
+    // sibling registration, surfaced as a manifest error rather than a warning.
+    expect(service.listPlugins()).toHaveLength(0);
+    expect(registerPanelKind).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid manifest in sidebar"),
+      expect.anything()
     );
   });
 
-  it("warns when an experimental_views entry targets a PTY-backed panel", async () => {
+  it("warns when an views entry targets a PTY-backed panel", async () => {
     await writePlugin("pty-view", {
       name: "acme.pty-view",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc", hasPty: true }],
-        experimental_views: [
+        views: [
           {
             id: "main",
             name: "Main",
@@ -5864,18 +7512,18 @@ describe("reserved contribution point warnings", () => {
     expect(panelCall.hasPty).toBe(true);
     expect(panelCall.componentPath).toBeUndefined();
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('experimental_views entry "main" matches a panel with hasPty=true')
+      expect.stringContaining('views entry "main" matches a panel with hasPty=true')
     );
   });
 
-  it("rejects an unsafe experimental_views componentPath", async () => {
+  it("rejects the whole manifest when a view declares a traversal componentPath (#10464)", async () => {
     await writePlugin("unsafe", {
       name: "acme.unsafe",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
-        experimental_views: [
+        views: [
           {
             id: "main",
             name: "Main",
@@ -5889,23 +7537,24 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
-    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      componentPath?: string;
-    };
-    expect(panelCall.componentPath).toBeUndefined();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('experimental_views entry "main" has an unsafe componentPath')
+    // An unsafe componentPath fails ViewContributionSchema's refine at parse
+    // time, so the manifest is invalid and the plugin never loads.
+    expect(service.listPlugins()).toHaveLength(0);
+    expect(registerPanelKind).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid manifest in unsafe"),
+      expect.anything()
     );
   });
 
-  it("rejects an absolute https componentPath as unsafe", async () => {
+  it("rejects the whole manifest when a view declares an https componentPath (#10464)", async () => {
     await writePlugin("https", {
       name: "acme.https",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
-        experimental_views: [
+        views: [
           {
             id: "main",
             name: "Main",
@@ -5919,23 +7568,22 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
-    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      componentPath?: string;
-    };
-    expect(panelCall.componentPath).toBeUndefined();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('experimental_views entry "main" has an unsafe componentPath')
+    expect(service.listPlugins()).toHaveLength(0);
+    expect(registerPanelKind).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid manifest in https"),
+      expect.anything()
     );
   });
 
-  it("warns and keeps the first occurrence on duplicate experimental_views ids", async () => {
+  it("rejects the whole manifest on duplicate views ids (#10620)", async () => {
     await writePlugin("dup", {
       name: "acme.dup",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
-        experimental_views: [
+        views: [
           { id: "main", name: "First", componentPath: "./first.js", location: "panel" },
           { id: "main", name: "Second", componentPath: "./second.js", location: "panel" },
         ],
@@ -5945,23 +7593,25 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
-    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      componentPath?: string;
-    };
-    expect(panelCall.componentPath).toBe("plugin://acme.dup/first.js");
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('experimental_views has duplicate entries for id "main"')
+    // A duplicate view id is now a hard manifest error
+    // (duplicate_contribution_id superRefine), so the plugin never loads —
+    // no first-wins, no panel kind registered.
+    expect(service.listPlugins()).toHaveLength(0);
+    expect(registerPanelKind).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid manifest in dup"),
+      expect.anything()
     );
   });
 
-  it("registers a contributes.experimental_mcpServers entry without eagerly spawning it (#9235)", async () => {
+  it("registers a contributes.mcpServers entry without eagerly spawning it (#9235)", async () => {
     mockPluginMcpSupervisor.start.mockClear();
     await writePlugin("mcp", {
       name: "acme.mcp",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
-        experimental_mcpServers: [
+        mcpServers: [
           {
             id: "linear",
             name: "Linear MCP",
@@ -5998,6 +7648,19 @@ describe("reserved contribution point warnings", () => {
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
+        // `settingsScopeRef` / `viewRefs` are cross-validated against the
+        // manifest's own settings/views (#10620), so the referenced ids must
+        // exist; the referenced view in turn needs a matching panel id.
+        panels: [{ id: "github-issues", name: "Issues", iconId: "eye", color: "#abc" }],
+        settings: [{ id: "github", type: "string", label: "GitHub" }],
+        views: [
+          {
+            id: "github-issues",
+            name: "Issues",
+            componentPath: "./issues.js",
+            location: "panel",
+          },
+        ],
         forgeProviders: [
           {
             id: "github",
@@ -6026,8 +7689,6 @@ describe("reserved contribution point warnings", () => {
       },
     ]);
     expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("contributes.forgeProviders"));
-    // A forge-only manifest does not touch the other registries.
-    expect(registerPanelKind).not.toHaveBeenCalled();
     expect(registerToolbarButton).not.toHaveBeenCalled();
     expect(registerPluginMenuItem).not.toHaveBeenCalled();
   });
@@ -6072,7 +7733,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.explicit-empty",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
-      contributes: { experimental_views: [], experimental_mcpServers: [], forgeProviders: [] },
+      contributes: { views: [], mcpServers: [], forgeProviders: [] },
     });
 
     const service = new PluginService(tmpDir, "0.7.5");
@@ -6089,16 +7750,16 @@ describe("reserved contribution point warnings", () => {
     expect(warnMessages.some((m: string) => m.includes("contributes.forgeProviders"))).toBe(false);
   });
 
-  it("still processes other contributions when reserved points are present", async () => {
+  it("migrates deprecated experimental_* contribution aliases to their stable names and warns (#10466)", async () => {
     mockPluginMcpSupervisor.start.mockClear();
-    await writePlugin("mixed", {
-      name: "acme.mixed",
+    await writePlugin("legacy", {
+      name: "acme.legacy",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
         experimental_views: [
-          { id: "main", name: "Main", componentPath: "./v.js", location: "sidebar" },
+          { id: "viewer", name: "Viewer", componentPath: "./v.js", location: "panel" },
         ],
         experimental_mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
       },
@@ -6107,32 +7768,73 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
+    // The deprecated aliases are honored: the view binds to its panel and the
+    // MCP contribution resolves through the canonical lookup.
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(registerPanelKind).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "acme.legacy.viewer",
+        componentPath: "plugin://acme.legacy/v.js",
+      })
+    );
+    expect(service.findMcpServerContribution("acme.legacy", "svc")).toBeDefined();
+
+    // Each deprecated alias logs exactly one deprecation warning naming the
+    // stable replacement — not zero (silently migrated) or more than one
+    // (double-emission from a future refactor).
+    const warnMessages = warnSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(
+      warnMessages.filter(
+        (m: string) =>
+          m.includes("contributes.experimental_views is deprecated") &&
+          m.includes("contributes.views")
+      )
+    ).toHaveLength(1);
+    expect(
+      warnMessages.filter(
+        (m: string) =>
+          m.includes("contributes.experimental_mcpServers is deprecated") &&
+          m.includes("contributes.mcpServers")
+      )
+    ).toHaveLength(1);
+  });
+
+  it("still processes other contributions when reserved points are present", async () => {
+    mockPluginMcpSupervisor.start.mockClear();
+    await writePlugin("mixed", {
+      name: "acme.mixed",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
+        views: [{ id: "viewer", name: "Viewer", componentPath: "./v.js", location: "panel" }],
+        mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
     expect(service.listPlugins()).toHaveLength(1);
     expect(registerPanelKind).toHaveBeenCalledTimes(1);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'experimental_views entry "main" has location "sidebar" which is not yet implemented'
-      )
-    );
-    // experimental_mcpServers is registered (no warning) but, under lazy
+    // mcpServers is registered (no warning) but, under lazy
     // discovery (#9235), is NOT spawned at activation.
     expect(mockPluginMcpSupervisor.start).not.toHaveBeenCalled();
     expect(service.findMcpServerContribution("acme.mixed", "svc")).toBeDefined();
   });
 
-  it("logs one warning per orphan or unsupported view entry", async () => {
+  it("rejects the whole manifest when any view entry is an orphan (#10620)", async () => {
     await writePlugin("many", {
       name: "acme.many",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
-        // `a` matches a panel and binds; `b` is a sidebar view; `c` is an
-        // orphan with no matching panel id. Each non-binding entry should log
-        // exactly one warning naming the entry id.
+        // `a` matches a panel and would bind; `c` is an orphan with no matching
+        // panel id. A single orphan view now fails the whole manifest
+        // (view_panel_ref_unknown superRefine) rather than logging a warning.
         panels: [{ id: "a", name: "A", iconId: "eye", color: "#000" }],
-        experimental_views: [
+        views: [
           { id: "a", name: "A", componentPath: "./a.js", location: "panel" },
-          { id: "b", name: "B", componentPath: "./b.js", location: "sidebar" },
           { id: "c", name: "C", componentPath: "./c.js", location: "panel" },
         ],
       },
@@ -6141,14 +7843,16 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
-    const sidebarWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
-      String(call[0]).includes('"b" has location "sidebar"')
-    );
+    expect(service.listPlugins()).toHaveLength(0);
+    expect(registerPanelKind).not.toHaveBeenCalled();
     const orphanWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
       String(call[0]).includes('"c" has no matching contributes.panels')
     );
-    expect(sidebarWarnings).toHaveLength(1);
-    expect(orphanWarnings).toHaveLength(1);
+    expect(orphanWarnings).toHaveLength(0);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid manifest in many"),
+      expect.anything()
+    );
   });
 
   it("rejects a views entry with an invalid location at schema level", () => {
@@ -6156,9 +7860,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.bad-location",
       version: "1.0.0",
       contributes: {
-        experimental_views: [
-          { id: "main", name: "Main", componentPath: "./v.js", location: "floating" },
-        ],
+        views: [{ id: "main", name: "Main", componentPath: "./v.js", location: "floating" }],
       },
     });
     expect(result.success).toBe(false);
@@ -6169,7 +7871,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.no-path",
       version: "1.0.0",
       contributes: {
-        experimental_views: [{ id: "main", name: "Main", location: "panel" }],
+        views: [{ id: "main", name: "Main", location: "panel" }],
       },
     });
     expect(result.success).toBe(false);
@@ -6180,7 +7882,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.no-cmd",
       version: "1.0.0",
       contributes: {
-        experimental_mcpServers: [{ id: "svc", name: "Svc" }],
+        mcpServers: [{ id: "svc", name: "Svc" }],
       },
     });
     expect(result.success).toBe(false);
@@ -6191,7 +7893,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.bad-env",
       version: "1.0.0",
       contributes: {
-        experimental_mcpServers: [{ id: "svc", name: "Svc", command: "node", env: { PORT: 8080 } }],
+        mcpServers: [{ id: "svc", name: "Svc", command: "node", env: { PORT: 8080 } }],
       },
     });
     expect(result.success).toBe(false);
@@ -6202,7 +7904,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.minimal-mcp",
       version: "1.0.0",
       contributes: {
-        experimental_mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
+        mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
       },
     });
     expect(result.success).toBe(true);
@@ -6243,7 +7945,10 @@ describe("Plugin exception containment (#9276)", () => {
       const service = new PluginService(tmpDir);
       // The host MUST NOT crash — initialize() should resolve.
       await expect(service.initialize()).resolves.toBeUndefined();
-      await service.activateStartupFinishedPlugins();
+      // Lazy by default (#10523): trigger activation explicitly rather than via
+      // the startup path, which no longer activates plugins without
+      // activationEvents.
+      await service.activatePlugin("acme.throws-activate");
 
       const record = service.getPluginLoadError("acme.throws-activate");
       expect(record).toBeDefined();
@@ -6269,7 +7974,7 @@ describe("Plugin exception containment (#9276)", () => {
 
       const service = new PluginService(tmpDir);
       await service.initialize();
-      await service.activateStartupFinishedPlugins();
+      await service.activatePlugin("acme.clean-activate");
 
       expect(service.getPluginLoadError("acme.clean-activate")).toBeUndefined();
     });
@@ -6296,7 +8001,7 @@ describe("Plugin exception containment (#9276)", () => {
 
       const service = new PluginService(tmpDir);
       await service.initialize();
-      await service.activateStartupFinishedPlugins();
+      await service.activatePlugin("acme.throws-then-unload");
       expect(service.getPluginLoadError("acme.throws-then-unload")).toBeDefined();
 
       // Unload removes the plugin from the registry, but the persisted
@@ -6322,7 +8027,7 @@ describe("Plugin exception containment (#9276)", () => {
 
       const service = new PluginService(tmpDir);
       await service.initialize();
-      await service.activateStartupFinishedPlugins();
+      await service.activatePlugin("acme.throws-string");
 
       const record = service.getPluginLoadError("acme.throws-string");
       expect(record?.message).toBe("plain-string-failure");
@@ -6390,8 +8095,10 @@ describe("Plugin exception containment (#9276)", () => {
         version: "1.0.0",
         contributes: {
           panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
-          toolbarButtons: [{ id: "btn", label: "Btn", iconId: "icon", actionId: "x.y" }],
-          menuItems: [{ label: "L", actionId: "x.y", location: "terminal" }],
+          toolbarButtons: [
+            { id: "btn", label: "Btn", iconId: "icon", actionId: "acme.cascade-test.act" },
+          ],
+          menuItems: [{ label: "L", actionId: "acme.cascade-test.act", location: "terminal" }],
         },
       });
 
@@ -6515,8 +8222,12 @@ describe("Plugin exception containment (#9276)", () => {
         version: "1.0.0",
         contributes: {
           panels: [{ id: "p", name: "P", iconId: "i", color: "#000" }],
-          toolbarButtons: [{ id: "b", label: "B", iconId: "i", actionId: "x.y" }],
-          menuItems: [{ label: "L", actionId: "x.y", location: "terminal" }],
+          toolbarButtons: [
+            { id: "b", label: "B", iconId: "i", actionId: "acme.remove-handlers-throws.act" },
+          ],
+          menuItems: [
+            { label: "L", actionId: "acme.remove-handlers-throws.act", location: "terminal" },
+          ],
         },
       });
       const service = new PluginService(tmpDir);
@@ -6565,7 +8276,7 @@ describe("Plugin exception containment (#9276)", () => {
 
       const service = new PluginService(tmpDir);
       await service.initialize();
-      await service.activateStartupFinishedPlugins();
+      await service.activatePlugin("acme.throws-undefined");
 
       const record = service.getPluginLoadError("acme.throws-undefined");
       expect(record).toBeDefined();
@@ -6587,7 +8298,7 @@ describe("Plugin exception containment (#9276)", () => {
 
       const service = new PluginService(tmpDir);
       await service.initialize();
-      await service.activateStartupFinishedPlugins();
+      await service.activatePlugin("acme.throws-null");
 
       const record = service.getPluginLoadError("acme.throws-null");
       expect(record).toBeDefined();
@@ -6724,11 +8435,11 @@ describe("Plugin provenance persistence", () => {
 
     const service = new PluginService(tmpDir);
     await service.initialize();
-    // Force the startup activation pass so this test exercises the path that
-    // would normally import every onStartupFinished plugin. The disabled plugin
-    // is rejected at scan time (never inserted into the plugins map), so the
-    // activation pass cannot pick it up — that's exactly what we assert below.
+    // Run the startup activation pass and an explicit trigger: the disabled
+    // plugin is rejected at scan time (never inserted into the plugins map), so
+    // neither path can pick it up — that's exactly what we assert below.
     await service.activateStartupFinishedPlugins();
+    await service.activatePlugin("acme.disabled-nb");
 
     const plugins = service.listPlugins();
     expect(plugins).toHaveLength(1);
@@ -6754,7 +8465,7 @@ describe("Plugin provenance persistence", () => {
 
     const service = new PluginService(tmpDir);
     await service.initialize();
-    await service.activateStartupFinishedPlugins();
+    await service.activatePlugin("acme.err-persist");
 
     const record = service.getPluginLoadError("acme.err-persist");
     expect(record?.message).toBe("persisted-boom");
@@ -6781,7 +8492,7 @@ describe("Plugin provenance persistence", () => {
 
     const first = new PluginService(tmpDir);
     await first.initialize();
-    await first.activateStartupFinishedPlugins();
+    await first.activatePlugin("acme.heal-fail");
     expect(first.getPluginLoadError("acme.heal-fail")?.message).toBe("first-fail");
 
     // Second plugin: same concept but different dir + name, so ESM cache
@@ -6800,7 +8511,7 @@ describe("Plugin provenance persistence", () => {
 
     const second = new PluginService(tmpDir);
     await second.initialize();
-    await second.activateStartupFinishedPlugins();
+    await second.activatePlugin("acme.heal-ok");
 
     // New plugin loaded successfully — no error
     expect(second.getPluginLoadError("acme.heal-ok")).toBeUndefined();
@@ -6939,7 +8650,7 @@ describe("PluginManifestSchema activationEvents field", () => {
 });
 
 describe("Deferred activation — activatePlugin", () => {
-  it("initialize() does not import plugin main; activateStartupFinishedPlugins does", async () => {
+  it("lazy by default: no activationEvents stays deferred through activateStartupFinishedPlugins, activates on first use (#10523)", async () => {
     const pluginDir = path.join(tmpDir, "deferred-import");
     await fs.mkdir(pluginDir);
     await fs.writeFile(
@@ -6947,7 +8658,7 @@ describe("Deferred activation — activatePlugin", () => {
       JSON.stringify({ name: "acme.deferred-import", version: "1.0.0", main: "main.mjs" })
     );
     // The module sets a global as a side effect at import time. If the
-    // module were imported during initialize() the global would be set
+    // module were imported during initialize()/startup the global would be set
     // before we explicitly activate.
     await fs.writeFile(
       path.join(pluginDir, "main.mjs"),
@@ -6962,7 +8673,13 @@ describe("Deferred activation — activatePlugin", () => {
       expect(service.hasPlugin("acme.deferred-import")).toBe(true);
       expect((globalThis as Record<string, unknown>).__deferredImportRan).toBeUndefined();
 
+      // With no activationEvents the plugin is lazy: startup activation must
+      // leave it deferred (the inverse of the pre-#10523 behavior).
       await service.activateStartupFinishedPlugins();
+      expect((globalThis as Record<string, unknown>).__deferredImportRan).toBeUndefined();
+
+      // An explicit first-use trigger imports main and runs activate().
+      await service.activatePlugin("acme.deferred-import");
       expect((globalThis as Record<string, unknown>).__deferredImportRan).toBe(true);
     } finally {
       delete (globalThis as Record<string, unknown>).__deferredImportRan;
@@ -7093,16 +8810,176 @@ describe("Deferred activation — activatePlugin", () => {
     }
   });
 
-  it("import() with a hanging top-level await times out instead of stalling forever", async () => {
+  it("activatePluginForView resolves the owning plugin from contributes.panels and activates it (#10523)", async () => {
+    const pluginDir = path.join(tmpDir, "view-owner");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.view-owner",
+        version: "1.0.0",
+        main: "main.mjs",
+        contributes: {
+          panels: [
+            {
+              id: "viewer",
+              name: "Viewer",
+              iconId: "eye",
+              color: "#000",
+              hasPty: false,
+              canRestart: false,
+              canConvert: false,
+              showInPalette: true,
+            },
+          ],
+          views: [{ id: "viewer", name: "Viewer", componentPath: "view.mjs", location: "panel" }],
+        },
+      })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "globalThis.__viewOwnerActivated = true; export function activate() {}"
+    );
+
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      // Lazy: registered but not yet activated.
+      expect(service.hasPlugin("acme.view-owner")).toBe(true);
+      expect((globalThis as Record<string, unknown>).__viewOwnerActivated).toBeUndefined();
+
+      // Opening the contributed panel view (kind id `${pluginId}.${panel.id}`)
+      // triggers first-use activation and reports success (#10618).
+      await expect(service.activatePluginForView("acme.view-owner.viewer")).resolves.toEqual({
+        ok: true,
+      });
+      expect((globalThis as Record<string, unknown>).__viewOwnerActivated).toBe(true);
+    } finally {
+      delete (globalThis as Record<string, unknown>).__viewOwnerActivated;
+    }
+  });
+
+  it("activatePluginForView is a no-op for an unknown or empty panel kind id (#10523)", async () => {
+    const pluginDir = path.join(tmpDir, "view-noop");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.view-noop",
+        version: "1.0.0",
+        main: "main.mjs",
+        contributes: {
+          panels: [
+            {
+              id: "viewer",
+              name: "Viewer",
+              iconId: "eye",
+              color: "#000",
+              hasPty: false,
+              canRestart: false,
+              canConvert: false,
+              showInPalette: true,
+            },
+          ],
+          views: [{ id: "viewer", name: "Viewer", componentPath: "view.mjs", location: "panel" }],
+        },
+      })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "globalThis.__viewNoopActivated = true; export function activate() {}"
+    );
+
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      // Unknown kind id — and a non-matching bare id — must not activate
+      // anything, and report ok (nothing to activate; #10618).
+      await expect(service.activatePluginForView("acme.view-noop.nope")).resolves.toEqual({
+        ok: true,
+      });
+      await expect(service.activatePluginForView("viewer")).resolves.toEqual({ ok: true });
+      await expect(service.activatePluginForView("")).resolves.toEqual({ ok: true });
+      expect((globalThis as Record<string, unknown>).__viewNoopActivated).toBeUndefined();
+    } finally {
+      delete (globalThis as Record<string, unknown>).__viewNoopActivated;
+    }
+  });
+
+  it("activatePluginForView records loadError on activation failure and retries on a second open (#10523)", async () => {
+    const pluginDir = path.join(tmpDir, "view-fail");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.view-fail",
+        version: "1.0.0",
+        main: "main.mjs",
+        contributes: {
+          panels: [
+            {
+              id: "viewer",
+              name: "Viewer",
+              iconId: "eye",
+              color: "#000",
+              hasPty: false,
+              canRestart: false,
+              canConvert: false,
+              showInPalette: true,
+            },
+          ],
+          views: [{ id: "viewer", name: "Viewer", componentPath: "view.mjs", location: "panel" }],
+        },
+      })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "export function activate() { globalThis.__viewFailActivateCount = (globalThis.__viewFailActivateCount ?? 0) + 1; throw new Error('view-activate-boom'); }"
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      // First open: activation fails but never rejects; contributions survive.
+      // The failure is surfaced as a plain { ok: false } result (#10618) carrying
+      // the real activate() error so PluginViewHost can throw it before import.
+      // (toMatchObject because the result also carries the diagnostic `stack`.)
+      await expect(service.activatePluginForView("acme.view-fail.viewer")).resolves.toMatchObject({
+        ok: false,
+        error: "view-activate-boom",
+      });
+      expect(service.getPluginLoadError("acme.view-fail")?.message).toBe("view-activate-boom");
+      expect(service.hasPlugin("acme.view-fail")).toBe(true);
+      expect((globalThis as Record<string, unknown>).__viewFailActivateCount).toBe(1);
+
+      // Second open: the failed in-flight entry was cleared, so activation runs
+      // again (Settings → Retry / re-open semantics) rather than returning a
+      // cached settled promise — proven by the activate() invocation count.
+      await expect(service.activatePluginForView("acme.view-fail.viewer")).resolves.toMatchObject({
+        ok: false,
+        error: "view-activate-boom",
+      });
+      expect(service.getPluginLoadError("acme.view-fail")?.message).toBe("view-activate-boom");
+      expect((globalThis as Record<string, unknown>).__viewFailActivateCount).toBe(2);
+    } finally {
+      errorSpy.mockRestore();
+      delete (globalThis as Record<string, unknown>).__viewFailActivateCount;
+    }
+  });
+
+  it("a hanging activation times out instead of stalling forever", async () => {
     const pluginDir = path.join(tmpDir, "hanging-import");
     await fs.mkdir(pluginDir);
     await fs.writeFile(
       path.join(pluginDir, "plugin.json"),
       JSON.stringify({ name: "acme.hanging-import", version: "1.0.0", main: "main.mjs" })
     );
-    // Top-level `await new Promise(() => {})` hangs forever. Without the
-    // import-timeout guard this would pin `_doActivate` and any
-    // `Promise.allSettled` fan-out behind it.
+    // Top-level `await new Promise(() => {})` hangs the worker's import forever.
+    // The worker is isolated (it can't stall main), but the activation gate must
+    // still time out so `Promise.allSettled` startup fan-outs aren't pinned.
     await fs.writeFile(
       path.join(pluginDir, "main.mjs"),
       "await new Promise(() => {}); export function activate() {}"
@@ -7112,12 +8989,12 @@ describe("Deferred activation — activatePlugin", () => {
     try {
       const service = new PluginService(tmpDir);
       await service.initialize();
-      // The promise resolves (it doesn't reject — `activatePlugin` swallows)
-      // and the timeout error is persisted as the loadError so diagnostics
+      // The promise resolves (it doesn't reject — `activatePlugin` swallows) and
+      // the activation-timeout error is persisted as the loadError so diagnostics
       // surface why the plugin never came up.
       await service.activatePlugin("acme.hanging-import");
       const record = service.getPluginLoadError("acme.hanging-import");
-      expect(record?.message).toContain("timed out");
+      expect(record?.message).toContain("did not settle");
     } finally {
       errorSpy.mockRestore();
     }
@@ -7211,15 +9088,15 @@ type SettingsHostShape = (pluginId: string) => {
 };
 
 async function setupSettingsService(
-  pluginId: string
+  pluginId: string,
+  settings?: Array<{ id: string; type: string; scope?: SettingsScope }>
 ): Promise<{ service: PluginService; settingsRoot: string }> {
   const pluginsRoot = path.join(tmpDir, "plugins");
   const dir = path.join(pluginsRoot, pluginId);
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(
-    path.join(dir, "plugin.json"),
-    JSON.stringify({ name: pluginId, version: "1.0.0" })
-  );
+  const manifest: Record<string, unknown> = { name: pluginId, version: "1.0.0" };
+  if (settings) manifest.contributes = { settings };
+  await fs.writeFile(path.join(dir, "plugin.json"), JSON.stringify(manifest));
   const service = new PluginService(pluginsRoot);
   await service.initialize();
   // User-scope settings live as a sibling of the plugins dir.
@@ -7326,7 +9203,7 @@ describe("createHost — settings", () => {
     const { service } = await setupSettingsService("acme.settings-watch");
     const { host } = createSettingsHost(service, "acme.settings-watch");
     const cb = vi.fn();
-    host.settings.onDidChange<string>("token", cb);
+    await host.settings.onDidChange<string>("token", cb);
     await host.settings.set("token", "v1");
     expect(cb).toHaveBeenCalledTimes(1);
     expect(cb).toHaveBeenCalledWith("v1");
@@ -7336,7 +9213,7 @@ describe("createHost — settings", () => {
     const { service } = await setupSettingsService("acme.settings-noop");
     const { host } = createSettingsHost(service, "acme.settings-noop");
     const cb = vi.fn();
-    host.settings.onDidChange("token", cb);
+    await host.settings.onDidChange("token", cb);
     await host.settings.set("token", "same");
     await host.settings.set("token", "same");
     expect(cb).toHaveBeenCalledTimes(1);
@@ -7347,7 +9224,7 @@ describe("createHost — settings", () => {
     const { service } = await setupSettingsService("acme.settings-scope");
     const { host } = createSettingsHost(service, "acme.settings-scope");
     const userCb = vi.fn();
-    host.settings.onDidChange("token", userCb, "user");
+    await host.settings.onDidChange("token", userCb, "user");
     await host.settings.set("token", "proj-value", "project");
     expect(userCb).not.toHaveBeenCalled();
   });
@@ -7356,7 +9233,7 @@ describe("createHost — settings", () => {
     const { service } = await setupSettingsService("acme.settings-dispose");
     const { host } = createSettingsHost(service, "acme.settings-dispose");
     const cb = vi.fn();
-    const dispose = host.settings.onDidChange("token", cb);
+    const dispose = await host.settings.onDidChange("token", cb);
     dispose();
     await host.settings.set("token", "v1");
     expect(cb).not.toHaveBeenCalled();
@@ -7366,7 +9243,7 @@ describe("createHost — settings", () => {
     const { service } = await setupSettingsService("acme.settings-unload");
     const { host } = createSettingsHost(service, "acme.settings-unload");
     const cb = vi.fn();
-    host.settings.onDidChange("token", cb);
+    await host.settings.onDidChange("token", cb);
     service.unloadPlugin("acme.settings-unload");
     await host.settings.set("token", "after-unload");
     expect(cb).not.toHaveBeenCalled();
@@ -7379,6 +9256,64 @@ describe("createHost — settings", () => {
     expect(() => host.settings.onDidChange("token", () => {})).toThrow(/host revoked/);
     await expect(host.settings.set("token", "still-works")).resolves.toBeUndefined();
     expect(await host.settings.get<string>("token")).toBe("still-works");
+  });
+
+  // #10586: get must honor a key's manifest-declared scope rather than silently
+  // defaulting to "user", mirroring the set/onDidChange scope guards.
+  it("get resolves a project-scoped declared key from the project store with no scope arg", async () => {
+    const projectDir = path.join(tmpDir, "proj-declared");
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projectDir });
+    const { service } = await setupSettingsService("acme.settings-declared-proj", [
+      { id: "ref", type: "string", scope: "project" },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-declared-proj");
+    // Written to project scope; a no-scope read must resolve there, not "user".
+    await host.settings.set("ref", "branch-x", "project");
+    expect(await host.settings.get<string>("ref")).toBe("branch-x");
+    // The value lives in the project file — proving the read didn't fall back to
+    // the (empty) user store.
+    const raw = await fs.readFile(
+      path.join(projectDir, ".daintree", "plugin-settings", "acme.settings-declared-proj.json"),
+      "utf-8"
+    );
+    expect(JSON.parse(raw)).toEqual({ ref: "branch-x" });
+  });
+
+  it("get throws when the explicit scope conflicts with the declared scope", async () => {
+    const projectDir = path.join(tmpDir, "proj-conflict");
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: projectDir });
+    const { service } = await setupSettingsService("acme.settings-declared-conflict", [
+      { id: "ref", type: "string", scope: "project" },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-declared-conflict");
+    await expect(host.settings.get("ref", "user")).rejects.toThrow(
+      /settings\.get: key "ref" is declared in "project" scope, not "user"/
+    );
+  });
+
+  it("get falls back to user scope for an undeclared key", async () => {
+    const { service, settingsRoot } = await setupSettingsService("acme.settings-undeclared", [
+      { id: "declared", type: "string", scope: "user" },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-undeclared");
+    // "loose" isn't declared, so a write would be rejected — seed the user-scope
+    // file directly to prove the read still resolves the permissive "user"
+    // default for undeclared keys.
+    await fs.mkdir(settingsRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(settingsRoot, "acme.settings-undeclared.json"),
+      JSON.stringify({ loose: "v" })
+    );
+    expect(await host.settings.get<string>("loose")).toBe("v");
+  });
+
+  it("get resolves a user-declared key from the user store with no scope arg", async () => {
+    const { service } = await setupSettingsService("acme.settings-declared-user", [
+      { id: "token", type: "string", scope: "user" },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-declared-user");
+    await host.settings.set("token", "sk-1", "user");
+    expect(await host.settings.get<string>("token")).toBe("sk-1");
   });
 });
 
@@ -7412,7 +9347,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     await expect(waiter).resolves.toBeUndefined();
   });
 
-  it("pushSnapshotTo() sends actions, panel kinds, toolbar buttons, menu items, context-menu items, and agents to the target webContents", async () => {
+  it("pushSnapshotTo() sends actions, panel kinds, toolbar buttons, context-menu items, and agents to the target webContents", async () => {
     const service = new PluginService(tmpDir);
     await service.activateStartupFinishedPlugins();
     const send = vi.fn();
@@ -7420,7 +9355,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.pushSnapshotTo(wc);
 
-    expect(send).toHaveBeenCalledTimes(7);
+    expect(send).toHaveBeenCalledTimes(6);
     // Every replay goes through the EVENTS_PUSH channel — the same channel the
     // renderer hooks' persistent push listeners consume, so no renderer-side
     // changes are needed for the cold-restore path.
@@ -7431,10 +9366,12 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     expect(names).toContain("plugin:actions-changed");
     expect(names).toContain("plugin:panel-kinds-changed");
     expect(names).toContain("plugin:toolbar-buttons-changed");
-    expect(names).toContain("plugin:menu-items-changed");
     expect(names).toContain("plugin:keybindings-changed");
     expect(names).toContain("plugin:context-menu-items-changed");
     expect(names).toContain("plugin:agents-changed");
+    // The renderer menu-items channel was removed (#10465) — guard against the
+    // cold-restore replay accidentally re-emitting it.
+    expect(names).not.toContain("plugin:menu-items-changed");
     // The keybindings replay is a full authoritative snapshot — the renderer
     // hook full-replaces its plugin bindings on every push, so `complete: true`
     // is consistent with that replace-all semantics.
@@ -7444,17 +9381,13 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     expect((keybindingsCall?.[1] as { payload: { complete: boolean } }).payload.complete).toBe(
       true
     );
-    // Toolbar, menu-item, and context-menu-item replays must use `complete: false`
+    // Toolbar and context-menu-item replays must use `complete: false`
     // so the renderer does not run a stale-prune sweep — replay is a load-style
     // snapshot, not an unload-driven authoritative sweep.
     const toolbarCall = send.mock.calls.find(
       (c) => (c[1] as { name?: string })?.name === "plugin:toolbar-buttons-changed"
     );
     expect((toolbarCall?.[1] as { payload: { complete: boolean } }).payload.complete).toBe(false);
-    const menuItemsCall = send.mock.calls.find(
-      (c) => (c[1] as { name?: string })?.name === "plugin:menu-items-changed"
-    );
-    expect((menuItemsCall?.[1] as { payload: { complete: boolean } }).payload.complete).toBe(false);
     const contextMenuItemsCall = send.mock.calls.find(
       (c) => (c[1] as { name?: string })?.name === "plugin:context-menu-items-changed"
     );
@@ -7479,11 +9412,10 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.pushSnapshotTo(wc);
 
-    expect(send).toHaveBeenCalledTimes(7);
+    expect(send).toHaveBeenCalledTimes(6);
     const names = send.mock.calls.map((c) => (c[1] as { name?: string })?.name);
     expect(names).toContain("plugin:panel-kinds-changed");
     expect(names).toContain("plugin:toolbar-buttons-changed");
-    expect(names).toContain("plugin:menu-items-changed");
     expect(names).toContain("plugin:keybindings-changed");
     expect(names).toContain("plugin:context-menu-items-changed");
     expect(names).toContain("plugin:agents-changed");
@@ -7514,7 +9446,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.activateStartupFinishedPlugins();
     await inFlight;
-    expect(send).toHaveBeenCalledTimes(7);
+    expect(send).toHaveBeenCalledTimes(6);
   });
 
   it("pushSnapshotTo() does not send after dispose()", async () => {
@@ -7562,11 +9494,12 @@ describe("dev-mode hot reload (#9304)", () => {
     expect(devWorkerMock.instances).toHaveLength(1);
     expect(devWorkerMock.instances[0].opts.pluginId).toBe("acme.dev");
     expect(devWorkerMock.instances[0].opts.bundlePath).toMatch(/dist[/\\]index\.js$/);
+    expect(devWorkerMock.instances[0].opts.mode).toBe("dev");
     expect(devWorkerMock.instances[0].start).toHaveBeenCalledTimes(1);
     expect(devWorkerMock.bridges[0].waitForActivation).toHaveBeenCalledTimes(1);
   });
 
-  it("does not fork a worker for a plugin without a marker", async () => {
+  it("forks a prod-mode worker for a plugin without a dev marker (#10526)", async () => {
     const dir = path.join(tmpDir, "prod-plugin");
     await fs.mkdir(path.join(dir, "dist"), { recursive: true });
     await fs.writeFile(
@@ -7578,9 +9511,40 @@ describe("dev-mode hot reload (#9304)", () => {
     await service.initialize();
     await service.activatePlugin("acme.prod");
 
-    expect(devWorkerMock.instances).toHaveLength(0);
+    // Every user plugin runs out-of-process now: a prod plugin forks the same
+    // worker as a dev plugin, but in "prod" mode (no hot-reload file watcher).
+    expect(devWorkerMock.instances).toHaveLength(1);
+    expect(devWorkerMock.instances[0].opts.pluginId).toBe("acme.prod");
+    expect(devWorkerMock.instances[0].opts.mode).toBe("prod");
     const info = service.listPlugins().find((p) => p.manifest.name === "acme.prod");
     expect(info?.devMode).toBe(false);
+  });
+
+  it("activates a built-in plugin in-process, NOT via a worker (#10526)", async () => {
+    // Built-ins stay on the in-process loader: they're trusted app-bundled code
+    // that may use synchronous host surfaces (registerForgeProvider) which can't
+    // cross the worker's async port — routing them through it would break forge.
+    const builtinRoot = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-builtin-route-"));
+    try {
+      const dir = path.join(builtinRoot, "daintree.builtin");
+      await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+      await fs.writeFile(
+        path.join(dir, "plugin.json"),
+        JSON.stringify({ name: "daintree.builtin", version: "1.0.0", main: "dist/index.js" })
+      );
+      await fs.writeFile(path.join(dir, "dist", "index.js"), "export function activate() {}");
+
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinRoot });
+      await service.initialize();
+      await service.activatePlugin("daintree.builtin");
+
+      // No worker forked for the built-in; it activated via the in-process loader.
+      expect(devWorkerMock.instances).toHaveLength(0);
+      const info = service.listPlugins().find((p) => p.manifest.name === "daintree.builtin");
+      expect(info?.isBuiltin).toBe(true);
+    } finally {
+      await fs.rm(builtinRoot, { recursive: true, force: true });
+    }
   });
 
   it("disposes the worker and bridge when the dev plugin is unloaded", async () => {
@@ -7633,7 +9597,7 @@ describe("dev-mode hot reload (#9304)", () => {
     // worker re-registers. Manifest commands must survive — only imperative
     // (host.registerAction) actions are dropped.
     const clearPriorRegistrations = (
-      devWorkerMock.bridges[0].deps as { clearPriorRegistrations: () => void }
+      devWorkerMock.bridges[0].deps as unknown as { clearPriorRegistrations: () => void }
     ).clearPriorRegistrations;
     clearPriorRegistrations();
 

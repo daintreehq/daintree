@@ -1513,6 +1513,50 @@ export interface IpcEventMap {
   };
 
   /**
+   * Plugin built-in action-catalog request (#10561). Main emits this on the
+   * active project WebContents when a plugin calls `host.actions.list()` and
+   * awaits a renderer `ipcRenderer.send` reply on
+   * `CHANNELS.PLUGIN_ACTIONS_LIST_RESPONSE`, correlated by `requestId`. The
+   * renderer projects `ActionService.list()` to {@link
+   * import("../actions.js").PluginActionManifestEntry}. The response channel is a
+   * renderer→main fire-and-forget send tracked in `DEAD_CHANNEL_ALLOWLIST` in
+   * channelDrift.test.ts.
+   */
+  "plugin:actions-list-request": {
+    requestId: string;
+  };
+
+  /**
+   * Plugin built-in action lookup request (#10561). Main emits this when a
+   * plugin calls `host.actions.get(id)` / `host.actions.canDispatch(id)` and
+   * awaits a renderer `ipcRenderer.send` reply on
+   * `CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE`, correlated by `requestId`. Same
+   * fire-and-forget response discipline as `plugin:actions-list-request`.
+   */
+  "plugin:actions-get-request": {
+    requestId: string;
+    actionId: string;
+  };
+
+  /**
+   * Imperative plugin UI-prompt request (#10522). Main emits this on the active
+   * project WebContents when a plugin calls `host.showQuickPick`/`showInputBox`/
+   * `showConfirm`, and awaits a renderer `ipcRenderer.send` reply on
+   * `CHANNELS.PLUGIN_UI_PROMPT_RESPONSE`, correlated by `promptId`. The response
+   * channel is a renderer→main fire-and-forget send tracked in
+   * `DEAD_CHANNEL_ALLOWLIST` in channelDrift.test.ts.
+   */
+  "plugin:ui-prompt-request": import("../pluginUiPrompt.js").PluginUiPromptRequest;
+
+  /**
+   * Cancel pending plugin UI prompts (#10522). Main broadcasts this to the
+   * active renderer when a plugin is unloaded with a prompt still open so the
+   * renderer can dismiss the dialog and resolve its queued promise. Omitting
+   * `promptId` cancels every prompt for `pluginId`.
+   */
+  "plugin:ui-prompt-cancel": import("../pluginUiPrompt.js").PluginUiPromptCancel;
+
+  /**
    * Targeted push: a help-session tool call was denied because its tier
    * doesn't permit the tool. Sent to the pinned WebContents so the renderer
    * can surface an inline approval banner. Tier is `string` (not `McpTier`)
@@ -1574,6 +1618,7 @@ export interface IpcEventMap {
   // Log events
   "logs:entry": LogEntry;
   "logs:batch": LogEntry[];
+  "logs:level-overrides-changed": Record<string, string>;
 
   // Event inspector events
   "event-inspector:event-batch": EventRecord[];
@@ -1620,12 +1665,6 @@ export interface IpcEventMap {
   "window:fullscreen-change": boolean;
   "window:reclaim-memory": { reason: string };
   "window:destroy-hidden-webviews": { tier: 1 | 2 };
-  // Per-window push event fired by `ProcessMemoryMonitor` mitigation tiers
-  // 1 and 2. The renderer compresses every BACKGROUND-tier terminal's
-  // hibernation timer to a much shorter delay (5s / 0s) so idle agent
-  // panes release memory immediately under OS pressure instead of waiting
-  // for the fixed 30s window. Renderer handler in `setupResourceListeners`.
-  "window:accelerate-hibernation": { level: 1 | 2 };
   // Main asks renderers to report process.getBlinkMemoryInfo() so
   // ProcessMemoryMonitor can see the Blink (DOM/CSS/inter-frame) memory tier
   // that V8 heap stats miss. Renderer replies via SYSTEM_REPORT_BLINK_MEMORY.
@@ -1760,6 +1799,7 @@ export interface IpcEventMap {
   // visibilitychange/resume ran while the view was still occluded, where
   // Chromium culls the paint, so it can fail to stick until the user clicks.
   "app:view-revealed": void;
+  "app:view-cached": void;
 
   // Privacy events
   "privacy:telemetry-consent-changed": {
@@ -1798,23 +1838,15 @@ export interface IpcEventMap {
     complete: boolean;
   };
 
-  // Plugin menu item registry events (main → renderer). Same `complete` flag
-  // semantics as toolbar buttons: true for an authoritative post-unload
-  // snapshot, false for partial/growing load-time broadcasts.
-  "plugin:menu-items-changed": {
-    items: Array<{ pluginId: string; item: import("../plugin.js").MenuItemContribution }>;
-    complete: boolean;
-  };
-
   // Plugin keybinding registry events (main → renderer). Same `complete` flag
-  // semantics as toolbar buttons and menu items.
+  // semantics as toolbar buttons.
   "plugin:keybindings-changed": {
     keybindings: import("../plugin.js").PluginKeybindingDescriptor[];
     complete: boolean;
   };
 
   // Plugin context-menu item registry events (main → renderer). Same `complete`
-  // flag semantics as menu items.
+  // flag semantics as toolbar buttons.
   "plugin:context-menu-items-changed": {
     items: Array<{ pluginId: string; item: import("../plugin.js").ContextMenuContribution }>;
     complete: boolean;
@@ -1822,7 +1854,7 @@ export interface IpcEventMap {
 
   // Plugin agent registry events (main → renderer). Carries the flattened
   // plugin-agent record so the renderer can mirror main's effective registry.
-  // Same `complete` flag semantics as toolbar buttons / menu items: true for an
+  // Same `complete` flag semantics as toolbar buttons: true for an
   // authoritative post-unload snapshot, false for partial/growing load-time
   // broadcasts.
   "plugin:agents-changed": {
@@ -1836,6 +1868,21 @@ export interface IpcEventMap {
   "plugin:decorations-changed": {
     scope: string;
     paths?: string[];
+  };
+
+  // Plugin panel-badge state changed (main → renderer, #10585). Carries this
+  // plugin's COMPLETE current badge map (panelId → badge) — never a delta — so
+  // the renderer replaces all of `pluginId`'s badges in one shot. An empty
+  // `badges` clears the plugin's badges. Authoritative per plugin, so no
+  // `complete` flag is needed (each event fully describes one plugin's state).
+  "plugin:panel-badges-changed": {
+    pluginId: string;
+    badges: Record<string, import("../plugin.js").PluginPanelBadge>;
+  };
+
+  // Plugin unloaded — drop all of its panel badges (main → renderer, #10585).
+  "plugin:panel-badges-cleared": {
+    pluginId: string;
   };
 
   // Plugin provenance record changed (main → renderer). Signal-only — the
@@ -1877,6 +1924,26 @@ export interface IpcEventMap {
     danger: "safe" | "confirm" | "restricted";
   };
 
+  /**
+   * Targeted push: a plugin-MCP `tools/call` requires user consent. Sent to the
+   * WebContents that initiated the call (pinned via `event.sender`, never the
+   * focused window) so the consent dialog renders in the originating session.
+   * The renderer replies via `plugin-mcp:resolve-consent`, correlated by
+   * `requestId`. Payload is display-safe — raw description/args never cross it.
+   */
+  "plugin-mcp:consent-request": import("../pluginMcpConsent.js").PluginMcpConsentRequestEvent;
+
+  /**
+   * Targeted push: a plugin is exercising a high-risk host capability
+   * (`shell:exec`, `fs:*-write`, `git:write`) for the first time and needs
+   * just-in-time consent (#10524). Sent to the focused window (falling back to
+   * the primary) — unlike the MCP consent push there is no initiating renderer,
+   * because the call originates in the plugin's own utility process. The
+   * renderer replies via `plugin-capability:resolve-consent`, correlated by
+   * `requestId`.
+   */
+  "plugin-capability:consent-request": import("../pluginCapabilityConsent.js").PluginCapabilityConsentRequestEvent;
+
   // Typed event bus envelope (multiplexed main → renderer for IpcEventBusMap)
   "events:push": EventBusEnvelope;
 }
@@ -1908,7 +1975,6 @@ export type IpcEventBusMap = Pick<
   | "window:fullscreen-change"
   | "window:reclaim-memory"
   | "window:destroy-hidden-webviews"
-  | "window:accelerate-hibernation"
   | "window:disk-space-status"
   | "window:sample-blink-memory"
   | "window:sample-renderer-elu"
@@ -1921,14 +1987,16 @@ export type IpcEventBusMap = Pick<
   // App-agent dispatch/confirmation (window-scoped)
   | "app-agent:dispatch-action-request"
   | "app-agent:confirmation-request"
+  // Plugin-MCP tool-call consent prompt (window-scoped — pinned to the caller)
+  | "plugin-mcp:consent-request"
+  // Plugin host-capability JIT consent prompt (window-scoped — focused window)
+  | "plugin-capability:consent-request"
   // Plugin action registry (global broadcast)
   | "plugin:actions-changed"
   // Plugin panel kind registry (global broadcast)
   | "plugin:panel-kinds-changed"
   // Plugin toolbar button registry (global broadcast)
   | "plugin:toolbar-buttons-changed"
-  // Plugin menu item registry (global broadcast)
-  | "plugin:menu-items-changed"
   // Plugin keybinding registry (global broadcast)
   | "plugin:keybindings-changed"
   // Plugin context-menu item registry (global broadcast)
@@ -1937,6 +2005,9 @@ export type IpcEventBusMap = Pick<
   | "plugin:agents-changed"
   // Plugin file-decoration invalidation (global broadcast)
   | "plugin:decorations-changed"
+  // Plugin panel-badge state (global broadcast)
+  | "plugin:panel-badges-changed"
+  | "plugin:panel-badges-cleared"
   // Plugin provenance record changed (global broadcast)
   | "plugin:provenance-changed"
   // Run history changed (global broadcast)

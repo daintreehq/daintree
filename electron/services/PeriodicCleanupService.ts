@@ -22,7 +22,12 @@
 import { app, powerMonitor } from "electron";
 import { runScratchCleanup } from "./ScratchCleanupService.js";
 import { runAssistantScratchCleanup } from "./AssistantScratchService.js";
-import { pruneOldLogs, logError } from "../utils/logger.js";
+import {
+  pruneOldLogs,
+  pruneHeapSnapshotsAsync,
+  MAX_HEAP_SNAPSHOTS,
+  logError,
+} from "../utils/logger.js";
 import { store } from "../store.js";
 
 const TICK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
@@ -108,6 +113,30 @@ class PeriodicCleanupService {
       }
     } catch (err) {
       logError("[PeriodicCleanup] log prune threw", err);
+    }
+    try {
+      // Count-based prune of V8 heap snapshots in app.getPath("logs") — a
+      // separate dir from userData/logs, bounded by count not retention age.
+      await pruneHeapSnapshotsAsync(app.getPath("logs"), MAX_HEAP_SNAPSHOTS);
+    } catch (err) {
+      logError("[PeriodicCleanup] heap snapshot prune threw", err);
+    }
+    try {
+      // Age out assistant audit-log records past the configured retention
+      // window (helpAssistant.auditRetention, in days; 0 = Off → keep). Re-read
+      // each pass — the user may change it mid-session. Lazy-import the MCP
+      // singleton so this maintenance file never forces it to construct early.
+      const retentionDays = store.get("helpAssistant")?.auditRetention ?? 7;
+      if (
+        typeof retentionDays === "number" &&
+        Number.isFinite(retentionDays) &&
+        retentionDays > 0
+      ) {
+        const { mcpServerService } = await import("./McpServerService.js");
+        mcpServerService.pruneAuditByRetention(retentionDays);
+      }
+    } catch (err) {
+      logError("[PeriodicCleanup] audit retention prune threw", err);
     }
   }
 }

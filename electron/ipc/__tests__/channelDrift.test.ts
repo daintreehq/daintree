@@ -64,6 +64,16 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   "mcp:dispatch-action-response",
   "mcp:get-manifest-response",
   "plugin:dispatch-action-response",
+  // fire-and-forget — renderer→main `ipcRenderer.send` replies carrying the
+  // projected built-in action catalog / single entry (#10561). Paired with the
+  // `plugin:actions-list-request` / `plugin:actions-get-request` events declared
+  // in IpcEventMap.
+  "plugin:actions-list-response",
+  "plugin:actions-get-response",
+  // fire-and-forget — renderer→main `ipcRenderer.send` reply carrying the user's
+  // answer to an imperative plugin UI prompt (#10522). Paired with the
+  // `plugin:ui-prompt-request` event declared in IpcEventMap.
+  "plugin:ui-prompt-response",
 
   // fire-and-forget — main→renderer broadcast for in-app demo command
   // forwarding (`sendCommandAndAwait` in handlers/demo.ts). The renderer

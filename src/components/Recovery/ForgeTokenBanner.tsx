@@ -29,9 +29,8 @@ export function ForgeTokenBanner() {
 
   const handleReconnect = () => {
     // Route through the action service to the provider's own settings panel —
-    // matches every other recovery entry point (e.g.
-    // `useForgeTokenExpiryNotification`). Use the canonical provider id for
-    // `subtab` to match the standardized forge routing.
+    // matches every other recovery entry point. Use the canonical provider id
+    // for `subtab` to match the standardized forge routing.
     void actionService.dispatch(
       "app.settings.openTab",
       { tab: "code-forge", subtab: providerId },

@@ -1,5 +1,4 @@
 import type { TerminalOutputWorkerInboundMessage } from "@shared/types/terminal-output-worker-messages";
-import { TerminalRefreshTier } from "@shared/types/panel";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { logDebug } from "@/utils/logger";
@@ -13,14 +12,6 @@ import { logDebug } from "@/utils/logger";
 const RENDERER_HIGH_WATERMARK_BYTES = 128 * 1024;
 const RENDERER_LOW_WATERMARK_BYTES = 32 * 1024;
 const COALESCE_BATCH_CAP_BYTES = 256 * 1024;
-// Hard ceiling on bytes held for a backgrounded panel (#9906). The producer
-// gate normally suppresses background output, but if the host/renderer tier
-// desyncs (a late wake re-promoting the host to "active"), in-flight batches
-// keep arriving uncapped — ~2MB per 10s cycle. 4MB gives two cycles of
-// catch-up headroom before the oldest held bytes are evicted, bounding memory
-// exposure if any desync path survives the tier-reconciliation fixes. On wake,
-// resumeFlush drains what remains through the COALESCE_BATCH_CAP_BYTES path.
-const BACKGROUND_QUEUE_MAX_BYTES = 4 * 1024 * 1024;
 const IPC_LOOKBACK_CHARS = 32;
 const INK_ERASE_LINE_PATTERN = "\x1b[2K\x1b[1A";
 
@@ -55,14 +46,7 @@ export class TerminalOutputIngestService {
       id: string,
       data: string | Uint8Array,
       chunkCount: number
-    ) => void,
-    private readonly getTier?: (id: string) => TerminalRefreshTier,
-    // Invoked once per chunk dropped by the background queue cap (#9906). The
-    // chunk was received over the MessagePort (and counted in the host's
-    // flow-control ledger) but will never be written to xterm, so it must still
-    // be acked or the host queue leaks toward permanent backpressure — same
-    // contract as the hibernated-output drop path in TerminalWriteController.
-    private readonly onEvict?: (id: string) => void
+    ) => void
   ) {}
 
   public async initialize(): Promise<void> {
@@ -104,7 +88,6 @@ export class TerminalOutputIngestService {
     const queue = this.queues.get(id);
     if (!queue) return;
     queue.inFlightBytes = Math.max(0, queue.inFlightBytes - bytes);
-    if (this.isBackgrounded(id)) return;
     if (queue.inFlightBytes <= RENDERER_LOW_WATERMARK_BYTES && queue.chunks.length > 0) {
       this.tryDrain(id, queue);
     }
@@ -113,18 +96,15 @@ export class TerminalOutputIngestService {
   public notifyParsed(id: string): void {
     const queue = this.queues.get(id);
     if (!queue || queue.chunks.length === 0 || queue.drainScheduled) return;
-    if (this.isBackgrounded(id)) return;
     this.tryDrain(id, queue);
   }
 
   /**
-   * Drain bytes held while a panel was backgrounded. Routed through tryDrain
-   * (not forceDrain) so the 256KB COALESCE_BATCH_CAP_BYTES cap is respected —
-   * a backgrounded panel may have accumulated a large in-flight batch, and a
-   * single multi-MB xterm.write() on wake would block the main thread (#4853).
+   * Drain any held bytes through tryDrain (not forceDrain) so the 256KB
+   * COALESCE_BATCH_CAP_BYTES cap is respected — a backlog must not become a
+   * single multi-MB xterm.write() that blocks the main thread (#4853).
    */
   public resumeFlush(id: string): void {
-    if (this.isBackgrounded(id)) return;
     const queue = this.queues.get(id);
     if (!queue || queue.chunks.length === 0) return;
     this.tryDrain(id, queue);
@@ -188,10 +168,6 @@ export class TerminalOutputIngestService {
     }, 50);
   }
 
-  private isBackgrounded(id: string): boolean {
-    return this.getTier?.(id) === TerminalRefreshTier.BACKGROUND;
-  }
-
   private markTerminalDataReceived(id: string, data: string | Uint8Array): void {
     this.perfSampleCounter += 1;
     if (this.perfSampleCounter % 64 !== 0) return;
@@ -227,16 +203,6 @@ export class TerminalOutputIngestService {
     queue.chunks.push(data);
     queue.queuedBytes += bytes;
 
-    // Backgrounded panels: hold bytes in the queue without parsing them into
-    // xterm. The producer-side gate in pty-host suppresses most output, but
-    // in-flight MessagePort batches still arrive after backgrounding; parsing
-    // them burns renderer main-thread CPU for a pane the user can't see. The
-    // queue is flushed via resumeFlush() when the tier upgrades back to active.
-    if (this.isBackgrounded(id)) {
-      this.evictBackgroundOverflow(id, queue);
-      return;
-    }
-
     const stringData = typeof data === "string" ? data : "";
     if (stringData) {
       // Scan the chunk and the boundary window separately — concatenating
@@ -256,10 +222,6 @@ export class TerminalOutputIngestService {
         globalThis.setTimeout(() => {
           if (this.queues.get(id) !== queue) return;
           queue.drainScheduled = false;
-          // Tier may have flipped to BACKGROUND between scheduling and firing —
-          // draining now would parse into a hidden pane. The held bytes are
-          // flushed by resumeFlush on the next tier upgrade.
-          if (this.isBackgrounded(id)) return;
           this.tryDrain(id, queue);
         }, 0);
         return;
@@ -268,29 +230,6 @@ export class TerminalOutputIngestService {
 
     if (!queue.drainScheduled) {
       this.tryDrain(id, queue);
-    }
-  }
-
-  /**
-   * Bound the held queue for a backgrounded panel (#9906). Drops oldest chunks
-   * (FIFO, matching coalesceBatch ordering) until the queue is back under the
-   * cap. These bytes were already dequeued from the MessagePort by onData, so
-   * the IPC-layer accounting is settled — no host ack is needed on drop. The
-   * loss is the same tradeoff as the existing background gate, now bounded: on
-   * wake the scrollback is replaced by the host's serialized snapshot anyway.
-   */
-  private evictBackgroundOverflow(id: string, queue: TerminalIngestQueue): void {
-    while (queue.queuedBytes > BACKGROUND_QUEUE_MAX_BYTES && queue.chunks.length > 0) {
-      const dropped = queue.chunks.shift()!;
-      queue.queuedBytes -= this.chunkByteSize(dropped);
-      // Held background chunks map 1:1 (in FIFO order) to the host's pending
-      // port-ack entries — nothing has been coalesced or written yet — so
-      // acking the oldest entry per evicted chunk keeps the ledger balanced.
-      this.onEvict?.(id);
-    }
-    // queuedBytes is the sum of chunk sizes; with chunks empty it is exactly 0.
-    if (queue.chunks.length === 0) {
-      queue.queuedBytes = 0;
     }
   }
 

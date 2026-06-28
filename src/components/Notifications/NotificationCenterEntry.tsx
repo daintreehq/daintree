@@ -354,7 +354,13 @@ async function reportNotificationOnGitHub(
       envInfo = await appClient.getVersionInfo();
     } catch (envError) {
       logError("Failed to load version info for inbox report", envError);
-      envInfo = { appVersion: "unknown", electron: "unknown", chrome: "unknown", os: "unknown" };
+      envInfo = {
+        appVersion: "unknown",
+        electron: "unknown",
+        chrome: "unknown",
+        os: "unknown",
+        arch: "unknown",
+      };
     }
 
     const reportMessage =

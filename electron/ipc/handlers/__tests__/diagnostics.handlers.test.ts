@@ -62,27 +62,31 @@ const collectDiagnosticsWithKeysMock = vi.hoisted(() =>
   vi.fn(() => Promise.resolve({ payload: { metadata: {} }, sectionKeys: ["metadata"] }))
 );
 
+// privateBytes is 0 here to mirror the real macOS/Linux shape: privateBytes is
+// a Windows-only field that reports 0 elsewhere (lesson #8646). Reading it would
+// sum to zero on 2 of 3 platforms, so the handlers must use workingSetSize. A
+// fixture with populated privateBytes would pass even if that bug regressed.
 const appMock = vi.hoisted(() => ({
   getAppMetrics: vi.fn(() => [
     {
       pid: 100,
       type: "Browser",
       name: "Browser",
-      memory: { privateBytes: 102400, workingSetSize: 204800 },
+      memory: { privateBytes: 0, workingSetSize: 204800 },
       cpu: { percentCPUUsage: 5.5 },
     },
     {
       pid: 200,
       type: "GPU",
       name: "GPU Process",
-      memory: { privateBytes: undefined, workingSetSize: 51200 },
+      memory: { privateBytes: 0, workingSetSize: 51200 },
       cpu: { percentCPUUsage: 2.3 },
     },
     {
       pid: 300,
       type: "Utility",
       name: "Network Service",
-      memory: { privateBytes: 30720, workingSetSize: 40960 },
+      memory: { privateBytes: 0, workingSetSize: 40960 },
       cpu: undefined,
     },
   ]),
@@ -171,6 +175,7 @@ vi.mock("../../../services/ProcessMemoryMonitor.js", () => ({
 }));
 
 import { registerDiagnosticsHandlers } from "../diagnostics.js";
+import { resetAppMetricsSnapshotForTesting } from "../../../utils/appMetricsSnapshot.js";
 
 function getHandlerFn(channelName: string): (...args: unknown[]) => unknown {
   const call = ipcMainMock.handle.mock.calls.find((c: unknown[]) => c[0] === channelName);
@@ -188,6 +193,9 @@ describe("registerDiagnosticsHandlers", () => {
     existsSyncMock.mockReturnValue(false);
     statMock.mockResolvedValue({ mtimeMs: Date.now() });
     readFileMock.mockResolvedValue("log line");
+    // The metrics handlers read through a 5s shared cache; clear it so each
+    // test's mocked getAppMetrics (incl. per-test throw overrides) actually runs.
+    resetAppMetricsSnapshotForTesting();
   });
 
   it("registers all expected IPC handlers", () => {
@@ -230,16 +238,19 @@ describe("registerDiagnosticsHandlers", () => {
       }>;
 
       expect(result).toHaveLength(3);
+      // workingSetSize 204800 KB / 1024 = 200 MB (NOT privateBytes, which is 0).
       expect(result[0].pid).toBe(100);
-      expect(result[0].memoryMB).toBe(100);
+      expect(result[0].memoryMB).toBe(200);
       expect(result[0].cpuPercent).toBe(5.5);
       expect(result[0].name).toBe("Browser");
 
-      // Falls back to workingSetSize when privateBytes is undefined
+      // workingSetSize 51200 KB / 1024 = 50 MB
       expect(result[1].pid).toBe(200);
       expect(result[1].memoryMB).toBe(50);
 
-      // CPU defaults to 0 when cpu is undefined
+      // CPU defaults to 0 when cpu is undefined; workingSetSize 40960 / 1024 = 40 MB
+      expect(result[2].pid).toBe(300);
+      expect(result[2].memoryMB).toBe(40);
       expect(result[2].cpuPercent).toBe(0);
 
       // Sorted by memoryMB descending
@@ -254,6 +265,52 @@ describe("registerDiagnosticsHandlers", () => {
       registerDiagnosticsHandlers(deps);
       const handler = getHandlerFn("diagnostics:get-process-metrics");
       expect(handler()).toEqual([]);
+    });
+  });
+
+  describe("handleGetAppMetrics", () => {
+    it("sums workingSetSize across processes (not the macOS/Linux-zero privateBytes)", () => {
+      registerDiagnosticsHandlers(deps);
+      const handler = getHandlerFn("system:get-app-metrics");
+      const result = handler() as { totalMemoryMB: number; unavailable?: true };
+
+      // (204800 + 51200 + 40960) KB / 1024 = 290 MB. Reading privateBytes would
+      // sum to 0 here — that's the regression this guards.
+      expect(result.totalMemoryMB).toBe(290);
+      expect(result.unavailable).toBeUndefined();
+    });
+
+    it("flags unavailable instead of returning a misleading 0 on error", () => {
+      appMock.getAppMetrics.mockImplementationOnce(() => {
+        throw new Error("fail");
+      });
+      registerDiagnosticsHandlers(deps);
+      const handler = getHandlerFn("system:get-app-metrics");
+      const result = handler() as { totalMemoryMB: number; unavailable?: true };
+
+      expect(result.unavailable).toBe(true);
+      expect(result.totalMemoryMB).toBe(0);
+    });
+
+    it("uses workingSetSize even when privateBytes is populated (no ?? regression)", () => {
+      // Simulate a Windows-shaped reading where privateBytes is large and would
+      // win under the old `privateBytes ?? workingSetSize`. The handler must
+      // still report workingSetSize so the metric is consistent cross-platform.
+      appMock.getAppMetrics.mockImplementationOnce(() => [
+        {
+          pid: 1,
+          type: "Browser",
+          name: "Browser",
+          memory: { privateBytes: 1024 * 1024, workingSetSize: 102400 },
+          cpu: { percentCPUUsage: 1 },
+        },
+      ]);
+      registerDiagnosticsHandlers(deps);
+      const handler = getHandlerFn("system:get-app-metrics");
+      const result = handler() as { totalMemoryMB: number };
+
+      // workingSetSize 102400 / 1024 = 100 MB, not privateBytes 1048576 / 1024 = 1024 MB.
+      expect(result.totalMemoryMB).toBe(100);
     });
   });
 

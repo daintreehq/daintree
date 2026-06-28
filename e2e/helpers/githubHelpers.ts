@@ -1,6 +1,7 @@
 import type { ElectronApplication, Page } from "@playwright/test";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../../shared/utils/forgeProviderIds";
 import type { Issue, Page as ForgePage } from "../../shared/types/forge";
+import { activateE2EPlugin } from "./plugins";
 
 /**
  * GitHub E2E helpers. All state is injected through the same fault-mode hooks
@@ -26,6 +27,7 @@ export async function seedGitHubToken(
   app: ElectronApplication,
   token: string = E2E_GITHUB_TOKEN
 ): Promise<void> {
+  await activateE2EPlugin(app, "daintree.github");
   await app.evaluate((_modules, t) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- E2E hook
     const seed = (globalThis as any).__daintreeSeedGitHubToken as
@@ -196,6 +198,13 @@ export async function stubRepoStats(
         fetchedAt: now,
       });
     }
+    // Force the stats hook through its normal successful-fetch path as well.
+    // The count push can be ignored by the hook's freshness guard if a previous
+    // token-error snapshot had an equal-or-newer timestamp, but the refresh
+    // event re-reads the stubbed handler and clears `isTokenError`.
+    await window.evaluate(() => {
+      window.dispatchEvent(new CustomEvent("daintree:refresh-sidebar"));
+    });
   }
 }
 

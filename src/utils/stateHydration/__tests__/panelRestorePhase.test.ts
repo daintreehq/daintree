@@ -102,12 +102,20 @@ vi.mock("@shared/utils/smokeTestTerminals", () => ({
 }));
 
 // Override stagger constants so tests don't have to wait 100ms × N
+// Spy on getRestoreBatchParams so tests can both pin fast/deterministic batches
+// (batchSize 2, delayMs 0) AND assert the resource profile is threaded through
+// from the context (#10528).
+const { getRestoreBatchParamsMock } = vi.hoisted(() => ({
+  getRestoreBatchParamsMock: vi.fn(() => ({ batchSize: 2, delayMs: 0 })),
+}));
+
 vi.mock("../batchScheduler", async () => {
   const actual = await vi.importActual<typeof import("../batchScheduler")>("../batchScheduler");
   return {
     ...actual,
     RESTORE_SPAWN_BATCH_SIZE: 2,
     RESTORE_SPAWN_BATCH_DELAY_MS: 0,
+    getRestoreBatchParams: getRestoreBatchParamsMock,
   };
 });
 
@@ -172,6 +180,8 @@ beforeEach(() => {
   initializeBackendTierMock.mockReset();
   setTargetSizeMock.mockReset();
   reconnectWithTimeoutMock.mockReset();
+  getRestoreBatchParamsMock.mockClear();
+  getRestoreBatchParamsMock.mockReturnValue({ batchSize: 2, delayMs: 0 });
 });
 
 describe("restorePanelsPhase — saved panels", () => {
@@ -267,6 +277,67 @@ describe("restorePanelsPhase — saved panels", () => {
     );
     expect(restoreTerminalOrder).toHaveBeenCalledTimes(1);
     expect(restoreTerminalOrder.mock.calls[0]![0]).toEqual(["new-t1", "new-t2", "new-t3"]);
+  });
+
+  it("restores every priority PTY panel even when one rejects (#10528 parallel tier)", async () => {
+    // All three are priority (active worktree). The middle addPanel rejects;
+    // the parallel Promise.allSettled tier must still attempt all three rather
+    // than aborting the rest as the old sequential loop's throw would.
+    const ctx = makeContext({ activeWorktreeId: "wA" });
+    ctx.backendTerminalMap.set("p1", backend("p1"));
+    ctx.backendTerminalMap.set("p2", backend("p2"));
+    ctx.backendTerminalMap.set("p3", backend("p3"));
+    const attempted: string[] = [];
+    ctx.addPanel.mockImplementation(async (args: { existingId?: string; requestedId?: string }) => {
+      const id = args.existingId ?? args.requestedId ?? "";
+      attempted.push(id);
+      if (id === "p2") throw new Error("spawn failed");
+      return id;
+    });
+    await restorePanelsPhase(
+      [
+        panel("p1", { worktreeId: "wA" }),
+        panel("p2", { worktreeId: "wA" }),
+        panel("p3", { worktreeId: "wA" }),
+      ],
+      ctx
+    );
+    // p1 and p3 must have been attempted even though p2 rejected — proving the
+    // parallel tier did not abort on the first failure.
+    expect(attempted).toContain("p1");
+    expect(attempted).toContain("p3");
+  });
+
+  it("runs priority PTY restores concurrently, not sequentially (#10528)", async () => {
+    // p1's addPanel only resolves once p3's addPanel has been called. A
+    // sequential loop would call p1 first and deadlock (p3 never reached); the
+    // Promise.allSettled tier fires both, so p3 unblocks p1. If this resolves,
+    // the tier is genuinely concurrent.
+    const ctx = makeContext({ activeWorktreeId: "wA" });
+    ctx.backendTerminalMap.set("p1", backend("p1"));
+    ctx.backendTerminalMap.set("p3", backend("p3"));
+    let resolveP3Seen!: () => void;
+    const p3Seen = new Promise<void>((resolve) => {
+      resolveP3Seen = resolve;
+    });
+    ctx.addPanel.mockImplementation(async (args: { existingId?: string; requestedId?: string }) => {
+      const id = args.existingId ?? args.requestedId ?? "";
+      if (id === "p3") resolveP3Seen();
+      if (id === "p1") await p3Seen;
+      return id;
+    });
+    await restorePanelsPhase(
+      [panel("p1", { worktreeId: "wA" }), panel("p3", { worktreeId: "wA" })],
+      ctx
+    );
+    expect(ctx.addPanel).toHaveBeenCalledTimes(2);
+  });
+
+  it("threads the context resource profile into getRestoreBatchParams (#10528)", async () => {
+    const ctx = makeContext({ activeWorktreeId: "wA", resourceProfile: "performance" });
+    ctx.backendTerminalMap.set("b1", backend("b1"));
+    await restorePanelsPhase([panel("b1", { worktreeId: "wOther" })], ctx);
+    expect(getRestoreBatchParamsMock).toHaveBeenCalledWith("performance");
   });
 
   it("does not call restoreTerminalOrder when no panels were restored", async () => {
@@ -494,6 +565,141 @@ describe("restorePanelsPhase — lastActiveAt promotion (issue #8703)", () => {
     const ids = ctx.addPanel.mock.calls.map((c) => (c[0] as { existingId?: string }).existingId);
     // All three promote; saved-order placement is preserved in the priority filter.
     expect(ids).toEqual(["b1", "a1", "c1"]);
+  });
+});
+
+describe("restorePanelsPhase — visible-panel priority tier (issue #10527)", () => {
+  // addPanel order is the observable. Visible PTY panels run in a dedicated
+  // tier ahead of the active-worktree priority tier; non-PTY visible panels are
+  // unaffected (they stay on the concurrent non-PTY path).
+  const restoredIds = (addPanel: Mock): (string | undefined)[] =>
+    addPanel.mock.calls.map((c) => {
+      const args = c[0] as { existingId?: string; requestedId?: string };
+      return args.existingId ?? args.requestedId;
+    });
+
+  it("restores the visible PTY panel first, ahead of the active-worktree tier", async () => {
+    const ctx = makeContext({ activeWorktreeId: "wA", visiblePanelId: "b1" });
+    ctx.backendTerminalMap.set("a1", backend("a1"));
+    ctx.backendTerminalMap.set("b1", backend("b1"));
+    ctx.backendTerminalMap.set("b2", backend("b2"));
+    await restorePanelsPhase(
+      [
+        panel("a1", { worktreeId: "wA" }), // active -> priority 0
+        panel("b1", { worktreeId: "wB", lastActiveAt: 10 }), // visible -> -1 (would be background)
+        panel("b2", { worktreeId: "wB", lastActiveAt: 200 }), // max in wB -> priority 0
+      ],
+      ctx
+    );
+    // Without the visible tier b1 is background and restores last (a1, b2, b1).
+    // The visible tier pulls it to the front.
+    expect(restoredIds(ctx.addPanel)).toEqual(["b1", "a1", "b2"]);
+    // Restored exactly once — the -1 tier replaces, not duplicates, its slot.
+    expect(ctx.addPanel).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not let a visible non-PTY panel jump the PTY restore queue", async () => {
+    const ctx = makeContext({ activeWorktreeId: "wA", visiblePanelId: "br1" });
+    ctx.backendTerminalMap.set("a1", backend("a1"));
+    ctx.backendTerminalMap.set("b1", backend("b1"));
+    await restorePanelsPhase(
+      [
+        panel("a1", { worktreeId: "wA" }), // active PTY -> priority 0
+        panel("br1", { kind: "browser", worktreeId: "wB" }), // non-PTY, visible
+        panel("b1", { worktreeId: "wB", lastActiveAt: 5 }), // background PTY
+      ],
+      ctx
+    );
+    // br1 restores via the concurrent non-PTY phase (first), but it never enters
+    // the -1 PTY tier, so the PTY ordering (a1 priority, b1 background) is
+    // unchanged — the visible non-PTY does not promote the background PTY.
+    expect(restoredIds(ctx.addPanel)).toEqual(["br1", "a1", "b1"]);
+  });
+
+  it("preserves existing ordering when no visiblePanelId is supplied", async () => {
+    const ctx = makeContext({ activeWorktreeId: "wA" }); // visiblePanelId undefined
+    ctx.backendTerminalMap.set("a1", backend("a1"));
+    ctx.backendTerminalMap.set("b1", backend("b1"));
+    ctx.backendTerminalMap.set("b2", backend("b2"));
+    await restorePanelsPhase(
+      [
+        panel("a1", { worktreeId: "wA" }),
+        panel("b1", { worktreeId: "wB", lastActiveAt: 10 }),
+        panel("b2", { worktreeId: "wB", lastActiveAt: 200 }),
+      ],
+      ctx
+    );
+    // a1 (active) + b2 (max in wB) are priority; b1 is background and last.
+    expect(restoredIds(ctx.addPanel)).toEqual(["a1", "b2", "b1"]);
+  });
+
+  it("degrades to existing ordering when visiblePanelId matches no saved panel", async () => {
+    const ctx = makeContext({ activeWorktreeId: "wA", visiblePanelId: "ghost" });
+    ctx.backendTerminalMap.set("a1", backend("a1"));
+    ctx.backendTerminalMap.set("b1", backend("b1"));
+    ctx.backendTerminalMap.set("b2", backend("b2"));
+    await restorePanelsPhase(
+      [
+        panel("a1", { worktreeId: "wA" }),
+        panel("b1", { worktreeId: "wB", lastActiveAt: 10 }),
+        panel("b2", { worktreeId: "wB", lastActiveAt: 200 }),
+      ],
+      ctx
+    );
+    // Identical to the no-signal case — a stale MRU head is harmless.
+    expect(restoredIds(ctx.addPanel)).toEqual(["a1", "b2", "b1"]);
+  });
+
+  it("restores a visible panel first via the respawn path on cold restart (no backend match)", async () => {
+    // No backend terminal for the visible panel → it takes the reconnect/respawn
+    // path. It must still jump ahead of the active-worktree PTY.
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
+    const ctx = makeContext({ activeWorktreeId: "wA", visiblePanelId: "v1" });
+    ctx.backendTerminalMap.set("a1", backend("a1"));
+    await restorePanelsPhase(
+      [
+        panel("a1", { worktreeId: "wA" }), // active PTY (backend match)
+        panel("v1", { kind: "agent", launchAgentId: "claude", worktreeId: "wB" }), // visible, respawn
+      ],
+      ctx
+    );
+    // v1 (visible, respawned with requestedId v1) restores before a1.
+    expect(restoredIds(ctx.addPanel)).toEqual(["v1", "a1"]);
+  });
+
+  it("restores the visible panel exactly once when it is also the active-worktree panel", async () => {
+    // Overlap: the visible panel is in the active worktree. priority -1 wins over
+    // priority 0, so it lands only in the visible tier — never double-restored.
+    const ctx = makeContext({ activeWorktreeId: "wA", visiblePanelId: "a1" });
+    ctx.backendTerminalMap.set("a1", backend("a1"));
+    ctx.backendTerminalMap.set("a2", backend("a2"));
+    await restorePanelsPhase(
+      [panel("a1", { worktreeId: "wA" }), panel("a2", { worktreeId: "wA" })],
+      ctx
+    );
+    expect(restoredIds(ctx.addPanel)).toEqual(["a1", "a2"]);
+    expect(ctx.addPanel).toHaveBeenCalledTimes(2);
+  });
+
+  it("wraps the visible tier in its own hydration batch separate from background", async () => {
+    // v1 is the max-lastActiveAt in wB but is visible → priority -1, so b1/b2
+    // (lower stamps, same worktree) are NOT promoted and both go to background.
+    // Tiers: visible[v1], background[b1,b2] (one batch, size 2) → 2 batch calls.
+    // A regression that forgot to wrap the visible tier would drop to 1.
+    const ctx = makeContext({ visiblePanelId: "v1" });
+    ctx.backendTerminalMap.set("v1", backend("v1"));
+    ctx.backendTerminalMap.set("b1", backend("b1"));
+    ctx.backendTerminalMap.set("b2", backend("b2"));
+    await restorePanelsPhase(
+      [
+        panel("v1", { worktreeId: "wB", lastActiveAt: 100 }), // visible
+        panel("b1", { worktreeId: "wB", lastActiveAt: 5 }), // background
+        panel("b2", { worktreeId: "wB", lastActiveAt: 5 }), // background
+      ],
+      ctx
+    );
+    expect(restoredIds(ctx.addPanel)).toEqual(["v1", "b1", "b2"]);
+    expect(ctx.withHydrationBatch).toHaveBeenCalledTimes(2);
   });
 });
 

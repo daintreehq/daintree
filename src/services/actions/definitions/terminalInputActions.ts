@@ -61,6 +61,10 @@ export function registerTerminalInputActions(
     category: "terminal",
     kind: "command",
     danger: "safe",
+    // Writes clipboard text (including \r-terminated, auto-executing commands in
+    // non-bracketed mode) into a terminal — closed to plugin dispatch so it
+    // can't be an end-run around the `agent:input` capability (#10558).
+    denyPluginDispatch: true,
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown) => {
@@ -197,45 +201,63 @@ export function registerTerminalInputActions(
   actions.set("terminal.arm", () => ({
     id: "terminal.arm",
     title: "Arm Terminal",
-    description: "Add a terminal to the fleet arming set",
+    description:
+      "Add a terminal to the fleet arming set so the next broadcast input is also routed to it. Args: `terminalId` (required) — panel UUID from `terminal.list` (the `id` field); ignored when the terminal is not arm-eligible. Returns { armed } — the resulting armed terminal IDs in broadcast (arm) order.",
     category: "terminal",
     kind: "command",
+    // Arming only edits the broadcast set — it routes the *next* input, mutates
+    // nothing, and is reversible via `terminal.disarm`/`terminal.disarmAll`, so
+    // it needs no confirmation. Hidden from the palette so user arming stays in
+    // the fleet UI (ribbon `toggleId`/`armAll`) rather than a stray palette pick.
     danger: "safe",
+    palette: { mode: "hidden" },
     scope: "renderer",
-    argsSchema: z.object({ terminalId: z.string() }),
+    argsSchema: z.object({ terminalId: z.string().min(1) }),
+    resultSchema: z.object({ armed: z.array(z.string()) }),
+    mcpOutputSchema: true,
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId: string };
       const terminal = usePanelStore.getState().panelsById[terminalId];
-      if (!isFleetArmEligible(terminal)) return;
-      useFleetArmingStore.getState().armId(terminalId);
+      if (isFleetArmEligible(terminal)) {
+        useFleetArmingStore.getState().armId(terminalId);
+      }
+      return { armed: [...useFleetArmingStore.getState().armOrder] };
     },
   }));
 
   actions.set("terminal.disarm", () => ({
     id: "terminal.disarm",
     title: "Disarm Terminal",
-    description: "Remove a terminal from the fleet arming set",
+    description:
+      "Remove a terminal from the fleet arming set. Args: `terminalId` (required) — panel UUID from `terminal.list` (the `id` field). No-op when the terminal is not armed. Returns { armed } — the resulting armed terminal IDs in broadcast (arm) order.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ terminalId: z.string() }),
+    argsSchema: z.object({ terminalId: z.string().min(1) }),
+    resultSchema: z.object({ armed: z.array(z.string()) }),
+    mcpOutputSchema: true,
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId: string };
       useFleetArmingStore.getState().disarmId(terminalId);
+      return { armed: [...useFleetArmingStore.getState().armOrder] };
     },
   }));
 
   actions.set("terminal.disarmAll", () => ({
     id: "terminal.disarmAll",
     title: "Disarm All",
-    description: "Clear the fleet arming set",
+    description:
+      "Clear the entire fleet arming set so no terminal receives broadcast input. Returns { armed } — always an empty array.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    resultSchema: z.object({ armed: z.array(z.string()) }),
+    mcpOutputSchema: true,
     run: async () => {
       useFleetArmingStore.getState().clear();
+      return { armed: [...useFleetArmingStore.getState().armOrder] };
     },
   }));
 

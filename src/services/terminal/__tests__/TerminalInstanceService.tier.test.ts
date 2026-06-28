@@ -14,6 +14,9 @@ const mockTerminalClient = {
     return vi.fn();
   }),
   setActivityTier: vi.fn(),
+  // The background→active foreground transition now runs a plain repaint whose
+  // handlePostWake reaches resize() for default-strategy panes.
+  resize: vi.fn(),
   wake: vi.fn(),
   getSerializedState: vi.fn(),
   getSharedBuffer: vi.fn(() => null),
@@ -70,7 +73,6 @@ type TierTestService = {
   updateOptions: (id: string, options: Record<string, unknown>) => void;
   applyAgentPromotion: (id: string, agentId: string) => void;
   clearAgentPromotion: (id: string) => void;
-  reduceScrollbackAllBackground: (targetLines: number) => void;
   writeController: { write: (id: string, data: string | Uint8Array) => void };
 };
 
@@ -99,7 +101,13 @@ function makeMockManaged(overrides: Record<string, unknown> = {}) {
     searchAddon: {},
     fileLinksDisposable: { dispose: vi.fn() } as { dispose: ReturnType<typeof vi.fn> } | null,
     webLinksAddon: { dispose: vi.fn() } as { dispose: ReturnType<typeof vi.fn> } | null,
-    hostElement: document.createElement("div"),
+    // The foreground (background→active) transition now runs a plain repaint that
+    // measures the host; jsdom's div lacks checkVisibility. Stub it false so the
+    // geometry path bails cleanly — these tests cover addon/cursorBlink/tier
+    // behavior, not layout.
+    hostElement: Object.assign(document.createElement("div"), {
+      checkVisibility: () => false,
+    }),
     isOpened: true,
     isVisible: true,
     isFocused: false,
@@ -162,7 +170,7 @@ describe("TerminalInstanceService - Activity Tier", () => {
   });
 
   describe("Addon Lifecycle on Tier Transitions", () => {
-    it("should dispose addons when transitioning to BACKGROUND", () => {
+    it("keeps content addons live when transitioning to BACKGROUND (hibernation removed)", () => {
       const managed = makeMockManaged({ lastAppliedTier: TerminalRefreshTier.FOCUSED });
       const imageDispose = managed.imageAddon!.dispose;
       const fileLinksDispose = managed.fileLinksDisposable!.dispose;
@@ -173,12 +181,14 @@ describe("TerminalInstanceService - Activity Tier", () => {
       // Downgrade has 500ms hysteresis
       vi.advanceTimersByTime(600);
 
-      expect(imageDispose).toHaveBeenCalled();
-      expect(fileLinksDispose).toHaveBeenCalled();
-      expect(webLinksDispose).toHaveBeenCalled();
-      expect(managed.imageAddon).toBeNull();
-      expect(managed.fileLinksDisposable).toBeNull();
-      expect(managed.webLinksAddon).toBeNull();
+      // Background panes stay fully live — image/link addons are NOT torn down.
+      // (WebGL context release is the only visibility-gated optimization kept.)
+      expect(imageDispose).not.toHaveBeenCalled();
+      expect(fileLinksDispose).not.toHaveBeenCalled();
+      expect(webLinksDispose).not.toHaveBeenCalled();
+      expect(managed.imageAddon).not.toBeNull();
+      expect(managed.fileLinksDisposable).not.toBeNull();
+      expect(managed.webLinksAddon).not.toBeNull();
     });
 
     it("should recreate addons when transitioning from BACKGROUND to VISIBLE", async () => {
@@ -264,7 +274,7 @@ describe("TerminalInstanceService - Activity Tier", () => {
       expect(createWebLinksAddon).not.toHaveBeenCalled();
     });
 
-    it("should null addons and set lastAppliedTier for terminals created at BACKGROUND tier", () => {
+    it("keeps content addons live and sets lastAppliedTier for terminals created at BACKGROUND tier", () => {
       const managed = service.prewarmTerminal("t-bg", "terminal", {});
       const m = managed as unknown as {
         imageAddon: unknown;
@@ -273,9 +283,12 @@ describe("TerminalInstanceService - Activity Tier", () => {
         lastAppliedTier: TerminalRefreshTier;
       };
 
-      expect(m.imageAddon).toBeNull();
-      expect(m.fileLinksDisposable).toBeNull();
-      expect(m.webLinksAddon).toBeNull();
+      // Finding 3 of the teardown: a pane created at BACKGROUND stays fully
+      // content-live — its addons are NOT torn down — while lastAppliedTier still
+      // records BACKGROUND so WebGL stays released until foreground.
+      expect(m.imageAddon).not.toBeNull();
+      expect(m.fileLinksDisposable).not.toBeNull();
+      expect(m.webLinksAddon).not.toBeNull();
       expect(m.lastAppliedTier).toBe(TerminalRefreshTier.BACKGROUND);
     });
 
@@ -309,26 +322,33 @@ describe("TerminalInstanceService - Activity Tier", () => {
       expect(capturedTierChangedCb).toBeTypeOf("function");
     });
 
-    it("re-arms needsWake when the host pushes a background demotion", () => {
+    it("re-arms the outbound dedupe baseline when the host pushes a background demotion (#9778)", () => {
       // Create a terminal so the lazy onTierChanged subscription is installed.
       service.prewarmTerminal("warm", "terminal", {});
 
-      const managed = makeMockManaged({
-        lastAppliedTier: TerminalRefreshTier.FOCUSED,
-        needsWake: false,
-      });
+      const managed = makeMockManaged({ lastAppliedTier: TerminalRefreshTier.VISIBLE });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
-      // Simulate the host's recomputeActivityTiers demoting this terminal and
-      // pushing the tier-changed control message over the MessagePort. The
-      // wiring must funnel it into rendererPolicy.initializeBackendTier, which
-      // for a background tier sets needsWake so the next activation wakes/flushes.
+      // Establish the renderer's outbound baseline as "active".
+      service.applyRendererPolicy("t1", TerminalRefreshTier.FOCUSED);
+      expect(mockTerminalClient.setActivityTier).toHaveBeenCalledWith("t1", "active", 50);
+      mockTerminalClient.setActivityTier.mockClear();
+      managed.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+
+      // The host's recomputeActivityTiers silently demotes this terminal and
+      // pushes the tier-changed control message over the MessagePort. It must
+      // funnel into rendererPolicy.initializeBackendTier and re-arm the baseline
+      // to "background" — WITHOUT setting needsWake (which no longer exists).
       capturedTierChangedCb?.("t1", "background");
 
-      expect(managed.needsWake).toBe(true);
+      // The next reactivation must RESEND "active" instead of dedupe-dropping it
+      // as a redundant same-tier call (the #9778 trap that stranded the producer
+      // gate suppressing bytes while the pane looked active).
+      service.applyRendererPolicy("t1", TerminalRefreshTier.BURST);
+      expect(mockTerminalClient.setActivityTier).toHaveBeenCalledWith("t1", "active", 50);
     });
 
-    it("does not force a wake when the host pushes an active tier", () => {
+    it("does not arm needsWake on a host-pushed tier (the field is permanently false)", () => {
       service.prewarmTerminal("warm", "terminal", {});
 
       const managed = makeMockManaged({
@@ -337,8 +357,10 @@ describe("TerminalInstanceService - Activity Tier", () => {
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
-      capturedTierChangedCb?.("t1", "active");
+      capturedTierChangedCb?.("t1", "background");
+      expect(managed.needsWake).toBe(false);
 
+      capturedTierChangedCb?.("t1", "active");
       expect(managed.needsWake).toBe(false);
     });
   });
@@ -641,38 +663,112 @@ describe("TerminalInstanceService - Activity Tier", () => {
           .lastScrollbackReduceAt
       ).toBeUndefined();
     });
+  });
+});
 
-    it("reduceScrollbackAllBackground bypasses cooldown for eligible terminals only", () => {
-      const recentlyReduced = makeMockManaged({
-        lastAppliedTier: TerminalRefreshTier.BACKGROUND,
-        lastScrollbackReduceAt: Date.now(), // deep inside cooldown
+// A separate top-level block: these tests mutate the real panelStore singleton,
+// so each one resets modules to get a fresh store and a fresh service singleton
+// rather than leaking flowStatus/backgroundedTerminals across cases.
+type InputWakeService = {
+  instances: Map<string, Record<string, unknown>>;
+  onUserInput: (id: string, data: string) => void;
+  wake: (id: string) => void;
+};
+
+type PanelStoreModule = {
+  usePanelStore: {
+    getState: () => Record<string, unknown>;
+    setState: (partial: Record<string, unknown>) => void;
+  };
+};
+
+describe("TerminalInstanceService - onUserInput wake for paused-backpressure", () => {
+  let service: InputWakeService;
+  let panelStore: PanelStoreModule["usePanelStore"];
+  let wakeSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+
+    ({ terminalInstanceService: service } =
+      (await import("../TerminalInstanceService")) as unknown as {
+        terminalInstanceService: InputWakeService;
       });
-      recentlyReduced.terminal.buffer.active.length = 3000;
+    ({ usePanelStore: panelStore } =
+      (await import("@/store/panelStore")) as unknown as PanelStoreModule);
 
-      const focused = makeMockManaged({ isFocused: true });
-      focused.terminal.buffer.active.length = 3000;
+    // wake() is now a plain repaint (no host snapshot wake). Spy it as a no-op so
+    // these tests assert the onUserInput ROUTING decision (which panes get an
+    // unstick reveal on type) without driving the real geometry/repaint path.
+    wakeSpy = vi.spyOn(service, "wake").mockImplementation(() => {});
 
-      const hibernated = makeMockManaged({ isHibernated: true });
-      hibernated.terminal.buffer.active.length = 3000;
+    service.instances.clear();
+  });
 
-      const workingAgent = makeMockManaged({
-        runtimeAgentId: "claude",
-        canonicalAgentState: "working",
-      });
-      workingAgent.terminal.buffer.active.length = 3000;
+  afterEach(() => {
+    vi.useRealTimers();
+    service.instances.clear();
+  });
 
-      service.instances.set("t-bg", recentlyReduced as unknown as Record<string, unknown>);
-      service.instances.set("t-focused", focused as unknown as Record<string, unknown>);
-      service.instances.set("t-hib", hibernated as unknown as Record<string, unknown>);
-      service.instances.set("t-agent", workingAgent as unknown as Record<string, unknown>);
-
-      service.reduceScrollbackAllBackground(500);
-
-      // Force-bypassed cooldown — but only for the eligible plain background terminal.
-      expect(recentlyReduced.terminal.options.scrollback).toBe(500);
-      expect(focused.terminal.options.scrollback).toBe(5000);
-      expect(hibernated.terminal.options.scrollback).toBe(5000);
-      expect(workingAgent.terminal.options.scrollback).toBe(5000);
+  function setStore(flowStatus: string, backgrounded: boolean) {
+    panelStore.setState({
+      panelsById: { t1: { kind: "terminal", flowStatus } },
+      backgroundedTerminals: backgrounded ? new Map([["t1", {}]]) : new Map(),
     });
+  }
+
+  it("reveals a visible paused-backpressure terminal on user input", () => {
+    service.instances.set("t1", makeMockManaged() as unknown as Record<string, unknown>);
+    setStore("paused-backpressure", false);
+
+    service.onUserInput("t1", "a");
+
+    expect(wakeSpy).toHaveBeenCalledTimes(1);
+    expect(wakeSpy).toHaveBeenCalledWith("t1");
+  });
+
+  it("does not reveal a backgrounded paused-backpressure terminal", () => {
+    service.instances.set("t1", makeMockManaged() as unknown as Record<string, unknown>);
+    setStore("paused-backpressure", true);
+
+    service.onUserInput("t1", "a");
+
+    expect(wakeSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not reveal a running terminal on user input", () => {
+    service.instances.set("t1", makeMockManaged() as unknown as Record<string, unknown>);
+    setStore("running", false);
+
+    service.onUserInput("t1", "a");
+
+    expect(wakeSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not reveal a paused-resource-governor terminal on user input", () => {
+    // The backpressure-only exclusion is intentional and locked by this test:
+    // resource-governor pauses are not unstuck by a reveal.
+    service.instances.set("t1", makeMockManaged() as unknown as Record<string, unknown>);
+    setStore("paused-resource-governor", false);
+
+    service.onUserInput("t1", "a");
+
+    expect(wakeSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not reveal when the panel is not a PTY panel", () => {
+    // flowStatus is a PtyPanelData field; the isPtyPanel guard keeps the
+    // condition type-safe against the BrowserPanelData branch of the union.
+    service.instances.set("t1", makeMockManaged() as unknown as Record<string, unknown>);
+    panelStore.setState({
+      panelsById: { t1: { kind: "browser", flowStatus: "paused-backpressure" } },
+      backgroundedTerminals: new Map(),
+    });
+
+    service.onUserInput("t1", "a");
+
+    expect(wakeSpy).not.toHaveBeenCalled();
   });
 });

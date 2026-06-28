@@ -47,6 +47,96 @@ const COMMIT_ROW_HEIGHT_PX = 58;
 const skeletonRowCount = (initialCount: number | null | undefined) =>
   Math.max(1, Math.min(initialCount ?? 3, 8));
 
+// Commit bodies are conventionally hard-wrapped at ~72 columns. In the narrow
+// dropdown panel those hard breaks collide with the panel's own soft wrapping,
+// producing ragged double-wrapped text (issue #10718). Reflow continuation
+// prose lines back into their paragraph so soft-wrapping is the only break,
+// while preserving structure that depends on its own line breaks: blank lines
+// (paragraph separators), list items, indented/code lines, and `Key: value`
+// trailers (Co-authored-by:, Signed-off-by:, Fixes:, …). The <pre> keeps
+// whitespace-pre-wrap + break-words so long unwrapped lines (e.g. pasted URLs)
+// still wrap. Pure, non-throwing, and idempotent.
+export function reflowCommitBody(body: string): string {
+  if (!body) return body;
+
+  const lines = body.replace(/\r\n?/g, "\n").split("\n");
+
+  const isBlank = (line: string) => line.trim() === "";
+  const isFenceDelimiter = (line: string) => line.startsWith("```");
+  // Lines whose own break is meaningful regardless of context. (Fence
+  // delimiters and fenced content are handled separately via inFence below.)
+  const isAlwaysStructural = (line: string) =>
+    /^\s/.test(line) || // indented / code / continuation line
+    /^\s*[-*+]\s/.test(line) || // bullet list item
+    /^\s*\d+[.)]\s/.test(line); // numbered list item
+  // Trailer-shaped line (`Key: value`, incl. `BREAKING CHANGE:`). Only counts
+  // as structural inside a trailer block (see below) so a wrapped prose line
+  // that merely starts "Word: …" still reflows.
+  const isTrailerShaped = (line: string) =>
+    /^[A-Za-z][A-Za-z0-9-]*:\s/.test(line) || /^BREAKING CHANGE:\s/.test(line);
+
+  const out: string[] = [];
+  let paragraph: string[] = [];
+
+  const flush = () => {
+    if (paragraph.length > 0) {
+      out.push(paragraph.join(" "));
+      paragraph = [];
+    }
+  };
+
+  // A trailer block is a run of `Key: value` lines that begins after a blank
+  // line (or at the body start) — matching git's own trailer convention. Mid-
+  // paragraph lines that happen to look like trailers are treated as prose.
+  let prevBlank = true;
+  let inTrailerBlock = false;
+  // Track whether we're between fence delimiters. Inside a fence every line is
+  // verbatim code — even unindented ones — so it must not join the paragraph
+  // buffer the way a wrapped prose line would.
+  let inFence = false;
+
+  for (const line of lines) {
+    if (isFenceDelimiter(line)) {
+      flush();
+      out.push(line);
+      inFence = !inFence;
+      prevBlank = false;
+      inTrailerBlock = false;
+      continue;
+    }
+
+    if (inFence) {
+      flush();
+      out.push(line);
+      prevBlank = false;
+      inTrailerBlock = false;
+      continue;
+    }
+
+    if (isBlank(line)) {
+      flush();
+      out.push(line);
+      prevBlank = true;
+      inTrailerBlock = false;
+      continue;
+    }
+
+    const isTrailer: boolean = isTrailerShaped(line) && (prevBlank || inTrailerBlock);
+    if (isAlwaysStructural(line) || isTrailer) {
+      flush();
+      out.push(line);
+      inTrailerBlock = isTrailer;
+    } else {
+      paragraph.push(line.replace(/\s+$/, ""));
+      inTrailerBlock = false;
+    }
+    prevBlank = false;
+  }
+  flush();
+
+  return out.join("\n");
+}
+
 function LocalCommitsSkeleton({ count }: { count: number | null | undefined }) {
   return (
     <div role="status" aria-live="polite" aria-busy="true" aria-label="Loading commits">
@@ -94,7 +184,7 @@ function LocalCommitRow({ commit, optionId, isActive, isExpanded, onToggle }: Lo
     };
   }, []);
 
-  const trimmedBody = commit.body?.trim() ?? "";
+  const trimmedBody = reflowCommitBody(commit.body?.trim() ?? "");
   const hasBody = trimmedBody.length > 0;
 
   const handleCopyHash = async (e: MouseEvent<HTMLButtonElement>) => {
@@ -528,7 +618,7 @@ export function LocalCommitsDropdown({
         ) : null}
         {!loading && !data.length && error && (
           <div className="p-8 text-center text-muted-foreground">
-            <AlertCircle className="h-5 w-5 mx-auto mb-2 opacity-50" />
+            <AlertCircle className="h-5 w-5 mx-auto mb-2 text-text-muted" />
             <p className="text-sm">{error}</p>
             <Button
               variant="ghost"

@@ -38,6 +38,7 @@ import {
   readStringField,
   RESOURCE_BACKING_ACTIONS,
   TIER_NOT_PERMITTED_CODE,
+  CONFIRMATION_REQUIRED_CODE,
   CONFIRMATION_TIMEOUT_CODE,
   USER_REJECTED_CODE,
   ELICITATION_FAILED_CODE,
@@ -45,7 +46,6 @@ import {
   MCP_DEDUP_TTL_MS,
   MCP_DEDUP_MAX_ENTRIES_PER_SESSION,
   MCP_DEDUP_KEY_COLLISION_CODE,
-  MCP_RATE_LIMITED_CODE,
   minimumPermittingTier,
   EXECUTION_ERROR_CODE,
   SESSION_BINDING_GONE,
@@ -57,7 +57,7 @@ import {
   INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS,
   MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS,
 } from "../../../shared/types/terminalWaitUntilIdle.js";
-import { SessionBindingError } from "./rendererBridge.js";
+import { SessionBindingError, RendererBridgeUnavailableError } from "./rendererBridge.js";
 import {
   buildDedupKey,
   canonicalArgsHash,
@@ -75,7 +75,30 @@ import {
 } from "./tierAuth.js";
 
 const TERMINAL_WAIT_UNTIL_IDLE_TOOL = "terminal.waitUntilIdle";
+const TERMINAL_WAIT_UNTIL_IDLE_BATCH_TOOL = "terminal.waitUntilIdleBatch";
 const HELP_DISPLAY_IMAGE_TOOL = "help.displayImage";
+const BROWSER_CAPTURE_SCREENSHOT_TOOL = "browser.captureScreenshot";
+
+/**
+ * Narrow a `browser.captureScreenshot` result to its base64-PNG payload so the
+ * tool response can carry a real MCP `image` content block (the generic path
+ * only ever text-serializes results). Guarded structurally rather than trusting
+ * the action id alone.
+ */
+function asScreenshotResult(
+  result: unknown
+): { pngBase64: string; width: number; height: number } | null {
+  if (
+    result !== null &&
+    typeof result === "object" &&
+    typeof (result as { pngBase64?: unknown }).pngBase64 === "string" &&
+    typeof (result as { width?: unknown }).width === "number" &&
+    typeof (result as { height?: unknown }).height === "number"
+  ) {
+    return result as { pngBase64: string; width: number; height: number };
+  }
+  return null;
+}
 import type { SessionStore } from "./sessionStore.js";
 
 /**
@@ -139,6 +162,11 @@ export interface SessionServerDeps {
     signal: AbortSignal,
     options?: { maxTimeoutMs?: number }
   ) => Promise<import("./shared.js").WaitUntilIdleResult>;
+  handleWaitUntilIdleBatch: (
+    rawArgs: unknown,
+    signal: AbortSignal,
+    options?: { maxTimeoutMs?: number }
+  ) => Promise<import("../../../shared/types/terminalWaitUntilIdle.js").WaitUntilIdleBatchResult>;
   appendAuditRecord: (input: {
     toolId: string;
     sessionId: string;
@@ -268,6 +296,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     requestManifest,
     dispatchAction,
     handleWaitUntilIdle: waitUntilIdle,
+    handleWaitUntilIdleBatch: waitUntilIdleBatch,
     appendAuditRecord,
     getCachedManifest,
     getFullToolSurface,
@@ -371,9 +400,30 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // action never consults the grant cache — grants are an additive layer,
     // never required when the floor already grants access.
     let grantIssuedAt: number | undefined;
+    // Set when a native session-scoped automation grant (#10648) authorized
+    // this call. Captured here so the post-dispatch path can refresh the
+    // grant's TTL window, and so the `danger: "confirm"` modal is bypassed —
+    // a native grant is an explicit user approval of the tool's scope.
+    let nativeGrantId: string | undefined;
     if (!isTierPermitted(tier, actionId, fullToolSurface)) {
       const grant = sessionStore.grantCache.check(sessionId, actionId);
-      if (!grant.granted) {
+      const native = grant.granted
+        ? null
+        : sessionStore.grantCache.peekNativeGrant(sessionId, actionId);
+      if (grant.granted) {
+        // Grant authorised the call. Capture the `issuedAt` token so the
+        // post-dispatch refresh can verify the entry wasn't revoked and
+        // re-issued under us (race guard, lesson #2243).
+        grantIssuedAt = grant.issuedAt;
+      } else if (native?.granted) {
+        // A native automation grant covers this tool and has a use left. It
+        // overrides the static tier floor only because the user explicitly
+        // approved this tool's scope — the grant's allowlist gates which tools
+        // `peekNativeGrant` authorizes. The use is NOT charged here: it is
+        // consumed only once the call is committed to dispatching (below), so
+        // an unauthorized call can't burn a use.
+        nativeGrantId = native.grantId;
+      } else {
         // Increment first, then ask the cache whether to suppress. The
         // post-increment count reflects "this denial counted"; the cache's
         // threshold compares against that. With threshold=2 the 1st and
@@ -430,39 +480,22 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           message: `action '${actionId}' is not permitted for the '${tier}' tier.`,
         });
       }
-      // Grant authorised the call. Capture the `issuedAt` token so the
-      // post-dispatch refresh can verify the entry wasn't revoked and
-      // re-issued under us (race guard, lesson #2243).
-      grantIssuedAt = grant.issuedAt;
     }
 
-    // Runaway-loop guard (#8468): charge one token against the
-    // per-`(session, toolId)` bucket before dedup or dispatch. Placed
-    // after the tier/grant check (an unauthorized call shouldn't consume
-    // tokens) and before dedup (a tight loop replaying the same dedup key
-    // must still be bounded — dedup is an idempotency guard, not a
-    // rate-limit bypass). Rejection is an explicit retriable tool-error
-    // with a `retryAfter` hint, never a silent skip.
-    const rateLimit = sessionStore.consumeRateLimitToken(sessionId, actionId);
-    if (!rateLimit.allowed) {
-      try {
-        appendAuditRecord({
-          toolId: actionId,
-          sessionId,
-          tier,
-          args,
-          durationMs: Date.now() - startedAt,
-          outcome: { kind: "rate_limited", retryAfter: rateLimit.retryAfter },
-          capturedTurnId,
+    // Charge the native automation grant's use now that the call has cleared
+    // the tier/grant check and is committed to proceeding (#10648). Doing it
+    // here — not at the peek above — means an unauthorized call never burns a
+    // use. The peek→consume path is synchronous (no `await`), so the grant
+    // can't be revoked between peek and consume; a `false` return is purely
+    // defensive and fails closed.
+    if (nativeGrantId !== undefined) {
+      const consumed = sessionStore.grantCache.consumeNativeGrantUse(nativeGrantId, actionId);
+      if (!consumed) {
+        return buildToolError({
+          code: TIER_NOT_PERMITTED_CODE,
+          message: `action '${actionId}' is not permitted for the '${tier}' tier.`,
         });
-      } catch (err) {
-        console.error("[MCP] Failed to append audit record:", err);
       }
-      return buildToolError({
-        code: MCP_RATE_LIMITED_CODE,
-        message: `Rate limit exceeded for '${actionId}'. Retry after ${rateLimit.retryAfter}s.`,
-        details: { retryAfter: rateLimit.retryAfter },
-      });
     }
 
     // Idempotency dedup for the creation-tool allowlist. Same-moment duplicates
@@ -566,7 +599,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     let confirmationDecision:
       | import("../../../shared/types/ipc/mcpServer.js").McpConfirmationDecision
       | undefined;
-    let dispatchConfirmed = false;
+    // A native automation grant is an explicit user approval of the tool's
+    // scope, so it authorizes a `danger: "confirm"` dispatch without surfacing
+    // a per-call modal — exactly as if the user had just approved it.
+    let dispatchConfirmed = nativeGrantId !== undefined;
     // Tracks whether a live "tool-call-started" push fired for this dispatch so
     // the shared `finally` only emits the matching "settled" push for calls the
     // activity strip is actually showing (#9759). Pre-dispatch rejections never
@@ -622,8 +658,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             // can run up to 2 hours on external sessions (longer than the
             // 15-min grant window), so this is the only block that prevents
             // the grant from silently aging out during a long wait (#8442).
-            if (grantIssuedAt !== undefined) {
-              sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
+            if (grantIssuedAt !== undefined || nativeGrantId !== undefined) {
+              if (grantIssuedAt !== undefined) {
+                sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
+              }
+              if (nativeGrantId !== undefined) {
+                sessionStore.grantCache.refreshNativeGrant(nativeGrantId);
+              }
               if (sessionStore.sessions.has(sessionId)) {
                 sessionStore.resetIdleTimer(sessionId);
               } else if (sessionStore.httpSessions.has(sessionId)) {
@@ -642,6 +683,47 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({
               code: EXECUTION_ERROR_CODE,
               message: formatErrorMessage(err, "waitUntilIdle failed"),
+            });
+          }
+        }
+
+        // Short-circuit: terminal.waitUntilIdleBatch is the batched sibling of
+        // waitUntilIdle (watch N terminals, resolve on first/all idle). Same
+        // main-process rationale and tier clamp; same grant-refresh-on-long-wait.
+        if (actionId === TERMINAL_WAIT_UNTIL_IDLE_BATCH_TOOL) {
+          emitToolCallStarted(false);
+          try {
+            const maxTimeoutMs =
+              tier === "external"
+                ? MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS
+                : INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS;
+            const result = await waitUntilIdleBatch(args, extra.signal, { maxTimeoutMs });
+            outcome = { kind: "result", value: { ok: true, result } };
+            if (grantIssuedAt !== undefined || nativeGrantId !== undefined) {
+              if (grantIssuedAt !== undefined) {
+                sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
+              }
+              if (nativeGrantId !== undefined) {
+                sessionStore.grantCache.refreshNativeGrant(nativeGrantId);
+              }
+              if (sessionStore.sessions.has(sessionId)) {
+                sessionStore.resetIdleTimer(sessionId);
+              } else if (sessionStore.httpSessions.has(sessionId)) {
+                sessionStore.resetHttpIdleTimer(sessionId);
+              }
+            }
+            return {
+              content: [{ type: "text" as const, text: safeSerializeToolResult(result) }],
+              structuredContent: result as unknown as Record<string, unknown>,
+            };
+          } catch (err) {
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) {
+              throw err;
+            }
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, "waitUntilIdleBatch failed"),
             });
           }
         }
@@ -778,6 +860,53 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               message: err.message,
             });
           }
+          // No live renderer to route the dispatch through (#10640). When a
+          // headless client lacks `elicitation.form`, the unconfirmed dispatch
+          // is forwarded to the renderer bridge so the human can approve it in a
+          // native ConfirmDialog; with no Daintree window open,
+          // `getActiveProjectWebContents` throws `RendererBridgeUnavailableError`.
+          if (err instanceof RendererBridgeUnavailableError) {
+            // Confirm-gated tool we KNOW needs human approval (manifest entry
+            // resolved): the action could not be confirmed, not that it failed
+            // mid-execution. Reclassify to CONFIRMATION_REQUIRED (audited as
+            // `confirmation-pending`, never retriable) with a machine-readable
+            // `confirmationChannel: "unavailable"` so an autonomous conductor
+            // can tell "needs a human I can't reach" apart from a transient
+            // error. Scoped to unconfirmed dispatches so an already-approved
+            // call that fails for any other reason isn't mislabelled.
+            if (entry?.danger === "confirm" && !dispatchConfirmed) {
+              const message =
+                `Action '${actionId}' requires confirmation, but no Daintree window is open to surface the ` +
+                `approval dialog. The action was not run — a human must approve it in Daintree.`;
+              const value: import("../../../shared/types/actions.js").ActionDispatchResult = {
+                ok: false,
+                error: {
+                  code: CONFIRMATION_REQUIRED_CODE,
+                  message,
+                  details: { confirmationChannel: "unavailable" },
+                },
+              };
+              outcome = { kind: "result", value };
+              return buildToolError({
+                code: CONFIRMATION_REQUIRED_CODE,
+                message,
+                details: { confirmationChannel: "unavailable" },
+              });
+            }
+            // Either a non-confirm tool, or a cold-cache call whose manifest
+            // entry couldn't be fetched (the manifest itself comes from the
+            // renderer, so `entry` is undefined here and the tool's danger is
+            // unknowable). We must not claim CONFIRMATION_REQUIRED without
+            // knowing the tool is confirm-gated, so this stays a *retriable*
+            // EXECUTION_ERROR — the renderer may come back when a window opens.
+            // The message names the cause so the caller retries deliberately
+            // rather than treating it as an opaque dispatch failure.
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message:
+                "No Daintree window is open, so the action surface is unavailable. Retry once a project window is open.",
+            });
+          }
           return buildToolError({
             code: EXECUTION_ERROR_CODE,
             message: formatErrorMessage(err, "Action dispatch failed"),
@@ -792,12 +921,34 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // grant was issued (#8442). The `grantIssuedAt` token guards
           // against a revoke-and-reissue race (#2243): if the entry was
           // replaced mid-dispatch, `refresh` is a silent no-op.
-          if (grantIssuedAt !== undefined) {
-            sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
+          if (grantIssuedAt !== undefined || nativeGrantId !== undefined) {
+            if (grantIssuedAt !== undefined) {
+              sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
+            }
+            if (nativeGrantId !== undefined) {
+              sessionStore.grantCache.refreshNativeGrant(nativeGrantId);
+            }
             if (sessionStore.sessions.has(sessionId)) {
               sessionStore.resetIdleTimer(sessionId);
             } else if (sessionStore.httpSessions.has(sessionId)) {
               sessionStore.resetHttpIdleTimer(sessionId);
+            }
+          }
+          // browser.captureScreenshot returns PNG bytes — surface them as a real
+          // MCP image content block so the model receives a usable image, not a
+          // base64 blob text-serialized into the transcript.
+          if (actionId === BROWSER_CAPTURE_SCREENSHOT_TOOL) {
+            const shot = asScreenshotResult(outcome.value.result);
+            if (shot) {
+              return {
+                content: [
+                  { type: "image" as const, data: shot.pngBase64, mimeType: "image/png" },
+                  {
+                    type: "text" as const,
+                    text: `Screenshot captured (${shot.width}×${shot.height})`,
+                  },
+                ],
+              };
             }
           }
           const structuredContent = buildStructuredContent(entry, outcome.value.result);
@@ -1154,10 +1305,22 @@ async function readResourceContents(
     const store = getAgentAvailabilityStore();
     const state = store.getState(parsed.id);
     const waitingReason = state === "waiting" ? store.getWaitingReason(parsed.id) : undefined;
+    // Exit metadata only after the agent has finished. exitCode may be null
+    // (signal kill), so gate on the agent being in a terminal state rather than
+    // on the value being truthy.
+    const hasExited = state === "completed" || state === "exited";
+    const exitCode = hasExited ? store.getExitCode(parsed.id) : undefined;
+    const exitSignal = hasExited ? store.getExitSignal(parsed.id) : undefined;
+    const spawnedAt = store.getSpawnedAt(parsed.id);
+    const lastTransitionAt = store.getLastStateChange(parsed.id);
     const text = JSON.stringify({
       agentId: parsed.id,
       state: state ?? null,
       ...(waitingReason ? { waitingReason } : {}),
+      ...(exitCode !== undefined ? { exitCode } : {}),
+      ...(exitSignal !== undefined ? { exitSignal } : {}),
+      ...(spawnedAt !== undefined ? { spawnedAt } : {}),
+      ...(lastTransitionAt !== undefined ? { lastTransitionAt } : {}),
     });
     return { uri, mimeType: "application/json", text };
   }

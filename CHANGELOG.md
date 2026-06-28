@@ -1,5 +1,104 @@
 # Changelog
 
+## [0.20.0] - 2026-06-28
+
+The plugin system reaches its 1.0 contract, per-terminal hibernation is removed for good, and project switching becomes near-instant — the largest release since the project opened up, spanning 179 PRs. Most of the surface-level work is a deep terminal-rendering and project-switch reliability pass; underneath it, the plugin and MCP automation surfaces both grow substantially.
+
+### Features
+
+**Plugin system (1.0 contract)**
+
+- Release-ready authoring toolchain: `@daintreehq/plugin-sdk` and `plugin-testing` packages, a `plugin-vite` preset, and `daintree-plugin dev` hot-reload (#10485, #10494)
+- Manifest contract frozen for 1.0 — `experimental_views`/`experimental_mcpServers` promoted to stable `views`/`mcpServers` (#10478, #10495)
+- Installed plugins run out-of-process in a utility worker with OS-level crash isolation (#10550)
+- Fully Promise-returning host API with capability-gated `host.process.spawn`, `host.fs`, and `host.git` (#10540, #10543)
+- Just-in-time consent for high-risk capabilities (shell, fs/git writes, agent input), revoked when a plugin updates (#10551, #10555)
+- Plugin-contributed agents are fully launchable and drive the working/waiting/completed state UI (#10574, #10601)
+- Plugins can decorate worktree file rows and set live panel-title badges (#10568, #10599)
+- Native UI prompts mid-command via `host.showQuickPick` / `showInputBox` / `showConfirm` (#10549)
+- Plugin MCP servers get a detail subtab (status, last error, stderr, restart) and auto-restart on secret rotation (#10595, #10628)
+- Plugin-provided MCP tools route through consent → audit → rate-limit, re-prompting when a tool's danger tier escalates (#10486, #10535)
+
+**MCP server**
+
+- Forge write operations over MCP — PR create/merge/comment/edit, issue create/close/label, and PR-review approve/request-changes (#10657, #10658, #10659)
+- Terminal/agent exit metadata (exit code, signal, timestamps) so a clean finish is distinguishable from a failure (#10642)
+- Parsed pass/fail check results on `terminal.getStatus` from tsc, ESLint, Vitest, and Jest (#10691)
+- `browser.captureScreenshot` returns real image bytes, plus console reads and dev-preview/portal control (#10689, #10692)
+- Worktree resource lifecycle and a host-pressure resource-profile snapshot over MCP (#10690)
+- Per-terminal and fleet arm/disarm, plus `terminal.restart`, over MCP tier allowlists (#10687, #10696, #10712)
+
+**Agents & presets**
+
+- Agent presets carry an optional display title (e.g. "Claude [Z.ai]"), surfaced across the agent button, dropdown, tray, and scope banner (#10740)
+- The preset dropdown splits each row — click to launch with that preset, the left gutter sets the worktree default without launching (#10726)
+- About Daintree shows the running build architecture (Apple Silicon, Intel, or Rosetta) (#10503)
+
+### Performance
+
+**Project switching**
+
+- Cold switches reveal a themed skeleton in ~150ms instead of freezing on the outgoing project for seconds (#10751, #10760)
+- A busy overlay covers slow switches while warm switches stay flash-free, with feedback flipped on before the heavy snapshot/IPC (#10737)
+- RAM-scaled warm view cache and workspace-host pool eliminate the evict/respawn churn that froze the main loop when rotating projects (#10760)
+- The efficiency profile freezes cached views instead of destroying them, ending cold-start storms on rapid switching (#10748)
+- Background projects pause git-status polling, fetches, and PR checks while hidden (#10746)
+
+**Terminal & memory**
+
+- Faster priority terminal restore via parallel rehydrate, with the on-screen terminal repainting first (#10533, #10534)
+- Project hibernation now evicts the cached renderer (~100-500MB) instead of just killing PTYs, while keeping terminals alive (#10796)
+- Batched host-log writes and a coalesced worktree-update bus remove multi-second keystroke lag under multi-agent load (#10770)
+
+### Bug Fixes
+
+**Terminal & rendering**
+
+- Removed per-terminal hibernation — backgrounded terminals stay live instead of suspending and resyncing on reveal. This eliminates the recurring agent-TUI corruption (zebra striping, double-spacing, dropped output) across OpenCode, Codex, Gemini, and Claude (#10811)
+- Alt-screen TUIs (OpenCode, vim, Gemini CLI) no longer garble on click or reveal — previously only a manual window resize fixed it (#10805)
+- Fixed a 60fps WebGL atlas-resync loop that pinned a CPU core and sheared glyphs after a refocus; bumps `@xterm/*` to 6.1.0-beta.287 (#10798)
+- Eliminated DOM-renderer zebra banding for alt-buffer TUIs on HiDPI displays (#10771)
+- Hidden streaming agents no longer steal WebGL contexts and drop visible terminals to the slower DOM renderer (#10673)
+- Agent terminals no longer return garbled after a project switch-back (#10508, #10637)
+- Windows: an invalid ConPTY pid 0 no longer starts process detection or spams warnings (#10791)
+
+**Agents**
+
+- A crashed agent CLI reports as "exited" instead of getting stuck on "waiting" (#10821)
+- Agents no longer stick on "waiting" during long heavy-streaming output (#10666)
+- OpenCode resumes its latest session on restart instead of showing a failed-restore banner (#10824, #10825)
+- Typing into a backpressure-paused terminal wakes it (#10717)
+- Pressing Enter at Claude's workspace-trust prompt no longer spawns a duplicate agent (#10631)
+
+**Project views & crash recovery**
+
+- The crash-recovery dialog no longer reappears after being resolved on switch-back (#10810)
+- A project view that loads the wrong internal page rolls back instead of getting stuck (#10804)
+- Fixed the forge status toolbar rendering twice, and a persistent red error line on it, during rapid switching (#10808, #10762)
+- Workspace-host OOM crash-loops are detected and surfaced instead of looping silently in "Reconnecting…" (#10733)
+
+**Git & forge**
+
+- `git rebase/merge/cherry-pick/revert --continue` works again after the simple-git 3.36 upgrade (#10789)
+- Background git-fetch auth failures retry with backoff instead of suspending fetches for the whole repo (#10675)
+- Commit search matches commit-hash prefixes, not just message text (#10817)
+- Self-assigning an issue during worktree creation reflects immediately in the open-issues dropdown (#10537, #10678)
+- Stuck mid-rebase/merge worktrees get an inline abort/continue recovery row (#10716)
+
+**Security & privacy**
+
+- The external MCP API-key `fullToolSurface` opt-in no longer bypasses the curated allowlist (#10710)
+- Plugin log output is secret-scrubbed before it reaches the log buffer and console mirror (#10781)
+- V8 heap snapshots in the logs dir are auto-pruned, clearing previously unbounded backlogs (#10732)
+
+**UI & onboarding**
+
+- Creating a custom preset no longer hijacks the agent default, and recipe launches now honor the selected preset (#10730, #10725)
+- Custom preset colors no longer wrap the agent icon in a near-white tile on dark themes (#10724)
+- Toned down two passive notifications and persisted onboarding dismissals across restarts (#10553, #10554)
+- Restored drag-to-grid, drag-to-worktree, and reorder on docked panel chips (#10799)
+- Diff-viewer and commit-body wrapping fixes in the dropdowns (#10629, #10719)
+
 ## [0.19.1] - 2026-06-14
 
 Same-day hotfix for two regressions introduced in 0.19.0: agent working/waiting state detection broke, and agent terminal grids came back with garbled line wrapping after switching away from a project and back.

@@ -1,4 +1,9 @@
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -7,8 +12,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -34,7 +37,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { MenuActionSourceContext, useMenuActionSource } from "@/components/ui/menu-source";
-import { ChevronDown, ExternalLink, PanelBottom } from "lucide-react";
+import { Check, ChevronDown, Circle, ExternalLink, PanelBottom } from "lucide-react";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentExternalLink } from "@shared/config/agentRegistry";
 import type { AgentAvailabilityState, AgentState } from "@shared/types";
@@ -196,6 +199,12 @@ export function AgentButton({
   // AgentTrayButton.
   const [primaryTooltipOpen, setPrimaryTooltipOpen] = useState(false);
   const [chevronTooltipOpen, setChevronTooltipOpen] = useState(false);
+  // The chevron dropdown is controlled so a label-zone click can close it
+  // explicitly (see renderPresetRow). A worktree-default click in the gutter
+  // zone must keep it open, which Radix's default per-item dismiss can't
+  // express — controlled state is the only lever that lets one row both
+  // close (launch) and stay open (set default). See issue #10720.
+  const [dropdownOpen, setDropdownOpen] = useState(false);
   const isRestoringFocusRef = useRef(false);
   // Set in onPointerDownOutside, read in onCloseAutoFocus. Lets us
   // preventDefault() the focus restoration only for pointer dismissals so the
@@ -266,7 +275,9 @@ export function AgentButton({
   const activePreset = savedPresetId ? presets.find((p) => p.id === savedPresetId) : undefined;
   // CCR presets carry the routing prefix in their stored name; strip it for
   // display so the tooltip and menu surfaces show the same human label.
-  const activePresetName = activePreset ? activePreset.name.replace(/^CCR:\s*/, "") : null;
+  const activePresetName = activePreset
+    ? (activePreset.displayTitle ?? activePreset.name.replace(/^CCR:\s*/, ""))
+    : null;
   // Group by source. Project presets are identified by membership so that a
   // project preset whose id happens to start with "ccr-" still lands in
   // "Project Shared" rather than being stolen by the CCR group. Everything
@@ -342,9 +353,12 @@ export function AgentButton({
         ? `Configure ${config.name}`
         : `Install ${config.name} CLI`;
 
-  const handleClick = () => {
+  const handleClick = (e?: ReactMouseEvent<HTMLElement>) => {
     if (isLoading) return;
     if (isLaunchable) {
+      // Drop focus on launch so Enter at a CLI prompt can't re-fire this button
+      // and spawn a duplicate agent before the input bar claims focus. See #10541.
+      e?.currentTarget?.blur();
       // Defer all preset resolution to useAgentLauncher. Forwarding the
       // resolved savedPresetId explicitly would block the launcher's
       // stale-fallback path: when a worktree-scoped pick references a
@@ -378,6 +392,75 @@ export function AgentButton({
   const persistWorktreePick = (presetId: string | undefined) => {
     if (!activeWorktreeId) return;
     void useAgentSettingsStore.getState().updateWorktreePreset(type, activeWorktreeId, presetId);
+  };
+
+  // Launch from a dropdown row's label zone. Unlike the primary button, the
+  // row names an explicit preset, so we forward it directly rather than
+  // deferring to the launcher's resolveEffectivePresetId path. Set
+  // wasPointerCloseRef before closing so the controlled dismiss runs the same
+  // focus-restore suppression as a Radix pointer dismiss — otherwise the
+  // chevron tooltip reopens over the freshly-launched terminal (issue #5171).
+  const launchWithPreset = (presetId: string | null) => {
+    wasPointerCloseRef.current = true;
+    setDropdownOpen(false);
+    void actionService.dispatch("agent.launch", { agentId: type, presetId }, { source: "user" });
+  };
+
+  // Each preset row carries two click zones. The left gutter (data-zone
+  // "gutter") sets the worktree-scoped default without launching and keeps the
+  // menu open; the rest of the row (the label) launches immediately with that
+  // preset and closes the menu. onSelect is preventDefault'd so Radix never
+  // auto-dismisses — the label zone owns closing — and the zones live inside a
+  // single menuitem (no nested interactive element) so the row stays
+  // ARIA-valid. Keyboard activation lands on the row itself, which launches.
+  // See issue #10720.
+  const renderPresetRow = (preset: {
+    id: string;
+    name: string;
+    color?: string;
+    displayTitle?: string;
+  }) => {
+    const isDefault = savedPresetId === preset.id;
+    const presetColor = preset.color ?? getBrandColorHex(type);
+    return (
+      <DropdownMenuItem
+        key={preset.id}
+        className="group/preset-row items-stretch py-0 pr-2.5 pl-0"
+        onSelect={(e) => e.preventDefault()}
+        onClick={(e) => {
+          // Element (not HTMLElement) so a click landing on the gutter's SVG
+          // icon — an SVGElement — still resolves; closest() lives on Element.
+          if (e.target instanceof Element && e.target.closest('[data-zone="gutter"]')) {
+            persistWorktreePick(preset.id);
+            return;
+          }
+          launchWithPreset(preset.id);
+        }}
+      >
+        <span
+          data-zone="gutter"
+          title={isDefault ? "Current default" : "Set as default"}
+          className="flex w-8 shrink-0 items-center justify-center self-stretch rounded-l-[var(--radius-sm)] text-daintree-text/60 transition-colors hover:bg-overlay-raised"
+        >
+          {isDefault ? (
+            <Check className="h-3.5 w-3.5" aria-hidden="true" />
+          ) : (
+            <Circle
+              className="h-2.5 w-2.5 opacity-0 transition-opacity duration-150 group-hover/preset-row:opacity-40"
+              aria-hidden="true"
+            />
+          )}
+        </span>
+        <span data-zone="label" className="flex min-w-0 flex-1 items-center py-1.5">
+          <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+            <BrandMark brandColor={presetColor} userChosen={!!preset.color}>
+              <config.icon brandColor={presetColor} />
+            </BrandMark>
+          </span>
+          {preset.displayTitle ?? preset.name.replace(/^CCR:\s*/, "")}
+        </span>
+      </DropdownMenuItem>
+    );
   };
 
   const toolbarBrandColor = getBrandColorHex(type);
@@ -546,7 +629,9 @@ export function AgentButton({
             </TooltipContent>
           </Tooltip>
           <DropdownMenu
+            open={dropdownOpen}
             onOpenChange={(open) => {
+              setDropdownOpen(open);
               if (open) {
                 setPrimaryTooltipOpen(false);
                 setChevronTooltipOpen(false);
@@ -603,92 +688,70 @@ export function AgentButton({
                 }
               }}
             >
-              <DropdownMenuRadioGroup value={savedPresetId ?? ""}>
-                <DropdownMenuRadioItem
-                  value=""
-                  onSelect={() => {
+              <DropdownMenuItem
+                className="group/preset-row items-stretch py-0 pr-2.5 pl-0"
+                onSelect={(e) => e.preventDefault()}
+                onClick={(e) => {
+                  // Element (not HTMLElement) so a gutter SVG-icon click still
+                  // resolves; closest() lives on Element.
+                  if (e.target instanceof Element && e.target.closest('[data-zone="gutter"]')) {
+                    // The agent-default gutter clears BOTH scopes: the
+                    // worktree override and the stale agent-level pick that
+                    // resolveEffectivePresetId would otherwise fall back to
+                    // (issue #6358).
                     void useAgentSettingsStore.getState().updateAgent(type, {
                       presetId: undefined,
                     });
                     persistWorktreePick(undefined);
-                  }}
+                    return;
+                  }
+                  launchWithPreset(null);
+                }}
+              >
+                <span
+                  data-zone="gutter"
+                  title={!savedPresetId ? "Current default" : "Set as default"}
+                  className="flex w-8 shrink-0 items-center justify-center self-stretch rounded-l-[var(--radius-sm)] text-daintree-text/60 transition-colors hover:bg-overlay-raised"
                 >
+                  {!savedPresetId ? (
+                    <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                  ) : (
+                    <Circle
+                      className="h-2.5 w-2.5 opacity-0 transition-opacity duration-150 group-hover/preset-row:opacity-40"
+                      aria-hidden="true"
+                    />
+                  )}
+                </span>
+                <span data-zone="label" className="flex min-w-0 flex-1 items-center py-1.5">
                   <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
                     <BrandMark brandColor={getBrandColorHex(type)}>
                       <config.icon brandColor={getBrandColorHex(type)} />
                     </BrandMark>
                   </span>
                   Agent default
-                </DropdownMenuRadioItem>
-                {ccrPresetGroup.length > 0 && (
-                  <>
-                    {hasMultiplePresetGroups && <DropdownMenuSeparator />}
-                    {hasMultiplePresetGroups && <DropdownMenuLabel>CCR Routes</DropdownMenuLabel>}
-                    {ccrPresetGroup.map((preset) => (
-                      <DropdownMenuRadioItem
-                        key={preset.id}
-                        value={preset.id}
-                        onSelect={() => {
-                          persistWorktreePick(preset.id);
-                        }}
-                      >
-                        <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                          <BrandMark brandColor={preset.color ?? getBrandColorHex(type)}>
-                            <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
-                          </BrandMark>
-                        </span>
-                        {preset.name.replace(/^CCR:\s*/, "")}
-                      </DropdownMenuRadioItem>
-                    ))}
-                  </>
-                )}
-                {projectPresetGroup.length > 0 && (
-                  <>
-                    {hasMultiplePresetGroups && <DropdownMenuSeparator />}
-                    {hasMultiplePresetGroups && (
-                      <DropdownMenuLabel>Project Shared</DropdownMenuLabel>
-                    )}
-                    {projectPresetGroup.map((preset) => (
-                      <DropdownMenuRadioItem
-                        key={preset.id}
-                        value={preset.id}
-                        onSelect={() => {
-                          persistWorktreePick(preset.id);
-                        }}
-                      >
-                        <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                          <BrandMark brandColor={preset.color ?? getBrandColorHex(type)}>
-                            <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
-                          </BrandMark>
-                        </span>
-                        {preset.name}
-                      </DropdownMenuRadioItem>
-                    ))}
-                  </>
-                )}
-                {customPresetGroup.length > 0 && (
-                  <>
-                    {hasMultiplePresetGroups && <DropdownMenuSeparator />}
-                    {hasMultiplePresetGroups && <DropdownMenuLabel>Custom</DropdownMenuLabel>}
-                    {customPresetGroup.map((preset) => (
-                      <DropdownMenuRadioItem
-                        key={preset.id}
-                        value={preset.id}
-                        onSelect={() => {
-                          persistWorktreePick(preset.id);
-                        }}
-                      >
-                        <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                          <BrandMark brandColor={preset.color ?? getBrandColorHex(type)}>
-                            <config.icon brandColor={preset.color ?? getBrandColorHex(type)} />
-                          </BrandMark>
-                        </span>
-                        {preset.name}
-                      </DropdownMenuRadioItem>
-                    ))}
-                  </>
-                )}
-              </DropdownMenuRadioGroup>
+                </span>
+              </DropdownMenuItem>
+              {ccrPresetGroup.length > 0 && (
+                <>
+                  {hasMultiplePresetGroups && <DropdownMenuSeparator />}
+                  {hasMultiplePresetGroups && <DropdownMenuLabel>CCR Routes</DropdownMenuLabel>}
+                  {ccrPresetGroup.map((preset) => renderPresetRow(preset))}
+                </>
+              )}
+              {projectPresetGroup.length > 0 && (
+                <>
+                  {hasMultiplePresetGroups && <DropdownMenuSeparator />}
+                  {hasMultiplePresetGroups && <DropdownMenuLabel>Project Shared</DropdownMenuLabel>}
+                  {projectPresetGroup.map((preset) => renderPresetRow(preset))}
+                </>
+              )}
+              {customPresetGroup.length > 0 && (
+                <>
+                  {hasMultiplePresetGroups && <DropdownMenuSeparator />}
+                  {hasMultiplePresetGroups && <DropdownMenuLabel>Custom</DropdownMenuLabel>}
+                  {customPresetGroup.map((preset) => renderPresetRow(preset))}
+                </>
+              )}
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onSelect={() =>
@@ -778,7 +841,7 @@ export function AgentButton({
                             );
                           }}
                         >
-                          {preset.name.replace(/^CCR:\s*/, "")}
+                          {preset.displayTitle ?? preset.name.replace(/^CCR:\s*/, "")}
                         </ContextMenuRadioItem>
                       ))}
                     </>

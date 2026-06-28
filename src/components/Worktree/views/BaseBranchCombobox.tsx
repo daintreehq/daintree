@@ -85,7 +85,7 @@ export function BaseBranchCombobox({
             disabled={disabled}
           >
             <span className="truncate">{selectedBranchLabel || "Select base branch..."}</span>
-            <ChevronsUpDown className="opacity-50 shrink-0" />
+            <ChevronsUpDown className="text-text-muted shrink-0" />
           </Button>
         </PopoverTrigger>
         <PopoverContent
@@ -94,7 +94,7 @@ export function BaseBranchCombobox({
           onEscapeKeyDown={(e) => e.stopPropagation()}
         >
           <div className="flex items-center border-b border-daintree-border px-3">
-            <Search className="mr-2 h-4 w-4 opacity-50 shrink-0" />
+            <Search className="mr-2 h-4 w-4 text-text-muted shrink-0" />
             <input
               ref={branchInputRef}
               className="flex h-10 w-full rounded-[var(--radius-md)] bg-transparent py-3 text-sm outline-hidden placeholder:text-text-placeholder disabled:cursor-not-allowed disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-daintree-accent/40"

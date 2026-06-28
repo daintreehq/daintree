@@ -94,10 +94,14 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       revokeSession: vi.fn(() => false),
       registerClientMetadata: vi.fn(),
       listExternalActiveClients: vi.fn(() => []),
+      resolveLiveTransportForHelpSession: vi.fn(() => null),
       grantCache: {
         clearDenialCounts: vi.fn(),
         revokeSession: vi.fn(() => 0),
         issueGrant: vi.fn(),
+        issueNativeGrant: vi.fn(),
+        getNativeGrant: vi.fn(() => undefined),
+        revokeNativeGrant: vi.fn(() => false),
       },
     },
     auditService: {
@@ -514,6 +518,140 @@ describe("HttpLifecycle", () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);
       expect(() => lc.resetDenialCounts("")).toThrow(/Invalid sessionId/);
+    });
+  });
+
+  describe("issueNativeGrant / revokeNativeGrant (#10648)", () => {
+    type NativeGrantCache = {
+      issueNativeGrant: ReturnType<typeof vi.fn>;
+      getNativeGrant: ReturnType<typeof vi.fn>;
+      revokeNativeGrant: ReturnType<typeof vi.fn>;
+    };
+    function grantCacheOf(deps: HttpLifecycleDeps) {
+      return (deps.sessionStore as unknown as { grantCache: NativeGrantCache }).grantCache;
+    }
+    function resolverOf(deps: HttpLifecycleDeps) {
+      return deps.sessionStore.resolveLiveTransportForHelpSession as ReturnType<typeof vi.fn>;
+    }
+    function mintEntry(allowedTools: string[], maxUses: number) {
+      return {
+        id: "grant-uuid",
+        sessionId: "transport-1",
+        actorId: "help-1",
+        actorType: "help-session" as const,
+        allowedTools: new Set(allowedTools),
+        maxUses,
+        remainingUses: maxUses,
+        ttlMs: 900_000,
+        expiresAt: 1_000_000,
+      };
+    }
+
+    it("resolves the transport session and mints a grant for valid input", () => {
+      const deps = fakeDeps();
+      resolverOf(deps).mockReturnValue("transport-1");
+      grantCacheOf(deps).issueNativeGrant.mockReturnValue(mintEntry(["git.commit"], 5));
+      const lc = new HttpLifecycle(deps);
+
+      const result = lc.issueNativeGrant(
+        "help-1",
+        { allowedTools: ["git.commit"], maxUses: 5 },
+        42
+      );
+
+      expect(resolverOf(deps)).toHaveBeenCalledWith("help-1", 42);
+      expect(grantCacheOf(deps).issueNativeGrant).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "transport-1",
+          actorId: "help-1",
+          actorType: "help-session",
+          allowedTools: ["git.commit"],
+          maxUses: 5,
+        })
+      );
+      expect(result.grantId).toBe("grant-uuid");
+    });
+
+    it("requires a caller WebContents id (fails closed)", () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      expect(() => lc.issueNativeGrant("help-1", { allowedTools: ["git.commit"] })).toThrow(
+        /Caller WebContents id is required/
+      );
+    });
+
+    it("throws when no live pinned session backs the help id", () => {
+      const deps = fakeDeps();
+      resolverOf(deps).mockReturnValue(null);
+      const lc = new HttpLifecycle(deps);
+      expect(() => lc.issueNativeGrant("help-gone", { allowedTools: ["git.commit"] }, 42)).toThrow(
+        /No live pinned session/
+      );
+    });
+
+    it("rejects an empty tool allowlist", () => {
+      const deps = fakeDeps();
+      resolverOf(deps).mockReturnValue("transport-1");
+      const lc = new HttpLifecycle(deps);
+      expect(() => lc.issueNativeGrant("help-1", { allowedTools: [] }, 42)).toThrow(
+        /at least one tool/
+      );
+      expect(grantCacheOf(deps).issueNativeGrant).not.toHaveBeenCalled();
+    });
+
+    it("rejects an unknown / non-grantable tool", () => {
+      const deps = fakeDeps();
+      resolverOf(deps).mockReturnValue("transport-1");
+      const lc = new HttpLifecycle(deps);
+      expect(() =>
+        lc.issueNativeGrant("help-1", { allowedTools: ["totally.notatool"] }, 42)
+      ).toThrow(/non-grantable/);
+      expect(grantCacheOf(deps).issueNativeGrant).not.toHaveBeenCalled();
+    });
+
+    it("rejects an out-of-range maxUses", () => {
+      const deps = fakeDeps();
+      resolverOf(deps).mockReturnValue("transport-1");
+      const lc = new HttpLifecycle(deps);
+      expect(() =>
+        lc.issueNativeGrant("help-1", { allowedTools: ["git.commit"], maxUses: 0 }, 42)
+      ).toThrow(/maxUses/);
+      expect(() =>
+        lc.issueNativeGrant("help-1", { allowedTools: ["git.commit"], maxUses: 9999 }, 42)
+      ).toThrow(/maxUses/);
+    });
+
+    it("revokeNativeGrant enforces caller-pin against the grant's session", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionWebContentsMap.set("transport-1", 42);
+      grantCacheOf(deps).getNativeGrant.mockReturnValue(mintEntry(["git.commit"], 5));
+      const lc = new HttpLifecycle(deps);
+      expect(() => lc.revokeNativeGrant("grant-uuid", 99)).toThrow(/not the pinned renderer/);
+      expect(grantCacheOf(deps).revokeNativeGrant).not.toHaveBeenCalled();
+    });
+
+    it("revokeNativeGrant is an idempotent no-op for an already-gone grant", () => {
+      const deps = fakeDeps();
+      grantCacheOf(deps).getNativeGrant.mockReturnValue(undefined);
+      const lc = new HttpLifecycle(deps);
+      expect(lc.revokeNativeGrant("grant-gone", 99)).toEqual({
+        grantId: "grant-gone",
+        revoked: false,
+      });
+      expect(grantCacheOf(deps).revokeNativeGrant).not.toHaveBeenCalled();
+    });
+
+    it("revokeNativeGrant drops the grant when the caller is the pinned renderer", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionWebContentsMap.set("transport-1", 42);
+      grantCacheOf(deps).getNativeGrant.mockReturnValue(mintEntry(["git.commit"], 5));
+      grantCacheOf(deps).revokeNativeGrant.mockReturnValue(true);
+      const lc = new HttpLifecycle(deps);
+      expect(lc.revokeNativeGrant("grant-uuid", 42)).toEqual({
+        grantId: "grant-uuid",
+        revoked: true,
+      });
+      expect(grantCacheOf(deps).revokeNativeGrant).toHaveBeenCalledWith("grant-uuid", "user");
     });
   });
 
@@ -1064,6 +1202,59 @@ describe("HttpLifecycle", () => {
       await sessionDeps.dispatchAction("actions.list", {}, false);
 
       expect(deps.dispatchAction).toHaveBeenCalledWith("actions.list", {}, false, undefined);
+    });
+  });
+
+  describe("assistant-pane pinning resolvers (#10647)", () => {
+    function pinnedResolver(lc: HttpLifecycle) {
+      return (
+        lc as unknown as { resolvePinnedWebContentsId: (h: string) => number | null }
+      ).resolvePinnedWebContentsId.bind(lc);
+    }
+    function ctxResolver(lc: HttpLifecycle) {
+      return (
+        lc as unknown as { resolveActionContext: (h: string) => unknown }
+      ).resolveActionContext.bind(lc);
+    }
+
+    it("falls through to the assistant resolver for a pinned pane bearer", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      // A help resolver is wired but returns null for this (non-help) token.
+      lc.setHelpSessionWebContentsResolver(() => null);
+      lc.setAssistantPaneWebContentsResolver((token) => (token === "assistant-tok" ? 77 : null));
+
+      const resolve = pinnedResolver(lc);
+      expect(resolve("Bearer assistant-tok")).toBe(77);
+      expect(resolve("Bearer unknown-tok")).toBeNull();
+    });
+
+    it("prefers the help resolver over the assistant resolver", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      lc.setHelpSessionWebContentsResolver((token) => (token === "help-tok" ? 11 : null));
+      const assistant = vi.fn(() => 99);
+      lc.setAssistantPaneWebContentsResolver(assistant);
+
+      expect(pinnedResolver(lc)("Bearer help-tok")).toBe(11);
+      // Help match short-circuits — the assistant resolver is never consulted.
+      expect(assistant).not.toHaveBeenCalled();
+    });
+
+    it("replays the assistant ActionContext for a pinned pane bearer", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const ctx = { projectId: "p1", activeWorktreeId: "wt-3" };
+      lc.setHelpSessionActionContextResolver(() => null);
+      lc.setAssistantPaneActionContextResolver((token) => (token === "assistant-tok" ? ctx : null));
+
+      const resolve = ctxResolver(lc);
+      expect(resolve("Bearer assistant-tok")).toEqual(ctx);
+      expect(resolve("Bearer unknown-tok")).toBeNull();
+    });
+
+    it("returns null for external/api-key bearers so they keep the focused-window fallback", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      // No resolvers wired at all (e.g. server up before any assistant spawn).
+      expect(pinnedResolver(lc)("Bearer anything")).toBeNull();
+      expect(ctxResolver(lc)("Bearer anything")).toBeNull();
     });
   });
 

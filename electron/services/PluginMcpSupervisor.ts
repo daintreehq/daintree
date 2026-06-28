@@ -151,6 +151,13 @@ const HANDSHAKE_TIMEOUT_MS = 15_000;
 const SHUTDOWN_GRACE_MS = 3_000;
 const TOOL_CALL_TIMEOUT_MS = 30_000;
 /**
+ * Debounce window for {@link PluginMcpSupervisor.notifySettingChanged} (#10619).
+ * Settings writes from the form fire one event per keystroke-committed field, so
+ * coalesce a rapid burst (e.g. paste-then-blur, or a multi-field save) into a
+ * single respawn rather than thrashing the subprocess.
+ */
+const SETTING_CHANGE_DEBOUNCE_MS = 1_000;
+/**
  * Upper bound on `tools/list` cursor pages (#9235). A misbehaving server that
  * returns the same non-empty `nextCursor` forever would otherwise loop without
  * end and accumulate tools unbounded — the cap is only applied after the full
@@ -187,6 +194,13 @@ export class PluginMcpSupervisor {
   private readonly states = new Map<string, SupervisedServerState>();
   private readonly spawner: SubprocessSpawner;
   private readonly killTree: ProcessTreeKiller;
+  /**
+   * Per-server debounce timers for {@link notifySettingChanged}. Keyed by
+   * {@link stateKey}; a burst of rapid secret edits coalesces into one restart.
+   * Cleared in {@link shutdownOne} so a teardown (plugin unload, app shutdown)
+   * never leaves a timer that would respawn a server the host has dropped.
+   */
+  private readonly settingChangeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(options?: { spawner?: SubprocessSpawner; killTree?: ProcessTreeKiller }) {
     this.spawner = options?.spawner ?? defaultSpawner;
@@ -823,6 +837,14 @@ export class PluginMcpSupervisor {
   }
 
   private async shutdownOne(key: string): Promise<void> {
+    // Cancel any pending settings-change respawn for this server first — once
+    // it's being torn down, a debounced restart would resurrect a server the
+    // host meant to drop (#10619, leak guard #9533).
+    const pendingTimer = this.settingChangeTimers.get(key);
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      this.settingChangeTimers.delete(key);
+    }
     const state = this.states.get(key);
     if (!state) return;
     state.status = "stopped";
@@ -906,6 +928,65 @@ export class PluginMcpSupervisor {
     await this.startOne(input.pluginId, input.pluginDir, input.contribution, input.resolveSettings);
   }
 
+  /**
+   * React to a `${settings:*}` value change for `pluginId` (#10619). Restarts
+   * every supervised server that (a) is currently `ready` or `crashed` and (b)
+   * embeds the changed `settingId` in its command/args/env — so a rotated secret
+   * takes effect without the user manually restarting the server. Servers that
+   * were never lazily started (no live state) are left alone, preserving the
+   * lazy-spawn contract (#5782): a settings change never eagerly boots a server.
+   *
+   * Restarts are debounced per server ({@link SETTING_CHANGE_DEBOUNCE_MS}). The
+   * actual restart is delegated to `restart` (supplied by `PluginService`) so
+   * the supervisor never holds a `resolveSettings` closure across calls — the
+   * same decoupling the `plugin-mcp:restart` IPC path relies on; the closure is
+   * minted fresh at fire time against the then-current setting value.
+   */
+  notifySettingChanged(
+    pluginId: string,
+    settingId: string,
+    restart: (serverId: string) => void | Promise<void>
+  ): void {
+    for (const [key, state] of this.states) {
+      if (state.pluginId !== pluginId) continue;
+      // Only act on servers with a settled process. A `spawning` server is
+      // mid-handshake; its `resolveSettings` closure reads the store lazily, so
+      // a change committed before `resolveContribution` runs is already picked
+      // up by the in-flight start, and one committed slightly after is a narrow,
+      // recoverable miss (the user re-saves or restarts manually). We don't
+      // chase that window with a follow-up timer — it'd add real complexity for
+      // a rare race. `stopped` servers stay stopped (lazy-spawn contract).
+      if (state.status !== "ready" && state.status !== "crashed") continue;
+      if (!contributionReferencesSetting(state.contribution, settingId)) continue;
+
+      const existing = this.settingChangeTimers.get(key);
+      if (existing) clearTimeout(existing);
+
+      const serverId = state.serverId;
+      const timer = setTimeout(() => {
+        this.settingChangeTimers.delete(key);
+        // Re-check at fire time: the server may have been shut down or unloaded
+        // between scheduling and firing, or already replaced by another restart.
+        const current = this.states.get(key);
+        if (!current || (current.status !== "ready" && current.status !== "crashed")) return;
+        void (async () => {
+          try {
+            await restart(serverId);
+          } catch (err) {
+            console.warn(
+              `[PluginMcpSupervisor] Auto-restart after settings change failed for "${pluginId}/${serverId}":`,
+              err
+            );
+          }
+        })();
+      }, SETTING_CHANGE_DEBOUNCE_MS);
+      // Don't let a pending respawn timer keep the event loop (and the app)
+      // alive on shutdown.
+      timer.unref?.();
+      this.settingChangeTimers.set(key, timer);
+    }
+  }
+
   /** Snapshot every supervised server for the `plugin-mcp:list` IPC. */
   list(): PluginMcpServerInfo[] {
     return [...this.states.values()].map((state) => this.toInfo(state));
@@ -959,6 +1040,27 @@ async function resolveContribution(
     env[key] = await substitute(value, resolve);
   }
   return { contribution, command, args, env, cwd };
+}
+
+/**
+ * Whether a contribution embeds the literal `${settings:<settingId>}` token in
+ * its command, any arg, or any env value (#10619). Uses an exact substring
+ * match rather than the resolver regex so detection is independent of the id
+ * grammar and pinpoints exactly the placeholder a change to `settingId` would
+ * alter — driving {@link PluginMcpSupervisor.notifySettingChanged}'s restart
+ * decision.
+ */
+function contributionReferencesSetting(
+  contribution: McpServerContribution,
+  settingId: string
+): boolean {
+  const token = `\${settings:${settingId}}`;
+  if (contribution.command.includes(token)) return true;
+  if (contribution.args?.some((arg) => arg.includes(token))) return true;
+  if (contribution.env && Object.values(contribution.env).some((value) => value.includes(token))) {
+    return true;
+  }
+  return false;
 }
 
 async function substitute(

@@ -24,6 +24,13 @@ The `plugins` root is configurable for testing via the `PluginService` construct
 
 Validation is strict. The manifest is parsed by `PluginManifestSchema` (Zod) in strict mode, which rejects unknown top-level keys and unknown keys inside `contributes` (both the inner object itself and contributions whose individual entry schemas opt into `.strict()`). The reason is conservative: unknown keys are almost always typos, and silently dropping typo'd contributions is a bad debugging experience.
 
+Validation also runs structural checks across the whole `contributes` block via a `superRefine` pass (#10620), not just per-field shape:
+
+- **Duplicate contribution IDs** within any one array (`panels`, `commands`, `views`, `mcpServers`, `agents`, `settings`, `forgeProviders`, `fileDecorationProviders`, …) are rejected with a `duplicate_contribution_id` error.
+- **Dangling cross-references** are rejected: a `forgeProvider`'s `settingsScopeRef` and `viewRefs[]` must resolve to declared settings/views; every `view.id` must match a declared `panels[].id` (an orphaned view that names no panel is now a hard manifest error, not a load-time warning); and `${settings:settingId}` tokens inside an MCP server's `command`/`args`/`env` must reference a declared setting (unknown tokens fail with `settings_token_unknown` / `settings_token_malformed`).
+
+Agent `command`/`args` are the one exception to the token check: the schema does **not** validate their `${settings:*}` tokens at parse time even though the runtime resolves them at spawn (see [Environment variable substitution](#environment-variable-substitution)).
+
 The `engines.daintree` semver range is validated and compared against the running Daintree version. A mismatch produces a user-visible toast and the plugin is skipped.
 
 ### Registration
@@ -42,24 +49,35 @@ Commands have two registration paths. They MAY be declared in `contributes.comma
 
 `forgeProviders` and `fileDecorationProviders` register their manifest-declared descriptors eagerly (`registerForgeProviders` / `registerFileDecorationProviders`), but their runtime implementations bind imperatively in `activate()` via `host.registerForgeProvider()` / `host.registerFileDecorationProvider()` against a declared descriptor id.
 
-Contributions that require code (e.g., a view component, an MCP server's runtime) are registered as **resolvers** — thunks that import the actual code when first needed. `experimental_mcpServers` are resolved lazily on first tool enumeration (#9235), not at activation.
+Contributions that require code are registered as **resolvers** — thunks that import the actual code when first needed. `views` are resolved lazily when their panel is first opened (#10523), and `mcpServers` are resolved lazily on first tool enumeration (#9235), not at activation. These two are the contribution points whose runtime never loads until used; together with the ten eager points above they make up the 12 entries in `contributes`.
 
 ### Activation
 
 A plugin's `activate(host)` function runs when something first needs the plugin's code. Triggers:
 
 - User runs a plugin-registered command
-- User opens a plugin-contributed panel
+- User opens a plugin-contributed panel (`activatePluginForView` runs before the view module imports — see [Activation failures](#activation-failures))
+- A forge operation reaches one of the plugin's declared providers (`activatePluginForForgeProvider`, `forgeRpcServer.ts`)
+- A file-decoration pull matches one of the plugin's declared scopes (`activatePluginsForFileDecorationScope`)
+- The plugin lists `"onStartupFinished"` in `activationEvents` — the one eager trigger, fired once startup settles rather than on demand
+
+**User-installed plugins activate out-of-process.** Every sideloaded, `.dntr`/URL-installed, or `dev`-linked plugin runs inside a `utilityProcess.fork` worker (#10526): its `main` executes in a child process with its own module realm, and the host bridges every `host.*` call and registration over a MessagePort. This gives clean teardown (unload kills the worker, reclaiming the whole module realm — no ESM-cache leak, no module-scope state surviving a reload) plus OS-level crash isolation. **Built-in plugins are the exception** — they stay on the in-process `import()` loader because they're trusted, app-bundled, and never unloaded, and because the GitHub built-in's forge provider exposes synchronous host methods (`parseRemote`, URL builders) that can't cross the worker's async port.
 
 When triggered, Daintree:
 
 1. Resolves the plugin's `main` file path relative to the plugin directory
-2. Imports it via `pathToFileURL()` + `import()` with a cache-busting query string (for hot reload)
+2. Loads the module — in the worker for user plugins, or in-process via `pathToFileURL()` + `import()` for built-ins
 3. Calls the exported `activate(host)` function
 4. Stores the cleanup function (if returned)
 5. Enforces a 5-second timeout via `Promise.race` — exceeded activations are marked failed
 
 Handler implementations are bound to the registered action IDs as activation resolves. Users who invoked a command before activation finished see a brief spinner; the handler runs as soon as binding completes.
+
+### Activation failures
+
+Opening a plugin-contributed view activates the owning plugin _before_ the renderer imports the view module. `PluginViewHost` calls `window.electron.plugin.activateForView(kindId)` and awaits it ahead of `import()`, so a failed activation surfaces as the real cause rather than a generic import timeout (#10618). The IPC handler reports every failure mode — manifest collision, an `activate()` throw, the 5-second activation timeout — through one error contract: it throws an `AppError` with code `PLUGIN_ACTIVATION_FAILED` whose `userMessage` carries the specific cause. The awaited rejection propagates to the view's error boundary, which renders the component-variant fallback with a "Try again" button; clicking it bumps the retry counter, mints a fresh `lazy()` reference, and re-runs the whole sequence — activation and import — under a fresh timeout.
+
+When a built-in plugin's `activate()` throws after partially registering listeners, handlers, or actions, the host rolls those registrations back automatically. Before calling `activate()`, `PluginService` pre-registers a synchronous rollback (`removeHandlers`, `unregisterImperativePluginActions`, `flushPluginEventCleanups`) in the cleanup map; if `activate()` throws, the catch path fires it immediately (guarded against a double-fire from a concurrent unload), undoing every partial registration. The plugin author carries no cleanup responsibility for a failed activation. User-installed plugins reach the same guarantee a different way — their worker is torn down on activation failure, reclaiming the whole module realm.
 
 ### Disposal
 
@@ -84,7 +102,7 @@ On plugin unload, `PluginService.unloadPlugin()` runs these cleanups in order:
 7. Panel kinds contributed via manifest
 8. MCP subprocess lifecycle (sent SIGTERM, then SIGKILL after grace period)
 
-After disposal, the plugin's module is orphaned. Node's module cache still holds it but no live references point to it — garbage collection claims it eventually.
+For a user-installed plugin the disposal cascade is followed by killing its worker, which reclaims the plugin's entire module realm — module-scope state never survives a reload. For a built-in (which runs in-process) the module is merely orphaned: Node's module cache still holds it but no live references point to it, and since built-ins are never uninstalled that residue never accumulates.
 
 ## Renderer host
 
@@ -116,9 +134,9 @@ Plugins declare a `react` peer dependency in their own `package.json`. The host 
 
 ### Import URL flow
 
-Plugin view modules are loaded via Daintree's `plugin://` privileged protocol. When `PluginService.loadPlugin` matches a `contributes.experimental_views` entry to a panel by bare id, it stores the resolved URL — `plugin://{pluginId}/{componentPath}` — on the `PanelKindConfig` and broadcasts it through `plugin:panel-kinds-changed`. The renderer's `PluginViewHost` calls `React.lazy(() => import(componentPath))` against that URL; Chromium 146 resolves the protocol, the response carries the `plugin://` security headers, and the bare `react` / `react/jsx-runtime` specifiers in the bundle resolve through the host import map to Daintree's single React instance.
+Plugin view modules are loaded via Daintree's `plugin://` privileged protocol. When `PluginService.loadPlugin` matches a `contributes.views` entry to a panel by bare id, it stores the resolved URL — `plugin://{pluginId}/{componentPath}` — on the `PanelKindConfig` and broadcasts it through `plugin:panel-kinds-changed`. The renderer's `PluginViewHost` calls `React.lazy(() => import(componentPath))` against that URL; Chromium 146 resolves the protocol, the response carries the `plugin://` security headers, and the bare `react` / `react/jsx-runtime` specifiers in the bundle resolve through the host import map to Daintree's single React instance.
 
-The resolved URL travels through the renderer over the existing panel-kinds IPC broadcast — no separate channel is required. A view that targets a panel id with no matching `contributes.panels` entry, or `location: "sidebar"` (reserved), or an unsafe `componentPath` (absolute paths, `..` segments) logs a `[PluginService]` warning at load time and is skipped.
+The resolved URL travels through the renderer over the existing panel-kinds IPC broadcast — no separate channel is required. `location: "sidebar"` and an unsafe `componentPath` (absolute paths, URL schemes, `..` segments) are rejected at manifest validation, so the whole plugin fails to load loudly rather than silently dropping the view. A view that targets a panel id with no matching `contributes.panels` entry is likewise rejected at manifest validation (#10620) — an orphaned view would otherwise never render, so the whole plugin fails to load rather than silently dropping it.
 
 ### Hot reload — dev only
 
@@ -162,19 +180,21 @@ This matters because tool definitions consume tokens. An MCP server exposing 40 
 
 - Spawn on first use per session.
 - Keep alive for the duration of the agent session.
-- Exponential backoff on crash (1s, 2s, 4s, 8s up to 30s). After 3 failures in 60 seconds, the server is marked degraded; tool calls return a structured error until manual restart.
+- On unexpected exit the supervisor transitions the server to `crashed`, records the error, invalidates the cached tool list, and rejects any pending calls. There is **no** automatic retry, backoff, or "degraded" state — the status enum is `spawning | ready | crashed | stopped`. Recovery is an explicit manual restart (the `pluginMcp.restart` IPC, or re-enabling the server from Preferences → Plugins), which also re-runs the trust-on-first-use tool comparison before any tool is re-injected.
 - SIGTERM on Daintree quit with a 2-second grace period, then SIGKILL.
 - Subprocess `stderr` is captured and logged for debugging but not exposed to agents.
 
 ### Environment variable substitution
 
-Plugin manifest `env` values support `${settings:settingId}` syntax. Substitution happens at spawn time, reading the current setting value from the plugin's settings scope. Changes to secret settings cause the server to restart with the new value on its next spawn.
+Plugin manifest `env` values support `${settings:settingId}` syntax. Substitution happens at spawn time, reading the current setting value from the plugin's **user scope** (never project scope). An unset or `null` setting resolves to an empty string; booleans and numbers are stringified, and objects/arrays are JSON-encoded. When a user-scope setting changes, every currently running server (status `ready` or `crashed`) that references it is automatically restarted so the new value is folded in (#10619) — the restart is debounced ~1s so a burst of edits coalesces into one respawn, and a server that was never lazily started is left stopped rather than eagerly booted. See [Agent Extensions → MCP servers → Lifecycle](./agent-extensions.md#lifecycle) for the full behavior.
+
+Plugin-contributed **agent** `command` and `args` get the same `${settings:settingId}` resolution at PTY spawn time (#10619), also against user scope. The agent path differs from MCP `env` in one respect: a referenced setting that is unset throws rather than collapsing to an empty string, so the spawn fails with a clear error instead of silently launching the agent with a blank credential. Built-in agents and plain-shell spawns skip the resolution entirely — only a plugin-contributed agent whose command actually embeds a template pays for the lookup.
 
 ### Security
 
-MCP subprocesses run with the full privileges of the Daintree process. There's no sandboxing. The curation model (review by human, trusted source, signed distribution) is the primary defense.
+MCP subprocesses run with the full privileges of the Daintree process. There's no sandboxing. The curation model — human review and trusted-source install — is the primary defense; there is no signing or publisher verification (see the [trust model](./trust-model.md)).
 
-An MCP server can do anything the plugin could do: make network requests, read and write files, spawn further processes. The manifest's declared `capabilities` are disclosed to the user at install — if a plugin declares `network:fetch` because its MCP server calls Linear's API, the user sees that during install and decides whether to trust it.
+An MCP server can do anything the plugin could do: make network requests, read and write files, spawn further processes. The manifest's declared `capabilities` are disclosed in the plugin manager — if a plugin declares `network:fetch` because its MCP server calls Linear's API, the user sees that in the plugin's detail pane after install and decides whether to keep trusting it.
 
 ## Worktree observability
 
@@ -202,19 +222,20 @@ Adding a field to the plugin snapshot requires:
 
 Plugins consuming worktree events during `activate()` — before the WorkspaceClient is fully initialized — get their subscriptions queued in `pendingWorktreeSubs` and replayed once the client connects. Your callback never misses the early events.
 
+Plugin-supplied listeners across the host (`onDidChangeAgentState`, `storage.onDidChange`, `settings.onDidChange`, and the worktree subscriptions above) are dispatched through `invokeTrackedListener`, which quarantines a misbehaving callback. Each throw — synchronous or a rejected async return — increments a per-listener counter that is logged with its position (`1/3`, `2/3`, …); a single successful invocation resets it to zero, so intermittent failures never accumulate. After three consecutive throws the listener is auto-unsubscribed via its own disposer, so a buggy or adversarial plugin can't spam the log with a repeating error on every event.
+
 ## Capability disclosure
 
 Capabilities are **disclosure-first with host-side policy effects** — a hybrid model. The host does not sandbox plugin code: a plugin declaring `capabilities: []` can still make network requests and write files via raw Node APIs. But declared capabilities are not purely advisory either. They drive host-side policy, most concretely danger classification on plugin-registered actions. See the [trust model](./trust-model.md) for the full decision record, decision matrix, and capability schema.
 
 What disclosure does:
 
-- During install, Daintree shows the declared capabilities in a humanized list: "This plugin can read your worktree files, make network requests, and spawn subprocesses."
-- Installed plugins' detail views show the same list.
-- The install dialog shows the list in large, clear text before the user confirms.
+- An installed plugin's detail view shows the declared capabilities in a humanized list: "This plugin can read your worktree files, make network requests, and spawn subprocesses."
+- That detail-pane list is the disclosure surface — it appears in the plugin manager after install, not as a pre-install consent gate. A fresh install runs without enumerating capabilities (see the [trust model](./trust-model.md)).
 
 What the host derives from declared capabilities:
 
-- **Danger classification (live today).** When a manifest holds any high-risk token in `CONFIRM_TRIGGERING_CAPABILITIES` (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`, `agent:register`), every action that plugin registers is raised to `effectiveDanger: "confirm"` — gating the renderer's confirm dialog, MRU-rail eligibility, and `repeatLast`. The host may only raise danger, never lower it. This is host-side UX policy on Daintree's own action system; it does **not** block the plugin from executing code or calling IPC directly.
+- **Danger classification (live today).** When a manifest holds any high-risk token in `CONFIRM_TRIGGERING_CAPABILITIES` (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`, `agent:register`, `agent:input`), every action that plugin registers is raised to `effectiveDanger: "confirm"` — gating the renderer's confirm dialog, MRU-rail eligibility, and `repeatLast`. The host may only raise danger, never lower it. This is host-side UX policy on Daintree's own action system; it does **not** block the plugin from executing code or calling IPC directly.
 - **Compound-capability lattice (live, #9247).** Single capabilities that aren't individually irreversible can still combine into a threat. `manifestTriggersCompoundElevation()` (`PluginService.ts`) catches two compound classes: exfiltration (a sensitive read in `SENSITIVE_READ_CAPABILITIES` paired with an unconstrained `shell:exec` or `network:fetch` sink) and remote-controlled mutation (`network:fetch` paired with a local write or shell sink). A plugin attenuates the elevation by declaring a tight `scopes.network.allowedUrls` — a scoped `network:fetch` can't be remote-controlled, so the scope removes that class. Wildcard scopes are rejected at the schema boundary.
 - **MCP consent tier (live, #9234).** A plugin's declared capabilities cap the danger tier its MCP server's tool surface can reach (`electron/services/plugin-mcp/PluginMcpTierAuth.ts`): a server that didn't declare a high-risk capability can't trigger a D2 confirmation just by advertising `destructiveHint: true` — the call is denied, not silently downgraded. See the trust model for the complete list.
 
@@ -230,7 +251,7 @@ Prior to #8321, the renderer trusted the plugin's self-reported `danger` field. 
 
 ### Mechanism
 
-The host consults the set `CONFIRM_TRIGGERING_CAPABILITIES` (defined in `PluginService.ts`):
+The host consults the set `CONFIRM_TRIGGERING_CAPABILITIES` (defined in `shared/config/pluginCapabilities.ts`; `PluginService.ts` imports it):
 
 | Capability           | Effect            |
 | -------------------- | ----------------- |
@@ -240,6 +261,7 @@ The host consults the set `CONFIRM_TRIGGERING_CAPABILITIES` (defined in `PluginS
 | `fs:user-data-write` | Raises to confirm |
 | `agent:invoke`       | Raises to confirm |
 | `agent:register`     | Raises to confirm |
+| `agent:input`        | Raises to confirm |
 
 When a plugin's declared manifest `capabilities` includes any of these tokens, every action that plugin registers gets `effectiveDanger: "confirm"` regardless of the self-reported value. The compound-capability lattice (`manifestTriggersCompoundElevation()`) raises danger for the multi-capability threat classes described under [Capability disclosure](#capability-disclosure).
 
@@ -292,7 +314,7 @@ The `@daintreehq/plugin-sdk` public type surface is defined in `shared/types/plu
 Two entry points:
 
 - `@daintreehq/plugin-sdk` — core types (manifest authoring, host API, forge providers, worktree projections)
-- `@daintreehq/plugin-sdk/react` — renderer-facing SDK types (`shared/types/plugin-sdk-react.ts`). Currently exposes `UseHostChannelResult` (the return shape of `useHostChannel`); runtime implementations live in `src/hooks/` and wire into this subpath when the SDK is extracted into its own package (F15/F36). Until then, plugins reference these types through the host bundle.
+- `@daintreehq/plugin-sdk/react` — renderer-facing SDK types (`shared/types/plugin-sdk-react.ts`). Currently exposes `UseHostChannelResult` (the return shape of `useHostChannel`); the runtime implementations (`useHostChannel`, `usePluginEvent`) live in `packages/plugin-sdk/src/react/` (the host re-exports them through thin `src/hooks/` shims) and reach plugins by being bundled into the plugin output by `@daintreehq/plugin-vite` — which is how the hooks resolve today. This subpath is **not** in the host import map (which serves only React specifiers), so a raw, un-bundled `plugin://` view cannot bare-import it; those views talk to the host through `window.electron.plugin.on`/`.invoke` directly (see [Host API → React hooks](./host-api.md#react-hooks)). The subpath becomes a published, import-map-served package when the SDK is extracted into its own package (F15/F36).
 
 ### Manifest authoring
 
@@ -305,8 +327,8 @@ Types a plugin author uses to write `plugin.json`:
 | `ToolbarButtonContribution` | `plugin.ts` |  |
 | `MenuItemContribution` | `plugin.ts` |  |
 | `MenuItemLocation` | `plugin.ts` | `"terminal" \| "file" \| "view" \| "help"` |
-| `ViewContribution` | `plugin.ts` | Panel location wired; sidebar reserved |
-| `ViewLocation` | `plugin.ts` | `"panel" \| "sidebar"` |
+| `ViewContribution` | `plugin.ts` | Panel location only; sidebar rejected at validation |
+| `ViewLocation` | `plugin.ts` | `"panel"` |
 | `McpServerContribution` | `plugin.ts` | Wired via `PluginMcpSupervisor` (`experimental_` prefix retained) |
 | `PluginCapability` | `plugin.ts` |  |
 | `BuiltInPluginCapability` | `plugin.ts` |  |

@@ -80,6 +80,12 @@ export class TerminalResizeController {
       this.resizeLocks.set(id, Date.now() + ttl);
     } else {
       this.resizeLocks.delete(id);
+      const managed = this.deps.getInstance(id);
+      if (managed && managed.pendingBackgroundResize) {
+        const { width, height } = managed.pendingBackgroundResize;
+        managed.pendingBackgroundResize = undefined;
+        this.resizePtyOnly(id, width, height);
+      }
     }
   }
 
@@ -264,7 +270,10 @@ export class TerminalResizeController {
     }
     const managed = this.deps.getInstance(id);
     if (!managed) return null;
-    if (this.isResizeLocked(id)) return null;
+    if (this.isResizeLocked(id)) {
+      managed.pendingBackgroundResize = { width, height };
+      return null;
+    }
     if (Math.abs(managed.lastWidth - width) < 1 && Math.abs(managed.lastHeight - height) < 1) {
       return null;
     }
@@ -365,6 +374,19 @@ export class TerminalResizeController {
 
     const rect = managed.hostElement.getBoundingClientRect();
     if (rect.width < 50 || rect.height < 50) return false;
+
+    // Never reflow a live alt-screen TUI here. A full-screen app (OpenCode, and
+    // any agent with blockAltScreen disabled) paints an absolutely-positioned
+    // frame and emits only cursor-positioned deltas; an out-of-band xterm
+    // resize/reflow at this point mangles that frame and races the app's own
+    // SIGWINCH redraw — the "settled OpenCode goes weird on click / garbles
+    // intermittently" corruption. This one-shot, lock-exempt reconcile was added
+    // (#10632) to re-fit main-buffer scrollback that wrapped at the wrong column
+    // after a project switch-back; it must not touch the alternate buffer. An
+    // alt-screen pane's geometry is reconciled by the ResizeObserver-driven
+    // applyResize path and the app's own redraw. Report success so the reveal
+    // repaint doesn't treat this as "not paintable yet" and spin in a retry loop.
+    if (managed.isAltBuffer) return true;
 
     // Prefer the fit addon's own DOM measurement so the grid matches exactly
     // what a manual Redraw's fit() would compute; fall back to cell-metric math

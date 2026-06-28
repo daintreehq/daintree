@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { deriveDangerTier } from "../PluginMcpTierAuth.js";
+import { CONFIRM_TRIGGERING_CAPABILITIES } from "../../../../shared/config/pluginCapabilities.js";
 
 describe("PluginMcpTierAuth.deriveDangerTier", () => {
   describe("annotation floor", () => {
@@ -79,6 +80,26 @@ describe("PluginMcpTierAuth.deriveDangerTier", () => {
       const result = deriveDangerTier({ destructiveHint: true }, ["agent:invoke"]);
       expect(result).toEqual({ kind: "tier", tier: "D2" });
     });
+
+    it("allows D2 when the plugin declares agent:register", () => {
+      // agent:register registers a launchable agent CLI — a runtime side effect
+      // on par with agent:invoke. It is in CONFIRM_TRIGGERING_CAPABILITIES, so a
+      // destructiveHint tool reaches D2. (Regression guard: the cap previously
+      // diverged from the action-danger set and omitted agent:register.)
+      const result = deriveDangerTier({ destructiveHint: true }, ["agent:register"]);
+      expect(result).toEqual({ kind: "tier", tier: "D2" });
+    });
+
+    // Every member of the shared CONFIRM_TRIGGERING_CAPABILITIES set must reach
+    // D2 — guards against membership drift between the MCP tier cap and the
+    // action-danger model now that both read the same constant.
+    it.each([...CONFIRM_TRIGGERING_CAPABILITIES])(
+      "allows D2 for high-risk capability %s",
+      (capability) => {
+        const result = deriveDangerTier({ destructiveHint: true }, [capability]);
+        expect(result).toEqual({ kind: "tier", tier: "D2" });
+      }
+    );
 
     it("treats an empty capability set as the read-only cap (D1)", () => {
       // Mirrors a plugin manifest that omits `capabilities` entirely.

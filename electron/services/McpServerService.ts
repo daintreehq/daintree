@@ -15,7 +15,9 @@ import type {
   McpAuditStats,
   McpGrantLifecyclePayload,
   McpIssueGrantResult,
+  McpIssueNativeGrantResult,
   McpLogRecord,
+  McpRevokeNativeGrantResult,
   McpRevokeSessionGrantsResult,
   McpRuntimeSnapshot,
   McpRuntimeState,
@@ -25,7 +27,7 @@ import { SessionStore } from "./mcp-server/sessionStore.js";
 import { AuditService } from "./mcp-server/auditLog.js";
 import { TurnOutcomeService } from "./mcp-server/turnOutcomeLog.js";
 import { createRendererBridge } from "./mcp-server/rendererBridge.js";
-import { handleWaitUntilIdle } from "./mcp-server/waitUntilIdle.js";
+import { handleWaitUntilIdle, handleWaitUntilIdleBatch } from "./mcp-server/waitUntilIdle.js";
 import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
 import { HttpLifecycle } from "./mcp-server/httpLifecycle.js";
 import { AbusePolicy } from "./mcp-server/abusePolicy.js";
@@ -36,6 +38,8 @@ import type {
   HelpSessionWebContentsResolver,
   HelpSessionActionContextResolver,
   HelpSessionIdResolver,
+  AssistantPaneWebContentsResolver,
+  AssistantPaneActionContextResolver,
 } from "./mcp-server/shared.js";
 import type { ActionManifestEntry } from "../../shared/types/actions.js";
 import { events } from "./events.js";
@@ -197,6 +201,8 @@ export class McpServerService {
         this.bridge.dispatchActionForWebContents(id, actionId, args, confirmed, contextOverride),
       handleWaitUntilIdle: (rawArgs, signal, options) =>
         handleWaitUntilIdle(rawArgs, signal, options),
+      handleWaitUntilIdleBatch: (rawArgs, signal, options) =>
+        handleWaitUntilIdleBatch(rawArgs, signal, options),
       getCachedManifest: () => this.bridge.getCachedManifest(),
       getCachedManifestForWebContents: (id) => this.bridge.getCachedManifestForWebContents(id),
       clearCachedManifest: () => this.bridge.clearCache(),
@@ -263,6 +269,14 @@ export class McpServerService {
 
   setHelpSessionIdResolver(resolver: HelpSessionIdResolver | null): void {
     this.httpLifecycle.setHelpSessionIdResolver(resolver);
+  }
+
+  setAssistantPaneWebContentsResolver(resolver: AssistantPaneWebContentsResolver | null): void {
+    this.httpLifecycle.setAssistantPaneWebContentsResolver(resolver);
+  }
+
+  setAssistantPaneActionContextResolver(resolver: AssistantPaneActionContextResolver | null): void {
+    this.httpLifecycle.setAssistantPaneActionContextResolver(resolver);
   }
 
   private emitStatusChange(): void {
@@ -474,6 +488,17 @@ export class McpServerService {
   }
 
   /**
+   * Apply the assistant audit-log retention setting (`helpAssistant.auditRetention`,
+   * in days; 0 = Off) to both assistant audit rings — the MCP dispatch log and
+   * the turn-outcome log. Called when the setting changes and on the periodic
+   * cleanup tick. Synchronous; both sub-services prune in-memory and flush.
+   */
+  pruneAuditByRetention(retentionDays: number): void {
+    this.auditService.pruneByAge(retentionDays);
+    this.turnOutcomeService.pruneByAge(retentionDays);
+  }
+
+  /**
    * Wires the help-session terminal↔session resolver. Called by
    * `HelpSessionService.ensureMcpServerReady()` (and equivalent sites) so
    * the turn-outcome classifier can correlate FSM transitions with the
@@ -531,11 +556,33 @@ export class McpServerService {
   getHelpSessionLiveStatus(
     helpSessionId: string,
     callerWcId: number
-  ): {
-    tier: McpTier;
-    activeGrants: Array<{ toolId: string; expiresAt: number; ttlMs: number }>;
-  } | null {
+  ): ReturnType<SessionStore["getLiveStatusForHelpSession"]> {
     return this.sessionStore.getLiveStatusForHelpSession(helpSessionId, callerWcId);
+  }
+
+  /**
+   * Approve a native session-scoped automation grant (#10648) for the help
+   * session a renderer owns, addressed by its public help-session id. The
+   * grant authorizes the named tools for a bounded number of uses without a
+   * per-call modal. Caller-pinned against the WebContents the session was
+   * pinned to at handshake. Returns the minted grant's id and scope so the
+   * renderer can render its card without polling.
+   */
+  issueNativeGrant(
+    helpSessionId: string,
+    params: { allowedTools: string[]; maxUses?: number; ttlMs?: number },
+    callerWcId?: number
+  ): McpIssueNativeGrantResult {
+    return this.httpLifecycle.issueNativeGrant(helpSessionId, params, callerWcId);
+  }
+
+  /**
+   * Revoke a single native automation grant by id. Caller-pinned against the
+   * session the grant belongs to. Idempotent — a grant already gone (exhausted,
+   * expired, or torn down with its session) reports `revoked: false`.
+   */
+  revokeNativeGrant(grantId: string, callerWcId?: number): McpRevokeNativeGrantResult {
+    return this.httpLifecycle.revokeNativeGrant(grantId, callerWcId);
   }
 
   /**
@@ -610,6 +657,12 @@ export class McpServerService {
         ttlMs: payload.ttlMs,
         expiresAt: payload.expiresAt,
         revokedReason: payload.revokedReason,
+        grantId: payload.grantId,
+        maxUses: payload.maxUses,
+        remainingUses: payload.remainingUses,
+        actorId: payload.actorId,
+        actorType: payload.actorType,
+        allowedTools: payload.allowedTools,
       });
     } catch (err) {
       console.error("[MCP] Failed to append grant audit record:", err);

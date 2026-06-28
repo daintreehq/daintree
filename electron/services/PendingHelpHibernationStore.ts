@@ -17,11 +17,20 @@ export interface PendingHelpHibernation {
   agentSessionId: string;
   cwd: string;
   capturedAt: number;
+  // In-memory only — whether the assistant panel was open when this token was
+  // captured this session. Drives auto-reopen + auto-resume on cold
+  // switch-back. Deliberately stripped before persisting (see `persist()`):
+  // tokens reloaded from disk on app restart are prior-session entries and
+  // must NOT auto-resume — only this-session eviction/crash captures do.
+  panelWasOpen?: boolean;
 }
+
+// Persisted shape excludes `panelWasOpen` — it is an in-memory-only field.
+type PersistedHelpHibernation = Omit<PendingHelpHibernation, "panelWasOpen">;
 
 interface FileShape {
   version: number;
-  entries: Record<string, PendingHelpHibernation>;
+  entries: Record<string, PersistedHelpHibernation>;
 }
 
 /**
@@ -60,7 +69,12 @@ export class PendingHelpHibernationStore {
         if (!projectId) continue;
         if (!this.isValid(entry)) continue;
         if (entry.capturedAt < cutoff) continue;
-        this.entries.set(projectId, entry);
+        // Defensively strip any `panelWasOpen` that reached disk (manual edit,
+        // corruption, or a regression in `persist()`): the field is in-memory
+        // only and a disk-loaded `true` would auto-resume a prior-session token
+        // on app restart — the exact invariant this feature must never break.
+        const { panelWasOpen: _panelWasOpen, ...safeEntry } = entry as PendingHelpHibernation;
+        this.entries.set(projectId, safeEntry);
       }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
@@ -105,9 +119,16 @@ export class PendingHelpHibernationStore {
   }
 
   private persist(): Promise<void> {
+    // Strip `panelWasOpen` (in-memory only) so reloaded entries on app restart
+    // are treated as prior-session tokens that never auto-resume.
+    const persistedEntries: Record<string, PersistedHelpHibernation> = {};
+    for (const [projectId, entry] of this.entries.entries()) {
+      const { panelWasOpen: _panelWasOpen, ...persisted } = entry;
+      persistedEntries[projectId] = persisted;
+    }
     const snapshot: FileShape = {
       version: FILE_VERSION,
-      entries: Object.fromEntries(this.entries.entries()),
+      entries: persistedEntries,
     };
     const work = this.writeChain
       .catch(() => undefined)

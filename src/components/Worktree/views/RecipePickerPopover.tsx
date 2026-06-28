@@ -78,7 +78,7 @@ export function RecipePickerPopover({
                 </>
               )}
             </span>
-            <ChevronsUpDown className="opacity-50 shrink-0" />
+            <ChevronsUpDown className="text-text-muted shrink-0" />
           </Button>
         </PopoverTrigger>
         <PopoverContent

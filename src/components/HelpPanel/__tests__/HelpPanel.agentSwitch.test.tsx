@@ -82,12 +82,16 @@ vi.mock("./HelpPanelHeader", () => ({ HelpPanelHeader: () => null }));
 vi.mock("./HelpPanelBanners", () => ({ HelpPanelBanners: () => null }));
 vi.mock("./HelpPanelVersionGate", () => ({ HelpPanelVersionGate: () => null }));
 vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { focus: vi.fn(), notifyUserInput: vi.fn() },
+  terminalInstanceService: { focus: vi.fn(), setFocused: vi.fn(), notifyUserInput: vi.fn() },
 }));
 vi.mock("@/clients", () => ({ terminalClient: { submit: vi.fn(), sendKey: vi.fn() } }));
 vi.mock("@shared/config/agentIds", () => ({
+  BUILT_IN_AGENT_IDS: ["claude", "codex", "claude-code"] as const,
+  ASSISTANT_ONLY_AGENT_IDS: [] as const,
+  LAUNCHABLE_AGENT_IDS: ["claude", "codex", "claude-code"] as const,
   isBuiltInAgentId: (v: unknown): v is string =>
     typeof v === "string" && ["claude", "codex", "claude-code"].includes(v),
+  isAssistantOnlyAgentId: () => false,
 }));
 vi.mock("../../../shared/utils/agentAvailability", () => ({ isAgentInstalled: () => true }));
 vi.mock("@/lib/accessibility", () => ({ TABBABLE_SELECTOR: "button" }));

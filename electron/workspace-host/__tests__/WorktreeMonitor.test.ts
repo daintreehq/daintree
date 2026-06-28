@@ -2705,6 +2705,54 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
 
+    it("forced refresh during a blocking operation stamps freshness and re-emits (#10715)", async () => {
+      vi.mocked(getGitDir).mockReturnValue("/test/worktree/.git");
+      mockGetRepoOperationStateSync.mockReturnValue("REVERTING");
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+
+      await monitor.start();
+      await flushInitialStatus();
+      // Initial snapshot emitted once; the git status fork itself was skipped.
+      expect(callbacks.onUpdate).toHaveBeenCalledTimes(1);
+      expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+
+      vi.mocked(callbacks.onUpdate).mockClear();
+      // The user clicks Refresh on the stale card → forced refresh. The op is
+      // still in progress so git status stays skipped, but the renderer must
+      // receive a fresh snapshot whose freshness timestamp has advanced —
+      // otherwise the Refresh button is a permanent no-op (the bug).
+      await monitor.updateGitStatus(true);
+
+      expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+      expect(callbacks.onUpdate).toHaveBeenCalledTimes(1);
+      const snapshot = vi.mocked(callbacks.onUpdate).mock.calls.at(-1)?.[0];
+      expect(snapshot?.lastGitStatusCheckedAt).toBeGreaterThan(0);
+
+      monitor.stop();
+    });
+
+    it("background poll during a blocking operation stamps silently without re-emitting", async () => {
+      vi.mocked(getGitDir).mockReturnValue("/test/worktree/.git");
+      mockGetRepoOperationStateSync.mockReturnValue("REBASING");
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+
+      await monitor.start();
+      await flushInitialStatus();
+      expect(callbacks.onUpdate).toHaveBeenCalledTimes(1);
+
+      vi.mocked(callbacks.onUpdate).mockClear();
+      // A non-forced (background) poll advances the freshness stamp but must not
+      // emit a redundant snapshot — only the user-driven forced refresh does.
+      await monitor.updateGitStatus(false);
+      expect(callbacks.onUpdate).not.toHaveBeenCalled();
+
+      monitor.stop();
+    });
+
     it("does not check operation sentinels when getGitDir returns null", async () => {
       vi.mocked(getGitDir).mockReturnValue(null);
       mockGetWorktreeChangesWithStats.mockResolvedValue({

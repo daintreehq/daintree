@@ -59,7 +59,7 @@ import {
 } from "@/hooks/app/useAgentDiscoveryOnboarding";
 import { AgentShortcutCapture } from "@/components/KeyboardShortcuts";
 import { notify } from "@/lib/notify";
-import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
+import { LAUNCHABLE_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
 import type { CliAvailability, AgentState } from "@shared/types";
 import { resolveEffectivePresetId } from "@shared/types";
 import { isAgentLaunchable, isAgentInstalled } from "../../../shared/utils/agentAvailability";
@@ -290,11 +290,14 @@ function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
                   onSelect={() => onLaunch(row.id, preset.id)}
                 >
                   <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                    <BrandMark brandColor={preset.color ?? getBrandColorHex(row.id)}>
+                    <BrandMark
+                      brandColor={preset.color ?? getBrandColorHex(row.id)}
+                      userChosen={!!preset.color}
+                    >
                       <row.Icon brandColor={preset.color ?? getBrandColorHex(row.id)} />
                     </BrandMark>
                   </span>
-                  {preset.name.replace(/^CCR:\s*/, "")}
+                  {preset.displayTitle ?? preset.name.replace(/^CCR:\s*/, "")}
                 </DropdownMenuRadioItem>
               ))}
             </>
@@ -310,11 +313,14 @@ function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
                   onSelect={() => onLaunch(row.id, preset.id)}
                 >
                   <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                    <BrandMark brandColor={preset.color ?? getBrandColorHex(row.id)}>
+                    <BrandMark
+                      brandColor={preset.color ?? getBrandColorHex(row.id)}
+                      userChosen={!!preset.color}
+                    >
                       <row.Icon brandColor={preset.color ?? getBrandColorHex(row.id)} />
                     </BrandMark>
                   </span>
-                  {preset.name}
+                  {preset.displayTitle ?? preset.name}
                 </DropdownMenuRadioItem>
               ))}
             </>
@@ -330,11 +336,14 @@ function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
                   onSelect={() => onLaunch(row.id, preset.id)}
                 >
                   <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                    <BrandMark brandColor={preset.color ?? getBrandColorHex(row.id)}>
+                    <BrandMark
+                      brandColor={preset.color ?? getBrandColorHex(row.id)}
+                      userChosen={!!preset.color}
+                    >
                       <row.Icon brandColor={preset.color ?? getBrandColorHex(row.id)} />
                     </BrandMark>
                   </span>
-                  {preset.name}
+                  {preset.displayTitle ?? preset.name}
                 </DropdownMenuRadioItem>
               ))}
             </>
@@ -441,12 +450,12 @@ export function AgentTrayButton({
   };
 
   const readyAgentIds = useMemo(() => {
-    return BUILT_IN_AGENT_IDS.filter((id) => isAgentLaunchable(agentAvailability?.[id]));
+    return LAUNCHABLE_AGENT_IDS.filter((id) => isAgentLaunchable(agentAvailability?.[id]));
   }, [agentAvailability]);
 
   const hasNoPinnedAgents = useMemo(() => {
     if (!agentSettings?.agents) return true;
-    return !BUILT_IN_AGENT_IDS.some((id) => isAgentPinned(agentSettings.agents?.[id]));
+    return !LAUNCHABLE_AGENT_IDS.some((id) => isAgentPinned(agentSettings.agents?.[id]));
   }, [agentSettings]);
 
   // While the first-run welcome card is actually being rendered, suppress
@@ -485,7 +494,7 @@ export function AgentTrayButton({
     const needsSetup: AgentRow[] = [];
     const fallbackSetup: AgentRow[] = [];
 
-    for (const id of BUILT_IN_AGENT_IDS) {
+    for (const id of LAUNCHABLE_AGENT_IDS) {
       const pinned = isAgentPinned(agentSettings?.agents?.[id]);
       const dominant = agentDominantStates.get(id) ?? null;
       const entry = agentSettings?.agents?.[id];
@@ -756,10 +765,8 @@ export function AgentTrayButton({
                   onSelect={() => handleSetup(row.id)}
                   className="group h-7"
                 >
-                  <span className="mr-2 inline-flex h-4 w-4 items-center justify-center grayscale opacity-50">
-                    <BrandMark brandColor={getBrandColorHex(row.id)}>
-                      <row.Icon brandColor={getBrandColorHex(row.id)} />
-                    </BrandMark>
+                  <span className="mr-2 inline-flex h-4 w-4 items-center justify-center">
+                    <row.Icon className="text-text-muted" />
                   </span>
                   <span className="flex-1 text-daintree-text/70">{row.name}</span>
                   <span className="ml-2 shrink-0 rounded border border-daintree-text/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-daintree-text/50">
@@ -780,10 +787,8 @@ export function AgentTrayButton({
                   className="group h-7"
                   data-testid={`agent-tray-fallback-${row.id}`}
                 >
-                  <span className="mr-2 inline-flex h-4 w-4 items-center justify-center grayscale opacity-50">
-                    <BrandMark brandColor={getBrandColorHex(row.id)}>
-                      <row.Icon brandColor={getBrandColorHex(row.id)} />
-                    </BrandMark>
+                  <span className="mr-2 inline-flex h-4 w-4 items-center justify-center">
+                    <row.Icon className="text-text-muted" />
                   </span>
                   <span className="flex-1 text-daintree-text/70">{row.name}</span>
                   <span className="ml-2 shrink-0 rounded border border-daintree-text/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-daintree-text/50">
@@ -796,7 +801,7 @@ export function AgentTrayButton({
 
           {(hasAnyContent || showFallback) && <DropdownMenuSeparator />}
           <DropdownMenuItem onSelect={handleManageAgents} className="h-7">
-            <Settings2 className="mr-2 h-3.5 w-3.5 opacity-60" />
+            <Settings2 className="mr-2 h-3.5 w-3.5 text-text-muted" />
             Manage Agents
           </DropdownMenuItem>
           <DropdownMenuActionItem
@@ -804,7 +809,7 @@ export function AgentTrayButton({
             args={{ tab: "toolbar" }}
             className="h-7"
           >
-            <Settings2 className="mr-2 h-3.5 w-3.5 opacity-60" />
+            <Settings2 className="mr-2 h-3.5 w-3.5 text-text-muted" />
             {TOOLBAR_CUSTOMIZE_LABEL}
           </DropdownMenuActionItem>
           <DropdownMenuItem onSelect={handleOpenAgentSetupWizard} className="h-7">

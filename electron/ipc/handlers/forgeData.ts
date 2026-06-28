@@ -1,4 +1,5 @@
 import fs from "fs/promises";
+import { existsSync } from "fs";
 import path from "path";
 import { CHANNELS } from "../channels.js";
 import { broadcastToRenderer, checkRateLimit, typedHandle } from "../utils.js";
@@ -327,6 +328,15 @@ async function handleForgeGetRepoStats(payload: {
     throw new Error("Invalid payload");
   }
   const cwd = requireCwd(payload.cwd);
+  // #10663: short-circuit before any git call if the project directory was
+  // deleted or moved externally. The renderer's `useRepositoryStats` loop
+  // keeps polling this handler (every 2min on its error backoff) even after
+  // the path is gone; without this guard each poll runs `getCommitCount` ->
+  // `createHardenedGit` against the dead path and emits a WARN log. Return a
+  // commits-only zero snapshot — the same shape as the no-provider fallback.
+  if (!existsSync(cwd)) {
+    return buildForgeRepositoryStats(0, { issueCount: null, prCount: null });
+  }
   let resolved: Awaited<ReturnType<typeof resolveForCwd>>;
   try {
     resolved = await resolveForCwd(cwd);

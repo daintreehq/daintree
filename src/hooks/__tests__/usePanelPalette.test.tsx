@@ -398,6 +398,42 @@ describe("usePanelPalette", () => {
       expect(gemini).toBeUndefined();
     });
 
+    it("shows a plugin agent with undefined availability as installed=false, not hidden (#10560)", () => {
+      // A plugin-contributed agent that CliAvailabilityService has not probed
+      // has no availability entry. It must surface greyed-out, not vanish the
+      // way an uninstalled built-in does.
+      getEffectiveAgentIdsMock.mockReturnValue(["acme-agent"]);
+      getEffectiveAgentConfigMock.mockReturnValue({
+        name: "Acme Agent",
+        iconId: "terminal",
+        color: "#3366ff",
+        tooltip: "Acme plugin agent",
+      });
+      cliAvailabilityState.availability = {};
+
+      const { result } = renderHook(() => usePanelPalette());
+
+      const acme = result.current.results.find((item) => item.id === "agent:acme-agent");
+      expect(acme).toBeDefined();
+      expect(acme?.installed).toBe(false);
+    });
+
+    it("shows a plugin agent even when its command is probed as missing (#10560)", () => {
+      getEffectiveAgentIdsMock.mockReturnValue(["acme-agent"]);
+      getEffectiveAgentConfigMock.mockReturnValue({
+        name: "Acme Agent",
+        iconId: "terminal",
+        color: "#3366ff",
+      });
+      cliAvailabilityState.availability = { "acme-agent": "missing" };
+
+      const { result } = renderHook(() => usePanelPalette());
+
+      const acme = result.current.results.find((item) => item.id === "agent:acme-agent");
+      expect(acme).toBeDefined();
+      expect(acme?.installed).toBe(false);
+    });
+
     it("sets installed=undefined before availability is initialized", () => {
       getEffectiveAgentIdsMock.mockReturnValue(["claude"]);
       cliAvailabilityState.isInitialized = false;

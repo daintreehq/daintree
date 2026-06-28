@@ -22,6 +22,7 @@ export const WORKBENCH_TIER_TOOLS = [
   "worktree.getDefaultPath",
   "worktree.getAvailableBranch",
   "worktree.resource.status",
+  "worktree.compareDiff",
 
   "files.search",
   "file.view",
@@ -31,6 +32,9 @@ export const WORKBENCH_TIER_TOOLS = [
   "terminal.list",
   "terminal.getOutput",
   "terminal.getStatus",
+
+  "browser.getConsoleMessages",
+  "portal.listTabs",
 
   "agent.getState",
 
@@ -50,11 +54,17 @@ export const WORKBENCH_TIER_TOOLS = [
   "forge.listIssues",
   "forge.listPRs",
   "forge.getIssue",
+  "forge.getPR",
 
   "workflow.prepBranchForReview",
 
   "system.checkCommand",
   "system.checkDirectory",
+  "system.getResourceProfileSnapshot",
+
+  "cliAvailability.get",
+
+  "hibernation.getConfig",
 
   "notifications.recent",
   "errors.recent",
@@ -66,6 +76,9 @@ export const ACTION_TIER_ADDONS = [
   "worktree.createWithRecipe",
   "worktree.setActive",
   "worktree.refresh",
+  "worktree.resource.provision",
+  "worktree.resource.pause",
+  "worktree.resource.resume",
 
   "terminal.inject",
   "terminal.new",
@@ -74,11 +87,13 @@ export const ACTION_TIER_ADDONS = [
   "terminal.closeAll",
   "terminal.kill",
   "terminal.killAll",
+  "terminal.restart",
   "terminal.moveToDock",
   "terminal.moveToGrid",
   "terminal.toggleDock",
   "terminal.rename",
   TERMINAL_WAIT_UNTIL_IDLE_TOOL,
+  "terminal.waitUntilIdleBatch",
 
   "recipe.list",
   "recipe.run",
@@ -94,8 +109,23 @@ export const ACTION_TIER_ADDONS = [
   "agent.focusNextAgent",
   "agent.focusPreviousAgent",
 
+  "panel.focus",
+
   "workflow.startWorkOnIssue",
   "workflow.focusNextAttention",
+
+  "browser.navigate",
+  "browser.openUrl",
+  "browser.captureScreenshot",
+
+  "devPreview.reloadPreview",
+  "devPreview.restart",
+  "devPreview.promoteToPortal",
+
+  "portal.openUrl",
+  "portal.newTab",
+  "portal.toggle",
+  "portal.toggleDevDashboard",
 
   "app.theme.pick",
   "app.theme.browser.open",
@@ -108,6 +138,11 @@ export const ACTION_TIER_ADDONS = [
 
 export const SYSTEM_TIER_ADDONS = [
   "worktree.delete",
+  "worktree.resource.teardown",
+
+  "terminal.arm",
+  "terminal.disarm",
+  "terminal.disarmAll",
 
   "copyTree.generateAndCopyFile",
 
@@ -126,6 +161,26 @@ export const SYSTEM_TIER_ADDONS = [
   "forge.openIssue",
   "forge.openPR",
   "forge.assignIssue",
+  "forge.unassignIssue",
+  "forge.approvePR",
+  "forge.requestChanges",
+  "forge.dismissReview",
+  "forge.requestReviewers",
+  "forge.createPR",
+  "forge.closePR",
+  "forge.reopenPR",
+  "forge.mergePR",
+  "forge.convertPRToDraft",
+  "forge.markPRReadyForReview",
+  "forge.commentOnPR",
+  "forge.editPR",
+  "forge.createIssue",
+  "forge.closeIssue",
+  "forge.reopenIssue",
+  "forge.editIssue",
+  "forge.addIssueComment",
+  "forge.addIssueLabel",
+  "forge.removeIssueLabel",
   "forge.validateToken",
 ] as const satisfies readonly BuiltInActionId[];
 

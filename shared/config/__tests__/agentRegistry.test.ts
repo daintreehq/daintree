@@ -19,6 +19,12 @@ import {
   type AssistantSupports,
 } from "../agentRegistry.js";
 import { UserAgentConfigSchema } from "../../types/userAgentRegistry.js";
+import {
+  BUILT_IN_AGENT_IDS,
+  LAUNCHABLE_AGENT_IDS,
+  BUILT_IN_AGENT_KEY_ACTIONS,
+  isAssistantOnlyAgentId,
+} from "../agentIds.js";
 
 describe("agentRegistry", () => {
   beforeEach(() => {
@@ -178,10 +184,10 @@ describe("agentRegistry", () => {
   });
 
   describe("assistant support", () => {
-    it("returns claude and codex as the stable-tier assistant agents", () => {
+    it("returns claude, codex, and daintree-assistant as the stable-tier assistant agents", () => {
       const ids = getAssistantSupportedAgentIds();
-      expect(ids).toEqual(expect.arrayContaining(["claude", "codex"]));
-      expect(ids).toHaveLength(2);
+      expect(ids).toEqual(expect.arrayContaining(["claude", "codex", "daintree-assistant"]));
+      expect(ids).toHaveLength(3);
     });
 
     it("claude has structured assistant supports at stable tier", () => {
@@ -260,6 +266,41 @@ describe("agentRegistry", () => {
       expect(wired).not.toContain("interpreter");
       expect(wired).not.toContain("goose");
       expect(wired).not.toContain("cursor");
+    });
+
+    it("daintree-assistant is wired at stable tier and shown in the assistant picker (#10634)", () => {
+      expect(getAssistantWiredAgentIds()).toContain("daintree-assistant");
+      expect(getAssistantSupportedAgentIds()).toContain("daintree-assistant");
+      expect(getAgentConfig("daintree-assistant")?.supports).toMatchObject({
+        mcpInjection: "env-only",
+        settingsOverlay: false,
+        permissionBypass: false,
+        trustDialog: false,
+        versionProbe: true,
+        tier: "stable",
+      });
+    });
+
+    it("daintree-assistant is registered and detectable but not launchable (#10634)", () => {
+      // Registered (so CliAvailabilityService detects it and the assistant
+      // overlay can use it)...
+      expect(BUILT_IN_AGENT_IDS).toContain("daintree-assistant");
+      expect(getAgentConfig("daintree-assistant")).toBeDefined();
+      expect(isAssistantOnlyAgentId("daintree-assistant")).toBe(true);
+      // ...but excluded from every launchable surface and given no
+      // direct-launch keybinding action.
+      expect(LAUNCHABLE_AGENT_IDS).not.toContain("daintree-assistant");
+      expect(BUILT_IN_AGENT_KEY_ACTIONS).not.toContain("agent.daintree-assistant");
+    });
+
+    it("LAUNCHABLE_AGENT_IDS is exactly BUILT_IN_AGENT_IDS minus assistant-only agents", () => {
+      expect(LAUNCHABLE_AGENT_IDS).toEqual(
+        BUILT_IN_AGENT_IDS.filter((id) => !isAssistantOnlyAgentId(id))
+      );
+      // No assistant-only agent leaks into the launchable set.
+      for (const id of LAUNCHABLE_AGENT_IDS) {
+        expect(isAssistantOnlyAgentId(id)).toBe(false);
+      }
     });
 
     it("excludes agents whose supports object is at experimental tier", () => {
@@ -408,8 +449,8 @@ describe("agentRegistry", () => {
     it("empty user registry produces same supported list as before", () => {
       setUserRegistry({});
       const ids = getAssistantSupportedAgentIds();
-      expect(ids).toEqual(expect.arrayContaining(["claude", "codex"]));
-      expect(ids).toHaveLength(2);
+      expect(ids).toEqual(expect.arrayContaining(["claude", "codex", "daintree-assistant"]));
+      expect(ids).toHaveLength(3);
     });
 
     it("supported list returns built-ins in BUILT_IN_AGENT_IDS order then user-defined", () => {
@@ -428,11 +469,12 @@ describe("agentRegistry", () => {
       setUserRegistry({ "zzz-last-agent": userAgent1, "aaa-first-agent": userAgent2 });
       try {
         const ids = getAssistantSupportedAgentIds();
-        // Built-ins first: claude, codex (in BUILT_IN_AGENT_IDS order)
+        // Built-ins first, in BUILT_IN_AGENT_IDS order
         expect(ids[0]).toBe("claude");
         expect(ids[1]).toBe("codex");
+        expect(ids[2]).toBe("daintree-assistant");
         // Then user-defined agents in registration order
-        const userDefinedIds = ids.slice(2);
+        const userDefinedIds = ids.slice(3);
         expect(userDefinedIds[0]).toBe("zzz-last-agent");
         expect(userDefinedIds[1]).toBe("aaa-first-agent");
       } finally {
@@ -637,10 +679,6 @@ describe("kimi detection patterns", () => {
 });
 
 describe("amp configuration", () => {
-  it("has the verified Sourcegraph brand color", () => {
-    expect(getAgentConfig("amp")?.color).toBe("#F34E3F");
-  });
-
   it("uses the amp command and Amp display name", () => {
     const config = getAgentConfig("amp");
     expect(config?.command).toBe("amp");

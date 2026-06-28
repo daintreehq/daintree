@@ -3,8 +3,10 @@
  * bundles, log files, and IPC error envelopes. Complements the key-based
  * redaction in `TelemetryService.sanitizeEvent` and `DiagnosticsCollector.redactDeep`.
  *
- * Apply at outbound boundaries only — never on the in-memory `logBuffer` path
- * that feeds the diagnostics dock. Approved call sites:
+ * Apply at outbound boundaries only — never on the main-app in-memory
+ * `logBuffer` path that feeds the diagnostics dock. (The plugin log ring is a
+ * separate buffer that is itself an outbound boundary — see call site 12.)
+ * Approved call sites:
  *   1. Sentry `beforeSend` (TelemetryService)
  *   2. DiagnosticsCollector string output
  *   3. Logger file-write (`writeToLogFile`) and console-mirror in `emit`/`emitError`
@@ -16,6 +18,7 @@
  *   9. AgentHelpService command output scrubbing
  *  10. AgentVersionService error-message scrubbing
  *  11. WorktreeLifecycleService full-output teardown log write (writeTeardownLog)
+ *  12. PluginService.recordPluginLog (plugin log ring buffer + console mirror)
  *
  * All patterns use bounded quantifiers for ReDoS safety. See the
  * `secretScrubber.test.ts` sibling for the `safe-regex2` assertion that

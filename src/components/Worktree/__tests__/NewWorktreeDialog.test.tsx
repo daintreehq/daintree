@@ -28,6 +28,7 @@ const mockFetchPRBranch = vi.fn();
 const mockGetRecentBranches = vi.fn();
 const mockGetCurrentUser = vi.fn();
 const mockAssignIssue = vi.fn();
+const mockUnassignIssue = vi.fn();
 
 const mockAgentSettingsGet = vi.fn().mockResolvedValue({ agents: {} });
 vi.mock("@/clients", () => ({
@@ -42,6 +43,7 @@ vi.mock("@/clients", () => ({
   forgeClient: {
     getCurrentUser: (...args: unknown[]) => mockGetCurrentUser(...args),
     assignIssue: (...args: unknown[]) => mockAssignIssue(...args),
+    unassignIssue: (...args: unknown[]) => mockUnassignIssue(...args),
   },
   agentSettingsClient: {
     get: (...args: unknown[]) => mockAgentSettingsGet(...args),
@@ -88,10 +90,11 @@ vi.mock("@/store/recipeStore", () => {
   };
 });
 
+let mockAssignWorktreeToSelf = false;
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: (selector: (s: Record<string, unknown>) => unknown) =>
     selector({
-      assignWorktreeToSelf: false,
+      assignWorktreeToSelf: mockAssignWorktreeToSelf,
       setAssignWorktreeToSelf: vi.fn(),
       lastSelectedWorktreeRecipeIdByProject: {},
       setLastSelectedWorktreeRecipeIdByProject: vi.fn(),
@@ -261,6 +264,14 @@ vi.mock("@/components/Worktree/worktreeCreationErrors", () => ({
 Element.prototype.scrollIntoView = vi.fn();
 
 import { NewWorktreeDialog, clearBranchListCache } from "../NewWorktreeDialog";
+import {
+  buildCacheKey,
+  setCache,
+  getCache,
+  getGeneration,
+  _resetForTests as resetForgeResourceCache,
+} from "@/lib/forgeResourceCache";
+import type { Issue } from "@shared/types/forge";
 
 beforeEach(() => {
   clearBranchListCache();
@@ -815,5 +826,234 @@ describe("NewWorktreeDialog — ARIA validation wiring", () => {
     expect(branchInput.getAttribute("aria-invalid")).toBeNull();
     expect(pathInput.getAttribute("aria-invalid")).toBeNull();
     expect(baseBranchButton?.getAttribute("aria-invalid")).toBeNull();
+  });
+});
+
+describe("NewWorktreeDialog — self-assign cache mutation", () => {
+  const ROOT = "/test/root";
+  const ISSUE_CACHE_KEY = buildCacheKey(ROOT, "issue", "open", "created");
+
+  function makeIssue(overrides: Partial<Issue> = {}): Issue {
+    return {
+      number: 42,
+      title: "Fix the thing",
+      body: "",
+      state: "open",
+      rawState: "open",
+      url: "https://example.com/issues/42",
+      assignees: [],
+      labels: [],
+      createdAt: 0,
+      updatedAt: 0,
+      rawData: null,
+      ...overrides,
+    };
+  }
+
+  function seedIssueCache(issue: Issue): void {
+    setCache(ISSUE_CACHE_KEY, {
+      items: [issue],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: 0,
+    });
+  }
+
+  function cachedIssue(): Issue {
+    const entry = getCache(ISSUE_CACHE_KEY);
+    if (!entry) throw new Error("expected cache entry to exist");
+    return entry.items[0] as Issue;
+  }
+
+  // Drive the dialog through a successful create with self-assign enabled.
+  async function createWithSelfAssign(): Promise<void> {
+    renderDialog({ initialIssue: makeIssue() });
+    await advanceTimersGradually(500);
+
+    const branchInput = screen.getByTestId("branch-name-input");
+    await act(async () => {
+      fireEvent.change(branchInput, { target: { value: "feature/fix-thing" } });
+    });
+    await advanceTimersGradually(500);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+    // Flush the void-fired async create/assign block.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    resetForgeResourceCache();
+    mockAssignWorktreeToSelf = true;
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockDispatch.mockResolvedValue({ ok: true, result: "new-wt-id" });
+    mockGetCurrentUser.mockResolvedValue({
+      login: "testuser",
+      avatarUrl: "https://example.com/avatar.png",
+      rawData: null,
+    });
+    mockAssignIssue.mockResolvedValue(undefined);
+    mockUnassignIssue.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+    mockAssignWorktreeToSelf = false;
+    resetForgeResourceCache();
+  });
+
+  it("patches the cached issue assignees after a successful self-assign", async () => {
+    seedIssueCache(makeIssue());
+    const genBefore = getGeneration(ISSUE_CACHE_KEY);
+
+    await createWithSelfAssign();
+
+    expect(mockAssignIssue).toHaveBeenCalledWith(ROOT, 42, "testuser");
+    expect(cachedIssue().assignees.map((a) => a.login)).toContain("testuser");
+    // The current user's avatar rides along so the optimistic row matches.
+    expect(cachedIssue().assignees.find((a) => a.login === "testuser")?.avatarUrl).toBe(
+      "https://example.com/avatar.png"
+    );
+    // Generation bumps so any in-flight list fetch is discarded.
+    expect(getGeneration(ISSUE_CACHE_KEY)).toBeGreaterThan(genBefore);
+  });
+
+  it("does not duplicate an already-present assignee", async () => {
+    seedIssueCache(
+      makeIssue({ assignees: [{ login: "testuser", avatarUrl: undefined, rawData: null }] })
+    );
+    const genBefore = getGeneration(ISSUE_CACHE_KEY);
+
+    await createWithSelfAssign();
+
+    expect(cachedIssue().assignees.filter((a) => a.login === "testuser")).toHaveLength(1);
+    // No effective change → no generation bump (in-flight fetches stay valid).
+    expect(getGeneration(ISSUE_CACHE_KEY)).toBe(genBefore);
+  });
+
+  it("leaves unrelated issues untouched", async () => {
+    const other = makeIssue({ number: 99, assignees: [] });
+    setCache(ISSUE_CACHE_KEY, {
+      items: [other],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: 0,
+    });
+    const genBefore = getGeneration(ISSUE_CACHE_KEY);
+
+    await createWithSelfAssign();
+
+    expect((getCache(ISSUE_CACHE_KEY)?.items[0] as Issue).assignees).toHaveLength(0);
+    expect(getGeneration(ISSUE_CACHE_KEY)).toBe(genBefore);
+  });
+
+  it("reverses the optimistic patch when the undo action fires", async () => {
+    const { notify } = await import("@/lib/notify");
+    seedIssueCache(makeIssue());
+
+    await createWithSelfAssign();
+    expect(cachedIssue().assignees.map((a) => a.login)).toContain("testuser");
+
+    const assignedCall = vi
+      .mocked(notify)
+      .mock.calls.find(([payload]) => payload.title === "Issue assigned");
+    expect(assignedCall).toBeDefined();
+    const onUndo = assignedCall?.[0].action?.onClick;
+    expect(onUndo).toBeTypeOf("function");
+
+    await act(async () => {
+      onUndo?.();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(mockUnassignIssue).toHaveBeenCalledWith(ROOT, 42, "testuser");
+    expect(cachedIssue().assignees.map((a) => a.login)).not.toContain("testuser");
+  });
+
+  it("keeps the optimistic patch when the unassign call fails", async () => {
+    const { notify } = await import("@/lib/notify");
+    mockUnassignIssue.mockRejectedValue(new Error("network down"));
+    seedIssueCache(makeIssue());
+
+    await createWithSelfAssign();
+
+    const onUndo = vi
+      .mocked(notify)
+      .mock.calls.find(([payload]) => payload.title === "Issue assigned")?.[0].action?.onClick;
+
+    await act(async () => {
+      onUndo?.();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // Unassign rejected → cache must NOT be reverted.
+    expect(cachedIssue().assignees.map((a) => a.login)).toContain("testuser");
+  });
+
+  it("patches every cached issue slot, not just one filter/sort view", async () => {
+    const updatedKey = buildCacheKey(ROOT, "issue", "open", "updated");
+    seedIssueCache(makeIssue());
+    setCache(updatedKey, {
+      items: [makeIssue()],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: 0,
+    });
+
+    await createWithSelfAssign();
+
+    expect(cachedIssue().assignees.map((a) => a.login)).toContain("testuser");
+    expect((getCache(updatedKey)?.items[0] as Issue).assignees.map((a) => a.login)).toContain(
+      "testuser"
+    );
+  });
+
+  it("does not assign or mutate the cache when self-assign is disabled", async () => {
+    mockAssignWorktreeToSelf = false;
+    seedIssueCache(makeIssue());
+
+    await createWithSelfAssign();
+
+    expect(mockAssignIssue).not.toHaveBeenCalled();
+    expect(cachedIssue().assignees).toHaveLength(0);
+    expect(getGeneration(ISSUE_CACHE_KEY)).toBe(0);
+  });
+
+  it("skips the assign flow when the selected issue already lists the current user", async () => {
+    seedIssueCache(makeIssue());
+
+    renderDialog({
+      initialIssue: makeIssue({
+        assignees: [{ login: "testuser", avatarUrl: undefined, rawData: null }],
+      }),
+    });
+    await advanceTimersGradually(500);
+    const branchInput = screen.getByTestId("branch-name-input");
+    await act(async () => {
+      fireEvent.change(branchInput, { target: { value: "feature/fix-thing" } });
+    });
+    await advanceTimersGradually(500);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(mockAssignIssue).not.toHaveBeenCalled();
+    expect(getGeneration(ISSUE_CACHE_KEY)).toBe(0);
   });
 });

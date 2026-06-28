@@ -19,12 +19,23 @@ describe("classifyGitError — table-driven", () => {
     ["auth-failed", "Permission denied (publickey)."],
     [
       "auth-failed",
-      "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
-    ],
-    [
-      "auth-failed",
       "fatal: unable to access 'https://github.com/acme/private.git/': The requested URL returned error: 403",
     ],
+    // `could not read Username` is a transient credential-helper hiccup under
+    // GIT_TERMINAL_PROMPT=0, not a durable auth failure — falls through to
+    // unknown (a short transient retry) rather than suspending the repo.
+    [
+      "unknown",
+      "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+    ],
+    // Forge secondary rate limit: same 403 URL line as auth, distinguished by
+    // the sideband message — must NOT bucket into auth-failed.
+    [
+      "rate-limited",
+      "fatal: unable to access 'https://github.com/x.git/': The requested URL returned error: 403\n" +
+        "remote: You have exceeded a secondary rate limit. Please wait a few minutes before you try again.",
+    ],
+    ["rate-limited", "remote: You have triggered an abuse detection mechanism."],
     ["repository-not-found", "remote: ERROR: Repository not found."],
     ["repository-not-found", "fatal: repository 'https://github.com/foo/bar.git/' not found"],
     [
@@ -60,6 +71,7 @@ describe("classifyGitError — table-driven", () => {
     ["push-rejected-policy", "remote: pack exceeds maximum allowed size"],
     ["push-rejected-outdated", " ! [rejected]        main -> main (non-fast-forward)"],
     ["push-rejected-outdated", "!\trefs/heads/main:refs/heads/main\t[rejected] (non-fast-forward)"],
+    ["push-rejected-outdated", " ! refs/heads/main:refs/heads/main [rejected] (non-fast-forward)"],
     ["push-rejected-outdated", " ! [rejected]        main -> main (fetch first)"],
     [
       "push-rejected-outdated",
@@ -169,8 +181,18 @@ describe("classifyGitError — ordering and normalization", () => {
   it("prefers auth-failed over repository-not-found when both signals appear", () => {
     const msg =
       "fatal: Could not read from remote repository.\n" +
-      "fatal: could not read Username for 'https://github.com': terminal prompts disabled";
+      "remote: Authentication failed for 'https://github.com/org/repo.git/'";
     expect(classifyGitError(msg)).toBe("auth-failed");
+  });
+
+  it("prefers rate-limited over auth-failed on a secondary-rate-limit 403", () => {
+    // A secondary rate limit and a generic 403 share the same `URL returned
+    // error: 403` line; the rate-limit signal must win so the repo backs off
+    // transiently instead of being treated as a broken credential.
+    const msg =
+      "fatal: unable to access 'https://github.com/acme/repo.git/': The requested URL returned error: 403\n" +
+      "remote: You have exceeded a secondary rate limit. Please wait a few minutes before you try again.";
+    expect(classifyGitError(msg)).toBe("rate-limited");
   });
 
   it("prefers lfs-quota-exceeded over lfs-missing when both signals appear", () => {
@@ -253,6 +275,7 @@ describe("getGitRecoveryHint", () => {
   it("returns a hint for every reason except 'unknown'", () => {
     const reasons: GitOperationReason[] = [
       "auth-failed",
+      "rate-limited",
       "network-unavailable",
       "repository-not-found",
       "not-a-repository",

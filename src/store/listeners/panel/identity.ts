@@ -112,6 +112,23 @@ export function setupIdentityListeners(): DisposableStore {
           usePanelStore.getState().processQueue(terminalId);
         }
 
+        // Carry the parsed check result (issue #10682) onto the panel so
+        // `terminal.getStatus` can surface it over MCP. Only present on settling
+        // transitions where a new recognized check summary was detected.
+        if (data.lastCheckResult) {
+          const checkResult = data.lastCheckResult;
+          usePanelStore.setState((s) => {
+            const panel = s.panelsById[terminalId];
+            if (!panel || !isPtyPanel(panel)) return s;
+            return {
+              panelsById: {
+                ...s.panelsById,
+                [terminalId]: { ...panel, lastCheckResult: checkResult },
+              },
+            };
+          });
+        }
+
         // Snapshot baseline `changedFileCount` the first time an agent enters
         // "working" in a session. Subsequent working↔waiting cycles keep the
         // initial baseline so the comparison at completion reflects the full

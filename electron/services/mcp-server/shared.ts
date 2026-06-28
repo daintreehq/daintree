@@ -76,6 +76,22 @@ export type HelpSessionActionContextResolver = (token: string) => ActionContext 
  * non-help bearers (api-key / pane tokens).
  */
 export type HelpSessionIdResolver = (token: string) => string | null;
+/**
+ * Resolver consulted at MCP handshake to pin a `daintree-assistant` pane
+ * bearer to the WebContents that launched it (#10647). Same routing effect as
+ * {@link HelpSessionWebContentsResolver} but sourced from
+ * `McpPaneConfigService` rather than `HelpSessionService`, so the assistant
+ * CLI's env-only pane token gets help-session-grade pinning without being
+ * promoted to a full help session. Returns null for generic pane tokens.
+ */
+export type AssistantPaneWebContentsResolver = (token: string) => number | null;
+/**
+ * Resolver consulted at MCP handshake to replay the launch-time
+ * `ActionContext` bound to a `daintree-assistant` pane bearer (#10647).
+ * Returns null for generic pane tokens, which keep the live focused-window
+ * context.
+ */
+export type AssistantPaneActionContextResolver = (token: string) => ActionContext | null;
 export type { HelpAssistantTier };
 
 export const MCP_SERVER_KEY = "daintree";
@@ -128,6 +144,37 @@ export const MCP_GRANT_MAX_LIFETIME_MS = 30 * 60 * 1000;
  * reads.
  */
 export const MCP_GRANT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * Default use ceiling for a native session-scoped automation grant (#10648)
+ * when the renderer issues one without specifying `maxUses`. A native grant
+ * authorizes its allowed tools for at most this many dispatches before it
+ * exhausts and the user must re-approve.
+ */
+export const MCP_NATIVE_GRANT_DEFAULT_MAX_USES = 10;
+
+/**
+ * Hard bounds on the use ceiling a renderer may request when issuing a native
+ * grant. Keeps a single approval from authorizing an unbounded run of
+ * automated tool calls — past the ceiling the grant must be re-approved.
+ */
+export const MCP_NATIVE_GRANT_MIN_MAX_USES = 1;
+export const MCP_NATIVE_GRANT_MAX_MAX_USES = 100;
+
+/**
+ * Maximum number of tools a single native grant may authorize. A grant is a
+ * deliberate, inspectable scope — an unbounded allowlist would defeat the
+ * point. Issuance rejects an allowlist larger than this.
+ */
+export const MCP_NATIVE_GRANT_MAX_ALLOWED_TOOLS = 20;
+
+/**
+ * Lower bound on a native grant's requested TTL. Below a minute a grant would
+ * expire before the assistant could meaningfully use it; the upper bound is
+ * {@link MCP_GRANT_MAX_LIFETIME_MS} so a native grant can never outlive its
+ * SSE session, matching the per-tool grant ceiling.
+ */
+export const MCP_NATIVE_GRANT_MIN_TTL_MS = 60 * 1000;
 
 /**
  * Number of consecutive `(sessionId, toolId)` denials before the renderer
@@ -185,7 +232,6 @@ export const BINDING_STALE = "BINDING_STALE";
 export const SESSION_BINDING_GONE = "SESSION_BINDING_GONE";
 export const MCP_DEDUP_KEY_COLLISION_CODE = "MCP_DEDUP_KEY_COLLISION";
 export const PRE_AUTH_FAILED_CODE = "PRE_AUTH_FAILED";
-export const MCP_RATE_LIMITED_CODE = "MCP_RATE_LIMITED";
 export const INVALID_URL_CODE = "INVALID_URL";
 
 /**
@@ -198,7 +244,6 @@ export const INVALID_URL_CODE = "INVALID_URL";
 export const RETRIABLE_ERROR_CODES: ReadonlySet<string> = new Set([
   EXECUTION_ERROR_CODE,
   CONFIRMATION_TIMEOUT_CODE,
-  MCP_RATE_LIMITED_CODE,
 ]);
 
 export interface McpErrorPayload {
@@ -314,12 +359,21 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "forge.listIssues",
   "forge.listPRs",
   "forge.getIssue",
+  "forge.getPR",
   "forge.openIssues",
   "forge.openPRs",
   "forge.openCommits",
   "forge.openIssue",
   "forge.openPR",
   "forge.assignIssue",
+  "forge.createPR",
+  "forge.closePR",
+  "forge.reopenPR",
+  "forge.mergePR",
+  "forge.convertPRToDraft",
+  "forge.markPRReadyForReview",
+  "forge.commentOnPR",
+  "forge.editPR",
   "forge.validateToken",
 
   "terminal.list",
@@ -330,6 +384,10 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "terminal.new",
   "terminal.rename",
   "terminal.waitUntilIdle",
+  "terminal.waitUntilIdleBatch",
+  "terminal.arm",
+  "terminal.disarm",
+  "terminal.disarmAll",
 
   "worktree.list",
   "worktree.getCurrent",
@@ -341,6 +399,10 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "worktree.delete",
   "worktree.setActive",
   "worktree.resource.status",
+  "worktree.resource.provision",
+  "worktree.resource.pause",
+  "worktree.resource.resume",
+  "worktree.resource.teardown",
 
   "workflow.startWorkOnIssue",
   "workflow.prepBranchForReview",
@@ -369,9 +431,42 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
 
   "system.checkCommand",
   "system.checkDirectory",
+  "system.getResourceProfileSnapshot",
+
+  "cliAvailability.get",
+
+  "hibernation.getConfig",
 ] as const satisfies readonly BuiltInActionId[];
 
 const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set(MCP_TOOL_ALLOWLIST_ENTRIES);
+
+/**
+ * Additional tools exposed ONLY to an `external` session that has opted into
+ * `fullToolSurface`, on top of {@link MCP_TOOL_ALLOWLIST}. This is the explicit,
+ * fail-closed seam for widening the api-key surface: `fullToolSurface` is a
+ * *floor-lifting* opt-in, never a bypass. Previously the flag short-circuited
+ * the allowlist entirely and let an external client reach any action that
+ * wasn't `danger: "restricted"` / `mcpVisibility: "hidden"` — trusting the
+ * author-set `danger` field as a security ceiling. The MCP spec is explicit
+ * that tool annotations (and by extension a self-declared danger rating) are
+ * untrusted UX hints, not an access-control boundary; the enforceable boundary
+ * is this server-side allowlist (#10701). Each future addition must be a
+ * deliberate, individually-vetted entry here — empty by default so that newly
+ * added safe-classified actions never silently leak to api-key callers.
+ */
+const MCP_FULL_TOOL_SURFACE_ADDON_ENTRIES = [] as const satisfies readonly BuiltInActionId[];
+
+/**
+ * The complete tool surface reachable by an `external` session with
+ * `fullToolSurface` enabled: the curated external allowlist plus the vetted
+ * add-on set above. Always a *superset* of {@link MCP_TOOL_ALLOWLIST} — the
+ * opt-in can only widen, never narrow, so it can never accidentally make the
+ * full surface smaller than the default external surface.
+ */
+export const MCP_FULL_TOOL_SURFACE_ALLOWLIST: ReadonlySet<string> = unionSet(
+  MCP_TOOL_ALLOWLIST,
+  new Set<string>(MCP_FULL_TOOL_SURFACE_ADDON_ENTRIES)
+);
 
 export const TIER_ALLOWLISTS: Readonly<Record<McpTier, ReadonlySet<string>>> = {
   workbench: WORKBENCH_TOOLS,
@@ -415,9 +510,19 @@ export const MCP_DEDUP_ALLOWLIST: ReadonlySet<string> = new Set([
   "forge.openIssue",
   "forge.openPR",
   "worktree.delete",
+  // Provisioning spins up a remote/cloud resource — an LLM retry after a
+  // transient failure could spawn a second one. Pause/resume/teardown are
+  // idempotent enough (or intentionally re-runnable) to stay out.
+  "worktree.resource.provision",
   "git.snapshotRevert",
   "git.snapshotDelete",
   "forge.assignIssue",
+  // PR writes where an LLM retry within the dispatch window leaves a visible
+  // duplicate: a second open PR, a re-merge attempt, or a duplicate comment
+  // (lesson #7554). Idempotent state-sets (close/reopen/draft/edit) are omitted.
+  "forge.createPR",
+  "forge.mergePR",
+  "forge.commentOnPR",
 ]);
 
 /**
@@ -435,69 +540,6 @@ export const MCP_DEDUP_TTL_MS = 120_000;
  * insertion above this cap so memory stays bounded at session lifetime.
  */
 export const MCP_DEDUP_MAX_ENTRIES_PER_SESSION = 256;
-
-/**
- * Token-bucket configuration for the per-`(session, toolId)` rate limiter
- * that bounds runaway agent loops on the MCP CallTool path (#8468).
- *
- * - `capacity`: maximum burst — tokens available when the bucket is full.
- * - `refillPerMs`: tokens regenerated per millisecond. Expressed per-ms so
- *   the bucket can be recomputed lazily from elapsed wall-clock on each call
- *   without a background timer.
- */
-export interface RateLimitConfig {
-  capacity: number;
-  refillPerMs: number;
-}
-
-/**
- * Rate-limit tiers. Intentionally conservative placeholders sized so that no
- * legitimate agent workflow trips them — a runaway loop hits the burst cap,
- * then `retryAfter` forces a minimum gap. Tuned post-ship from audit data.
- *
- * - `highFreqRead` (60/min): cheap read-only polling tools. The
- *   `triage_terminals` recipe explicitly tells agents not to busy-loop;
- *   60/min is generous for legitimate fleet-polling cadences.
- * - `standard` (30/min): the default for any tool not in
- *   {@link RATE_LIMIT_TOOL_MAP}.
- * - `mutation` (10/min): side-effecting tools where a tight loop produces
- *   duplicate resources (commits, pushes, issues, PRs).
- */
-export const RATE_LIMIT_TIERS = {
-  highFreqRead: { capacity: 60, refillPerMs: 60 / 60_000 },
-  standard: { capacity: 30, refillPerMs: 30 / 60_000 },
-  mutation: { capacity: 10, refillPerMs: 10 / 60_000 },
-} as const satisfies Record<string, RateLimitConfig>;
-
-/**
- * Per-tool tier overrides. Tools absent from this map fall back to
- * {@link RATE_LIMIT_TIERS.standard}. Keep the mutation cohort aligned with
- * {@link MCP_DEDUP_ALLOWLIST}'s destructive mutation entries.
- */
-export const RATE_LIMIT_TOOL_MAP: ReadonlyMap<string, RateLimitConfig> = new Map([
-  ["terminal.getOutput", RATE_LIMIT_TIERS.highFreqRead],
-  ["terminal.getStatus", RATE_LIMIT_TIERS.highFreqRead],
-  ["actions.getContext", RATE_LIMIT_TIERS.highFreqRead],
-  ["git.commit", RATE_LIMIT_TIERS.mutation],
-  ["git.push", RATE_LIMIT_TIERS.mutation],
-  ["forge.openIssue", RATE_LIMIT_TIERS.mutation],
-  ["forge.openPR", RATE_LIMIT_TIERS.mutation],
-  ["worktree.delete", RATE_LIMIT_TIERS.mutation],
-  ["git.snapshotRevert", RATE_LIMIT_TIERS.mutation],
-  ["git.snapshotDelete", RATE_LIMIT_TIERS.mutation],
-  ["forge.assignIssue", RATE_LIMIT_TIERS.mutation],
-  // Not a git mutation, but capped at the mutation tier (10/min) so a runaway
-  // model can't flood the assistant panel's figure rail with images (#9828).
-  ["help.displayImage", RATE_LIMIT_TIERS.mutation],
-] as Array<[string, RateLimitConfig]>);
-
-/**
- * Resolve the rate-limit config for a tool — its explicit override or the
- * `standard` fallback.
- */
-export function rateLimitConfigForTool(toolId: string): RateLimitConfig {
-  return RATE_LIMIT_TOOL_MAP.get(toolId) ?? RATE_LIMIT_TIERS.standard;
-}
 
 /**
  * Compute the minimum non-external tier that permits the given tool. Used to
@@ -673,7 +715,7 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
         "",
         "**Recipe:**",
         "",
-        "1. **Snapshot the fleet in one call.** Pass `terminalIds` (when you know what you spawned) or a `worktreeId`/`location` filter. Each entry returns `agentState`, `waitingReason` (when waiting), `lastTransitionAt`, and an optional `recentOutput` tail.",
+        "1. **Snapshot the fleet in one call.** Pass `terminalIds` (when you know what you spawned) or a `worktreeId`/`location` filter. Each entry returns `agentState`, `waitingReason` (when waiting), `lastTransitionAt`, an optional `lastCheckResult` (parsed test/lint/build pass/fail — see step 5b), and an optional `recentOutput` tail.",
         '2. **Skip working terminals.** When `agentState === "working"` (or `"directing"`) the agent is mid-task — nothing to act on this round.',
         '3. **Skip already-handled transitions.** Track the last `lastTransitionAt` you acted on per terminal and skip when it hasn\'t advanced. `lastTransitionAt` is `undefined` for terminals that have never transitioned — treat that as "no transition yet," not as "changed."',
         "4. **Act on `agentState`** for non-working terminals:",
@@ -683,6 +725,7 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
         "   - `idle` — agent is settling between subtasks; skip and re-poll.",
         "   - `null` — no agent attached or unknown state; treat as still busy.",
         "5. **Cross-check stuck state with `includeOutput`.** The state cache is a heuristic, not ground truth — `ActivityMonitor` can pin a finished agent at `working`. **If `agentState` for a given terminal hasn't transitioned across roughly 3 polling rounds, set `includeOutput` on the next round to verify against actual terminal text.** A short scrollback tail is usually enough to tell a stuck FSM from a genuinely working agent.",
+        "5b. **Route on `lastCheckResult` instead of scraping tails.** When present it carries `{ command, passed, ranAt, failureSummary, truncated }` parsed from the agent's last recognized tsc/ESLint/Vitest/Jest summary — use `passed` to branch (e.g. proceed vs. tell the agent to fix), and `failureSummary` to see what broke without an `includeOutput` round-trip. It is PARSED, not an authoritative exit code: trust it for routing but confirm with `recentOutput` before anything destructive. Absence means no recognized check summary was seen — NOT that a check passed or that none ran. Check `ranAt` against `lastTransitionAt` to confirm the result is from the current run.",
         "6. **Pace the next round with `ScheduleWakeup`.** Don't busy-loop. `ScheduleWakeup` resumes the orchestrator after a delay without holding a blocking call open, so it stays responsive to user interrupts.",
         "",
         "Sketch:",

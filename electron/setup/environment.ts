@@ -34,7 +34,13 @@ import {
   shouldRetryGpuAfterUpdate,
 } from "../services/gpuDisabledFlag.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { isDemoMode, isSmokeTest, smokeTestStart } from "./runtimeFlags.js";
+import {
+  e2eCrashDumpsDir,
+  isDemoMode,
+  isE2EMode,
+  isSmokeTest,
+  smokeTestStart,
+} from "./runtimeFlags.js";
 // Side-effect import: registers the macOS `daintree://` `open-url` listener on
 // the early-load path (#9559). environment.ts is imported first in main.ts, so
 // the listener is live before `app.whenReady()` resolves — see deepLinkUrlQueue.
@@ -67,12 +73,8 @@ if (!app.isPackaged && !hasExplicitUserDataDir) {
 // E2E: redirect crash dumps to workspace-relative path so CI artifact upload
 // captures them. Runs before crashReporter.start() (main.ts:158) because
 // environment.ts is imported synchronously at the top of main.ts.
-if (
-  process.env.DAINTREE_E2E_MODE === "1" &&
-  process.env.DAINTREE_E2E_CRASH_DUMPS_DIR &&
-  path.isAbsolute(process.env.DAINTREE_E2E_CRASH_DUMPS_DIR)
-) {
-  app.setPath("crashDumps", process.env.DAINTREE_E2E_CRASH_DUMPS_DIR);
+if (isE2EMode && e2eCrashDumpsDir && path.isAbsolute(e2eCrashDumpsDir)) {
+  app.setPath("crashDumps", e2eCrashDumpsDir);
 }
 
 // Handle --reset-data: wipe userData before Chromium acquires file locks

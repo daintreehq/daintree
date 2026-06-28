@@ -55,6 +55,7 @@ import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { PluginPanelBadges } from "@/components/Panel/PluginPanelBadges";
 import { BellDot, FolderGit2 } from "@/components/icons";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
@@ -597,6 +598,7 @@ function PanelHeaderComponent({
                 chrome={tab.chrome}
                 className="w-3.5 h-3.5"
                 brandColor={tab.presetColor ?? tab.chrome.color}
+                userChosen={!!tab.presetColor}
               />
             </span>
             <span className="truncate">{getBaseTitle(tab.title)}</span>
@@ -743,6 +745,7 @@ function PanelHeaderComponent({
               chrome={chrome}
               className="w-3.5 h-3.5"
               brandColor={presetColor ?? chrome.color}
+              userChosen={!!presetColor}
             />
           </span>
 
@@ -763,7 +766,7 @@ function PanelHeaderComponent({
                 <TooltipTrigger asChild>
                   <span
                     className={cn(
-                      "text-xs font-medium font-sans select-none transition-colors inline-flex items-center min-h-6",
+                      "text-xs font-medium font-sans select-none transition-colors block truncate min-w-0 min-h-6 leading-6",
                       isFocused || isSelected ? "text-daintree-text" : "text-daintree-text/70",
                       onTitleChange && "cursor-text hover:text-daintree-text",
                       isPinged &&
@@ -849,6 +852,9 @@ function PanelHeaderComponent({
               <BellDot className="w-3 h-3 animate-pulse motion-reduce:animate-none" />
             </span>
           )}
+
+          {/* Live plugin-contributed badges (host.setPanelBadge) for this panel */}
+          <PluginPanelBadges panelId={id} />
 
           {/* Add tab button for single panels */}
           {onAddTab && (

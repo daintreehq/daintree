@@ -72,6 +72,7 @@ const ERROR_TYPE_FALLBACKS = {
  */
 const GIT_REASON_TITLES = {
   "auth-failed": "Git authentication failed",
+  "rate-limited": "Forge rate limit reached",
   "network-unavailable": "Couldn't reach the remote",
   "repository-not-found": "Repository not found",
   "not-a-repository": "Not a git repository",

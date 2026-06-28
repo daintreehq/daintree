@@ -43,7 +43,7 @@ Produces `{pluginId}-{version}.dntr` in the project root. Runs through:
 1. Validates the manifest via the same Zod schema Daintree uses at load.
 2. Builds the plugin with Vite (unless `--skip-build` is passed).
 3. Copies the build output + referenced assets + manifest into a zip.
-4. Excludes `node_modules/`, source files, source maps (unless `--sourcemaps`), and anything in `.gitignore`.
+4. Excludes `node_modules/`, `.git/`, source files (`*.ts`/`*.tsx`), source maps (unless `--sourcemaps`), root-level dev metadata (`package.json`, lockfiles, `tsconfig*.json`, `*.config.*`), and anything in `.gitignore`.
 
 The output is deterministic — the same source tree + `daintree-plugin` version produces a byte-identical `.dntr` file on the same OS. This matters if you're signing releases or publishing reproducible artifacts.
 
@@ -103,8 +103,9 @@ The following are never included in a `.dntr` archive:
 - `.gitignore`'d entries — matched at pack time by the CLI packager
 - Source files (`*.ts`, `*.tsx`) — the archive ships compiled output
 - Source maps (`*.js.map`, `*.mjs.map`) — excluded by default, included only when `--sourcemaps` is passed to the packager
+- Root-level dev metadata — `package.json`, lockfiles (`package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock`, `bun.lockb`), `tsconfig*.json`, and any root `*.config.*` (e.g. `vite.config.ts`, `tsup.config.mjs`). Scoped to the archive root only — a runtime asset like `dist/app.config.json` is kept. `package.json` is excluded because it carries the author's full dependency layout and, in a monorepo/`file:` setup, leaks the author's absolute home path into every distributed copy.
 
-The reference implementation in `PluginArchive.ts` applies the explicit exclusion list. Full `.gitignore` matching is the CLI packager's responsibility (F32) since it requires a git working tree.
+The reference implementation in `PluginArchive.ts` applies the explicit exclusion list (`REQUIRED_EXCLUSIONS`, `SOURCE_EXTS`, `ROOT_DEV_FILE_NAMES`, `ROOT_CONFIG_FILE`) at both pack and verify time. Full `.gitignore` matching is the CLI packager's responsibility (F32) since it requires a git working tree.
 
 ### SHA-256 archive hash
 
@@ -121,6 +122,8 @@ This hash is persisted in the plugin's provenance record (`LoadedPluginInfo.arch
 - **Audit trail**: the provenance record ties the installed plugin to a specific byte sequence.
 
 The hash covers the raw ZIP bytes as received — same-OS determinism guarantees the hash is stable for a given source tree and tool version. Cross-platform byte identity is not yet guaranteed (the ZIP "made by" header varies per OS); the hash reflects the bytes as produced by the current platform.
+
+This hash establishes **integrity**, not **authenticity**. It proves the bytes match between two fetches of the same artifact; it does not prove who produced them. `.dntr` archives are unsigned and Daintree performs no publisher-identity verification at any install path (sideload, file, or URL) — see the [trust model](./trust-model.md) for the full non-guarantee contract.
 
 ### Cross-platform determinism
 
@@ -149,7 +152,7 @@ This is the right distribution method for:
 - Team-internal plugins shared via a private repo
 - Anyone who wants to audit or modify a plugin before running it
 
-**Dev plugins:** the hot-reload dev loop (`daintree-plugin dev`) is planned (F32b) and not yet available — the command is registered but fails immediately (`packages/daintree-plugin/src/cli.ts`). Until it ships, sideload manually using the `git clone … && npm install && npm run build` steps above and restart to pick up changes.
+**Dev plugins:** for active development, `daintree-plugin dev` hot-reloads a plugin on every save instead of repackaging — see [Development loop](./dev-loop.md#daintree-plugin-dev). Manual sideload (the `git clone … && npm install && npm run build` steps above, then restart to pick up changes) is the alternative when you want the production load path or don't have the CLI on hand.
 
 ## File install
 
@@ -192,7 +195,7 @@ The user pastes a URL pointing to a `.dntr` file. Daintree:
 
 - Daintree does not validate signatures on URL-installed plugins. Trust is on the user.
 - No TLS enforcement beyond what the OS does for HTTPS. Installing from non-HTTPS URLs is allowed but warned (the `pendingHttpUrl` plaintext-HTTP confirm in `usePluginManager.ts`).
-- Redirects are followed by Chromium's net stack (capped at its built-in limit). Acceptance is decided from the final response's content-type; the `.dntr`-suffix fallback is checked against the **original** pasted URL's path, since the resolved URL isn't reliable through Electron's fetch.
+- Redirects are followed **manually**, up to 5 hops (`MAX_REDIRECT_HOPS`), and every hop is independently re-validated: each `Location` must stay `https:` (an `https→http` downgrade is rejected) and its host must clear both the literal SSRF guard and a DNS-resolution check (a public URL that 30x-redirects to a private/loopback/link-local address is rejected before the body is fetched). Acceptance is decided from the final response's content-type; the `.dntr`-suffix fallback is checked against the **original** pasted URL's path, since the resolved URL isn't reliable through Electron's fetch.
 - Private, loopback, and link-local hosts are rejected before the fetch runs (SSRF guard).
 - The plaintext-HTTP warning shows the original URL so the user can spot a non-HTTPS host before committing. Declared capabilities are not enumerated at install time — consent is gathered per-tool-call at runtime (TOFU; see `docs/plugins/trust-model.md`).
 
@@ -223,7 +226,7 @@ Daintree:
 4. Deletes `~/.daintree/plugins/{publisher}.{name}/`.
 5. By default, **keeps** the plugin's user-scope settings file (`~/.daintree/plugin-settings/{publisher}.{name}.json`) so an API token survives a reinstall. The CLI's `--delete-settings` flag (or the UI's "also remove stored settings" checkbox) deletes that file instead.
 
-Secrets are **not** stored separately — they live as plaintext JSON in the same user-scope settings file (`type: "secret"` only affects how the UI renders the value; there's no OS keychain). So "keep settings" keeps the secrets too, and `--delete-settings` removes them.
+Secrets are not stored in a separate file — `type: "secret"` values live in the same user-scope settings file, but encrypted at rest through the OS keychain (Electron `safeStorage`: macOS Keychain / Windows DPAPI / Linux libsecret-kwallet) when one is available, persisted as a tagged ciphertext envelope. On a host with no keychain backend (typically headless Linux) they fall back to plaintext JSON under `chmod 0o600`, and the settings UI discloses which tier is in use. Either way they share the settings file's lifecycle: "keep settings" keeps the secrets too, and `--delete-settings` removes them.
 
 Project-scope settings (`<projectRoot>/.daintree/plugin-settings/{publisher}.{name}.json`) are **never** touched by uninstall — they're tracked per-repo and removing them is the project's concern.
 
@@ -235,7 +238,7 @@ For authors who want to share plugins publicly:
 
 - **GitHub Releases** is the default recommendation. `.dntr` files are small; releases are free; versioning maps cleanly to git tags.
 - **README with install instructions.** Include the literal URL to paste into Daintree.
-- **Semver your releases.** Daintree uses semver for version comparison and update detection.
+- **Semver your releases.** Daintree uses `semver` only for the `engines.daintree` host-compatibility gate — not for update detection. "Check for update" re-fetches the original URL and compares the SHA-256 archive hash against the installed one, so a new build is detected by content change regardless of its version string.
 - **Set `engines.daintree` honestly.** Lock to the current minor you've tested against (e.g. `^0.15.0` against the app version you built on). Don't set `*` — you'll get bug reports from users on Daintree versions you haven't supported.
 - **Don't commit `.dntr` files to the source repo.** Build them in CI on release-tag.
 - **Pin `@daintreehq/plugin-sdk` tightly.** Pre-1.0, minor versions can break APIs.

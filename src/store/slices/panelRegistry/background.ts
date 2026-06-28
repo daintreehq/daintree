@@ -94,11 +94,6 @@ export const createBackgroundActions = (
 
     if (panelKindHasPty(terminal.kind ?? "terminal")) {
       terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
-      // Re-arm hibernation now that the panel is user-backgrounded: a panel
-      // already at BACKGROUND tier gets a no-op above, so without this the
-      // backgrounded bypass wouldn't take effect until the silence window
-      // expired.
-      terminalInstanceService.onPanelBackgrounded(id);
     }
   },
 
@@ -180,9 +175,6 @@ export const createBackgroundActions = (
       }
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
         terminalInstanceService.applyRendererPolicy(bid, TerminalRefreshTier.BACKGROUND);
-        // See backgroundTerminal: re-arm hibernation for panels already at
-        // BACKGROUND tier (non-active group tabs) so the bypass applies now.
-        terminalInstanceService.onPanelBackgrounded(bid);
       }
     }
   },

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { scheduleBackgroundFetchAndRestore } from "../batchScheduler";
+import { scheduleBackgroundFetchAndRestore, getRestoreBatchParams } from "../batchScheduler";
+import type { ResourceProfile } from "@shared/types/resourceProfile";
 
 vi.mock("@/utils/logger", () => ({
   logWarn: vi.fn(),
@@ -81,5 +82,35 @@ describe("scheduleBackgroundFetchAndRestore", () => {
       "Background scrollback restore failed",
       expect.objectContaining({ error })
     );
+  });
+});
+
+describe("getRestoreBatchParams", () => {
+  it("scales batch size up and delay down as the profile gets more capable", () => {
+    const performance = getRestoreBatchParams("performance");
+    const balanced = getRestoreBatchParams("balanced");
+    const efficiency = getRestoreBatchParams("efficiency");
+
+    // Monotonic: more capable profile => larger batches, shorter gaps.
+    expect(performance.batchSize).toBeGreaterThan(balanced.batchSize);
+    expect(balanced.batchSize).toBeGreaterThan(efficiency.batchSize);
+    expect(performance.delayMs).toBeLessThan(balanced.delayMs);
+    expect(balanced.delayMs).toBeLessThan(efficiency.delayMs);
+  });
+
+  it("keeps every batch size positive and below the fd-leak ceiling (#9544)", () => {
+    for (const profile of ["performance", "balanced", "efficiency"] as ResourceProfile[]) {
+      const { batchSize, delayMs } = getRestoreBatchParams(profile);
+      expect(batchSize).toBeGreaterThan(0);
+      expect(batchSize).toBeLessThanOrEqual(8);
+      expect(delayMs).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("falls back to the balanced params for missing or unknown profiles", () => {
+    const balanced = getRestoreBatchParams("balanced");
+    expect(getRestoreBatchParams(undefined)).toEqual(balanced);
+    expect(getRestoreBatchParams(null)).toEqual(balanced);
+    expect(getRestoreBatchParams("nonsense" as ResourceProfile)).toEqual(balanced);
   });
 });

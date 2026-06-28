@@ -2,18 +2,62 @@
   "name": "daintree.rich",
   "version": "0.1.0",
   "displayName": "Rich Daintree",
-  "description": "Capability- and settings-rich sample plugin (#9592). Sideloaded alongside hello-daintree so the full-plugins E2E bucket can exercise the Permissions tab, the generated settings form, and the danger summary — surfaces hello-daintree's empty manifest leaves uncovered.",
+  "description": "Capability- and settings-rich sample plugin (#9592, #10473). Sideloaded alongside hello-daintree so the full-plugins E2E bucket can exercise the Permissions tab, the generated settings form, the danger summary, and the panel / keybinding / context-menu / agent contribution points — surfaces hello-daintree's empty manifest leaves uncovered.",
   "main": "main/index.js",
   "engines": {
     "daintree": ">=0.11.0"
   },
-  "capabilities": ["fs:project-read", "fs:project-write", "network:fetch"],
+  "capabilities": ["fs:project-read", "fs:project-write", "network:fetch", "agent:register"],
   "scopes": {
     "network": {
       "allowedUrls": ["https://api.example.com"]
     }
   },
   "contributes": {
+    "panels": [
+      {
+        "id": "rich-panel",
+        "name": "Rich Panel",
+        "iconId": "layout-panel-top",
+        "color": "#6366f1",
+        "hasPty": false,
+        "canRestart": false,
+        "canConvert": false,
+        "showInPalette": true
+      }
+    ],
+    "views": [
+      {
+        "id": "rich-panel",
+        "name": "Rich Panel",
+        "componentPath": "./view/rich-panel-view.js",
+        "location": "panel"
+      }
+    ],
+    "keybindings": [
+      {
+        "actionId": "daintree.rich.ready",
+        "combo": "CmdOrCtrl+Shift+R",
+        "scope": "global",
+        "description": "Sentinel keybinding from the Rich Daintree sample plugin"
+      }
+    ],
+    "contextMenus": [
+      {
+        "actionId": "daintree.rich.ready",
+        "location": "worktree",
+        "label": "Rich sample action"
+      }
+    ],
+    "agents": [
+      {
+        "id": "rich-sample",
+        "name": "Rich Sample",
+        "command": "echo",
+        "color": "#6366f1",
+        "iconId": "bot"
+      }
+    ],
     "settings": [
       {
         "id": "greeting",

@@ -1,5 +1,5 @@
 import { ipcMain, dialog, BrowserWindow, net } from "electron";
-import { open, writeFile, rm } from "node:fs/promises";
+import { open, writeFile, rm, access } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -8,6 +8,7 @@ import path, { extname, isAbsolute } from "node:path";
 import crypto from "node:crypto";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
+import { AppError } from "../../utils/errorTypes.js";
 import {
   getPluginActionAuditService,
   type PluginActionAuditService,
@@ -32,6 +33,7 @@ import {
 import { isPrivateOrLoopbackHostname, SCOPED_PLUGIN_NAME_PATTERN } from "../../schemas/plugin.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { stableArgsSha256 } from "../../utils/pluginMcpHash.js";
+import { isAuditedHandlerFailure } from "../../utils/pluginAuditMarker.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   getPluginToolbarButtonIds,
@@ -41,6 +43,7 @@ import {
   getPluginPanelKinds,
   type PanelKindConfig,
 } from "../../../shared/config/panelKindRegistry.js";
+import { isPluginInvokeOwnershipError } from "../../services/plugin/PluginInvokeErrors.js";
 import { getPluginMenuItems } from "../../services/pluginMenuRegistry.js";
 import { getPluginKeybindings } from "../../services/pluginKeybindingRegistry.js";
 import { getPluginContextMenuItems } from "../../services/pluginContextMenuRegistry.js";
@@ -64,6 +67,9 @@ import type {
   PluginCheckUpdateResult,
   PluginSettingsScope,
   PluginSettingsUiValues,
+  PluginPickPathRequest,
+  PluginWorktreeStatus,
+  PluginActivationResult,
 } from "../../../shared/types/plugin.js";
 import type { IpcContext } from "../types.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
@@ -289,9 +295,11 @@ export async function handleInstallFromUrl(url: string): Promise<PluginInstallRe
       if (!guarded.ok) {
         return failed(
           "fetch_failed",
-          guarded.reason === "private-redirect"
-            ? "The download redirected to a private or loopback address."
-            : "The download followed too many redirects."
+          guarded.reason === "private-redirect" || guarded.reason === "private-host"
+            ? "The download resolved to a private or loopback address."
+            : guarded.reason === "insecure-protocol"
+              ? "The download redirected to an insecure (non-https) URL."
+              : "The download followed too many redirects."
         );
       }
       response = guarded.response;
@@ -417,23 +425,15 @@ async function handleToolbarButtons(): Promise<ToolbarButtonConfig[]> {
     .filter((c): c is ToolbarButtonConfig => c !== undefined);
 }
 
-async function handleMenuItems() {
-  // Same init-race guard as `handleToolbarButtons` — block until startup
-  // activation settles so the renderer's mount-time pull can't observe an
-  // empty registry before plugins finish registering (#9285).
-  await (await getPluginService()).waitForInit();
-  return getPluginMenuItems();
-}
-
 async function handleKeybindings() {
   await (await getPluginService()).waitForInit();
   return getPluginKeybindings();
 }
 
 async function handleContextMenuItems() {
-  // Same init-race guard as `handleMenuItems` — block until startup activation
-  // settles so the renderer's mount-time pull can't observe an empty registry
-  // before plugins finish registering (#9285).
+  // Same init-race guard as `handleToolbarButtons` — block until startup
+  // activation settles so the renderer's mount-time pull can't observe an empty
+  // registry before plugins finish registering (#9285).
   await (await getPluginService()).waitForInit();
   return getPluginContextMenuItems();
 }
@@ -498,6 +498,31 @@ async function handleActionsUnregister(pluginId: string, actionId: string): Prom
 async function handlePanelKindsGet(): Promise<PanelKindConfig[]> {
   await (await getPluginService()).waitForInit();
   return getPluginPanelKinds();
+}
+
+/**
+ * Implicit activation for contributed panel views (#10523): force the plugin
+ * owning `panelKindId` to `activate()` before the renderer imports its
+ * `plugin://` module, so handlers bound during `activate()` are live when the
+ * view first renders. `activatePlugin` never rejects, but the service reports the
+ * outcome via {@link PluginActivationResult}; on failure this handler throws an
+ * {@link AppError} (#6020 — IPC handlers throw instead of returning an `{ ok }`
+ * envelope) so the IPC call rejects and `PluginViewHost` surfaces the real
+ * activation cause through its ErrorBoundary BEFORE importing the module (#10618),
+ * instead of failing later with a generic import timeout. Resolves (void) once
+ * the owning plugin is already activated, or when the kind id is unknown.
+ */
+async function handleActivateForView(panelKindId: string): Promise<void> {
+  const result: PluginActivationResult = await (
+    await getPluginService()
+  ).activatePluginForView(panelKindId);
+  if (!result.ok) {
+    throw new AppError({
+      code: "PLUGIN_ACTIVATION_FAILED",
+      message: `Plugin failed to activate for view "${panelKindId}": ${result.error}`,
+      userMessage: result.error,
+    });
+  }
 }
 
 async function handleForgeProvidersGet(): Promise<RegisteredForgeProvider[]> {
@@ -707,6 +732,18 @@ async function handleFileDecorationsGet(
   return merged;
 }
 
+/**
+ * Renderer-facing read of the changed-file / git-status projection for the
+ * worktree at `path` — the companion to the per-plugin `host.getWorktreeStatus`
+ * so a file list outside the Review Hub can scan the changed set. Reads the
+ * host's already-polled status; never shells out. `null` when no worktree
+ * matches or no status has been computed.
+ */
+async function handleWorktreeStatusGet(path: string): Promise<PluginWorktreeStatus | null> {
+  if (typeof path !== "string" || path.length === 0) return null;
+  return (await getPluginService()).getWorktreeStatusForPath(path);
+}
+
 // ── Plugin-action audit log ───────────────────────────────────────────────
 
 async function handleGetAuditRecords(): Promise<PluginActionAuditRecord[]> {
@@ -717,7 +754,35 @@ async function handleGetAuditConfig(): Promise<PluginAuditConfig> {
   return getPluginActionAuditService().getConfig();
 }
 
-async function handleClearAuditLog(): Promise<void> {
+/**
+ * Wipe every plugin's audit records. Unlike the read-only audit getters, this
+ * destroys the shared forensic trail, so it carries a sender-trust gate that
+ * the read paths don't need (#10517). Plugin view modules are `import()`ed
+ * into the shared renderer realm, but a frame outside the first-party origin
+ * (a cross-origin iframe, `<webview>`, or portal WebContents) must never reach
+ * this — it would let an untrusted surface erase the evidence of its own and
+ * every other plugin's activity. The rejected attempt is itself audited (the
+ * security-relevant signal is "an untrusted frame tried to clear the log"),
+ * mirroring the `plugin:invoke` trust check.
+ */
+async function handleClearAuditLog(ctx: IpcContext): Promise<void> {
+  const senderUrl = ctx.event.senderFrame?.url;
+  if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
+    const safeUrl = senderUrl
+      ? scrubSecrets(senderUrl.slice(0, UNTRUSTED_URL_MAX_CHARS))
+      : "unknown";
+    safeAppend({
+      pluginId: "",
+      actionId: PLUGIN_METHOD_CHANNELS.clearAuditLog,
+      recordType: "ipc-invoke",
+      channel: PLUGIN_METHOD_CHANNELS.clearAuditLog,
+      result: "restricted",
+      errorMessage: `untrusted sender (url=${safeUrl})`,
+      argsHash: "",
+      durationMs: 0,
+    });
+    throw new Error(`plugin:clear-audit-log rejected: untrusted sender (url=${safeUrl})`);
+  }
   getPluginActionAuditService().clear();
 }
 
@@ -802,6 +867,68 @@ async function handleSettingsRevealSecret(
   return (await getPluginService()).revealSecretSettingForUi(pluginId, key, scope, projectId);
 }
 
+// Native folder/file chooser for `path` / `directory` / `file` settings fields.
+// User-initiated from the settings form's "Browse" button, so it carries no
+// capability gate — but `pluginId` must be a well-formed scoped name so the
+// surface stays bounded to an actual plugin (mirrors handleUninstall's guard).
+// Reuses the install flow's showOpenDialog pattern. Returns the chosen absolute
+// path, or null when the picker is dismissed.
+async function handlePickPath(
+  ctx: IpcContext,
+  pluginId: string,
+  request: PluginPickPathRequest
+): Promise<string | null> {
+  if (typeof pluginId !== "string" || !SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
+    throw new Error("pickPath: pluginId must be a scoped plugin name (publisher.name)");
+  }
+  const isDirectory = request.kind === "directory";
+  const properties: Array<"openFile" | "openDirectory"> = isDirectory
+    ? ["openDirectory"]
+    : ["openFile"];
+  const filters =
+    !isDirectory && request.filters && request.filters.length > 0
+      ? request.filters.map((f) => ({ name: f.name, extensions: f.extensions }))
+      : undefined;
+  const defaultPath =
+    typeof request.defaultPath === "string" && isAbsolute(request.defaultPath)
+      ? request.defaultPath
+      : undefined;
+  const dialogOptions = {
+    title: isDirectory ? "Choose folder" : "Choose file",
+    properties,
+    ...(filters ? { filters } : {}),
+    ...(defaultPath ? { defaultPath } : {}),
+  };
+  const win = ctx.senderWindow ?? BrowserWindow.getFocusedWindow();
+  const result = win
+    ? await dialog.showOpenDialog(win, dialogOptions)
+    : await dialog.showOpenDialog(dialogOptions);
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+  return result.filePaths[0]!;
+}
+
+// Existence probe for `mustExist` path/directory/file settings. The settings form
+// flags a stored path that no longer resolves on disk (it may have been moved or
+// deleted since it was picked). Scoped to a valid pluginId; a non-absolute path
+// resolves false rather than throwing so a stale stored value can't crash the
+// form.
+async function handlePathExists(pluginId: string, targetPath: string): Promise<boolean> {
+  if (typeof pluginId !== "string" || !SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
+    throw new Error("pathExists: pluginId must be a scoped plugin name (publisher.name)");
+  }
+  if (typeof targetPath !== "string" || !isAbsolute(targetPath)) {
+    return false;
+  }
+  try {
+    await access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export const pluginNamespace = defineIpcNamespace({
   name: "plugin",
   ops: {
@@ -816,7 +943,6 @@ export const pluginNamespace = defineIpcNamespace({
     uninstall: op(PLUGIN_METHOD_CHANNELS.uninstall, handleUninstall),
     checkForUpdate: op(PLUGIN_METHOD_CHANNELS.checkForUpdate, handleCheckForUpdate),
     toolbarButtons: op(PLUGIN_METHOD_CHANNELS.toolbarButtons, handleToolbarButtons),
-    menuItems: op(PLUGIN_METHOD_CHANNELS.menuItems, handleMenuItems),
     keybindings: op(PLUGIN_METHOD_CHANNELS.keybindings, handleKeybindings),
     contextMenuItems: op(PLUGIN_METHOD_CHANNELS.contextMenuItems, handleContextMenuItems),
     validateActionIds: op(PLUGIN_METHOD_CHANNELS.validateActionIds, handleValidateActionIds),
@@ -824,12 +950,16 @@ export const pluginNamespace = defineIpcNamespace({
     registerAction: op(PLUGIN_METHOD_CHANNELS.registerAction, handleActionsRegister),
     unregisterAction: op(PLUGIN_METHOD_CHANNELS.unregisterAction, handleActionsUnregister),
     getPanelKinds: op(PLUGIN_METHOD_CHANNELS.getPanelKinds, handlePanelKindsGet),
+    activateForView: op(PLUGIN_METHOD_CHANNELS.activateForView, handleActivateForView),
     getAgents: op(PLUGIN_METHOD_CHANNELS.getAgents, handleAgentsGet),
     getForgeProviders: op(PLUGIN_METHOD_CHANNELS.getForgeProviders, handleForgeProvidersGet),
     getDecorations: op(PLUGIN_METHOD_CHANNELS.getDecorations, handleFileDecorationsGet),
+    getWorktreeStatus: op(PLUGIN_METHOD_CHANNELS.getWorktreeStatus, handleWorktreeStatusGet),
     getAuditRecords: op(PLUGIN_METHOD_CHANNELS.getAuditRecords, handleGetAuditRecords),
     getAuditConfig: op(PLUGIN_METHOD_CHANNELS.getAuditConfig, handleGetAuditConfig),
-    clearAuditLog: op(PLUGIN_METHOD_CHANNELS.clearAuditLog, handleClearAuditLog),
+    clearAuditLog: op(PLUGIN_METHOD_CHANNELS.clearAuditLog, handleClearAuditLog, {
+      withContext: true,
+    }),
     setAuditEnabled: op(PLUGIN_METHOD_CHANNELS.setAuditEnabled, handleSetAuditEnabled),
     setAuditMaxRecords: op(PLUGIN_METHOD_CHANNELS.setAuditMaxRecords, handleSetAuditMaxRecords),
     exportAuditLog: op(PLUGIN_METHOD_CHANNELS.exportAuditLog, handleExportAuditLog),
@@ -841,6 +971,8 @@ export const pluginNamespace = defineIpcNamespace({
     setSettingValue: op(PLUGIN_METHOD_CHANNELS.setSettingValue, handleSettingsSetValue),
     deleteSettingValue: op(PLUGIN_METHOD_CHANNELS.deleteSettingValue, handleSettingsDeleteValue),
     revealSecretSetting: op(PLUGIN_METHOD_CHANNELS.revealSecretSetting, handleSettingsRevealSecret),
+    pickPath: op(PLUGIN_METHOD_CHANNELS.pickPath, handlePickPath, { withContext: true }),
+    pathExists: op(PLUGIN_METHOD_CHANNELS.pathExists, handlePathExists),
   },
 });
 
@@ -888,28 +1020,42 @@ export function registerPluginHandlers(): () => void {
       try {
         return await (await getPluginService()).dispatchHandler(pluginId, channel, ctx, args);
       } catch (err) {
-        // `stableArgsSha256` content-discriminates without persisting any
-        // arg bytes — two structurally identical failed invokes hash the
-        // same, but distinct args produce distinct hashes. (A summary-based
-        // hash via `summarizeMcpArgs` collapses arrays to a constant, which
-        // would defeat forensic grouping.)
-        let argsHash = "";
-        try {
-          argsHash = stableArgsSha256(args);
-        } catch {
-          // Hashing is best-effort — a serialization throw here must not
-          // mask the original handler error.
+        // A throwing plugin handler is already audited at the dispatch
+        // boundary (#10463); recording it again here would double-count the
+        // failure. Errors that never reach a handler — schema/permission/
+        // no-handler — aren't marked, so the IPC boundary still owns them.
+        if (!isAuditedHandlerFailure(err)) {
+          // `stableArgsSha256` content-discriminates without persisting any
+          // arg bytes — two structurally identical failed invokes hash the
+          // same, but distinct args produce distinct hashes. (A summary-based
+          // hash via `summarizeMcpArgs` collapses arrays to a constant, which
+          // would defeat forensic grouping.)
+          let argsHash = "";
+          try {
+            argsHash = stableArgsSha256(args);
+          } catch {
+            // Hashing is best-effort — a serialization throw here must not
+            // mask the original handler error.
+          }
+          // An ownership rejection (#10462) is a denied invocation, not a
+          // handler failure — record it as "restricted" so it groups with the
+          // untrusted-sender rejection above rather than with genuine dispatch
+          // errors. The sender already passed `isTrustedRendererUrl`, so the
+          // args are from a trusted frame and the forensic `argsHash` is still
+          // useful. An ownership error is thrown before any handler runs, so it
+          // is never marked as an audited handler failure and always reaches
+          // this block.
+          safeAppend({
+            pluginId,
+            actionId: channel,
+            recordType: "ipc-invoke",
+            channel: CHANNELS.PLUGIN_INVOKE,
+            result: isPluginInvokeOwnershipError(err) ? "restricted" : "error",
+            errorMessage: formatErrorMessage(err, "plugin:invoke dispatch failed"),
+            argsHash,
+            durationMs: Date.now() - start,
+          });
         }
-        safeAppend({
-          pluginId,
-          actionId: channel,
-          recordType: "ipc-invoke",
-          channel: CHANNELS.PLUGIN_INVOKE,
-          result: "error",
-          errorMessage: formatErrorMessage(err, "plugin:invoke dispatch failed"),
-          argsHash,
-          durationMs: Date.now() - start,
-        });
         throw err;
       }
     }

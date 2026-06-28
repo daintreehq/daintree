@@ -5,7 +5,7 @@ import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
  * Slot registry for renderer-side views contributed by built-in plugins. The
  * registry exists so host-owned dialogs (NewWorktreeDialog, SidebarContent)
  * can render plugin-contributed components without importing them directly,
- * preserving the plugin boundary while `contributes.experimental_views` from the plugin
+ * preserving the plugin boundary while `contributes.views` from the plugin
  * manifest is unimplemented. Slot ids are dot-namespaced by plugin
  * (`github.bulkCreateWorktreeDialog`) so the host can grep the seam.
  *
@@ -28,6 +28,9 @@ interface SlotEntry {
 
 const REGISTRY = new Map<string, SlotEntry>();
 
+/** Slot ids already warned about (dev-mode), so a typo'd ref warns once, not per render. */
+const warnedMissingSlots = new Set<string>();
+
 export function registerBuiltinView(
   slotId: string,
   component: AnyComponent,
@@ -48,7 +51,21 @@ function resolveSlot<P>(
   disabledPluginIds: ReadonlySet<string>
 ): ComponentType<P> | null {
   const entry = REGISTRY.get(slotId);
-  if (!entry) return null;
+  if (!entry) {
+    // A non-empty ref that was never registered is most likely a plugin-author
+    // typo in a `forgeProviders.slots` value — the main process can't validate
+    // these against this renderer registry, so surface it here. Dev-only and
+    // warn-not-throw: an empty ref is the documented "no slot" sentinel, and a
+    // null resolution is defined contract, not an error.
+    if (import.meta.env.DEV && slotId.length > 0 && !warnedMissingSlots.has(slotId)) {
+      warnedMissingSlots.add(slotId);
+      console.warn(
+        `[builtinRendererRegistry] No view registered for slot "${slotId}" — ` +
+          `check the plugin's forgeProviders.slots ref and registerBuiltinView call`
+      );
+    }
+    return null;
+  }
   if (entry.pluginId !== null && disabledPluginIds.has(entry.pluginId)) return null;
   return entry.component as ComponentType<P>;
 }
@@ -76,4 +93,5 @@ export function useBuiltinView<P>(slotId: string): ComponentType<P> | null {
 
 export function __resetBuiltinRendererRegistryForTests(): void {
   REGISTRY.clear();
+  warnedMissingSlots.clear();
 }

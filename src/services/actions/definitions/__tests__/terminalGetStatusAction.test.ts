@@ -4,9 +4,13 @@ import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../..
 const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const terminalClientMock = vi.hoisted(() => ({ submit: vi.fn() }));
 const getSerializedStatesMock = vi.hoisted(() => vi.fn());
+const fleetArmingMock = vi.hoisted(() => ({ armedIds: new Set<string>() }));
 
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: { getState: panelStoreMock.getState },
+}));
+vi.mock("@/store/fleetArmingStore", () => ({
+  useFleetArmingStore: { getState: () => ({ armedIds: fleetArmingMock.armedIds }) },
 }));
 vi.mock("@/clients", () => ({ terminalClient: terminalClientMock }));
 vi.mock("@shared/config/panelKindRegistry", () => ({
@@ -21,7 +25,17 @@ type StatusEntry = {
   agentState: string | null;
   waitingReason?: string;
   lastTransitionAt?: number;
+  exitCode?: number | null;
+  spawnedAt?: number;
+  lastCheckResult?: {
+    command: string | null;
+    passed: boolean;
+    ranAt: number;
+    failureSummary: string | null;
+    truncated: boolean;
+  };
   recentOutput?: string | null;
+  armed?: boolean;
   error?: string;
 };
 
@@ -42,6 +56,7 @@ async function callGetStatus(actions: ActionRegistry, args?: unknown): Promise<S
 
 beforeEach(() => {
   vi.clearAllMocks();
+  fleetArmingMock.armedIds = new Set<string>();
   Object.defineProperty(globalThis, "window", {
     value: {
       electron: {
@@ -276,6 +291,76 @@ describe("terminal.getStatus", () => {
     expect(terminals[0]?.lastTransitionAt).toBe(1_700_000_000_000);
   });
 
+  it("surfaces exitCode and spawnedAt from the panel (#10638)", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["t1", "t2"],
+      panelsById: {
+        t1: {
+          id: "t1",
+          kind: "terminal",
+          location: "grid",
+          agentState: "exited",
+          launchAgentId: "claude",
+          exitCode: 1,
+          startedAt: 1_700_000_000_000,
+        },
+        // Still running — no exitCode on the panel yet → reported as null.
+        t2: {
+          id: "t2",
+          kind: "terminal",
+          location: "grid",
+          agentState: "working",
+          launchAgentId: "claude",
+          startedAt: 1_700_000_001_000,
+        },
+      },
+    });
+
+    const { terminals } = await callGetStatus(setupActions(), { terminalIds: ["t1", "t2"] });
+    expect(terminals[0]).toMatchObject({
+      terminalId: "t1",
+      exitCode: 1,
+      spawnedAt: 1_700_000_000_000,
+    });
+    expect(terminals[1]?.exitCode).toBeNull();
+    expect(terminals[1]?.spawnedAt).toBe(1_700_000_001_000);
+  });
+
+  it("surfaces lastCheckResult from the panel, undefined when absent (#10682)", async () => {
+    const checkResult = {
+      command: "npm run check",
+      passed: false,
+      ranAt: 1_700_000_000_500,
+      failureSummary: "Found 2 errors.",
+      truncated: false,
+    };
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["t1", "t2"],
+      panelsById: {
+        t1: {
+          id: "t1",
+          kind: "terminal",
+          location: "grid",
+          agentState: "waiting",
+          launchAgentId: "claude",
+          lastCheckResult: checkResult,
+        },
+        // No check observed → field absent in the entry.
+        t2: {
+          id: "t2",
+          kind: "terminal",
+          location: "grid",
+          agentState: "working",
+          launchAgentId: "claude",
+        },
+      },
+    });
+
+    const { terminals } = await callGetStatus(setupActions(), { terminalIds: ["t1", "t2"] });
+    expect(terminals[0]?.lastCheckResult).toEqual(checkResult);
+    expect(terminals[1]?.lastCheckResult).toBeUndefined();
+  });
+
   it("does not call getSerializedStates when includeOutput is omitted", async () => {
     panelStoreMock.getState.mockReturnValue({
       panelIds: ["t1", "t2"],
@@ -313,6 +398,27 @@ describe("terminal.getStatus", () => {
     expect(getSerializedStatesMock).toHaveBeenCalledWith(["t1", "t2", "t3"]);
     expect(terminals.find((t) => t.terminalId === "t1")?.recentOutput).toBe("alpha\nbeta");
     expect(terminals.find((t) => t.terminalId === "t3")?.recentOutput).toBeNull();
+  });
+
+  it("surfaces real content past a bottom-padding tail (issue #10763)", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["t1"],
+      panelsById: {
+        t1: { id: "t1", kind: "terminal", location: "grid", agentState: "waiting" },
+      },
+    });
+    // Codex-shaped buffer: answer + idle composer, then bottom blank padding
+    // that would otherwise fill the small recentOutput window entirely.
+    getSerializedStatesMock.mockResolvedValue({
+      t1: "agent answer\nidle composer\r\n" + "\r\n".repeat(40),
+    });
+
+    const { terminals } = await callGetStatus(setupActions(), {
+      includeOutput: { lines: 10 },
+    });
+    const out = terminals.find((t) => t.terminalId === "t1")?.recentOutput as string;
+    // The 40-row blank padding is gone; recentOutput is exactly the real tail.
+    expect(out).toBe("agent answer\nidle composer");
   });
 
   it("caps includeOutput.lines at 50", async () => {
@@ -515,5 +621,40 @@ describe("terminal.getStatus", () => {
     expect(t1?.error).toBeUndefined();
     expect(t2?.recentOutput).toBeNull();
     expect(t2?.error).toBeUndefined();
+  });
+
+  it("reflects the fleet arming set: armed true only for armed terminals", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["t1", "t2"],
+      panelsById: {
+        t1: { id: "t1", kind: "terminal", location: "grid", agentState: "working" },
+        t2: { id: "t2", kind: "terminal", location: "grid", agentState: "idle" },
+      },
+    });
+    fleetArmingMock.armedIds = new Set<string>(["t1"]);
+
+    const { terminals } = await callGetStatus(setupActions());
+
+    expect(terminals.find((t) => t.terminalId === "t1")?.armed).toBe(true);
+    expect(terminals.find((t) => t.terminalId === "t2")?.armed).toBe(false);
+  });
+
+  it("omits armed on not-found entries (they carry error instead)", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["t1"],
+      panelsById: {
+        t1: { id: "t1", kind: "terminal", location: "grid", agentState: "idle" },
+      },
+    });
+    fleetArmingMock.armedIds = new Set<string>(["t1"]);
+
+    const { terminals } = await callGetStatus(setupActions(), {
+      terminalIds: ["t1", "missing"],
+    });
+
+    expect(terminals.find((t) => t.terminalId === "t1")?.armed).toBe(true);
+    const missing = terminals.find((t) => t.terminalId === "missing");
+    expect(missing?.error).toBe("Terminal not found");
+    expect(missing?.armed).toBeUndefined();
   });
 });

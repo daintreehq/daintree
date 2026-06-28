@@ -13,9 +13,20 @@ function makeConfig() {
 }
 
 const identity = { pluginId: "acme", serverId: "main", toolName: "read_file" };
-const fpA = { rawHash: "a".repeat(64), displayHash: "x".repeat(64), schemaHash: "s".repeat(64) };
-const fpB = { rawHash: "b".repeat(64), displayHash: "x".repeat(64), schemaHash: "s".repeat(64) };
+const fpA = {
+  rawHash: "a".repeat(64),
+  displayHash: "x".repeat(64),
+  schemaHash: "s".repeat(64),
+  annotationHash: "n".repeat(64),
+};
+const fpB = {
+  rawHash: "b".repeat(64),
+  displayHash: "x".repeat(64),
+  schemaHash: "s".repeat(64),
+  annotationHash: "n".repeat(64),
+};
 const fpSchemaChanged = { ...fpA, schemaHash: "t".repeat(64) };
+const fpAnnotationChanged = { ...fpA, annotationHash: "m".repeat(64) };
 
 describe("PluginMcpConsentStore", () => {
   let cfg: ReturnType<typeof makeConfig>;
@@ -58,8 +69,42 @@ describe("PluginMcpConsentStore", () => {
       rawHash: "c".repeat(64),
       displayHash: "y".repeat(64),
       schemaHash: "u".repeat(64),
+      annotationHash: "z".repeat(64),
     };
     expect(store.lookup(identity, both).kind).toBe("raw-changed");
+  });
+
+  it("returns annotation-changed when only the annotation hash flips — tier rug-pull", () => {
+    store.pin(identity, fpA);
+    const result = store.lookup(identity, fpAnnotationChanged);
+    expect(result.kind).toBe("annotation-changed");
+  });
+
+  it("prefers schema-changed over annotation-changed when both differ", () => {
+    store.pin(identity, fpA);
+    const both = { ...fpA, schemaHash: "t".repeat(64), annotationHash: "m".repeat(64) };
+    expect(store.lookup(identity, both).kind).toBe("schema-changed");
+  });
+
+  it("treats a legacy pin lacking annotationHash as annotation-changed so it re-prompts", () => {
+    // Hydrate from a persisted snapshot minted before annotationHash existed.
+    // normalizeRecord backfills the "" sentinel, which never equals a real
+    // 64-char digest — so the next lookup forces re-consent rather than
+    // silently inheriting an approval that never covered the annotation tier.
+    const legacy = {
+      pluginId: identity.pluginId,
+      serverId: identity.serverId,
+      toolName: identity.toolName,
+      approvedAt: 1,
+      fingerprint: {
+        rawHash: fpA.rawHash,
+        displayHash: fpA.displayHash,
+        schemaHash: fpA.schemaHash,
+        // no annotationHash
+      },
+    };
+    const rebuilt = new PluginMcpConsentStore(cfg.save, () => ({ pins: [legacy] }));
+    expect(rebuilt.lookup(identity, fpA).kind).toBe("annotation-changed");
   });
 
   it("returns revoked after revoke()", () => {

@@ -7,7 +7,10 @@ import os from "os";
 import { fileURLToPath, pathToFileURL } from "url";
 import { createLogger } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { PLUGIN_DEV_WORKER_KIND } from "../../../shared/types/pluginDevWorker.js";
+import {
+  PLUGIN_DEV_WORKER_KIND,
+  PLUGIN_PROD_WORKER_KIND,
+} from "../../../shared/types/pluginDevWorker.js";
 import type {
   PluginHostToWorkerMessage,
   PluginWorkerToHostMessage,
@@ -45,12 +48,21 @@ export interface PluginDevWorkerHostOptions {
   pluginDir: string;
   /** Absolute path to the built bundle (`dist/index.js`) the worker imports. */
   bundlePath: string;
+  /**
+   * `"dev"` (default) hot-reloads the worker on every `bundlePath` rebuild;
+   * `"prod"` runs the same worker without the file watcher (production bundles
+   * never rebuild in place, so there is nothing to watch). Crash supervision,
+   * fork lifecycle, and graceful dispose are identical in both modes.
+   */
+  mode?: "dev" | "prod";
 }
 
 /**
- * Owns the `utilityProcess.fork` lifecycle for one dev-mode plugin: fork the
- * worker, hand it the bundle to import, watch `bundlePath` for rebuilds, and
- * kill + respawn on each change. Crash supervision mirrors
+ * Owns the `utilityProcess.fork` lifecycle for one plugin: fork the worker,
+ * hand it the bundle to import, and (in `"dev"` mode only) watch `bundlePath`
+ * for rebuilds, killing + respawning on each change. Production plugins reuse
+ * the same host with `mode: "prod"` and no file watcher. Crash supervision
+ * mirrors
  * {@link WorkspaceHostProcess} (sliding crash window, `child-process-gone`
  * filtering, exit/gone ordering defer).
  *
@@ -67,6 +79,8 @@ export class PluginDevWorkerHost extends EventEmitter {
   private readonly pluginDir: string;
   private readonly bundlePath: string;
   private readonly serviceName: string;
+  private readonly mode: "dev" | "prod";
+  private readonly workerKind: string;
 
   private watcher: fs.FSWatcher | null = null;
   private reloadTimer: NodeJS.Timeout | null = null;
@@ -95,13 +109,15 @@ export class PluginDevWorkerHost extends EventEmitter {
     this.pluginId = options.pluginId;
     this.pluginDir = options.pluginDir;
     this.bundlePath = options.bundlePath;
+    this.mode = options.mode ?? "dev";
+    this.workerKind = this.mode === "prod" ? PLUGIN_PROD_WORKER_KIND : PLUGIN_DEV_WORKER_KIND;
 
     const safeName = options.pluginId.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 40);
-    // Hash the plugin dir so two dev plugins sharing a sanitized name still get
+    // Hash the plugin dir so two plugins sharing a sanitized name still get
     // distinct service names — otherwise the per-instance `child-process-gone`
     // filter would cross-attribute crashes.
     const dirHash = createHash("sha1").update(options.pluginDir).digest("hex").slice(0, 8);
-    this.serviceName = `daintree-plugin-dev:${safeName}-${dirHash}`;
+    this.serviceName = `daintree-plugin-${this.mode}:${safeName}-${dirHash}`;
 
     this.readyPromise = new Promise((resolve, reject) => {
       this.readyResolve = resolve;
@@ -124,7 +140,9 @@ export class PluginDevWorkerHost extends EventEmitter {
    * never throw synchronously, so awaiting callers still observe rejections. */
   start(): Promise<void> {
     this.startWorker();
-    this.startWatching();
+    // Production workers never rebuild their bundle in place, so there is
+    // nothing to hot-reload — skip the file watcher entirely.
+    if (this.mode === "dev") this.startWatching();
     return this.readyPromise;
   }
 
@@ -377,7 +395,7 @@ export class PluginDevWorkerHost extends EventEmitter {
           // env REPLACES process.env in a utility process (#6081) — spread first.
           ...(process.env as Record<string, string>),
           DAINTREE_USER_DATA: app.getPath("userData"),
-          DAINTREE_UTILITY_PROCESS_KIND: PLUGIN_DEV_WORKER_KIND,
+          DAINTREE_UTILITY_PROCESS_KIND: this.workerKind,
           // io_uring disabled on Linux for utility-process stability (#6081).
           ...(process.platform === "linux" ? { UV_USE_IO_URING: "0" } : {}),
         },
@@ -392,7 +410,10 @@ export class PluginDevWorkerHost extends EventEmitter {
         );
         this.readyReject = null;
       }
-      this.emit("crash-loop", -1);
+      // A fork failure is a hard non-start, not a crash loop: `start()` rejects
+      // and `activateViaDevWorker`'s catch records the (more informative)
+      // loadError. Emitting `crash-loop` here would make the bridge write a
+      // second, racy "crash loop (code -1)" provenance entry over that one.
       return;
     }
 

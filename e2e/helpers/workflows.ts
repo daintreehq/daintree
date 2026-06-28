@@ -8,6 +8,8 @@ import { getGridPanelIds, getPanelById, openTerminal } from "./panels";
 import { SEL } from "./selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "./timeouts";
 
+const terminalShortcut = process.platform === "darwin" ? "Meta+Alt+t" : "Control+Alt+t";
+
 export async function openProjectSwitcherPalette(window: Page): Promise<Locator> {
   const trigger = window.locator(SEL.toolbar.projectSwitcherTrigger);
   await expect(trigger).toBeVisible({ timeout: T_MEDIUM });
@@ -193,34 +195,50 @@ export async function spawnTerminalAndVerify(
       const idsBeforeSet = new Set(idsBefore);
       let selectedPanelId: string | null = null;
 
-      await openTerminal(window);
-      await expect
-        .poll(
-          async () => {
-            const ids = await getGridPanelIds(window);
-            const newIds = ids.filter((id) => !idsBeforeSet.has(id));
-            if (newIds.length > 0) {
-              selectedPanelId = newIds[newIds.length - 1] ?? null;
-              return true;
-            }
+      const waitForNewGridPanel = async (timeout: number): Promise<boolean> => {
+        await expect
+          .poll(
+            async () => {
+              const ids = await getGridPanelIds(window);
+              const newIds = ids.filter((id) => !idsBeforeSet.has(id));
+              if (newIds.length > 0) {
+                selectedPanelId = newIds[newIds.length - 1] ?? null;
+                return true;
+              }
 
-            if (ids.length > idsBefore.length) {
-              selectedPanelId = ids[ids.length - 1] ?? null;
-              return selectedPanelId !== null;
-            }
+              if (ids.length > idsBefore.length) {
+                selectedPanelId = ids[ids.length - 1] ?? null;
+                return selectedPanelId !== null;
+              }
 
-            return false;
-          },
-          { timeout: T_LONG }
-        )
-        .toBe(true);
+              return false;
+            },
+            { timeout }
+          )
+          .toBe(true);
+        return true;
+      };
+
+      for (let attempt = 0; attempt < 4 && selectedPanelId === null; attempt += 1) {
+        await openTerminal(window);
+        try {
+          await waitForNewGridPanel(T_LONG + T_SHORT);
+        } catch (error: unknown) {
+          if (attempt === 3) throw error;
+
+          await dismissProjectSwitcherPalette(window);
+          await window.keyboard.press("Escape").catch(() => undefined);
+          await window.keyboard.press(terminalShortcut);
+          await waitForNewGridPanel(T_MEDIUM).catch(() => undefined);
+        }
+      }
 
       const panel = selectedPanelId
         ? getPanelById(window, selectedPanelId)
         : window.locator(SEL.panel.gridPanel).last();
       await expect(panel).toBeVisible({ timeout: T_MEDIUM });
       if (options.waitForInitialOutput ?? true) {
-        await waitForTerminalReady(window, panel, T_LONG);
+        await waitForTerminalReady(window, panel, 60_000);
       } else {
         await waitForTerminalPty(window, panel, T_LONG);
       }

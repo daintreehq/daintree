@@ -12,7 +12,7 @@ import { projectStore } from "../../../services/ProjectStore.js";
 import type * as McpServerServiceModule from "../../../services/McpServerService.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
 import { helpSessionService } from "../../../services/HelpSessionService.js";
-import type { HandlerDependencies } from "../../types.js";
+import type { HandlerDependencies, IpcContext } from "../../types.js";
 import { TerminalSpawnOptionsSchema } from "../../../schemas/ipc.js";
 import { resolveDaintreeMcpTier } from "../../../../shared/types/project.js";
 import { DEFAULT_DANGEROUS_ARGS } from "../../../../shared/types/agentSettings.js";
@@ -20,6 +20,12 @@ import {
   getAssistantWiredAgentIds,
   getEffectiveAgentConfig,
 } from "../../../../shared/config/agentRegistry.js";
+import { getPluginIdForAgent } from "../../../../shared/config/pluginAgentRegistry.js";
+import {
+  SettingTemplateError,
+  substituteSettingsTemplates,
+} from "../../../services/settingsTemplateResolver.js";
+import type * as PluginServiceModule from "../../../services/PluginService.js";
 
 type ValidatedTerminalSpawnOptions = z.output<typeof TerminalSpawnOptionsSchema>;
 
@@ -37,6 +43,37 @@ async function getMcpServerService(): Promise<McpServerSingleton> {
   }
   return cachedMcpServerService;
 }
+
+// One-time wiring of the assistant-pane pinning resolvers (#10647). Help-session
+// resolvers are wired in globalServicesInit / HelpSessionService; the assistant
+// pane path has no such owner, so we lazily wire it on first assistant spawn —
+// before `registerAssistantPaneBearer` and the CLI's first `/mcp` handshake.
+// Idempotent re-set is harmless, but the guard avoids re-binding on every spawn.
+let assistantPaneResolversWired = false;
+function wireAssistantPaneResolvers(mcpServerService: McpServerSingleton): void {
+  if (assistantPaneResolversWired) return;
+  mcpServerService.setAssistantPaneWebContentsResolver((token) =>
+    mcpPaneConfigService.getWebContentsIdForToken(token)
+  );
+  mcpServerService.setAssistantPaneActionContextResolver((token) =>
+    mcpPaneConfigService.getActionContextForToken(token)
+  );
+  assistantPaneResolversWired = true;
+}
+
+// Same lazy-import discipline as the MCP service above: PluginService pulls in
+// the whole plugin host (~thousands of lines), and only plugin-agent launches
+// that actually embed a `${settings:*}` template need it — so keep it off the
+// eager spawn path and load on first such launch.
+type PluginServiceSingleton = typeof PluginServiceModule.pluginService;
+let cachedPluginService: PluginServiceSingleton | null = null;
+async function getPluginService(): Promise<PluginServiceSingleton> {
+  if (!cachedPluginService) {
+    const mod = await import("../../../services/PluginService.js");
+    cachedPluginService = mod.pluginService;
+  }
+  return cachedPluginService;
+}
 import {
   listAgentSessions,
   clearAgentSessions,
@@ -53,8 +90,15 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
   }
 
   const handleTerminalSpawn = async (
+    ctx: IpcContext,
     validatedOptions: ValidatedTerminalSpawnOptions
   ): Promise<string> => {
+    // Capture the sender window id synchronously before any `await` — the
+    // window can be destroyed mid-spawn, after which `ctx.senderWindow` would
+    // be a stale reference. Only the daintree-assistant env-only path consumes
+    // this (as `DAINTREE_WINDOW_ID`); `null` means no window was in scope.
+    const windowId = ctx.senderWindow?.id ?? null;
+
     const bypassedRateLimit = validatedOptions.restore === true && consumeRestoreQuota();
     if (!bypassedRateLimit) {
       await waitForRateLimitSlot("terminalSpawn", 1_000);
@@ -190,6 +234,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // gated on the session's snapshotted `bypassPermissions` (independent
     // of `tier`), so an `action`-tier session can still skip permission
     // prompts and a `system`-tier session can still respect them.
+    //
+    // The Daintree Assistant is the exception to the session-dir cwd: it is
+    // env-only (MCP via DAINTREE_MCP_* env vars, reads no cwd config) so the
+    // renderer points it at the project root instead — see the assistant cwd
+    // branches in HelpSessionController/`helpActions`. Nothing here depends on
+    // the assistant's cwd; we just honor whatever cwd the renderer supplied.
     const helpToken = spawnEnv?.DAINTREE_MCP_TOKEN ?? "";
     const helpTier = helpToken ? helpSessionService.validateToken(helpToken) : false;
     const isAssistantAgent =
@@ -212,6 +262,20 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     if (isHelpLaunch && launchAgentId) {
       const dangerous = DEFAULT_DANGEROUS_ARGS[launchAgentId];
       const bypassPermissions = helpSessionService.getBypassPermissions(helpToken);
+      // The Daintree Assistant is not Claude Code — it has no
+      // `--dangerously-skip-permissions` flag (no DEFAULT_DANGEROUS_ARGS entry).
+      // For it, the user's "bypass permissions" preference maps to skipping the
+      // assistant's OWN per-action confirm sheet, which the CLI reads from this
+      // env var at startup. The capability tier remains the only safeguard.
+      if (launchAgentId === "daintree-assistant" && bypassPermissions) {
+        spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_ASSISTANT_AUTO_APPROVE: "1" };
+      }
+      // The Daintree Assistant emits a full-fidelity per-session debug trace
+      // when this env var is set (off by default). Gated on the user's
+      // provision-time preference; only the assistant's own CLI reads it.
+      if (launchAgentId === "daintree-assistant" && helpSessionService.getDebugLogging(helpToken)) {
+        spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_ASSISTANT_DEBUG_LOG: "1" };
+      }
       // Honor the agent's `supports.permissionBypass` declaration: only
       // append the dangerous flag when the agent has opted in. Gemini help
       // sessions sit at `permissionBypass: false` (Phase 1 stays in plan
@@ -389,6 +453,97 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           mcpErr
         );
       }
+    } else if (launchAgentId === "daintree-assistant" && safeCommand.length > 0 && projectId) {
+      // Daintree Assistant reads its MCP connection details straight from PTY
+      // env (`mcpInjection: "env-only"`) — no .mcp.json, no CLI flags. Mint a
+      // per-pane bearer via the same `preparePaneConfig` path Claude uses so
+      // the token is registered with the MCP server's bearer validator (an
+      // unregistered raw UUID would be rejected on connect) and revoked on PTY
+      // exit; we discard the written config file and use only the token.
+      // The assistant speaks Streamable HTTP at /mcp (not Claude's /sse).
+      // DAINTREE_PROJECT_ID is injected downstream by `injectDaintreeMetadata`
+      // in the pty-host, so it is intentionally not set here.
+      try {
+        const projSettings = await projectStore.getProjectSettings(projectId);
+        const tier = resolveDaintreeMcpTier(projSettings);
+        if (tier !== "off") {
+          const mcpServerService = await getMcpServerService();
+          const ready = mcpServerService.isRunning || (await mcpServerService.ensureReady());
+          if (!ready) {
+            console.warn(
+              "[TerminalSpawn] Daintree MCP requested for assistant launch, but the MCP server is not ready; continuing without MCP injection"
+            );
+          }
+          const port = mcpServerService.currentPort;
+          if (ready && port) {
+            const { token } = await mcpPaneConfigService.preparePaneConfig({
+              paneId: id,
+              port,
+              tier,
+            });
+            // Promote the assistant's pane token to a pinned bearer so its MCP
+            // session binds to the launching renderer's WebContents and replays
+            // the launch-time ActionContext, instead of falling back to
+            // active-window dispatch (#10647). The resolvers must be wired and
+            // the bearer registered before this IPC resolves — the PTY starts
+            // immediately and the CLI's first /mcp POST can race ahead. When the
+            // sender WebContents is unknown we skip registration and degrade to
+            // the generic pane-token behaviour rather than pinning to nothing.
+            //
+            // Cleanup is free: the pinning metadata lives on the token record,
+            // so the existing `revokePaneConfig(id)` on PTY exit (events.ts) and
+            // spawn failure tears it down. A destroyed renderer is handled by
+            // the fail-closed `getPinnedWebContents` → `SessionBindingError`
+            // primitive, which is exactly the structured tool error we want —
+            // revoking the token here would degrade that into a 401 instead.
+            if (Number.isInteger(ctx.webContentsId) && ctx.webContentsId > 0) {
+              wireAssistantPaneResolvers(mcpServerService);
+              mcpPaneConfigService.registerAssistantPaneBearer(
+                token,
+                ctx.webContentsId,
+                validatedOptions.actionContext
+              );
+            }
+            spawnEnv = {
+              ...(spawnEnv ?? {}),
+              DAINTREE_MCP_URL: `http://127.0.0.1:${port}/mcp`,
+              DAINTREE_MCP_TOKEN: token,
+              ...(windowId !== null ? { DAINTREE_WINDOW_ID: String(windowId) } : {}),
+            };
+          }
+        }
+      } catch (mcpErr) {
+        console.error(
+          "[TerminalSpawn] Failed to prepare Daintree Assistant MCP env; continuing without MCP injection:",
+          mcpErr
+        );
+      }
+    }
+
+    // Expand `${settings:*}` templates a plugin agent embedded in its command
+    // or args (e.g. `--token=${settings:apiToken}`). The agent's args were
+    // concatenated into `safeCommand` upstream by `generateAgentCommand`, so the
+    // literal template is sitting in this string. MCP servers already resolve
+    // these at spawn (PluginMcpSupervisor.resolveContribution); the agent path
+    // had no equivalent, so the unexpanded token reached the PTY and the agent
+    // failed to authenticate (#10619). The cheap `includes` pre-check keeps a
+    // plain-shell or built-in-agent spawn off the lazy PluginService load
+    // entirely; only a plugin-contributed agent with a template pays for it.
+    // An unconfigured setting throws `SettingTemplateError` (surfaced as the
+    // spawn IPC's rejection) rather than leaking a literal `${...}` to the wire.
+    if (launchAgentId && safeCommand.includes("${settings:")) {
+      const pluginId = getPluginIdForAgent(launchAgentId);
+      if (pluginId) {
+        const pluginService = await getPluginService();
+        safeCommand = await substituteSettingsTemplates(safeCommand, async (settingId) => {
+          const value = await pluginService.resolveSettingTemplate(pluginId, settingId);
+          // `resolveSettingTemplate` returns "" for an unset/missing setting;
+          // treat that as unresolved so the command never spawns with a blank
+          // secret silently swapped in.
+          if (!value) throw new SettingTemplateError(pluginId, settingId);
+          return value;
+        });
+      }
     }
 
     // Resolve spawn shell and args: project overrides > spawn options >
@@ -520,7 +675,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
   const namespace = defineIpcNamespace({
     name: "terminalLifecycle",
     ops: {
-      spawn: opValidated(CHANNELS.TERMINAL_SPAWN, TerminalSpawnOptionsSchema, handleTerminalSpawn),
+      spawn: opValidated(CHANNELS.TERMINAL_SPAWN, TerminalSpawnOptionsSchema, handleTerminalSpawn, {
+        withContext: true,
+      }),
       kill: op(CHANNELS.TERMINAL_KILL, handleTerminalKill),
       gracefulKill: op(CHANNELS.TERMINAL_GRACEFUL_KILL, handleTerminalGracefulKill),
       trash: op(CHANNELS.TERMINAL_TRASH, handleTerminalTrash),

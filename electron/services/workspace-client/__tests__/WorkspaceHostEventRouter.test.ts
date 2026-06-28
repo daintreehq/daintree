@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceHostEventRouter } from "../WorkspaceHostEventRouter.js";
 import { CHANNELS } from "../../../ipc/channels.js";
 import type { WorkspaceHostEvent } from "../../../../shared/types/workspace-host.js";
@@ -79,6 +79,10 @@ describe("WorkspaceHostEventRouter", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // `sys:worktree:update` is now coalesced behind a 50ms trailing-edge timer
+    // (#10769). Fake timers let tests advance past the window deterministically;
+    // the forge guard tests override Date.now with their own spies as needed.
+    vi.useFakeTimers();
     copyTreeCallbacks = new Map();
     router = new WorkspaceHostEventRouter({
       emit: vi.fn(),
@@ -86,6 +90,13 @@ describe("WorkspaceHostEventRouter", () => {
       copyTreeProgressCallbacks: copyTreeCallbacks,
     });
   });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // Number of ms past the `sys:worktree:update` debounce window.
+  const SYS_WORKTREE_DEBOUNCE_MS = 50;
 
   describe("inotify-limit-reached dedup", () => {
     it("fires toast on first emit", () => {
@@ -186,13 +197,120 @@ describe("WorkspaceHostEventRouter", () => {
   });
 
   describe("sys:worktree:update", () => {
-    it("emits the full worktree object directly", () => {
+    it("emits the full worktree object after the debounce window", () => {
       const entry = makeEntry();
       const event = makeWorktreeUpdateEvent({ branch: "feature/foo", prTitle: "My PR" });
 
       router.routeHostEvent(entry, event);
+      vi.advanceTimersByTime(SYS_WORKTREE_DEBOUNCE_MS);
 
       expect(events.emit).toHaveBeenCalledWith("sys:worktree:update", event.worktree);
+    });
+  });
+
+  describe("sys:worktree:update debounce (#10769)", () => {
+    function sysUpdateCalls() {
+      return (events.emit as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c) => c[0] === "sys:worktree:update"
+      );
+    }
+
+    it("does not emit on the sys bus synchronously — it waits for the window", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, makeWorktreeUpdateEvent());
+
+      expect(events.emit).not.toHaveBeenCalledWith("sys:worktree:update", expect.anything());
+
+      vi.advanceTimersByTime(SYS_WORKTREE_DEBOUNCE_MS);
+      expect(sysUpdateCalls()).toHaveLength(1);
+    });
+
+    it("still emits worktree-update on the plugin bus synchronously (not debounced)", () => {
+      const entry = makeEntry();
+      const event = makeWorktreeUpdateEvent();
+
+      router.routeHostEvent(entry, event);
+
+      const emit = router as unknown as { emit: ReturnType<typeof vi.fn> };
+      expect(emit.emit).toHaveBeenCalledWith("worktree-update", {
+        worktree: event.worktree,
+        projectPath: entry.projectPath,
+      });
+    });
+
+    it("collapses rapid same-worktree updates into one emit carrying the latest snapshot", () => {
+      const entry = makeEntry();
+      const first = makeWorktreeUpdateEvent({ branch: "old" });
+      const last = makeWorktreeUpdateEvent({ branch: "new" });
+
+      router.routeHostEvent(entry, first);
+      router.routeHostEvent(entry, last);
+      vi.advanceTimersByTime(SYS_WORKTREE_DEBOUNCE_MS);
+
+      const calls = sysUpdateCalls();
+      expect(calls).toHaveLength(1);
+      expect(calls[0][1]).toBe(last.worktree);
+    });
+
+    it("emits once per distinct worktree in a burst", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, makeWorktreeUpdateEvent({ id: "wt-1", worktreeId: "wt-1" }));
+      router.routeHostEvent(entry, makeWorktreeUpdateEvent({ id: "wt-2", worktreeId: "wt-2" }));
+      vi.advanceTimersByTime(SYS_WORKTREE_DEBOUNCE_MS);
+
+      expect(sysUpdateCalls()).toHaveLength(2);
+    });
+
+    it("keys off the resolved path when worktreeId is missing", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({ worktreeId: undefined, path: "/p/a" })
+      );
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({ worktreeId: undefined, path: "/p/b" })
+      );
+      vi.advanceTimersByTime(SYS_WORKTREE_DEBOUNCE_MS);
+
+      expect(sysUpdateCalls()).toHaveLength(2);
+    });
+
+    it("dispose() before the window elapses drops the pending emit", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, makeWorktreeUpdateEvent());
+      router.dispose();
+      vi.advanceTimersByTime(SYS_WORKTREE_DEBOUNCE_MS);
+
+      expect(events.emit).not.toHaveBeenCalledWith("sys:worktree:update", expect.anything());
+    });
+
+    it("ignores worktree-update routed after dispose()", () => {
+      const entry = makeEntry();
+      router.dispose();
+      router.routeHostEvent(entry, makeWorktreeUpdateEvent());
+      vi.advanceTimersByTime(SYS_WORKTREE_DEBOUNCE_MS);
+
+      expect(events.emit).not.toHaveBeenCalledWith("sys:worktree:update", expect.anything());
+    });
+
+    it("drops a pending update when the worktree is removed within the window", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, makeWorktreeUpdateEvent({ id: "wt-1", worktreeId: "wt-1" }));
+      router.routeHostEvent(entry, {
+        type: "worktree-removed",
+        worktreeId: "wt-1",
+        epoch: "550e8400-e29b-41d4-a716-446655440000",
+        seq: 2,
+      });
+      vi.advanceTimersByTime(SYS_WORKTREE_DEBOUNCE_MS);
+
+      // The remove fires synchronously; the queued update must NOT fire after it.
+      expect(events.emit).toHaveBeenCalledWith(
+        "sys:worktree:remove",
+        expect.objectContaining({ worktreeId: "wt-1" })
+      );
+      expect(events.emit).not.toHaveBeenCalledWith("sys:worktree:update", expect.anything());
     });
   });
 
@@ -434,6 +552,7 @@ describe("WorkspaceHostEventRouter", () => {
       });
 
       router.routeHostEvent(entry, event);
+      vi.advanceTimersByTime(SYS_WORKTREE_DEBOUNCE_MS);
 
       expect(events.emit).toHaveBeenCalledWith("sys:worktree:update", event.worktree);
     });
@@ -469,6 +588,7 @@ describe("WorkspaceHostEventRouter", () => {
       });
 
       router.routeHostEvent(entry, event);
+      vi.advanceTimersByTime(SYS_WORKTREE_DEBOUNCE_MS);
 
       expect(broadcastToRenderer).not.toHaveBeenCalled();
       // Normal routing must still happen even when the toast is skipped.
@@ -563,6 +683,7 @@ describe("WorkspaceHostEventRouter", () => {
       const event = makeWorktreeUpdateEvent();
 
       expect(() => router.routeHostEvent(entry, event)).not.toThrow();
+      vi.advanceTimersByTime(SYS_WORKTREE_DEBOUNCE_MS);
       expect(broadcastToRenderer).not.toHaveBeenCalled();
       expect(events.emit).toHaveBeenCalledWith("sys:worktree:update", event.worktree);
     });

@@ -28,6 +28,15 @@ export class AgentAvailabilityStore {
   private agentStates: Map<string, AgentState> = new Map();
   private waitingReasons: Map<string, WaitingReason> = new Map();
   private lastStateChange: Map<string, number> = new Map();
+  // Exit metadata captured from the "completed"/"exited" state transition so MCP
+  // read paths (waitUntilIdle, the agentState resource) can report pass/fail
+  // without scraping output. `exitCode` is null when the process died from a
+  // signal with no numeric code; `exitSignal` is the raw node-pty signal number.
+  private exitCodes: Map<string, number | null> = new Map();
+  private exitSignals: Map<string, number> = new Map();
+  // Spawn timestamp captured from agent:spawned so supervisors can reason about
+  // run duration in the same read as state.
+  private spawnedAt: Map<string, number> = new Map();
   private terminalToAgent: Map<string, string> = new Map();
   private agentToTerminal: Map<string, string> = new Map();
   private trashedTerminals: Set<string> = new Set();
@@ -47,6 +56,19 @@ export class AgentAvailabilityStore {
       events.on("agent:spawned", (payload) => {
         this.terminalToAgent.set(payload.terminalId, payload.agentId);
         this.agentToTerminal.set(payload.agentId, payload.terminalId);
+        this.spawnedAt.set(payload.agentId, payload.timestamp);
+        // A fresh spawn resets the tracked state to "working" so a stale state
+        // from a prior session under the same agentId can't outlive a respawn.
+        // Without this, a previous "waiting" persists and waitUntilIdle settles
+        // immediately as already-idle, dropping its listener before the new
+        // session's crash "exited" event arrives (issue #10816).
+        this.agentStates.set(payload.agentId, "working");
+        this.lastStateChange.set(payload.agentId, payload.timestamp);
+        this.waitingReasons.delete(payload.agentId);
+        // A fresh spawn clears any exit metadata from a prior session under the
+        // same agentId so a stale exit code can't outlive a respawn.
+        this.exitCodes.delete(payload.agentId);
+        this.exitSignals.delete(payload.agentId);
         if (this.trashedTerminals.has(payload.terminalId)) {
           this.trashedAgentIds.add(payload.agentId);
         }
@@ -82,6 +104,8 @@ export class AgentAvailabilityStore {
     state: AgentState;
     timestamp: number;
     waitingReason?: WaitingReason;
+    exitCode?: number | null;
+    exitSignal?: number;
   }): void {
     if (!payload.agentId) return;
 
@@ -91,6 +115,17 @@ export class AgentAvailabilityStore {
       this.waitingReasons.set(payload.agentId, payload.waitingReason);
     } else {
       this.waitingReasons.delete(payload.agentId);
+    }
+    // Cache exit metadata when the transition carries it (completed/exited from
+    // a PTY exit event). `exitCode` may legitimately be null (signal kill), so
+    // gate on the field being present rather than truthy.
+    if (payload.state === "completed" || payload.state === "exited") {
+      if (payload.exitCode !== undefined) {
+        this.exitCodes.set(payload.agentId, payload.exitCode);
+      }
+      if (payload.exitSignal !== undefined) {
+        this.exitSignals.set(payload.agentId, payload.exitSignal);
+      }
     }
   }
 
@@ -130,11 +165,47 @@ export class AgentAvailabilityStore {
   }
 
   /**
+   * Resolve the latest terminal associated with an agent id.
+   *
+   * Agent ids identify the agent type today (for example "claude"), so multiple
+   * terminals can temporarily share one id. Terminal-scoped waiters use this as
+   * a guard before trusting agent-level snapshot state.
+   */
+  getTerminalIdForAgent(agentId: string): string | undefined {
+    return this.agentToTerminal.get(agentId);
+  }
+
+  /**
    * Timestamp (ms) of the most recent state transition for an agent, sourced from the
    * canonical event payload rather than wall-clock time.
    */
   getLastStateChange(agentId: string): number | undefined {
     return this.lastStateChange.get(agentId);
+  }
+
+  /**
+   * Process exit code from the agent's last "completed"/"exited" transition.
+   * Returns `null` when the process was signal-terminated without a numeric
+   * code, or `undefined` when the agent has not exited (or never spawned).
+   */
+  getExitCode(agentId: string): number | null | undefined {
+    return this.exitCodes.get(agentId);
+  }
+
+  /**
+   * Raw OS signal number that terminated the agent process, if one was reported.
+   * Returns `undefined` when the agent exited normally or has not exited.
+   */
+  getExitSignal(agentId: string): number | undefined {
+    return this.exitSignals.get(agentId);
+  }
+
+  /**
+   * Wall-clock spawn timestamp (ms) captured from agent:spawned, for duration
+   * reasoning. Returns `undefined` for agents registered before a spawn event.
+   */
+  getSpawnedAt(agentId: string): number | undefined {
+    return this.spawnedAt.get(agentId);
   }
 
   /**
@@ -212,6 +283,9 @@ export class AgentAvailabilityStore {
     this.agentStates.delete(agentId);
     this.waitingReasons.delete(agentId);
     this.lastStateChange.delete(agentId);
+    this.exitCodes.delete(agentId);
+    this.exitSignals.delete(agentId);
+    this.spawnedAt.delete(agentId);
     const terminalId = this.agentToTerminal.get(agentId);
     if (terminalId) {
       this.terminalToAgent.delete(terminalId);
@@ -230,6 +304,9 @@ export class AgentAvailabilityStore {
     this.agentStates.clear();
     this.waitingReasons.clear();
     this.lastStateChange.clear();
+    this.exitCodes.clear();
+    this.exitSignals.clear();
+    this.spawnedAt.clear();
     this.terminalToAgent.clear();
     this.agentToTerminal.clear();
     this.trashedTerminals.clear();

@@ -2,7 +2,11 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { waitForTerminalText, runTerminalCommand } from "../../helpers/terminal";
+import {
+  waitForTerminalText,
+  waitForTerminalTextIgnoringLineBreaks,
+  runTerminalCommand,
+} from "../../helpers/terminal";
 import { expectTerminalFocused } from "../../helpers/focus";
 import { getFirstGridPanel, openTerminal } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
@@ -83,12 +87,12 @@ test.describe.serial("Core: SAB Fallback (IPC-only terminal output)", () => {
       panel,
       "node -e \"console.log('MULTI_TOP'); for(let i=1;i<=150;i++) console.log(i); console.log('MULTI_BOTTOM')\""
     );
-    await waitForTerminalText(panel, "MULTI_BOTTOM", T_LONG);
+    await waitForTerminalTextIgnoringLineBreaks(panel, "149150MULTI_BOTTOM", T_LONG);
 
     // The scrollback buffer must retain the full 150-line run end-to-end via the
     // IPC-fed ring buffer: the top sentinel and a mid-run line are only present if
     // the lines scrolled out of the viewport were captured, not just the tail.
     await waitForTerminalText(panel, "MULTI_TOP", T_MEDIUM);
-    await waitForTerminalText(panel, "\n75\n", T_MEDIUM);
+    await waitForTerminalTextIgnoringLineBreaks(panel, "747576", T_MEDIUM);
   });
 });

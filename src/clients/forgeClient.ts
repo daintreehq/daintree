@@ -1,8 +1,13 @@
 import type {
   AuthValidation,
   ForgeUser,
+  ForgeLabel,
   PushErrorClassification,
   Issue,
+  IssueComment,
+  CreateIssueInput,
+  EditIssueInput,
+  IssueCloseReason,
   PR,
   Page,
   RepoMetadata,
@@ -54,6 +59,63 @@ export const forgeClient = {
 
   unassignIssue: (cwd: string, issueNumber: number, username: string): Promise<void> => {
     return window.electron.forge.unassignIssue({ cwd, issueNumber, username });
+  },
+
+  approvePR: (cwd: string, prNumber: number, body?: string): Promise<void> => {
+    return window.electron.forge.approvePR({ cwd, prNumber, body });
+  },
+
+  requestChanges: (cwd: string, prNumber: number, body: string): Promise<void> => {
+    return window.electron.forge.requestChanges({ cwd, prNumber, body });
+  },
+
+  dismissReview: (
+    cwd: string,
+    prNumber: number,
+    reviewId: number,
+    message: string
+  ): Promise<void> => {
+    return window.electron.forge.dismissReview({ cwd, prNumber, reviewId, message });
+  },
+
+  requestReviewers: (
+    cwd: string,
+    prNumber: number,
+    reviewers: { users?: string[]; teams?: string[] }
+  ): Promise<void> => {
+    return window.electron.forge.requestReviewers({ cwd, prNumber, ...reviewers });
+  },
+
+  createIssue: (cwd: string, input: CreateIssueInput): Promise<Issue> => {
+    return window.electron.forge.createIssue({ cwd, input });
+  },
+
+  closeIssue: (
+    cwd: string,
+    issueNumber: number,
+    stateReason?: IssueCloseReason
+  ): Promise<Issue> => {
+    return window.electron.forge.closeIssue({ cwd, issueNumber, stateReason });
+  },
+
+  reopenIssue: (cwd: string, issueNumber: number): Promise<Issue> => {
+    return window.electron.forge.reopenIssue({ cwd, issueNumber });
+  },
+
+  editIssue: (cwd: string, issueNumber: number, input: EditIssueInput): Promise<Issue> => {
+    return window.electron.forge.editIssue({ cwd, issueNumber, input });
+  },
+
+  addIssueComment: (cwd: string, issueNumber: number, body: string): Promise<IssueComment> => {
+    return window.electron.forge.addIssueComment({ cwd, issueNumber, body });
+  },
+
+  addIssueLabel: (cwd: string, issueNumber: number, label: string): Promise<ForgeLabel[]> => {
+    return window.electron.forge.addIssueLabel({ cwd, issueNumber, label });
+  },
+
+  removeIssueLabel: (cwd: string, issueNumber: number, label: string): Promise<ForgeLabel[]> => {
+    return window.electron.forge.removeIssueLabel({ cwd, issueNumber, label });
   },
 
   validateToken: (providerId: string, token: string): Promise<AuthValidation> => {
@@ -137,6 +199,53 @@ export const forgeClient = {
 
   openPR: (cwd: string, prNumber: number): Promise<void> => {
     return window.electron.forge.openPR({ cwd, prNumber });
+  },
+
+  createPR: (
+    cwd: string,
+    input: { head: string; base: string; title: string; body?: string; draft?: boolean }
+  ): Promise<PR> => {
+    return window.electron.forge.createPR({ cwd, ...input });
+  },
+
+  closePR: (cwd: string, prNumber: number): Promise<void> => {
+    return window.electron.forge.closePR({ cwd, prNumber });
+  },
+
+  reopenPR: (cwd: string, prNumber: number): Promise<void> => {
+    return window.electron.forge.reopenPR({ cwd, prNumber });
+  },
+
+  mergePR: (
+    cwd: string,
+    prNumber: number,
+    input?: {
+      mergeMethod?: "merge" | "squash" | "rebase";
+      commitTitle?: string;
+      commitMessage?: string;
+    }
+  ): Promise<void> => {
+    return window.electron.forge.mergePR({ cwd, prNumber, ...input });
+  },
+
+  convertPRToDraft: (cwd: string, prNumber: number): Promise<void> => {
+    return window.electron.forge.convertPRToDraft({ cwd, prNumber });
+  },
+
+  markPRReadyForReview: (cwd: string, prNumber: number): Promise<void> => {
+    return window.electron.forge.markPRReadyForReview({ cwd, prNumber });
+  },
+
+  commentOnPR: (cwd: string, prNumber: number, body: string): Promise<void> => {
+    return window.electron.forge.commentOnPR({ cwd, prNumber, body });
+  },
+
+  editPR: (
+    cwd: string,
+    prNumber: number,
+    input: { title?: string; body?: string }
+  ): Promise<PR> => {
+    return window.electron.forge.editPR({ cwd, prNumber, ...input });
   },
 
   onRepoStatsAndPageUpdated: (

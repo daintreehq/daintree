@@ -472,6 +472,43 @@ describe("TerminalProcess — observer-driven exit handlers", () => {
     }
   });
 
+  it("returns the last non-empty visible lines when the prompt sits above blank viewport rows", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const pty = createControllablePty();
+    const terminal = createTerminal(
+      pty,
+      { cols: 80, rows: 10, kind: "terminal", launchAgentId: "claude" },
+      undefined,
+      "t-visible-tail-non-empty"
+    );
+
+    try {
+      terminal.stopActivityMonitor();
+
+      await emitDataAndFlush(
+        pty,
+        [
+          "Quick safety check: Is this a project you created or one you trust?",
+          "FAKE_CLAUDE_READY",
+          "__DAINTREE_FAKE_CLAUDE_STOP__",
+          "FAKE_CLAUDE_EXIT",
+          "PS C:\\Users\\runneradmin\\AppData\\Local\\Temp\\project>",
+        ].join("\r\n")
+      );
+
+      expect(terminal.getLastNLines(4)).toEqual([
+        "FAKE_CLAUDE_READY",
+        "__DAINTREE_FAKE_CLAUDE_STOP__",
+        "FAKE_CLAUDE_EXIT",
+        "PS C:\\Users\\runneradmin\\AppData\\Local\\Temp\\project>",
+      ]);
+    } finally {
+      terminal.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("detects spinner activity above a pinned bottom input box (regression: cursor-anchored scan window)", async () => {
     // Regression for the v0.19.0 detection break: getVisibleActivityCells was
     // narrowed to a cursor-anchored bottom-15-row window. A TUI agent that

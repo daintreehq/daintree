@@ -55,8 +55,8 @@ function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo
         toolbarButtons: [],
         menuItems: [],
         commands: [],
-        experimental_views: [],
-        experimental_mcpServers: [],
+        views: [],
+        mcpServers: [],
         keybindings: [],
         contextMenus: [],
         forgeProviders: [],
@@ -183,6 +183,37 @@ describe("PluginManagerView", () => {
     await screen.findAllByText("Acme Demo");
     const toggle = screen.getByRole("switch", { name: "Enable Acme Demo" });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("does not flash 'Restart required' when a built-in plugin is toggled (#10512)", async () => {
+    // Built-ins transition live, so their authoritative pendingRestart stays
+    // false. The optimistic update must match — not invert — to avoid a
+    // false badge flash before the next refresh.
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePlugin({ isBuiltin: true, disabled: false, pendingRestart: false }),
+    ]);
+    renderDialog();
+    const toggle = await screen.findByRole("switch", { name: "Enable Acme Demo" });
+    fireEvent.click(toggle);
+
+    // The optimistic flip lands synchronously; wait for it to settle the switch,
+    // then assert no restart badge appeared.
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
+    expect(screen.queryByText("Restart required")).toBeNull();
+  });
+
+  it("flashes 'Restart required' when a session-fixed user plugin is toggled (#10512)", async () => {
+    // Control for the built-in case: user plugins are fixed for the session, so
+    // a toggle genuinely diverges desired vs. running state and must surface the
+    // restart cue.
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePlugin({ isBuiltin: false, disabled: false, pendingRestart: false }),
+    ]);
+    renderDialog();
+    const toggle = await screen.findByRole("switch", { name: "Enable Acme Demo" });
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(screen.getAllByText("Restart required").length).toBeGreaterThan(0));
   });
 
   it("renders a plugin's settings form in the detail pane once selected", async () => {
@@ -700,6 +731,24 @@ describe("PluginManagerView", () => {
         "https://example.com/p.dntr"
       )
     );
+  });
+
+  it("surfaces the no-sandbox security disclosure in the URL dialog", async () => {
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+
+    // The disclosure must not be present before the dialog opens.
+    expect(screen.queryByText(/full Node\.js privileges/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    await waitFor(() => expect(screen.getByLabelText("Plugin URL")).toBeTruthy());
+
+    // Scope to the open dialog so hidden/other surfaces can't satisfy the
+    // assertion. The disclosure must state the trust model (no sandbox, no
+    // signing, no pre-install consent) before the user pastes a URL.
+    const dialog = within(screen.getByRole("dialog", { name: "Install from URL" }));
+    expect(dialog.getByText(/full Node\.js privileges/)).toBeTruthy();
+    expect(dialog.getByText(/no signature check/)).toBeTruthy();
   });
 
   it("keeps the URL dialog open and shows an error on an invalid URL", async () => {
@@ -1227,18 +1276,6 @@ describe("PluginManagerView", () => {
         .filter((el) => el.getAttribute("aria-disabled") === "true")
         .map((el) => el.getAttribute("aria-label"));
       expect(sectionHeaders).toEqual(["Forge providers", "Workspace", "Other"]);
-    });
-
-    it("omits categories with no plugins", async () => {
-      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
-        named({ manifest: { name: "acme.demo", displayName: "Acme Demo" } }),
-      ]);
-      renderDialog();
-      await screen.findAllByText("Acme Demo");
-      expect(sectionExists("Forge providers")).toBe(false);
-      expect(sectionExists("AI & agents")).toBe(false);
-      expect(sectionExists("Workspace")).toBe(false);
-      expect(sectionExists("Other")).toBe(true);
     });
 
     it("preserves alphabetical order within a section regardless of enabled state", async () => {

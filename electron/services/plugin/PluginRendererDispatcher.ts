@@ -2,7 +2,10 @@ import { ipcMain } from "electron";
 import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getWindowRegistry, getProjectViewManager } from "../../window/windowRef.js";
-import type { ActionDispatchResult } from "../../../shared/types/actions.js";
+import type {
+  ActionDispatchResult,
+  PluginActionManifestEntry,
+} from "../../../shared/types/actions.js";
 
 /**
  * Time budget for a `host.dispatch()` main→renderer round-trip. Matches the MCP
@@ -20,6 +23,20 @@ const PLUGIN_DISPATCH_TIMEOUT_MS = 30_000;
  */
 interface PendingPluginDispatch {
   resolve: (result: ActionDispatchResult) => void;
+  timer: ReturnType<typeof setTimeout>;
+  webContentsId: number;
+  destroyedCleanup?: () => void;
+}
+
+/**
+ * A `host.actions.list()` / `host.actions.get()` round-trip awaiting its
+ * renderer response. Like {@link PendingPluginDispatch} the promise always
+ * resolves (with the projected result or a fallback) and never rejects.
+ */
+interface PendingActionsRequest {
+  resolve: (value: unknown) => void;
+  /** Result handed back if the round-trip is torn down by {@link PluginRendererDispatcher.dispose}. */
+  fallback: unknown;
   timer: ReturnType<typeof setTimeout>;
   webContentsId: number;
   destroyedCleanup?: () => void;
@@ -51,6 +68,21 @@ export class PluginRendererDispatcher {
    * {@link dispose}.
    */
   private pluginDispatchListenerCleanup: (() => void) | null = null;
+
+  /**
+   * In-flight `host.actions.list()` / `host.actions.get()` round-trips, keyed by
+   * `requestId`. Shared across both catalog channels — request ids are UUIDs, so
+   * a single map is unambiguous. Each entry resolves with the projected result
+   * (or its fallback on failure) and never rejects, mirroring
+   * {@link pendingPluginDispatches}.
+   */
+  private pendingActionsRequests = new Map<string, PendingActionsRequest>();
+  /**
+   * Cleanups for the lazily-registered `ipcMain` response listeners, keyed by
+   * response channel so each is registered at most once. Cleared in
+   * {@link dispose}.
+   */
+  private actionsListenerCleanups = new Map<string, () => void>();
 
   constructor(deps: PluginRendererDispatcherDeps) {
     this.deps = deps;
@@ -219,7 +251,151 @@ export class PluginRendererDispatcher {
   }
 
   /**
-   * Tear down the lazily-registered response listener and reject every pending
+   * Project `ActionService.list()` to the active renderer for the plugin
+   * action catalog (#10561). Resolves `[]` (never rejects) when no renderer is
+   * available, the round-trip times out, or the view is destroyed.
+   */
+  sendActionsListToRenderer(): Promise<PluginActionManifestEntry[]> {
+    return this.requestFromRenderer<PluginActionManifestEntry[]>({
+      requestChannel: CHANNELS.PLUGIN_ACTIONS_LIST_REQUEST,
+      responseChannel: CHANNELS.PLUGIN_ACTIONS_LIST_RESPONSE,
+      buildRequest: (requestId) => ({ requestId }),
+      extract: (payload) => {
+        const entries = (payload as { entries?: unknown }).entries;
+        return Array.isArray(entries) ? (entries as PluginActionManifestEntry[]) : [];
+      },
+      fallback: [],
+    });
+  }
+
+  /**
+   * Look up a single projected action entry on the active renderer (#10561).
+   * Resolves `null` (never rejects) when the action is absent or the round-trip
+   * fails.
+   */
+  sendActionsGetToRenderer(actionId: string): Promise<PluginActionManifestEntry | null> {
+    return this.requestFromRenderer<PluginActionManifestEntry | null>({
+      requestChannel: CHANNELS.PLUGIN_ACTIONS_GET_REQUEST,
+      responseChannel: CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE,
+      buildRequest: (requestId) => ({ requestId, actionId }),
+      extract: (payload) =>
+        ((payload as { entry?: unknown }).entry ?? null) as PluginActionManifestEntry | null,
+      fallback: null,
+    });
+  }
+
+  /**
+   * Lazily register the single `ipcMain` listener for a catalog response
+   * channel, registered on first use and torn down in {@link dispose}. Mirrors
+   * {@link ensurePluginDispatchListener}'s sender-id guard so a renderer in
+   * another window cannot resolve a request initiated for a different window.
+   */
+  private ensureActionsListener(
+    responseChannel: string,
+    extract: (payload: Record<string, unknown>) => unknown
+  ): void {
+    if (this.actionsListenerCleanups.has(responseChannel)) return;
+    const handler = (
+      event: Electron.IpcMainEvent,
+      payload: { requestId?: unknown } & Record<string, unknown>
+    ) => {
+      if (!payload || typeof payload.requestId !== "string") return;
+      const pending = this.pendingActionsRequests.get(payload.requestId);
+      if (!pending) return;
+      if (event.sender.id !== pending.webContentsId) {
+        console.warn(
+          `[PluginService] Ignoring actions response from unexpected sender ${event.sender.id} (expected ${pending.webContentsId}, requestId=${payload.requestId})`
+        );
+        return;
+      }
+      clearTimeout(pending.timer);
+      pending.destroyedCleanup?.();
+      this.pendingActionsRequests.delete(payload.requestId);
+      pending.resolve(extract(payload));
+    };
+    ipcMain.on(responseChannel, handler);
+    this.actionsListenerCleanups.set(responseChannel, () => {
+      ipcMain.removeListener(responseChannel, handler);
+    });
+  }
+
+  /**
+   * Generic main→renderer request/response round-trip for the read-only catalog
+   * surface. Always resolves with the extracted result or `fallback` — failures
+   * (no renderer, timeout, destroyed view, send error) come back as the fallback
+   * rather than a rejected promise. Shares the resolution/timeout/cleanup
+   * discipline of {@link sendDispatchToRenderer}.
+   */
+  private requestFromRenderer<T>(opts: {
+    requestChannel: string;
+    responseChannel: string;
+    buildRequest: (requestId: string) => Record<string, unknown>;
+    extract: (payload: Record<string, unknown>) => T;
+    fallback: T;
+  }): Promise<T> {
+    return new Promise((resolve) => {
+      if (this.deps.isDisposed()) {
+        resolve(opts.fallback);
+        return;
+      }
+      const webContents = this.resolveActiveWebContents();
+      if (!webContents) {
+        resolve(opts.fallback);
+        return;
+      }
+
+      this.ensureActionsListener(
+        opts.responseChannel,
+        opts.extract as (payload: Record<string, unknown>) => unknown
+      );
+
+      const requestId = randomUUID();
+      const webContentsId = webContents.id;
+      const timer = setTimeout(() => {
+        const pending = this.pendingActionsRequests.get(requestId);
+        if (!pending) return;
+        pending.destroyedCleanup?.();
+        this.pendingActionsRequests.delete(requestId);
+        resolve(opts.fallback);
+      }, PLUGIN_DISPATCH_TIMEOUT_MS);
+
+      const onDestroyed = () => {
+        const pending = this.pendingActionsRequests.get(requestId);
+        if (!pending) return;
+        clearTimeout(pending.timer);
+        this.pendingActionsRequests.delete(requestId);
+        resolve(opts.fallback);
+      };
+      webContents.once("destroyed", onDestroyed);
+      const destroyedCleanup = () => {
+        try {
+          webContents.removeListener("destroyed", onDestroyed);
+        } catch {
+          // best-effort; webContents may already be gone
+        }
+      };
+
+      this.pendingActionsRequests.set(requestId, {
+        resolve: resolve as (value: unknown) => void,
+        fallback: opts.fallback,
+        timer,
+        webContentsId,
+        destroyedCleanup,
+      });
+
+      try {
+        webContents.send(opts.requestChannel, opts.buildRequest(requestId));
+      } catch {
+        clearTimeout(timer);
+        destroyedCleanup();
+        this.pendingActionsRequests.delete(requestId);
+        resolve(opts.fallback);
+      }
+    });
+  }
+
+  /**
+   * Tear down the lazily-registered response listeners and reject every pending
    * dispatch with an `EXECUTION_ERROR`. Invoked from `PluginService.dispose`.
    */
   dispose(): void {
@@ -237,5 +413,19 @@ export class PluginRendererDispatcher {
       });
     }
     this.pendingPluginDispatches.clear();
+
+    for (const cleanup of this.actionsListenerCleanups.values()) {
+      cleanup();
+    }
+    this.actionsListenerCleanups.clear();
+    // Catalog round-trips resolve with their fallback ([] / null) on disposal —
+    // the read-only surface has no error envelope, so an in-flight list/get
+    // degrades to "empty" rather than throwing into the plugin.
+    for (const pending of this.pendingActionsRequests.values()) {
+      clearTimeout(pending.timer);
+      pending.destroyedCleanup?.();
+      pending.resolve(pending.fallback);
+    }
+    this.pendingActionsRequests.clear();
   }
 }

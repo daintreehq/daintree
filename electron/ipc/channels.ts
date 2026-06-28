@@ -34,7 +34,6 @@ export const CHANNELS = {
   TERMINAL_TRASHED: "terminal:trashed",
   TERMINAL_RESTORED: "terminal:restored",
   TERMINAL_SET_ACTIVITY_TIER: "terminal:set-activity-tier",
-  TERMINAL_WAKE: "terminal:wake",
   TERMINAL_GET_FOR_PROJECT: "terminal:get-for-project",
   TERMINAL_GET_AVAILABLE: "terminal:get-available",
   TERMINAL_GET_BY_STATE: "terminal:get-by-state",
@@ -118,6 +117,7 @@ export const CHANNELS = {
   SYSTEM_GET_APP_METRICS: "system:get-app-metrics",
   SYSTEM_GET_HARDWARE_INFO: "system:get-hardware-info",
   SYSTEM_GET_RESOURCE_PROFILE: "system:get-resource-profile",
+  SYSTEM_GET_RESOURCE_PROFILE_SNAPSHOT: "system:get-resource-profile-snapshot",
   DIAGNOSTICS_GET_PROCESS_METRICS: "diagnostics:get-process-metrics",
   DIAGNOSTICS_GET_HEAP_STATS: "diagnostics:get-heap-stats",
   DIAGNOSTICS_GET_INFO: "diagnostics:get-info",
@@ -147,6 +147,7 @@ export const CHANNELS = {
   APP_VIEW_PAINTED: "app:view-painted",
   APP_VIEW_WARM_PAINTED: "app:view-warm-painted",
   APP_VIEW_REVEALED: "app:view-revealed",
+  APP_VIEW_CACHED: "app:view-cached",
   APP_DISMISS_ROSETTA_WARNING: "app:dismiss-rosetta-warning",
   MENU_ACTION: "menu:action",
   MENU_SHOW_CONTEXT: "menu:show-context",
@@ -160,9 +161,12 @@ export const CHANNELS = {
   LOGS_SET_VERBOSE: "logs:set-verbose",
   LOGS_GET_VERBOSE: "logs:get-verbose",
   LOGS_WRITE: "logs:write",
+  LOGS_WRITE_BATCH: "logs:write-batch",
+  LOGS_GET_DEFAULT_LEVEL: "logs:get-default-level",
   LOGS_GET_LEVEL_OVERRIDES: "logs:get-level-overrides",
   LOGS_SET_LEVEL_OVERRIDES: "logs:set-level-overrides",
   LOGS_CLEAR_LEVEL_OVERRIDES: "logs:clear-level-overrides",
+  LOGS_LEVEL_OVERRIDES_CHANGED: "logs:level-overrides-changed",
   LOGS_GET_REGISTRY: "logs:get-registry",
 
   ERROR_NOTIFY: "error:notify",
@@ -356,6 +360,7 @@ export const CHANNELS = {
   WEBVIEW_GET_CONSOLE_PROPERTIES: "webview:get-console-properties",
   WEBVIEW_RELOAD_IGNORING_CACHE: "webview:reload-ignoring-cache",
   WEBVIEW_GET_SCROLL_POSITION: "webview:get-scroll-position",
+  WEBVIEW_CAPTURE_SCREENSHOT: "webview:capture-screenshot",
   WEBVIEW_CONSOLE_MESSAGE: "webview:console-message",
   WEBVIEW_CONSOLE_CONTEXT_CLEARED: "webview:console-context-cleared",
   WEBVIEW_GET_NAVIGATION_HISTORY: "webview:get-navigation-history",
@@ -487,7 +492,9 @@ export const CHANNELS = {
   HELP_UNMARK_TERMINAL: "help:unmark-terminal",
   HELP_PROVISION_SESSION: "help:provision-session",
   HELP_REVOKE_SESSION: "help:revoke-session",
+  HELP_PEEK_PENDING_HIBERNATION: "help:peek-pending-hibernation",
   HELP_TAKE_PENDING_HIBERNATION: "help:take-pending-hibernation",
+  HELP_REPORT_PANEL_OPEN: "help:report-panel-open",
   HELP_GET_PINNED_ACTION_CONTEXT: "help:get-pinned-action-context",
 
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
@@ -625,6 +632,17 @@ export const CHANNELS = {
    */
   MCP_SERVER_REVOKE_SESSION_GRANTS: "mcp-server:revoke-session-grants",
   /**
+   * Approve a native session-scoped automation grant (#10648), addressed by
+   * the public help-session id. Authorizes a bounded set of tools for a
+   * bounded number of uses without a per-call modal. Caller-pin checked.
+   */
+  MCP_SERVER_ISSUE_NATIVE_GRANT: "mcp-server:issue-native-grant",
+  /**
+   * Revoke a single native automation grant by id. Idempotent. Caller-pin
+   * checked against the session the grant belongs to.
+   */
+  MCP_SERVER_REVOKE_NATIVE_GRANT: "mcp-server:revoke-native-grant",
+  /**
    * Reset the per-`(sessionId, toolId)` denial counters for a session without
    * touching its grants. Fired when the user dismisses the tier-mismatch
    * banner so the next out-of-tier call re-arms the banner instead of being
@@ -731,6 +749,12 @@ export const CHANNELS = {
   // Shortcut Hints channels
   SHORTCUT_HINTS_GET_COUNTS: "shortcut-hints:get-counts",
   SHORTCUT_HINTS_INCREMENT_COUNT: "shortcut-hints:increment-count",
+  SHORTCUT_HINTS_GET_HINTED_HOVER: "shortcut-hints:get-hinted-hover",
+  SHORTCUT_HINTS_SET_HINTED_HOVER: "shortcut-hints:set-hinted-hover",
+
+  // Forge recommendation channels
+  FORGE_RECOMMENDATION_GET_DISMISSED: "forge-recommendation:get-dismissed",
+  FORGE_RECOMMENDATION_MARK_DISMISSED: "forge-recommendation:mark-dismissed",
 
   // GPU channels
   GPU_GET_STATUS: "gpu:get-status",
@@ -809,6 +833,17 @@ export const CHANNELS = {
   FORGE_GET_ISSUE_URL: "forge:get-issue-url",
   FORGE_ASSIGN_ISSUE: "forge:assign-issue",
   FORGE_UNASSIGN_ISSUE: "forge:unassign-issue",
+  FORGE_APPROVE_PR: "forge:approve-pr",
+  FORGE_REQUEST_CHANGES: "forge:request-changes",
+  FORGE_DISMISS_REVIEW: "forge:dismiss-review",
+  FORGE_REQUEST_REVIEWERS: "forge:request-reviewers",
+  FORGE_CREATE_ISSUE: "forge:create-issue",
+  FORGE_CLOSE_ISSUE: "forge:close-issue",
+  FORGE_REOPEN_ISSUE: "forge:reopen-issue",
+  FORGE_EDIT_ISSUE: "forge:edit-issue",
+  FORGE_ADD_ISSUE_COMMENT: "forge:add-issue-comment",
+  FORGE_ADD_ISSUE_LABEL: "forge:add-issue-label",
+  FORGE_REMOVE_ISSUE_LABEL: "forge:remove-issue-label",
   FORGE_VALIDATE_TOKEN: "forge:validate-token",
   FORGE_SET_CREDENTIAL: "forge:set-credential",
   FORGE_GET_CREDENTIAL_STATUS: "forge:get-credential-status",
@@ -832,6 +867,14 @@ export const CHANNELS = {
   FORGE_GET_TOKEN_HEALTH: "forge:get-token-health",
   FORGE_GET_RATE_LIMIT_DETAILS: "forge:get-rate-limit-details",
   FORGE_OPEN_PR: "forge:open-pr",
+  FORGE_CREATE_PR: "forge:create-pr",
+  FORGE_CLOSE_PR: "forge:close-pr",
+  FORGE_REOPEN_PR: "forge:reopen-pr",
+  FORGE_MERGE_PR: "forge:merge-pr",
+  FORGE_CONVERT_PR_TO_DRAFT: "forge:convert-pr-to-draft",
+  FORGE_MARK_PR_READY_FOR_REVIEW: "forge:mark-pr-ready-for-review",
+  FORGE_COMMENT_ON_PR: "forge:comment-on-pr",
+  FORGE_EDIT_PR: "forge:edit-pr",
   FORGE_REPO_STATS_AND_PAGE_UPDATED: "forge:repo-stats-and-page-updated",
   FORGE_REPO_COUNTS_UPDATED: "forge:repo-counts-updated",
 
@@ -863,7 +906,6 @@ export const CHANNELS = {
   PLUGIN_CHECK_FOR_UPDATE: "plugin:check-for-update",
   PLUGIN_INVOKE: "plugin:invoke",
   PLUGIN_TOOLBAR_BUTTONS: "plugin:toolbar-buttons",
-  PLUGIN_MENU_ITEMS: "plugin:menu-items",
   PLUGIN_KEYBINDINGS: "plugin:keybindings",
   PLUGIN_CONTEXT_MENU_ITEMS: "plugin:context-menu-items",
   PLUGIN_VALIDATE_ACTION_IDS: "plugin:validate-action-ids",
@@ -871,9 +913,12 @@ export const CHANNELS = {
   PLUGIN_ACTIONS_REGISTER: "plugin:actions-register",
   PLUGIN_ACTIONS_UNREGISTER: "plugin:actions-unregister",
   PLUGIN_PANEL_KINDS_GET: "plugin:panel-kinds-get",
+  /** Lazy activation: force the plugin owning a contributed panel view to `activate()` before its module loads. */
+  PLUGIN_ACTIVATE_FOR_VIEW: "plugin:activate-for-view",
   PLUGIN_AGENTS_GET: "plugin:agents-get",
   PLUGIN_FORGE_PROVIDERS_GET: "plugin:forge-providers-get",
   PLUGIN_FILE_DECORATIONS_GET: "plugin:file-decorations-get",
+  PLUGIN_WORKTREE_STATUS_GET: "plugin:worktree-status-get",
   PLUGIN_GET_AUDIT_RECORDS: "plugin:get-audit-records",
   PLUGIN_GET_AUDIT_CONFIG: "plugin:get-audit-config",
   PLUGIN_CLEAR_AUDIT_LOG: "plugin:clear-audit-log",
@@ -885,10 +930,28 @@ export const CHANNELS = {
   PLUGIN_SETTINGS_SET_VALUE: "plugin:settings-set-value",
   PLUGIN_SETTINGS_DELETE_VALUE: "plugin:settings-delete-value",
   PLUGIN_SETTINGS_REVEAL_SECRET: "plugin:settings-reveal-secret",
+  /** Native folder/file chooser for plugin path/directory/file settings fields. */
+  PLUGIN_PICK_PATH: "plugin:pick-path",
+  /** Existence probe for a stored plugin `mustExist` path setting. */
+  PLUGIN_PATH_EXISTS: "plugin:path-exists",
   /** Bridge: main process dispatches a plugin-sourced action request to the renderer. */
   PLUGIN_DISPATCH_ACTION_REQUEST: "plugin:dispatch-action-request",
   /** Bridge: renderer returns the plugin-sourced action dispatch result to the main process. */
   PLUGIN_DISPATCH_ACTION_RESPONSE: "plugin:dispatch-action-response",
+  /** Bridge: main process asks the renderer for the plugin-facing action catalog (#10561). */
+  PLUGIN_ACTIONS_LIST_REQUEST: "plugin:actions-list-request",
+  /** Bridge: renderer returns the projected action catalog to the main process. */
+  PLUGIN_ACTIONS_LIST_RESPONSE: "plugin:actions-list-response",
+  /** Bridge: main process asks the renderer for a single projected action entry (#10561). */
+  PLUGIN_ACTIONS_GET_REQUEST: "plugin:actions-get-request",
+  /** Bridge: renderer returns the single projected action entry (or null) to the main process. */
+  PLUGIN_ACTIONS_GET_RESPONSE: "plugin:actions-get-response",
+  /** Bridge: main process asks the renderer to render an imperative plugin UI prompt (#10522). */
+  PLUGIN_UI_PROMPT_REQUEST: "plugin:ui-prompt-request",
+  /** Bridge: renderer returns the user's answer to a plugin UI prompt (fire-and-forget). */
+  PLUGIN_UI_PROMPT_RESPONSE: "plugin:ui-prompt-response",
+  /** Bridge: main process tells the renderer to drop a plugin's pending UI prompts on unload. */
+  PLUGIN_UI_PROMPT_CANCEL: "plugin:ui-prompt-cancel",
 
   // Plugin MCP supervisor channels (#9233) — stdio MCP servers contributed by
   // plugin manifests, supervised in the main process via execa. Distinct from
@@ -903,6 +966,22 @@ export const CHANNELS = {
   // Advanced tuning: the global tool-count cap surfaced as a setting (#9235).
   PLUGIN_MCP_GET_CONFIG: "plugin-mcp:get-config",
   PLUGIN_MCP_SET_CONFIG: "plugin-mcp:set-config",
+  // Gated tool dispatch (#10461): callTool runs the rate-limit → consent →
+  // dispatch pipeline; resolveConsent is the renderer's reply to a consent push.
+  PLUGIN_MCP_CALL_TOOL: "plugin-mcp:call-tool",
+  PLUGIN_MCP_RESOLVE_CONSENT: "plugin-mcp:resolve-consent",
+
+  // Just-in-time plugin host-capability consent (#10524). The renderer's reply
+  // to a `plugin-capability:consent-request` push; the request itself rides the
+  // typed event bus. Distinct from the per-tool plugin-MCP consent above —
+  // this gates first use of a host capability (shell:exec, fs:*-write, git:write).
+  PLUGIN_CAPABILITY_RESOLVE_CONSENT: "plugin-capability:resolve-consent",
+
+  // Plugin managed-process channels (#9234) — child processes spawned by a
+  // plugin via `host.process.spawn` (gated on `shell:exec`). `list` is the
+  // read-only renderer observability surface (e.g. a process dashboard);
+  // streaming output reaches a plugin's panels over its `postToPanel` transport.
+  PLUGIN_PROCESS_LIST: "plugin-process:list",
 
   // Config reload channels
   APP_RELOAD_CONFIG: "app:reload-config",

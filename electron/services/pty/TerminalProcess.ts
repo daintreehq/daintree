@@ -441,7 +441,11 @@ export class TerminalProcess {
     this.setupPtyHandlers(ptyProcess, dataHandoff);
 
     const ptyPid = ptyProcess.pid;
-    if (ptyPid !== undefined && deps.processTreeCache) {
+    // A PTY PID is usable only once positive — Windows ConPTY reports `pid: 0`
+    // during connect(). Skipping construction here avoids spawning a
+    // ProcessDetector that would spam "Invalid PTY PID" on every refresh tick;
+    // the pty-host re-triggers detection once the real PID resolves.
+    if (Number.isInteger(ptyPid) && ptyPid > 0 && deps.processTreeCache) {
       this.processDetector = new ProcessDetector(
         id,
         spawnedAt,
@@ -755,6 +759,8 @@ export class TerminalProcess {
       agentModelId: t.agentModelId,
       spawnArgs: t.spawnArgs,
       exitCode: t.exitCode,
+      exitSignal: t.exitSignal,
+      lastCheckResult: t.lastCheckResult,
       worktreeId: t.worktreeId,
       lastObservedTitle: t.lastObservedTitle,
       agentPresetId: t.agentPresetId,
@@ -955,6 +961,38 @@ export class TerminalProcess {
     this.writeQueue.submit(text);
   }
 
+  /**
+   * Stage `text` into the terminal's input WITHOUT submitting it — the no-Enter
+   * counterpart to {@link submit}. Reuses the same bracketed-paste / soft-newline
+   * encoding `performSubmit` uses for the body, then stops: no Enter is written
+   * and no output-settle bookkeeping runs. Multi-line text is always wrapped
+   * (bracketed paste when supported, soft newlines otherwise) so a stray `\n`
+   * can't trigger the shell-submit detection in {@link write} and auto-execute a
+   * line. Trailing newlines in `text` are dropped — staging never submits. Used
+   * by `host.sendToActiveAgent(text, { submit: false })` (#10558).
+   */
+  stage(text: string): void {
+    const terminal = this.terminalInfo;
+    if (terminal.isExited || !terminal.ptyProcess) {
+      return;
+    }
+    const normalized = normalizeSubmitText(text);
+    const { body } = splitTrailingNewlines(normalized);
+    if (body.length === 0) {
+      return;
+    }
+    terminal.lastInputTime = Date.now();
+    const useBracketedPaste = body.includes("\n") || body.length > PASTE_THRESHOLD_CHARS;
+    if (useBracketedPaste && supportsBracketedPaste(terminal)) {
+      const pasteBody = body.replace(/\n/g, "\r");
+      this.write(`${BRACKETED_PASTE_START}${pasteBody}${BRACKETED_PASTE_END}`);
+    } else if (body.includes("\n")) {
+      this.write(body.replace(/\n/g, getSoftNewlineSequence(terminal)));
+    } else {
+      this.write(body);
+    }
+  }
+
   private async performSubmit(text: string): Promise<void> {
     const terminal = this.terminalInfo;
     terminal.lastInputTime = Date.now();
@@ -1147,15 +1185,19 @@ export class TerminalProcess {
     const buffer = terminal.buffer.active;
     if (!buffer) return [];
 
+    const viewportTop = buffer.baseY;
     const viewportBottom = buffer.baseY + terminal.rows;
-    const start = Math.max(buffer.baseY, viewportBottom - n);
 
     const lines: string[] = [];
-    for (let i = start; i < viewportBottom; i++) {
+    for (let i = viewportTop; i < viewportBottom; i++) {
       const line = buffer.getLine(i);
-      if (line) lines.push(line.translateToString(true));
+      if (!line) continue;
+      const text = line.translateToString(true);
+      if (text.trim().length > 0) {
+        lines.push(text);
+      }
     }
-    return lines;
+    return lines.slice(-n);
   }
 
   getVisibleActivityLines(n: number): string[] {
@@ -1306,6 +1348,7 @@ export class TerminalProcess {
       },
       getLastNLines: (n) => tp.getLastNLines(n),
       getCursorLine: () => tp.getCursorLine(),
+      getRecentOutput: () => tp.forensicsBuffer.getRecentOutput(),
       getLastCommand: () => tp.semanticBufferManager.getLastCommand(),
       getPtyDescendantCount: () => tp.getPtyDescendantCount(),
       readForegroundProcessGroupSnapshot: () => tp.readForegroundProcessGroupSnapshot(),
@@ -1315,7 +1358,7 @@ export class TerminalProcess {
 
   private getPtyDescendantCount(): number | undefined {
     const ptyPid = this.terminalInfo.ptyProcess.pid;
-    if (ptyPid === undefined || !this.deps.processTreeCache) {
+    if (!Number.isInteger(ptyPid) || ptyPid <= 0 || !this.deps.processTreeCache) {
       return undefined;
     }
     return this.deps.processTreeCache.getDescendantPids(ptyPid).length;
@@ -1388,7 +1431,12 @@ export class TerminalProcess {
 
   startProcessDetector(): void {
     const ptyPid = this.terminalInfo.ptyProcess.pid;
-    if (ptyPid !== undefined && !this.processDetector && this.deps.processTreeCache) {
+    if (
+      Number.isInteger(ptyPid) &&
+      ptyPid > 0 &&
+      !this.processDetector &&
+      this.deps.processTreeCache
+    ) {
       this.processDetector = new ProcessDetector(
         this.id,
         this.terminalInfo.spawnedAt,
@@ -1473,7 +1521,9 @@ export class TerminalProcess {
 
   setActivityMonitorTier(tier: "active" | "background", pollingIntervalMs: number): void {
     // The tier is authoritative; the polling interval is only a cadence hint
-    // (issue #8596 — VISIBLE-unfocused panes are "active" at 200ms).
+    // (issue #8596 — VISIBLE-unfocused panes are "active" at 200ms). Output is
+    // never coalesced anymore (it streams live through _runPtyPipeline), so this
+    // only adjusts the headless agent-state poll cadence.
     this._activityTier = tier;
 
     if (this.activityMonitor) {
@@ -1700,6 +1750,33 @@ export class TerminalProcess {
       terminal.firstByteAt = now;
     }
     terminal.lastOutputTime = now;
+
+    // Tap OSC 9;4 progress sequences upstream of the rest of the pipeline so
+    // the agent-state signal is viewport-independent (#8701). The parser is
+    // a read-only side channel; `IdleSequenceFilter.stripIdleTerminalSequences`
+    // still removes the sequence from the ActivityMonitor byte-volume /
+    // activity-gate path, so those detectors stay clean (the renderer keeps
+    // the raw bytes — see TerminalProcess.osc.test.ts). This runs per-chunk for
+    // backgrounded terminals too so the heartbeat never lags (#8753, #10744).
+    this.osc94Parser.feed(data, now);
+
+    // Hibernation removed: PTY output ALWAYS flows through the live parse
+    // pipeline regardless of activity tier, so a backgrounded pane's renderer
+    // buffer stays current instead of being held in a coalesce queue until
+    // reveal. The agent-state poll cadence (50ms active / 500ms background, set
+    // in setActivityMonitorTier) still throttles the headless poll loop.
+    this._runPtyPipeline(data);
+  }
+
+  /**
+   * The per-chunk parse pipeline downstream of the OSC 9;4 tap and timestamp
+   * bookkeeping. Runs immediately for every chunk regardless of activity tier.
+   * `data` is the raw PTY string; the renderer-bound copy is derived here after
+   * OSC color queries are answered.
+   */
+  private _runPtyPipeline(data: string): void {
+    const terminal = this.terminalInfo;
+
     // noteAgentOutputActivity only acts on waiting/idle/completed — skip the
     // full-viewport extraction in other states (it would be computed and
     // discarded on every chunk during "working", the heaviest output phase).
@@ -1711,14 +1788,6 @@ export class TerminalProcess {
       (agentState === "waiting" || agentState === "idle" || agentState === "completed")
         ? this.getAgentOutputContentSnapshot()
         : undefined;
-
-    // Tap OSC 9;4 progress sequences upstream of the rest of the pipeline so
-    // the agent-state signal is viewport-independent (#8701). The parser is
-    // a read-only side channel; `IdleSequenceFilter.stripIdleTerminalSequences`
-    // still removes the sequence from the ActivityMonitor byte-volume /
-    // activity-gate path, so those detectors stay clean (the renderer keeps
-    // the raw bytes — see TerminalProcess.osc.test.ts).
-    this.osc94Parser.feed(data, now);
 
     if (this.activityMonitor) {
       this.activityMonitor.onData(data);
@@ -1760,6 +1829,7 @@ export class TerminalProcess {
 
     this.emitData(rendererData);
     this.forensicsBuffer.capture(data);
+    this.identityWatcher.observeOutput(data);
     this.semanticBufferManager.onData(data);
 
     // Output mirror for agent consumers: keep a rolling recent-output
@@ -1888,10 +1958,22 @@ export class TerminalProcess {
         recentOutput,
       });
 
+      // Persist exit metadata on every natural exit — not just the preserve
+      // path. The exit code is the authoritative pass/fail signal an MCP
+      // supervisor reads, and gating it on preserve-on-exit left ephemeral
+      // terminals with no recorded outcome (#10638). A user kill is not an
+      // outcome, so it is still excluded — that path emits agent:killed, not a
+      // completion. The write sits inside the ptyProcess identity guard and
+      // hasEmitted dedup above, so a stale exit from a respawned PTY cannot
+      // overwrite the live session (lesson #5948).
+      if (!terminal.wasKilled) {
+        terminal.exitCode = exitCode ?? 0;
+        terminal.exitSignal = signal;
+        terminal.isExited = true;
+      }
+
       const preserve = this.shouldPreserveOnExit(exitCode ?? 0);
       if (preserve) {
-        terminal.exitCode = exitCode ?? 0;
-        terminal.isExited = true;
         this.lifecycle.setExited({ code: exitCode ?? 0, signal, reason: reasonForEvent });
         this.snapshotAndDisposePreserved();
         return;

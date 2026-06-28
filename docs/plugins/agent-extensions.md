@@ -7,18 +7,20 @@ Daintree is an orchestration layer for AI coding agents. Plugins extend what tho
 
 Which you choose depends on what the extension needs to do. MCP servers can run arbitrary code (API calls, shell commands, subprocess orchestration). Skills are pure declarative knowledge — prompt snippets, workflow instructions, rubrics — injected into the agent's context on demand.
 
+Both extend an agent that's already running. A separate contribution point, `contributes.agents` (requires the `agent:register` capability), goes the other direction: it teaches Daintree about a launchable agent CLI it doesn't ship in-tree, so the CLI appears as a named, selectable agent rather than a generic shell. See [Contribution points → Agents](./contribution-points.md#agents--shipped-minimal-tier) for that manifest shape.
+
 ## MCP servers
 
 Daintree supervises any MCP server a plugin ships. It spawns the process lazily, manages lifecycle, exposes tools to agents, and cleans up on Daintree exit.
 
 ### Manifest
 
-The manifest key is `experimental_mcpServers` — the `experimental_` prefix signals that the shape may change before the feature ships.
+The manifest key is `mcpServers`. It was `experimental_mcpServers` before the 1.0 freeze; the old key is still accepted as a deprecated alias (it parses and runs identically but logs a one-time deprecation warning).
 
 ```json
 {
   "contributes": {
-    "experimental_mcpServers": [
+    "mcpServers": [
       {
         "id": "linear",
         "name": "Linear MCP",
@@ -39,7 +41,7 @@ The manifest key is `experimental_mcpServers` — the `experimental_` prefix sig
 | `name` | yes | Display name in the agent's tool list and Daintree UI. |
 | `command` | yes | Executable. Relative paths resolve inside the plugin directory. Absolute paths and bare commands (`node`, `python`, `npx`, `uv`) work too. |
 | `args` | no | Argv after the command. |
-| `env` | no | Environment variables. Values support the `${settings:settingId}` syntax, which resolves to the current value of the plugin's setting with that ID at spawn time. |
+| `env` | no | Environment variables. Values support the `${settings:settingId}` syntax, which resolves at spawn time to the current value of the plugin's **user-scope** setting with that ID (project scope is never read). An unset or `null` setting resolves to an empty string (so the env var stays a valid empty string, not the literal `undefined`); booleans and numbers are stringified, and objects/arrays are JSON-encoded. |
 
 **Intentionally excluded:** remote transports (no `url` field), explicit transport declarations (stdio is inferred from `command`'s presence), per-server working directories, restart policies. Shape deliberately matches the Claude Desktop / Cursor MCP config format — authors shipping the same server as a standalone Claude Desktop extension can copy their config verbatim.
 
@@ -54,7 +56,9 @@ Daintree spawns MCP servers **on first tool enumeration**, not at plugin activat
 
 **Tool discovery:** Daintree queries each server's tool list lazily as well. The list is fetched on first spawn and cached (invalidated on crash or restart). A server that ships with 40 tools won't dump 40 schemas into the agent's context window unless the agent asks for them — Daintree uses a capped two-tier disclosure: tier-1 (`pluginMcp.listTools`) returns terse tool summaries, bounded by a per-session `maxToolsPerSession` cap (`clampMaxTools`), and the full JSON schema for a tool is fetched lazily via tier-2 (`pluginMcp.getFullSchema`) only when the agent selects it.
 
-**Crash handling:** if a server process dies unexpectedly, the supervisor transitions it to status `crashed`, records `lastError`, invalidates its tool cache, and rejects any pending tool calls (`handleSubprocessExit`, `electron/services/PluginMcpSupervisor.ts`). There is **no** automatic retry or backoff, and no "degraded" state — the status enum is `spawning | ready | crashed | stopped`. Recovery is an explicit manual restart through the `pluginMcp.restart` IPC (also fired automatically when a `${settings:*}` secret referenced by the manifest rotates, since the new value is only folded into env at spawn time).
+**Crash handling:** if a server process dies unexpectedly, the supervisor transitions it to status `crashed`, records `lastError`, invalidates its tool cache, and rejects any pending tool calls (`handleSubprocessExit`, `electron/services/PluginMcpSupervisor.ts`). There is **no** automatic retry or backoff, and no "degraded" state — the status enum is `spawning | ready | crashed | stopped`. Recovery is an explicit manual restart through the `pluginMcp.restart` IPC.
+
+**Secret rotation:** when a **user-scope** setting changes, every currently running server (status `ready` or `crashed`) that references it via `${settings:settingId}` in its `command`, `args`, or `env` is automatically restarted, so the new value is folded in at the next spawn (`PluginMcpSupervisor.notifySettingChanged`, wired from `PluginService.setSettingValueFromUi`/`deleteSettingValueFromUi`). The restart is debounced ~1s so a burst of edits coalesces into one respawn. Servers that were never lazily started are left stopped — a settings change never eagerly boots a server. Project-scope writes are ignored, since `${settings:*}` resolves against user scope only.
 
 ### Writing an MCP server for Daintree
 
@@ -64,35 +68,29 @@ Minimal Node server:
 
 ```ts
 // dist/mcp/linear-server.js
-import { Server } from "@modelcontextprotocol/sdk/server";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
 
-const server = new Server({ name: "linear", version: "0.1.0" }, { capabilities: { tools: {} } });
+const server = new McpServer({ name: "linear", version: "0.1.0" });
 
-server.setRequestHandler("tools/list", async () => ({
-  tools: [
-    {
-      name: "list_issues",
-      description: "List Linear issues assigned to the current user.",
-      inputSchema: {
-        type: "object",
-        properties: { state: { type: "string" } },
-      },
-    },
-  ],
-}));
-
-server.setRequestHandler("tools/call", async (request) => {
-  if (request.params.name === "list_issues") {
-    const issues = await fetchLinear(process.env.LINEAR_API_KEY);
+server.registerTool(
+  "list_issues",
+  {
+    description: "List Linear issues assigned to the current user.",
+    inputSchema: { state: z.string().optional() },
+  },
+  async ({ state }) => {
+    const issues = await fetchLinear(process.env.LINEAR_API_KEY, state);
     return { content: [{ type: "text", text: JSON.stringify(issues) }] };
   }
-  throw new Error(`Unknown tool: ${request.params.name}`);
-});
+);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
 ```
+
+This uses the current `@modelcontextprotocol/sdk` 1.x high-level API (`McpServer` + `registerTool`; the older low-level `new Server(...)` + string-keyed `setRequestHandler("tools/list" | "tools/call", …)` still works but is the verbose path). Note the `.js` extensions on the deep import paths — required under Node's ESM (`NodeNext`) resolution. Daintree speaks the MCP `2025-06-18` protocol version over stdio NDJSON, so any spec-compliant server (any SDK, any language) interoperates.
 
 Bundle with your plugin's Vite build (as a separate entry — MCP servers run in a subprocess, not in Daintree's renderer).
 

@@ -34,13 +34,17 @@ export type UsePanelPaletteReturn = UseSearchablePaletteReturn<PanelKindOption> 
   confirmSelection: () => PanelKindOption | null;
 };
 
-import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import {
+  LAUNCHABLE_AGENT_IDS,
+  isBuiltInAgentId,
+  isAssistantOnlyAgentId,
+} from "@shared/config/agentIds";
 import { isAgentInstalled } from "../../shared/utils/agentAvailability";
 
 const STALE_THRESHOLD_MS = 5 * 60 * 1000;
 
 const AGENT_LAUNCH_ACTIONS: Record<string, KeyAction> = Object.fromEntries(
-  BUILT_IN_AGENT_IDS.map((id) => [id, `agent.${id}` as KeyAction])
+  LAUNCHABLE_AGENT_IDS.map((id) => [id, `agent.${id}` as KeyAction])
 );
 
 const PANEL_FUSE_OPTIONS: IFuseOptions<PanelKindOption> = {
@@ -111,7 +115,16 @@ export function usePanelPalette(): UsePanelPaletteReturn {
       });
 
     const isAgentHidden = (agentId: string): boolean => {
+      // Assistant-only agents are never launchable from the palette — they
+      // exist solely for the Daintree Assistant overlay.
+      if (isAssistantOnlyAgentId(agentId)) return true;
       if (!isAvailabilityInitialized) return false;
+      // Plugin-contributed agents are always shown — greyed-out via the
+      // `installed` field when their command is unresolved/uninstalled — rather
+      // than silently dropped the way an uninstalled built-in agent is (#10560).
+      // Without this, a plugin agent whose availability is still `undefined`
+      // (never probed) fails `isAgentInstalled` and vanishes from the palette.
+      if (!isBuiltInAgentId(agentId)) return false;
       return !isAgentInstalled(availability[agentId]);
     };
 

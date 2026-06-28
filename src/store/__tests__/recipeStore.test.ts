@@ -92,6 +92,27 @@ vi.mock("../panelStore", () => ({
   },
 }));
 
+// Preset sources resolved during recipe agent launches (#10722). Mutable so
+// individual tests can inject CCR/project presets; reset in beforeEach.
+const ccrPresetsState: { ccrPresetsByAgent: Record<string, unknown> } = {
+  ccrPresetsByAgent: {},
+};
+const projectPresetsState: { presetsByAgent: Record<string, unknown> } = {
+  presetsByAgent: {},
+};
+
+vi.mock("@/store/ccrPresetsStore", () => ({
+  useCcrPresetsStore: {
+    getState: vi.fn(() => ccrPresetsState),
+  },
+}));
+
+vi.mock("@/store/projectPresetsStore", () => ({
+  useProjectPresetsStore: {
+    getState: vi.fn(() => projectPresetsState),
+  },
+}));
+
 // runRecipeWithResults records the run via window.electron.runHistory.append
 // (fire-and-forget). Stub it so the call resolves cleanly in tests.
 const runHistoryAppendMock = vi.fn().mockResolvedValue(undefined);
@@ -110,6 +131,12 @@ describe("recipeStore", () => {
     useRecipeStore.getState().reset();
     panelStoreState.panelIds = [];
     panelStoreState.panelsById = {};
+    ccrPresetsState.ccrPresetsByAgent = {};
+    projectPresetsState.presetsByAgent = {};
+    // clearAllMocks resets call counts but not implementations — restore the
+    // hoisted default so each test starts from an empty agent-settings shape
+    // instead of inheriting a prior test's mockResolvedValue.
+    getAgentSettingsMock.mockResolvedValue({ agents: {} });
   });
 
   it("rejects malformed recipe json", async () => {
@@ -1073,6 +1100,209 @@ describe("recipeStore", () => {
         expect.arrayContaining(["--dangerously-skip-permissions"])
       );
       expect(call.agentLaunchFlags?.every((f) => f.trim().length > 0)).toBe(true);
+    });
+
+    describe("preset resolution (#10722)", () => {
+      type AgentSpawnCall = {
+        command?: string;
+        env?: Record<string, string>;
+        agentLaunchFlags?: string[];
+        agentPresetId?: string;
+        agentPresetColor?: string;
+      };
+
+      const runSingleAgentRecipe = async (
+        terminal: Record<string, unknown>,
+        worktreeId = "worktree-1"
+      ): Promise<AgentSpawnCall> => {
+        addTerminalMock.mockResolvedValue("terminal-1");
+        useRecipeStore.setState({
+          recipes: [
+            {
+              id: "recipe-1",
+              name: "Agent Recipe",
+              projectId: "project-1",
+              terminals: [terminal as never],
+              createdAt: Date.now(),
+            },
+          ],
+          isLoading: false,
+          currentProjectId: "project-1",
+        });
+        await useRecipeStore
+          .getState()
+          .runRecipeWithResults("recipe-1", "/tmp/worktree", worktreeId);
+        return addTerminalMock.mock.calls[0]?.[0] as AgentSpawnCall;
+      };
+
+      it("folds the agent-wide default preset's args and env into the launch", async () => {
+        getAgentSettingsMock.mockResolvedValue({
+          agents: {
+            claude: {
+              presetId: "fast",
+              customPresets: [
+                { id: "fast", name: "Fast", args: ["--fast"], env: { PRESET_KEY: "preset" } },
+              ],
+            },
+          },
+        });
+
+        const call = await runSingleAgentRecipe({ type: "claude", title: "Claude", env: {} });
+
+        expect(call.command).toContain("--fast");
+        expect(call.env).toMatchObject({ PRESET_KEY: "preset" });
+        expect(call.agentPresetId).toBe("fast");
+        expect(call.agentLaunchFlags).toEqual(expect.arrayContaining(["--fast"]));
+      });
+
+      it("prefers the worktree-scoped preset over the agent-wide default", async () => {
+        getAgentSettingsMock.mockResolvedValue({
+          agents: {
+            claude: {
+              presetId: "fast",
+              worktreePresets: { "worktree-1": "careful" },
+              customPresets: [
+                { id: "fast", name: "Fast", args: ["--fast"] },
+                { id: "careful", name: "Careful", args: ["--careful"], color: "#abcdef" },
+              ],
+            },
+          },
+        });
+
+        const call = await runSingleAgentRecipe({ type: "claude", title: "Claude", env: {} });
+
+        expect(call.command).toContain("--careful");
+        expect(call.command).not.toContain("--fast");
+        expect(call.agentPresetId).toBe("careful");
+        expect(call.agentPresetColor).toBe("#abcdef");
+        // Restart/resume must reproduce the scoped preset, so its args have to
+        // land in the persisted launch flags too — not just the live command.
+        expect(call.agentLaunchFlags).toEqual(expect.arrayContaining(["--careful"]));
+      });
+
+      it("lets recipe-defined env win over preset env on key conflicts", async () => {
+        getAgentSettingsMock.mockResolvedValue({
+          agents: {
+            claude: {
+              presetId: "fast",
+              customPresets: [
+                {
+                  id: "fast",
+                  name: "Fast",
+                  env: { SHARED: "from-preset", PRESET_ONLY: "preset" },
+                },
+              ],
+            },
+          },
+        });
+
+        const call = await runSingleAgentRecipe({
+          type: "claude",
+          title: "Claude",
+          env: { SHARED: "from-recipe" },
+        });
+
+        expect(call.env).toMatchObject({ SHARED: "from-recipe", PRESET_ONLY: "preset" });
+      });
+
+      it("applies preset behavioral overrides to the generated command", async () => {
+        getAgentSettingsMock.mockResolvedValue({
+          agents: {
+            claude: {
+              presetId: "danger",
+              customPresets: [
+                { id: "danger", name: "Danger", dangerousMode: "on", customFlags: "--verbose" },
+              ],
+            },
+          },
+        });
+
+        const call = await runSingleAgentRecipe({ type: "claude", title: "Claude", env: {} });
+
+        expect(call.command).toContain("--dangerously-skip-permissions");
+        expect(call.command).toContain("--verbose");
+        // effectiveEntry (not the raw entry) must reach buildAgentLaunchFlags so
+        // the bypass override survives a restart.
+        expect(call.agentLaunchFlags).toEqual(
+          expect.arrayContaining(["--dangerously-skip-permissions"])
+        );
+      });
+
+      it("falls back to the agent-wide default when the worktree preset is stale", async () => {
+        getAgentSettingsMock.mockResolvedValue({
+          agents: {
+            claude: {
+              presetId: "fast",
+              worktreePresets: { "worktree-1": "deleted" },
+              customPresets: [{ id: "fast", name: "Fast", args: ["--fast"] }],
+            },
+          },
+        });
+
+        const call = await runSingleAgentRecipe({ type: "claude", title: "Claude", env: {} });
+
+        expect(call.command).toContain("--fast");
+        expect(call.agentPresetId).toBe("fast");
+      });
+
+      it("resolves presets discovered from the CCR source", async () => {
+        getAgentSettingsMock.mockResolvedValue({
+          agents: { claude: { presetId: "ccr-preset" } },
+        });
+        ccrPresetsState.ccrPresetsByAgent = {
+          claude: [{ id: "ccr-preset", name: "CCR", args: ["--ccr"] }],
+        };
+
+        const call = await runSingleAgentRecipe({ type: "claude", title: "Claude", env: {} });
+
+        expect(call.command).toContain("--ccr");
+        expect(call.agentPresetId).toBe("ccr-preset");
+      });
+
+      it("resolves presets shared via the project source", async () => {
+        getAgentSettingsMock.mockResolvedValue({
+          agents: { claude: { presetId: "project-preset" } },
+        });
+        projectPresetsState.presetsByAgent = {
+          claude: [{ id: "project-preset", name: "Project", args: ["--project"] }],
+        };
+
+        const call = await runSingleAgentRecipe({ type: "claude", title: "Claude", env: {} });
+
+        expect(call.command).toContain("--project");
+        expect(call.agentPresetId).toBe("project-preset");
+      });
+
+      it("does not auto-apply a CCR/registry default when no preset is selected", async () => {
+        // Boundary of the #10722 fix: recipe launches honor an explicitly
+        // selected preset (agent-level or worktree-scoped) but, unlike manual
+        // launches, deliberately do not auto-select a registry/CCR default when
+        // the user never picked one — recipe launches stay conservative and
+        // never apply a preset the user didn't choose.
+        getAgentSettingsMock.mockResolvedValue({ agents: { claude: {} } });
+        ccrPresetsState.ccrPresetsByAgent = {
+          claude: [{ id: "ccr-default", name: "CCR Default", args: ["--ccr"] }],
+        };
+
+        const call = await runSingleAgentRecipe({ type: "claude", title: "Claude", env: {} });
+
+        expect(call.command).not.toContain("--ccr");
+        expect(call.agentPresetId).toBeUndefined();
+      });
+
+      it("does not attach preset metadata to non-agent terminals", async () => {
+        getAgentSettingsMock.mockResolvedValue({ agents: {} });
+
+        const call = await runSingleAgentRecipe({
+          type: "terminal",
+          title: "Shell",
+          command: "npm test",
+          env: {},
+        });
+
+        expect(call.agentPresetId).toBeUndefined();
+        expect(call.agentPresetColor).toBeUndefined();
+      });
     });
   });
 

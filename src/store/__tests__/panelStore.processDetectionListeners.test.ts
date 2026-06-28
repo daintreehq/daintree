@@ -212,7 +212,6 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     cleanup: vi.fn(),
     applyAgentPromotion: applyAgentPromotionMock,
     clearAgentPromotion: clearAgentPromotionMock,
-    accelerateHibernation: vi.fn(),
   },
 }));
 
@@ -223,7 +222,6 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     onResourceMetrics: vi.fn(() => vi.fn()),
     onReclaimMemory: vi.fn(() => vi.fn()),
     onFdLeakWarning: vi.fn(() => vi.fn()),
-    onAccelerateHibernation: vi.fn(() => vi.fn()),
   },
   terminalConfig: {
     get: vi.fn().mockResolvedValue({}),
@@ -698,10 +696,15 @@ describe("terminalStore process detection listeners", () => {
       cleanup();
     });
 
-    it("calls wake on paused-backpressure status", () => {
+    // Hibernation removal (Codex review Finding 2): a `paused-backpressure`
+    // status no longer drives an auto force-resume / wake. Recovery is left to
+    // flow-control auto-resume — the live renderer drains and acks bytes, and the
+    // host releases the backpressure token once the queue falls below the low
+    // watermark. The user-initiated force-resume action remains the escape hatch.
+    it("does not call wake on paused-backpressure status (flow-control auto-resume)", () => {
       const cleanup = setupTerminalStoreListeners();
       handlers.status?.({ id: "term-1", status: "paused-backpressure", timestamp: Date.now() });
-      expect(terminalInstanceService.wake).toHaveBeenCalledWith("term-1");
+      expect(terminalInstanceService.wake).not.toHaveBeenCalled();
       cleanup();
     });
 

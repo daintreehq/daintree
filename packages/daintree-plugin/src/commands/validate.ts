@@ -1,6 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { getPluginManifestSchema } from "../../../../electron/schemas/plugin.js";
+import {
+  DEPRECATED_CONTRIBUTION_ALIASES,
+  getPluginManifestSchema,
+} from "../../../../electron/schemas/plugin.js";
+import {
+  VALID_PANEL_ICON_IDS,
+  isValidPanelIconId,
+} from "../../../../shared/config/panelIconIds.js";
+import { isBuiltInAgentId } from "../../../../shared/config/agentIds.js";
 
 export interface ValidateOptions {
   /** Plugin project directory (default: cwd). */
@@ -15,8 +23,48 @@ export interface ValidateResult {
   warnings: string[];
 }
 
-/** Match `${settings:KEY}` interpolation tokens used in mcpServers env/args. */
-const SETTINGS_TOKEN = /\$\{settings:([^}]+)\}/g;
+/**
+ * Match `${settings:KEY}` interpolation tokens used in mcpServers env/args. The
+ * key grammar mirrors the host's substitution gate exactly — `SETTINGS_TEMPLATE_RE`
+ * in `electron/services/PluginMcpSupervisor.ts` only resolves `[a-zA-Z0-9._-]+`,
+ * so a token with any other character (e.g. a space) would never be substituted
+ * at runtime. Validating with the same grammar means `--env` reports the same
+ * set of tokens the host will actually resolve, instead of the broader `[^}]+`
+ * that flagged tokens the supervisor silently leaves literal.
+ */
+const SETTINGS_TOKEN = /\$\{settings:([a-zA-Z0-9._-]+)\}/g;
+
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await fs.access(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Advisory existence check for a relative build target (`main`, a view's
+ * `componentPath`). Pushes a warning when the file is missing but its top-level
+ * directory exists — a stale or mistyped path. Skips absolute paths, Windows
+ * separators, and the unbuilt-output case where the top-level dir (e.g. `dist`)
+ * is itself absent, so running `validate` before a build stays quiet.
+ */
+async function warnIfTargetMissing(
+  dir: string,
+  target: string | undefined,
+  label: string,
+  warnings: string[]
+): Promise<void> {
+  if (!target || path.isAbsolute(target) || target.includes("\\")) return;
+  if (await pathExists(path.join(dir, target))) return;
+  // Normalize a leading `./` so the top-segment check sees `dist`, not `.`
+  // (a bare `.` always exists and would defeat the unbuilt-output skip below).
+  const normalized = target.replace(/^\.\//, "");
+  const [topSegment] = normalized.split("/");
+  if (normalized.includes("/") && !(await pathExists(path.join(dir, topSegment)))) return;
+  warnings.push(`${label} "${target}" doesn't exist on disk — build the plugin or fix the path`);
+}
 
 function parseEnvFile(content: string): Map<string, string> {
   const map = new Map<string, string>();
@@ -75,8 +123,25 @@ export async function runValidate(opts: ValidateOptions = {}): Promise<ValidateR
 
   const manifest = result.data;
 
+  // Surface deprecated `contributes.experimental_*` aliases here too — the Zod
+  // schema migrates them silently, so without this the author gets no feedback
+  // until the host logs a deprecation warning at load time.
+  const rawContributes = (json as { contributes?: Record<string, unknown> } | null)?.contributes;
+  if (rawContributes && typeof rawContributes === "object") {
+    for (const [deprecated, canonical] of Object.entries(DEPRECATED_CONTRIBUTION_ALIASES)) {
+      if (deprecated in rawContributes) {
+        warnings.push(
+          `contributes.${deprecated} is deprecated — rename it to contributes.${canonical}`
+        );
+      }
+    }
+  }
+
   if (!manifest.engines?.daintree) {
-    warnings.push("engines.daintree omitted — consider pinning a range, e.g. ^0.11.0");
+    // `>=0.11.0` (open-ended), not `^0.11.0`: the caret on a 0.x minor resolves
+    // to `>=0.11.0 <0.12.0`, which the host's engine gate rejects on every
+    // release past 0.11.
+    warnings.push("engines.daintree omitted — consider pinning a range, e.g. >=0.11.0");
   }
 
   for (const [index, command] of manifest.contributes.commands.entries()) {
@@ -85,6 +150,37 @@ export async function runValidate(opts: ValidateOptions = {}): Promise<ValidateR
         `commands[${index}].keywords is empty — 2–3 terms help discoverability in the palette`
       );
     }
+  }
+
+  // Advisory icon check: a panel/view `iconId` outside the recognized set renders
+  // as the generic terminal icon (the renderers do no dynamic Lucide-by-name
+  // lookup). Built-in agent ids are exempt — `PanelKindIcon` resolves them via
+  // `getAgentConfig` to the agent's brand icon before the fallback. Non-fatal:
+  // the schema accepts any string and the renderer is the runtime authority.
+  const isUnrenderableIcon = (iconId: string): boolean =>
+    !isValidPanelIconId(iconId) && !isBuiltInAgentId(iconId);
+  for (const [index, panel] of manifest.contributes.panels.entries()) {
+    if (panel.iconId && isUnrenderableIcon(panel.iconId)) {
+      warnings.push(
+        `panels[${index}].iconId "${panel.iconId}" isn't a recognized panel icon — it will render as the default terminal icon. Known ids: ${VALID_PANEL_ICON_IDS.join(", ")}`
+      );
+    }
+  }
+  for (const [index, view] of manifest.contributes.views.entries()) {
+    if (view.iconId && isUnrenderableIcon(view.iconId)) {
+      warnings.push(
+        `views[${index}].iconId "${view.iconId}" isn't a recognized panel icon — it will render as the default terminal icon. Known ids: ${VALID_PANEL_ICON_IDS.join(", ")}`
+      );
+    }
+  }
+
+  // Advisory build-target check: warn when `main` or a view's `componentPath`
+  // points at a missing file whose parent dir exists (a typo or stale path). A
+  // missing top-level dir — typically an unbuilt `dist/` — is skipped so
+  // pre-build validation stays quiet.
+  await warnIfTargetMissing(dir, manifest.main, "main", warnings);
+  for (const [index, view] of manifest.contributes.views.entries()) {
+    await warnIfTargetMissing(dir, view.componentPath, `views[${index}].componentPath`, warnings);
   }
 
   if (opts.env) {

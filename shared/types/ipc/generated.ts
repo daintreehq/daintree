@@ -319,6 +319,86 @@ export interface GeneratedIpcInvokeMap {
     args: [enabled: boolean];
     result: { enabled: boolean; maxRecords: number };
   };
+  "forge-recommendation:get-dismissed": {
+    args: [];
+    result: Record<string, true>;
+  };
+  "forge-recommendation:mark-dismissed": {
+    args: [projectPath: string];
+    result: void;
+  };
+  "forge:add-issue-comment": {
+    args: [payload: { cwd: string; issueNumber: number; body: string }];
+    result: import("../forge.js").IssueComment;
+  };
+  "forge:add-issue-label": {
+    args: [payload: { cwd: string; issueNumber: number; label: string }];
+    result: import("../forge.js").ForgeLabel[];
+  };
+  "forge:approve-pr": {
+    args: [payload: { cwd: string; prNumber: number; body?: string | undefined }];
+    result: void;
+  };
+  "forge:close-issue": {
+    args: [
+      payload: {
+        cwd: string;
+        issueNumber: number;
+        stateReason?: import("../forge.js").IssueCloseReason | undefined;
+      },
+    ];
+    result: import("../forge.js").Issue;
+  };
+  "forge:close-pr": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: void;
+  };
+  "forge:comment-on-pr": {
+    args: [payload: { cwd: string; prNumber: number; body: string }];
+    result: void;
+  };
+  "forge:convert-pr-to-draft": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: void;
+  };
+  "forge:create-issue": {
+    args: [payload: { cwd: string; input: import("../forge.js").CreateIssueInput }];
+    result: import("../forge.js").Issue;
+  };
+  "forge:create-pr": {
+    args: [
+      payload: {
+        cwd: string;
+        head: string;
+        base: string;
+        title: string;
+        body?: string | undefined;
+        draft?: boolean | undefined;
+      },
+    ];
+    result: import("../forge.js").PR;
+  };
+  "forge:dismiss-review": {
+    args: [payload: { cwd: string; prNumber: number; reviewId: number; message: string }];
+    result: void;
+  };
+  "forge:edit-issue": {
+    args: [
+      payload: { cwd: string; issueNumber: number; input: import("../forge.js").EditIssueInput },
+    ];
+    result: import("../forge.js").Issue;
+  };
+  "forge:edit-pr": {
+    args: [
+      payload: {
+        cwd: string;
+        prNumber: number;
+        title?: string | undefined;
+        body?: string | undefined;
+      },
+    ];
+    result: import("../forge.js").PR;
+  };
   "forge:get-first-page-cache": {
     args: [payload: { cwd: string }];
     result: import("./forge.js").ForgeFirstPageCachePayload | null;
@@ -359,8 +439,51 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { providerId: string }];
     result: import("../forge.js").ForgeTokenHealthState | null;
   };
+  "forge:mark-pr-ready-for-review": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: void;
+  };
+  "forge:merge-pr": {
+    args: [
+      payload: {
+        cwd: string;
+        prNumber: number;
+        mergeMethod?: "merge" | "squash" | "rebase" | undefined;
+        commitTitle?: string | undefined;
+        commitMessage?: string | undefined;
+      },
+    ];
+    result: void;
+  };
   "forge:open-pr": {
     args: [payload: { cwd: string; prNumber: number }];
+    result: void;
+  };
+  "forge:remove-issue-label": {
+    args: [payload: { cwd: string; issueNumber: number; label: string }];
+    result: import("../forge.js").ForgeLabel[];
+  };
+  "forge:reopen-issue": {
+    args: [payload: { cwd: string; issueNumber: number }];
+    result: import("../forge.js").Issue;
+  };
+  "forge:reopen-pr": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: void;
+  };
+  "forge:request-changes": {
+    args: [payload: { cwd: string; prNumber: number; body: string }];
+    result: void;
+  };
+  "forge:request-reviewers": {
+    args: [
+      payload: {
+        cwd: string;
+        prNumber: number;
+        users?: string[] | undefined;
+        teams?: string[] | undefined;
+      },
+    ];
     result: void;
   };
   "forge:resolve-author-avatar": {
@@ -437,6 +560,10 @@ export interface GeneratedIpcInvokeMap {
     args: [terminalId: string];
     result: void;
   };
+  "help:peek-pending-hibernation": {
+    args: [projectId: string];
+    result: { agentId: string; agentSessionId: string; cwd: string; panelWasOpen: boolean } | null;
+  };
   "help:provision-session": {
     args: [
       input: {
@@ -454,6 +581,10 @@ export interface GeneratedIpcInvokeMap {
       mcpUrl: string | null;
       windowId: number;
     } | null;
+  };
+  "help:report-panel-open": {
+    args: [projectId: string, isOpen: boolean];
+    result: void;
   };
   "help:revoke-session": {
     args: [sessionId: string];
@@ -490,6 +621,20 @@ export interface GeneratedIpcInvokeMap {
   "idle-terminal:update-config": {
     args: [config: Partial<import("./idleTerminals.js").IdleTerminalNotifyConfig>];
     result: import("./idleTerminals.js").IdleTerminalNotifyConfig;
+  };
+  "logs:get-default-level": {
+    args: [];
+    result: string;
+  };
+  "logs:write-batch": {
+    args: [
+      entries: {
+        level: "error" | "debug" | "info" | "warn";
+        message: string;
+        context?: Record<string, unknown> | undefined;
+      }[],
+    ];
+    result: void;
   };
   "mcp-server:clear-audit-log": {
     args: [];
@@ -543,6 +688,17 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { sessionId: string; toolId: string }];
     result: import("./mcpServer.js").McpIssueGrantResult;
   };
+  "mcp-server:issue-native-grant": {
+    args: [
+      payload: {
+        helpSessionId: string;
+        allowedTools: string[];
+        maxUses?: number | undefined;
+        ttlMs?: number | undefined;
+      },
+    ];
+    result: import("./mcpServer.js").McpIssueNativeGrantResult;
+  };
   "mcp-server:list-active-bearers": {
     args: [];
     result: import("./mcpServer.js").ActiveBearerRecord[];
@@ -558,6 +714,10 @@ export interface GeneratedIpcInvokeMap {
   "mcp-server:reset-denial-counts": {
     args: [payload: { sessionId: string }];
     result: void;
+  };
+  "mcp-server:revoke-native-grant": {
+    args: [payload: { grantId: string }];
+    result: import("./mcpServer.js").McpRevokeNativeGrantResult;
   };
   "mcp-server:revoke-session-grants": {
     args: [payload: { sessionId: string }];
@@ -659,6 +819,14 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: boolean | undefined;
   };
+  "plugin-capability:resolve-consent": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityResolveConsentInput];
+    result: void;
+  };
+  "plugin-mcp:call-tool": {
+    args: [input: import("./pluginMcp.js").PluginMcpCallToolInput];
+    result: import("./pluginMcp.js").PluginMcpCallToolResult;
+  };
   "plugin-mcp:get-config": {
     args: [];
     result: import("./pluginMcp.js").PluginMcpConfig;
@@ -679,6 +847,10 @@ export interface GeneratedIpcInvokeMap {
     args: [key: import("./pluginMcp.js").PluginMcpServerKey];
     result: import("./pluginMcp.js").PluginMcpListToolsResult;
   };
+  "plugin-mcp:resolve-consent": {
+    args: [input: import("./pluginMcp.js").PluginMcpResolveConsentInput];
+    result: void;
+  };
   "plugin-mcp:restart": {
     args: [key: import("./pluginMcp.js").PluginMcpServerKey];
     result: void;
@@ -686,6 +858,10 @@ export interface GeneratedIpcInvokeMap {
   "plugin-mcp:set-config": {
     args: [config: import("./pluginMcp.js").PluginMcpConfig];
     result: import("./pluginMcp.js").PluginMcpConfig;
+  };
+  "plugin-process:list": {
+    args: [pluginId?: string | undefined];
+    result: import("./pluginProcess.js").PluginProcessInfo[];
   };
   "plugin:actions-get": {
     args: [];
@@ -697,6 +873,10 @@ export interface GeneratedIpcInvokeMap {
   };
   "plugin:actions-unregister": {
     args: [pluginId: string, actionId: string];
+    result: void;
+  };
+  "plugin:activate-for-view": {
+    args: [panelKindId: string];
     result: void;
   };
   "plugin:agents-get": {
@@ -763,13 +943,17 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../plugin.js").LoadedPluginInfo[];
   };
-  "plugin:menu-items": {
-    args: [];
-    result: { pluginId: string; item: import("../plugin.js").MenuItemContribution }[];
-  };
   "plugin:panel-kinds-get": {
     args: [];
     result: import("../../config/panelKindRegistry.js").PanelKindConfig[];
+  };
+  "plugin:path-exists": {
+    args: [pluginId: string, targetPath: string];
+    result: boolean;
+  };
+  "plugin:pick-path": {
+    args: [pluginId: string, request: import("../plugin.js").PluginPickPathRequest];
+    result: string | null;
   };
   "plugin:set-audit-enabled": {
     args: [enabled: boolean];
@@ -830,6 +1014,10 @@ export interface GeneratedIpcInvokeMap {
   "plugin:validate-action-ids": {
     args: [actionIds: string[]];
     result: void;
+  };
+  "plugin:worktree-status-get": {
+    args: [path: string];
+    result: import("../plugin.js").PluginWorktreeStatus | null;
   };
   "portal:close-tab": {
     args: [payload: import("../portal.js").PortalCloseTabPayload];
@@ -1013,12 +1201,20 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: Record<string, number>;
   };
+  "shortcut-hints:get-hinted-hover": {
+    args: [];
+    result: string[];
+  };
   "shortcut-hints:increment-count": {
     args: [actionId: string];
     result: void;
   };
+  "shortcut-hints:set-hinted-hover": {
+    args: [keys: string[]];
+    result: void;
+  };
   "slash-commands:list": {
-    args: [payload: import("../slashCommands.js").SlashCommandListRequest];
+    args: [payload: { agentId: string; projectPath?: string | undefined }];
     result: import("../slashCommands.js").SlashCommand[];
   };
   "system-sleep:get-awake-time": {
@@ -1036,6 +1232,10 @@ export interface GeneratedIpcInvokeMap {
   "system:get-resource-profile": {
     args: [];
     result: import("../resourceProfile.js").ResourceProfilePayload;
+  };
+  "system:get-resource-profile-snapshot": {
+    args: [];
+    result: import("../resourceProfile.js").ResourceProfileSnapshot;
   };
   "telemetry:get": {
     args: [];
@@ -1216,6 +1416,32 @@ export interface GeneratedIpcInvokeMap {
         agentPresetId?: string | undefined;
         agentPresetColor?: string | undefined;
         originalAgentPresetId?: string | undefined;
+        actionContext?:
+          | {
+              projectId?: string | undefined;
+              projectName?: string | undefined;
+              projectPath?: string | undefined;
+              activeWorktreeId?: string | undefined;
+              activeWorktreeName?: string | undefined;
+              activeWorktreePath?: string | undefined;
+              activeWorktreeBranch?: string | undefined;
+              activeWorktreeIsMain?: boolean | undefined;
+              focusedWorktreeId?: string | undefined;
+              focusedTerminalId?: string | undefined;
+              focusedTerminalKind?: string | undefined;
+              focusedTerminalType?: string | undefined;
+              focusedTerminalTitle?: string | undefined;
+              isSettingsOpen?: boolean | undefined;
+              dispatchSource?:
+                | "user"
+                | "menu"
+                | "keybinding"
+                | "agent"
+                | "context-menu"
+                | "plugin"
+                | undefined;
+            }
+          | undefined;
       },
     ];
     result: string;
@@ -1228,13 +1454,13 @@ export interface GeneratedIpcInvokeMap {
     args: [id: string];
     result: void;
   };
-  "terminal:wake": {
-    args: [id: string];
-    result: { state: string | null; warnings?: string[] | undefined };
-  };
   "watchdog:restart": {
     args: [];
     result: void;
+  };
+  "webview:capture-screenshot": {
+    args: [panelId: string];
+    result: { pngBase64: string; width: number; height: number };
   };
   "webview:get-navigation-history": {
     args: [webContentsId: number];

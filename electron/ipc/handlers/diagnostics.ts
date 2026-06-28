@@ -26,6 +26,7 @@ import type {
 import { getActionBreadcrumbService } from "../../services/ActionBreadcrumbService.js";
 import type * as DiagnosticsCollectorModule from "../../services/DiagnosticsCollector.js";
 import { recordBlinkSample, recordEluSample } from "../../services/ProcessMemoryMonitor.js";
+import { getAppMetricsSnapshot } from "../../utils/appMetricsSnapshot.js";
 
 let cachedDiagnosticsCollector: typeof DiagnosticsCollectorModule | null = null;
 async function getDiagnosticsCollector(): Promise<typeof DiagnosticsCollectorModule> {
@@ -191,6 +192,39 @@ function ensureEventLoopHistogram(): IntervalHistogram {
   return eventLoopHistogram;
 }
 
+/**
+ * Snapshot total + available physical memory for the diagnostics popover.
+ * `systemTotalMB` comes from os.totalmem() (always available). `systemAvailableMB`
+ * = free (+ purgeable on macOS) per process.getSystemMemoryInfo(), mirroring
+ * ProcessMemoryMonitor.readAvailableMemoryMb so the two stay in sync; it is
+ * omitted when that Chromium API is unavailable (e.g. test mocks), so the
+ * renderer hides the row rather than showing 0.
+ */
+function readSystemMemoryMB(): { systemTotalMB?: number; systemAvailableMB?: number } {
+  try {
+    const out: { systemTotalMB?: number; systemAvailableMB?: number } = {};
+    const totalBytes = os.totalmem();
+    if (Number.isFinite(totalBytes) && totalBytes > 0) {
+      out.systemTotalMB = Math.round(totalBytes / 1024 / 1024);
+    }
+    const getInfo = (
+      process as {
+        getSystemMemoryInfo?: () => { free: number; purgeable?: number; total: number };
+      }
+    ).getSystemMemoryInfo;
+    if (typeof getInfo === "function") {
+      const info = getInfo.call(process);
+      const freeKb = typeof info.free === "number" ? info.free : 0;
+      const purgeableKb = typeof info.purgeable === "number" ? info.purgeable : 0;
+      const availableKb = freeKb + purgeableKb;
+      if (availableKb > 0) out.systemAvailableMB = Math.round(availableKb / 1024);
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
@@ -198,27 +232,34 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
 
   const handleGetAppMetrics = (): AppMetricsSummary => {
     try {
-      const metrics = app.getAppMetrics();
+      const metrics = getAppMetricsSnapshot();
       let totalKB = 0;
       for (const proc of metrics) {
-        totalKB += proc.memory.privateBytes ?? proc.memory.workingSetSize;
+        // workingSetSize is the only cross-platform field: privateBytes is
+        // Windows-only and reports 0 on macOS/Linux, so a `?? workingSetSize`
+        // fallback never fires there and silently sums to zero (lesson #8646).
+        totalKB += proc.memory.workingSetSize;
       }
       return { totalMemoryMB: Math.round(totalKB / 1024) };
     } catch {
-      return { totalMemoryMB: 0 };
+      // Distinguish a real read failure from a genuine 0 reading so the badge
+      // can suppress the value instead of rendering a misleading "0MB".
+      return { totalMemoryMB: 0, unavailable: true };
     }
   };
   handlers.push(typedHandle(CHANNELS.SYSTEM_GET_APP_METRICS, handleGetAppMetrics));
 
   const handleGetProcessMetrics = (): ProcessMetricEntry[] => {
     try {
-      const metrics = app.getAppMetrics();
+      const metrics = getAppMetricsSnapshot();
       return metrics
         .map((proc) => ({
           pid: proc.pid,
           type: proc.type,
           name: proc.name ?? proc.type,
-          memoryMB: Math.round((proc.memory.privateBytes ?? proc.memory.workingSetSize) / 1024),
+          // workingSetSize only — privateBytes is Windows-only and reports 0
+          // on macOS/Linux (lesson #8646).
+          memoryMB: Math.round(proc.memory.workingSetSize / 1024),
           cpuPercent: Math.round((proc.cpu?.percentCPUUsage ?? 0) * 10) / 10,
         }))
         .sort((a, b) => b.memoryMB - a.memoryMB);
@@ -251,6 +292,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
       return {
         uptimeSeconds: Math.floor(process.uptime()),
         eventLoopP99Ms: Math.round(histogram.percentile(99) / 1_000_000),
+        ...readSystemMemoryMB(),
       };
     } catch {
       return { uptimeSeconds: 0, eventLoopP99Ms: 0 };

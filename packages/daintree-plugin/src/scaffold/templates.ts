@@ -21,10 +21,14 @@ export interface ScaffoldContext {
   template: TemplateKind;
 }
 
-const DAINTREE_ENGINE_RANGE = "^0.11.0";
+// Open-ended lower bound: `^0.11.0` resolves to `>=0.11.0 <0.12.0` under semver's
+// 0.x caret rule, so a scaffolded plugin would be rejected by the host's
+// `engines.daintree` gate on every release past 0.11 (e.g. 0.19.x). Match the
+// reference manifests under `plugins/sample/`, which pin the open-ended range.
+const DAINTREE_ENGINE_RANGE = ">=0.11.0";
 
 /**
- * A `contributes.panels` entry paired with an `experimental_views` entry of the
+ * A `contributes.panels` entry paired with a `views` entry of the
  * same `id`. The runtime (`PluginService.loadPlugin`) only registers a panel
  * kind while iterating declared `panels`, attaching the view's `componentPath`
  * when ids match; a view with no matching panel is ignored, so the scaffold
@@ -65,7 +69,7 @@ function manifest(ctx: ScaffoldContext, contributes: Record<string, unknown>): s
   return JSON.stringify(obj, null, 2) + "\n";
 }
 
-function packageJson(ctx: ScaffoldContext, needsReact: boolean): string {
+function packageJson(ctx: ScaffoldContext, needsReact: boolean, needsServer = false): string {
   const deps: Record<string, string> = {};
   const devDeps: Record<string, string> = {
     "@daintreehq/plugin-sdk": "^0.1.0",
@@ -76,6 +80,18 @@ function packageJson(ctx: ScaffoldContext, needsReact: boolean): string {
   if (needsReact) {
     devDeps.react = "^19.0.0";
     devDeps["react-dom"] = "^19.0.0";
+    // React 19 still ships types separately; without these the generated
+    // `panel.tsx` fails `tsc` on the `react` import and the JSX namespace.
+    devDeps["@types/react"] = "^19.0.0";
+    devDeps["@types/react-dom"] = "^19.0.0";
+  }
+  if (needsServer) {
+    // Runtime dependency, not a devDependency: the spawned `node dist/server.js`
+    // imports the SDK at runtime, so it must be installed in the packaged plugin.
+    // Floor at 1.12: `server/mcp.js`'s `McpServer` arrived in 1.3 and
+    // `registerTool` (used by the generated server) in 1.12, so a lower `^1.0.0`
+    // could resolve to a release missing both.
+    deps["@modelcontextprotocol/sdk"] = "^1.12.0";
   }
   const obj = {
     name: ctx.scopedName,
@@ -84,7 +100,9 @@ function packageJson(ctx: ScaffoldContext, needsReact: boolean): string {
     type: "module",
     private: true,
     scripts: {
-      build: "vite build",
+      // `vite build` runs one config object at a time, so the Node server entry
+      // is built by a second pass against vite.config.server.ts (see that file).
+      build: needsServer ? "vite build && vite build --config vite.config.server.ts" : "vite build",
       validate: "daintree-plugin validate",
       package: "daintree-plugin package",
     },
@@ -111,7 +129,11 @@ function tsconfig(jsx: boolean): string {
 }
 
 function viteConfig(entries: Record<string, string>): string {
-  const entryLiteral = JSON.stringify(entries, null, 6).replace(/\n/g, "\n  ");
+  // `entry:` sits at 6-space depth inside the `build.lib` block, so each line of
+  // the embedded object literal needs a 6-space lead to align — and the closing
+  // brace must land back at that depth. Stringify at 2-space indent, then offset
+  // every line by the 6 spaces of the surrounding context.
+  const entryLiteral = JSON.stringify(entries, null, 2).replace(/\n/g, "\n      ");
   return `import { daintreePlugin } from "@daintreehq/plugin-vite";
 import { defineConfig } from "vite";
 
@@ -129,9 +151,39 @@ export default defineConfig({
 `;
 }
 
+/**
+ * Vite config for Node entries (stdio MCP servers). Separate from the browser
+ * config because a single \`vite build\` runs one config object at a time, and a
+ * Node target must not be applied to the renderer/panel bundles. \`target:
+ * "node"\` externalizes Node built-ins instead of browser-shimming them — the
+ * root cause of a stdio server crashing with \`process.stdin === undefined\`.
+ * \`emptyOutDir: false\` preserves the browser build that ran first.
+ */
+function viteServerConfig(entries: Record<string, string>): string {
+  // Same 6-space alignment as viteConfig (see the note there).
+  const entryLiteral = JSON.stringify(entries, null, 2).replace(/\n/g, "\n      ");
+  return `import { daintreePlugin } from "@daintreehq/plugin-vite";
+import { defineConfig } from "vite";
+
+export default defineConfig({
+  plugins: [daintreePlugin({ target: "node" })],
+  build: {
+    lib: {
+      entry: ${entryLiteral},
+      formats: ["es"],
+    },
+    outDir: "dist",
+    emptyOutDir: false,
+    sourcemap: true,
+  },
+});
+`;
+}
+
 const GITIGNORE = `node_modules/
 dist/
 *.dntr
+.dev-marker
 `;
 
 function commandEntry(ctx: ScaffoldContext): string {
@@ -147,7 +199,7 @@ function commandEntry(ctx: ScaffoldContext): string {
  * unregistered automatically on unload, so the disposer here is a no-op.
  */
 export async function activate(host: PluginHostApi): Promise<() => void> {
-  host.registerAction(
+  await host.registerAction(
     {
       id: "run",
       title: ${title},
@@ -172,7 +224,7 @@ function viewEntry(ctx: ScaffoldContext): string {
 
 /**
  * ${c(ctx.displayName)} — view plugin entry. The panel UI lives in \`src/panel.tsx\`
- * and is wired through \`contributes.experimental_views\` in plugin.json.
+ * and is wired through \`contributes.views\` in plugin.json.
  */
 export async function activate(_host: PluginHostApi): Promise<() => void> {
   return () => {};
@@ -198,7 +250,7 @@ function mcpEntry(ctx: ScaffoldContext): string {
 
 /**
  * ${c(ctx.displayName)} — MCP plugin entry. The MCP server process is declared in
- * \`contributes.experimental_mcpServers\` (see plugin.json) and spawned by
+ * \`contributes.mcpServers\` (see plugin.json) and spawned by
  * Daintree; \`src/server.ts\` is its skeleton implementation.
  */
 export async function activate(_host: PluginHostApi): Promise<() => void> {
@@ -210,13 +262,31 @@ export async function activate(_host: PluginHostApi): Promise<() => void> {
 function mcpServer(ctx: ScaffoldContext): string {
   return `#!/usr/bin/env node
 /**
- * Minimal stdio MCP server skeleton for ${c(ctx.displayName)}. Replace this with a
- * real implementation using \`@modelcontextprotocol/sdk\`. Daintree spawns it
- * per the \`command\`/\`args\` in plugin.json and speaks MCP over stdio.
+ * Minimal stdio MCP server for ${c(ctx.displayName)}. Daintree spawns it per the
+ * \`command\`/\`args\` in plugin.json and speaks MCP over stdio. The SDK answers
+ * the \`initialize\` handshake and \`tools/list\` automatically once connected —
+ * the previous skeleton only listened on stdin and never replied, so the host
+ * timed out and marked the server crashed.
+ *
+ * Never write to stdout yourself: it carries the JSON-RPC stream and stray
+ * output corrupts the protocol. Log to stderr (\`console.error\`) instead. Built
+ * with vite.config.server.ts (\`target: "node"\`) so the SDK's stdio transport
+ * gets the real Node \`process\` rather than a browser shim.
  */
-process.stdin.on("data", () => {
-  // Wire up an MCP server here (tools/list, tools/call, …).
-});
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+
+const server = new McpServer({ name: ${q(ctx.scopedName)}, version: "0.1.0" });
+
+// Example tool — replace with your own. It takes no input and returns text;
+// add an \`inputSchema\` (a Zod raw shape) to accept arguments.
+server.registerTool(
+  "ping",
+  { description: ${q(`Health check for ${ctx.displayName}; replies with "pong".`)} },
+  async () => ({ content: [{ type: "text", text: "pong" }] })
+);
+
+await server.connect(new StdioServerTransport());
 `;
 }
 
@@ -248,7 +318,7 @@ export function buildTemplateFiles(ctx: ScaffoldContext): Record<string, string>
       return {
         "plugin.json": manifest(ctx, {
           panels: [viewPanelContribution(ctx)],
-          experimental_views: [
+          views: [
             {
               id: "main",
               name: ctx.displayName,
@@ -268,7 +338,7 @@ export function buildTemplateFiles(ctx: ScaffoldContext): Record<string, string>
     case "mcp": {
       return {
         "plugin.json": manifest(ctx, {
-          experimental_mcpServers: [
+          mcpServers: [
             {
               id: "main",
               name: ctx.displayName,
@@ -277,9 +347,10 @@ export function buildTemplateFiles(ctx: ScaffoldContext): Record<string, string>
             },
           ],
         }),
-        "package.json": packageJson(ctx, false),
+        "package.json": packageJson(ctx, false, true),
         "tsconfig.json": tsconfig(false),
-        "vite.config.ts": viteConfig({ index: "src/index.ts", server: "src/server.ts" }),
+        "vite.config.ts": viteConfig({ index: "src/index.ts" }),
+        "vite.config.server.ts": viteServerConfig({ server: "src/server.ts" }),
         ".gitignore": GITIGNORE,
         "src/index.ts": mcpEntry(ctx),
         "src/server.ts": mcpServer(ctx),
@@ -300,7 +371,7 @@ export function buildTemplateFiles(ctx: ScaffoldContext): Record<string, string>
             },
           ],
           panels: [viewPanelContribution(ctx)],
-          experimental_views: [
+          views: [
             {
               id: "main",
               name: ctx.displayName,
@@ -308,7 +379,7 @@ export function buildTemplateFiles(ctx: ScaffoldContext): Record<string, string>
               location: "panel",
             },
           ],
-          experimental_mcpServers: [
+          mcpServers: [
             {
               id: "main",
               name: ctx.displayName,
@@ -317,13 +388,13 @@ export function buildTemplateFiles(ctx: ScaffoldContext): Record<string, string>
             },
           ],
         }),
-        "package.json": packageJson(ctx, true),
+        "package.json": packageJson(ctx, true, true),
         "tsconfig.json": tsconfig(true),
         "vite.config.ts": viteConfig({
           index: "src/index.ts",
           panel: "src/panel.tsx",
-          server: "src/server.ts",
         }),
+        "vite.config.server.ts": viteServerConfig({ server: "src/server.ts" }),
         ".gitignore": GITIGNORE,
         "src/index.ts": commandEntry(ctx),
         "src/panel.tsx": panelComponent(ctx),

@@ -5,6 +5,7 @@ import {
   resolvePluginCategory,
 } from "@shared/config/pluginCategoryRegistry";
 import { PluginIconTile } from "./pluginIcons";
+import { PluginMcpServersSection } from "./PluginMcpServersSection";
 import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,10 +14,12 @@ import {
 } from "@/components/Settings/SettingsSubtabBar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
+import { systemClient } from "@/clients/systemClient";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
   type BuiltInPluginCapability,
   type LoadedPluginInfo,
+  type PluginAuthor,
   type PluginInstallSource,
 } from "@shared/types/plugin";
 
@@ -97,6 +100,11 @@ const CAPABILITY_META = {
   "agent:register": {
     label: "Register agent CLIs",
     description: "Add launchable agent commands",
+    severity: "warning",
+  },
+  "agent:input": {
+    label: "Send input to agents",
+    description: "Type and submit text into running agent sessions",
     severity: "warning",
   },
   "git:read": {
@@ -213,7 +221,61 @@ function PluginCapabilityList({ plugin }: { plugin: LoadedPluginInfo }) {
   );
 }
 
-type PluginDetailTab = "overview" | "settings" | "capabilities";
+/**
+ * Attribution credits (#10516) for the selected plugin. Each author's `name` is
+ * plain text; `url` and `email` (when present) are clickable, routed through
+ * `systemClient.openExternal` (the established external-navigation path) rather
+ * than bare anchors. Styled neutrally — credits are reference metadata, not a
+ * focus signal, so they never take the accent colour (CLAUDE.md accent-restraint).
+ * The `url`/`email` were https/format-validated at the manifest gate, so the
+ * values handed to `openExternal` are safe to construct.
+ */
+function PluginContributors({ authors }: { authors: PluginAuthor[] }) {
+  return (
+    <div className="space-y-2">
+      <h4 className="text-[11px] font-medium uppercase tracking-wide text-daintree-text/40">
+        Contributors
+      </h4>
+      <ul className="space-y-2">
+        {authors.map((author, index) => {
+          const { name, url, email, role } = author;
+          return (
+            <li key={`${name}-${index}`} className="text-xs">
+              <div className="text-daintree-text/80">
+                {name}
+                {role && <span className="text-[11px] text-daintree-text/40"> · {role}</span>}
+              </div>
+              {(url || email) && (
+                <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                  {url && (
+                    <button
+                      type="button"
+                      onClick={() => void systemClient.openExternal(url)}
+                      className="text-[11px] text-daintree-text/50 hover:text-daintree-text/80 hover:underline break-all"
+                    >
+                      {url}
+                    </button>
+                  )}
+                  {email && (
+                    <button
+                      type="button"
+                      onClick={() => void systemClient.openExternal(`mailto:${email}`)}
+                      className="text-[11px] text-daintree-text/50 hover:text-daintree-text/80 hover:underline break-all"
+                    >
+                      {email}
+                    </button>
+                  )}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+type PluginDetailTab = "overview" | "settings" | "capabilities" | "mcp-servers";
 
 interface PluginDetailPaneProps {
   plugin: LoadedPluginInfo;
@@ -254,6 +316,8 @@ export function PluginDetailPane({
   const sourceLabel = SOURCE_BADGE_LABELS[plugin.source] ?? plugin.source;
   const categoryLabel = getPluginCategoryMeta(resolvePluginCategory(plugin.manifest)).label;
   const hasSettings = (plugin.manifest.contributes.settings?.length ?? 0) > 0;
+  const mcpServers = plugin.manifest.contributes.mcpServers ?? [];
+  const hasMcpServers = mcpServers.length > 0;
   const [activeTab, setActiveTab] = useState<PluginDetailTab>("overview");
 
   // URL-installed plugins have an upstream to re-fetch and compare against;
@@ -272,6 +336,9 @@ export function PluginDetailPane({
     { id: "overview", label: "Overview" },
     { id: "settings", label: "Settings" },
     { id: "capabilities", label: "Permissions" },
+    // Only plugins that actually contribute MCP servers get the runtime tab —
+    // it surfaces subprocess health and restart, which is meaningless otherwise.
+    ...(hasMcpServers ? [{ id: "mcp-servers", label: "MCP servers" }] : []),
   ];
 
   return (
@@ -372,7 +439,12 @@ export function PluginDetailPane({
           subtabs={tabs}
           activeId={activeTab}
           onChange={(id) => {
-            if (id === "overview" || id === "settings" || id === "capabilities") {
+            if (
+              id === "overview" ||
+              id === "settings" ||
+              id === "capabilities" ||
+              (id === "mcp-servers" && hasMcpServers)
+            ) {
               setActiveTab(id);
             }
           }}
@@ -387,6 +459,10 @@ export function PluginDetailPane({
             </p>
           ) : (
             <p className="text-xs text-daintree-text/40">No description provided.</p>
+          )}
+
+          {plugin.manifest.authors && plugin.manifest.authors.length > 0 && (
+            <PluginContributors authors={plugin.manifest.authors} />
           )}
 
           {plugin.loadError && (
@@ -411,6 +487,10 @@ export function PluginDetailPane({
         ))}
 
       {activeTab === "capabilities" && <PluginCapabilityList plugin={plugin} />}
+
+      {activeTab === "mcp-servers" && hasMcpServers && (
+        <PluginMcpServersSection pluginId={plugin.manifest.name} declared={mcpServers} />
+      )}
     </div>
   );
 }

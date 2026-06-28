@@ -4,7 +4,6 @@ import fs from "node:fs";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { SimpleGit } from "simple-git";
 import { CHANNELS } from "../channels.js";
 import { checkRateLimit, typedHandle, typedHandleWithContext, sendToRenderer } from "../utils.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
@@ -16,7 +15,12 @@ import type {
   RepoState,
   StagingStatus,
 } from "../../../shared/types/git.js";
-import { validateCwd, createHardenedGit, createAuthenticatedGit } from "../../utils/hardenedGit.js";
+import {
+  validateCwd,
+  createHardenedGit,
+  createAuthenticatedGit,
+  buildContinueEnv,
+} from "../../utils/hardenedGit.js";
 import { getPerFileDiffStats, invalidateStagingDiffStatCache } from "../../utils/git.js";
 import { store } from "../../store.js";
 import { getSoundService } from "../../services/getSoundService.js";
@@ -48,6 +52,21 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { GitOperationError } from "../../utils/errorTypes.js";
 
 const execFileAsync = promisify(execFile);
+
+function classifyGitFailure(error: unknown, formattedMessage: string) {
+  const reason = classifyGitError(error);
+  return reason === "unknown" ? classifyGitError(formattedMessage) : reason;
+}
+
+function encodeGitOperationErrorMessage(
+  reason: ReturnType<typeof classifyGitFailure>,
+  message: string,
+  fields: { leaseSha?: string; branchName?: string } = {}
+): string {
+  const leaseSha = fields.leaseSha ? encodeURIComponent(fields.leaseSha) : "";
+  const branchName = fields.branchName ? encodeURIComponent(fields.branchName) : "";
+  return `[GitError|${reason}|${leaseSha}|${branchName}] ${message}`;
+}
 
 interface StagingFileEntry {
   path: string;
@@ -285,7 +304,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
         playSoundFireAndForget("git-push-error");
       }
       const errorMessage = formatErrorMessage(error, "git push failed");
-      const gitReason = classifyGitError(error);
+      const gitReason = classifyGitFailure(error, errorMessage);
       // Capture the lease SHA at rejection time, not at click time. A
       // background fetch advancing `refs/remotes/origin/<branch>` between
       // here and the user's force-push click would silently degrade
@@ -301,13 +320,18 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
           leaseSha = undefined;
         }
       }
-      throw new GitOperationError(gitReason, errorMessage, {
-        cwd: payload.cwd,
-        op: "push",
-        cause: error instanceof Error ? error : undefined,
-        leaseSha,
-        branchName,
-      });
+      throw new GitOperationError(
+        gitReason,
+        encodeGitOperationErrorMessage(gitReason, errorMessage, { leaseSha, branchName }),
+        {
+          cwd: payload.cwd,
+          op: "push",
+          cause: error instanceof Error ? error : undefined,
+          rawMessage: errorMessage,
+          leaseSha,
+          branchName,
+        }
+      );
     } finally {
       pushingCwds.delete(payload.cwd);
     }
@@ -332,12 +356,17 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
         playSoundFireAndForget("git-push-error");
       }
       const errorMessage = formatErrorMessage(error, "git pull --rebase failed");
-      const gitReason = classifyGitError(error);
-      throw new GitOperationError(gitReason, errorMessage, {
-        cwd: payload.cwd,
-        op: "pull-rebase",
-        cause: error instanceof Error ? error : undefined,
-      });
+      const gitReason = classifyGitFailure(error, errorMessage);
+      throw new GitOperationError(
+        gitReason,
+        encodeGitOperationErrorMessage(gitReason, errorMessage),
+        {
+          cwd: payload.cwd,
+          op: "pull-rebase",
+          cause: error instanceof Error ? error : undefined,
+          rawMessage: errorMessage,
+        }
+      );
     }
   };
   handlers.push(typedHandle(CHANNELS.GIT_PULL_REBASE, handlePullRebase));
@@ -374,12 +403,22 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
         playSoundFireAndForget("git-push-error");
       }
       const errorMessage = formatErrorMessage(error, "git push --force-with-lease failed");
-      const gitReason = classifyGitError(error);
-      throw new GitOperationError(gitReason, errorMessage, {
-        cwd: payload.cwd,
-        op: "force-push-with-lease",
-        cause: error instanceof Error ? error : undefined,
-      });
+      const gitReason = classifyGitFailure(error, errorMessage);
+      throw new GitOperationError(
+        gitReason,
+        encodeGitOperationErrorMessage(gitReason, errorMessage, {
+          leaseSha: payload.leaseSha,
+          branchName,
+        }),
+        {
+          cwd: payload.cwd,
+          op: "force-push-with-lease",
+          cause: error instanceof Error ? error : undefined,
+          rawMessage: errorMessage,
+          leaseSha: payload.leaseSha,
+          branchName,
+        }
+      );
     }
   };
   handlers.push(typedHandle(CHANNELS.GIT_FORCE_PUSH_WITH_LEASE, handleForcePushWithLease));
@@ -415,12 +454,18 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       }));
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "git log failed");
-      const gitReason = classifyGitError(error);
-      throw new GitOperationError(gitReason, errorMessage, {
-        cwd: payload.cwd,
-        op: "list-remote-commits",
-        cause: error instanceof Error ? error : undefined,
-      });
+      const gitReason = classifyGitFailure(error, errorMessage);
+      throw new GitOperationError(
+        gitReason,
+        encodeGitOperationErrorMessage(gitReason, errorMessage, { branchName }),
+        {
+          cwd: payload.cwd,
+          op: "list-remote-commits",
+          cause: error instanceof Error ? error : undefined,
+          rawMessage: errorMessage,
+          branchName,
+        }
+      );
     }
   };
   handlers.push(typedHandle(CHANNELS.GIT_LIST_REMOTE_COMMITS, handleListRemoteCommits));
@@ -598,16 +643,6 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
   };
   handlers.push(typedHandle(CHANNELS.GIT_GET_STAGING_STATUS, handleGetStagingStatus));
 
-  const withNonInteractiveEnv = (git: SimpleGit): SimpleGit =>
-    git.env({
-      ...process.env,
-      LC_MESSAGES: "C",
-      LANGUAGE: "",
-      GIT_EDITOR: "true",
-      GIT_MERGE_AUTOEDIT: "no",
-      GIT_TERMINAL_PROMPT: "0",
-    });
-
   const handleAbortRepositoryOperation = async (cwd: string): Promise<void> => {
     checkRateLimit(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION, 5, 10_000);
     validateCwd(cwd);
@@ -641,13 +676,20 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     checkRateLimit(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION, 5, 10_000);
     validateCwd(cwd);
 
-    const git = withNonInteractiveEnv(await createHardenedGit(cwd));
+    // One .env() call only: simple-git's .env() replaces the spawn env
+    // wholesale, so re-stating the full hardened env (plus editor suppression)
+    // via buildContinueEnv is the only way to keep createHardenedGit's
+    // hardening intact on the continue path (#7058, #10786).
+    const git = (await createHardenedGit(cwd)).env(buildContinueEnv());
     const gitDir = await resolveGitDir(git, cwd);
     const { state } = await detectRepoOperationState(gitDir, false);
 
     switch (state) {
       case "MERGING":
-        await git.merge(["--continue", "--no-edit"]);
+        // `git merge --continue` rejects extra args ("--continue expects no
+        // arguments", exit 129); the env overlay (GIT_MERGE_AUTOEDIT=no,
+        // GIT_EDITOR=true) suppresses the editor instead of a `--no-edit` flag.
+        await git.merge(["--continue"]);
         return;
       case "REBASING":
         // `git rebase --continue` has no `--no-edit`; the env overlay covers it.

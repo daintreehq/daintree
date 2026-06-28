@@ -15,46 +15,46 @@ describe("VIEWPORT_PRESETS", () => {
     expect(VIEWPORT_PRESET_LIST.map((p) => p.id)).toEqual(["galaxy", "iphone", "pixel", "ipad"]);
   });
 
-  it("Galaxy S25 covers the sub-393 px breakpoint", () => {
+  it("Galaxy S26 covers the sub-393 px breakpoint", () => {
     expect(VIEWPORT_PRESETS.galaxy).toMatchObject({
       id: "galaxy",
-      label: "Galaxy S25",
+      label: "Galaxy S26",
       width: 360,
       height: 780,
     });
-    expect(VIEWPORT_PRESETS.galaxy.userAgent).toContain("Android 15");
-    expect(VIEWPORT_PRESETS.galaxy.userAgent).toContain("SM-S931U");
+    expect(VIEWPORT_PRESETS.galaxy.userAgent).toContain("Android 16");
+    expect(VIEWPORT_PRESETS.galaxy.userAgent).toContain("SM-S941U");
   });
 
-  it("iPhone 16 keeps the iPhone 15 dimensions", () => {
+  it("iPhone 17 keeps the canonical 393 pt iPhone width", () => {
     expect(VIEWPORT_PRESETS.iphone).toMatchObject({
       id: "iphone",
-      label: "iPhone 16",
+      label: "iPhone 17",
       width: 393,
       height: 852,
     });
-    expect(VIEWPORT_PRESETS.iphone.userAgent).toContain("iPhone OS 18_0");
+    expect(VIEWPORT_PRESETS.iphone.userAgent).toContain("iPhone OS 19_4");
   });
 
-  it("Pixel 9 ticks height up to 923", () => {
+  it("Pixel 10 holds the 412 x 923 Pixel width", () => {
     expect(VIEWPORT_PRESETS.pixel).toMatchObject({
       id: "pixel",
-      label: "Pixel 9",
+      label: "Pixel 10",
       width: 412,
       height: 923,
     });
-    expect(VIEWPORT_PRESETS.pixel.userAgent).toContain("Android 15");
-    expect(VIEWPORT_PRESETS.pixel.userAgent).toContain("Pixel 9");
+    expect(VIEWPORT_PRESETS.pixel.userAgent).toContain("Android 16");
+    expect(VIEWPORT_PRESETS.pixel.userAgent).toContain("Pixel 10");
   });
 
-  it("iPad Air M3 keeps the iPad Air dimensions", () => {
+  it('iPad Air 11" keeps the 820 x 1180 iPad width', () => {
     expect(VIEWPORT_PRESETS.ipad).toMatchObject({
       id: "ipad",
-      label: "iPad Air M3",
+      label: 'iPad Air 11"',
       width: 820,
       height: 1180,
     });
-    expect(VIEWPORT_PRESETS.ipad.userAgent).toContain("CPU OS 18_0");
+    expect(VIEWPORT_PRESETS.ipad.userAgent).toContain("CPU OS 19_4");
   });
 });
 

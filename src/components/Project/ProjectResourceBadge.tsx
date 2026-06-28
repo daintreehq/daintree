@@ -7,47 +7,23 @@ import { logError } from "@/utils/logger";
 import type { ProcessMetricEntry, HeapStats, DiagnosticsInfo } from "@shared/types/ipc/system";
 import type { BulkProjectStatsEntry } from "@shared/types/ipc/project";
 import type { Project } from "@shared/types";
+import {
+  type MemoryState,
+  type TrendDirection,
+  type MemoryThresholds,
+  FALLBACK_THRESHOLDS,
+  computeThresholds,
+  getMemoryState,
+  getTrendDirection,
+  formatMemory,
+} from "./ProjectResourceBadge.utils";
 
-type MemoryState = "normal" | "elevated" | "critical";
-type TrendDirection = "up" | "down" | "stable";
-
-const MEMORY_THRESHOLD_ELEVATED = 500;
-const MEMORY_THRESHOLD_CRITICAL = 800;
-const TREND_DEADBAND_MB_PER_MIN = 3;
 const MAX_SAMPLES = 12;
 const BADGE_POLL_MS = 10_000;
 const POPOVER_POLL_MS = 4_000;
 const SAMPLES_PER_MIN = 60_000 / BADGE_POLL_MS;
-
-function getMemoryState(totalMB: number): MemoryState {
-  if (totalMB >= MEMORY_THRESHOLD_CRITICAL) return "critical";
-  if (totalMB >= MEMORY_THRESHOLD_ELEVATED) return "elevated";
-  return "normal";
-}
-
-function computeSlope(samples: number[]): number {
-  const n = samples.length;
-  if (n < 3) return 0;
-  const sumX = (n * (n - 1)) / 2;
-  const sumX2 = (n * (n - 1) * (2 * n - 1)) / 6;
-  const sumY = samples.reduce((a, b) => a + b, 0);
-  const sumXY = samples.reduce((acc, y, i) => acc + i * y, 0);
-  const denom = n * sumX2 - sumX * sumX;
-  if (denom === 0) return 0;
-  return (n * sumXY - sumX * sumY) / denom;
-}
-
-function getTrendDirection(samples: number[]): TrendDirection {
-  const slopePerSample = computeSlope(samples);
-  const slopePerMin = slopePerSample * SAMPLES_PER_MIN;
-  if (Math.abs(slopePerMin) < TREND_DEADBAND_MB_PER_MIN) return "stable";
-  return slopePerMin > 0 ? "up" : "down";
-}
-
-function formatMemory(mb: number): string {
-  if (mb >= 1024) return `${(mb / 1024).toFixed(1)}GB`;
-  return `${mb}MB`;
-}
+// Cadence for advancing the "updated Ns ago" freshness label while the popover is open.
+const FRESHNESS_TICK_MS = 1_000;
 
 function formatUptime(seconds: number): string {
   const h = Math.floor(seconds / 3600);
@@ -118,10 +94,46 @@ function HeapBar({ heapStats }: { heapStats: HeapStats }) {
   );
 }
 
+function MemoryRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between text-[10px]">
+      <span className="text-daintree-text/50">{label}</span>
+      <span className="font-mono tabular-nums text-daintree-text/40">{value}</span>
+    </div>
+  );
+}
+
+function MemorySummary({
+  appMemoryMB,
+  workloadMB,
+  systemAvailableMB,
+}: {
+  appMemoryMB: number;
+  workloadMB: number | null;
+  systemAvailableMB: number | null;
+}) {
+  return (
+    <div className="space-y-1">
+      <MemoryRow label="Daintree app" value={formatMemory(appMemoryMB)} />
+      {workloadMB !== null && (
+        <MemoryRow label="Terminal workloads" value={formatMemory(workloadMB)} />
+      )}
+      {systemAvailableMB !== null && (
+        <MemoryRow label="System available" value={formatMemory(systemAvailableMB)} />
+      )}
+      {workloadMB !== null && (
+        <div className="text-[9px] text-daintree-text/25 leading-tight">
+          Workloads = dev servers, agents, and tools your terminals launched
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ProcessTable({ metrics }: { metrics: ProcessMetricEntry[] }) {
   return (
     <div className="space-y-1">
-      <div className="text-[10px] text-daintree-text/50 font-medium">Processes</div>
+      <div className="text-[10px] text-daintree-text/50 font-medium">Daintree processes</div>
       <div className="space-y-px">
         {metrics.map((proc) => (
           <div
@@ -157,18 +169,32 @@ function ProjectBreakdown({
     <div className="space-y-1">
       <div className="text-[10px] text-daintree-text/50 font-medium">Projects</div>
       <div className="space-y-px">
-        {entries.map((entry) => (
-          <div
-            key={entry.id}
-            className="flex items-center justify-between text-[10px] font-mono py-0.5"
-          >
-            <span className="text-daintree-text/60 truncate max-w-[140px]">{entry.name}</span>
-            <div className="flex gap-2 text-daintree-text/40 shrink-0">
-              <span>{entry.stats!.terminalCount} terms</span>
-              <span>{entry.stats!.estimatedMemoryMB}MB</span>
+        {entries.map((entry) => {
+          const s = entry.stats!;
+          // Prefer measured terminal-tree memory; the `~` prefix marks the
+          // terminalCount*50 estimate used when the OS table couldn't be read.
+          const memLabel =
+            s.terminalMemoryMB !== undefined
+              ? formatMemory(s.terminalMemoryMB)
+              : `~${formatMemory(s.estimatedMemoryMB)}`;
+          return (
+            <div
+              key={entry.id}
+              className="flex items-center justify-between text-[10px] font-mono py-0.5 gap-2"
+            >
+              <span className="text-daintree-text/60 truncate min-w-0">
+                {entry.name}
+                {s.topProcess && (
+                  <span className="text-daintree-text/25"> · {s.topProcess.name}</span>
+                )}
+              </span>
+              <div className="flex gap-2 text-daintree-text/40 shrink-0">
+                <span>{s.terminalCount} terms</span>
+                <span className="tabular-nums">{memLabel}</span>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -227,13 +253,37 @@ export function ProjectResourceBadge() {
   const [isLoading, setIsLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [popoverData, setPopoverData] = useState<PopoverData | null>(null);
+  const [popoverSampledAt, setPopoverSampledAt] = useState<number | null>(null);
+  const [nowTs, setNowTs] = useState(() => Date.now());
+  const [thresholds, setThresholds] = useState<MemoryThresholds>(FALLBACK_THRESHOLDS);
   const samplesRef = useRef<number[]>([]);
   // Mirror into state so JSX doesn't read the ref during render (React Compiler).
   const [samples, setSamples] = useState<number[]>([]);
 
-  const memoryState = getMemoryState(stats.totalMemoryMB);
-  const trend = getTrendDirection(samples);
+  const memoryState = getMemoryState(stats.totalMemoryMB, thresholds);
+  const trend = getTrendDirection(samples, SAMPLES_PER_MIN);
   const projectIdsKey = useMemo(() => stats.projects.map((p) => p.id).join(","), [stats.projects]);
+
+  // Sum measured terminal-tree memory across projects for the popover summary.
+  // Null when no project reported a measurement (OS table unreadable) so the
+  // row hides rather than implying a real 0.
+  const workloadMB = useMemo(() => {
+    if (!popoverData) return null;
+    let sum = 0;
+    let measured = false;
+    for (const entry of Object.values(popoverData.projectStats)) {
+      if (typeof entry.terminalMemoryMB === "number") {
+        sum += entry.terminalMemoryMB;
+        measured = true;
+      }
+    }
+    return measured ? sum : null;
+  }, [popoverData]);
+  const systemAvailableMB = popoverData?.diagnosticsInfo.systemAvailableMB ?? null;
+  const ageSec =
+    popoverSampledAt !== null ? Math.max(0, Math.round((nowTs - popoverSampledAt) / 1000)) : null;
+  const ageLabel =
+    ageSec === null ? null : ageSec < 2 ? "Updated just now" : `Updated ${ageSec}s ago`;
 
   const fetchStats = useCallback(async () => {
     try {
@@ -241,6 +291,10 @@ export function ProjectResourceBadge() {
         projectClient.getAll(),
         systemClient.getAppMetrics(),
       ]);
+
+      // Suppress the reading rather than reporting a misleading "0MB" when the
+      // main process couldn't read process metrics.
+      if (appMetrics.unavailable) return null;
 
       const currentStats = useProjectStatsStore.getState().stats;
       let running = 0;
@@ -265,21 +319,46 @@ export function ProjectResourceBadge() {
     }
   }, []);
 
+  // Read total RAM once to scale the severity thresholds to the machine.
   useEffect(() => {
     let cancelled = false;
+    void systemClient
+      .getHardwareInfo()
+      .then((info) => {
+        if (!cancelled) setThresholds(computeThresholds(info.totalMemoryBytes));
+      })
+      .catch((error) => {
+        logError("[ProjectResourceBadge] Failed to fetch hardware info", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let pending = false;
     let interval: ReturnType<typeof setInterval> | null = null;
 
     const runFetch = async () => {
-      const result = await fetchStats();
-      if (!cancelled && result) {
-        samplesRef.current = result.nextSamples;
-        setSamples(result.nextSamples);
-        setStats({
-          runningProjects: result.runningProjects,
-          totalMemoryMB: result.totalMemoryMB,
-          projects: result.projects,
-        });
-        setIsLoading(false);
+      // Skip if a previous poll is still in flight so a slow IPC round-trip
+      // can't stack overlapping calls or write results out of order.
+      if (pending) return;
+      pending = true;
+      try {
+        const result = await fetchStats();
+        if (!cancelled && result) {
+          samplesRef.current = result.nextSamples;
+          setSamples(result.nextSamples);
+          setStats({
+            runningProjects: result.runningProjects,
+            totalMemoryMB: result.totalMemoryMB,
+            projects: result.projects,
+          });
+          setIsLoading(false);
+        }
+      } finally {
+        pending = false;
       }
     };
 
@@ -298,6 +377,11 @@ export function ProjectResourceBadge() {
       if (document.hidden) {
         stopInterval();
       } else {
+        // The poll pauses while hidden, so pre-hide samples are arbitrarily old
+        // relative to the resumed cadence — drop them so the trend slope isn't
+        // computed across the gap.
+        samplesRef.current = [];
+        setSamples([]);
         void runFetch();
         startInterval();
       }
@@ -337,6 +421,7 @@ export function ProjectResourceBadge() {
 
         if (!cancelled) {
           setPopoverData({ processMetrics, heapStats, diagnosticsInfo, projectStats });
+          setPopoverSampledAt(Date.now());
         }
       } catch (error) {
         logError("[ProjectResourceBadge] Failed to fetch popover data", error);
@@ -351,6 +436,15 @@ export function ProjectResourceBadge() {
       clearInterval(interval);
     };
   }, [open, projectIdsKey]);
+
+  // Tick a 1s clock while the popover is open so the "updated Ns ago" label
+  // advances and a stalled metric path reveals itself instead of looking fresh.
+  useEffect(() => {
+    if (!open) return;
+    setNowTs(Date.now());
+    const tick = setInterval(() => setNowTs(Date.now()), FRESHNESS_TICK_MS);
+    return () => clearInterval(tick);
+  }, [open]);
 
   if (isLoading || stats.runningProjects === 0) {
     return null;
@@ -381,14 +475,25 @@ export function ProjectResourceBadge() {
         <div className="space-y-3">
           {popoverData ? (
             <>
+              <MemorySummary
+                appMemoryMB={stats.totalMemoryMB}
+                workloadMB={workloadMB}
+                systemAvailableMB={systemAvailableMB}
+              />
+              <ProjectBreakdown projects={stats.projects} projectStats={popoverData.projectStats} />
               <ProcessTable metrics={popoverData.processMetrics} />
               <HeapBar heapStats={popoverData.heapStats} />
-              <ProjectBreakdown projects={stats.projects} projectStats={popoverData.projectStats} />
               <DiagnosticsSection
                 diagnosticsInfo={popoverData.diagnosticsInfo}
                 trend={trend}
                 trendSamples={samples}
               />
+              <div className="pt-1 border-t border-divider space-y-0.5">
+                {ageLabel && <div className="text-[9px] text-daintree-text/30">{ageLabel}</div>}
+                <div className="text-[9px] text-daintree-text/25 leading-tight">
+                  Figures sum working-set memory and count shared pages once per process
+                </div>
+              </div>
             </>
           ) : (
             <Skeleton label="Loading resource details" className="space-y-3">

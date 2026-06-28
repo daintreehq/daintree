@@ -1,12 +1,76 @@
 import type {
+  PluginWorktreeFileState,
   PluginWorktreeLinked,
   PluginWorktreeLinkedIssue,
   PluginWorktreeLinkedPR,
   PluginWorktreeSnapshot,
+  PluginWorktreeStatus,
+  PluginWorktreeStatusFile,
 } from "../types/plugin.js";
+import type { GitStatus, WorktreeChanges } from "../types/git.js";
 import type { NormalizedPRState, ResourceRef } from "../types/forge.js";
 import type { WorktreeSnapshot } from "../types/workspace-host.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "./forgeProviderIds.js";
+
+/**
+ * Collapse the internal {@link GitStatus} vocabulary down to the five
+ * plugin-facing states. `copied` reads as `added`, `conflicted` as `modified`;
+ * `ignored` returns `null` so the file is dropped from the projection entirely
+ * (a plugin scanning "what changed" never wants ignored noise).
+ */
+function projectFileState(status: GitStatus): PluginWorktreeFileState | null {
+  switch (status) {
+    case "added":
+    case "copied":
+      return "added";
+    case "modified":
+    case "conflicted":
+      return "modified";
+    case "deleted":
+      return "deleted";
+    case "untracked":
+      return "untracked";
+    case "renamed":
+      return "renamed";
+    case "ignored":
+      return null;
+  }
+}
+
+/**
+ * Project the host's already-polled {@link WorktreeChanges} down to the
+ * read-only {@link PluginWorktreeStatus} allowlist, then deep-freeze it. Reuses
+ * the status the host polled — never shells out. Returns `null` when the host
+ * has not computed changes for this worktree yet. Files are sorted by path so
+ * consumers get a stable order to diff against.
+ */
+export function toPluginWorktreeStatus(
+  changes: WorktreeChanges | null | undefined
+): PluginWorktreeStatus | null {
+  if (changes == null) return null;
+
+  const counts: Record<PluginWorktreeFileState, number> = {
+    added: 0,
+    modified: 0,
+    deleted: 0,
+    untracked: 0,
+    renamed: 0,
+  };
+  const files: PluginWorktreeStatusFile[] = [];
+  for (const change of changes.changes) {
+    const state = projectFileState(change.status);
+    if (state === null) continue;
+    counts[state] += 1;
+    files.push(Object.freeze({ path: change.path, state }));
+  }
+  files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+
+  return Object.freeze({
+    files: Object.freeze(files),
+    changedFileCount: files.length,
+    counts: Object.freeze(counts),
+  });
+}
 
 /**
  * Project an internal `WorktreeSnapshot` down to the read-only
@@ -30,6 +94,7 @@ export function toPluginWorktreeSnapshot(snapshot: WorktreeSnapshot): PluginWork
     mood: snapshot.mood,
     lastActivityTimestamp: snapshot.lastActivityTimestamp ?? null,
     createdAt: snapshot.createdAt,
+    status: toPluginWorktreeStatus(snapshot.worktreeChanges),
   };
   return Object.freeze(projection);
 }

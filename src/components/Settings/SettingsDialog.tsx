@@ -33,6 +33,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { appClient } from "@/clients";
+import type { AppVersionInfo } from "@shared/types/ipc/app";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { GeneralTab } from "./GeneralTab";
@@ -84,9 +85,9 @@ const SETTINGS_HIGHLIGHT_DECAY_MS = 1500;
 // doesn't mount every tab at once.
 export const SETTINGS_TAB_HOVER_INTENT_MS = 150;
 
-// The app version is immutable for the process lifetime — fetch it once and
-// reuse across dialog opens so the sidebar slot never shows a placeholder.
-let cachedAppVersion: string | null = null;
+// Version info is immutable for the process lifetime — fetch it once and reuse
+// across dialog opens so the About card never shows a placeholder.
+let cachedVersionInfo: AppVersionInfo | null = null;
 
 // Lowercase the first letter so the label reads naturally mid-sentence
 // ("Requires voice input"), unless it starts with an initialism like
@@ -195,7 +196,8 @@ function SettingsDialogInner({
     }
   }, [isOpen, setPortalOpen]);
 
-  const [appVersion, setAppVersion] = useState<string>(cachedAppVersion ?? "");
+  const [appVersion, setAppVersion] = useState<string>(cachedVersionInfo?.appVersion ?? "");
+  const [buildArch, setBuildArch] = useState<string | undefined>(cachedVersionInfo?.arch);
 
   const [hiddenSettingBanner, setHiddenSettingBanner] = useState<{
     label: string;
@@ -245,15 +247,16 @@ function SettingsDialogInner({
   }, [isOpen, defaultTab, defaultSubtab, defaultSectionId]);
 
   useEffect(() => {
-    if (isOpen && cachedAppVersion === null) {
+    if (isOpen && cachedVersionInfo === null) {
       appClient
-        .getVersion()
-        .then((version) => {
-          cachedAppVersion = version;
-          setAppVersion(version);
+        .getVersionInfo()
+        .then((info) => {
+          cachedVersionInfo = info;
+          setAppVersion(info.appVersion);
+          setBuildArch(info.arch);
         })
         .catch((error) => {
-          logError("Failed to fetch app version", error);
+          logError("Failed to fetch app version info", error);
           setAppVersion("Unavailable");
         });
     }
@@ -767,6 +770,7 @@ function SettingsDialogInner({
                         <>
                           <GeneralTab
                             appVersion={appVersion}
+                            buildArch={buildArch}
                             onNavigateToAgents={(agentId?: string) => {
                               markTabVisited("agents");
                               if (agentId) {

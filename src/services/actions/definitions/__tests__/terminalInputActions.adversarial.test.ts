@@ -296,4 +296,87 @@ describe("terminalInputActions adversarial", () => {
       expect(armAll).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe("terminal.arm / disarm / disarmAll (MCP-exposed fleet primitives)", () => {
+    it("arms an eligible terminal and echoes the POST-mutation armed set in order", async () => {
+      // Stateful mock: armId mutates the same armOrder the run() echoes, so a
+      // read-before-mutate regression (spreading armOrder before armId runs)
+      // would surface as a stale echo here, not pass silently.
+      const armOrder: string[] = ["t2"];
+      const armId = vi.fn((id: string) => {
+        armOrder.push(id);
+      });
+      fleetArmingMock.isFleetArmEligible.mockReturnValueOnce(true);
+      fleetArmingMock.useFleetArmingStore.getState.mockReturnValue({ armId, armOrder } as never);
+      setPanelState({ panelsById: { t1: { kind: "agent" } } });
+
+      const { run } = setupActions();
+      const result = await run("terminal.arm", { terminalId: "t1" });
+
+      expect(armId).toHaveBeenCalledWith("t1");
+      expect(result).toEqual({ armed: ["t2", "t1"] });
+    });
+
+    it("does not arm an ineligible terminal but still echoes the current armed set", async () => {
+      const armOrder: string[] = ["existing"];
+      const armId = vi.fn((id: string) => {
+        armOrder.push(id);
+      });
+      fleetArmingMock.isFleetArmEligible.mockReturnValue(false);
+      fleetArmingMock.useFleetArmingStore.getState.mockReturnValue({ armId, armOrder } as never);
+      setPanelState({ panelsById: { browser: { kind: "browser" } } });
+
+      const { run } = setupActions();
+      const result = await run("terminal.arm", { terminalId: "browser" });
+
+      expect(armId).not.toHaveBeenCalled();
+      expect(result).toEqual({ armed: ["existing"] });
+    });
+
+    it("disarm removes the terminal and echoes the POST-mutation armed set", async () => {
+      const armOrder: string[] = ["t1", "t2"];
+      const disarmId = vi.fn((id: string) => {
+        const i = armOrder.indexOf(id);
+        if (i >= 0) armOrder.splice(i, 1);
+      });
+      fleetArmingMock.useFleetArmingStore.getState.mockReturnValue({ disarmId, armOrder } as never);
+
+      const { run } = setupActions();
+      const result = await run("terminal.disarm", { terminalId: "t1" });
+
+      expect(disarmId).toHaveBeenCalledWith("t1");
+      expect(result).toEqual({ armed: ["t2"] });
+    });
+
+    it("disarmAll clears the set and echoes the now-empty armed set", async () => {
+      const armOrder: string[] = ["t1", "t2"];
+      const clear = vi.fn(() => {
+        armOrder.length = 0;
+      });
+      fleetArmingMock.useFleetArmingStore.getState.mockReturnValue({ clear, armOrder } as never);
+
+      const { run } = setupActions();
+      const result = await run("terminal.disarmAll");
+
+      expect(clear).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ armed: [] });
+    });
+
+    it("keeps every arm/disarm primitive safe — they only edit the broadcast set", () => {
+      const actions: ActionRegistry = new Map();
+      registerTerminalInputActions(actions, {
+        getActiveWorktreeId: vi.fn(),
+        onInject: vi.fn(),
+      } as unknown as ActionCallbacks);
+      const arm = actions.get("terminal.arm")!() as AnyActionDefinition;
+      const disarm = actions.get("terminal.disarm")!() as AnyActionDefinition;
+      const disarmAll = actions.get("terminal.disarmAll")!() as AnyActionDefinition;
+
+      // Arming/disarming routes the *next* input and mutates nothing on its own;
+      // it's fully reversible via disarm, so none of it carries a confirm gate.
+      expect(arm.danger).toBe("safe");
+      expect(disarm.danger).toBe("safe");
+      expect(disarmAll.danger).toBe("safe");
+    });
+  });
 });

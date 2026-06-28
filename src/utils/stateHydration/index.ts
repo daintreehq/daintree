@@ -30,6 +30,7 @@ import {
 import { isDaintreeEnvEnabled } from "@/utils/env";
 import { useSafeModeStore } from "@/store/safeModeStore";
 import { useDistributionStore } from "@/store/distributionStore";
+import { useResourceProfileStore } from "@/store/resourceProfileStore";
 import type { AgentPreset } from "@/config/agents";
 import type { HydrationBatchToken } from "@/store/slices/panelRegistry/types";
 import { normalizeAndApplyScrollback } from "./scrollbackConfig";
@@ -442,6 +443,18 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
 
         const prefetchedReconnectResults = await reconnectPrefetchPromise;
 
+        // The per-project MRU head is the terminal the user last had on screen.
+        // It is persisted as `terminal:<id>`; strip the prefix to recover the
+        // saved panel id so restorePanelsPhase can jump it to the front of the
+        // restore queue (#10527). A non-terminal head (browser/dev-preview MRU
+        // entry) yields undefined, degrading to the existing ordering.
+        const MRU_TERMINAL_PREFIX = "terminal:";
+        const mruHead = appState.mruList?.[0];
+        const visiblePanelId =
+          typeof mruHead === "string" && mruHead.startsWith(MRU_TERMINAL_PREFIX)
+            ? mruHead.slice(MRU_TERMINAL_PREFIX.length)
+            : undefined;
+
         const restoreResult = await restorePanelsPhase(appState.terminals, {
           addPanel,
           withHydrationBatch,
@@ -456,6 +469,13 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
           worktreesPromise,
           restoreTerminalOrder: options.restoreTerminalOrder,
           safeMode: hydrateResult.safeMode,
+          visiblePanelId,
+          // May still read the "balanced" default if the useResourceProfile
+          // hook's getResourceProfile() IPC hasn't resolved yet on a cold
+          // first hydration (#10528). Acceptable: it only affects background/
+          // orphan stagger sizing, errs toward more-aggressive, and self-
+          // corrects on the next project switch.
+          resourceProfile: useResourceProfileStore.getState().profile,
           logHydrationInfo,
         });
         const { restoreTasks } = restoreResult;

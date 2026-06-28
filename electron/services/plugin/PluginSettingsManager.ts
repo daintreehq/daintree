@@ -8,6 +8,11 @@ import type {
   PluginSettingsUiValues,
   SettingDefinition,
 } from "../../../shared/types/plugin.js";
+import {
+  createListenerFailureState,
+  invokeTrackedListener,
+  type ListenerFailureState,
+} from "./pluginCallbackUtils.js";
 
 export function assertSettingsKey(
   pluginId: string,
@@ -23,6 +28,8 @@ interface SettingsSubscriber {
   key: string;
   scope: PluginSettingsScope;
   cb: (value: unknown) => void;
+  /** Consecutive-failure counter, lazily initialized on first dispatch (#10621). */
+  failures?: ListenerFailureState;
 }
 
 interface PluginSettingsManagerDeps {
@@ -101,12 +108,12 @@ export class PluginSettingsManager {
   }
 
   /**
-   * Enforce `contributes.settings` key declarations on `set`/`delete`. F29 has
-   * not landed yet, so manifests never declare settings today and any key is
-   * accepted; once a plugin declares them, undeclared keys are rejected. When a
-   * key IS declared, its declared `scope` (default `"user"`) must match the
-   * requested scope — the write counterpart to the scope filter the read/reveal
-   * paths apply, so a `user`-scoped key can't be written under `project` (or
+   * Enforce `contributes.settings` key declarations on `set`/`delete`. When a
+   * manifest declares no settings (absent or empty array), any key is accepted;
+   * once a plugin declares them, undeclared keys are rejected. When a key IS
+   * declared, its declared `scope` (default `"user"`) must match the requested
+   * scope — the write counterpart to the scope filter the read/reveal paths
+   * apply, so a `user`-scoped key can't be written under `project` (or
    * vice-versa) via the host API or the settings-UI bridge.
    */
   assertSettingDeclared(pluginId: string, key: string, scope: PluginSettingsScope): void {
@@ -138,6 +145,19 @@ export class PluginSettingsManager {
         `Plugin "${pluginId}" settings.onDidChange: key "${key}" is declared in "${def.scope ?? "user"}" scope, not "${scope}"`
       );
     }
+  }
+
+  /**
+   * Resolve the manifest-declared scope for a key so the read path (`settings.get`)
+   * can target the same scope the write path enforces via {@link assertSettingDeclared}.
+   * Returns the declared scope (default `"user"`) when the key is declared, or
+   * `undefined` when the manifest declares no settings or doesn't declare this key —
+   * the same permissive fallback the write/secret guards take, so reads of undeclared
+   * keys keep working against the caller-supplied (or `"user"`) scope.
+   */
+  getDeclaredScope(pluginId: string, key: string): PluginSettingsScope | undefined {
+    const def = this.deps.getManifest(pluginId)?.contributes.settings?.find((s) => s.id === key);
+    return def ? (def.scope ?? "user") : undefined;
   }
 
   /**
@@ -188,14 +208,14 @@ export class PluginSettingsManager {
     // mid-iteration.
     for (const sub of [...subs]) {
       if (sub.key !== key || sub.scope !== scope) continue;
-      try {
-        sub.cb(value);
-      } catch (err) {
-        console.error(
-          `[PluginService] settings.onDidChange callback for "${pluginId}" key "${key}" failed:`,
-          err
-        );
-      }
+      if (!sub.failures) sub.failures = createListenerFailureState();
+      invokeTrackedListener(
+        sub.failures,
+        pluginId,
+        `settings.onDidChange (key "${key}")`,
+        () => sub.cb(value),
+        () => this.removeSubscriber(pluginId, sub)
+      );
     }
   }
 
@@ -219,7 +239,8 @@ export class PluginSettingsManager {
     const filePath = this.resolveSettingsFilePath(pluginId, "user");
     if (!filePath) return "";
     const value = await this.getOrCreateSettingsStore(pluginId, "user", filePath).get<unknown>(
-      settingId
+      settingId,
+      { secret: this.isSecretKey(pluginId, settingId) }
     );
     if (value === undefined || value === null) return "";
     if (typeof value === "string") return value;
@@ -256,6 +277,18 @@ export class PluginSettingsManager {
    */
   private isSecretSetting(def: SettingDefinition): boolean {
     return def.type === "secret" || def.secret === true;
+  }
+
+  /**
+   * Whether the declared setting `key` is secret, for routing its at-rest value
+   * through the OS keychain (#9167). A manifest that declares no settings — or an
+   * undeclared key — is treated as non-secret: the same permissive stance
+   * {@link assertSettingDeclared} takes, so the host `settings` API used before a
+   * plugin declares its settings keeps working as plaintext.
+   */
+  isSecretKey(pluginId: string, key: string): boolean {
+    const def = this.deps.getManifest(pluginId)?.contributes.settings?.find((s) => s.id === key);
+    return def ? this.isSecretSetting(def) : false;
   }
 
   /**
@@ -306,29 +339,46 @@ export class PluginSettingsManager {
   ): Promise<PluginSettingsUiValues> {
     const values: Record<string, unknown> = {};
     const secretsSet: string[] = [];
+    const secretsPlaintext: string[] = [];
     const filePath = this.resolveUiSettingsFilePath(pluginId, scope, projectId);
-    if (!filePath) return { values, secretsSet };
+    if (!filePath) {
+      return { values, secretsSet, secretsPlaintext, secretTier: "plaintext" };
+    }
     const store = this.getOrCreateSettingsStore(pluginId, scope, filePath);
     const defs = this.uiSettingDefinitions(pluginId).filter((d) => (d.scope ?? "user") === scope);
     await Promise.all(
       defs.map(async (def) => {
-        const stored = await store.get<unknown>(def.id);
+        const secret = this.isSecretSetting(def);
+        const stored = await store.get<unknown>(def.id, { secret });
         if (stored === undefined) return;
-        if (this.isSecretSetting(def)) secretsSet.push(def.id);
-        else values[def.id] = stored;
+        if (secret) {
+          secretsSet.push(def.id);
+          // Surface a value still sitting in plaintext so the form can nudge a
+          // re-save once a keychain is available.
+          if ((await store.storedSecretTier(def.id)) === "plaintext") {
+            secretsPlaintext.push(def.id);
+          }
+        } else {
+          values[def.id] = stored;
+        }
       })
     );
-    return { values, secretsSet };
+    return { values, secretsSet, secretsPlaintext, secretTier: store.secretTier() };
   }
 
-  /** Persist a value from the settings form, firing the plugin's `onDidChange`. */
+  /**
+   * Persist a value from the settings form, firing the plugin's `onDidChange`.
+   * Returns whether the stored value actually changed, so callers can skip
+   * change-driven side effects (e.g. an MCP server restart on secret rotation,
+   * #10619) on a redundant re-save of the same value.
+   */
   async setSettingValueFromUi(
     pluginId: string,
     key: string,
     value: unknown,
     scope: PluginSettingsScope,
     projectId: string | null
-  ): Promise<void> {
+  ): Promise<boolean> {
     assertSettingsKey(pluginId, "set", key);
     if (value === undefined) {
       throw new Error(
@@ -344,28 +394,32 @@ export class PluginSettingsManager {
       );
     }
     const store = this.getOrCreateSettingsStore(pluginId, scope, filePath);
-    const changed = await store.set(key, value);
+    const changed = await store.set(key, value, { secret: this.isSecretKey(pluginId, key) });
     if (changed) this.notifySettingsSubscribers(pluginId, scope, key, value);
+    return changed;
   }
 
   /**
    * Clear a stored value (the form's "reset to default" — resetting removes the
    * stored override rather than writing the declared default). Fires
    * `onDidChange` with `undefined` so the plugin falls back to its default.
+   * Returns whether anything was actually removed (see
+   * {@link setSettingValueFromUi} for why the changed signal matters).
    */
   async deleteSettingValueFromUi(
     pluginId: string,
     key: string,
     scope: PluginSettingsScope,
     projectId: string | null
-  ): Promise<void> {
+  ): Promise<boolean> {
     assertSettingsKey(pluginId, "delete", key);
     this.assertSettingDeclared(pluginId, key, scope);
     const filePath = this.resolveUiSettingsFilePath(pluginId, scope, projectId);
-    if (!filePath) return;
+    if (!filePath) return false;
     const store = this.getOrCreateSettingsStore(pluginId, scope, filePath);
     const changed = await store.delete(key);
     if (changed) this.notifySettingsSubscribers(pluginId, scope, key, undefined);
+    return changed;
   }
 
   /**
@@ -392,7 +446,9 @@ export class PluginSettingsManager {
     if ((def.scope ?? "user") !== scope) return null;
     const filePath = this.resolveUiSettingsFilePath(pluginId, scope, projectId);
     if (!filePath) return null;
-    const value = await this.getOrCreateSettingsStore(pluginId, scope, filePath).get<unknown>(key);
+    const value = await this.getOrCreateSettingsStore(pluginId, scope, filePath).get<unknown>(key, {
+      secret: true,
+    });
     if (value === undefined || value === null) return null;
     if (typeof value === "string") return value;
     return JSON.stringify(value);

@@ -203,13 +203,6 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       broker.resolve(event.requestId, event.state ?? null);
       return true;
 
-    case "wake-result":
-      broker.resolve(event.requestId, {
-        state: event.state ?? null,
-        warnings: event.warnings,
-      });
-      return true;
-
     case "kill-by-project-result":
       broker.resolve(event.requestId, event.killed ?? 0);
       return true;
@@ -233,6 +226,10 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       );
       return true;
 
+    case "memory-rollup":
+      broker.resolve(event.requestId, event.rollup);
+      return true;
+
     case "terminal-diagnostic-info":
       broker.resolve(event.requestId, event.info);
       return true;
@@ -242,6 +239,12 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       return true;
 
     case "terminal-pid":
+      // Defense-in-depth: the pty-host already gates invalid PIDs, but the
+      // router must never store a non-positive PID (Windows ConPTY `pid: 0`).
+      if (!Number.isInteger(event.pid) || event.pid <= 0) {
+        deps.logWarn(`[PtyClient] Ignoring invalid terminal-pid for ${event.id}: ${event.pid}`);
+        return true;
+      }
       state.terminalPids.set(event.id, event.pid);
       if (callbacks.onTerminalPid) {
         try {

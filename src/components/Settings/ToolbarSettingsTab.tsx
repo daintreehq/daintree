@@ -29,7 +29,7 @@ import { useToolbarPreferencesStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
-import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import {
   TOOLBAR_BUTTON_METADATA,
   isToolbarButtonVisible,
@@ -572,7 +572,7 @@ export function ToolbarSettingsTab() {
             >
               <option value="">None (first available)</option>
               <option value="terminal">Terminal</option>
-              {BUILT_IN_AGENT_IDS.map((id) => (
+              {LAUNCHABLE_AGENT_IDS.map((id) => (
                 <option key={id} value={id}>
                   {getAgentConfig(id)?.name ?? id}
                 </option>

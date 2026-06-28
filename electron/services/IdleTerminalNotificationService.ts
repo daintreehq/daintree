@@ -232,9 +232,10 @@ export class IdleTerminalNotificationService {
 
   /**
    * "Close Them" action handler. Delegates to HibernationService so that
-   * project-scoped cleanup callbacks (e.g. DevPreview session teardown) run
-   * and the renderer sees the standard hibernation event — same as if the
-   * scheduled hibernation timer had closed the project itself.
+   * project-scoped cleanup callbacks (e.g. DevPreview session teardown) run and
+   * the renderer sees the standard hibernation event. Passes `"user-initiated"`
+   * so this explicit action also evicts the project's cached renderer (#10668) —
+   * unlike the silent scheduled/memory-pressure paths, which leave it warm.
    */
   async closeProject(projectId: string): Promise<number> {
     if (!projectId) return 0;
@@ -247,7 +248,7 @@ export class IdleTerminalNotificationService {
       const terminalsKilled = await getHibernationService().hibernateProjectOnDemand(
         projectId,
         projectName,
-        "scheduled"
+        "user-initiated"
       );
 
       // Only burn a cooldown slot if we actually acted on something — otherwise
@@ -269,6 +270,21 @@ export class IdleTerminalNotificationService {
 
   private readDismissals(): Record<string, number> {
     const raw = store.get("idleTerminalDismissals");
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      return { ...(raw as Record<string, number>) };
+    }
+    return {};
+  }
+
+  /**
+   * Per-project "last broadcast" timestamps. Distinct from dismissals: a
+   * dismissal is an *explicit* user mute that persists for the whole cooldown,
+   * whereas this is *producer throttling* — it stops an ignored project from
+   * being re-broadcast every check cycle, and is cleared the moment the project
+   * leaves the idle-eligible state so a fresh idle period notifies again.
+   */
+  private readNotifiedAt(): Record<string, number> {
+    const raw = store.get("idleTerminalNotifiedAt");
     if (raw && typeof raw === "object" && !Array.isArray(raw)) {
       return { ...(raw as Record<string, number>) };
     }
@@ -300,9 +316,11 @@ export class IdleTerminalNotificationService {
     const thresholdMs = config.thresholdMinutes * 60 * 1000;
     const cooldownMs = this.cooldownMs(config.thresholdMinutes);
 
-    // Read dismissals once and clean stale entries opportunistically. Run this
-    // before any early returns so cleanup keeps progressing even when there
-    // are no projects to evaluate.
+    // Read dismissals + notified-throttle once and clean stale entries
+    // opportunistically. Run this before any early returns so cleanup keeps
+    // progressing even when there are no projects to evaluate. An entry older
+    // than the cooldown no longer suppresses anything, so dropping it is safe
+    // and bounds the maps against deleted projects.
     const dismissals = this.readDismissals();
     let dismissalsChanged = false;
     for (const [pid, ts] of Object.entries(dismissals)) {
@@ -315,41 +333,83 @@ export class IdleTerminalNotificationService {
       store.set("idleTerminalDismissals", dismissals);
     }
 
+    const notifiedAt = this.readNotifiedAt();
+    let notifiedChanged = false;
+    for (const [pid, ts] of Object.entries(notifiedAt)) {
+      if (typeof ts !== "number" || !Number.isFinite(ts) || now - ts > cooldownMs) {
+        delete notifiedAt[pid];
+        notifiedChanged = true;
+      }
+    }
+
     const currentProjectId = projectStore.getCurrentProjectId();
     const projects = projectStore.getAllProjects();
-    if (projects.length === 0) return;
+    if (projects.length === 0) {
+      if (notifiedChanged) store.set("idleTerminalNotifiedAt", notifiedAt);
+      return;
+    }
 
-    if (!this.ptyClient) return;
+    if (!this.ptyClient) {
+      if (notifiedChanged) store.set("idleTerminalNotifiedAt", notifiedAt);
+      return;
+    }
     const allTerminals = await this.ptyClient.getAllTerminalsAsync();
+
+    const clearNotified = (pid: string): void => {
+      if (notifiedAt[pid] !== undefined) {
+        delete notifiedAt[pid];
+        notifiedChanged = true;
+      }
+    };
 
     const qualifying: IdleTerminalProjectEntry[] = [];
 
     for (const project of projects) {
       if (!project.id) continue;
-      if (project.id === currentProjectId) continue;
+      const pid = project.id;
 
-      // Skip if dismissed within cooldown window
-      const dismissedAt = dismissals[project.id];
-      if (typeof dismissedAt === "number" && now - dismissedAt < cooldownMs) continue;
+      // The active project is never notified, but we deliberately do NOT reset
+      // its throttle here: merely viewing a project isn't engaging with its
+      // terminals, and clearing on focus alone would let a switch-to-then-away
+      // round trip re-notify the same still-idle terminals inside the cooldown.
+      // A genuine reset (typing, agent activity) surfaces as terminal activity
+      // below and clears the throttle through the ineligible path.
+      if (pid === currentProjectId) continue;
 
+      // Any remaining non-qualifying reason (no terminals, active agent, recent
+      // activity) means the project has left the idle state, so its notified
+      // throttle is cleared — a later idle period then notifies fresh. The
+      // explicit dismissal is deliberately NOT cleared here.
       const projectTerminals = allTerminals.filter(
-        (t) => t.projectId === project.id && t.hasPty !== false
+        (t) => t.projectId === pid && t.hasPty !== false
       );
-      if (projectTerminals.length === 0) continue;
 
-      // Skip if any terminal in the project has an active agent
       const hasActiveAgent = projectTerminals.some(
         (t) => t.agentState && ACTIVE_AGENT_STATES.has(t.agentState)
       );
-      if (hasActiveAgent) continue;
 
-      // All running terminals must be idle past the threshold
-      const allIdle = projectTerminals.every((t) => {
-        const lastActivity = Math.max(t.lastInputTime ?? 0, t.lastOutputTime ?? 0);
-        if (!lastActivity) return false; // unknown activity — be conservative
-        return now - lastActivity >= thresholdMs;
-      });
-      if (!allIdle) continue;
+      const allIdle =
+        projectTerminals.length > 0 &&
+        projectTerminals.every((t) => {
+          const lastActivity = Math.max(t.lastInputTime ?? 0, t.lastOutputTime ?? 0);
+          if (!lastActivity) return false; // unknown activity — be conservative
+          return now - lastActivity >= thresholdMs;
+        });
+
+      const eligible = projectTerminals.length > 0 && !hasActiveAgent && allIdle;
+      if (!eligible) {
+        clearNotified(pid);
+        continue;
+      }
+
+      // Eligible — but suppress when the user has explicitly muted the project
+      // or it was already broadcast within the cooldown window. Neither path
+      // clears the throttle: the project is still idle, so it stays suppressed
+      // until the cooldown lapses.
+      const dismissedAt = dismissals[pid];
+      if (typeof dismissedAt === "number" && now - dismissedAt < cooldownMs) continue;
+      const lastNotified = notifiedAt[pid];
+      if (typeof lastNotified === "number" && now - lastNotified < cooldownMs) continue;
 
       // Compute idle minutes from the *most recently active* terminal
       const newestActivity = projectTerminals.reduce(
@@ -359,11 +419,17 @@ export class IdleTerminalNotificationService {
       const idleMinutes = newestActivity > 0 ? Math.floor((now - newestActivity) / 60000) : 0;
 
       qualifying.push({
-        projectId: project.id,
+        projectId: pid,
         projectName: project.name,
         terminalCount: projectTerminals.length,
         idleMinutes,
       });
+      notifiedAt[pid] = now;
+      notifiedChanged = true;
+    }
+
+    if (notifiedChanged) {
+      store.set("idleTerminalNotifiedAt", notifiedAt);
     }
 
     if (qualifying.length === 0) return;

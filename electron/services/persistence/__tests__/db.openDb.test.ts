@@ -302,6 +302,65 @@ describe("openDb (integration)", () => {
     }
   });
 
+  it("applies a later migration to a DB already migrated through an earlier one (regression: audit_rings skip)", async () => {
+    // Reproduces the journal-timestamp bug: drizzle only applies a migration when
+    // its folderMillis (the journal `when`) is greater than the newest recorded
+    // `created_at`. A migration stamped with a `when` that predates an already-
+    // applied one is silently skipped on every existing DB. Here we seed a DB that
+    // has run through every migration EXCEPT the last and assert openDb closes the
+    // gap — i.e. the final migration's table actually gets created.
+    const dbPath = path.join(tmpDir, "mid-history.db");
+
+    const journal = JSON.parse(
+      fs.readFileSync(path.join(migrationsFolder, "meta", "_journal.json"), "utf8")
+    ).entries as Array<{ when: number; tag: string }>;
+    // Everything except the most recent migration is "already applied".
+    const applied = journal.slice(0, -1);
+    const latest = journal[journal.length - 1];
+
+    const Database = (await import("better-sqlite3")).default;
+    const seed = new Database(dbPath);
+    // Mirror drizzle's own bookkeeping table + a projects table for openDb's backfill.
+    seed.exec(`
+      CREATE TABLE __drizzle_migrations (
+        id SERIAL PRIMARY KEY,
+        hash text NOT NULL,
+        created_at numeric
+      );
+      CREATE TABLE projects (
+        id TEXT PRIMARY KEY,
+        path TEXT NOT NULL,
+        name TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        last_opened INTEGER NOT NULL,
+        pinned INTEGER NOT NULL DEFAULT 0,
+        frecency_score REAL NOT NULL DEFAULT 3.0,
+        last_accessed_at INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    const ins = seed.prepare("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)");
+    for (const entry of applied) ins.run(entry.tag, entry.when);
+    seed.close();
+
+    // The migration's table must be absent before the upgrade for the test to mean
+    // anything — guards against the seed accidentally creating it.
+    expect(latest.tag).toContain("audit_rings");
+
+    const { sqlite } = openDb(dbPath, migrationsFolder);
+    try {
+      const hasAuditRings = sqlite
+        .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='audit_rings'")
+        .get();
+      expect(hasAuditRings).toBeTruthy();
+
+      // The skipped migration is now recorded — total equals the full journal.
+      const migrations = sqlite.prepare("SELECT id FROM __drizzle_migrations").all();
+      expect(migrations).toHaveLength(EXPECTED_MIGRATION_COUNT);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("closes the underlying SQLite handle if migrate() throws", () => {
     const dbPath = path.join(tmpDir, "leak.db");
     const bogusFolder = path.join(tmpDir, "does-not-exist");

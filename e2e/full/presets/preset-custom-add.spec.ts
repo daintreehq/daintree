@@ -103,7 +103,7 @@ test.describe.serial("Presets: Custom Add (13–24)", () => {
     await goToClaudeSettings();
     await addCustomPreset(ctx.window);
     await expect(
-      ctx.window.locator(SEL.preset.section).locator("span", { hasText: "New Preset" }).first()
+      ctx.window.locator(SEL.preset.section).locator("span", { hasText: "New preset" }).first()
     ).toBeVisible({
       timeout: T_SHORT,
     });
@@ -127,7 +127,7 @@ test.describe.serial("Presets: Custom Add (13–24)", () => {
     await chevron.click();
     const dropdown = ctx.window.locator('[role="menu"]');
     await expect(dropdown).toBeVisible({ timeout: T_MEDIUM });
-    await expect(dropdown.getByText("New Preset").first()).toBeVisible({ timeout: T_SHORT });
+    await expect(dropdown.getByText("New preset").first()).toBeVisible({ timeout: T_SHORT });
     await ctx.window.keyboard.press("Escape");
   });
 
@@ -159,7 +159,7 @@ test.describe.serial("Presets: Custom Add (13–24)", () => {
     await expect(submenuContent).toBeVisible({ timeout: T_SHORT });
     // Preset name renders as a text node inside DropdownMenuItem (not inside
     // a span). Use getByText so the matcher walks both nodes and spans.
-    await expect(submenuContent.getByText("New Preset").first()).toBeVisible({
+    await expect(submenuContent.getByText("New preset").first()).toBeVisible({
       timeout: T_SHORT,
     });
 
@@ -193,7 +193,7 @@ test.describe.serial("Presets: Custom Add (13–24)", () => {
   test("19. Added preset persists after closing and reopening Settings", async () => {
     await goToClaudeSettings();
     await addCustomPreset(ctx.window);
-    const name = "New Preset";
+    const name = "New preset";
     await expect(
       ctx.window.locator(SEL.preset.section).locator("span", { hasText: name }).first()
     ).toBeVisible({

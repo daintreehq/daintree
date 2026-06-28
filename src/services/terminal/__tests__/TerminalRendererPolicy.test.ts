@@ -9,6 +9,10 @@ vi.mock("@/clients", () => ({
   },
 }));
 
+// Hibernation removed: a background→active (foreground) transition is a plain,
+// SYNCHRONOUS repaint — applyDeferredResize → terminal.refresh → onPostWake →
+// onResumeFlush. There is no wake/resync, no needsWake arming, no discard path,
+// and no onBackgrounded callback. These tests assert the repaint-only behavior.
 describe("TerminalRendererPolicy", () => {
   let policy: import("../TerminalRendererPolicy").TerminalRendererPolicy;
   let mockDeps: RendererPolicyDeps;
@@ -23,7 +27,6 @@ describe("TerminalRendererPolicy", () => {
       getRefreshTier: () => TerminalRefreshTier.FOCUSED,
       tierChangeTimer: undefined,
       pendingTier: undefined,
-      needsWake: undefined,
       terminal: {
         refresh: vi.fn(),
         rows: 24,
@@ -33,7 +36,6 @@ describe("TerminalRendererPolicy", () => {
 
     mockDeps = {
       getInstance: vi.fn(() => mockManagedTerminal as ManagedTerminal),
-      wakeAndRestore: vi.fn(() => Promise.resolve({ ok: true, replayedMainBuffer: true })),
     };
 
     const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
@@ -45,21 +47,6 @@ describe("TerminalRendererPolicy", () => {
       policy.initializeBackendTier("test-id", "background");
 
       expect(policy.getLastBackendTier("test-id")).toBe("background");
-    });
-
-    it("should set needsWake=true when initializing to background tier", () => {
-      policy.initializeBackendTier("test-id", "background");
-
-      expect(mockManagedTerminal.needsWake).toBe(true);
-    });
-
-    it("should not set needsWake when initializing to active tier", () => {
-      mockManagedTerminal.needsWake = undefined;
-
-      policy.initializeBackendTier("test-id", "active");
-
-      expect(policy.getLastBackendTier("test-id")).toBe("active");
-      expect(mockManagedTerminal.needsWake).toBeUndefined();
     });
 
     it("should not call setActivityTier on backend (only initializes frontend state)", async () => {
@@ -83,45 +70,73 @@ describe("TerminalRendererPolicy", () => {
     });
   });
 
-  describe("initializeBackendTier integration with applyRendererPolicy", () => {
-    it("should trigger wake when transitioning from initialized background to active", async () => {
-      // Set up terminal as if it was backgrounded (lastAppliedTier = BACKGROUND)
-      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+  describe("background → active foreground transition (plain repaint)", () => {
+    it("repaints (refresh + onPostWake + onResumeFlush) instead of waking", async () => {
+      const onPostWake = vi.fn();
+      const onResumeFlush = vi.fn();
+      mockDeps.onPostWake = onPostWake;
+      mockDeps.onResumeFlush = onResumeFlush;
+      const terminal = mockManagedTerminal.terminal as unknown as {
+        refresh: ReturnType<typeof vi.fn>;
+      };
 
-      // Initialize to background (simulating reconnection after project switch)
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+
+      // Reconnected after a project switch: backend recorded as background.
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
       policy.initializeBackendTier("test-id", "background");
 
-      expect(policy.getLastBackendTier("test-id")).toBe("background");
-      expect(mockManagedTerminal.needsWake).toBe(true);
-
-      // Now apply active policy (simulating terminal becoming visible)
-      // This is an "upgrade" since FOCUSED (100) < BACKGROUND (1000)
+      // FOCUSED (100) < BACKGROUND (1000) → an upgrade, applied immediately.
       policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
 
-      // Should have triggered wake because:
-      // 1. Backend tier was "background" (from initializeBackendTier)
-      // 2. Transitioning to "active" backend tier (FOCUSED maps to active)
-      // 3. needsWake was true
-      expect(mockDeps.wakeAndRestore).toHaveBeenCalledWith("test-id");
-
-      // Backend tier should now be "active"
+      expect(terminal.refresh).toHaveBeenCalledWith(0, 23);
+      expect(onPostWake).toHaveBeenCalledWith("test-id");
+      expect(onResumeFlush).toHaveBeenCalledWith("test-id");
       expect(policy.getLastBackendTier("test-id")).toBe("active");
     });
 
-    it("should not trigger wake when initializing to active tier", () => {
-      // Initialize to active
+    it("does not repaint when the backend tier was already active", async () => {
+      const onPostWake = vi.fn();
+      const onResumeFlush = vi.fn();
+      mockDeps.onPostWake = onPostWake;
+      mockDeps.onResumeFlush = onResumeFlush;
+
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+
+      // Backend already active; a within-active tier change must not repaint.
       policy.initializeBackendTier("test-id", "active");
-
-      // Set up terminal as if it was at BACKGROUND tier (to trigger a tier change)
       mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
-
-      // Apply active policy
       policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
 
-      // Should not have triggered wake since:
-      // - Backend tier was already "active" (from initializeBackendTier)
-      // - Condition "prevBackendTier !== 'active'" is false
-      expect(mockDeps.wakeAndRestore).not.toHaveBeenCalled();
+      expect(onPostWake).not.toHaveBeenCalled();
+      expect(onResumeFlush).not.toHaveBeenCalled();
+    });
+
+    it("calls applyDeferredResize before terminal.refresh", async () => {
+      const callOrder: string[] = [];
+      const applyDeferredResize = vi.fn(() => {
+        callOrder.push("applyDeferredResize");
+      });
+      mockDeps.applyDeferredResize = applyDeferredResize;
+      const terminal = mockManagedTerminal.terminal as unknown as {
+        refresh: ReturnType<typeof vi.fn>;
+      };
+      terminal.refresh = vi.fn(() => {
+        callOrder.push("refresh");
+      });
+
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+
+      policy.initializeBackendTier("test-id", "background");
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+
+      expect(applyDeferredResize).toHaveBeenCalledWith("test-id");
+      expect(callOrder).toEqual(["applyDeferredResize", "refresh"]);
     });
 
     it("does not resend backend tier when switching within active renderer tiers", async () => {
@@ -169,263 +184,6 @@ describe("TerminalRendererPolicy", () => {
       policy.applyRendererPolicy("test-id", TerminalRefreshTier.VISIBLE);
 
       expect(terminalClient.setActivityTier).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("onPostWake callback", () => {
-    it("calls onPostWake for alt-screen terminals after successful wake", async () => {
-      const onPostWake = vi.fn();
-      mockDeps.onPostWake = onPostWake;
-      mockManagedTerminal.isAltBuffer = true;
-      mockManagedTerminal.needsWake = true;
-      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
-      mockManagedTerminal.isVisible = true;
-      mockManagedTerminal.latestWasAtBottom = true;
-
-      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
-      policy = new TerminalRendererPolicy(mockDeps);
-
-      policy.initializeBackendTier("test-id", "background");
-      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
-
-      await vi.waitFor(() => {
-        expect(onPostWake).toHaveBeenCalledWith("test-id");
-      });
-    });
-
-    it("calls onPostWake for non-alt-screen terminals after successful wake", async () => {
-      const onPostWake = vi.fn();
-      mockDeps.onPostWake = onPostWake;
-      mockManagedTerminal.isAltBuffer = false;
-      mockManagedTerminal.needsWake = true;
-      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
-      mockManagedTerminal.isVisible = true;
-      mockManagedTerminal.latestWasAtBottom = true;
-
-      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
-      policy = new TerminalRendererPolicy(mockDeps);
-
-      policy.initializeBackendTier("test-id", "background");
-      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
-
-      await vi.waitFor(() => {
-        expect(onPostWake).toHaveBeenCalledWith("test-id");
-      });
-    });
-
-    it("does not call onPostWake when wake fails", async () => {
-      const onPostWake = vi.fn();
-      mockDeps.onPostWake = onPostWake;
-      mockDeps.wakeAndRestore = vi.fn(() =>
-        Promise.resolve({ ok: false, replayedMainBuffer: false })
-      );
-      mockManagedTerminal.isAltBuffer = true;
-      mockManagedTerminal.needsWake = true;
-      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
-
-      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
-      policy = new TerminalRendererPolicy(mockDeps);
-
-      policy.initializeBackendTier("test-id", "background");
-      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
-
-      await vi.waitFor(() => {
-        expect(mockDeps.wakeAndRestore).toHaveBeenCalled();
-      });
-
-      expect(onPostWake).not.toHaveBeenCalled();
-    });
-
-    it("does not auto-scroll to bottom for non-alt terminals after wake", async () => {
-      mockManagedTerminal.isAltBuffer = false;
-      mockManagedTerminal.needsWake = true;
-      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
-      mockManagedTerminal.isVisible = true;
-      mockManagedTerminal.latestWasAtBottom = true;
-
-      const terminal = mockManagedTerminal.terminal as unknown as {
-        scrollToBottom: ReturnType<typeof vi.fn>;
-        refresh: ReturnType<typeof vi.fn>;
-      };
-
-      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
-      policy = new TerminalRendererPolicy(mockDeps);
-
-      policy.initializeBackendTier("test-id", "background");
-      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
-
-      await vi.waitFor(() => {
-        expect(mockDeps.wakeAndRestore).toHaveBeenCalled();
-      });
-
-      expect(terminal.scrollToBottom).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("wake-result flush dispatch (#9910)", () => {
-    let onResumeFlush: ReturnType<typeof vi.fn>;
-    let onDiscardHeld: ReturnType<typeof vi.fn>;
-
-    beforeEach(async () => {
-      onResumeFlush = vi.fn();
-      onDiscardHeld = vi.fn();
-      mockDeps.onResumeFlush = onResumeFlush as unknown as ((id: string) => void) | undefined;
-      mockDeps.onDiscardHeld = onDiscardHeld as unknown as ((id: string) => void) | undefined;
-      mockManagedTerminal.needsWake = true;
-      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
-    });
-
-    async function applyActiveUpgrade(): Promise<void> {
-      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
-      policy = new TerminalRendererPolicy(mockDeps);
-      policy.initializeBackendTier("test-id", "background");
-      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
-      await vi.waitFor(() => {
-        expect(mockDeps.wakeAndRestore).toHaveBeenCalled();
-      });
-    }
-
-    it("discards held bytes (no flush) after a successful main-buffer replay", async () => {
-      mockDeps.wakeAndRestore = vi.fn(() =>
-        Promise.resolve({ ok: true, replayedMainBuffer: true })
-      );
-
-      await applyActiveUpgrade();
-
-      await vi.waitFor(() => {
-        expect(onDiscardHeld).toHaveBeenCalledExactlyOnceWith("test-id");
-      });
-      expect(onResumeFlush).not.toHaveBeenCalled();
-    });
-
-    it("flushes held bytes on an alt-buffer wake (ok without replay)", async () => {
-      mockDeps.wakeAndRestore = vi.fn(() =>
-        Promise.resolve({ ok: true, replayedMainBuffer: false })
-      );
-
-      await applyActiveUpgrade();
-
-      await vi.waitFor(() => {
-        expect(onResumeFlush).toHaveBeenCalledExactlyOnceWith("test-id");
-      });
-      expect(onDiscardHeld).not.toHaveBeenCalled();
-    });
-
-    it("flushes held bytes when the wake fails", async () => {
-      mockDeps.wakeAndRestore = vi.fn(() =>
-        Promise.resolve({ ok: false, replayedMainBuffer: false })
-      );
-
-      await applyActiveUpgrade();
-
-      await vi.waitFor(() => {
-        expect(onResumeFlush).toHaveBeenCalledExactlyOnceWith("test-id");
-      });
-      expect(onDiscardHeld).not.toHaveBeenCalled();
-    });
-
-    it("flushes held bytes when the wake rejects", async () => {
-      mockDeps.wakeAndRestore = vi.fn(() => Promise.reject(new Error("boom")));
-
-      await applyActiveUpgrade();
-
-      await vi.waitFor(() => {
-        expect(onResumeFlush).toHaveBeenCalledExactlyOnceWith("test-id");
-      });
-      expect(onDiscardHeld).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("applyDeferredResize callback", () => {
-    it("calls applyDeferredResize before terminal.refresh on the synchronous wake path", async () => {
-      const callOrder: string[] = [];
-      const applyDeferredResize = vi.fn(() => {
-        callOrder.push("applyDeferredResize");
-      });
-      mockDeps.applyDeferredResize = applyDeferredResize;
-
-      const terminal = mockManagedTerminal.terminal as unknown as {
-        refresh: ReturnType<typeof vi.fn>;
-      };
-      terminal.refresh = vi.fn(() => {
-        callOrder.push("refresh");
-      });
-
-      // needsWake=false → synchronous refresh path inside applyRendererPolicyImmediate.
-      mockManagedTerminal.needsWake = false;
-      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
-
-      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
-      policy = new TerminalRendererPolicy(mockDeps);
-
-      policy.initializeBackendTier("test-id", "background");
-      // Initialize sets needsWake=true; reset before the upgrade so we hit the sync branch.
-      mockManagedTerminal.needsWake = false;
-      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
-
-      expect(applyDeferredResize).toHaveBeenCalledWith("test-id");
-      expect(callOrder).toEqual(["applyDeferredResize", "refresh"]);
-    });
-
-    it("calls applyDeferredResize before terminal.refresh after a successful async wake", async () => {
-      const callOrder: string[] = [];
-      const applyDeferredResize = vi.fn(() => {
-        callOrder.push("applyDeferredResize");
-      });
-      mockDeps.applyDeferredResize = applyDeferredResize;
-
-      const terminal = mockManagedTerminal.terminal as unknown as {
-        refresh: ReturnType<typeof vi.fn>;
-      };
-      terminal.refresh = vi.fn(() => {
-        callOrder.push("refresh");
-      });
-
-      mockManagedTerminal.needsWake = true;
-      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
-
-      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
-      policy = new TerminalRendererPolicy(mockDeps);
-
-      policy.initializeBackendTier("test-id", "background");
-      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
-
-      await vi.waitFor(() => {
-        expect(applyDeferredResize).toHaveBeenCalledWith("test-id");
-      });
-
-      expect(callOrder).toEqual(["applyDeferredResize", "refresh"]);
-    });
-
-    it("calls applyDeferredResize before terminal.refresh on the wake-failure recovery path", async () => {
-      const callOrder: string[] = [];
-      const applyDeferredResize = vi.fn(() => {
-        callOrder.push("applyDeferredResize");
-      });
-      mockDeps.applyDeferredResize = applyDeferredResize;
-      mockDeps.wakeAndRestore = vi.fn(() => Promise.reject(new Error("boom")));
-
-      const terminal = mockManagedTerminal.terminal as unknown as {
-        refresh: ReturnType<typeof vi.fn>;
-      };
-      terminal.refresh = vi.fn(() => {
-        callOrder.push("refresh");
-      });
-
-      mockManagedTerminal.needsWake = true;
-      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
-
-      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
-      policy = new TerminalRendererPolicy(mockDeps);
-
-      policy.initializeBackendTier("test-id", "background");
-      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
-
-      await vi.waitFor(() => {
-        expect(applyDeferredResize).toHaveBeenCalledWith("test-id");
-      });
-
-      expect(callOrder).toEqual(["applyDeferredResize", "refresh"]);
     });
   });
 
@@ -507,8 +265,6 @@ describe("TerminalRendererPolicy", () => {
       policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
 
       expect(onResumeFlush).toHaveBeenCalledExactlyOnceWith("test-id");
-      // No wake: the applied tier never went to background.
-      expect(mockDeps.wakeAndRestore).not.toHaveBeenCalled();
     });
 
     // The pending BACKGROUND downgrade is superseded by a different active-tier
@@ -629,29 +385,36 @@ describe("TerminalRendererPolicy", () => {
       vi.useRealTimers();
     });
 
-    it("re-sends the active backend tier and runs the wake path", async () => {
+    it("re-sends the active backend tier and runs the repaint path", async () => {
       const { terminalClient } = await import("@/clients");
+      const onResumeFlush = vi.fn();
+      mockDeps.onResumeFlush = onResumeFlush;
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+
       mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.VISIBLE;
-      mockManagedTerminal.needsWake = true;
       policy.initializeBackendTier("test-id", "background");
 
       policy.reassertActiveTier("test-id");
 
       expect(policy.getLastBackendTier("test-id")).toBe("active");
       expect(terminalClient.setActivityTier).toHaveBeenCalledWith("test-id", "active", 200);
-      expect(mockDeps.wakeAndRestore).toHaveBeenCalledWith("test-id");
+      expect(onResumeFlush).toHaveBeenCalledWith("test-id");
     });
 
     it("no-ops when the backend tier is already active or the applied tier is BACKGROUND", () => {
+      const onResumeFlush = vi.fn();
+      mockDeps.onResumeFlush = onResumeFlush;
+
       mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.VISIBLE;
       policy.initializeBackendTier("test-id", "active");
       policy.reassertActiveTier("test-id");
-      expect(mockDeps.wakeAndRestore).not.toHaveBeenCalled();
+      expect(onResumeFlush).not.toHaveBeenCalled();
 
       mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
       policy.initializeBackendTier("test-id", "background");
       policy.reassertActiveTier("test-id");
-      expect(mockDeps.wakeAndRestore).not.toHaveBeenCalled();
+      expect(onResumeFlush).not.toHaveBeenCalled();
     });
 
     it("cancels a pending hysteresis downgrade so the repair is not undone", () => {
@@ -672,72 +435,6 @@ describe("TerminalRendererPolicy", () => {
       vi.advanceTimersByTime(1000);
       expect(mockManagedTerminal.lastAppliedTier).toBe(TerminalRefreshTier.FOCUSED);
       expect(policy.getLastBackendTier("test-id")).toBe("active");
-    });
-  });
-
-  describe("onBackgrounded callback (#9906)", () => {
-    beforeEach(async () => {
-      vi.useFakeTimers();
-      vi.stubGlobal("window", globalThis);
-      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
-      policy = new TerminalRendererPolicy(mockDeps);
-    });
-
-    afterEach(() => {
-      vi.unstubAllGlobals();
-      vi.useRealTimers();
-    });
-
-    it("fires when the backend tier transitions active → background", async () => {
-      const onBackgrounded = vi.fn();
-      mockDeps.onBackgrounded = onBackgrounded;
-      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
-      policy = new TerminalRendererPolicy(mockDeps);
-
-      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
-      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.FOCUSED;
-
-      // Downgrade to BACKGROUND arms the hysteresis timer; the callback fires
-      // only when it actually applies.
-      policy.applyRendererPolicy("test-id", TerminalRefreshTier.BACKGROUND);
-      expect(onBackgrounded).not.toHaveBeenCalled();
-
-      vi.advanceTimersByTime(1000);
-      expect(onBackgrounded).toHaveBeenCalledExactlyOnceWith("test-id");
-    });
-
-    it("does not fire on an active → active tier change", async () => {
-      const onBackgrounded = vi.fn();
-      mockDeps.onBackgrounded = onBackgrounded;
-      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
-      policy = new TerminalRendererPolicy(mockDeps);
-
-      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.VISIBLE;
-
-      // Upgrade VISIBLE → FOCUSED stays "active" on the backend — no background.
-      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
-      vi.advanceTimersByTime(1000);
-      expect(onBackgrounded).not.toHaveBeenCalled();
-    });
-
-    it("does not fire again when already background (background → background)", async () => {
-      const onBackgrounded = vi.fn();
-      mockDeps.onBackgrounded = onBackgrounded;
-      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
-      policy = new TerminalRendererPolicy(mockDeps);
-
-      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
-      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.FOCUSED;
-
-      policy.applyRendererPolicy("test-id", TerminalRefreshTier.BACKGROUND);
-      vi.advanceTimersByTime(1000);
-      expect(onBackgrounded).toHaveBeenCalledTimes(1);
-
-      // Re-applying BACKGROUND is a no-op (prevBackendTier already background).
-      onBackgrounded.mockClear();
-      policy.applyRendererPolicy("test-id", TerminalRefreshTier.BACKGROUND);
-      vi.advanceTimersByTime(1000);
-      expect(onBackgrounded).not.toHaveBeenCalled();
     });
   });
 

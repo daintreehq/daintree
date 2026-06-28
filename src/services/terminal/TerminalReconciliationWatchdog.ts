@@ -62,8 +62,15 @@ export interface ReconciliationWatchdogDeps {
   isWebGLActive: (id: string) => boolean;
   shouldHaveWebGL: (managed: ManagedTerminal) => boolean;
   ensureWebGL: (id: string, managed: ManagedTerminal) => void;
-  unhibernate: (id: string) => void;
   forceReflow: (element: HTMLElement) => void;
+  /**
+   * Repair (#10632): alt-buffer-safe atomic reveal reconcile — a FRESH fit
+   * (xterm + PTY resized together) plus a local WebGL-atlas repair, with NO
+   * mid-block reflow. Returns false on an unmeasurable / occluded box so the
+   * obligation is kept and retried on a later tick (present-ordering: never
+   * repaint into a surface that isn't foreground-presenting).
+   */
+  reconcileRevealGeometry: (id: string) => boolean;
   isStoreBackgrounded: (id: string) => boolean;
   /** Store-side panel.isVisible === false — the one store state DOM geometry can prove wrong. */
   isStoreHidden: (id: string) => boolean;
@@ -178,15 +185,51 @@ export class TerminalReconciliationWatchdog {
     let heavyBudget = WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK;
     const now = Date.now();
     for (const { id, managed } of onScreen) {
+      this.diagnoseGeometryDivergence(id, managed);
       if (now - (managed.lastWatchdogRepairAt ?? 0) < WATCHDOG_REPAIR_COOLDOWN_MS) continue;
       heavyBudget -= this.reconcile(id, managed, now, heavyBudget);
     }
   }
 
   /**
+   * Dev-only diagnostic for the project-switch garble bug: an on-screen,
+   * settled terminal whose xterm grid (`terminal.cols/rows`) disagrees with the
+   * dimensions the container can actually hold (`fitAddon.proposeDimensions()`)
+   * is rendering its buffer at the wrong width — the exact "garbled line flow"
+   * users see after switching back to a project. The watchdog already gated out
+   * drags, layout transitions, and resize-suppressed/attaching terminals, so a
+   * divergence reaching here is real, not transient. This call itself only
+   * logs (DEV) — the actual repair is the geometry-convergence branch in
+   * {@link reconcile} (#10632) — so a silently-wrong grid is both loud during
+   * local development and reconciled on the same tick.
+   */
+  private diagnoseGeometryDivergence(id: string, managed: ManagedTerminal): void {
+    if (!import.meta.env?.DEV) return;
+    if (managed.isHibernated) return;
+    try {
+      const proposal = managed.fitAddon.proposeDimensions?.();
+      if (!proposal || proposal.cols <= 1 || proposal.rows <= 1) return;
+      const { cols, rows } = managed.terminal;
+      if (proposal.cols !== cols || proposal.rows !== rows) {
+        logWarn(
+          "[TerminalReconciliationWatchdog] geometry divergence: xterm grid disagrees with container (garble risk)",
+          {
+            id,
+            xtermCols: cols,
+            xtermRows: rows,
+            proposedCols: proposal.cols,
+            proposedRows: proposal.rows,
+          }
+        );
+      }
+    } catch {
+      // Diagnostic only — never let a measurement throw break the sweep.
+    }
+  }
+
+  /**
    * Verify the rendering chain for one on-screen terminal and repair the
-   * first divergence found, ordered by causal depth: hibernation (nothing
-   * else exists without a live xterm instance) → service visibility →
+   * first divergence found, ordered by causal depth: service visibility →
    * computed/applied tier → backend tier → stranded ingest bytes → xterm
    * render pause → WebGL context. Returns the heavy-repair budget consumed
    * (0 or 1). A heavy repair skipped for budget is retried next tick — the
@@ -198,16 +241,6 @@ export class TerminalReconciliationWatchdog {
     now: number,
     heavyBudget: number
   ): number {
-    if (managed.isHibernated) {
-      if (heavyBudget <= 0) return 0;
-      managed.lastWatchdogRepairAt = now;
-      logWarn("[TerminalReconciliationWatchdog] on-screen terminal is hibernated — restoring", {
-        id,
-      });
-      this.deps.unhibernate(id);
-      return 1;
-    }
-
     if (!managed.isVisible) {
       if (heavyBudget <= 0) return 0;
       managed.lastWatchdogRepairAt = now;
@@ -272,10 +305,10 @@ export class TerminalReconciliationWatchdog {
       return 1;
     }
 
-    // Bytes stranded in the ingest queue with no drain in flight. Never flush
-    // while a wake is needed, pending, or in flight — wakeAndRestore resets
-    // the buffer during replay and flushing first would write held bytes into
-    // a pre-reset terminal (#8371); the wake path flushes itself on completion.
+    // Bytes stranded in the ingest queue with no drain in flight. The wake/resync
+    // machinery is gone (terminals stay live in the background), so these guards
+    // are always satisfied now — kept so the flush still defers if a future
+    // buffer-resetting path ever re-arms one (#8371).
     const stalledBytes = this.deps.getStalledBytes(id);
     if (
       stalledBytes > 0 &&
@@ -295,22 +328,114 @@ export class TerminalReconciliationWatchdog {
       return 0;
     }
 
-    // Mirror TerminalReflowController.maybeReflow's eligibility guards:
-    // alt-buffer TUIs repaint from live PTY data, and a reflow mid
-    // DEC 2026 synchronized-output block would interleave a paint with the
-    // buffered range.
+    // A DEC 2026 synchronized-output block is open: a repaint/reflow now would
+    // interleave a paint with the buffered range, so DEFER every render-level
+    // repair (reveal-pending, geometry, unpause) to a later tick once the block
+    // closes (#10632). Structural repairs above already ran; the synchronized
+    // window is short, so the next 3s tick converges.
+    const inSynchronizedBlock = managed.terminal.modes?.synchronizedOutputMode === true;
     const element = managed.terminal.element;
+
+    // Reveal-pending guaranteed redraw (#10632). The project-switch suppression
+    // window cleared while this host was still detached/occluded, so its one-shot
+    // resetRenderer was deferred to the watchdog rather than spent on a zero-box
+    // host (TerminalInstanceService.suppressResizesDuringProjectSwitch). DOM
+    // geometry now proves the pane on-screen, so run the alt-buffer-safe atomic
+    // repair — this is the closed-loop "is it correct now" recovery the open-loop
+    // rAF/1s/3s/10s backstops never reliably delivered. The obligation is owned
+    // by the attachGeneration it was armed under: a later re-attach that already
+    // re-ran its own reveal supersedes it. Cleared ONLY on a successful reconcile
+    // (false = unmeasurable/occluded box → keep the flag and retry next tick).
+    if (managed.revealPendingRepair && !inSynchronizedBlock) {
+      if (
+        managed.revealPendingGeneration !== undefined &&
+        managed.revealPendingGeneration > managed.attachGeneration
+      ) {
+        // Generation ran backwards (only possible via a fresh instance reusing
+        // the id) — the obligation can't belong to this incarnation; drop it.
+        managed.revealPendingRepair = false;
+        managed.revealPendingGeneration = undefined;
+      } else {
+        if (heavyBudget <= 0) return 0;
+        managed.lastWatchdogRepairAt = now;
+        logWarn(
+          "[TerminalReconciliationWatchdog] reveal-pending redraw for on-screen terminal — reconciling",
+          {
+            id,
+            revealPendingGeneration: managed.revealPendingGeneration,
+            attachGeneration: managed.attachGeneration,
+          }
+        );
+        if (this.deps.reconcileRevealGeometry(id)) {
+          // Full click-equivalent: now that geometry is re-fit AND we are not in
+          // a synchronized block, also unpause so convergence completes in one
+          // tick (resetRenderer reflows too). Safe here — the synchronized guard
+          // above is the only mid-block hazard.
+          this.unpauseIfNeeded(managed, element);
+          managed.revealPendingRepair = false;
+          managed.revealPendingGeneration = undefined;
+        }
+        return 1;
+      }
+    }
+
+    // Geometry convergence (#10632). An on-screen terminal whose xterm grid
+    // (`terminal.cols/rows`) disagrees with what the container can hold
+    // (`fitAddon.proposeDimensions()`) is rendering its buffer at the wrong width
+    // — the exact "garbled line flow" users see after a warm switch-back, and the
+    // failure mode the watchdog previously only DIAGNOSED (DEV log) while
+    // excluding agent TUIs entirely. Now repair it for EVERY on-screen terminal,
+    // alt-buffer/DEC-2026 agents included, with the atomic alt-buffer-safe
+    // reconcile (no mid-block reflow). This is the verifier half: the divergence
+    // IS the proof the pane converged wrong, and the watchdog ticks until it
+    // matches. Bounded by the heavy-repair budget (== REVEAL_CONCURRENCY) so a
+    // grid that all diverges at once never lands as a single long task.
+    if (!inSynchronizedBlock) {
+      const proposal = managed.fitAddon.proposeDimensions?.();
+      if (
+        proposal &&
+        proposal.cols > 1 &&
+        proposal.rows > 1 &&
+        (proposal.cols !== managed.terminal.cols || proposal.rows !== managed.terminal.rows)
+      ) {
+        if (heavyBudget <= 0) return 0;
+        managed.lastWatchdogRepairAt = now;
+        logWarn(
+          "[TerminalReconciliationWatchdog] geometry divergence for on-screen terminal — reconciling",
+          {
+            id,
+            xtermCols: managed.terminal.cols,
+            xtermRows: managed.terminal.rows,
+            proposedCols: proposal.cols,
+            proposedRows: proposal.rows,
+            isAltBuffer: managed.isAltBuffer === true,
+          }
+        );
+        if (this.deps.reconcileRevealGeometry(id)) {
+          this.unpauseIfNeeded(managed, element);
+        }
+        return 1;
+      }
+    }
+
+    // xterm render service paused on an on-screen terminal — force an IO
+    // re-evaluation so a renderer paused while the view was occluded resumes
+    // drawing. This now covers alt-buffer agent TUIs too (#10632): the old
+    // `!managed.isAltBuffer` exclusion was over-broad — the real hazard is
+    // interleaving a paint into an open DEC 2026 synchronized-output block, which
+    // `inSynchronizedBlock` already guards. A paused renderer repaints from
+    // NOTHING until unpaused, so excluding the very agent TUIs that break was the
+    // structural gap behind the recurring switch-back garble.
     if (
       element &&
       element.isConnected &&
-      !managed.isAltBuffer &&
-      managed.terminal.modes?.synchronizedOutputMode !== true &&
+      !inSynchronizedBlock &&
       isXtermRenderPaused(managed.terminal)
     ) {
       managed.lastWatchdogRepairAt = now;
       logWarn(
         "[TerminalReconciliationWatchdog] xterm render service paused for on-screen terminal — reflowing",
-        { id }
+        { id, isAltBuffer: managed.isAltBuffer === true }
       );
       this.deps.forceReflow(element);
       return 0;
@@ -328,6 +453,21 @@ export class TerminalReconciliationWatchdog {
     }
 
     return 0;
+  }
+
+  /**
+   * Unpause a still-paused renderer right after a successful reveal reconcile
+   * (#10632). Only called from the reveal-pending / geometry branches, which
+   * have already established we are NOT inside a DEC 2026 synchronized-output
+   * block — so the reflow can't interleave a paint with a buffered range. This
+   * is what makes the watchdog's reveal recovery single-tick (geometry re-fit +
+   * unpause together), matching a manual Redraw rather than dribbling the two
+   * halves across separate cooldown windows.
+   */
+  private unpauseIfNeeded(managed: ManagedTerminal, element: HTMLElement | undefined): void {
+    if (!element || !element.isConnected) return;
+    if (!isXtermRenderPaused(managed.terminal)) return;
+    this.deps.forceReflow(element);
   }
 
   /**
