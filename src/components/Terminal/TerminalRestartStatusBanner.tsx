@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { XCircle, Loader2, RotateCcw } from "lucide-react";
+import { XCircle, Loader2, RotateCcw, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import type { RestartBannerVariant } from "./restartStatus";
@@ -57,23 +57,22 @@ export function TerminalRestartStatusBanner({
       );
 
     case "session-resume-unavailable":
+      // Toned down per issue #10823: the terminal already relaunched into a
+      // fresh, usable session, so this is a dismissable acknowledgement, not an
+      // assertive error. Warning severity + polite status role + a dismiss
+      // control; no restart action (a restart would be a redundant third
+      // session). The banner still surfaces the lost session so it isn't
+      // dropped silently (issue #9802).
       return (
         <InlineStatusBanner
-          icon={XCircle}
+          icon={AlertTriangle}
           title={RESTART_BANNER_COPY["session-resume-unavailable"].title}
           description={RESTART_BANNER_COPY["session-resume-unavailable"].description}
-          severity="error"
+          severity="warning"
           animated={false}
-          role="alert"
-          action={{
-            id: "start-new-session",
-            label: "Start new session",
-            icon: RotateCcw,
-            variant: "dangerFilled",
-            onClick: onRestart,
-            title: "Start new session",
-            ariaLabel: "Start new session",
-          }}
+          role="status"
+          ariaLive="polite"
+          onClose={onDismiss}
         />
       );
 

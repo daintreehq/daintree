@@ -266,6 +266,15 @@ describe("getRestartBannerVariant — session-resume-unavailable (issue #9802)",
     expect(result).toEqual({ type: "none" });
   });
 
+  it("returns none once dismissed — the banner is dismissable (issue #10823)", () => {
+    const result = getRestartBannerVariant({
+      ...restored,
+      sessionLostOnRestore: true,
+      dismissedRestartPrompt: true,
+    });
+    expect(result).toEqual({ type: "none" });
+  });
+
   it("ignores backendStatus — the lost session is independent of host connectivity", () => {
     const result = getRestartBannerVariant({
       ...restored,

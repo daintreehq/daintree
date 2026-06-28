@@ -8,12 +8,13 @@ export interface RestartBannerCopyMap {
 export const RESTART_BANNER_COPY: RestartBannerCopyMap = {
   "auto-restarting": { title: "Auto-restarting…" },
   restarting: { title: "Restarting…" },
-  // Neutral, non-accusatory copy per issue #9802 and the CLAUDE.md
-  // Title-Message-Action microcopy rule. Title is a noun phrase; the action
-  // label ("Start new session") lives in the banner component.
+  // Neutral, non-accusatory copy per issue #9802 and the CLAUDE.md microcopy
+  // rule. Title is a period-free noun phrase. The description reassures rather
+  // than prompts an action (issue #10823) — the terminal already relaunched
+  // into a fresh, usable session, so the banner is a dismissable acknowledgement.
   "session-resume-unavailable": {
     title: "Session no longer reachable",
-    description: "The previous conversation couldn't be restored. Start a new session to continue.",
+    description: "The previous session couldn't be restored. A fresh session is ready.",
   },
   "exit-error": ({ exitCode }) => ({ title: `Session exited with code ${exitCode}` }),
 };

@@ -43,9 +43,12 @@ export function getRestartBannerVariant(input: RestartBannerInput): RestartBanne
   // fresh launch. Surface it so the user isn't silently dropped into a clean
   // session (issue #9802). Gated below the in-flight restart states (a live
   // restart takes precedence) and above exit-error so a lost session is
-  // acknowledged before any prior exit prompt.
+  // acknowledged before any prior exit prompt. Dismissable (issue #10823): the
+  // user recovers just by carrying on in the fresh session, so once they
+  // acknowledge it the banner stays gone for this session.
   if (
     input.sessionLostOnRestore &&
+    !input.dismissedRestartPrompt &&
     !input.isRestarting &&
     !input.isAutoRestarting &&
     !input.restartError &&
