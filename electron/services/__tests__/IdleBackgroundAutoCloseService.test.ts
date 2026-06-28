@@ -8,6 +8,9 @@ const storeMock = vi.hoisted(() => ({
   }),
 }));
 
+// getProjectById is consulted TWICE per close: the pre-teardown re-check (must
+// see a still-eligible background project) and the post-close PROJECT_UPDATED
+// broadcast. Default it to a background project idle well past the threshold.
 const projectStoreMock = vi.hoisted(() => ({
   getCurrentProjectId: vi.fn<() => string | null>(() => null),
   getAllProjects: vi.fn<() => Array<Record<string, unknown>>>(() => []),
@@ -15,7 +18,8 @@ const projectStoreMock = vi.hoisted(() => ({
     id,
     name: id,
     path: `/projects/${id}`,
-    status: "closed",
+    status: "background",
+    lastOpened: Date.now() - 30 * 60 * 1000,
   })),
   updateProjectStatus: vi.fn(),
 }));
@@ -124,7 +128,8 @@ describe("IdleBackgroundAutoCloseService", () => {
       id,
       name: id,
       path: `/projects/${id}`,
-      status: "closed",
+      status: "background",
+      lastOpened: Date.now() - THIRTY_MIN_MS,
     }));
     ptyClientMock.getAllTerminalsAsync.mockResolvedValue([]);
     ptyClientMock.gracefulKillByProject.mockResolvedValue([]);
@@ -193,6 +198,11 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed", {
         autoParkedAt: expect.any(Number),
       });
+      // PROJECT_UPDATED drives the switcher row → "Suspended to free memory".
+      expect(broadcastToRendererMock).toHaveBeenCalledWith(
+        "project:updated",
+        expect.objectContaining({ id: "proj-1" })
+      );
       expect(broadcastToRendererMock).toHaveBeenCalledWith(
         "idle-background:closed",
         expect.objectContaining({
@@ -316,6 +326,112 @@ describe("IdleBackgroundAutoCloseService", () => {
         expect.anything()
       );
     });
+
+    it("never closes a project the store still calls 'active' (defensive status guard)", async () => {
+      enable();
+      // PVM provider and DB pointer both miss it, but its persisted status is
+      // "active" — the status guard is the last line of defense.
+      projectStoreMock.getAllProjects.mockReturnValue([
+        makeIdleProject("proj-1", { status: "active" }),
+      ]);
+      const service = makeService();
+      await runCheck(service);
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
+    it("isolates a throwing ProjectViewManager and still consults the others", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("bg-1")]);
+      const throwing = {
+        getActiveProjectId: () => {
+          throw new Error("PVM disposing");
+        },
+        getOutgoingBridgeProjectId: () => null,
+      } as unknown as ProjectViewManager;
+      const service = makeService();
+      // A healthy PVM marks active-1 as foreground; the throwing one must not
+      // drop it from the active set. bg-1 is unaffected and still closes.
+      service.setProjectViewManagersProvider(() => [throwing, makePvm("active-1")]);
+      await runCheck(service);
+      expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith(
+        "bg-1",
+        "closed",
+        expect.anything()
+      );
+    });
+
+    it("falls back to the DB pointer when the whole provider throws", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      projectStoreMock.getCurrentProjectId.mockReturnValue("proj-1");
+      const service = makeService();
+      service.setProjectViewManagersProvider(() => {
+        throw new Error("registry tearing down");
+      });
+      await runCheck(service);
+      // Provider threw, but the DB current-project fallback still protects proj-1.
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("teardown re-check (TOCTOU)", () => {
+    it("does not close a project that became active during the sweep", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      // Loop snapshot sees no active project; by teardown the user has focused it.
+      let call = 0;
+      const service = makeService();
+      service.setProjectViewManagersProvider(() => {
+        call += 1;
+        return call === 1 ? [] : [makePvm("proj-1")];
+      });
+      await runCheck(service);
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
+    it("does not close a project that gained a terminal during the sweep", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      // First registry read (loop) is empty; the teardown re-query sees a terminal.
+      ptyClientMock.getAllTerminalsAsync
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([makeTerminal("proj-1")]);
+      const service = makeService();
+      await runCheck(service);
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
+    it("does not close a project whose lastOpened was freshly bumped (re-fetch)", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      // The fresh row read at teardown shows a just-switched-away project: still
+      // "background" with zero terminals, but lastOpened bumped to ~now.
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "proj-1",
+        name: "proj-1",
+        path: "/projects/proj-1",
+        status: "background",
+        lastOpened: Date.now(),
+      });
+      const service = makeService();
+      await runCheck(service);
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
+    it("does not close once the fresh row shows the project already closed", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "proj-1",
+        name: "proj-1",
+        path: "/projects/proj-1",
+        status: "closed",
+        lastOpened: Date.now() - THIRTY_MIN_MS,
+      });
+      const service = makeService();
+      await runCheck(service);
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
   });
 
   describe("resilience", () => {
@@ -351,6 +467,30 @@ describe("IdleBackgroundAutoCloseService", () => {
       );
     });
 
+    it("isolates a failure at the renderer-eviction step and continues the sweep", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([
+        makeIdleProject("bad-1"),
+        makeIdleProject("good-1"),
+      ]);
+      evictProjectRendererMock.mockImplementation((id: string) => {
+        if (id === "bad-1") throw new Error("evict failed");
+        return 1;
+      });
+      const service = makeService();
+      await runCheck(service);
+      expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith(
+        "good-1",
+        "closed",
+        expect.anything()
+      );
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalledWith(
+        "bad-1",
+        "closed",
+        expect.anything()
+      );
+    });
+
     it("writes hibernation markers for each killed terminal", async () => {
       enable();
       projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
@@ -367,6 +507,50 @@ describe("IdleBackgroundAutoCloseService", () => {
       const service = makeService();
       await runCheck(service);
       expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("lifecycle guards", () => {
+    it("suppresses sweeps during the startup quiet period after start()", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      const service = makeService();
+      // start() seeds quietUntil = now + 2min, so an immediate sweep is a no-op.
+      service.start();
+      await runCheck(service);
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+
+      // With the quiet window elapsed, the same project now closes. (stop() is
+      // deferred to the end — it nulls the injected ptyClient.)
+      (service as unknown as { quietUntil: number | null }).quietUntil = null;
+      await runCheck(service);
+      expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith(
+        "proj-1",
+        "closed",
+        expect.anything()
+      );
+      service.stop();
+    });
+
+    it("skips an overlapping sweep while a prior one is still running", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      // Hold the first sweep open inside getAllTerminalsAsync.
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      ptyClientMock.getAllTerminalsAsync.mockImplementationOnce(async () => {
+        await gate;
+        return [];
+      });
+      const service = makeService();
+      const first = runCheck(service);
+      // Second sweep fires before the first resolves — must early-return.
+      await runCheck(service);
+      expect(ptyClientMock.getAllTerminalsAsync).toHaveBeenCalledTimes(1);
+      release();
+      await first;
     });
   });
 });

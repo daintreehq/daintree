@@ -387,7 +387,15 @@ export class ProjectStore {
     }
   }
 
-  updateProject(projectId: string, updates: Partial<Project>): Project {
+  updateProject(
+    projectId: string,
+    // `autoParkedAt` widened to allow an explicit `null` so callers can CLEAR the
+    // marker (the DB column is nullable). Passing `null` writes NULL; passing a
+    // number sets it; omitting the key leaves it untouched. Don't route the clear
+    // through `undefined` — a callee that strips undefined keys would silently
+    // drop the clear (review #4).
+    updates: Partial<Omit<Project, "autoParkedAt">> & { autoParkedAt?: number | null }
+  ): Project {
     const db = getSharedDb();
 
     const set: Partial<{
@@ -432,9 +440,12 @@ export class ProjectStore {
     status: ProjectStatus,
     options?: { autoParkedAt?: number | null }
   ): Project {
-    const updates: Partial<Project> = { status };
+    const updates: Partial<Omit<Project, "autoParkedAt">> & { autoParkedAt?: number | null } = {
+      status,
+    };
     if (options && "autoParkedAt" in options) {
-      updates.autoParkedAt = options.autoParkedAt ?? undefined;
+      // Pass null straight through to clear; updateProject writes NULL for it.
+      updates.autoParkedAt = options.autoParkedAt;
     }
     return this.updateProject(projectId, updates);
   }
@@ -533,7 +544,10 @@ export class ProjectStore {
           this.updateProjectStatus(project.id, "missing");
           missingIds.push(project.id);
         } else if (exists && project.status === "missing") {
-          this.updateProjectStatus(project.id, "closed");
+          // Clear any stale auto-parked marker — a project that went missing and
+          // came back wasn't suspended by the idle sweep, so the switcher must
+          // not label it "Suspended to free memory".
+          this.updateProjectStatus(project.id, "closed", { autoParkedAt: null });
         }
       })
     );

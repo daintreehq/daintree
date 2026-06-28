@@ -4,7 +4,6 @@ import type {
   IdleBackgroundClosedPayload,
   IdleBackgroundClosedProjectEntry,
 } from "../../shared/types/ipc/idleBackgroundAutoClose.js";
-import type { Project } from "../../shared/types/project.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { ProjectViewManager } from "../window/ProjectViewManager.js";
 import { getPtyClient, getWorkspaceClientRef } from "../window/serviceRefs.js";
@@ -61,6 +60,8 @@ export class IdleBackgroundAutoCloseService {
   private readonly WAKE_QUIET_MS = 30_000;
   private ptyClient: PtyClient | null = null;
   private projectViewManagersProvider: (() => ProjectViewManager[]) | null = null;
+  /** Guards against overlapping sweeps when one cycle outruns the 5-min tick. */
+  private sweepInProgress = false;
 
   /**
    * Inject the live PtyClient so terminal-presence checks read the real registry
@@ -269,6 +270,22 @@ export class IdleBackgroundAutoCloseService {
       return;
     }
 
+    // Skip if a prior sweep is still running — a stalled `getAllTerminalsAsync`
+    // (pty-host backpressure/restart) must not let the 5-min tick stack overlapping
+    // sweeps that double-evaluate the same project against pre-write snapshots.
+    if (this.sweepInProgress) return;
+    this.sweepInProgress = true;
+    try {
+      await this.runSweep();
+    } finally {
+      this.sweepInProgress = false;
+    }
+  }
+
+  private async runSweep(): Promise<void> {
+    const config = this.getConfig();
+    if (!config.enabled) return;
+
     const projects = projectStore.getAllProjects();
     if (projects.length === 0) return;
 
@@ -291,6 +308,12 @@ export class IdleBackgroundAutoCloseService {
       // Never touch the foreground project in any window.
       if (activeIds.has(pid)) continue;
 
+      // Defensive: the active project should already be in `activeIds`, but if
+      // the PVM provider and DB pointer both lagged, the persisted status is a
+      // second line of defense — never auto-close a project the store calls
+      // "active".
+      if (project.status === "active") continue;
+
       // Already reclaimed or gone — nothing resident to free.
       if (project.status === "closed" || project.status === "missing") continue;
 
@@ -306,7 +329,7 @@ export class IdleBackgroundAutoCloseService {
       if (hasTerminal) continue;
 
       try {
-        const result = await this.closeProject(project, now);
+        const result = await this.closeProject(pid, now, thresholdMs);
         if (result) closed.push(result);
       } catch (error) {
         // Isolate per project — one teardown failure must not abort the sweep.
@@ -339,10 +362,32 @@ export class IdleBackgroundAutoCloseService {
    * `closed` with the `autoParkedAt` marker so the switcher labels it distinctly.
    */
   private async closeProject(
-    project: Project,
-    now: number
+    projectId: string,
+    now: number,
+    thresholdMs: number
   ): Promise<IdleBackgroundClosedProjectEntry | null> {
-    const projectId = project.id;
+    // Re-verify eligibility against FRESH state immediately before the
+    // irreversible teardown. The sweep snapshotted projects (status, lastOpened)
+    // and terminals before this async loop, so during an earlier project's awaits
+    // the user could have switched to this project — which bumps its lastOpened
+    // to `now-1` and flips its status — or spawned a terminal in it (TOCTOU). Re-
+    // read the project row and the live registry, and bail if anything now
+    // disqualifies it. Also re-check `enabled` so a toggle-off mid-sweep halts.
+    if (!this.getConfig().enabled) return null;
+
+    const fresh = projectStore.getProjectById(projectId);
+    if (!fresh) return null;
+    if (fresh.status !== "background") return null;
+    if (!fresh.lastOpened || fresh.lastOpened <= 0) return null;
+    if (now - fresh.lastOpened < thresholdMs) return null;
+    if (this.collectActiveProjectIds().has(projectId)) return null;
+
+    const liveTerminals = (await this.ptyClient?.getAllTerminalsAsync()) ?? [];
+    if (liveTerminals.some((t) => t.projectId === projectId && t.hasPty !== false)) {
+      return null;
+    }
+
+    const project = fresh;
 
     // Graceful, session-preserving kill — scrollback survives via hibernation
     // markers so a later reopen restores panels instead of starting cold. For a
