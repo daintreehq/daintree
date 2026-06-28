@@ -75,6 +75,33 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
           id: msg.id,
           error: parseSpawnError(error),
         };
+
+        // A failed-to-start spawn never produces a PTY, so no exit event ever
+        // fires and the main-side TerminalProcess never emits agent:spawned.
+        // For a launched agent that means AgentAvailabilityStore retains the
+        // prior session's state and MCP waiters (waitUntilIdle) can't tell the
+        // crash from an idle terminal. Synthesize the spawn + exited transition
+        // so the store records "exited" and consumers see the crash (#10816).
+        // Order matters: agent-spawned resets store state to "working" (and
+        // clears stale exit metadata) before agent-state writes "exited".
+        const launchAgentId = msg.options.launchAgentId;
+        if (launchAgentId) {
+          const timestamp = Date.now();
+          sendEvent({
+            type: "agent-spawned",
+            payload: { agentId: launchAgentId, terminalId: msg.id, timestamp },
+          });
+          sendEvent({
+            type: "agent-state",
+            id: msg.id,
+            agentId: launchAgentId,
+            state: "exited",
+            previousState: "working",
+            timestamp,
+            trigger: "exit",
+            confidence: 1,
+          });
+        }
       }
 
       sendEvent({ type: "spawn-result", id: msg.id, result: spawnResult });

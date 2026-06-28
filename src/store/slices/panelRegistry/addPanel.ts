@@ -753,10 +753,24 @@ export const createAddPanelActions = (
           const _current = state.panelsById[id];
           if (!_current || !isPtyPanel(_current) || _current.spawnStatus !== "spawning")
             return state;
+          // A launched agent that fails to start never produces a PTY exit, so
+          // its optimistic agentState would stay stuck (e.g. "working"). Mark it
+          // "exited" so terminal.list / terminal.getStatus report the crash
+          // instead of a phantom running agent (#10816). Plain shells have no
+          // launchAgentId and keep agentState undefined.
+          const agentPatch = _current.launchAgentId
+            ? { agentState: "exited" as const, lastStateChange: Date.now() }
+            : {};
           return {
             panelsById: {
               ...state.panelsById,
-              [id]: { ..._current, spawnStatus: "failed", spawnError, runtimeStatus: "error" },
+              [id]: {
+                ..._current,
+                spawnStatus: "failed",
+                spawnError,
+                runtimeStatus: "error",
+                ...agentPatch,
+              },
             },
           };
         });

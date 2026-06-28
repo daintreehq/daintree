@@ -211,6 +211,29 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
     expect(payload.agentLaunchFlags).toEqual(["--persisted-flag"]);
   });
 
+  it("restarts as agent terminal when a failed-to-start spawn is retried (#10816)", async () => {
+    // A failed-to-start agent spawn carries agentState "exited" (so MCP read
+    // paths report the crash) but no exitCode — it never ran. Retrying it must
+    // relaunch the agent rather than demote to a shell.
+    const failedToStart = {
+      ...agentPanelBase,
+      agentState: "exited" as const,
+      spawnStatus: "failed" as const,
+    };
+    usePanelStore.setState({
+      panelsById: { [failedToStart.id]: failedToStart },
+      panelIds: [failedToStart.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.kind).toBe("terminal");
+    expect(payload.launchAgentId).toBe("claude");
+    expect(payload.agentLaunchFlags).toEqual(["--persisted-flag"]);
+  });
+
   it("reapplies preset env, color, IDs, and args when restarting an active agent terminal", async () => {
     const { agentSettingsClient, projectClient } = await import("@/clients");
     (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({
