@@ -85,10 +85,11 @@ const HIBERNATED_CHANNEL = "hibernation:project-hibernated";
 /**
  * Project IDs for which the `hibernation:project-hibernated` event was
  * broadcast, in call order. EXPERIMENT (hibernation removal, step 4): the PTY-
- * kill is guarded off, so `gracefulKillByProject` is never called — the
- * broadcast event is the observable for which projects the sweep actually
- * selected (each selected project still emits one event, now reporting zero
- * kills).
+ * kill is guarded off on the background paths (scheduled sweep, memory
+ * pressure), so `gracefulKillByProject` is never called there — the broadcast
+ * event is the observable for which projects the sweep actually selected (each
+ * selected project still emits one event, now reporting zero kills). The
+ * user-initiated path (#10831) bypasses the guard and does kill.
  */
 function hibernatedProjectIds(): string[] {
   return broadcastToRendererMock.mock.calls
@@ -1243,9 +1244,10 @@ describe("HibernationService", () => {
 
       const killed = await service.hibernateProjectOnDemand("proj-1", "Proj One", "user-initiated");
 
-      // No PTYs are killed under the experiment (count is 0); the throwing
-      // provider is swallowed and the project-hibernated event still fires.
-      expect(killed).toBe(0);
+      // The user-initiated path kills despite the experiment flag (#10831); the
+      // beforeEach stub returns one terminal. The throwing eviction provider is
+      // swallowed and the project-hibernated event still fires.
+      expect(killed).toBe(1);
       expect(broadcastToRendererMock).toHaveBeenCalled();
     });
 
@@ -1264,14 +1266,34 @@ describe("HibernationService", () => {
       });
     });
 
-    it("returns a zero killed-terminal count and does not throw when no provider is wired", async () => {
+    it("returns the killed-terminal count and does not throw when no provider is wired", async () => {
       const service = makeService();
 
       const killed = await service.hibernateProjectOnDemand("proj-1", "Proj One", "user-initiated");
 
-      // No provider wired (no eviction) and no PTYs killed under the experiment.
-      expect(killed).toBe(0);
+      // No provider wired (no eviction), but the user-initiated kill still runs
+      // (#10831) — the beforeEach stub returns one terminal.
+      expect(killed).toBe(1);
       expect(broadcastToRendererMock).toHaveBeenCalled();
+    });
+
+    it("calls gracefulKillByProject despite EXPERIMENT_HIBERNATION_DISABLED for user-initiated (#10831)", async () => {
+      const service = makeServiceWithManagers([makeManager(null)]);
+
+      const killed = await service.hibernateProjectOnDemand("proj-1", "Proj One", "user-initiated");
+
+      expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
+        preserveSession: true,
+      });
+      expect(killed).toBe(1);
+    });
+
+    it("writes hibernation markers for terminals killed on user-initiated (#10831)", async () => {
+      const service = makeServiceWithManagers([makeManager(null)]);
+
+      await service.hibernateProjectOnDemand("proj-1", "Proj One", "user-initiated");
+
+      expect(writeHibernatedMarkerMock).toHaveBeenCalledWith("t1");
     });
 
     it("defaults to user-initiated when no reason is passed", async () => {

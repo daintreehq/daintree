@@ -61,9 +61,12 @@ const GIT_SENTINEL_NAMES = new Set([
  */
 export class HibernationService {
   // EXPERIMENT (hibernation removal, step 4): disables the PTY-kill so a
-  // backgrounded project's terminals are never torn down — by the scheduled
-  // sweep (checkAndHibernate), under memory pressure (hibernateUnderMemoryPressure),
-  // or on demand (hibernateProjectOnDemand). All three funnel through the single
+  // backgrounded project's terminals are never torn down by the *background*
+  // paths — the scheduled sweep (checkAndHibernate) and memory pressure
+  // (hibernateUnderMemoryPressure). User-initiated closes (#10831 — the idle
+  // "Close Them" action) deliberately bypass this guard and DO kill, since the
+  // user explicitly asked for it; see the `reason !== "user-initiated"` check in
+  // hibernateProject(). All paths funnel through the single
   // `gracefulKillByProject` chokepoint in hibernateProject(), guarded below.
   // The rest of the flow (callbacks, the project-hibernated event, and the
   // user-initiated WebContentsView eviction we KEEP) is preserved. Typed
@@ -400,11 +403,17 @@ export class HibernationService {
     ptyClient: PtyClient
   ): Promise<number> {
     // EXPERIMENT (hibernation removal, step 4): skip the PTY-kill so backgrounded
-    // projects' terminals stay fully alive; report 0 killed. The kill branch is
-    // kept reachable so ptyClient/gracefulKillByProject stay referenced.
-    const results = HibernationService.EXPERIMENT_HIBERNATION_DISABLED
-      ? []
-      : await ptyClient.gracefulKillByProject(projectId, { preserveSession: true });
+    // projects' terminals stay fully alive; report 0 killed. Scoped to the
+    // background paths only — a user-initiated close (#10831, the idle "Close
+    // Them" action) bypasses the guard and actually kills, because the user
+    // explicitly requested it and the idle notification only surfaces when every
+    // terminal is below the active-agent states. `preserveSession: true` flushes
+    // scrollback before kill, so `.restore` files survive and terminals come back
+    // on next project open.
+    const results =
+      HibernationService.EXPERIMENT_HIBERNATION_DISABLED && reason !== "user-initiated"
+        ? []
+        : await ptyClient.gracefulKillByProject(projectId, { preserveSession: true });
     const terminalsKilled = results.length;
 
     // Write hibernation markers for each killed terminal
