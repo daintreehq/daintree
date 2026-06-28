@@ -2,8 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@/types";
 import {
+  __resetSidebarHydrationLockForTests,
   __resetSidebarLayoutTransitionLockForTests,
   lockSidebarLayoutTransition,
+  unlockSidebarHydration,
 } from "@/lib/layoutTransitionLock";
 import {
   TerminalReconciliationWatchdog,
@@ -155,6 +157,10 @@ describe("TerminalReconciliationWatchdog", () => {
     instances = new Map();
     setDocumentVisibility("visible");
     __resetSidebarLayoutTransitionLockForTests();
+    // #10827: the watchdog now also gates on the one-shot hydration lock, which
+    // starts locked at module init. Release it so ticks run their repairs.
+    __resetSidebarHydrationLockForTests();
+    unlockSidebarHydration();
   });
 
   afterEach(() => {
@@ -163,6 +169,7 @@ describe("TerminalReconciliationWatchdog", () => {
     delete document.documentElement.dataset.dragging;
     document.body.innerHTML = "";
     __resetSidebarLayoutTransitionLockForTests();
+    __resetSidebarHydrationLockForTests();
     vi.useRealTimers();
     vi.clearAllMocks();
   });
@@ -200,6 +207,24 @@ describe("TerminalReconciliationWatchdog", () => {
       lockSidebarLayoutTransition(60_000);
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
       expect(deps.setVisible).not.toHaveBeenCalled();
+    });
+
+    it("skips the tick while the startup hydration lock is held, then resumes (issue #10827)", () => {
+      // The production boot path: pre-hydration geometry is the default-width
+      // sidebar, so reconciling against it would repair to the wrong size. Other
+      // suites unlock hydration in beforeEach; this one re-arms it to exercise
+      // the real first-load gate.
+      __resetSidebarHydrationLockForTests();
+      instances.set("t1", makeManaged({ isVisible: false }));
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.setVisible).not.toHaveBeenCalled();
+
+      unlockSidebarHydration();
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.setVisible).toHaveBeenCalledWith("t1");
     });
 
     it("fires an immediate sweep when the document becomes visible again", () => {

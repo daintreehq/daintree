@@ -12,8 +12,9 @@ import { MIN_TERMINAL_WIDTH_PX } from "@/lib/terminalLayout";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { isBrowserPanel, isDevPreviewPanel, isReviewPanel } from "@shared/types/panel";
 import {
-  isSidebarLayoutTransitionLocked,
+  isSidebarMeasurementLocked,
   subscribeSidebarLayoutTransitionUnlock,
+  subscribeSidebarHydrationUnlock,
 } from "@/lib/layoutTransitionLock";
 
 interface TwoPaneSplitLayoutProps {
@@ -139,7 +140,7 @@ export function TwoPaneSplitLayout({
         rafId = null;
         const entry = latestEntry;
         latestEntry = null;
-        if (isSidebarLayoutTransitionLocked()) return;
+        if (isSidebarMeasurementLocked()) return;
         if (entry) {
           const width = entry.contentRect.width;
           setContainerWidth((prev) => (prev === width ? prev : width));
@@ -148,24 +149,26 @@ export function TwoPaneSplitLayout({
     });
 
     observer.observe(container);
-    // Skip the initial measurement if a sidebar transition is in flight — the
-    // unlock subscriber below will resync once the animation completes.
-    if (!isSidebarLayoutTransitionLocked()) {
+    // Skip the initial measurement if a sidebar transition is in flight, or
+    // while startup hydration is still pending (#10827) — the unlock
+    // subscribers below resync once the animation completes / width restores.
+    if (!isSidebarMeasurementLocked()) {
       setContainerWidth(container.clientWidth);
     }
 
-    // Force a single measurement after the sidebar transition completes so
-    // the pane widths land at their post-transition size even if no further
-    // RO entry fires.
-    const unsubscribe = subscribeSidebarLayoutTransitionUnlock(() => {
+    // Force a single measurement after the sidebar transition completes (or
+    // after startup hydration lands, #10827) so the pane widths reach their
+    // settled size even if no further RO entry fires. Shared by both unlock
+    // subscribers.
+    const remeasureAfterUnlock = () => {
       const node = containerRef.current;
       if (!node) return;
       if (finalRafId !== null) cancelAnimationFrame(finalRafId);
       finalRafId = requestAnimationFrame(() => {
         finalRafId = null;
-        // Re-check the lock — a second toggle may have started in the ~16ms
+        // Re-check both locks — a second toggle may have started in the ~16ms
         // between unlock and this rAF.
-        if (isSidebarLayoutTransitionLocked()) return;
+        if (isSidebarMeasurementLocked()) return;
         // Don't override an in-progress divider drag — changing
         // `containerWidth` mid-drag shifts `minRatio`/`maxRatio` clamping
         // bounds, which can snap the live ratio. Defer the resync until
@@ -179,13 +182,19 @@ export function TwoPaneSplitLayout({
         const width = measureNode.clientWidth;
         setContainerWidth((prev) => (prev === width ? prev : width));
       });
-    });
+    };
+
+    const unsubscribeTransition = subscribeSidebarLayoutTransitionUnlock(remeasureAfterUnlock);
+    // #10827: remeasure once the persisted sidebar width is restored. Fires
+    // synchronously if hydration already completed before this effect mounted.
+    const unsubscribeHydration = subscribeSidebarHydrationUnlock(remeasureAfterUnlock);
 
     return () => {
       observer.disconnect();
       if (rafId !== null) cancelAnimationFrame(rafId);
       if (finalRafId !== null) cancelAnimationFrame(finalRafId);
-      unsubscribe();
+      unsubscribeTransition();
+      unsubscribeHydration();
     };
   }, []);
 

@@ -40,6 +40,7 @@ import { useLayoutState, useOverlayOpen } from "@/hooks";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import { repaintAssistantAfterTransition, suppressSidebarResizes } from "@/lib/sidebarToggle";
+import { unlockSidebarHydration } from "@/lib/layoutTransitionLock";
 import { logError } from "@/utils/logger";
 
 function preloadGlobalBannerCoordinator() {
@@ -103,6 +104,12 @@ interface AppLayoutProps {
 export const MIN_SIDEBAR_WIDTH = 200;
 export const MAX_SIDEBAR_WIDTH = 600;
 export const DEFAULT_SIDEBAR_WIDTH = 350;
+
+// #10827: upper bound on how long the grid-measurement hydration lock stays
+// armed if the persisted-width restore IPC neither resolves nor rejects. After
+// this the lock releases anyway so the grid still measures (pre-#10827 visible
+// behavior) rather than staying blank. Far longer than a healthy restore.
+const SIDEBAR_HYDRATION_UNLOCK_FALLBACK_MS = 5000;
 
 export function AppLayout({
   children,
@@ -322,6 +329,37 @@ export function AppLayout({
     };
     restoreState();
   }, []);
+
+  // #10827: release the grid-measurement hydration lock once the persisted
+  // sidebar width has been restored. This passive effect runs after React
+  // commits the restored `sidebarWidth` (and the cleared hydrating flag) into
+  // the DOM, so grid/pane measurement subscribers fire against the correct
+  // `<main>` width instead of the default 350px — eliminating the first-load
+  // narrow-then-snap. `unlockSidebarHydration()` is idempotent.
+  //
+  // Gated on `isHydrated`: the pre-hydration skeleton AppLayout (App.tsx renders
+  // `<AppLayout isHydrated={false}>` with no ContentGrid) runs the same
+  // `restoreState()` effect, and its fast `appClient.getState()` typically
+  // resolves before the real AppLayout + ContentGrid mount. Without this gate
+  // the skeleton would release the global lock early, so the real grid would
+  // hit the already-unlocked fast path and measure at the default width.
+  useEffect(() => {
+    if (!isHydrated) return;
+    if (!isSidebarWidthHydrating) {
+      unlockSidebarHydration();
+      return;
+    }
+    // Safety net: if the width restore hangs (IPC never resolves *or* rejects),
+    // `isSidebarWidthHydrating` would stay true forever and the grid would
+    // never measure. Release the lock after a generous timeout so a stuck IPC
+    // degrades to the pre-#10827 behavior (visible grid) rather than a blank
+    // one. Cleared the instant the flag clears normally (effect re-runs).
+    const fallback = window.setTimeout(
+      unlockSidebarHydration,
+      SIDEBAR_HYDRATION_UNLOCK_FALLBACK_MS
+    );
+    return () => window.clearTimeout(fallback);
+  }, [isHydrated, isSidebarWidthHydrating]);
 
   useEffect(() => {
     if (layout.gestureSidebarHidden) return;
