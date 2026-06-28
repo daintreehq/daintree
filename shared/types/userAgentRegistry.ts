@@ -10,7 +10,7 @@ export const AssistantSupportsSchema = z.object({
   permissionBypass: z.boolean(),
   trustDialog: z.boolean(),
   versionProbe: z.boolean(),
-  tier: z.enum(["stable", "experimental"]),
+  tier: z.enum(["stable", "experimental", "deprecated"]),
 });
 
 export const UserAgentConfigSchema = z

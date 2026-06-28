@@ -104,7 +104,7 @@ vi.mock("../../../utils.js", () => ({
 
 vi.mock("../../../../shared/config/agentRegistry.js", () => ({
   isRegisteredAgent: vi.fn(() => false),
-  getAssistantWiredAgentIds: vi.fn(() => ["claude", "codex", "gemini", "copilot"]),
+  getAssistantWiredAgentIds: vi.fn(() => ["claude", "codex", "copilot"]),
   getEffectiveAgentConfig: vi.fn((id: string) => {
     if (id === "claude") {
       return {
@@ -127,18 +127,6 @@ vi.mock("../../../../shared/config/agentRegistry.js", () => ({
           trustDialog: false,
           versionProbe: true,
           tier: "stable",
-        },
-      };
-    }
-    if (id === "gemini") {
-      return {
-        supports: {
-          mcpInjection: "project-config",
-          settingsOverlay: true,
-          permissionBypass: false,
-          trustDialog: true,
-          versionProbe: true,
-          tier: "experimental",
         },
       };
     }
@@ -185,16 +173,8 @@ const mockGetCodexLaunchArgs = vi.hoisted(() =>
   vi.fn<(token: string) => string[] | null>(() => null)
 );
 
-const mockGetGeminiLaunchArgs = vi.hoisted(() =>
-  vi.fn<(token: string) => string[] | null>(() => null)
-);
-
 const mockGetCopilotLaunchArgs = vi.hoisted(() =>
   vi.fn<(token: string) => string[] | null>(() => null)
-);
-
-const mockGetGeminiSpawnEnv = vi.hoisted(() =>
-  vi.fn<(token: string) => Record<string, string> | null>(() => null)
 );
 
 const mockMarkTerminalForToken = vi.hoisted(() =>
@@ -215,9 +195,7 @@ vi.mock("../../../../services/HelpSessionService.js", () => ({
   helpSessionService: {
     validateToken: (token: string) => mockValidateToken(token),
     getCodexLaunchArgs: (token: string) => mockGetCodexLaunchArgs(token),
-    getGeminiLaunchArgs: (token: string) => mockGetGeminiLaunchArgs(token),
     getCopilotLaunchArgs: (token: string) => mockGetCopilotLaunchArgs(token),
-    getGeminiSpawnEnv: (token: string) => mockGetGeminiSpawnEnv(token),
     getAssistantScratchEnv: (token: string) => mockGetAssistantScratchEnv(token),
     getBypassPermissions: (token: string) => mockGetBypassPermissions(token),
     getDebugLogging: (token: string) => mockGetDebugLogging(token),
@@ -787,8 +765,6 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     mockCurrentPort.mockReturnValue(null);
     mockGetCodexLaunchArgs.mockReset();
     mockGetCodexLaunchArgs.mockReturnValue(null);
-    mockGetGeminiLaunchArgs.mockReset();
-    mockGetGeminiLaunchArgs.mockReturnValue(null);
     mockGetBypassPermissions.mockReset();
     mockGetBypassPermissions.mockReturnValue(false);
     mockMarkTerminalForToken.mockReset();
@@ -1354,181 +1330,11 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(ptyClient.spawn).not.toHaveBeenCalled();
   });
 
-  it("refuses to spawn when getGeminiLaunchArgs returns null — cross-agent token reuse signal (#7533)", async () => {
-    // Symmetric to the Codex case — silently spawning Gemini without
-    // `--approval-mode=plan` would lose the read-only guardrail, so a
-    // mismatched token must hard-fail.
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
-    mockGetGeminiLaunchArgs.mockReturnValue(null);
-
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await expect(
-      handler(
-        {} as Electron.IpcMainInvokeEvent,
-        {
-          cols: 80,
-          rows: 24,
-          cwd: tmpDir,
-          command: "gemini",
-          launchAgentId: "gemini",
-          env: { DAINTREE_MCP_TOKEN: "help-token" },
-        } as unknown as Parameters<typeof handler>[1]
-      )
-    ).rejects.toThrow(/does not belong to a Gemini session/);
-    expect(ptyClient.spawn).not.toHaveBeenCalled();
-  });
-
-  it("appends --approval-mode=plan to a Gemini help-session spawn (#7533)", async () => {
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
-    mockGetGeminiLaunchArgs.mockImplementation((token) =>
-      token === "help-token" ? ["--approval-mode=plan"] : null
-    );
-
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler(
-      {} as Electron.IpcMainInvokeEvent,
-      {
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "gemini",
-        launchAgentId: "gemini",
-        env: { DAINTREE_MCP_TOKEN: "help-token" },
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.command).toContain("'--approval-mode=plan'");
-    // Gemini Phase 1 does not flow through per-pane MCP injection — that
-    // path is Claude-only.
-    expect(mockPreparePaneConfig).not.toHaveBeenCalled();
-  });
-
-  it("does NOT append --yolo to a Gemini help-session spawn even when bypassPermissions is on (#7533)", async () => {
-    // Gemini's `supports.permissionBypass` is `false` — Phase 1 stays in
-    // plan mode regardless of the user's help-assistant bypass setting.
-    mockValidateToken.mockImplementation((token) => (token === "bypass-token" ? "system" : false));
-    mockGetBypassPermissions.mockImplementation((token) => token === "bypass-token");
-    mockGetGeminiLaunchArgs.mockReturnValue(["--approval-mode=plan"]);
-
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler(
-      {} as Electron.IpcMainInvokeEvent,
-      {
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "gemini",
-        launchAgentId: "gemini",
-        env: { DAINTREE_MCP_TOKEN: "bypass-token" },
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.command).not.toContain("--yolo");
-    expect(spawnArgs.command).toContain("'--approval-mode=plan'");
-  });
-
-  it("strips a smuggled --approval-mode=yolo from a Gemini help-session spawn so plan mode is unambiguously authoritative (#7533)", async () => {
-    // Defense-in-depth: Gemini CLI's flag parser treats repeated flags as
-    // last-wins in practice, but the read-only guardrail must not depend
-    // on parser quirks. Strip any user-supplied `--approval-mode=...`
-    // before appending the canonical `--approval-mode=plan`.
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
-    mockGetGeminiLaunchArgs.mockReturnValue(["--approval-mode=plan"]);
-
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler(
-      {} as Electron.IpcMainInvokeEvent,
-      {
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "gemini --approval-mode=yolo",
-        launchAgentId: "gemini",
-        env: { DAINTREE_MCP_TOKEN: "help-token" },
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.command).not.toContain("--approval-mode=yolo");
-    // Exactly one occurrence of approval-mode (the appended plan flag),
-    // never the smuggled yolo.
-    const matches = spawnArgs.command.match(/--approval-mode/g) ?? [];
-    expect(matches).toHaveLength(1);
-    expect(spawnArgs.command).toContain("'--approval-mode=plan'");
-  });
-
-  it("strips a smuggled --approval-mode auto_edit form (space-separated value) (#7533)", async () => {
-    // Some users may use the long form with a space; the strip must catch
-    // both `--approval-mode=value` and `--approval-mode value`.
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
-    mockGetGeminiLaunchArgs.mockReturnValue(["--approval-mode=plan"]);
-
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler(
-      {} as Electron.IpcMainInvokeEvent,
-      {
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "gemini --approval-mode auto_edit",
-        launchAgentId: "gemini",
-        env: { DAINTREE_MCP_TOKEN: "help-token" },
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.command).not.toContain("auto_edit");
-    const matches = spawnArgs.command.match(/--approval-mode/g) ?? [];
-    expect(matches).toHaveLength(1);
-    expect(spawnArgs.command).toContain("'--approval-mode=plan'");
-  });
-
-  it("strips a smuggled --yolo from a Gemini help-session spawn (#7533)", async () => {
-    // Defense-in-depth: even if a user customFlags entry leaked --yolo
-    // into the command string, the dangerous-strip pass removes it before
-    // the agent runs in plan mode.
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
-    mockGetGeminiLaunchArgs.mockReturnValue(["--approval-mode=plan"]);
-
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler(
-      {} as Electron.IpcMainInvokeEvent,
-      {
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "gemini --yolo",
-        launchAgentId: "gemini",
-        env: { DAINTREE_MCP_TOKEN: "help-token" },
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.command).not.toContain("--yolo");
-    expect(spawnArgs.command).toContain("'--approval-mode=plan'");
-  });
-
-  it("does not query Gemini launch args for a non-help Gemini launch (#7533)", async () => {
+  it("spawns Gemini as a normal agent — no help-session flag injection after deprecation (#8811)", async () => {
+    // Gemini is deprecated from the assistant overlay (#8811) but still
+    // launches from the main toolbar. A plain launch (no DAINTREE_MCP_TOKEN)
+    // must reach `ptyClient.spawn` with the command untouched and never flow
+    // through the Claude per-pane MCP path.
     mockValidateToken.mockReturnValue(false);
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -1546,71 +1352,11 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
       } as unknown as Parameters<typeof handler>[1]
     );
 
-    expect(mockGetGeminiLaunchArgs).not.toHaveBeenCalled();
-  });
-
-  it("merges per-agent env from getGeminiSpawnEnv into the PTY env when non-empty (#7542)", async () => {
-    // Today `getGeminiSpawnEnv` returns `{}` for Gemini sessions — we don't
-    // redirect `GEMINI_CLI_HOME` because it would break OAuth credential
-    // lookup. This test guards the merge plumbing so future per-agent env
-    // additions land in the PTY env without regression. Uses a sentinel
-    // key that isn't actually injected today.
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
-    mockGetGeminiLaunchArgs.mockReturnValue(["--approval-mode=plan"]);
-    mockGetGeminiSpawnEnv.mockImplementation((token) =>
-      token === "help-token" ? { GEMINI_TEST_SENTINEL: "1" } : null
-    );
-
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler(
-      {} as Electron.IpcMainInvokeEvent,
-      {
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "gemini",
-        launchAgentId: "gemini",
-        env: { DAINTREE_MCP_TOKEN: "help-token" },
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.env).toMatchObject({
-      DAINTREE_MCP_TOKEN: "help-token",
-      GEMINI_TEST_SENTINEL: "1",
-    });
-  });
-
-  it("does not inject GEMINI_CLI_HOME when getGeminiSpawnEnv returns {} (#7542)", async () => {
-    // OAuth-only Gemini users would lose auth if we redirected `os.homedir()`
-    // via `GEMINI_CLI_HOME`. Guard that the renderer + main both honor the
-    // empty-env return value.
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
-    mockGetGeminiLaunchArgs.mockReturnValue(["--approval-mode=plan"]);
-    mockGetGeminiSpawnEnv.mockReturnValue({});
-
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler(
-      {} as Electron.IpcMainInvokeEvent,
-      {
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "gemini",
-        launchAgentId: "gemini",
-        env: { DAINTREE_MCP_TOKEN: "help-token" },
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.env.GEMINI_CLI_HOME).toBeUndefined();
-    expect(spawnArgs.env.DAINTREE_MCP_TOKEN).toBe("help-token");
+    expect(spawnArgs.command).toBe("gemini");
+    expect(spawnArgs.command).not.toContain("--approval-mode");
+    expect(mockPreparePaneConfig).not.toHaveBeenCalled();
   });
 
   it("appends --plan to a Copilot help-session spawn (#7542)", async () => {
