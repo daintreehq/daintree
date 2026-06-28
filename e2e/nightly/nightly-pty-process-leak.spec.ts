@@ -3,16 +3,20 @@ import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo, createFixtureRepos } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { getGridPanelCount, getGridPanelIds, getPanelById, openTerminal } from "../helpers/panels";
+import { waitForTerminalPty } from "../helpers/terminal";
 import { addAndSwitchToProject } from "../helpers/workflows";
 import { SEL } from "../helpers/selectors";
 import { T_LONG, T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
 
-// Counts live PTY processes, not panels: a leaked PTY (e.g. node-pty's master
-// /dev/ptmx fd never released on kill — see #9544) survives even after the
-// renderer panel is gone. The pty-host reports `hasPty = !wasKilled && !isExited`
-// per terminal (electron/pty-host/handlers/terminalInfo.ts), so the count of
-// terminals with hasPty === true is the direct "live process" signal. Alt+click
-// close sets wasKilled=true synchronously, but the registry entry is only dropped
+// Counts live PTY entries, not panels: a leaked PTY (e.g. node-pty's master
+// /dev/ptmx fd never released on kill — see #9544) leaves a registry entry alive
+// even after the renderer panel is gone. The pty-host reports
+// `hasPty = !wasKilled && !isExited` per terminal
+// (electron/pty-host/handlers/terminalInfo.ts), so the count of terminals with
+// hasPty === true is the registry-level "live PTY" signal — it catches a PTY
+// that never tears down, but not an fd leak that still flips wasKilled=true
+// (that needs OS-level fd inspection, out of scope here). Alt+click close sets
+// wasKilled=true synchronously, but the registry entry is only dropped
 // asynchronously once the process actually exits — hence every assertion polls.
 //
 // Scoped to plain terminals on purpose: agent-promoted terminals are preserved
@@ -22,6 +26,9 @@ import { T_LONG, T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
 
 const CHURN_COUNT = 20;
 const WARMUP_CYCLES = 3;
+// More than one so the freeMemory teardown must kill every project PTY, not just
+// the first — a single terminal wouldn't surface an early-exiting kill loop.
+const PROJECT_A_TERMINALS = 3;
 
 // Scheduled hibernation currently kills no PTYs: HibernationService.ts pins
 // `EXPERIMENT_HIBERNATION_DISABLED = true`, so the scheduled-kill branch is dead
@@ -43,6 +50,11 @@ async function openAndCloseTerminal(window: AppContext["window"]): Promise<void>
   const newId = idsAfter.find((id) => !idsBefore.includes(id));
   const panel = newId ? getPanelById(window, newId) : window.locator(SEL.panel.gridPanel).last();
   await expect(panel).toBeVisible({ timeout: T_MEDIUM });
+
+  // Wait for the PTY to actually attach before closing, so every cycle exercises
+  // the kill-attached-PTY teardown path (the test subject) rather than the
+  // cancel-pending-spawn path a close-before-spawn race would hit on loaded CI.
+  await waitForTerminalPty(window, panel, T_LONG);
 
   // Force click to handle the close button being momentarily detached from the
   // DOM during re-renders (common on Windows CI). Alt+click sets wasKilled=true.
@@ -108,9 +120,10 @@ test.describe.serial("Nightly: PTY process leak — terminal churn", () => {
 
     // hasPty flips false synchronously on kill, but the registry entry is only
     // dropped once the process exits — poll across the IPC round-trip rather
-    // than a single fixed-wait read, which flakes on loaded CI.
+    // than a single fixed-wait read, which flakes on loaded CI. T_LONG gives
+    // queued exit handshakes headroom on slow Windows runners.
     await window.waitForTimeout(T_SETTLE);
-    await expect.poll(() => getLivePtyCount(window), { timeout: T_MEDIUM }).toBe(baseline);
+    await expect.poll(() => getLivePtyCount(window), { timeout: T_LONG }).toBe(baseline);
   });
 });
 
@@ -136,12 +149,16 @@ test.describe.serial("Nightly: PTY process leak — project.freeMemory teardown"
     });
     expect(projectAId, "project A id").toBeTruthy();
 
-    // Open a terminal in project A so it owns a live PTY, then confirm it
-    // attached before switching away — getAllTerminals reports it under A's id.
-    await openTerminal(ctx.window);
+    // Open several terminals in project A so it owns multiple live PTYs, then
+    // confirm they attached before switching away — getAllTerminals reports them
+    // under A's id. Using more than one guards against a teardown that kills only
+    // the first PTY (e.g. an early-exiting gracefulKillByProject loop).
+    for (let i = 0; i < PROJECT_A_TERMINALS; i++) {
+      await openTerminal(ctx.window);
+    }
     await expect
       .poll(() => getLivePtyCount(ctx.window, projectAId), { timeout: T_LONG })
-      .toBeGreaterThan(0);
+      .toBe(PROJECT_A_TERMINALS);
 
     // Register and switch to project B — freeMemory refuses the active project
     // (it owns the visible renderer), so A must be backgrounded first. The
@@ -157,10 +174,10 @@ test.describe.serial("Nightly: PTY process leak — project.freeMemory teardown"
   test("background project's PTYs are torn down by project.freeMemory", async () => {
     test.setTimeout(600_000);
 
-    // Sanity: backgrounding project A keeps its PTY alive (no teardown yet).
+    // Sanity: backgrounding project A keeps all its PTYs alive (no teardown yet).
     const before = await getLivePtyCount(ctx.window, projectAId);
     console.log(`[pty-leak] project A live PTYs before freeMemory: ${before}`);
-    expect(before).toBeGreaterThan(0);
+    expect(before).toBe(PROJECT_A_TERMINALS);
 
     await ctx.window.evaluate(async (pid) => {
       await (
