@@ -2425,9 +2425,11 @@ describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
 
     // The take is the gate, and it runs before provisioning displaces anything.
     expect(takeMock).toHaveBeenCalledWith("p1");
-    expect(takeMock.mock.invocationCallOrder[0]).toBeLessThan(
-      provisionMock().mock.invocationCallOrder[0]
-    );
+    const takeOrder = takeMock.mock.invocationCallOrder[0];
+    const provisionOrder = provisionMock().mock.invocationCallOrder[0];
+    expect(takeOrder).toBeDefined();
+    expect(provisionOrder).toBeDefined();
+    expect(takeOrder!).toBeLessThan(provisionOrder!);
     // The taken entry seeds the local store the resume block reads.
     expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith("p1", {
       sessionId: "abc-123",
