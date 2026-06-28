@@ -20,7 +20,8 @@ const CREATE_TABLES_SQL = `
     in_repo_settings INTEGER,
     pinned INTEGER NOT NULL DEFAULT 0,
     frecency_score REAL NOT NULL DEFAULT 3.0,
-    last_accessed_at INTEGER NOT NULL DEFAULT 0
+    last_accessed_at INTEGER NOT NULL DEFAULT 0,
+    auto_parked_at INTEGER
   );
   CREATE TABLE IF NOT EXISTS app_state (
     key TEXT PRIMARY KEY,
