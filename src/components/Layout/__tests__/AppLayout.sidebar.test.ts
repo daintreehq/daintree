@@ -507,7 +507,9 @@ describe("AppLayout grid-measurement hydration unlock — issue #10827", () => {
     // stays true forever; the timeout releases the lock so the grid degrades to a
     // visible (pre-#10827) state rather than never measuring. Cleared the instant
     // the flag clears normally.
-    expect(source).toMatch(/setTimeout\(unlockSidebarHydration, \d+\)/);
+    expect(source).toMatch(
+      /setTimeout\(\s*unlockSidebarHydration,\s*SIDEBAR_HYDRATION_UNLOCK_FALLBACK_MS\s*\)/
+    );
     expect(source).toMatch(/clearTimeout\(fallback\)/);
   });
 });
