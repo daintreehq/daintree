@@ -313,10 +313,13 @@ When the full local gate is green and `stabilize.yml` passes on the branch (plus
    ```bash
    git switch <branch>
    git reset --soft "$(git merge-base origin/develop HEAD)"   # collapse every commit since the base into the index
-   git commit -m "fix(ci): stabilize <area>"                  # one commit; conventional subject (or test(e2e): stabilize <suite>)
+   git commit -m "fix(ci): stabilize <area>" -m "- <fix 1>" -m "- <flake hardened>"   # subject + body bullets
    ```
 
-3. Use a body with a bullet list of the concrete fixes and which flakes were hardened (pass extra `-m` flags or amend).
+3. Write the commit in Daintree's standard format (the same convention the `/commit` command uses):
+   - **Subject:** `<type>(<scope>): <description>` — present-tense imperative ("stabilize", not "stabilized"), under 72 characters. `type` is one of `feat` | `fix` | `refactor` | `test` | `docs` | `chore` | `style`; a stabilization run is usually `fix(ci): …` (workflow/build fixes) or `test(e2e): …` (spec/flake fixes), with `scope` inferred from what you touched.
+   - **Body:** 2–5 bullet lines (`- …`) describing what changed and why — the concrete fixes and which flakes were hardened. Pass each as its own `-m`, or amend.
+   - **No AI attribution:** never add `Co-Authored-By`, `Signed-off-by`, or any mention of Claude/AI.
 4. Force-push the rewritten branch with lease — squashing rewrites history, so a plain push is rejected. Force-pushing the **stabilize branch** is expected and safe; never force-push `develop`.
 
    ```bash
