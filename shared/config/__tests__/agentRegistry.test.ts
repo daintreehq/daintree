@@ -227,15 +227,14 @@ describe("agentRegistry", () => {
     it("agents with no supports field are excluded from the stable list", () => {
       const ids = getAssistantSupportedAgentIds();
       // goose, cursor, etc. have not been wired yet — they leave `supports`
-      // undefined and must not leak into the dropdown. Gemini IS wired
-      // (`tier: "experimental"`) but is intentionally excluded from the
-      // stable list — see the experimental-tier exclusion test below and
-      // the dedicated Gemini block.
+      // undefined and must not leak into the dropdown. Gemini retains its
+      // `supports` shape but at `tier: "deprecated"`, so it is excluded too
+      // — see the deprecated-tier block below.
       expect(ids).not.toContain("goose");
       expect(ids).not.toContain("cursor");
     });
 
-    it("gemini has structured assistant supports at experimental tier (#7533)", () => {
+    it("gemini retains its assistant supports shape but at deprecated tier (#8811)", () => {
       const gemini = getAgentConfig("gemini");
       expect(gemini?.supports).toMatchObject({
         mcpInjection: "project-config",
@@ -243,7 +242,7 @@ describe("agentRegistry", () => {
         permissionBypass: false,
         trustDialog: true,
         versionProbe: true,
-        tier: "experimental",
+        tier: "deprecated",
       });
     });
 
@@ -258,9 +257,13 @@ describe("agentRegistry", () => {
       expect(ids).not.toContain("interpreter");
     });
 
-    it("getAssistantWiredAgentIds includes both stable and experimental tiers (#7533)", () => {
+    it("getAssistantWiredAgentIds includes stable and experimental tiers but excludes deprecated (#8811)", () => {
       const wired = getAssistantWiredAgentIds();
-      expect(wired).toEqual(expect.arrayContaining(["claude", "codex", "gemini"]));
+      expect(wired).toEqual(expect.arrayContaining(["claude", "codex"]));
+      // Deprecated-tier agents (gemini) are excluded from the wired list, so
+      // they cannot provision an assistant help session even though they
+      // keep their `supports` shape for historical reference.
+      expect(wired).not.toContain("gemini");
       // structurally ineligible / not wired entries must still be excluded
       expect(wired).not.toContain("aider");
       expect(wired).not.toContain("interpreter");

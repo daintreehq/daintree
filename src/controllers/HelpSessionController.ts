@@ -293,13 +293,8 @@ interface HelpSessionRef {
  * Per-agent env injection for help-session launches. Today this is a
  * placeholder shape — no agent currently requires renderer-side env beyond
  * the universal `DAINTREE_MCP_TOKEN` / `DAINTREE_WINDOW_ID` set in
- * `buildHelpEnv`. Gemini intentionally does NOT receive `GEMINI_CLI_HOME`:
- * its OAuth credentials live under `os.homedir()` and redirecting them
- * would break auth for users who haven't set `GEMINI_API_KEY`. MCP-server
- * isolation for Gemini comes from the workspace-level
- * `<sessionPath>/.gemini/settings.json` written at provision time, which
- * Gemini's merge precedence (workspace > user) lets shadow same-name
- * user-level entries.
+ * `buildHelpEnv`. The hook stays so future per-agent env additions have a
+ * single place to land.
  */
 function agentSpawnEnv(_agentId: string, _sessionPath: string): Record<string, string> {
   return {};

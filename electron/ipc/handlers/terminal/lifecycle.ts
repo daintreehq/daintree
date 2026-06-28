@@ -277,10 +277,10 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_ASSISTANT_DEBUG_LOG: "1" };
       }
       // Honor the agent's `supports.permissionBypass` declaration: only
-      // append the dangerous flag when the agent has opted in. Gemini help
-      // sessions sit at `permissionBypass: false` (Phase 1 stays in plan
-      // mode), so a stored `bypassPermissions: true` from the user's
-      // help-assistant settings must not flip Gemini into `--yolo`.
+      // append the dangerous flag when the agent has opted in. Agents that
+      // sit at `permissionBypass: false` stay in their read-only mode even
+      // when the user's help-assistant settings carry a stored
+      // `bypassPermissions: true`.
       const launchAgentConfig = getEffectiveAgentConfig(launchAgentId);
       const agentAllowsBypass = launchAgentConfig?.supports
         ? launchAgentConfig.supports.permissionBypass === true
@@ -293,9 +293,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         // lookalikes that could survive a substring-only check). Then append
         // the canonical flag iff bypass is on AND the agent declares it
         // accepts bypass. The strip-first pass means
-        // `--dangerously-skip-permissions=false` (or `--yolo` smuggled via
-        // customArgs against a Gemini help session) never wins over the
-        // session's stored preference or the agent's `permissionBypass`
+        // `--dangerously-skip-permissions=false` (or a bypass flag smuggled
+        // via customArgs against a read-only help session) never wins over
+        // the session's stored preference or the agent's `permissionBypass`
         // opt-out.
         const dangerousEscaped = dangerous.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         const stripPattern = new RegExp(`(^|\\s)${dangerousEscaped}(?:=\\S*)?(?=\\s|$)`, "g");
@@ -328,51 +328,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           safeCommand = `${safeCommand} ${codexArgs.map((arg) => quoteCommandArg(arg, quotingShell)).join(" ")}`;
         }
       }
-      // Gemini help sessions are pinned to `--approval-mode=plan` (strict
-      // read-only) at spawn time. The flag is a CLI-only knob — it cannot
-      // come from the bundled `.gemini/settings.json`, which only carries
-      // the docs MCP entry and the tool allowlist.
-      //
-      // A `null` return is the agent-mismatch signal (e.g. a Claude help
-      // token reused with `launchAgentId: "gemini"`) — refuse to spawn,
-      // because silently dropping the launch args would mean spawning
-      // Gemini without the read-only plan-mode guardrail.
-      //
-      // Strip any user-supplied `--approval-mode=...` first so the
-      // appended `--approval-mode=plan` is unambiguously authoritative
-      // (Gemini's flag parser treats repeated flags as last-wins, but we
-      // don't rely on parser quirks for a security-relevant guardrail).
-      if (launchAgentId === "gemini") {
-        const geminiArgs = helpSessionService.getGeminiLaunchArgs(helpToken);
-        if (geminiArgs === null) {
-          throw new Error(
-            "Daintree Assistant help token does not belong to a Gemini session; refusing to spawn"
-          );
-        }
-        safeCommand = safeCommand
-          .replace(/(^|\s)--approval-mode(?:=\S*|\s+\S+)?(?=\s|$)/g, "$1")
-          .replace(/\s{2,}/g, " ")
-          .trim();
-        if (geminiArgs.length > 0) {
-          safeCommand =
-            `${safeCommand} ${geminiArgs.map((arg) => quoteCommandArg(arg, quotingShell)).join(" ")}`.trim();
-        }
-        // Merge any per-agent env returned by `getGeminiSpawnEnv` into the
-        // PTY spawn env. Today this is a no-op (Gemini's MCP isolation is
-        // achieved via workspace-level `.gemini/settings.json` precedence
-        // rather than `GEMINI_CLI_HOME` redirection — see
-        // `getGeminiSpawnEnv` in HelpSessionService for the rationale).
-        // The merge stays so future per-agent env additions land here
-        // consistently with the existing pattern.
-        const geminiEnv = helpSessionService.getGeminiSpawnEnv(helpToken);
-        if (geminiEnv && Object.keys(geminiEnv).length > 0) {
-          spawnEnv = { ...(spawnEnv ?? {}), ...geminiEnv };
-        }
-      }
       // Copilot help sessions get the `--plan` read-only flag appended at
-      // spawn time (same pattern as `--approval-mode=plan` for Gemini). MCP
-      // wiring lives in `<sessionPath>/.mcp.json` via `writeCopilotMcpConfig`
-      // and is auto-discovered from cwd — no flag injection needed for that.
+      // spawn time (the same CLI-flag pinning pattern Codex uses for its
+      // `-c` MCP args). MCP wiring lives in `<sessionPath>/.mcp.json` via
+      // `writeCopilotMcpConfig` and is auto-discovered from cwd — no flag
+      // injection needed for that.
       //
       // A `null` return is the agent-mismatch signal (e.g. a Claude help
       // token reused with `launchAgentId: "copilot"`) — refuse to spawn.
@@ -396,7 +356,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       }
 
       // Inject the per-session assistant scratch dir into the PTY spawn env
-      // for every help-session agent (Claude, Codex, Gemini, Copilot).
+      // for every help-session agent (Claude, Codex, Copilot).
       // Paired with the markdown addendum written into the session dir at
       // provision time so the agent has both a literal path in its
       // instruction surface and an env var for shell substitution. Merged
