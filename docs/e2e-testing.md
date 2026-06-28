@@ -17,7 +17,7 @@ npm run test:e2e:full-terminal     # Run a single bucket — substitute any of:
                                    #   full-platform full-panels full-resilience
                                    #   full-plugins
 npm run test:e2e:online            # Claude/OpenCode-dependent online tests
-npm run test:e2e:nightly           # Soak / memory-leak nightly tests
+npm run test:e2e:nightly           # Memory-leak / soak suite (serialized, workers=1)
 npm run test:e2e:demo              # Demo-engine specs (workers=1, screencast capture)
 npx playwright test e2e/full/terminal/core-terminal-search.spec.ts  # Single file
 PWDEBUG=1 npx playwright test --project=core                         # Debug mode
@@ -36,9 +36,9 @@ Tests are split into twelve Playwright projects:
 - **full-resilience** — Errors, IPC, crashes, races, perf budgets, diagnostics.
 - **full-plugins** — Plugin manager UI, plugin lifecycle (enable/disable, restart gating), and manifest contribution rendering against the sideloaded sample plugin.
 - **online** — Tests that interact with real agent CLIs (requires `ANTHROPIC_API_KEY`).
-- **nightly** — Long-running memory-leak detection (workers=1, no retries).
+- **nightly** — Long-running memory-leak detection (workers=1, no retries). The project name predates the scheduled nightly; it now runs as part of the `stabilize` sweep and on demand, not on a cron.
 - **screenshots** — Marketing screenshot pipeline. Run on demand via `screenshots.yml`, not part of the PR/release gates.
-- **demo** — Demo-engine specs that exercise the in-app demo automation API (`window.electron.demo`) — screencast recording and scripted terminal input (workers=1, no retries). Runs nightly and on demand via the `demo` suite in `e2e.yml`; not a release gate. The 4K dimension assertion in `demo-reel` is skipped on hosted CI (where the virtual display can't reach 4K) unless `DAINTREE_DEMO_STRICT_DIMS=1` is set.
+- **demo** — Demo-engine specs that exercise the in-app demo automation API (`window.electron.demo`) — screencast recording and scripted terminal input (workers=1, no retries). Runs on demand via the `demo` suite in `e2e.yml`; not a release gate. The 4K dimension assertion in `demo-reel` is skipped on hosted CI (where the virtual display can't reach 4K) unless `DAINTREE_DEMO_STRICT_DIMS=1` is set.
 
 ## Configuration
 
@@ -80,15 +80,16 @@ e2e/
 │   ├── presets/         # agent presets, recipes
 │   ├── platform/        # settings, persistence, a11y, oauth
 │   ├── panels/          # browser, dev-preview, portal, review hub
-│   └── resilience/      # errors, IPC, crashes, races, perf
+│   ├── resilience/      # errors, IPC, crashes, races, perf
+│   └── plugins/         # plugin manager UI, lifecycle, manifest contributions
 ├── online/              # agent-integration specs (release gate)
 │   └── *.spec.ts
-├── nightly/             # 2 memory-leak specs (nightly only)
+├── nightly/             # 2 memory-leak specs (stabilize sweep / on demand)
 │   └── nightly-*.spec.ts
 ├── screenshots/         # marketing screenshot pipeline (on demand)
 │   ├── store-reel.spec.ts
 │   └── theme-review.spec.ts
-└── demo/                # demo-engine specs (nightly + on demand)
+└── demo/                # demo-engine specs (on demand)
     ├── demo-reel.spec.ts
     └── demo-terminal-input.spec.ts
 ```
@@ -164,7 +165,7 @@ A single reusable workflow runs every E2E suite. Pick one via the `suite` input:
 - **Matrix:** macOS-14, ubuntu-22.04, windows-latest (selectable via `platform`)
 - **Single-file runs:** pass `test_file: e2e/full/<bucket>/foo.spec.ts` and set `suite` to the bucket that owns that path (workflow_dispatch).
 - **Conditional behaviour by suite:**
-  - `full` — expands to six `--project=full-*` flags on a single runner. Use this for ad-hoc validation; release and nightly fan the buckets out across separate runners instead.
+  - `full` — expands to all seven `--project=full-*` flags on a single runner. Use this for ad-hoc validation; the release workflows and `stabilize.yml` fan the buckets out across separate runners instead.
   - `online` — extra `npm install -g opencode-ai`. Caller MUST use `secrets: inherit` so `ANTHROPIC_API_KEY` is reachable.
   - `nightly` — Playwright is invoked with `--workers=1` (the memory-leak heuristic depends on serialized launches).
   - All others — no extra steps.
@@ -173,9 +174,13 @@ A single reusable workflow runs every E2E suite. Pick one via the `suite` input:
 
 A separate workflow for fine-grained ad-hoc runs of a single test file with configurable `workers`, `retries`, and an optional `--grep` pattern. Routes through `scripts/ci/run-single-e2e.mjs`, which validates that the spec path matches the chosen project. Use this when iterating on a flaky test in CI.
 
+### `stabilize.yml` (cross-platform validation)
+
+The comprehensive cross-platform surface, dispatched on demand by the `stabilize` skill (`.agents/skills/stabilize/`) — it replaced the old scheduled nightly. `workflow_dispatch` only (no cron), input `platform` defaulting to `linux-windows` (also `windows` | `linux` | `all` | `non-windows` | `macos`). One run executes `check`, unit `test`, `build` + smoke, `integration-test`, `knip`, and every E2E suite (`core`, all seven `full-*` buckets, `online`, and the `nightly` memory-leak soak) across the chosen platforms. It opens no issues — the driving agent triages results from the per-shard `failed-specs-*` / `failure-report-*` artifacts and the `stabilize-merged-playwright-report`. Watch the single `stabilize-ok` gate for the overall verdict. The skill runs the full gate locally first on macOS, so CI defaults to `linux-windows` (no macOS); `windows` alone is the usual iteration target, and `all` (adds macOS-on-CI) is reserved for the rare macOS issue that can't be reproduced locally.
+
 ### Release Gating
 
-Releases run as three independent per-OS workflows (`release-macos.yml`, `release-linux.yml`, `release-windows.yml`, #8052), each triggered by the same `v*` tag. Every workflow runs checks, unit tests, and that OS's e2e gates (`core` + the six `full-*` buckets fanned out as a matrix + `online`) before that OS's platform packaging starts, then publishes that OS's artifacts to R2 the moment its own pipeline is green — a failed or hung OS only delays itself. Because each `full-*` bucket auto-shards 4 ways inside `e2e.yml` (#8053), a full Windows bucket finishes in ~10min wall-time instead of ~39min serial, so Windows `full-*` now gates the Windows release (it no longer takes ~5–6 hours). Nightly is unchanged: it runs `core` and `online` across all three OSes; the `full-*` buckets and the memory-leak `nightly` project run on macOS and Linux only (still serially across OSes, but each `full-*` bucket is auto-sharded there too).
+Releases run as three independent per-OS workflows (`release-macos.yml`, `release-linux.yml`, `release-windows.yml`, #8052), each triggered by the same `v*` tag. Every workflow runs checks, unit tests, and that OS's e2e gates (`core` + the seven `full-*` buckets fanned out as a matrix + `online`) before that OS's platform packaging starts, then publishes that OS's artifacts to R2 the moment its own pipeline is green — a failed or hung OS only delays itself. Because each `full-*` bucket auto-shards inside `e2e.yml` (#8053 — Windows buckets fan out up to 16–32 ways), a full Windows bucket finishes in ~10min wall-time instead of ~39min serial, so Windows `full-*` now gates the Windows release (it no longer takes ~5–6 hours). Pre-release cross-platform confidence beyond what the release tag itself runs comes from `stabilize.yml` (the `stabilize` skill — normally `platform=linux-windows`, since the mandatory local run already covers macOS; `platform=all` only when a macOS-on-CI check is genuinely essential), not from a scheduled nightly — the test-nightly was retired and only `nightly-publish.yml` (binary publish, smoke only) still runs on a cron.
 
 ### Cross-Platform Matrix
 

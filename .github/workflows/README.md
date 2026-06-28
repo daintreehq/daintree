@@ -119,7 +119,7 @@ The workflow gates release packaging before any artifacts are produced:
 
 1. **Quality gate stage**:
    - Checks and unit tests run on Linux
-   - `core` smoke, six `full-*` domain buckets (terminal, worktree, presets, platform, panels, resilience) fanned out as a matrix, and the `online` gate all run on non-Windows runners (Linux + macOS). Windows E2E is nightly-only.
+   - `core` smoke, the seven `full-*` domain buckets (terminal, worktree, presets, platform, panels, resilience, plugins) fanned out as a matrix, and the `online` gate run before packaging. Each `full-*` bucket auto-shards inside `e2e.yml` (#8053), so Windows `full-*` gates the Windows release too. Broader pre-release cross-platform validation is the on-demand `stabilize.yml` workflow (driven by the `stabilize` skill), not a scheduled nightly.
 
 2. **Build stage** (parallel matrix):
    - macOS, Windows, Linux build in parallel

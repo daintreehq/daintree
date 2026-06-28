@@ -1,0 +1,438 @@
+name: Stabilize
+
+# The comprehensive, cross-platform validation surface — the GitHub side of the
+# `stabilize` skill (`.agents/skills/stabilize/`). It replaces the old scheduled
+# `nightly.yml` test run. There is NO cron and NO issue creation: an agent (or a
+# human) dispatches this when stabilizing the tree — before a release, or every
+# few days — and triages the results itself. Failures surface as machine-readable
+# artifacts (`failed-specs-*`, `failure-report-*`) plus the per-shard logs, which
+# the skill reads to distinguish real regressions from E2E flakes and to scope
+# intelligent re-runs (job re-run with `--test-list`, or `e2e-single.yml`).
+#
+# What it runs: check (typecheck/lint/format), unit, integration, knip, build +
+# smoke, and the full Playwright surface — core, all seven full-* buckets, online,
+# and the nightly memory-leak suite — across the platforms selected by `platform`.
+# Nightly BINARY publishing has moved to `nightly-publish.yml`; this workflow
+# never publishes.
+#
+# `stabilize-ok` is the single gate to watch (`gh run watch`) for the overall
+# verdict; drill into the per-suite jobs and artifacts for specifics.
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Platforms to validate. Default `linux-windows` — macOS is ALREADY covered by the mandatory local run on the dev Mac, so CI normally only needs Linux + Windows. `windows` alone is the usual iteration target (it's almost always the lone straggler). `all` adds macOS-on-CI and is rarely needed — only when a macOS issue genuinely can't be reproduced locally."
+        type: choice
+        default: linux-windows
+        options:
+          - linux-windows
+          - windows
+          - linux
+          - all
+          - non-windows
+          - macos
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+# Must be a superset of every permission declared by the reusable workflows this
+# calls (`e2e.yml` declares `contents: read`). No `issues: write` — this workflow
+# never opens issues; the driving agent owns triage.
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22"
+  # onnxruntime-node (transitive via avr-vad for CPU-only Silero VAD) tries
+  # to download optional CUDA/TensorRT GPU binaries from api.nuget.org on
+  # postinstall. Daintree's VAD runs on CPU; the GPU binaries are never
+  # loaded. The CI runner pool can't reliably reach nuget.org, so skip the
+  # GPU download and let the bundled CPU runtime + binding node module
+  # (already in the npm tarball) do the work.
+  ONNXRUNTIME_NODE_INSTALL: "skip"
+
+jobs:
+  matrix-setup:
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        run: |
+          PLATFORM="${{ inputs.platform || 'linux-windows' }}"
+
+          case "$PLATFORM" in
+            macos)         echo 'matrix={"include":[{"os":"macos-14","name":"macOS"}]}' >> "$GITHUB_OUTPUT" ;;
+            linux)         echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"}]}' >> "$GITHUB_OUTPUT" ;;
+            windows)       echo 'matrix={"include":[{"os":"windows-2022","name":"Windows"}]}' >> "$GITHUB_OUTPUT" ;;
+            non-windows)   echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"},{"os":"macos-14","name":"macOS"}]}' >> "$GITHUB_OUTPUT" ;;
+            linux-windows) echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"},{"os":"windows-2022","name":"Windows"}]}' >> "$GITHUB_OUTPUT" ;;
+            *)             echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"},{"os":"macos-14","name":"macOS"},{"os":"windows-2022","name":"Windows"}]}' >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  check:
+    needs: matrix-setup
+    runs-on: ${{ matrix.os }}
+    name: Check (${{ matrix.name }})
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix-setup.outputs.matrix) }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Install dependencies (Windows)
+        if: matrix.os == 'windows-2022'
+        run: node scripts/ci/npm-ci-retry.mjs
+        env:
+          npm_config_msvs_version: "2022"
+
+      - name: Install dependencies
+        if: matrix.os != 'windows-2022'
+        run: node scripts/ci/npm-ci-retry.mjs
+
+      - name: Check (typecheck + lint + format)
+        run: npm run check
+
+  test:
+    needs: matrix-setup
+    runs-on: ${{ matrix.os }}
+    name: Test (${{ matrix.name }})
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix-setup.outputs.matrix) }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Install dependencies (Windows)
+        if: matrix.os == 'windows-2022'
+        run: node scripts/ci/npm-ci-retry.mjs
+        env:
+          npm_config_msvs_version: "2022"
+
+      - name: Install dependencies
+        if: matrix.os != 'windows-2022'
+        run: node scripts/ci/npm-ci-retry.mjs
+
+      - name: Test
+        run: npm run test
+
+  # Production build + launch smoke on each platform. No packaging, signing, or
+  # publishing here — that surface lives in the release dry-runs
+  # (`release-{macos,linux,windows}.yml -f dry_run=true`) and, for binaries, in
+  # `nightly-publish.yml`. This job only proves the app compiles and launches.
+  build:
+    needs: [matrix-setup, check, test]
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.name }})
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix-setup.outputs.matrix) }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libarchive-tools \
+            libxss-dev \
+            libsecret-1-dev \
+            libnss3-dev \
+            libnotify-dev \
+            libxkbfile-dev
+
+      - name: Fontconfig cache key
+        id: fontconfig-cache-key
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.cache/fontconfig
+          source /etc/os-release
+          echo "ubuntu=${ID}-${VERSION_ID}-${VERSION_CODENAME}" >> "$GITHUB_OUTPUT"
+          echo "fc_version=$(fc-cache --version 2>&1 | head -1)" >> "$GITHUB_OUTPUT"
+          echo "font_pkg_hash=$(dpkg-query -W -f='${Package} ${Version}\n' 2>/dev/null | grep -E '^fonts-|^fontconfig' | LC_ALL=C sort | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache fontconfig
+        id: cache-fontconfig
+        if: matrix.os == 'ubuntu-22.04'
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/fontconfig
+          key: fontconfig-${{ runner.os }}-${{ runner.arch }}-${{ steps.fontconfig-cache-key.outputs.ubuntu }}-${{ steps.fontconfig-cache-key.outputs.fc_version }}-${{ steps.fontconfig-cache-key.outputs.font_pkg_hash }}
+
+      - name: Warm fontconfig cache
+        if: matrix.os == 'ubuntu-22.04'
+        run: fc-cache -fv
+
+      - name: Install dependencies (Windows)
+        if: matrix.os == 'windows-2022'
+        run: node scripts/ci/npm-ci-retry.mjs
+        env:
+          npm_config_msvs_version: "2022"
+
+      - name: Install dependencies
+        if: matrix.os != 'windows-2022'
+        run: node scripts/ci/npm-ci-retry.mjs
+
+      - name: Build
+        run: npm run build
+
+      - name: Smoke test (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: xvfb-run --auto-servernum npm run test:smoke
+        env:
+          NODE_ENV: production
+          ELECTRON_ENABLE_LOGGING: "1"
+          DBUS_SESSION_BUS_ADDRESS: /dev/null
+          SMOKE_RUNS: "1"
+          SMOKE_TIMEOUT_MS: "210000"
+          SMOKE_RETRIES: "1"
+        timeout-minutes: 10
+
+      - name: Smoke test (macOS)
+        if: matrix.os == 'macos-14'
+        run: npm run test:smoke
+        env:
+          NODE_ENV: production
+          ELECTRON_ENABLE_LOGGING: "1"
+          SMOKE_RUNS: "1"
+          SMOKE_TIMEOUT_MS: "210000"
+          SMOKE_RETRIES: "1"
+        timeout-minutes: 10
+
+      - name: Smoke test (Windows)
+        if: matrix.os == 'windows-2022'
+        run: npm run test:smoke
+        env:
+          NODE_ENV: production
+          ELECTRON_ENABLE_LOGGING: "1"
+          ELECTRON_ENABLE_STACK_DUMPING: "1"
+          SMOKE_RUNS: "3"
+          SMOKE_TIMEOUT_MS: "210000"
+          SMOKE_RETRIES: "1"
+        timeout-minutes: 16
+
+  integration-test:
+    needs: [check, test]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Install dependencies
+        run: node scripts/ci/npm-ci-retry.mjs
+
+      - name: Run integration tests
+        run: npm run test:integration
+
+  # Static dead-code report. OS-agnostic, so Linux-only.
+  knip:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Install dependencies
+        run: node scripts/ci/npm-ci-retry.mjs
+
+      - name: Knip (static dead-code report)
+        run: npm run knip
+
+  # Every E2E job is a call into the unified e2e.yml runner, parameterised by
+  # `suite` and the dispatched `platform`. json_report emits the machine-readable
+  # results the stabilize skill reads to separate real regressions from flakes;
+  # enable_blob_report feeds the merged HTML report below.
+  e2e-core:
+    needs: [check, test]
+    uses: ./.github/workflows/e2e.yml
+    with:
+      suite: core
+      platform: ${{ inputs.platform || 'linux-windows' }}
+      json_report: true
+
+  # Seven domain buckets fanned across the OS matrix inside e2e.yml, which
+  # auto-shards each full-* bucket (#8053) — so even a Windows full bucket lands
+  # in ~10min wall-time rather than ~39min serial, keeping the default
+  # `linux-windows` pass (and the rarer `all`) practical to run overnight.
+  e2e-full:
+    needs: [check, test]
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - full-terminal
+          - full-worktree
+          - full-presets
+          - full-platform
+          - full-panels
+          - full-resilience
+          - full-plugins
+    uses: ./.github/workflows/e2e.yml
+    with:
+      suite: ${{ matrix.suite }}
+      platform: ${{ inputs.platform || 'linux-windows' }}
+      json_report: true
+      enable_blob_report: true
+
+  e2e-online:
+    needs: [check, test]
+    uses: ./.github/workflows/e2e.yml
+    with:
+      suite: online
+      platform: ${{ inputs.platform || 'linux-windows' }}
+      json_report: true
+    secrets: inherit
+
+  # Memory-leak detection — the `nightly` E2E suite (serialized, --workers=1,
+  # forced by e2e.yml). It legitimately runs long, especially on Windows. macOS
+  # is covered by the local run, so this rides the default `linux-windows` pass;
+  # add macOS (`all`) only when a macOS-on-CI soak is genuinely essential.
+  e2e-nightly:
+    needs: [check, test]
+    uses: ./.github/workflows/e2e.yml
+    with:
+      suite: nightly
+      platform: ${{ inputs.platform || 'linux-windows' }}
+      json_report: true
+      enable_blob_report: true
+
+  # Merge Playwright blob reports from every shard into one HTML report for human
+  # review. Non-gating (if: always()) — a broken merge must not flip the verdict.
+  merge-playwright-reports:
+    needs: [e2e-full, e2e-nightly]
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: node scripts/ci/npm-ci-retry.mjs --ignore-scripts
+
+      - name: Download blob reports
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: e2e-*-blob-*
+          path: ./blob-report
+          merge-multiple: true
+
+      - name: Merge blob reports
+        continue-on-error: true
+        run: npx playwright merge-reports ./blob-report --reporter=html
+
+      - name: Upload merged report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: stabilize-merged-playwright-report
+          path: playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # Single gate to watch for the overall verdict. Mirrors ci.yml's `ci-ok`:
+  # insulates the agent from matrix/job-name churn and folds every required job
+  # into one pass/fail. The non-gating report-merge job is intentionally excluded.
+  #
+  # `matrix-setup` MUST be in `needs`: it is the shared upstream of every gated
+  # job, so if it fails/cancels the downstream jobs go `skipped` (not failure) —
+  # without it here, a malformed matrix would skip everything and the gate would
+  # report green. We also count `skipped` as failure for defence-in-depth.
+  stabilize-ok:
+    if: always()
+    needs:
+      [
+        matrix-setup,
+        check,
+        test,
+        build,
+        integration-test,
+        knip,
+        e2e-core,
+        e2e-full,
+        e2e-online,
+        e2e-nightly,
+      ]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 2
+
+    steps:
+      - name: Check results
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        run: exit 1

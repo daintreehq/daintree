@@ -90,7 +90,7 @@ High-signal anchors for Code Mapping. Use these to ground references; do not use
 
 **Windows.** `electron/window/ProjectViewManager.ts` manages a `WebContentsView` per project with LRU eviction (cache 1–5). `WindowContext.services` holds per-view services (EventBuffer, PortalManager, ProjectSwitchService, active ports). Global singletons (PtyClient, WorkspaceClient, WorktreePortBroker) are shared across windows. Agent state controls eviction ordering — views with active agents are evicted last.
 
-**Tests.** Unit tests co-locate in `__tests__/` folders next to source. E2E lives in `e2e/core/` (13 tests, gates releases), `e2e/full/` (nightly), `e2e/online/` (agent integration, gates releases), `e2e/nightly/` (memory leak / soak).
+**Tests.** Unit tests co-locate in `__tests__/` folders next to source. E2E lives in `e2e/core/` (13 tests, gates releases), `e2e/full/` (seven domain buckets — gate releases, also run in the on-demand `stabilize` sweep), `e2e/online/` (agent integration, gates releases), `e2e/nightly/` (memory leak / soak — runs in the `stabilize` sweep and on demand).
 
 ---
 

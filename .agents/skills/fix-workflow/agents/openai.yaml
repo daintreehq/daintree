@@ -1,4 +1,0 @@
-interface:
-  display_name: "Fix Workflow"
-  short_description: "Fix release and nightly workflows until green."
-  default_prompt: "Use $fix-workflow to fix the current Daintree release dry-run or nightly workflow failure until CI passes."

@@ -73,8 +73,8 @@ jobs:
 
   # Unit suite, sharded 4 ways across ubuntu runners. Gated on `check` so a
   # typecheck/lint failure skips all shards instead of burning 4 runners.
-  # Ubuntu-only by design — Windows unit coverage runs in nightly, and adding
-  # it here would quadruple cost for no branch-protection benefit.
+  # Ubuntu-only by design — Windows unit coverage runs in stabilize.yml, and
+  # adding it here would quadruple cost for no branch-protection benefit.
   test:
     needs: [check]
     runs-on: ubuntu-latest

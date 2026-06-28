@@ -1,7 +1,7 @@
 name: E2E Tests
 
 # Distinguish manual-dispatch runs in the Actions list. Reusable-workflow
-# callers (release-{macos,linux,windows}.yml, nightly.yml) keep their own
+# callers (release-{macos,linux,windows}.yml, stabilize.yml) keep their own
 # parent run title; the matrix job names still make the suite visible inside
 # the run.
 run-name: ${{ inputs.suite || 'core' }} · ${{ inputs.platform || 'all' }}${{ inputs.test_file && format(' · {0}', inputs.test_file) || '' }}${{ inputs.shard && inputs.shard_total && format(' · shard {0}/{1}', inputs.shard, inputs.shard_total) || '' }}
@@ -32,12 +32,13 @@ on:
           - linux
           - windows
           - non-windows
+          - linux-windows
       test_file:
         description: "Single test file to run (e.g. e2e/full/terminal/core-terminal-search.spec.ts). Leave empty to run the entire suite."
         type: string
         default: ""
       suite:
-        description: "Suite to run. `full` is a meta-suite that runs all seven full-* buckets sequentially on one runner — handy for ad-hoc validation. Release and nightly fan the buckets out across separate runners instead."
+        description: "Suite to run. `full` is a meta-suite that runs all seven full-* buckets sequentially on one runner — handy for ad-hoc validation. Release and stabilize fan the buckets out across separate runners instead."
         type: choice
         default: "full"
         options:
@@ -62,7 +63,7 @@ on:
         type: string
         default: ""
       json_report:
-        description: "Enable Playwright JSON reporter for machine-readable test results (nightly dedup)."
+        description: "Enable Playwright JSON reporter for machine-readable test results (stabilize triage)."
         type: boolean
         default: false
   workflow_call:
@@ -88,11 +89,11 @@ on:
         type: string
         default: ""
       json_report:
-        description: "Enable Playwright JSON reporter for machine-readable test results (nightly dedup)."
+        description: "Enable Playwright JSON reporter for machine-readable test results (stabilize triage)."
         type: boolean
         default: false
       enable_blob_report:
-        description: "Enable Playwright blob reporter so downstream jobs can merge reports across shards/OSes (nightly-only)."
+        description: "Enable Playwright blob reporter so downstream jobs can merge reports across shards/OSes (stabilize sweep / release)."
         type: boolean
         default: false
 
@@ -138,11 +139,12 @@ jobs:
           REQUESTED_SHARD_TOTAL="${{ inputs.shard_total }}"
 
           case "$PLATFORM" in
-            macos)       OSES='[{"os":"macos-14","name":"macOS"}]' ;;
-            linux)       OSES='[{"os":"ubuntu-22.04","name":"Linux"}]' ;;
-            windows)     OSES='[{"os":"windows-2022","name":"Windows"}]' ;;
-            non-windows) OSES='[{"os":"macos-14","name":"macOS"},{"os":"ubuntu-22.04","name":"Linux"}]' ;;
-            *)           OSES='[{"os":"macos-14","name":"macOS"},{"os":"ubuntu-22.04","name":"Linux"},{"os":"windows-2022","name":"Windows"}]' ;;
+            macos)         OSES='[{"os":"macos-14","name":"macOS"}]' ;;
+            linux)         OSES='[{"os":"ubuntu-22.04","name":"Linux"}]' ;;
+            windows)       OSES='[{"os":"windows-2022","name":"Windows"}]' ;;
+            non-windows)   OSES='[{"os":"macos-14","name":"macOS"},{"os":"ubuntu-22.04","name":"Linux"}]' ;;
+            linux-windows) OSES='[{"os":"ubuntu-22.04","name":"Linux"},{"os":"windows-2022","name":"Windows"}]' ;;
+            *)             OSES='[{"os":"macos-14","name":"macOS"},{"os":"ubuntu-22.04","name":"Linux"},{"os":"windows-2022","name":"Windows"}]' ;;
           esac
 
           # Only the full-* buckets and the `full` meta-suite fan out. N=4 is
@@ -164,35 +166,35 @@ jobs:
           # 45-minute e2e job timeout when its crash-recovery files pack together.
           case "$SUITE" in
             full-terminal)
-              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
+              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ] || [ "$PLATFORM" = "linux-windows" ]; then
                 SHARD_TOTAL=32
               else
                 SHARD_TOTAL=4
               fi
               ;;
             full-platform)
-              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
+              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ] || [ "$PLATFORM" = "linux-windows" ]; then
                 SHARD_TOTAL=16
               else
                 SHARD_TOTAL=4
               fi
               ;;
             full-worktree|full-presets)
-              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
+              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ] || [ "$PLATFORM" = "linux-windows" ]; then
                 SHARD_TOTAL=16
               else
                 SHARD_TOTAL=4
               fi
               ;;
             full-resilience)
-              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
+              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ] || [ "$PLATFORM" = "linux-windows" ]; then
                 SHARD_TOTAL=16
               else
                 SHARD_TOTAL=4
               fi
               ;;
             full-panels)
-              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
+              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ] || [ "$PLATFORM" = "linux-windows" ]; then
                 SHARD_TOTAL=32
               else
                 SHARD_TOTAL=4
@@ -553,7 +555,7 @@ jobs:
           OPENCODE_E2E_ENABLED: ${{ inputs.suite == 'online' && '1' || '' }}
           FAIL_ON_FLAKY_TESTS: ${{ (inputs.suite == 'core' || inputs.suite == 'online') && 'true' || 'false' }}
           # Always emit the JSON report so the failed-specs extractor below has
-          # something to read on retry. Nightly dedup (`inputs.json_report`)
+          # something to read on retry. Stabilize triage (`inputs.json_report`)
           # piggybacks on the same file via `PLAYWRIGHT_JSON_REPORT`.
           PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/report.json
           PLAYWRIGHT_JSON_REPORT: ${{ inputs.json_report && '1' || '' }}
@@ -646,8 +648,8 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-      # Extract structured failure data for nightly dedup. Only runs when the
-      # caller opted into the dedup pipeline (`inputs.json_report`) AND the
+      # Extract structured failure data for stabilize triage. Only runs when the
+      # caller opted into the triage pipeline (`inputs.json_report`) AND the
       # test run failed. The JSON report lives at `test-results/report.json`
       # — the same file the failed-specs extractor reads above — so both
       # consumers share a single artifact.

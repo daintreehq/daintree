@@ -176,7 +176,7 @@ Daintree targets all three desktop platforms, but not equally:
 
 - **macOS** — Primary development platform. First-class support. All features tested here first.
 - **Linux** — Growing focus. CI runs full E2E on Linux. Important for developer adoption.
-- **Windows** — Supported but lower priority. Nightly CI only for E2E. Known friction with native modules.
+- **Windows** — Supported but lower priority. Windows E2E runs in the release workflows and the on-demand `stabilize` sweep, not on every PR. Known friction with native modules.
 
 "Cross-platform" means features must not break on any platform, but macOS is where the bar is set.
 

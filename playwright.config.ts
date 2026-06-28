@@ -21,22 +21,22 @@ const coreTimeout = isWindowsCI
       : 120_000;
 const onlineTimeout = isWindowsCI ? 480_000 : 300_000;
 
-// Blob reporter is opted into by the nightly multi-OS matrix only, so per-leg
-// outputs can be merged into a single unified HTML report. PR CI and local
-// runs keep the default reporters. The JSON reporter is also enabled in the
-// nightly path so extract-failures.mjs has structured data to build
-// signature-keyed failure reports for the rolling nightly-failure issue.
+// Blob reporter is opted into by the cross-platform stabilize sweep and the
+// release E2E matrix, so per-leg outputs can be merged into a single unified
+// HTML report. PR CI and local runs keep the default reporters. The JSON
+// reporter is also enabled on that path so extract-failures.mjs has structured
+// data to build signature-keyed failure reports the stabilize agent triages.
 // JSON reporter is opted into by two consumers:
 //   1. E2E workflow retry path — sets PLAYWRIGHT_JSON_OUTPUT_FILE to the
 //      target path; attempt 1 writes the JSON, the next step extracts failed
 //      spec paths into a --test-list artifact, and any retry attempt
 //      downloads that artifact and reruns only the failed specs.
-//   2. Nightly dedup — sets PLAYWRIGHT_JSON_REPORT=1; extract-failures.mjs
-//      reads the JSON to build signature-keyed failure reports.
-// When both are set the explicit output file wins; otherwise the dedup path
+//   2. Stabilize triage — sets PLAYWRIGHT_JSON_REPORT=1; extract-failures.mjs
+//      reads the JSON to build signature-keyed failure reports the agent reads.
+// When both are set the explicit output file wins; otherwise the triage path
 // falls back to the historical default `playwright-results.json`.
-// Blob and JSON reporters can coexist: a single nightly run produces a blob
-// for the merged HTML report and a JSON for downstream dedup.
+// Blob and JSON reporters can coexist: a single stabilize/release run produces
+// a blob for the merged HTML report and a JSON for downstream triage.
 const jsonOutputFile =
   process.env.PLAYWRIGHT_JSON_OUTPUT_FILE ||
   (process.env.PLAYWRIGHT_JSON_REPORT === "1" ? "playwright-results.json" : "");
@@ -158,7 +158,7 @@ export default defineConfig({
     {
       // Demo-engine pipeline — exercises the in-app demo automation API
       // (window.electron.demo) to record screencasts and drive scripted
-      // terminal input. Runs nightly and on demand via the `demo` suite in
+      // terminal input. Runs on demand via the `demo` suite in
       // .github/workflows/e2e.yml; not a release gate.
       //
       // workers:1 is mandatory and baked into the project (not a CLI flag):

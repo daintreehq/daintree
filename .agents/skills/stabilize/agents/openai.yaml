@@ -1,0 +1,4 @@
+interface:
+  display_name: "Stabilize"
+  short_description: "Drive Daintree to fully green across every check, locally and cross-platform."
+  default_prompt: "Use $stabilize to drive Daintree to a green, stable state: run the full local gate, fix real failures, intelligently re-run flaky E2E, then dispatch the cross-platform stabilize.yml workflow (and release dry-runs when releasing) and iterate until everything passes."
