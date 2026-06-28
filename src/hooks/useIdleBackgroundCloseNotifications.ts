@@ -30,7 +30,9 @@ export function useIdleBackgroundCloseNotifications(): void {
           message,
           inboxMessage: message,
           priority: "low",
-          context: { projectId: project.projectId },
+          // Ambient host/resource-management event (memory reclaim), like the
+          // disk-space warnings — routes via EVENT_POLICY's "host" kind.
+          context: { eventKind: "host", projectId: project.projectId },
           coalesce: {
             key: "idle-background:closed",
             windowMs: 10000,
