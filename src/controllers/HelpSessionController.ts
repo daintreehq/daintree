@@ -2141,6 +2141,38 @@ export class HelpSessionController {
         this._patch({ assistantVersionTooOld: null, phase: "provisioning" });
       }
 
+      // #10819: resume-only intent must claim the pending-hibernation entry
+      // BEFORE provisioning. `provisionHelpSession` calls `displacePriorSessions`
+      // in main, which revokes/kills the project's existing assistant backend. In
+      // a multi-window cold-restore race, both windows would provision (and so
+      // displace each other) before reaching the `resumeOnly` abort below, leaving
+      // both with no live backend. The atomic `takePendingHibernation` is the
+      // single-winner gate: a null take (lost the race, or nothing captured) or an
+      // agentId mismatch aborts before any displacement. The seeded local-store
+      // entry then drives the normal resume block; `_seedHibernateFromMain` is
+      // skipped for this path since the take already happened.
+      if (options.resumeOnly && !reservedId && !options.seedPrompt) {
+        let earlyPending: { agentId: string; agentSessionId: string; cwd: string } | null = null;
+        try {
+          earlyPending = await window.electron.help.takePendingHibernation(launchProject.id);
+        } catch (err) {
+          logError("HelpPanel: resumeOnly early hibernation take failed", err);
+        }
+        if (gen !== this._launchGen) {
+          this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
+          return;
+        }
+        if (!earlyPending || earlyPending.agentId !== launchAgentId) {
+          this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
+          return;
+        }
+        useHelpPanelStore.getState().setHibernateSession(launchProject.id, {
+          sessionId: earlyPending.agentSessionId,
+          cwd: earlyPending.cwd,
+          agentId: earlyPending.agentId,
+        });
+      }
+
       const outcome = await provisionHelpSession(launchProject, launchAgentId, launchContext);
       if (gen !== this._launchGen) {
         if (outcome.ok) session = outcome.session;
@@ -2181,10 +2213,18 @@ export class HelpSessionController {
         // eviction-captured entry is available to the lookup below. The
         // helper checks `gen` after its IPC await so a superseded launch
         // doesn't write a stale entry back into helpPanelStore.
-        await this._seedHibernateFromMain(launchProject.id, gen);
-        if (gen !== this._launchGen) {
-          this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
-          return;
+        //
+        // #10819: the `resumeOnly` path already performed the atomic
+        // `takePendingHibernation` before provisioning and seeded the local
+        // store from it, so re-seeding here is skipped — a second take would
+        // return null (the entry is consumed) and clear nothing, but running it
+        // is wasteful and misleading.
+        if (!options.resumeOnly) {
+          await this._seedHibernateFromMain(launchProject.id, gen);
+          if (gen !== this._launchGen) {
+            this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
+            return;
+          }
         }
         const hibernated = useHelpPanelStore.getState().hibernateSessions[launchProject.id];
         if (hibernated && hibernated.agentId === launchAgentId && folderPath) {

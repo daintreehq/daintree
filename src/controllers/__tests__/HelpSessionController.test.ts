@@ -2312,12 +2312,23 @@ describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
   const provisionMock = () =>
     window.electron.help.provisionSession as unknown as ReturnType<typeof vi.fn>;
 
-  it("aborts a resumeOnly launch without fresh-launching when there is nothing to resume", async () => {
-    // Cold switch-back / cross-window auto-resume: the renderer peeks
-    // non-consumingly, then launches resumeOnly. If the atomic take finds nothing
-    // (another window already won it, or a stale peek), the launch must NOT fall
-    // through to a fresh agent.launch — that would displace the backend the other
-    // window just resumed. It must release the provisioned session and bail.
+  // #10819: a state-mutating setHibernateSession so the resume block below can
+  // read the entry the early atomic take seeded. The global resetState() leaves
+  // it a pure spy; this writes through to helpPanelState.hibernateSessions.
+  const seedThroughSetHibernate = () => {
+    helpPanelState.setHibernateSession = vi.fn(
+      (projectId: string, entry: { sessionId: string; cwd: string; agentId: string }) => {
+        helpPanelState.hibernateSessions[projectId] = entry;
+      }
+    );
+  };
+
+  it("aborts a resumeOnly launch without provisioning when the atomic take returns null", async () => {
+    // Cold switch-back / cross-window auto-resume. #10819: the atomic take is
+    // hoisted BEFORE provisioning. A null take (another window already won it, or
+    // nothing was captured) must abort before provisionHelpSession runs — that
+    // call displaces the project's existing backend, which is exactly what would
+    // strand the window that legitimately resumed.
     const ctrl = new HelpSessionController();
     ctrl.start();
     ctrl["_launchGen"] = 7;
@@ -2325,13 +2336,6 @@ describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
       window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
     ).takePendingHibernation = vi.fn().mockResolvedValue(null);
     helpPanelState.hibernateSessions = {};
-    provisionMock().mockResolvedValueOnce({
-      sessionId: "sess-ro",
-      sessionPath: "/help",
-      token: "tok",
-      mcpUrl: null,
-      windowId: 1,
-    });
 
     await ctrl["_executeLaunch"](
       7,
@@ -2340,8 +2344,9 @@ describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
       undefined
     );
 
-    // The provisioned session is released — no orphaned token leaks.
-    expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-ro");
+    // Never provisions, so nothing to displace and no session to revoke.
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+    expect(window.electron.help.revokeSession).not.toHaveBeenCalled();
     expect(ctrl["_pendingSessionId"]).toBeNull();
     // NEVER fresh-launches, and never spawns a panel.
     expect(actionService.dispatch).not.toHaveBeenCalledWith(
@@ -2357,7 +2362,11 @@ describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
     ctrl.stop();
   });
 
-  it("resumes (never fresh-launches) on a resumeOnly launch when a matching entry exists", async () => {
+  it("does not provision when the take returns null even if a stale local hibernate entry exists (#10819 secondary race)", async () => {
+    // The resume decision must gate on the main-side atomic take, NOT on the
+    // local persisted hibernateSessions entry. A losing window can still carry a
+    // stale local entry from before; without the take gate it would provision
+    // (and displace the winner) on the strength of that stale entry alone.
     const ctrl = new HelpSessionController();
     ctrl.start();
     ctrl["_launchGen"] = 7;
@@ -2365,10 +2374,39 @@ describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
       window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
     ).takePendingHibernation = vi.fn().mockResolvedValue(null);
     helpPanelState.hibernateSessions["p1"] = {
-      sessionId: "abc-123",
+      sessionId: "stale-123",
       cwd: "/repo",
       agentId: "claude",
     };
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", replaceExisting: true, resumeOnly: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+    expect(window.electron.help.revokeSession).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    ctrl.stop();
+  });
+
+  it("resumes (never fresh-launches) on a resumeOnly launch when the atomic take returns a matching entry", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    seedThroughSetHibernate();
+    helpPanelState.hibernateSessions = {};
+    const takeMock = vi.fn().mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/repo",
+    });
+    (
+      window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
+    ).takePendingHibernation = takeMock;
     provisionMock().mockResolvedValueOnce({
       sessionId: "sess-ro2",
       sessionPath: "/help",
@@ -2385,6 +2423,17 @@ describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
       undefined
     );
 
+    // The take is the gate, and it runs before provisioning displaces anything.
+    expect(takeMock).toHaveBeenCalledWith("p1");
+    expect(takeMock.mock.invocationCallOrder[0]).toBeLessThan(
+      provisionMock().mock.invocationCallOrder[0]
+    );
+    // The taken entry seeds the local store the resume block reads.
+    expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith("p1", {
+      sessionId: "abc-123",
+      cwd: "/repo",
+      agentId: "claude",
+    });
     expect(panelStoreState.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "terminal" })
     );
@@ -2395,6 +2444,65 @@ describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
     );
     expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1");
     expect(ctrl.getSnapshot().phase).toBe("live");
+    ctrl.stop();
+  });
+
+  it("aborts before provisioning when the early take's agentId mismatches the launch agent (#10819)", async () => {
+    // The entry was captured for a different agent (the user switched the
+    // preferred agent before the cold restore). The mismatched entry can't be
+    // resumed, so abort before provisioning rather than displace a live backend.
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    helpPanelState.hibernateSessions = {};
+    (
+      window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
+    ).takePendingHibernation = vi.fn().mockResolvedValue({
+      agentId: "codex",
+      agentSessionId: "codex-1",
+      cwd: "/repo",
+    });
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", replaceExisting: true, resumeOnly: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+    expect(window.electron.help.revokeSession).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    ctrl.stop();
+  });
+
+  it("drops the early take and does not provision when the generation is superseded mid-take (#10819)", async () => {
+    // A competing launch bumps _launchGen while the atomic take IPC is in flight.
+    // The stale result must not seed the store or provision — the gen guard after
+    // the take await abandons the launch.
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    seedThroughSetHibernate();
+    helpPanelState.hibernateSessions = {};
+    (
+      window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
+    ).takePendingHibernation = vi.fn().mockImplementation(async () => {
+      ctrl["_launchGen"] = 8; // superseded mid-await
+      return { agentId: "claude", agentSessionId: "abc-123", cwd: "/repo" };
+    });
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", replaceExisting: true, resumeOnly: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    expect(helpPanelState.setHibernateSession).not.toHaveBeenCalled();
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
     ctrl.stop();
   });
 });
