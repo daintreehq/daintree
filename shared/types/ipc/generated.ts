@@ -562,7 +562,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "help:peek-pending-hibernation": {
     args: [projectId: string];
-    result: { agentId: string; agentSessionId: string; cwd: string } | null;
+    result: { agentId: string; agentSessionId: string; cwd: string; panelWasOpen: boolean } | null;
   };
   "help:provision-session": {
     args: [
@@ -581,6 +581,10 @@ export interface GeneratedIpcInvokeMap {
       mcpUrl: string | null;
       windowId: number;
     } | null;
+  };
+  "help:report-panel-open": {
+    args: [projectId: string, isOpen: boolean];
+    result: void;
   };
   "help:revoke-session": {
     args: [sessionId: string];

@@ -387,6 +387,12 @@ if (!gotTheLock) {
           .catch((err) => {
             console.warn(`[main] run-history pushSnapshotTo failed for wc ${wcId}:`, err);
           });
+
+        // #10815: cold switch-back auto-resume is driven entirely by the
+        // renderer's pull-on-mount `help.peekPendingHibernation` peek (which
+        // surfaces the in-memory `panelWasOpen` flag), not a main→renderer push:
+        // the lazy HelpPanel subscribes long after `did-finish-load` fires, so a
+        // one-shot push was dropped on a true cold restore. No push needed here.
       },
     });
     setProjectViewManager(pvm);

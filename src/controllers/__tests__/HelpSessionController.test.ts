@@ -2308,6 +2308,97 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
   });
 });
 
+describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
+  const provisionMock = () =>
+    window.electron.help.provisionSession as unknown as ReturnType<typeof vi.fn>;
+
+  it("aborts a resumeOnly launch without fresh-launching when there is nothing to resume", async () => {
+    // Cold switch-back / cross-window auto-resume: the renderer peeks
+    // non-consumingly, then launches resumeOnly. If the atomic take finds nothing
+    // (another window already won it, or a stale peek), the launch must NOT fall
+    // through to a fresh agent.launch — that would displace the backend the other
+    // window just resumed. It must release the provisioned session and bail.
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    (
+      window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
+    ).takePendingHibernation = vi.fn().mockResolvedValue(null);
+    helpPanelState.hibernateSessions = {};
+    provisionMock().mockResolvedValueOnce({
+      sessionId: "sess-ro",
+      sessionPath: "/help",
+      token: "tok",
+      mcpUrl: null,
+      windowId: 1,
+    });
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", replaceExisting: true, resumeOnly: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    // The provisioned session is released — no orphaned token leaks.
+    expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-ro");
+    expect(ctrl["_pendingSessionId"]).toBeNull();
+    // NEVER fresh-launches, and never spawns a panel.
+    expect(actionService.dispatch).not.toHaveBeenCalledWith(
+      "agent.launch",
+      expect.anything(),
+      expect.anything()
+    );
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+    // Expected no-op: phase falls back to idle, no scary launch error.
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    expect(notify).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("resumes (never fresh-launches) on a resumeOnly launch when a matching entry exists", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    (
+      window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
+    ).takePendingHibernation = vi.fn().mockResolvedValue(null);
+    helpPanelState.hibernateSessions["p1"] = {
+      sessionId: "abc-123",
+      cwd: "/repo",
+      agentId: "claude",
+    };
+    provisionMock().mockResolvedValueOnce({
+      sessionId: "sess-ro2",
+      sessionPath: "/help",
+      token: "tok",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("term-ro");
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", replaceExisting: true, resumeOnly: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "terminal" })
+    );
+    expect(actionService.dispatch).not.toHaveBeenCalledWith(
+      "agent.launch",
+      expect.anything(),
+      expect.anything()
+    );
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1");
+    expect(ctrl.getSnapshot().phase).toBe("live");
+    ctrl.stop();
+  });
+});
+
 describe("HelpSessionController — MCP tool activity strip (#9759)", () => {
   function startCtrl() {
     const ctrl = new HelpSessionController();

@@ -19,6 +19,7 @@ import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar"
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { terminalClient } from "@/clients";
 import { logWarn } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { HelpIntroBanner } from "./HelpIntroBanner";
 import { HelpPanelHeader } from "./HelpPanelHeader";
@@ -371,6 +372,85 @@ export function HelpPanel({
     resumablePending && resumablePending.projectId === currentProjectId
       ? resumablePending.agentId
       : null;
+
+  // #10815: report this project's panel open-state to main on every change so
+  // an LRU eviction / crash capture can stamp `panelWasOpen` onto the resume
+  // token. Fire-and-forget — a slow or missing binding must never block the UI.
+  useEffect(() => {
+    if (!currentProjectId) return;
+    const reported = window.electron.help.reportPanelOpen?.(currentProjectId, isOpen);
+    if (reported) safeFireAndForget(reported, { context: "HelpPanel.reportPanelOpen" });
+  }, [isOpen, currentProjectId]);
+
+  // #10815: cold switch-back auto-resume — driven by the reliable pull-on-mount
+  // peek, NOT a racy main→renderer push. The lazy HelpPanel mounts behind
+  // hydration gates and subscribes long after main's `did-finish-load` fires, so
+  // a one-shot push was dropped on a true cold restore (the exact scenario this
+  // targets). The peek is request/response and can't be missed: when this
+  // project's view was evicted (or crashed) with the assistant open, main's
+  // capture stamped `panelWasOpen` onto the resume token (in-memory only —
+  // disk-loaded prior-session entries lack it, so app restart reads false and
+  // never auto-resumes). Runs even while closed: the panel is closed by design
+  // after a cold restore, so gating on `isOpen` would drop the signal.
+  // `coldResumeArmedRef` plus the `!terminalId` gate keep it one-shot — a
+  // re-peek on a dep change can't re-arm, and a DevTools reload that still holds
+  // a live session never arms a second backend. `peekPendingHibernation` is
+  // non-consuming; the launch flow below does the atomic `take`.
+  //
+  // Gated on `isReadyToLaunch` so we don't arm — or even peek — until the
+  // controller can actually accept the launch (#10815). A true cold restore
+  // renders with project state still hydrating (`isReadyToLaunch === false`);
+  // arming then would set `autoResumeAgentId`, and the fire-effect would call
+  // `launch()` against a not-ready controller, which rejects and burns the
+  // one-shot intent — silently losing the resume in exactly the target scenario.
+  // Deferring the whole effect until ready preserves the intent (the peek is
+  // non-consuming, so main keeps the entry until the atomic take): the effect
+  // re-runs when `isReadyToLaunch` flips true, by which point `syncInputs` has
+  // already pushed the ready state into the controller, so no fire-vs-sync race.
+  const [autoResumeAgentId, setAutoResumeAgentId] = useState<string | null>(null);
+  const coldResumeArmedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!currentProjectId || terminalId || !isReadyToLaunch) return;
+    if (coldResumeArmedRef.current === currentProjectId) return;
+    const peek = window.electron.help.peekPendingHibernation?.(currentProjectId);
+    if (!peek) return;
+    let cancelled = false;
+    void peek
+      .then((pending) => {
+        if (cancelled || coldResumeArmedRef.current === currentProjectId) return;
+        if (!pending?.panelWasOpen || !pending.agentId) return;
+        coldResumeArmedRef.current = currentProjectId;
+        setOpen(true);
+        setAutoResumeAgentId(pending.agentId);
+      })
+      .catch((err) => {
+        logWarn("HelpPanel: failed to peek cold-resume hibernation", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentProjectId, terminalId, isReadyToLaunch, setOpen]);
+
+  // Fire the captured resume once the panel has opened. The `!terminalId` guard
+  // covers two cases: a DevTools reload that still holds a live session, and the
+  // controller's own auto-launch (when consent is on) already having spawned —
+  // either way a live session means the resume already happened (or shouldn't
+  // double), so drop the intent. Deliberately omits `setAutoLaunchEnabled`:
+  // auto-resuming a stranded session is one-time recovery, not an opt-in to
+  // billed auto-launch on every future open (#10699). Mirrors
+  // `handleResumeAssistant`. `resumeOnly` makes the launch restore-or-nothing:
+  // if main's pending entry is already gone (another window won the atomic take,
+  // or a stale peek), the controller aborts instead of fresh-launching a blank
+  // session that would displace the resumed backend (#10815).
+  useEffect(() => {
+    if (!autoResumeAgentId || !isOpen) return;
+    if (terminalId) {
+      setAutoResumeAgentId(null);
+      return;
+    }
+    controller.launch({ agentId: autoResumeAgentId, replaceExisting: true, resumeOnly: true });
+    setAutoResumeAgentId(null);
+  }, [autoResumeAgentId, isOpen, terminalId, controller]);
 
   // Lifecycle — arms IPC subscriptions on mount, clears all timers on
   // unmount. `start()` is idempotent across StrictMode's double-mount.

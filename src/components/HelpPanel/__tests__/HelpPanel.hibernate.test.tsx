@@ -9,6 +9,8 @@ const {
   mockGetFolderPath,
   mockMarkTerminal,
   mockPeekPendingHibernation,
+  mockTakePendingHibernation,
+  mockReportPanelOpen,
   mockProvisionSession,
   mockRevokeSession,
   mockGracefulKill,
@@ -37,6 +39,8 @@ const {
   mockGetFolderPath: vi.fn(),
   mockMarkTerminal: vi.fn().mockResolvedValue(undefined),
   mockPeekPendingHibernation: vi.fn().mockResolvedValue(null),
+  mockTakePendingHibernation: vi.fn().mockResolvedValue(null),
+  mockReportPanelOpen: vi.fn().mockResolvedValue(undefined),
   mockProvisionSession: vi.fn().mockResolvedValue(null),
   mockRevokeSession: vi.fn().mockResolvedValue(undefined),
   mockGracefulKill: vi.fn().mockResolvedValue(null),
@@ -321,6 +325,18 @@ vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 
 import { HelpPanel } from "../HelpPanel";
 
+// Drain the full async chain (pull-on-mount peek → setState → re-render →
+// fire-effect → async launch) by yielding to a macrotask: setTimeout(0) runs
+// only once the microtask queue is empty, so every chained `await` in the
+// launch flow has settled when it fires. RTL's standalone `waitFor` can't be
+// used here — this suite replaces the global `window` with a minimal mock that
+// has no `document`, which waitFor's MutationObserver requires.
+async function flushAsyncWork() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
 function resetState() {
   helpPanelState.isOpen = true;
   helpPanelState.width = 380;
@@ -367,6 +383,10 @@ function resetState() {
   mockNotifyUserInput.mockReset();
   mockPeekPendingHibernation.mockReset();
   mockPeekPendingHibernation.mockResolvedValue(null);
+  mockTakePendingHibernation.mockReset();
+  mockTakePendingHibernation.mockResolvedValue(null);
+  mockReportPanelOpen.mockReset();
+  mockReportPanelOpen.mockResolvedValue(undefined);
   mockProvisionSession.mockReset();
   mockProvisionSession.mockResolvedValue(null);
   mockRevokeSession.mockReset();
@@ -429,6 +449,8 @@ beforeEach(() => {
           getFolderPath: mockGetFolderPath,
           markTerminal: mockMarkTerminal,
           peekPendingHibernation: mockPeekPendingHibernation,
+          takePendingHibernation: mockTakePendingHibernation,
+          reportPanelOpen: mockReportPanelOpen,
           provisionSession: mockProvisionSession,
           revokeSession: mockRevokeSession,
           getPinnedActionContext: vi.fn().mockResolvedValue({}),
@@ -824,6 +846,386 @@ describe("HelpPanel — Resume affordance for eviction-captured sessions", () =>
 
     expect(await findByTestId("help-start-assistant")).toBeTruthy();
     expect(queryByTestId("help-resume-assistant")).toBeNull();
+  });
+});
+
+describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
+  it("reports the panel open-state to main for the current project", async () => {
+    helpPanelState.isOpen = true;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+
+    expect(mockReportPanelOpen).toHaveBeenCalledWith("proj-1", true);
+  });
+
+  it("auto-opens and resumes the captured session WITHOUT recording consent on cold restore", async () => {
+    // Default user (consent off) so the controller does NOT auto-launch a fresh
+    // session on open — proving the resume comes from the pull-on-mount peek,
+    // not the controller's own consent-gated auto-launch.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.terminalId = null;
+    // Seed what _seedHibernateFromMain would have written so the launch actually
+    // resumes (mirrors the click-to-resume test).
+    helpPanelState.hibernateSessions = {
+      "proj-1": { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+    };
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "fresh-session",
+      sessionPath: "/tmp/help/proj-1",
+      token: "tok",
+      mcpUrl: "http://localhost:1234",
+      windowId: 1,
+    });
+    mockBuildResumeLatestCommand.mockReturnValue("claude resume --last");
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("resumed-term-1");
+    // Main captured this project's assistant with the panel open at eviction —
+    // the peek surfaces panelWasOpen:true and the renderer drives the resume off
+    // it (no main→renderer push to miss).
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      panelWasOpen: true,
+    });
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+
+    // The panel is auto-opened off the peek...
+    expect(helpPanelState.setOpen).toHaveBeenCalledWith(true);
+    // ...and the captured session resumes via the agent's --resume command.
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        launchAgentId: "claude",
+        command: "claude --resume abc-123",
+        removeOnExit: true,
+      })
+    );
+    expect(mockBuildResumeCommand).toHaveBeenCalledWith("claude", "abc-123", undefined);
+    // Auto-resuming a stranded session is recovery, NOT billed-auto-launch
+    // consent — same separation as the manual Resume CTA (#10699).
+    expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
+  });
+
+  it("does NOT launch when a live session already exists (DevTools reload guard)", async () => {
+    // A DevTools reload can mount the panel while the store still reports a live
+    // terminal. The `!terminalId` gate must drop the auto-resume so a second
+    // backend is never spawned over the live one — even though main still has a
+    // panelWasOpen capture for the project.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.terminalId = "live-term";
+    helpPanelState.agentId = "claude";
+    helpPanelState.sessionId = "live-session";
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("should-not-be-called");
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      panelWasOpen: true,
+    });
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+
+    // No new session spawned over the live one.
+    expect(mockProvisionSession).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+  });
+
+  it("defers the resume launch until the panel is actually open (isOpen gate)", async () => {
+    // The peek resolves while the panel is closed (a cold restore always
+    // rehydrates with isOpen=false). The launch must NOT fire until the panel
+    // has opened — proving the fire-effect is gated on isOpen, not just on the
+    // arm from the peek.
+    helpPanelState.isOpen = false;
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.terminalId = null;
+    helpPanelState.hibernateSessions = {
+      "proj-1": { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+    };
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "fresh-session",
+      sessionPath: "/tmp/help/proj-1",
+      token: "tok",
+      mcpUrl: "http://localhost:1234",
+      windowId: 1,
+    });
+    mockBuildResumeLatestCommand.mockReturnValue("claude resume --last");
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("resumed-term-1");
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      panelWasOpen: true,
+    });
+
+    let view: ReturnType<typeof render> | undefined;
+    await act(async () => {
+      view = render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+
+    // Peek resolved while closed — panel is asked to open, but with the store
+    // still reporting isOpen=false the launch must not fire yet.
+    expect(helpPanelState.setOpen).toHaveBeenCalledWith(true);
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+
+    // The panel actually opens; re-render reflects the new store state and the
+    // gated effect now fires the resume.
+    helpPanelState.isOpen = true;
+    await act(async () => {
+      view!.rerender(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "claude --resume abc-123" })
+    );
+  });
+
+  it("consumes the pending entry via takePendingHibernation and RESUMES (peek→take→resume handoff)", async () => {
+    // The cold-restore peek is non-consuming; the real handoff is the
+    // controller's atomic takePendingHibernation, which seeds the hibernate slot
+    // the resume lookup reads. Wire setHibernateSession/clearHibernateSession to
+    // mutate state so the genuine take→seed→resume chain runs end to end — no
+    // pre-seeded shortcut masking the handoff.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.terminalId = null;
+    helpPanelState.hibernateSessions = {};
+    helpPanelState.setHibernateSession = vi.fn(
+      (projectId: string, entry: { sessionId: string; cwd: string; agentId: string }) => {
+        helpPanelState.hibernateSessions[projectId] = entry;
+      }
+    );
+    helpPanelState.clearHibernateSession = vi.fn((projectId: string) => {
+      delete helpPanelState.hibernateSessions[projectId];
+    });
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "fresh-session",
+      sessionPath: "/tmp/help/proj-1",
+      token: "tok",
+      mcpUrl: "http://localhost:1234",
+      windowId: 1,
+    });
+    mockBuildResumeLatestCommand.mockReturnValue("claude resume --last");
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("resumed-term-1");
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      panelWasOpen: true,
+    });
+    // Main hands the captured entry over atomically — this is what actually
+    // moves the resume token into the renderer's hibernate slot.
+    mockTakePendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+    });
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+
+    // The peek targets the in-view project, and the launch consumes the entry
+    // via the atomic take.
+    expect(mockPeekPendingHibernation).toHaveBeenCalledWith("proj-1");
+    expect(mockTakePendingHibernation).toHaveBeenCalledWith("proj-1");
+    // The session is RESUMED (addPanel with the --resume command)...
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "claude --resume abc-123", launchAgentId: "claude" })
+    );
+    // ...never fresh-launched via the generic agent.launch dispatch.
+    expect(mockDispatch).not.toHaveBeenCalledWith(
+      "agent.launch",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it("does NOT auto-resume on app restart (panelWasOpen:false)", async () => {
+    // A prior-session token reloaded from disk lacks the in-memory open flag, so
+    // main reports panelWasOpen:false. App restart must never silently spin up a
+    // billed assistant the user didn't ask for.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.terminalId = null;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      panelWasOpen: false,
+    });
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+
+    expect(helpPanelState.setOpen).not.toHaveBeenCalledWith(true);
+    expect(mockTakePendingHibernation).not.toHaveBeenCalled();
+    expect(mockProvisionSession).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+  });
+
+  it("does NOT auto-resume when the peek entry lacks panelWasOpen", async () => {
+    // Defensive against a legacy/disk-loaded entry shape with the field absent:
+    // treated identically to false — no arm, no resume.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.terminalId = null;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+    });
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+
+    expect(helpPanelState.setOpen).not.toHaveBeenCalledWith(true);
+    expect(mockTakePendingHibernation).not.toHaveBeenCalled();
+    expect(mockProvisionSession).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+  });
+
+  it("aborts resume-only without fresh-launching or erroring when the entry was already taken", async () => {
+    // Two windows of the same project both peek panelWasOpen:true and both arm,
+    // but the atomic take has exactly one winner. The losing window's resume-only
+    // launch finds nothing to resume: it must abort cleanly — never fresh-launch a
+    // blank session over the backend the other window just resumed, never leak the
+    // provisioned session, and never raise a launch error for an expected no-op.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.terminalId = null;
+    helpPanelState.hibernateSessions = {};
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "fresh-session",
+      sessionPath: "/tmp/help/proj-1",
+      token: "tok",
+      mcpUrl: "http://localhost:1234",
+      windowId: 1,
+    });
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("should-not-be-called");
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      panelWasOpen: true,
+    });
+    // The other window already won the atomic take.
+    mockTakePendingHibernation.mockResolvedValue(null);
+
+    let view: ReturnType<typeof render> | undefined;
+    await act(async () => {
+      view = render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+
+    // The losing window armed and attempted the take...
+    expect(mockTakePendingHibernation).toHaveBeenCalledWith("proj-1");
+    // ...but nothing is resumed and nothing is fresh-launched.
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+    expect(mockDispatch).not.toHaveBeenCalledWith(
+      "agent.launch",
+      expect.anything(),
+      expect.anything()
+    );
+    // The provisioned session is released, not leaked.
+    expect(mockRevokeSession).toHaveBeenCalledWith("fresh-session");
+    // No scary launch error — neither a toast nor the inline banner.
+    expect(mockNotify).not.toHaveBeenCalled();
+    expect(view!.queryByTestId("help-launch-error-banner")).toBeNull();
+  });
+
+  it("preserves the resume intent until the controller is ready (readiness gate)", async () => {
+    // A true cold restore renders while project state is still hydrating
+    // (isReadyToLaunch=false). Arming then would burn the one-shot intent on a
+    // launch the controller rejects. The intent must survive and fire once
+    // hydration completes.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.terminalId = null;
+    helpPanelState.hibernateSessions = {
+      "proj-1": { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+    };
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "fresh-session",
+      sessionPath: "/tmp/help/proj-1",
+      token: "tok",
+      mcpUrl: "http://localhost:1234",
+      windowId: 1,
+    });
+    mockBuildResumeLatestCommand.mockReturnValue("claude resume --last");
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("resumed-term-1");
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      panelWasOpen: true,
+    });
+
+    let view: ReturnType<typeof render> | undefined;
+    await act(async () => {
+      view = render(<HelpPanel width={380} isReadyToLaunch={false} />);
+    });
+    await flushAsyncWork();
+
+    // Still hydrating: the auto-resume must not arm, so the panel isn't
+    // force-opened and no session is provisioned — the intent is held, not lost.
+    expect(helpPanelState.setOpen).not.toHaveBeenCalledWith(true);
+    expect(mockProvisionSession).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+
+    // Hydration completes — the gated effect arms and the resume fires exactly once.
+    await act(async () => {
+      view!.rerender(<HelpPanel width={380} isReadyToLaunch={true} />);
+    });
+    await flushAsyncWork();
+
+    expect(mockPeekPendingHibernation).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.setOpen).toHaveBeenCalledWith(true);
+    expect(panelStoreState.addPanel).toHaveBeenCalledTimes(1);
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "claude --resume abc-123" })
+    );
+  });
+
+  it("reports the panel closed to main when isOpen transitions to false", async () => {
+    helpPanelState.isOpen = true;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+
+    let view: ReturnType<typeof render> | undefined;
+    await act(async () => {
+      view = render(<HelpPanel width={380} />);
+    });
+    expect(mockReportPanelOpen).toHaveBeenCalledWith("proj-1", true);
+
+    // User closes the panel — main must learn so a later eviction does not
+    // stamp panelWasOpen:true and auto-resume an assistant the user dismissed.
+    helpPanelState.isOpen = false;
+    await act(async () => {
+      view!.rerender(<HelpPanel width={380} />);
+    });
+    expect(mockReportPanelOpen).toHaveBeenCalledWith("proj-1", false);
   });
 });
 

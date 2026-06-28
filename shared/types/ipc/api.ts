@@ -1630,6 +1630,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: import("./mcpServer.js").McpTurnOutcomeAlertPayload) => void
     ): () => void;
   };
+  // All help methods (incl. reportPanelOpen + peekPendingHibernation, which
+  // surfaces `panelWasOpen` for cold switch-back auto-resume) come from
+  // GeneratedElectronAPI (#10815).
+  help: GeneratedElectronAPI["help"];
   // helpAssistant is generated — see GeneratedElectronAPI.
   mcpBridge: {
     /** Listen for manifest requests from main process */

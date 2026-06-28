@@ -494,6 +494,7 @@ export const CHANNELS = {
   HELP_REVOKE_SESSION: "help:revoke-session",
   HELP_PEEK_PENDING_HIBERNATION: "help:peek-pending-hibernation",
   HELP_TAKE_PENDING_HIBERNATION: "help:take-pending-hibernation",
+  HELP_REPORT_PANEL_OPEN: "help:report-panel-open",
   HELP_GET_PINNED_ACTION_CONTEXT: "help:get-pinned-action-context",
 
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
