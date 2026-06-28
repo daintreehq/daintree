@@ -26,7 +26,9 @@ const projectStoreMock = vi.hoisted(() => ({
 
 const ptyClientMock = vi.hoisted(() => ({
   getAllTerminalsAsync: vi.fn<() => Promise<unknown[]>>(async () => []),
-  gracefulKillByProject: vi.fn(async () => [] as Array<{ id: string }>),
+  gracefulKillByProject: vi.fn<
+    (projectId: string, opts?: { preserveSession?: boolean }) => Promise<Array<{ id: string }>>
+  >(async () => []),
 }));
 
 const workspaceClientMock = vi.hoisted(() => ({
