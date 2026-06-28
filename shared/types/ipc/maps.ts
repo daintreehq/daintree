@@ -71,6 +71,7 @@ import type { RetryAction, ErrorRecord, RetryProgressPayload } from "./errors.js
 import type { EventRecord } from "./events.js";
 import type {
   ProjectCloseResult,
+  ProjectFreeMemoryResult,
   ProjectStats,
   ProjectStatusMap,
   ProjectSwitchPayload,
@@ -628,6 +629,10 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "project:close": {
     args: [projectId: string, options?: { killTerminals?: boolean }];
     result: ProjectCloseResult;
+  };
+  "project:free-memory": {
+    args: [projectId: string];
+    result: ProjectFreeMemoryResult;
   };
   "project:reopen": {
     args: [projectId: string, outgoingState?: ProjectSwitchOutgoingState];

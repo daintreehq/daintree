@@ -1599,6 +1599,8 @@ function buildElectronApi(): ElectronAPI {
       close: (projectId: string, options?: { killTerminals?: boolean }) =>
         _unwrappingInvoke(CHANNELS.PROJECT_CLOSE, projectId, options),
 
+      freeMemory: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_FREE_MEMORY, projectId),
+
       reopen: (
         projectId: string,
         outgoingState?: import("../shared/types/ipc/project.js").ProjectSwitchOutgoingState

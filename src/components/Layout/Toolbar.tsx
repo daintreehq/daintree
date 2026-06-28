@@ -609,6 +609,13 @@ export function Toolbar({
     [projectSwitcher]
   );
 
+  const handleFreeMemoryProject = useCallback(
+    (projectId: string) => {
+      void projectSwitcher.freeMemoryProject(projectId);
+    },
+    [projectSwitcher]
+  );
+
   const handleLocateProject = useCallback(
     (projectId: string) => {
       void projectSwitcher.locateProject(projectId);
@@ -1466,6 +1473,7 @@ export function Toolbar({
                 onCloneRepo={projectSwitcher.cloneRepo}
                 onStopProject={handleStopProject}
                 onCloseProject={handleCloseProject}
+                onFreeMemoryProject={handleFreeMemoryProject}
                 onLocateProject={handleLocateProject}
                 onTogglePinProject={projectSwitcher.togglePinProject}
                 onCopyPath={projectSwitcher.copyPath}
@@ -1476,6 +1484,10 @@ export function Toolbar({
                 onRemoveConfirmClose={handleRemoveConfirmClose}
                 onConfirmRemove={projectSwitcher.confirmRemoveProject}
                 isRemovingProject={projectSwitcher.isRemovingProject}
+                freeMemoryConfirmProject={projectSwitcher.freeMemoryConfirmProject}
+                onFreeMemoryConfirmClose={() => projectSwitcher.setFreeMemoryConfirmProject(null)}
+                onConfirmFreeMemory={projectSwitcher.confirmFreeMemory}
+                isFreeingMemory={projectSwitcher.isFreeingMemory}
                 scratchResults={projectSwitcher.scratchResults}
                 onCreateScratch={() => void projectSwitcher.createScratch()}
                 onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}

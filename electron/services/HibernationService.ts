@@ -437,7 +437,7 @@ export class HibernationService {
     // Chromium renderer resident per project, so without this hibernation
     // appears to free almost nothing.
     if (reason === "user-initiated") {
-      this.evictCachedRenderer(projectId);
+      this.evictProjectRenderer(projectId);
     }
 
     return terminalsKilled;
@@ -456,10 +456,15 @@ export class HibernationService {
    * though `activeProjectId` already points at the incoming project). Destroying
    * either would expose a blank/unpainted frame. Both guards are per-manager —
    * each window tracks its own active and outgoing project.
+   *
+   * Public so the user-initiated `project:free-memory` IPC handler can reclaim
+   * the renderer directly without routing through the (experiment-gated)
+   * `hibernateProject` PTY-kill path. Returns the number of windows whose
+   * cached view was torn down.
    */
-  private evictCachedRenderer(projectId: string): void {
+  evictProjectRenderer(projectId: string): number {
     const provider = this.projectViewManagersProvider;
-    if (!provider) return;
+    if (!provider) return 0;
 
     let managers: ProjectViewManager[];
     try {
@@ -467,7 +472,7 @@ export class HibernationService {
     } catch (error) {
       // windowRegistry may be tearing down — eviction is best-effort.
       logError("user-initiated-hibernate-evict-provider-failed", error, { projectId });
-      return;
+      return 0;
     }
 
     let evictedViewCount = 0;
@@ -492,6 +497,8 @@ export class HibernationService {
     if (evictedViewCount > 0) {
       logInfo("user-initiated-hibernate-renderer-evicted", { projectId, evictedViewCount });
     }
+
+    return evictedViewCount;
   }
 
   getConfig(): HibernationConfig {
