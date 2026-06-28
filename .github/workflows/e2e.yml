@@ -229,6 +229,7 @@ jobs:
               "full-terminal",
               "full-worktree",
               "full-platform",
+              "full-resilience",
               "full-panels",
             ]);
             function isLongWindowsShard(os) {
