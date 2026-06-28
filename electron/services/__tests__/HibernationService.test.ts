@@ -1288,12 +1288,39 @@ describe("HibernationService", () => {
       expect(killed).toBe(1);
     });
 
-    it("writes hibernation markers for terminals killed on user-initiated (#10831)", async () => {
+    it("writes a hibernation marker for every terminal killed on user-initiated (#10831)", async () => {
+      ptyManagerMock.gracefulKillByProject.mockResolvedValue([
+        { id: "t1", agentSessionId: null },
+        { id: "t2", agentSessionId: null },
+      ]);
       const service = makeServiceWithManagers([makeManager(null)]);
 
-      await service.hibernateProjectOnDemand("proj-1", "Proj One", "user-initiated");
+      const killed = await service.hibernateProjectOnDemand("proj-1", "Proj One", "user-initiated");
 
+      expect(killed).toBe(2);
       expect(writeHibernatedMarkerMock).toHaveBeenCalledWith("t1");
+      expect(writeHibernatedMarkerMock).toHaveBeenCalledWith("t2");
+    });
+
+    it("still broadcasts the hibernated event when user-initiated kills nothing (#10831)", async () => {
+      // gracefulKillByProject is invoked (the experiment guard is bypassed) but
+      // resolves empty — no terminals matched. Count is 0, no markers, but the
+      // project-hibernated event must still fire so the renderer eviction and
+      // dismissal gate see a consistent signal.
+      ptyManagerMock.gracefulKillByProject.mockResolvedValue([]);
+      const service = makeServiceWithManagers([makeManager(null)]);
+
+      const killed = await service.hibernateProjectOnDemand("proj-1", "Proj One", "user-initiated");
+
+      expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
+        preserveSession: true,
+      });
+      expect(killed).toBe(0);
+      expect(writeHibernatedMarkerMock).not.toHaveBeenCalled();
+      expect(broadcastToRendererMock).toHaveBeenCalledWith(
+        "hibernation:project-hibernated",
+        expect.objectContaining({ reason: "user-initiated", terminalsKilled: 0 })
+      );
     });
 
     it("defaults to user-initiated when no reason is passed", async () => {
