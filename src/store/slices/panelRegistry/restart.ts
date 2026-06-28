@@ -325,9 +325,18 @@ export const createRestartActions = (
     // `panelStoreListeners.onAgentExited` must NOT clear `agentId` — if it
     // did, a cold-launched agent that `/quit`s into its shell would lose its
     // launch identity and relaunch decisions would misclassify. #5807
+    // A failed-to-start agent spawn now carries `agentState === "exited"` so MCP
+    // read paths surface the crash (#10816), but it never actually ran and must
+    // relaunch as the agent rather than demote to a shell. `wasFailed`
+    // (captured above before spawnStatus is cleared for the restart) means
+    // "never started". Gate it on a surviving `command`: a failed *agent* launch
+    // keeps its agent command, whereas a demoted shell (an agent that quit to
+    // its shell) has `command` cleared — without this, a demoted shell whose
+    // restart then fails to spawn would wrongly re-promote to an agent (#5764).
+    const failedAgentLaunch = wasFailed && currentTerminal.command !== undefined;
     const isAgent =
       !!effectiveAgentId &&
-      currentTerminal.agentState !== "exited" &&
+      (currentTerminal.agentState !== "exited" || failedAgentLaunch) &&
       currentTerminal.exitCode === undefined;
     const isDemotedAgent = !!effectiveAgentId && !isAgent;
     let loadedRuntimeSettings: LoadedAgentRuntimeSettings | undefined;

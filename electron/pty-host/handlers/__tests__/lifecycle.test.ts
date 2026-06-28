@@ -373,3 +373,90 @@ describe("lifecycle spawn — terminal-pid gating and deferred retry (#10787)", 
     expect(getMock(ctx).mock.calls.length).toBeLessThanOrEqual(21);
   });
 });
+
+describe("lifecycle spawn — failed-to-start synthesizes an exit for launched agents (#10816)", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function sentEvents(ctx: HostContext) {
+    return (ctx.sendEvent as ReturnType<typeof vi.fn>).mock.calls.map(([event]) => event);
+  }
+
+  it("emits agent-spawned then agent-state(exited) then spawn-result when launchAgentId is set", () => {
+    const ctx = makeCtx();
+    (ctx.ptyManager.spawn as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error("ENOENT: command not found");
+    });
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: { launchAgentId: "claude" } });
+
+    const events = sentEvents(ctx);
+    const spawned = events.find((e) => e.type === "agent-spawned");
+    const state = events.find((e) => e.type === "agent-state");
+    const result = events.find((e) => e.type === "spawn-result");
+
+    expect(spawned).toMatchObject({
+      type: "agent-spawned",
+      payload: { agentId: "claude", terminalId: "t1" },
+    });
+    expect(state).toMatchObject({
+      type: "agent-state",
+      id: "t1",
+      agentId: "claude",
+      state: "exited",
+      previousState: "working",
+      trigger: "exit",
+    });
+    expect(result).toMatchObject({ type: "spawn-result", id: "t1" });
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- narrowed by find above
+    expect((result as { result: { success: boolean } }).result.success).toBe(false);
+
+    // Order: agent-spawned resets store state before agent-state writes "exited",
+    // and both precede spawn-result.
+    const order = events
+      .map((e) => e.type)
+      .filter((t) => t === "agent-spawned" || t === "agent-state" || t === "spawn-result");
+    expect(order).toEqual(["agent-spawned", "agent-state", "spawn-result"]);
+  });
+
+  it("emits only spawn-result on a failed plain-shell spawn (no launchAgentId)", () => {
+    const ctx = makeCtx();
+    (ctx.ptyManager.spawn as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: {} });
+
+    const events = sentEvents(ctx);
+    expect(events.find((e) => e.type === "agent-spawned")).toBeUndefined();
+    expect(events.find((e) => e.type === "agent-state")).toBeUndefined();
+    expect(events.find((e) => e.type === "spawn-result")).toMatchObject({
+      type: "spawn-result",
+      id: "t1",
+    });
+  });
+
+  it("does not synthesize exit events on a successful spawn", () => {
+    const ctx = makeCtx();
+    getMockTerminal(ctx).mockReturnValue(termInfo(1234));
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: { launchAgentId: "claude" } });
+
+    const events = sentEvents(ctx);
+    expect(events.find((e) => e.type === "agent-spawned")).toBeUndefined();
+    expect(events.find((e) => e.type === "agent-state")).toBeUndefined();
+  });
+
+  function getMockTerminal(ctx: HostContext) {
+    return ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>;
+  }
+});

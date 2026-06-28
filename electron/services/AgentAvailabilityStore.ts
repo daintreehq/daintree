@@ -57,6 +57,14 @@ export class AgentAvailabilityStore {
         this.terminalToAgent.set(payload.terminalId, payload.agentId);
         this.agentToTerminal.set(payload.agentId, payload.terminalId);
         this.spawnedAt.set(payload.agentId, payload.timestamp);
+        // A fresh spawn resets the tracked state to "working" so a stale state
+        // from a prior session under the same agentId can't outlive a respawn.
+        // Without this, a previous "waiting" persists and waitUntilIdle settles
+        // immediately as already-idle, dropping its listener before the new
+        // session's crash "exited" event arrives (issue #10816).
+        this.agentStates.set(payload.agentId, "working");
+        this.lastStateChange.set(payload.agentId, payload.timestamp);
+        this.waitingReasons.delete(payload.agentId);
         // A fresh spawn clears any exit metadata from a prior session under the
         // same agentId so a stale exit code can't outlive a respawn.
         this.exitCodes.delete(payload.agentId);

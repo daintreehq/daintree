@@ -258,6 +258,81 @@ describe("AgentAvailabilityStore", () => {
     });
   });
 
+  describe("respawn state reset (#10816)", () => {
+    it("resets a stale 'waiting' state to 'working' on respawn", () => {
+      store.registerAgent("agent-1", "working");
+      events.emit("agent:state-changed", {
+        agentId: "agent-1",
+        state: "waiting",
+        previousState: "working",
+        timestamp: Date.now(),
+        trigger: "output",
+        confidence: 1.0,
+        waitingReason: "prompt",
+      });
+      expect(store.getState("agent-1")).toBe("waiting");
+      expect(store.getWaitingReason("agent-1")).toBe("prompt");
+
+      // A fresh spawn under the same agentId must not inherit "waiting"; it
+      // would otherwise let waitUntilIdle settle as already-idle before the new
+      // session's exit event arrives.
+      events.emit("agent:spawned", {
+        agentId: "agent-1",
+        terminalId: "term-1",
+        timestamp: Date.now(),
+      });
+
+      expect(store.getState("agent-1")).toBe("working");
+      expect(store.getWaitingReason("agent-1")).toBeUndefined();
+      expect(store.isAvailable("agent-1")).toBe(false);
+    });
+
+    it("excludes a freshly respawned agent from getAvailableAgents", () => {
+      store.registerAgent("agent-1", "waiting");
+      events.emit("agent:spawned", {
+        agentId: "agent-1",
+        terminalId: "term-1",
+        timestamp: Date.now(),
+      });
+
+      expect(store.getAvailableAgents().find((a) => a.agentId === "agent-1")).toBeUndefined();
+    });
+
+    it("clears a stale 'exited' state on respawn", () => {
+      store.registerAgent("agent-1", "working");
+      events.emit("agent:state-changed", {
+        agentId: "agent-1",
+        state: "exited",
+        previousState: "working",
+        timestamp: Date.now(),
+        trigger: "exit",
+        confidence: 1.0,
+        exitCode: 1,
+      });
+      expect(store.getState("agent-1")).toBe("exited");
+
+      events.emit("agent:spawned", {
+        agentId: "agent-1",
+        terminalId: "term-1",
+        timestamp: Date.now(),
+      });
+
+      expect(store.getState("agent-1")).toBe("working");
+      expect(store.getExitCode("agent-1")).toBeUndefined();
+    });
+
+    it("records the spawn timestamp as the lastStateChange on respawn", () => {
+      store.registerAgent("agent-1", "waiting");
+      events.emit("agent:spawned", {
+        agentId: "agent-1",
+        terminalId: "term-1",
+        timestamp: 9999,
+      });
+
+      expect(store.getLastStateChange("agent-1")).toBe(9999);
+    });
+  });
+
   describe("getAgentsByAvailability", () => {
     it("returns all agents with availability info", () => {
       store.registerAgent("agent-1", "idle");

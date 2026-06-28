@@ -182,6 +182,89 @@ describe("handleWaitUntilIdle exit metadata", () => {
   });
 });
 
+describe("handleWaitUntilIdle stale-state crash race (#10816)", () => {
+  it("does not settle as already-idle on a prior session's stale 'waiting' after respawn", async () => {
+    const store = getAgentAvailabilityStore();
+    const agentId = `wt-agent-stale-${(counter += 1)}`;
+    const oldTerminal = `wt-term-stale-old-${counter}`;
+    const newTerminal = `wt-term-stale-new-${counter}`;
+
+    // Prior session under the same agentId ended in "waiting".
+    events.emit("agent:spawned", { agentId, terminalId: oldTerminal, timestamp: Date.now() });
+    events.emit("agent:state-changed", {
+      agentId,
+      terminalId: oldTerminal,
+      state: "waiting",
+      previousState: "working",
+      trigger: "output",
+      confidence: 1,
+      timestamp: Date.now(),
+      waitingReason: "prompt",
+    });
+    expect(store.getState(agentId)).toBe("waiting");
+
+    // New session spawns under the same agentId (e.g. another "claude" launch).
+    events.emit("agent:spawned", { agentId, terminalId: newTerminal, timestamp: Date.now() });
+
+    const p = handleWaitUntilIdle(
+      { terminalId: newTerminal, timeoutMs: 10_000 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+
+    // Must block on the live subscription rather than short-circuit on the stale
+    // "waiting". Then the crash arrives and is reported as the exit, not idle.
+    await new Promise((r) => setTimeout(r, 10));
+    events.emit("agent:state-changed", {
+      agentId,
+      terminalId: newTerminal,
+      state: "exited",
+      previousState: "working",
+      trigger: "exit",
+      confidence: 1,
+      timestamp: Date.now(),
+      exitCode: 1,
+    });
+
+    const result = await p;
+    expect(result.timedOut).toBe(false);
+    expect(result.busyState).toBe("idle");
+    expect(result.idleReason).toBe("exited");
+    expect(result.exitCode).toBe(1);
+  });
+
+  it("reports a failed-to-start agent as exited (no exitCode) on the already-idle path (#10816 mode 3)", async () => {
+    // Mode 3: the pty-host synthesizes agent-spawned + agent-state(exited) with
+    // NO exitCode before the consumer calls waitUntilIdle. The store is already
+    // "exited", so this exercises the already-idle snapshot path — it must
+    // report idleReason "exited" (not "unknown"/working) and omit exitCode,
+    // since no process ever ran.
+    const store = getAgentAvailabilityStore();
+    const agentId = `wt-agent-mode3-${(counter += 1)}`;
+    const terminalId = `wt-term-mode3-${counter}`;
+
+    events.emit("agent:spawned", { agentId, terminalId, timestamp: Date.now() });
+    events.emit("agent:state-changed", {
+      agentId,
+      terminalId,
+      state: "exited",
+      previousState: "working",
+      trigger: "exit",
+      confidence: 1,
+      timestamp: Date.now(),
+      // No exitCode — failed-to-start, process never ran.
+    });
+    expect(store.getState(agentId)).toBe("exited");
+    expect(store.getExitCode(agentId)).toBeUndefined();
+
+    const result = await handleWaitUntilIdle({ terminalId }, new AbortController().signal);
+    expect(result.timedOut).toBe(false);
+    expect(result.busyState).toBe("idle");
+    expect(result.idleReason).toBe("exited");
+    expect(result).not.toHaveProperty("exitCode");
+  });
+});
+
 describe("handleWaitUntilIdleBatch", () => {
   it("mode 'first' resolves as soon as any terminal leaves working", async () => {
     const a = nextIds();
@@ -303,25 +386,44 @@ describe("handleWaitUntilIdleBatch", () => {
     expect(res.results[0]!.terminalId).toBe("batch-dup");
   });
 
-  it("settles a mapped-but-stateless terminal immediately instead of waiting (mode 'all')", async () => {
-    // agent:spawned with no following state-changed leaves getState() undefined.
-    // The batch must treat that as already-idle (mirrors the single handler), or
-    // 'all' mode would hang on it until timeout.
+  it("treats a freshly spawned terminal as working, not already-idle (mode 'all', #10816)", async () => {
+    // agent:spawned now resets the tracked state to "working", so a brand-new
+    // session must NOT settle immediately — that stale "already-idle" short
+    // circuit is exactly what let a crash be missed. The batch blocks until the
+    // session actually transitions.
     const { terminalId, agentId } = nextIds();
     getAgentAvailabilityStore();
     events.emit("agent:spawned", { agentId, terminalId, timestamp: Date.now() });
 
-    const started = Date.now();
-    const res = await handleWaitUntilIdleBatch(
-      { terminalIds: [terminalId], mode: "all" },
+    const p = handleWaitUntilIdleBatch(
+      { terminalIds: [terminalId], mode: "all", timeoutMs: 10_000 },
       new AbortController().signal,
       { maxTimeoutMs: 5_000 }
     );
-    expect(Date.now() - started).toBeLessThan(1_000);
+    // It must still be pending after a beat — proves it didn't short-circuit.
+    const stillPending = await Promise.race([
+      p.then(() => "resolved" as const),
+      new Promise<"pending">((r) => setTimeout(() => r("pending"), 60)),
+    ]);
+    expect(stillPending).toBe("pending");
+
+    // The crash exit then settles it with the exit metadata intact.
+    events.emit("agent:state-changed", {
+      agentId,
+      terminalId,
+      state: "exited",
+      previousState: "working",
+      trigger: "exit",
+      confidence: 1,
+      timestamp: Date.now(),
+      exitCode: 1,
+    });
+    const res = await p;
     expect(res.timedOut).toBe(false);
     expect(res.settledTerminalIds).toEqual([terminalId]);
     expect(res.results[0]!.busyState).toBe("idle");
-    expect(res.results[0]!.settled).toBe(true);
+    expect(res.results[0]!.idleReason).toBe("exited");
+    expect(res.results[0]!.exitCode).toBe(1);
   });
 
   it("rejects an empty terminalIds array", async () => {
