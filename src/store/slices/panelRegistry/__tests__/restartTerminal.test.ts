@@ -234,6 +234,30 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
     expect(payload.agentLaunchFlags).toEqual(["--persisted-flag"]);
   });
 
+  it("does not re-promote a demoted shell whose restart later fails to spawn (#10816 / #5764)", async () => {
+    // A demoted shell (agent quit to its shell) keeps launchAgentId but has its
+    // command cleared. If a subsequent restart fails to spawn, spawnStatus
+    // becomes "failed" — but command is still undefined, so it must stay a shell
+    // and NOT be reclassified as an agent.
+    const demotedFailed = {
+      ...agentPanelBase,
+      command: undefined,
+      agentState: "exited" as const,
+      spawnStatus: "failed" as const,
+    };
+    usePanelStore.setState({
+      panelsById: { [demotedFailed.id]: demotedFailed },
+      panelIds: [demotedFailed.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.kind).toBe("terminal");
+    expect(payload.launchAgentId).toBeUndefined();
+  });
+
   it("reapplies preset env, color, IDs, and args when restarting an active agent terminal", async () => {
     const { agentSettingsClient, projectClient } = await import("@/clients");
     (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({

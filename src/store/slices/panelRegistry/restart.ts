@@ -329,11 +329,14 @@ export const createRestartActions = (
     // read paths surface the crash (#10816), but it never actually ran and must
     // relaunch as the agent rather than demote to a shell. `wasFailed`
     // (captured above before spawnStatus is cleared for the restart) means
-    // "never started" (vs a real run that quit to shell), so treat it as still
-    // an agent despite the "exited" state.
+    // "never started". Gate it on a surviving `command`: a failed *agent* launch
+    // keeps its agent command, whereas a demoted shell (an agent that quit to
+    // its shell) has `command` cleared — without this, a demoted shell whose
+    // restart then fails to spawn would wrongly re-promote to an agent (#5764).
+    const failedAgentLaunch = wasFailed && currentTerminal.command !== undefined;
     const isAgent =
       !!effectiveAgentId &&
-      (currentTerminal.agentState !== "exited" || wasFailed) &&
+      (currentTerminal.agentState !== "exited" || failedAgentLaunch) &&
       currentTerminal.exitCode === undefined;
     const isDemotedAgent = !!effectiveAgentId && !isAgent;
     let loadedRuntimeSettings: LoadedAgentRuntimeSettings | undefined;

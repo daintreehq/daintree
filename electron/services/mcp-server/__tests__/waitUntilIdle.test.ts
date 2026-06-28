@@ -232,6 +232,37 @@ describe("handleWaitUntilIdle stale-state crash race (#10816)", () => {
     expect(result.idleReason).toBe("exited");
     expect(result.exitCode).toBe(1);
   });
+
+  it("reports a failed-to-start agent as exited (no exitCode) on the already-idle path (#10816 mode 3)", async () => {
+    // Mode 3: the pty-host synthesizes agent-spawned + agent-state(exited) with
+    // NO exitCode before the consumer calls waitUntilIdle. The store is already
+    // "exited", so this exercises the already-idle snapshot path — it must
+    // report idleReason "exited" (not "unknown"/working) and omit exitCode,
+    // since no process ever ran.
+    const store = getAgentAvailabilityStore();
+    const agentId = `wt-agent-mode3-${(counter += 1)}`;
+    const terminalId = `wt-term-mode3-${counter}`;
+
+    events.emit("agent:spawned", { agentId, terminalId, timestamp: Date.now() });
+    events.emit("agent:state-changed", {
+      agentId,
+      terminalId,
+      state: "exited",
+      previousState: "working",
+      trigger: "exit",
+      confidence: 1,
+      timestamp: Date.now(),
+      // No exitCode — failed-to-start, process never ran.
+    });
+    expect(store.getState(agentId)).toBe("exited");
+    expect(store.getExitCode(agentId)).toBeUndefined();
+
+    const result = await handleWaitUntilIdle({ terminalId }, new AbortController().signal);
+    expect(result.timedOut).toBe(false);
+    expect(result.busyState).toBe("idle");
+    expect(result.idleReason).toBe("exited");
+    expect(result).not.toHaveProperty("exitCode");
+  });
 });
 
 describe("handleWaitUntilIdleBatch", () => {
