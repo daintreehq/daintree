@@ -184,9 +184,10 @@ function ProjectListItem({
 }: ProjectListItemProps) {
   const showStop = project.processCount > 0 && !project.isMissing;
   // "Free memory" reclaims a backgrounded project's resident RAM. Only
-  // meaningful for non-active, non-missing projects (the active project owns
-  // the live renderer; a missing one has nothing loaded).
-  const showFreeMemory = !project.isActive && !project.isMissing;
+  // meaningful for non-active, non-missing projects that still hold resources
+  // (the active project owns the live renderer; a missing one has nothing
+  // loaded; an already-closed one was reclaimed, so the action would no-op).
+  const showFreeMemory = !project.isActive && !project.isMissing && project.status !== "closed";
 
   const notificationOverrides = useProjectSettingsStore(
     (state) => state.notificationOverridesByProjectId[project.id]
@@ -1115,6 +1116,7 @@ function DropdownContent({
           onOpenProjectSettings={innerProps.onOpenProjectSettings}
           onStopProject={innerProps.onStopProject}
           onCloseProject={innerProps.onCloseProject}
+          onFreeMemoryProject={innerProps.onFreeMemoryProject}
           onLocateProject={innerProps.onLocateProject}
           onTogglePinProject={innerProps.onTogglePinProject}
           onCopyPath={innerProps.onCopyPath}
