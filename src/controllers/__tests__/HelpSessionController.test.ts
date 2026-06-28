@@ -2561,12 +2561,7 @@ describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
     });
     panelStoreState.addPanel = vi.fn().mockResolvedValue("term-normal");
 
-    await ctrl["_executeLaunch"](
-      7,
-      { agentId: "claude" },
-      { id: "p1", path: "/repo" },
-      undefined
-    );
+    await ctrl["_executeLaunch"](7, { agentId: "claude" }, { id: "p1", path: "/repo" }, undefined);
 
     // _seedHibernateFromMain ran (the take is its only caller on this path).
     expect(takeMock).toHaveBeenCalledWith("p1");
