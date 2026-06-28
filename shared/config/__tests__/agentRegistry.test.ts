@@ -1691,6 +1691,29 @@ describe("UserAgentConfigSchema supports field", () => {
     }
   });
 
+  it("accepts a deprecated supports tier (#8811)", () => {
+    const result = UserAgentConfigSchema.safeParse({
+      id: "test-agent",
+      name: "Test Agent",
+      command: "test",
+      color: "#FF0000",
+      iconId: "test",
+      supportsContextInjection: true,
+      supports: {
+        mcpInjection: "project-config",
+        settingsOverlay: true,
+        permissionBypass: false,
+        trustDialog: true,
+        versionProbe: true,
+        tier: "deprecated",
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.supports).toMatchObject({ tier: "deprecated" });
+    }
+  });
+
   it("rejects invalid supports tier", () => {
     const result = UserAgentConfigSchema.safeParse({
       id: "test-agent",

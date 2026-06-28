@@ -1330,6 +1330,35 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(ptyClient.spawn).not.toHaveBeenCalled();
   });
 
+  it("spawns Gemini as a normal agent — no help-session flag injection after deprecation (#8811)", async () => {
+    // Gemini is deprecated from the assistant overlay (#8811) but still
+    // launches from the main toolbar. A plain launch (no DAINTREE_MCP_TOKEN)
+    // must reach `ptyClient.spawn` with the command untouched and never flow
+    // through the Claude per-pane MCP path.
+    mockValidateToken.mockReturnValue(false);
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "gemini",
+        launchAgentId: "gemini",
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.command).toBe("gemini");
+    expect(spawnArgs.command).not.toContain("--approval-mode");
+    expect(mockPreparePaneConfig).not.toHaveBeenCalled();
+  });
+
   it("appends --plan to a Copilot help-session spawn (#7542)", async () => {
     mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
     mockGetCopilotLaunchArgs.mockImplementation((token) =>
