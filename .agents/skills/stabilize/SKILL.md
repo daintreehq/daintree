@@ -5,7 +5,7 @@ description: Drive Daintree to a fully green, stable state across every check we
 
 # Stabilize
 
-Drive the Daintree tree to green and keep it there. This is the replacement for the old scheduled nightly: instead of a dumb cron that runs everything once and opens a low-signal `[Nightly] Tests failed` issue every time an E2E flake trips, an agent runs the whole surface, reads the results, tells flakes apart from real regressions, re-runs intelligently, fixes the real failures, and only reports when the work is actually done. Treat this as a durable, multi-hour loop. The job is complete only when the full local gate is green AND the cross-platform `stabilize.yml` workflow passes on the branch (plus release dry-runs when stabilizing for a release).
+Drive the Daintree tree to green and keep it there. This is the replacement for the old scheduled nightly: instead of a dumb cron that runs everything once and opens a low-signal `[Nightly] Tests failed` issue every time an E2E flake trips, an agent runs the whole surface, reads the results, tells flakes apart from real regressions, re-runs intelligently, fixes the real failures, and only reports when the work is actually done. Treat this as a durable, multi-hour loop. All the work happens on a dedicated stabilize branch off `origin/develop`. The job is complete only when the full local gate is green AND the cross-platform `stabilize.yml` workflow passes on the branch (plus release dry-runs when stabilizing for a release) AND that work has been squashed into a single commit, merged into `develop`, and pushed to origin — with the working tree left back on `develop`. See **Finalization** for the exact close-out and its "done means" checklist.
 
 There is no issue-creation step anywhere in this flow. You are the triage. Do not open or update a `nightly-failure` issue — that mechanism was retired with the scheduled nightly.
 
@@ -303,23 +303,53 @@ Each dry run executes that OS's checks, unit tests, E2E gates, and its platform 
 
 ## Finalization
 
+This is mandatory, not optional. All of the work above happens on the stabilize branch; stabilization is not finished until that work has been folded into `develop` as a **single commit**, pushed to origin, with the working tree left back on `develop`. A green branch that was never merged is an incomplete run.
+
 When the full local gate is green and `stabilize.yml` passes on the branch (plus release dry-runs when targeting a release):
 
 1. Run the relevant local final checks for touched areas, at minimum `npm run check` plus targeted tests.
-2. Squash the branch to one commit with a conventional subject, usually `fix(ci): stabilize <area>` or `test(e2e): stabilize <suite>`.
-3. Include a bullet list in the commit body summarizing the concrete fixes and which flakes were hardened.
-4. Push the single-commit branch and re-run `stabilize.yml` if the squash changed the commit SHA materially.
-5. Merge the single commit back into `develop` only after the branch workflow is green:
+2. Squash the branch to ONE commit (the entire stabilization lands as a single commit, not one commit per fix). Do this non-interactively from the stabilize branch — `git rebase -i` is not available here:
+
+   ```bash
+   git switch <branch>
+   git reset --soft "$(git merge-base origin/develop HEAD)"   # collapse every commit since the base into the index
+   git commit -m "fix(ci): stabilize <area>"                  # one commit; conventional subject (or test(e2e): stabilize <suite>)
+   ```
+
+3. Use a body with a bullet list of the concrete fixes and which flakes were hardened (pass extra `-m` flags or amend).
+4. Force-push the rewritten branch with lease — squashing rewrites history, so a plain push is rejected. Force-pushing the **stabilize branch** is expected and safe; never force-push `develop`.
+
+   ```bash
+   git push --force-with-lease origin <branch>
+   ```
+
+   A pure squash doesn't change the final tree, so it needs no re-validation. Re-run `stabilize.yml` only if a rebase onto a moved `origin/develop` (below) pulled in new changes.
+
+5. Merge that single commit back into `develop` only after the branch is green, then return to `develop` and push:
 
    ```bash
    git switch develop
    git pull --ff-only origin develop
-   git merge --ff-only <branch>
-   git push origin develop
+   git merge --ff-only <branch>     # fast-forwards develop to the one squashed commit (no merge commit)
+   git push origin develop          # develop now carries the stabilization, pushed to origin
    git push origin --delete <branch>
    git branch -d <branch>
    ```
 
-If `develop` moved and `--ff-only` cannot merge, rebase the branch onto `origin/develop`, re-run the relevant checks/workflow, then merge. Do not force-push `develop`.
+If `origin/develop` moved — so `git merge --ff-only` fails, or `git push origin develop` is rejected as non-fast-forward — do NOT force-push `develop`. Instead rebase the stabilize branch onto the new `origin/develop`, force-push the branch with lease, re-run the relevant checks/workflow, then ff-merge and push `develop` again:
 
-Final response must include the branch name, final commit SHA, the `stabilize.yml` run URL and conclusion (and any release dry-run URLs), the local checks run, the flakes hardened, and whether the remote branch was deleted.
+```bash
+git switch <branch>
+git rebase origin/develop
+git push --force-with-lease origin <branch>
+# re-run validation, then repeat step 5
+```
+
+**Done means** — all four must be true before you report completion:
+
+- You are on `develop` (not the stabilize branch).
+- The stabilization is exactly one new commit on `develop`.
+- `develop` has been pushed to origin.
+- The stabilize branch has been deleted locally and on origin.
+
+Final response must include the branch name (now deleted), the final commit SHA on `develop`, the `stabilize.yml` run URL and conclusion (and any release dry-run URLs), the local checks run, the flakes hardened, and confirmation that `develop` was pushed.
