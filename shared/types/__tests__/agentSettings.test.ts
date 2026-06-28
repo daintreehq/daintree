@@ -168,6 +168,11 @@ describe("buildResumeLatestCommand", () => {
     expect(buildResumeLatestCommand("opencode")).toBe("opencode --continue");
   });
 
+  it("prepends launch flags before resume-latest args for opencode", () => {
+    const cmd = buildResumeLatestCommand("opencode", ["--dangerously-skip-permissions"]);
+    expect(cmd).toBe("opencode --dangerously-skip-permissions --continue");
+  });
+
   it("prepends launch flags before resume-latest args for claude", () => {
     const cmd = buildResumeLatestCommand("claude", ["--dangerously-skip-permissions"]);
     expect(cmd).toBe("claude --dangerously-skip-permissions --continue");
