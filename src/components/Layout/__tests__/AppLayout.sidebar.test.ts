@@ -470,3 +470,31 @@ describe("AppLayout sidebar-width hydration transition gating — issue #10321",
     expect(source).not.toMatch(/flushSync\([^)]*setIsSidebarWidthHydrating/);
   });
 });
+
+describe("AppLayout grid-measurement hydration unlock — issue #10827", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
+  });
+
+  it("imports the hydration unlock from the layout-transition lock module", () => {
+    expect(source).toContain("unlockSidebarHydration");
+    expect(source).toContain('from "@/lib/layoutTransitionLock"');
+  });
+
+  it("releases the hydration lock in an effect gated on the cleared hydrating flag", () => {
+    // The passive effect runs after React commits the restored sidebarWidth (and
+    // the cleared flag) into the DOM, so grid/pane measurement subscribers fire
+    // against the correct <main> width instead of the default 350px.
+    expect(source).toMatch(
+      /if \(!isSidebarWidthHydrating\)\s*\{\s*unlockSidebarHydration\(\);\s*\}/
+    );
+  });
+
+  it("depends only on the hydrating flag so it fires when the flag clears", () => {
+    expect(source).toMatch(
+      /unlockSidebarHydration\(\);[\s\S]{0,60}\}, \[isSidebarWidthHydrating\]\)/
+    );
+  });
+});

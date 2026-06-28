@@ -2,8 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@/types";
 import {
+  __resetSidebarHydrationLockForTests,
   __resetSidebarLayoutTransitionLockForTests,
   lockSidebarLayoutTransition,
+  unlockSidebarHydration,
 } from "@/lib/layoutTransitionLock";
 import {
   TerminalReconciliationWatchdog,
@@ -155,6 +157,10 @@ describe("TerminalReconciliationWatchdog", () => {
     instances = new Map();
     setDocumentVisibility("visible");
     __resetSidebarLayoutTransitionLockForTests();
+    // #10827: the watchdog now also gates on the one-shot hydration lock, which
+    // starts locked at module init. Release it so ticks run their repairs.
+    __resetSidebarHydrationLockForTests();
+    unlockSidebarHydration();
   });
 
   afterEach(() => {
@@ -163,6 +169,7 @@ describe("TerminalReconciliationWatchdog", () => {
     delete document.documentElement.dataset.dragging;
     document.body.innerHTML = "";
     __resetSidebarLayoutTransitionLockForTests();
+    __resetSidebarHydrationLockForTests();
     vi.useRealTimers();
     vi.clearAllMocks();
   });

@@ -35,6 +35,10 @@ import {
   WATCHDOG_INTERVAL_MS,
   type ReconciliationWatchdogDeps,
 } from "../TerminalReconciliationWatchdog";
+import {
+  __resetSidebarHydrationLockForTests,
+  unlockSidebarHydration,
+} from "@/lib/layoutTransitionLock";
 import type { ManagedTerminal } from "../types";
 
 vi.mock("@/utils/logger", () => ({
@@ -222,12 +226,17 @@ describe("#10632 switch-back redraw — closed-loop convergence", () => {
     setDocumentVisible();
     instances = new Map();
     agents = new Map();
+    // #10827: the watchdog gates on the one-shot hydration lock, which starts
+    // locked at module init. Release it so ticks run their repairs.
+    __resetSidebarHydrationLockForTests();
+    unlockSidebarHydration();
   });
 
   afterEach(() => {
     watchdog?.dispose();
     watchdog = undefined;
     document.body.innerHTML = "";
+    __resetSidebarHydrationLockForTests();
     vi.useRealTimers();
     vi.clearAllMocks();
   });

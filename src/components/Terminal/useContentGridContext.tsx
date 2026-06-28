@@ -42,8 +42,9 @@ import {
   GRID_TRANSITION_DURATION_MS,
 } from "@/lib/terminalLayout";
 import {
-  isSidebarLayoutTransitionLocked,
+  isSidebarMeasurementLocked,
   subscribeSidebarLayoutTransitionUnlock,
+  subscribeSidebarHydrationUnlock,
 } from "@/lib/layoutTransitionLock";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useProjectBranding } from "@/hooks";
@@ -574,8 +575,10 @@ export function useContentGridContext({
         latestEntry = null;
         // Skip mid-transition widths — the flex parent is reflowing every
         // frame and committing fractional widths into `grid-template-columns`
-        // produces visible jitter on the panel grid edge (#6979).
-        if (isSidebarLayoutTransitionLocked()) return;
+        // produces visible jitter on the panel grid edge (#6979). Also skip
+        // during startup hydration, before the persisted sidebar width is
+        // restored (#10827).
+        if (isSidebarMeasurementLocked()) return;
         if (entry) {
           const { width, height } = entry.contentRect;
           setGridWidth((prev) => (prev === width ? prev : width));
@@ -587,29 +590,31 @@ export function useContentGridContext({
 
     observer.observe(container);
     // If the effect re-mounts mid-transition (e.g., a dep like
-    // `gridTerminals.length` changes during the lock window), skip the
-    // initial measurement — a mid-animation `<main>` width would re-snap
-    // `grid-template-columns` and reintroduce jitter. The unlock subscriber
-    // below will sync the grid once the transition completes.
-    if (!isSidebarLayoutTransitionLocked()) {
+    // `gridTerminals.length` changes during the lock window), or while startup
+    // hydration is still pending (#10827), skip the initial measurement — a
+    // mid-animation or pre-restore `<main>` width would re-snap
+    // `grid-template-columns` and reintroduce jitter. The unlock subscribers
+    // below sync the grid once the transition completes / hydration lands.
+    if (!isSidebarMeasurementLocked()) {
       setGridWidth(container.clientWidth);
       setGridHeight(container.clientHeight);
       setGridDimensions({ width: container.clientWidth, height: container.clientHeight });
     }
 
-    // Force a single measurement after the sidebar transition completes so
-    // the grid lands at its post-transition size even if no further RO entry
-    // fires (the geometry may already be settled by the time we unlock).
-    const unsubscribe = subscribeSidebarLayoutTransitionUnlock(() => {
+    // Force a single measurement after the sidebar transition completes (or
+    // after startup hydration lands, #10827) so the grid reaches its settled
+    // size even if no further RO entry fires (the geometry may already be
+    // stable by the time we unlock). Shared by both unlock subscribers.
+    const remeasureAfterUnlock = () => {
       const node = gridContainerRef.current;
       if (!node) return;
       if (finalRafId !== null) cancelAnimationFrame(finalRafId);
       finalRafId = requestAnimationFrame(() => {
         finalRafId = null;
-        // Re-check the lock — a second toggle may have started in the ~16ms
+        // Re-check both locks — a second toggle may have started in the ~16ms
         // between unlock and this rAF, in which case our measurement would
         // capture a mid-animation width from the new transition.
-        if (isSidebarLayoutTransitionLocked()) return;
+        if (isSidebarMeasurementLocked()) return;
         const measureNode = gridContainerRef.current;
         if (!measureNode) return;
         const width = measureNode.clientWidth;
@@ -618,13 +623,19 @@ export function useContentGridContext({
         setGridHeight((prev) => (prev === height ? prev : height));
         setGridDimensions({ width, height });
       });
-    });
+    };
+
+    const unsubscribeTransition = subscribeSidebarLayoutTransitionUnlock(remeasureAfterUnlock);
+    // #10827: remeasure once the persisted sidebar width is restored. Fires
+    // synchronously if hydration already completed before this effect mounted.
+    const unsubscribeHydration = subscribeSidebarHydrationUnlock(remeasureAfterUnlock);
 
     return () => {
       observer.disconnect();
       if (rafId !== null) cancelAnimationFrame(rafId);
       if (finalRafId !== null) cancelAnimationFrame(finalRafId);
-      unsubscribe();
+      unsubscribeTransition();
+      unsubscribeHydration();
       setGridDimensions(null);
     };
   }, [setGridDimensions, gridTerminals.length, maximizedId, twoPaneSplitEnabled, showPlaceholder]);

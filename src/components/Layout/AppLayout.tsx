@@ -40,6 +40,7 @@ import { useLayoutState, useOverlayOpen } from "@/hooks";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import { repaintAssistantAfterTransition, suppressSidebarResizes } from "@/lib/sidebarToggle";
+import { unlockSidebarHydration } from "@/lib/layoutTransitionLock";
 import { logError } from "@/utils/logger";
 
 function preloadGlobalBannerCoordinator() {
@@ -322,6 +323,19 @@ export function AppLayout({
     };
     restoreState();
   }, []);
+
+  // #10827: release the grid-measurement hydration lock once the persisted
+  // sidebar width has been restored. This passive effect runs after React
+  // commits the restored `sidebarWidth` (and the cleared hydrating flag) into
+  // the DOM, so grid/pane measurement subscribers fire against the correct
+  // `<main>` width instead of the default 350px — eliminating the first-load
+  // narrow-then-snap. `unlockSidebarHydration()` is idempotent, so a failed
+  // restore (which also clears the flag) still releases the lock exactly once.
+  useEffect(() => {
+    if (!isSidebarWidthHydrating) {
+      unlockSidebarHydration();
+    }
+  }, [isSidebarWidthHydrating]);
 
   useEffect(() => {
     if (layout.gestureSidebarHidden) return;

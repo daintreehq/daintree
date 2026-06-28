@@ -1,10 +1,15 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
+  __resetSidebarHydrationLockForTests,
   __resetSidebarLayoutTransitionLockForTests,
+  isSidebarHydrationLocked,
   isSidebarLayoutTransitionLocked,
+  isSidebarMeasurementLocked,
   lockSidebarLayoutTransition,
+  subscribeSidebarHydrationUnlock,
   subscribeSidebarLayoutTransitionUnlock,
+  unlockSidebarHydration,
 } from "../layoutTransitionLock";
 
 describe("layoutTransitionLock", () => {
@@ -157,5 +162,145 @@ describe("layoutTransitionLock", () => {
 
     vi.advanceTimersByTime(250);
     expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+// Issue #10827 — the one-shot startup hydration lock. Distinct from the
+// transition lock: it starts locked, releases exactly once when the persisted
+// sidebar width is restored, and never re-arms.
+describe("layoutTransitionLock sidebar hydration lock", () => {
+  beforeEach(() => {
+    __resetSidebarHydrationLockForTests();
+  });
+
+  afterEach(() => {
+    __resetSidebarHydrationLockForTests();
+  });
+
+  it("starts locked", () => {
+    expect(isSidebarHydrationLocked()).toBe(true);
+  });
+
+  it("unlocks on the first call and stays unlocked", () => {
+    unlockSidebarHydration();
+    expect(isSidebarHydrationLocked()).toBe(false);
+    unlockSidebarHydration();
+    expect(isSidebarHydrationLocked()).toBe(false);
+  });
+
+  it("notifies subscribers exactly once on unlock", () => {
+    const listener = vi.fn();
+    subscribeSidebarHydrationUnlock(listener);
+    expect(listener).not.toHaveBeenCalled();
+
+    unlockSidebarHydration();
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire subscribers a second time on a repeated unlock", () => {
+    const listener = vi.fn();
+    subscribeSidebarHydrationUnlock(listener);
+
+    unlockSidebarHydration();
+    unlockSidebarHydration();
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies multiple subscribers", () => {
+    const a = vi.fn();
+    const b = vi.fn();
+    subscribeSidebarHydrationUnlock(a);
+    subscribeSidebarHydrationUnlock(b);
+
+    unlockSidebarHydration();
+    expect(a).toHaveBeenCalledTimes(1);
+    expect(b).toHaveBeenCalledTimes(1);
+  });
+
+  it("unsubscribe before unlock prevents the callback from firing", () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeSidebarHydrationUnlock(listener);
+    unsubscribe();
+
+    unlockSidebarHydration();
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("fires synchronously and returns a no-op cleanup when already unlocked", () => {
+    unlockSidebarHydration();
+
+    const listener = vi.fn();
+    const unsubscribe = subscribeSidebarHydrationUnlock(listener);
+    // Already-unlocked fast path: a measurement effect mounting after restore
+    // still gets its deferred remeasure instead of silently dropping it.
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(() => unsubscribe()).not.toThrow();
+  });
+
+  it("survives a listener that throws and still notifies the others", () => {
+    const ok = vi.fn();
+    subscribeSidebarHydrationUnlock(() => {
+      throw new Error("boom");
+    });
+    subscribeSidebarHydrationUnlock(ok);
+
+    unlockSidebarHydration();
+    expect(ok).toHaveBeenCalledTimes(1);
+    expect(isSidebarHydrationLocked()).toBe(false);
+  });
+
+  it("__resetSidebarHydrationLockForTests re-arms the lock and drops pending listeners", () => {
+    const listener = vi.fn();
+    subscribeSidebarHydrationUnlock(listener);
+
+    __resetSidebarHydrationLockForTests();
+    expect(isSidebarHydrationLocked()).toBe(true);
+
+    unlockSidebarHydration();
+    expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+describe("isSidebarMeasurementLocked", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    __resetSidebarLayoutTransitionLockForTests();
+    __resetSidebarHydrationLockForTests();
+  });
+
+  afterEach(() => {
+    __resetSidebarLayoutTransitionLockForTests();
+    __resetSidebarHydrationLockForTests();
+    vi.useRealTimers();
+  });
+
+  it("is true while only the hydration lock is active", () => {
+    expect(isSidebarLayoutTransitionLocked()).toBe(false);
+    expect(isSidebarHydrationLocked()).toBe(true);
+    expect(isSidebarMeasurementLocked()).toBe(true);
+  });
+
+  it("is true while only the transition lock is active", () => {
+    unlockSidebarHydration();
+    lockSidebarLayoutTransition(100);
+    expect(isSidebarHydrationLocked()).toBe(false);
+    expect(isSidebarLayoutTransitionLocked()).toBe(true);
+    expect(isSidebarMeasurementLocked()).toBe(true);
+  });
+
+  it("is true while both locks are active", () => {
+    lockSidebarLayoutTransition(100);
+    expect(isSidebarMeasurementLocked()).toBe(true);
+  });
+
+  it("is false only once both locks have cleared", () => {
+    unlockSidebarHydration();
+    lockSidebarLayoutTransition(100);
+    expect(isSidebarMeasurementLocked()).toBe(true);
+
+    vi.advanceTimersByTime(100);
+    expect(isSidebarLayoutTransitionLocked()).toBe(false);
+    expect(isSidebarHydrationLocked()).toBe(false);
+    expect(isSidebarMeasurementLocked()).toBe(false);
   });
 });
