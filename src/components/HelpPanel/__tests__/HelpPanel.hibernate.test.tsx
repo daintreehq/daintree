@@ -892,6 +892,14 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
       cwd: "/tmp/help/proj-1",
       panelWasOpen: true,
     });
+    // #10819: the resumeOnly launch gates on the atomic take (hoisted before
+    // provisioning). Whenever the peek surfaces a panelWasOpen entry, main still
+    // holds it, so the take returns the same entry.
+    mockTakePendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+    });
 
     await act(async () => {
       render(<HelpPanel width={380} />);
@@ -969,6 +977,12 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
       agentSessionId: "abc-123",
       cwd: "/tmp/help/proj-1",
       panelWasOpen: true,
+    });
+    // #10819: take returns the same entry the peek surfaced (gates the resume).
+    mockTakePendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
     });
 
     let view: ReturnType<typeof render> | undefined;
@@ -1148,8 +1162,11 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
       expect.anything(),
       expect.anything()
     );
-    // The provisioned session is released, not leaked.
-    expect(mockRevokeSession).toHaveBeenCalledWith("fresh-session");
+    // #10819: the null take aborts BEFORE provisioning, so the loser never mints
+    // a session (nothing to revoke) and — critically — never runs the displacing
+    // provision that would have killed the backend the winning window just resumed.
+    expect(mockProvisionSession).not.toHaveBeenCalled();
+    expect(mockRevokeSession).not.toHaveBeenCalled();
     // No scary launch error — neither a toast nor the inline banner.
     expect(mockNotify).not.toHaveBeenCalled();
     expect(view!.queryByTestId("help-launch-error-banner")).toBeNull();
@@ -1181,6 +1198,12 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
       agentSessionId: "abc-123",
       cwd: "/tmp/help/proj-1",
       panelWasOpen: true,
+    });
+    // #10819: take returns the same entry the peek surfaced (gates the resume).
+    mockTakePendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
     });
 
     let view: ReturnType<typeof render> | undefined;
