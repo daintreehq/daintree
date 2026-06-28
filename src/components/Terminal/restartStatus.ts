@@ -22,6 +22,13 @@ export interface RestartBannerInput {
   backendStatus: BackendStatus;
   /** True when restore fell through to a fresh agent launch (issue #9802). */
   sessionLostOnRestore?: boolean;
+  /**
+   * True once the user dismissed the session-resume-unavailable banner
+   * (issue #10823). Tracked separately from `dismissedRestartPrompt` so
+   * acknowledging a lost session never suppresses a later exit-error banner
+   * for a crash of the fresh session.
+   */
+  dismissedSessionLost?: boolean;
 }
 
 export function getRestartBannerVariant(input: RestartBannerInput): RestartBannerVariant {
@@ -45,10 +52,13 @@ export function getRestartBannerVariant(input: RestartBannerInput): RestartBanne
   // restart takes precedence) and above exit-error so a lost session is
   // acknowledged before any prior exit prompt. Dismissable (issue #10823): the
   // user recovers just by carrying on in the fresh session, so once they
-  // acknowledge it the banner stays gone for this session.
+  // acknowledge it the banner stays gone for this session. Uses a dedicated
+  // `dismissedSessionLost` flag — not `dismissedRestartPrompt` — so dismissing
+  // this acknowledgement never suppresses a later exit-error for the fresh
+  // session crashing.
   if (
     input.sessionLostOnRestore &&
-    !input.dismissedRestartPrompt &&
+    !input.dismissedSessionLost &&
     !input.isRestarting &&
     !input.isAutoRestarting &&
     !input.restartError &&

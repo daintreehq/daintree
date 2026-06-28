@@ -14,7 +14,7 @@ export const RESTART_BANNER_COPY: RestartBannerCopyMap = {
   // into a fresh, usable session, so the banner is a dismissable acknowledgement.
   "session-resume-unavailable": {
     title: "Session no longer reachable",
-    description: "The previous session couldn't be restored. A fresh session is ready.",
+    description: "The previous session couldn't be restored. A fresh session was started.",
   },
   "exit-error": ({ exitCode }) => ({ title: `Session exited with code ${exitCode}` }),
 };

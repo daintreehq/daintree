@@ -155,6 +155,9 @@ describe("TerminalRestartStatusBanner", () => {
         />
       );
       expect(screen.queryByRole("button", { name: /start new session/i })).toBeNull();
+      expect(screen.queryByRole("button", { name: /restart session/i })).toBeNull();
+      // Dismiss is the only control.
+      expect(screen.getAllByRole("button")).toHaveLength(1);
     });
 
     it("has a dismiss control that calls onDismiss (#10823)", () => {

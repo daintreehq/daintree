@@ -270,9 +270,32 @@ describe("getRestartBannerVariant — session-resume-unavailable (issue #9802)",
     const result = getRestartBannerVariant({
       ...restored,
       sessionLostOnRestore: true,
-      dismissedRestartPrompt: true,
+      dismissedSessionLost: true,
     });
     expect(result).toEqual({ type: "none" });
+  });
+
+  it("stays visible when only dismissedRestartPrompt is set — independent flags (#10823)", () => {
+    // Dismissing an exit-error prompt must not hide a lost-session acknowledgement.
+    const result = getRestartBannerVariant({
+      ...restored,
+      sessionLostOnRestore: true,
+      dismissedRestartPrompt: true,
+    });
+    expect(result).toEqual({ type: "session-resume-unavailable" });
+  });
+
+  it("surfaces exit-error after the lost-session banner is dismissed (#10823)", () => {
+    // The dedicated dismiss flag means acknowledging the lost session must not
+    // silently suppress a crash banner for the fresh session that followed.
+    const result = getRestartBannerVariant({
+      ...restored,
+      isExited: true,
+      exitCode: 1,
+      sessionLostOnRestore: true,
+      dismissedSessionLost: true,
+    });
+    expect(result).toEqual({ type: "exit-error", exitCode: 1 });
   });
 
   it("ignores backendStatus — the lost session is independent of host connectivity", () => {

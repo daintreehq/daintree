@@ -344,6 +344,9 @@ function TerminalPaneComponent({
   const [justFocusedUntil, setJustFocusedUntil] = useState(0);
   const inputBarRef = useRef<HybridInputBarHandle>(null);
   const [dismissedRestartPrompt, setDismissedRestartPrompt] = useState(false);
+  // Separate from dismissedRestartPrompt so dismissing the lost-session
+  // acknowledgement (issue #10823) never suppresses a later exit-error banner.
+  const [dismissedSessionLost, setDismissedSessionLost] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isUpdateCwdOpen, setIsUpdateCwdOpen] = useState(false);
   const [isAutoRestarting, setIsAutoRestarting] = useState(false);
@@ -372,6 +375,7 @@ function TerminalPaneComponent({
 
   useEffect(() => {
     setDismissedRestartPrompt(false);
+    setDismissedSessionLost(false);
     inputTracker.reset();
     // Track process start time on each restart for backoff stability window
     processStartTimeRef.current = Date.now();
@@ -1174,6 +1178,7 @@ function TerminalPaneComponent({
     spawnError,
     backendStatus,
     sessionLostOnRestore,
+    dismissedSessionLost,
   });
   // Backend-dependent banners (restart / spawn / reconnect) describe failures
   // whose only recovery path runs through the host, so they're hidden while
@@ -1339,7 +1344,11 @@ function TerminalPaneComponent({
         <TerminalRestartStatusBanner
           variant={restartBannerVariant}
           onRestart={handleRestart}
-          onDismiss={() => setDismissedRestartPrompt(true)}
+          onDismiss={() =>
+            restartBannerVariant.type === "session-resume-unavailable"
+              ? setDismissedSessionLost(true)
+              : setDismissedRestartPrompt(true)
+          }
         />
       </BannerSlot>
 
