@@ -624,6 +624,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
               title: "Couldn't free memory",
               message: formatErrorMessage(retryError, "Couldn't free the project's memory"),
               actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+              context: { eventKind: "uiFeedback" },
             });
           }
         };
@@ -632,6 +633,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
           title: "Couldn't free memory",
           message: formatErrorMessage(error, "Couldn't free the project's memory"),
           actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+          context: { eventKind: "uiFeedback" },
         });
       }
     },
@@ -651,6 +653,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
           type: "info",
           title: "Switch away first",
           message: "Switch to another project to free this one's memory.",
+          context: { eventKind: "uiFeedback" },
         });
         return;
       }
