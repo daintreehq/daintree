@@ -55,7 +55,7 @@ vi.mock("../../../services/ProjectSwitchService.js", () => ({
 
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
-import { registerProjectCrudHandlers } from "../projectCrud/index.js";
+import { registerProjectFreeMemoryHandlers } from "../projectFreeMemory.js";
 import type { HandlerDependencies } from "../../types.js";
 
 type FreeMemoryResult = {
@@ -67,7 +67,7 @@ type FreeMemoryResult = {
 type FreeMemoryHandler = (event: unknown, projectId: string) => Promise<FreeMemoryResult>;
 
 function getFreeMemoryHandler(deps: HandlerDependencies): FreeMemoryHandler {
-  registerProjectCrudHandlers(deps);
+  registerProjectFreeMemoryHandlers(deps);
   const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
     .calls;
   const call = calls.find((c) => c[0] === CHANNELS.PROJECT_FREE_MEMORY);
