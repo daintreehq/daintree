@@ -50,6 +50,21 @@ export interface ProjectCloseResult {
   terminalsKilled: number;
 }
 
+/**
+ * Result from the project:free-memory operation. Reclaims a background
+ * project's resident memory (renderer + PTYs + workspace host) while keeping
+ * the project in the list as `closed` and preserving its layout for a
+ * non-destructive reopen. Failures throw `AppError`.
+ */
+export interface ProjectFreeMemoryResult {
+  /** Number of terminals gracefully killed (sessions preserved for restore). */
+  terminalsKilled: number;
+  /** True when a cached renderer WebContentsView was torn down. */
+  rendererEvicted: boolean;
+  /** True when the project's workspace-host process was evicted. */
+  workspaceEvicted: boolean;
+}
+
 /** Project resource statistics */
 export interface ProjectStats {
   /** Total number of running processes */

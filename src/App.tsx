@@ -1319,6 +1319,9 @@ function AppInner() {
                     onCloseProject={(projectId) =>
                       void projectSwitcherPalette.removeProject(projectId)
                     }
+                    onFreeMemoryProject={(projectId) =>
+                      void projectSwitcherPalette.freeMemoryProject(projectId)
+                    }
                     onLocateProject={(projectId) =>
                       void projectSwitcherPalette.locateProject(projectId)
                     }
@@ -1332,6 +1335,12 @@ function AppInner() {
                     }
                     onConfirmRemove={projectSwitcherPalette.confirmRemoveProject}
                     isRemovingProject={projectSwitcherPalette.isRemovingProject}
+                    freeMemoryConfirmProject={projectSwitcherPalette.freeMemoryConfirmProject}
+                    onFreeMemoryConfirmClose={() =>
+                      projectSwitcherPalette.setFreeMemoryConfirmProject(null)
+                    }
+                    onConfirmFreeMemory={projectSwitcherPalette.confirmFreeMemory}
+                    isFreeingMemory={projectSwitcherPalette.isFreeingMemory}
                     onSelectNewWindow={(project) => {
                       projectSwitcherPalette.close();
                       void actionService.dispatch(

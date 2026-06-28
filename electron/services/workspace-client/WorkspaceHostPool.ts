@@ -414,6 +414,22 @@ export class WorkspaceHostPool {
 
   // ── Eviction / dormant management ──
 
+  /**
+   * Force-evict the workspace host for `projectPath` on demand (user-initiated
+   * "free memory"). Disposes the utility process and drops the entry. Returns
+   * false — without evicting — when no host is loaded, or when the project is
+   * still held by a window (`refCount > 0`): another open window may be using
+   * the same host, and severing it mid-use would break that window's worktree
+   * monitoring. Unlike `scheduleDormantCleanup`, this skips the grace period.
+   */
+  evictProject(projectPath: string): boolean {
+    const normalized = this.normalizeProjectPath(projectPath);
+    const entry = this.entries.get(normalized);
+    if (!entry || entry.refCount > 0) return false;
+    this.evictEntry(normalized, entry);
+    return true;
+  }
+
   private evictEntry(projectPath: string, entry: ProcessEntry): void {
     if (entry.cleanupTimeout) {
       clearTimeout(entry.cleanupTimeout);

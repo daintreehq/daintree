@@ -297,6 +297,17 @@ export class WorkspaceClient extends EventEmitter {
     }
   }
 
+  /**
+   * Force-evict the workspace host for `projectPath` (user-initiated "free
+   * memory"). No-op when the client is disposed. Returns false when no host is
+   * loaded or the project is still held by a window (see
+   * {@link WorkspaceHostPool.evictProject}).
+   */
+  evictProject(projectPath: string): boolean {
+    if (this.isDisposed) return false;
+    return this.pool.evictProject(projectPath);
+  }
+
   pauseHealthCheck(): void {
     for (const entry of this.pool.entries.values()) {
       entry.host.pauseHealthCheck();

@@ -97,6 +97,13 @@ export function ProjectSwitcher() {
     [projectSwitcher]
   );
 
+  const handleFreeMemoryProject = useCallback(
+    (projectId: string) => {
+      void projectSwitcher.freeMemoryProject(projectId);
+    },
+    [projectSwitcher]
+  );
+
   const handleLocateProject = useCallback(
     (projectId: string) => {
       void projectSwitcher.locateProject(projectId);
@@ -172,6 +179,7 @@ export function ProjectSwitcher() {
             onCreateFolder={handleCreateFolder}
             onStopProject={handleStopProject}
             onCloseProject={handleCloseProject}
+            onFreeMemoryProject={handleFreeMemoryProject}
             onLocateProject={handleLocateProject}
             onTogglePinProject={handleTogglePinProject}
             onCopyPath={projectSwitcher.copyPath}
@@ -182,6 +190,10 @@ export function ProjectSwitcher() {
             onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
             onConfirmRemove={projectSwitcher.confirmRemoveProject}
             isRemovingProject={projectSwitcher.isRemovingProject}
+            freeMemoryConfirmProject={projectSwitcher.freeMemoryConfirmProject}
+            onFreeMemoryConfirmClose={() => projectSwitcher.setFreeMemoryConfirmProject(null)}
+            onConfirmFreeMemory={projectSwitcher.confirmFreeMemory}
+            isFreeingMemory={projectSwitcher.isFreeingMemory}
             scratchResults={projectSwitcher.scratchResults}
             onCreateScratch={() => void projectSwitcher.createScratch()}
             onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
@@ -240,6 +252,7 @@ export function ProjectSwitcher() {
         onCreateFolder={handleCreateFolder}
         onStopProject={handleStopProject}
         onCloseProject={handleCloseProject}
+        onFreeMemoryProject={handleFreeMemoryProject}
         onLocateProject={handleLocateProject}
         onTogglePinProject={handleTogglePinProject}
         onOpenProjectSettings={handleOpenSettings}
@@ -250,6 +263,10 @@ export function ProjectSwitcher() {
         onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
         onConfirmRemove={projectSwitcher.confirmRemoveProject}
         isRemovingProject={projectSwitcher.isRemovingProject}
+        freeMemoryConfirmProject={projectSwitcher.freeMemoryConfirmProject}
+        onFreeMemoryConfirmClose={() => projectSwitcher.setFreeMemoryConfirmProject(null)}
+        onConfirmFreeMemory={projectSwitcher.confirmFreeMemory}
+        isFreeingMemory={projectSwitcher.isFreeingMemory}
         onDropdownCloseAutoFocus={suppressTooltipDuringFocusRestore}
       >
         <Tooltip open={tooltipOpen} onOpenChange={handleTooltipOpenChange}>

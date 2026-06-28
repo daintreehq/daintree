@@ -1099,6 +1099,10 @@ export interface GeneratedIpcInvokeMap {
     args: [options: import("./gitClone.js").CloneRepoOptions];
     result: import("./gitClone.js").CloneRepoResult;
   };
+  "project:free-memory": {
+    args: [projectId: string];
+    result: import("./project.js").ProjectFreeMemoryResult;
+  };
   "project:get-draft-inputs": {
     args: [projectId: string];
     result: Record<string, string>;
