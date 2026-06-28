@@ -113,7 +113,12 @@ export function unlockSidebarHydration(): void {
  */
 export function subscribeSidebarHydrationUnlock(listener: () => void): () => void {
   if (!hydrationLocked) {
-    listener();
+    try {
+      listener();
+    } catch {
+      // Mirror unlockSidebarHydration's throw-safety so a bad subscriber on the
+      // already-unlocked fast path can't escape into the caller's effect.
+    }
     return () => {};
   }
   hydrationListeners.add(listener);

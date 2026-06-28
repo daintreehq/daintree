@@ -329,13 +329,28 @@ export function AppLayout({
   // commits the restored `sidebarWidth` (and the cleared hydrating flag) into
   // the DOM, so grid/pane measurement subscribers fire against the correct
   // `<main>` width instead of the default 350px — eliminating the first-load
-  // narrow-then-snap. `unlockSidebarHydration()` is idempotent, so a failed
-  // restore (which also clears the flag) still releases the lock exactly once.
+  // narrow-then-snap. `unlockSidebarHydration()` is idempotent.
+  //
+  // Gated on `isHydrated`: the pre-hydration skeleton AppLayout (App.tsx renders
+  // `<AppLayout isHydrated={false}>` with no ContentGrid) runs the same
+  // `restoreState()` effect, and its fast `appClient.getState()` typically
+  // resolves before the real AppLayout + ContentGrid mount. Without this gate
+  // the skeleton would release the global lock early, so the real grid would
+  // hit the already-unlocked fast path and measure at the default width.
   useEffect(() => {
+    if (!isHydrated) return;
     if (!isSidebarWidthHydrating) {
       unlockSidebarHydration();
+      return;
     }
-  }, [isSidebarWidthHydrating]);
+    // Safety net: if the width restore hangs (IPC never resolves *or* rejects),
+    // `isSidebarWidthHydrating` would stay true forever and the grid would
+    // never measure. Release the lock after a generous timeout so a stuck IPC
+    // degrades to the pre-#10827 behavior (visible grid) rather than a blank
+    // one. Cleared the instant the flag clears normally (effect re-runs).
+    const fallback = window.setTimeout(unlockSidebarHydration, 5000);
+    return () => window.clearTimeout(fallback);
+  }, [isHydrated, isSidebarWidthHydrating]);
 
   useEffect(() => {
     if (layout.gestureSidebarHidden) return;

@@ -209,6 +209,24 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(deps.setVisible).not.toHaveBeenCalled();
     });
 
+    it("skips the tick while the startup hydration lock is held, then resumes (issue #10827)", () => {
+      // The production boot path: pre-hydration geometry is the default-width
+      // sidebar, so reconciling against it would repair to the wrong size. Other
+      // suites unlock hydration in beforeEach; this one re-arms it to exercise
+      // the real first-load gate.
+      __resetSidebarHydrationLockForTests();
+      instances.set("t1", makeManaged({ isVisible: false }));
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.setVisible).not.toHaveBeenCalled();
+
+      unlockSidebarHydration();
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.setVisible).toHaveBeenCalledWith("t1");
+    });
+
     it("fires an immediate sweep when the document becomes visible again", () => {
       instances.set("t1", makeManaged({ isVisible: false }));
       const deps = makeDeps(instances);

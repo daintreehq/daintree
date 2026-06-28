@@ -249,6 +249,24 @@ describe("layoutTransitionLock sidebar hydration lock", () => {
     expect(isSidebarHydrationLocked()).toBe(false);
   });
 
+  it("stays locked and silent until unlock is called (covers a hung width-restore IPC)", () => {
+    const listener = vi.fn();
+    subscribeSidebarHydrationUnlock(listener);
+
+    // No unlock — mirrors appClient.getState() hanging without resolve/reject.
+    expect(isSidebarHydrationLocked()).toBe(true);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("survives a throwing listener on the already-unlocked fast path", () => {
+    unlockSidebarHydration();
+    expect(() =>
+      subscribeSidebarHydrationUnlock(() => {
+        throw new Error("boom");
+      })
+    ).not.toThrow();
+  });
+
   it("__resetSidebarHydrationLockForTests re-arms the lock and drops pending listeners", () => {
     const listener = vi.fn();
     subscribeSidebarHydrationUnlock(listener);
