@@ -2505,6 +2505,76 @@ describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
     expect(panelStoreState.addPanel).not.toHaveBeenCalled();
     ctrl.stop();
   });
+
+  it("aborts silently before provisioning when the early take IPC throws (#10819)", async () => {
+    // The early take is a recovery-path credential check; an IPC failure means
+    // "can't prove we won the race", so abort WITHOUT displacing — and without a
+    // scary error banner, mirroring how _seedHibernateFromMain swallows its own
+    // IPC failure.
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    helpPanelState.hibernateSessions = {};
+    (
+      window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
+    ).takePendingHibernation = vi.fn().mockRejectedValue(new Error("ipc down"));
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", replaceExisting: true, resumeOnly: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+    expect(window.electron.help.revokeSession).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    expect(notify).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("still seeds via _seedHibernateFromMain on a non-resumeOnly launch (#10819 invariant)", async () => {
+    // The early-take guard must NOT swallow the normal empty-state launch: a
+    // non-resumeOnly launch still pulls main's pending entry post-provision via
+    // _seedHibernateFromMain and resumes from it.
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    seedThroughSetHibernate();
+    helpPanelState.hibernateSessions = {};
+    const takeMock = vi.fn().mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-9",
+      cwd: "/repo",
+    });
+    (
+      window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
+    ).takePendingHibernation = takeMock;
+    provisionMock().mockResolvedValueOnce({
+      sessionId: "sess-normal",
+      sessionPath: "/help",
+      token: "tok",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("term-normal");
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude" },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    // _seedHibernateFromMain ran (the take is its only caller on this path).
+    expect(takeMock).toHaveBeenCalledWith("p1");
+    expect(panelStoreState.addPanel).toHaveBeenCalled();
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1");
+    expect(ctrl.getSnapshot().phase).toBe("live");
+    ctrl.stop();
+  });
 });
 
 describe("HelpSessionController — MCP tool activity strip (#9759)", () => {
