@@ -3,6 +3,7 @@ import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "../utils/performance";
 import { useHibernationNotifications } from "../hooks/useHibernationNotifications";
 import { useIdleTerminalNotifications } from "../hooks/useIdleTerminalNotifications";
+import { useIdleBackgroundCloseNotifications } from "../hooks/useIdleBackgroundCloseNotifications";
 import { useDiskSpaceWarnings } from "../hooks/useDiskSpaceWarnings";
 import { useForgeTokenHealth } from "../hooks/useForgeTokenHealth";
 import { useForgeRateLimit } from "../hooks/useForgeRateLimit";
@@ -26,6 +27,7 @@ import { useRecipeFocusReload, useWorktreeDevServerStateSync } from "../hooks/ap
 export function PostHydrationListeners() {
   useHibernationNotifications();
   useIdleTerminalNotifications();
+  useIdleBackgroundCloseNotifications();
   useDiskSpaceWarnings();
   useForgeTokenHealth();
   useForgeRateLimit();

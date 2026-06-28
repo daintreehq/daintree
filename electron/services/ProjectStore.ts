@@ -63,6 +63,7 @@ function rowToProject(row: ProjectRow): Project {
   project.frecencyScore =
     typeof row.frecencyScore === "number" ? row.frecencyScore : FRECENCY_COLD_START;
   project.lastAccessedAt = typeof row.lastAccessedAt === "number" ? row.lastAccessedAt : 0;
+  if (typeof row.autoParkedAt === "number") project.autoParkedAt = row.autoParkedAt;
   return project;
 }
 
@@ -401,6 +402,7 @@ export class ProjectStore {
       pinned: number;
       frecencyScore: number;
       lastAccessedAt: number;
+      autoParkedAt: number | null;
     }> = {};
     if (updates.name !== undefined) set.name = updates.name;
     if (updates.path !== undefined) set.path = updates.path;
@@ -414,6 +416,7 @@ export class ProjectStore {
     if (updates.pinned !== undefined) set.pinned = updates.pinned ? 1 : 0;
     if (updates.frecencyScore !== undefined) set.frecencyScore = updates.frecencyScore;
     if (updates.lastAccessedAt !== undefined) set.lastAccessedAt = updates.lastAccessedAt;
+    if ("autoParkedAt" in updates) set.autoParkedAt = updates.autoParkedAt ?? null;
 
     if (Object.keys(set).length > 0) {
       db.update(projectsTable).set(set).where(eq(projectsTable.id, projectId)).run();
@@ -424,8 +427,16 @@ export class ProjectStore {
     return rowToProject(row);
   }
 
-  updateProjectStatus(projectId: string, status: ProjectStatus): Project {
-    return this.updateProject(projectId, { status });
+  updateProjectStatus(
+    projectId: string,
+    status: ProjectStatus,
+    options?: { autoParkedAt?: number | null }
+  ): Project {
+    const updates: Partial<Project> = { status };
+    if (options && "autoParkedAt" in options) {
+      updates.autoParkedAt = options.autoParkedAt ?? undefined;
+    }
+    return this.updateProject(projectId, updates);
   }
 
   getAllProjects(): Project[] {
@@ -701,7 +712,10 @@ export class ProjectStore {
           lastOpened?: number;
           frecencyScore?: number;
           lastAccessedAt?: number;
-        } = { status: "active" };
+          autoParkedAt: number | null;
+          // Reopening a project clears any background-idle "parked" marker so the
+          // switcher stops showing "Suspended to free memory" once it's live again.
+        } = { status: "active", autoParkedAt: null };
         if (!writesSuppressed && newScore !== null) {
           activeUpdate.lastOpened = now;
           activeUpdate.frecencyScore = newScore;

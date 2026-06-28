@@ -6,6 +6,7 @@ import {
   appClient,
   hibernationClient,
   idleTerminalClient,
+  idleBackgroundAutoCloseClient,
   worktreeConfigClient,
 } from "@/clients";
 import { dispatchEscape } from "@/lib/escapeStack";
@@ -213,6 +214,44 @@ export function registerAppConfigActions(
     run: async (args: unknown) => {
       const { projectId } = ProjectIdArgsSchema.parse(args);
       await idleTerminalClient.dismissProject(projectId);
+    },
+  }));
+
+  actions.set("idleBackgroundAutoClose.getConfig", () => ({
+    id: "idleBackgroundAutoClose.getConfig",
+    title: "Get Idle Background Auto-Close Config",
+    description: "Get the idle background-project auto-close configuration",
+    category: "settings",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    resultSchema: z.object({
+      enabled: z.boolean(),
+      thresholdMinutes: z.number(),
+    }),
+    run: async () => {
+      return await idleBackgroundAutoCloseClient.getConfig();
+    },
+  }));
+
+  actions.set("idleBackgroundAutoClose.updateConfig", () => ({
+    id: "idleBackgroundAutoClose.updateConfig",
+    title: "Update Idle Background Auto-Close Config",
+    description: "Update the idle background-project auto-close configuration",
+    category: "settings",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    // Config-patch tool: a palette pick dispatches `{}` (an empty patch that
+    // changes nothing). Belongs in Settings, not the palette. Stays an MCP tool.
+    palette: { mode: "hidden" },
+    argsSchema: z.object({
+      enabled: z.boolean().optional(),
+      thresholdMinutes: z.number().int().positive().optional(),
+    }),
+    run: async (args: unknown) => {
+      const config = args as { enabled?: boolean; thresholdMinutes?: number };
+      return await idleBackgroundAutoCloseClient.updateConfig(config);
     },
   }));
 

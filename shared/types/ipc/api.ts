@@ -133,6 +133,7 @@ import type {
 import type { TerminalConfig } from "./config.js";
 import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
+import type { IdleBackgroundClosedPayload } from "./idleBackgroundAutoClose.js";
 import type { KeyAction } from "../keymap.js";
 
 export interface KeybindingImportResult {
@@ -975,6 +976,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       ...args: IpcInvokeMap["idle-terminal:dismiss-project"]["args"]
     ): Promise<IpcInvokeMap["idle-terminal:dismiss-project"]["result"]>;
     onNotify(callback: (payload: IdleTerminalNotifyPayload) => void): () => void;
+  };
+  // Channel is `idle-background:*` but the renderer surface uses
+  // `idleBackgroundAutoClose`. The preload opts out of the API codegen via
+  // RENDERER_API_SKIP — methods are hand-typed here against IpcInvokeMap.
+  idleBackgroundAutoClose: {
+    getConfig(): Promise<IpcInvokeMap["idle-background:get-config"]["result"]>;
+    updateConfig(
+      ...args: IpcInvokeMap["idle-background:update-config"]["args"]
+    ): Promise<IpcInvokeMap["idle-background:update-config"]["result"]>;
+    onClosed(callback: (payload: IdleBackgroundClosedPayload) => void): () => void;
   };
   // Invoke methods come from GeneratedElectronAPI; suspend/wake are renderer-only subscriptions.
   systemSleep: GeneratedElectronAPI["systemSleep"] & {
