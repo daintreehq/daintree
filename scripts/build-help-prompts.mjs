@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Concatenates per-agent source partials in `scripts/help-src/` into the three
+// Concatenates per-agent source partials in `scripts/help-src/` into the
 // committed help-assistant prompt files in `help/`. Run after editing any
 // partial; CI runs `--check` mode via `npm run check` to detect drift.
 
@@ -24,10 +24,6 @@ const TARGETS = [
       SHARED,
       path.join(SRC_DIR, "CLAUDE.tail.md"),
     ],
-  },
-  {
-    out: path.join(HELP_DIR, "GEMINI.md"),
-    parts: [path.join(SRC_DIR, "GEMINI.head.md"), SHARED],
   },
   {
     out: path.join(HELP_DIR, "AGENTS.md"),
