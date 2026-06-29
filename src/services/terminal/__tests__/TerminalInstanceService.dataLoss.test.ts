@@ -62,8 +62,8 @@ vi.mock("@/store/projectSettingsStore", () => ({
 
 const { terminalInstanceService } = await import("../TerminalInstanceService");
 
-function createManagedTerminal(id: string) {
-  return terminalInstanceService.getOrCreate(id, undefined, {
+async function createManagedTerminal(id: string) {
+  return await terminalInstanceService.getOrCreate(id, undefined, {
     rows: 24,
     cols: 80,
     allowProposedApi: true,
@@ -75,8 +75,8 @@ describe("injectDataLossMarker", () => {
     terminalInstanceService.dispose();
   });
 
-  it("writes a structured OSC 57301 sequence, not a raw ANSI line", () => {
-    const managed = createManagedTerminal("dl-1");
+  it("writes a structured OSC 57301 sequence, not a raw ANSI line", async () => {
+    const managed = await createManagedTerminal("dl-1");
     const writeSpy = vi.spyOn(managed.terminal, "write");
 
     terminalInstanceService.injectDataLossMarker("dl-1", 1234);
@@ -101,7 +101,7 @@ describe("injectDataLossMarker", () => {
   });
 
   it("renders the yellow marker via the OSC handler round-trip", async () => {
-    createManagedTerminal("dl-3");
+    await createManagedTerminal("dl-3");
     terminalInstanceService.injectDataLossMarker("dl-3", 2048);
 
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
@@ -114,7 +114,7 @@ describe("injectDataLossMarker", () => {
   });
 
   it("uses a generic label when the dropped byte count is zero", async () => {
-    createManagedTerminal("dl-4");
+    await createManagedTerminal("dl-4");
     terminalInstanceService.injectDataLossMarker("dl-4", 0);
 
     await new Promise<void>((resolve) => setTimeout(resolve, 50));

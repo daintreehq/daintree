@@ -209,6 +209,10 @@ describe("TerminalInstanceService - Activity Tier", () => {
       expect(createImageAddon).toHaveBeenCalled();
       expect(createFileLinksAddon).toHaveBeenCalled();
       expect(createWebLinksAddon).toHaveBeenCalled();
+      // The link providers attach synchronously; the lazy ImageAddon (#10840)
+      // resolves a microtask later, so flush before asserting its slot is set.
+      await Promise.resolve();
+      await Promise.resolve();
       expect(managed.imageAddon).not.toBeNull();
       expect(managed.fileLinksDisposable).not.toBeNull();
       expect(managed.webLinksAddon).not.toBeNull();
@@ -274,8 +278,8 @@ describe("TerminalInstanceService - Activity Tier", () => {
       expect(createWebLinksAddon).not.toHaveBeenCalled();
     });
 
-    it("keeps content addons live and sets lastAppliedTier for terminals created at BACKGROUND tier", () => {
-      const managed = service.prewarmTerminal("t-bg", "terminal", {});
+    it("keeps content addons live and sets lastAppliedTier for terminals created at BACKGROUND tier", async () => {
+      const managed = await service.prewarmTerminal("t-bg", "terminal", {});
       const m = managed as unknown as {
         imageAddon: unknown;
         fileLinksDisposable: unknown;
@@ -314,17 +318,17 @@ describe("TerminalInstanceService - Activity Tier", () => {
   });
 
   describe("host-pushed tier reconciliation (issue #9778)", () => {
-    it("subscribes to terminalClient.onTierChanged on first terminal creation", () => {
+    it("subscribes to terminalClient.onTierChanged on first terminal creation", async () => {
       // The subscription is installed lazily (alongside onData/onExit) so that
       // merely constructing the singleton never reaches into terminalClient —
       // keeping it out of unrelated component tests' import graph.
-      service.prewarmTerminal("warm", "terminal", {});
+      await service.prewarmTerminal("warm", "terminal", {});
       expect(capturedTierChangedCb).toBeTypeOf("function");
     });
 
-    it("re-arms the outbound dedupe baseline when the host pushes a background demotion (#9778)", () => {
+    it("re-arms the outbound dedupe baseline when the host pushes a background demotion (#9778)", async () => {
       // Create a terminal so the lazy onTierChanged subscription is installed.
-      service.prewarmTerminal("warm", "terminal", {});
+      await service.prewarmTerminal("warm", "terminal", {});
 
       const managed = makeMockManaged({ lastAppliedTier: TerminalRefreshTier.VISIBLE });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
@@ -348,8 +352,8 @@ describe("TerminalInstanceService - Activity Tier", () => {
       expect(mockTerminalClient.setActivityTier).toHaveBeenCalledWith("t1", "active", 50);
     });
 
-    it("does not arm needsWake on a host-pushed tier (the field is permanently false)", () => {
-      service.prewarmTerminal("warm", "terminal", {});
+    it("does not arm needsWake on a host-pushed tier (the field is permanently false)", async () => {
+      await service.prewarmTerminal("warm", "terminal", {});
 
       const managed = makeMockManaged({
         lastAppliedTier: TerminalRefreshTier.FOCUSED,

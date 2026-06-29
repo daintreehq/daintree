@@ -194,8 +194,8 @@ describe("TerminalInstanceService — installTerminalBoundListeners call-site pa
     vi.useRealTimers();
   });
 
-  it("create path: getOrCreate installs terminal-bound listeners exactly once", () => {
-    service.getOrCreate("t1", undefined, {});
+  it("create path: getOrCreate installs terminal-bound listeners exactly once", async () => {
+    await service.getOrCreate("t1", undefined, {});
 
     expect(installMock).toHaveBeenCalledTimes(1);
     expect(installMock).toHaveBeenCalledWith(

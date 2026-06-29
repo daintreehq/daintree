@@ -161,7 +161,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     const id = "test-terminal-1";
     const smallState = "x".repeat(1000);
 
-    const terminal = terminalInstanceService.getOrCreate(
+    const terminal = await terminalInstanceService.getOrCreate(
       id,
       "terminal",
       {},
@@ -185,7 +185,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     const id = "test-terminal-2";
     const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes + 1000);
 
-    const terminal = terminalInstanceService.getOrCreate(
+    const terminal = await terminalInstanceService.getOrCreate(
       id,
       "terminal",
       {},
@@ -226,7 +226,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     const id = "test-terminal-3";
     const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 3);
 
-    const terminal = terminalInstanceService.getOrCreate(
+    const terminal = await terminalInstanceService.getOrCreate(
       id,
       "terminal",
       {},
@@ -257,7 +257,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     const id = "test-terminal-4";
     const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 5);
 
-    const terminal = terminalInstanceService.getOrCreate(
+    const terminal = await terminalInstanceService.getOrCreate(
       id,
       "terminal",
       {},
@@ -291,7 +291,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     const state1 = "a".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 2);
     const state2 = "b".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 2);
 
-    const terminal = terminalInstanceService.getOrCreate(
+    const terminal = await terminalInstanceService.getOrCreate(
       id,
       "terminal",
       {},
@@ -322,7 +322,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     const id = "test-terminal-6";
     const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 2);
 
-    const terminal = terminalInstanceService.getOrCreate(
+    const terminal = await terminalInstanceService.getOrCreate(
       id,
       "terminal",
       {},
@@ -361,7 +361,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     const id = "test-terminal-7";
     const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 2);
 
-    const terminal = terminalInstanceService.getOrCreate(
+    const terminal = await terminalInstanceService.getOrCreate(
       id,
       "terminal",
       {},
@@ -396,7 +396,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     const id = "test-terminal-no-scroll-sync";
     const smallState = "x".repeat(1000);
 
-    const terminal = terminalInstanceService.getOrCreate(
+    const terminal = await terminalInstanceService.getOrCreate(
       id,
       "terminal",
       {},
@@ -420,7 +420,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     const id = "test-terminal-no-scroll-incr";
     const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes + 1000);
 
-    const terminal = terminalInstanceService.getOrCreate(
+    const terminal = await terminalInstanceService.getOrCreate(
       id,
       "terminal",
       {},
@@ -453,7 +453,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     const id = "test-scroll-sync-preserve";
     const smallState = "x".repeat(1000);
 
-    const terminal = terminalInstanceService.getOrCreate(
+    const terminal = await terminalInstanceService.getOrCreate(
       id,
       "terminal",
       {},
@@ -496,7 +496,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     const id = "test-scroll-sync-at-bottom";
     const smallState = "x".repeat(1000);
 
-    const terminal = terminalInstanceService.getOrCreate(
+    const terminal = await terminalInstanceService.getOrCreate(
       id,
       "terminal",
       {},
@@ -521,7 +521,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     const id = "test-scroll-incr-preserve";
     const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes + 1000);
 
-    const terminal = terminalInstanceService.getOrCreate(
+    const terminal = await terminalInstanceService.getOrCreate(
       id,
       "terminal",
       {},
@@ -574,7 +574,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     const id = "test-scroll-sync-clamp";
     const smallState = "x".repeat(1000);
 
-    const terminal = terminalInstanceService.getOrCreate(
+    const terminal = await terminalInstanceService.getOrCreate(
       id,
       "terminal",
       {},
@@ -608,7 +608,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     const id = "test-scroll-incr-clamp";
     const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes + 1000);
 
-    const terminal = terminalInstanceService.getOrCreate(
+    const terminal = await terminalInstanceService.getOrCreate(
       id,
       "terminal",
       {},
@@ -655,7 +655,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
 
     (global as any).scheduler = undefined;
 
-    const terminal = terminalInstanceService.getOrCreate(
+    const terminal = await terminalInstanceService.getOrCreate(
       id,
       "terminal",
       {},
