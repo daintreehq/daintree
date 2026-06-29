@@ -247,10 +247,11 @@ export class TerminalRegistry {
    * Agent terminals that exit cleanly retain their full serialized scrollback
    * (~1–4MB each) in memory and are otherwise removed only on explicit
    * trash/kill or project close — within an open project they accumulate
-   * without bound. Evict oldest-first (by `preservedAt`) down to `max`, but
-   * never evict `skipId` (the terminal that just triggered eviction, whose
-   * snapshot may not be written yet) nor any snapshot served within the
-   * recent-access guard window (currently-viewed). Over-cap is tolerated rather
+   * without bound. Walk preserved terminals oldest-first (by `preservedAt`) and
+   * evict until the count is back at `max`, but never evict `skipId` (the
+   * just-preserved terminal, kept as the newest entry) nor any snapshot served
+   * within the recent-access guard window (currently-viewed). When too many of
+   * the oldest entries are guarded to reach `max`, over-cap is tolerated rather
    * than dropping a snapshot the user is actively inspecting.
    *
    * `now` is injectable for deterministic tests; callers use the default.
@@ -273,15 +274,17 @@ export class TerminalRegistry {
       });
     }
 
-    if (preserved.length <= max) {
+    let excess = preserved.length - max;
+    if (excess <= 0) {
       return;
     }
 
-    // Oldest first; only the entries past the cap are eviction candidates.
+    // Oldest first — evict the oldest evictable entries until back at the cap.
     preserved.sort((a, b) => a.preservedAt - b.preservedAt);
-    const candidates = preserved.slice(0, preserved.length - max);
-
-    for (const entry of candidates) {
+    for (const entry of preserved) {
+      if (excess <= 0) {
+        break;
+      }
       if (entry.id === skipId) {
         continue;
       }
@@ -289,6 +292,7 @@ export class TerminalRegistry {
         continue;
       }
       this.delete(entry.id);
+      excess--;
     }
   }
 

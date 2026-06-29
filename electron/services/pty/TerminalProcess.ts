@@ -115,6 +115,14 @@ type CursorBuffer = {
 export interface TerminalProcessCallbacks {
   emitData: (id: string, data: string | Uint8Array) => void;
   onExit: (id: string, exitCode: number, signal?: number) => void;
+  /**
+   * Fired once the preserved-exit snapshot has actually been captured (after
+   * the deferred headless write callback runs). The owner uses this to bound
+   * the number of in-memory preserved snapshots (issue #10839); triggering here
+   * — rather than in `onExit` — means the just-preserved terminal is already
+   * counted, so a burst of exits can't slip past the cap.
+   */
+  onPreserved?: (id: string) => void;
 }
 
 export interface TerminalProcessDependencies {
@@ -615,18 +623,22 @@ export class TerminalProcess {
         }
       }
       terminal.preservedSnapshot = snapshot;
-      // Stamp capture + initial access time so eviction (issue #10839) sorts
-      // oldest-first and a just-preserved snapshot keeps a grace window before
-      // a later exit can evict it.
-      const preservedAt = Date.now();
-      terminal.preservedAt = preservedAt;
-      terminal.preservedSnapshotLastAccessedAt = preservedAt;
+      // Stamp capture time so eviction (issue #10839) sorts oldest-first. Do
+      // NOT seed preservedSnapshotLastAccessedAt here: a freshly-captured
+      // snapshot has not been viewed, and treating it as recently-accessed
+      // would shield a burst of just-exited terminals from the cap. The access
+      // stamp is set only on a real serialize request.
+      terminal.preservedAt = Date.now();
       // The buffer is final from here on: bump the epoch so the next wake
       // serves the preserved snapshot, and zero the parse counter (disposed
       // headless write callbacks never fire) so that serve can serve-mark.
       terminal.contentEpoch++;
       terminal.pendingHeadlessWrites = 0;
       this.disposeHeadless();
+      // Bound the in-memory preserved-snapshot count now that this terminal's
+      // snapshot is actually present — counting it (unlike an onExit-time sweep)
+      // keeps the cap accurate under bursts of simultaneous exits.
+      this.callbacks.onPreserved?.(this.id);
     });
   }
 

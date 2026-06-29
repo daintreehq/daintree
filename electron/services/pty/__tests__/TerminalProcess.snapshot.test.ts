@@ -328,7 +328,7 @@ describe("TerminalProcess — snapshot and dispose preserved exited terminals", 
     await expect(terminal.getSerializedStateAsync()).resolves.toBe(info.preservedSnapshot);
   });
 
-  it("stamps preservedAt and preservedSnapshotLastAccessedAt on preserved exit", async () => {
+  it("stamps preservedAt but not lastAccessedAt on preserved exit (fresh ≠ viewed)", async () => {
     const pty = createControllablePty();
     const terminal = createTerminal(undefined, pty);
 
@@ -343,7 +343,35 @@ describe("TerminalProcess — snapshot and dispose preserved exited terminals", 
     const info = terminal.getInfo();
     expect(info.preservedAt).toBeGreaterThanOrEqual(before);
     expect(info.preservedAt).toBeLessThanOrEqual(after);
-    expect(info.preservedSnapshotLastAccessedAt).toBe(info.preservedAt);
+    // A freshly-captured snapshot has not been viewed — leaving lastAccessedAt
+    // unset keeps it evictable so a burst of exits can't slip past the cap.
+    expect(info.preservedSnapshotLastAccessedAt).toBeUndefined();
+  });
+
+  it("fires onPreserved once the snapshot is captured, but not on non-preserved exit", async () => {
+    const preservedIds: string[] = [];
+    const onPreserved = (id: string) => preservedIds.push(id);
+
+    const ptyA = createControllablePty();
+    const a = createTerminal(undefined, ptyA);
+    // Inject the optional callback the production wiring provides.
+    (a as unknown as { callbacks: { onPreserved?: (id: string) => void } }).callbacks.onPreserved =
+      onPreserved;
+    ptyA.emitData("ok\r\n");
+    await exitAndAwaitDispose(a, ptyA);
+    expect(preservedIds).toEqual(["t1"]);
+
+    const ptyB = createControllablePty();
+    const b = createTerminal(undefined, ptyB);
+    (b as unknown as { callbacks: { onPreserved?: (id: string) => void } }).callbacks.onPreserved =
+      onPreserved;
+    ptyB.emitData("crash\r\n");
+    ptyB.emitExit(1);
+    await vi.waitFor(() => {
+      expect(b.getInfo().headlessTerminal).toBeUndefined();
+    });
+    // Non-preserved exit must not fire onPreserved.
+    expect(preservedIds).toEqual(["t1"]);
   });
 
   it("does not stamp preserved timestamps on non-preserved (non-zero) exit", async () => {
@@ -361,7 +389,7 @@ describe("TerminalProcess — snapshot and dispose preserved exited terminals", 
     expect(info.preservedSnapshotLastAccessedAt).toBeUndefined();
   });
 
-  it("refreshes preservedSnapshotLastAccessedAt each time the snapshot is served", async () => {
+  it("stamps preservedSnapshotLastAccessedAt on both sync and async serves", async () => {
     const pty = createControllablePty();
     const terminal = createTerminal(undefined, pty);
 
@@ -369,8 +397,13 @@ describe("TerminalProcess — snapshot and dispose preserved exited terminals", 
     await exitAndAwaitDispose(terminal, pty);
 
     const info = terminal.getInfo();
+
     info.preservedSnapshotLastAccessedAt = 0;
     terminal.getSerializedState();
+    expect(info.preservedSnapshotLastAccessedAt).toBeGreaterThan(0);
+
+    info.preservedSnapshotLastAccessedAt = 0;
+    await terminal.getSerializedStateAsync();
     expect(info.preservedSnapshotLastAccessedAt).toBeGreaterThan(0);
   });
 
@@ -387,6 +420,11 @@ describe("TerminalProcess — snapshot and dispose preserved exited terminals", 
     expect(terminal.getInfo().headlessTerminal).toBeUndefined();
     // Let any queued drain callback fire and hit the bail guard.
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(terminal.getInfo().preservedSnapshot).toBeUndefined();
+    const info = terminal.getInfo();
+    expect(info.preservedSnapshot).toBeUndefined();
+    // The bail guard runs before any stamping, so a snapshot-less terminal must
+    // never carry preserve timestamps (which would wrongly shield it / sort it).
+    expect(info.preservedAt).toBeUndefined();
+    expect(info.preservedSnapshotLastAccessedAt).toBeUndefined();
   });
 });
