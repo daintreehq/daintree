@@ -1209,6 +1209,39 @@ describe("notify()", () => {
       Date.now = realDateNow;
     });
 
+    it("does not self-evict a freshly created short-window entry at the cap (#10842)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const realDateNow = Date.now;
+      Date.now = () => 1000; // freeze so nothing expires mid-test
+
+      // Saturate the cap with long-window entries.
+      for (let i = 0; i < 200; i++) {
+        notify(makeCoalescePayload(`bg:${i}`)); // windowMs 15000
+      }
+
+      // A new entry with the SMALLEST expiresAt must survive its own prune pass
+      // — otherwise the eviction-by-expiresAt would drop the entry just set.
+      const shortPayload = {
+        type: "success" as const,
+        message: "Short",
+        priority: "high" as const,
+        title: "Short",
+        duration: 5000,
+        coalesce: {
+          key: "short-window",
+          windowMs: 100,
+          buildMessage: (count: number) => `${count} short`,
+        },
+      };
+      const id1 = notify(shortPayload);
+      // The immediate follow-up must coalesce into id1, proving the entry was
+      // retained (a duplicate id would mean it was evicted then recreated).
+      const id2 = notify(shortPayload);
+      expect(id1).toBe(id2);
+
+      Date.now = realDateNow;
+    });
+
     it("drops expired coalesce entries on the next create (#10842)", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       const realDateNow = Date.now;

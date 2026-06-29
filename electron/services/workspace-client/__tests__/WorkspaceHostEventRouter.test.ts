@@ -715,6 +715,47 @@ describe("WorkspaceHostEventRouter", () => {
       expect(broadcastToRenderer).toHaveBeenCalledTimes(2);
     });
 
+    it("prunes every dedup key for the removed worktree, not just the first (#10842)", () => {
+      const entry = makeEntry();
+      // Two distinct teardown attempts for wt-1 produce two dedup keys
+      // (`wt-1:1000`, `wt-1:2000`).
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({
+          lifecycleStatus: lifecycleStatus("resource-teardown", "failed", 1000),
+        })
+      );
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({
+          lifecycleStatus: lifecycleStatus("resource-teardown", "failed", 2000),
+        })
+      );
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(2);
+
+      router.routeHostEvent(entry, {
+        type: "worktree-removed",
+        worktreeId: "wt-1",
+        epoch: "550e8400-e29b-41d4-a716-446655440000",
+        seq: 3,
+      });
+
+      // Both keys must be gone — a first-match-only prune would leave wt-1:2000.
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({
+          lifecycleStatus: lifecycleStatus("resource-teardown", "failed", 1000),
+        })
+      );
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({
+          lifecycleStatus: lifecycleStatus("resource-teardown", "failed", 2000),
+        })
+      );
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(4);
+    });
+
     it("only prunes dedup keys for the removed worktree (#10842)", () => {
       const entry = makeEntry();
       const failure = (worktreeId: string) =>

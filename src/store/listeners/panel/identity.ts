@@ -190,6 +190,12 @@ export function setupIdentityListeners(): DisposableStore {
   // its `_changedFileBaseline` entry; `_lastReviewInboxAt` had no eviction at
   // all. `panelIds` is the canonical liveness signal — drop any tracked id no
   // longer present, and any worktree with no remaining PTY panel (#10842).
+  //
+  // Keyed on `panelIds` only: a `moveTerminalToWorktree` that rewrites a
+  // panel's `worktreeId` without changing `panelIds` won't fire this, so a
+  // stale `_lastReviewInboxAt[oldWorktreeId]` lingers until the next `panelIds`
+  // change. Bounded (worktree ids are finite/reused, not add-only) and benign
+  // — at worst one 5s-window inbox dedupe is missed after a rare move.
   d.add(
     toDisposable(
       usePanelStore.subscribe(

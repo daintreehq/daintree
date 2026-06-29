@@ -161,6 +161,12 @@ export const useForgeProviderHealthStore = create<ForgeProviderHealthStore>((set
 // cascade). Plain `subscribe` (pluginRuntimeStore has no `subscribeWithSelector`
 // middleware) fires on any state change, so guard on the `disabledPluginIds`
 // reference and bail when no providers are tracked.
+//
+// Known gap (out of scope for #10842, which targets unbounded growth): a push
+// already in flight when the plugin is disabled could re-add a single slice
+// after this pass, and it won't re-fire (the set reference is unchanged). That
+// is one stale slice for a finite, reused provider id — bounded, not a leak —
+// and the main process gates plugin-backed IPC, so the race is narrow.
 usePluginRuntimeStore.subscribe((state, prev) => {
   if (state.disabledPluginIds === prev.disabledPluginIds) return;
   const { providers, removeProvider } = useForgeProviderHealthStore.getState();

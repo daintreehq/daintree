@@ -2537,5 +2537,27 @@ describe("ResourceGovernor", () => {
 
       governor.dispose();
     });
+
+    it("only sweeps PIDs past the grace window, keeping younger ones", () => {
+      const deps = createMockDeps();
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // PID A killed at t=0, PID B killed at t=3000. Grace is a strict
+      // `age > ORPHAN_GRACE_MS` (4000), evaluated each 2s tick.
+      governor.trackKilledPid(1111);
+      vi.advanceTimersByTime(3000);
+      governor.trackKilledPid(2222);
+
+      // Tick at t=6000: A is 6s old (swept), B is 3s old (kept).
+      vi.advanceTimersByTime(3000);
+      expect(mockCheckForLeaks).toHaveBeenLastCalledWith(0, [1111]);
+
+      // Tick at t=8000: B is now 5s old (swept).
+      vi.advanceTimersByTime(2000);
+      expect(mockCheckForLeaks).toHaveBeenLastCalledWith(0, [2222]);
+
+      governor.dispose();
+    });
   });
 });
