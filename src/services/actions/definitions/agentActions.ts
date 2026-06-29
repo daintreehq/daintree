@@ -10,8 +10,6 @@ import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
-import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { AGENT_REGISTRY, getAgentDisplayTitle } from "@/config/agents";
 import { agentSettingsClient, cliAvailabilityClient } from "@/clients";
@@ -478,6 +476,14 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       // migrated — see agentSettingsStore) rather than the raw persisted
       // settings, and the live CLI-availability store. Fall back to the
       // cache-aware clients only when a store hasn't hydrated yet.
+      //
+      // Imported lazily so this module's static graph stays free of the store
+      // singletons — eager-importing them breaks unrelated action tests that
+      // only partially mock the agent-config graph the stores pull in.
+      const [{ useAgentSettingsStore }, { useCliAvailabilityStore }] = await Promise.all([
+        import("@/store/agentSettingsStore"),
+        import("@/store/cliAvailabilityStore"),
+      ]);
       const storeSettings = useAgentSettingsStore.getState().settings;
       const settings = storeSettings ?? (await agentSettingsClient.get());
       const availabilityStore = useCliAvailabilityStore.getState();
