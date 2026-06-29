@@ -396,3 +396,98 @@ describe("identity listener — completed-with-changes notification", () => {
     d.dispose();
   });
 });
+
+describe("identity listener — map eviction on panel removal (#10842)", () => {
+  function setupTwoPanels() {
+    const makePanel = (id: string) =>
+      ({
+        id,
+        kind: "terminal",
+        title: id,
+        cwd: "/tmp/wt-1",
+        cols: 80,
+        rows: 24,
+        location: "grid" as const,
+        worktreeId: "wt-1",
+      }) as unknown as ReturnType<typeof usePanelStore.getState>["panelsById"][string];
+    usePanelStore.setState({
+      panelsById: { "term-1": makePanel("term-1"), "term-2": makePanel("term-2") },
+      panelIds: ["term-1", "term-2"],
+    });
+  }
+
+  it("prunes _changedFileBaseline when a panel disappears without an exit event", () => {
+    setupPanel();
+    const d = setupIdentityListeners();
+
+    // Capture a baseline of 0 for term-1.
+    mockChangedFileCount = 0;
+    transition("working", "idle");
+
+    // Force-kill: the panel vanishes from the store with no completed/exited
+    // event (the gap this fix closes). The panelIds subscriber must evict the
+    // stale baseline.
+    usePanelStore.setState({ panelsById: {}, panelIds: [] });
+
+    // A reused-id panel completes without a fresh working event. A surviving
+    // baseline (0) would make the grown count (5) fire; a correct prune leaves
+    // no baseline, so nothing fires.
+    setupPanel();
+    mockChangedFileCount = 5;
+    transition("completed", "idle");
+
+    expect(notify).not.toHaveBeenCalled();
+
+    d.dispose();
+  });
+
+  it("prunes _lastReviewInboxAt when the last PTY panel for a worktree is removed", () => {
+    setupPanel();
+    const d = setupIdentityListeners();
+
+    mockChangedFileCount = 0;
+    transition("working", "idle");
+    mockChangedFileCount = 3;
+    transition("completed", "working");
+    expect(notify).toHaveBeenCalledTimes(1); // records _lastReviewInboxAt[wt-1]
+
+    // The worktree's last panel goes away → its coalesce timestamp must evict.
+    usePanelStore.setState({ panelsById: {}, panelIds: [] });
+
+    // A brand-new agent on wt-1 completing within the 5s coalesce window must
+    // still notify; a surviving stale timestamp would suppress it.
+    setupPanel();
+    mockChangedFileCount = 3;
+    transition("working", "idle");
+    mockChangedFileCount = 6;
+    transition("completed", "working");
+    expect(notify).toHaveBeenCalledTimes(2);
+
+    d.dispose();
+  });
+
+  it("retains _lastReviewInboxAt while another PTY panel for the worktree survives", () => {
+    setupTwoPanels();
+    const d = setupIdentityListeners();
+
+    mockChangedFileCount = 0;
+    transition("working", "idle", "term-1");
+    transition("working", "idle", "term-2");
+
+    mockChangedFileCount = 3;
+    transition("completed", "working", "term-1");
+    expect(notify).toHaveBeenCalledTimes(1); // records _lastReviewInboxAt[wt-1]
+
+    // Remove only term-1; term-2 keeps wt-1 alive, so the coalesce timestamp
+    // must be retained (no over-pruning).
+    const survivor = usePanelStore.getState().panelsById["term-2"]!;
+    usePanelStore.setState({ panelsById: { "term-2": survivor }, panelIds: ["term-2"] });
+
+    // term-2 completes within the window → coalesced, no second notify.
+    mockChangedFileCount = 6;
+    transition("completed", "working", "term-2");
+    expect(notify).toHaveBeenCalledTimes(1);
+
+    d.dispose();
+  });
+});

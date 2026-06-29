@@ -2508,5 +2508,56 @@ describe("ResourceGovernor", () => {
 
       governor.dispose();
     });
+
+    it("prunes killed PIDs even when FD monitoring is unsupported (Windows)", () => {
+      // Regression for #10842: the orphan sweep used to sit behind the
+      // `if (!supported) return` guard, so on Windows (no /proc/fd) killedPids
+      // grew unbounded until dispose(). Prove the entry is swept while
+      // unsupported by flipping support on afterward and asserting the next
+      // FD check sees an empty orphan list — if the pid had leaked it would
+      // surface here.
+      mockFdMonitorSupported = false;
+
+      const deps = createMockDeps();
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      governor.trackKilledPid(9999);
+
+      // Past the 4s grace window — the unconditional sweep deletes the entry
+      // even though checkForLeaks never runs while unsupported.
+      vi.advanceTimersByTime(6000);
+      expect(mockCheckForLeaks).not.toHaveBeenCalled();
+
+      // FD monitoring becomes available: the next tick runs checkForLeaks with
+      // no orphan candidates, proving the pid was already pruned.
+      mockFdMonitorSupported = true;
+      vi.advanceTimersByTime(2000);
+      expect(mockCheckForLeaks).toHaveBeenLastCalledWith(0, []);
+
+      governor.dispose();
+    });
+
+    it("only sweeps PIDs past the grace window, keeping younger ones", () => {
+      const deps = createMockDeps();
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // PID A killed at t=0, PID B killed at t=3000. Grace is a strict
+      // `age > ORPHAN_GRACE_MS` (4000), evaluated each 2s tick.
+      governor.trackKilledPid(1111);
+      vi.advanceTimersByTime(3000);
+      governor.trackKilledPid(2222);
+
+      // Tick at t=6000: A is 6s old (swept), B is 3s old (kept).
+      vi.advanceTimersByTime(3000);
+      expect(mockCheckForLeaks).toHaveBeenLastCalledWith(0, [1111]);
+
+      // Tick at t=8000: B is now 5s old (swept).
+      vi.advanceTimersByTime(2000);
+      expect(mockCheckForLeaks).toHaveBeenLastCalledWith(0, [2222]);
+
+      governor.dispose();
+    });
   });
 });

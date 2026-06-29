@@ -184,6 +184,44 @@ export function setupIdentityListeners(): DisposableStore {
     )
   );
 
+  // Prune the per-terminal/per-worktree maps when panels disappear. The
+  // `agent:exited`/`completed` deletes above cover graceful teardown, but a
+  // force-kill mid-"working" removes the panel without an exit event, leaking
+  // its `_changedFileBaseline` entry; `_lastReviewInboxAt` had no eviction at
+  // all. `panelIds` is the canonical liveness signal — drop any tracked id no
+  // longer present, and any worktree with no remaining PTY panel (#10842).
+  //
+  // Keyed on `panelIds` only: a `moveTerminalToWorktree` that rewrites a
+  // panel's `worktreeId` without changing `panelIds` won't fire this, so a
+  // stale `_lastReviewInboxAt[oldWorktreeId]` lingers until the next `panelIds`
+  // change. Bounded (worktree ids are finite/reused, not add-only) and benign
+  // — at worst one 5s-window inbox dedupe is missed after a rare move.
+  d.add(
+    toDisposable(
+      usePanelStore.subscribe(
+        (s) => s.panelIds,
+        (panelIds) => {
+          if (_changedFileBaseline.size === 0 && _lastReviewInboxAt.size === 0) return;
+          const liveIds = new Set(panelIds);
+          for (const terminalId of _changedFileBaseline.keys()) {
+            if (!liveIds.has(terminalId)) _changedFileBaseline.delete(terminalId);
+          }
+          if (_lastReviewInboxAt.size === 0) return;
+          const { panelsById } = usePanelStore.getState();
+          const liveWorktreeIds = new Set(
+            panelIds.flatMap((id) => {
+              const panel = panelsById[id];
+              return panel && isPtyPanel(panel) && panel.worktreeId ? [panel.worktreeId] : [];
+            })
+          );
+          for (const worktreeId of _lastReviewInboxAt.keys()) {
+            if (!liveWorktreeIds.has(worktreeId)) _lastReviewInboxAt.delete(worktreeId);
+          }
+        }
+      )
+    )
+  );
+
   d.add(
     toDisposable(
       terminalRegistryController.onAgentDetected((data) => {
