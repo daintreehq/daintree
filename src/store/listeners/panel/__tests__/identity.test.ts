@@ -480,7 +480,7 @@ describe("identity listener — map eviction on panel removal (#10842)", () => {
 
     // Remove only term-1; term-2 keeps wt-1 alive, so the coalesce timestamp
     // must be retained (no over-pruning).
-    const survivor = usePanelStore.getState().panelsById["term-2"];
+    const survivor = usePanelStore.getState().panelsById["term-2"]!;
     usePanelStore.setState({ panelsById: { "term-2": survivor }, panelIds: ["term-2"] });
 
     // term-2 completes within the window → coalesced, no second notify.

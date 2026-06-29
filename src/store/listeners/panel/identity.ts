@@ -211,7 +211,7 @@ export function setupIdentityListeners(): DisposableStore {
           const liveWorktreeIds = new Set(
             panelIds.flatMap((id) => {
               const panel = panelsById[id];
-              return isPtyPanel(panel) && panel.worktreeId ? [panel.worktreeId] : [];
+              return panel && isPtyPanel(panel) && panel.worktreeId ? [panel.worktreeId] : [];
             })
           );
           for (const worktreeId of _lastReviewInboxAt.keys()) {
