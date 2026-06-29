@@ -497,7 +497,9 @@ export function XtermAdapter({
       }
 
       onReadyRef.current?.();
-    })();
+    })().catch((err) => {
+      if (!disposed) logError("[XtermAdapter] Terminal attach failed", err);
+    });
 
     return () => {
       disposed = true;

@@ -1945,7 +1945,11 @@ class TerminalInstanceService {
     if (!managed.imageAddon) {
       try {
         const imageAddon = await createImageAddon(managed.terminal);
-        if (managed.imageAddon) {
+        // Dispose the loser rather than leak it if, during the async import, a
+        // concurrent caller already populated the slot OR the terminal was
+        // destroyed/replaced (its instance is no longer the one in the map, so
+        // its own teardown will never dispose this addon).
+        if (managed.imageAddon || this.instances.get(id) !== managed) {
           imageAddon.dispose();
         } else {
           managed.imageAddon = imageAddon;
