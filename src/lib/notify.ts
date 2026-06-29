@@ -351,8 +351,38 @@ interface CoalesceEntry {
 
 const _activeCoalesced = new Map<string, CoalesceEntry>();
 
+// Match the 200-entry cap on the sibling `_escalationTrackers` /
+// `_rateLimitBuckets` maps. In practice only a handful of static coalesce keys
+// are live, but the map was add-only with no upper bound (#10842).
+const ACTIVE_COALESCED_MAX_ENTRIES = 200;
+
 export function _resetCoalesceMap(): void {
   _activeCoalesced.clear();
+}
+
+/** Test-only: observe the bounded coalesce map's current size. */
+export function _getActiveCoalescedSizeForTest(): number {
+  return _activeCoalesced.size;
+}
+
+// Bound `_activeCoalesced`. First drop entries whose window has already
+// elapsed (a coalesced entry is dead once `expiresAt` passes), then, if still
+// over the cap, evict the soonest-to-expire entries. Sort key is `expiresAt`,
+// not last-activity: coalesce windows are time-bounded, so the entries closest
+// to expiry are the least useful to keep.
+function pruneCoalesceMap(now: number): void {
+  for (const [key, entry] of _activeCoalesced) {
+    if (entry.expiresAt <= now) _activeCoalesced.delete(key);
+  }
+  if (_activeCoalesced.size <= ACTIVE_COALESCED_MAX_ENTRIES) return;
+
+  const entries = Array.from(_activeCoalesced.entries());
+  entries.sort((a, b) => a[1].expiresAt - b[1].expiresAt);
+
+  const toRemove = entries.slice(0, entries.length - ACTIVE_COALESCED_MAX_ENTRIES);
+  for (const [key] of toRemove) {
+    _activeCoalesced.delete(key);
+  }
 }
 
 // ── active-context suppression ──────────────────────────────────────────────
@@ -1078,6 +1108,7 @@ export function notify(payload: NotifyPayload): string {
       expiresAt: now + windowMs,
       count: 1,
     });
+    pruneCoalesceMap(now);
     return id;
   }
 

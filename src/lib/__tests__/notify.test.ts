@@ -9,6 +9,7 @@ import {
   EVENT_KIND_TO_SETTING_KEY,
   type NotificationEventKind,
   _resetCoalesceMap,
+  _getActiveCoalescedSizeForTest,
   _resetEscalationTrackers,
   _resetRateLimitBuckets,
   _resetOverflowAnnouncements,
@@ -1191,6 +1192,40 @@ describe("notify()", () => {
 
       expect(secondUpdatedAt).toBeDefined();
       expect(secondUpdatedAt).toBeGreaterThanOrEqual(firstUpdatedAt!);
+    });
+
+    it("bounds the coalesce map at 200 entries under unique-key churn (#10842)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const realDateNow = Date.now;
+      Date.now = () => 1000; // freeze so no entry expires during the fill
+
+      // 250 distinct keys would otherwise leave 250 add-only entries.
+      for (let i = 0; i < 250; i++) {
+        notify(makeCoalescePayload(`overflow:${i}`));
+      }
+
+      expect(_getActiveCoalescedSizeForTest()).toBe(200);
+
+      Date.now = realDateNow;
+    });
+
+    it("drops expired coalesce entries on the next create (#10842)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const realDateNow = Date.now;
+
+      let now = 1000;
+      Date.now = () => now;
+
+      notify(makeCoalescePayload("expiring")); // expiresAt = 1000 + 15000
+      expect(_getActiveCoalescedSizeForTest()).toBe(1);
+
+      now = 20000; // past the 15s window
+      notify(makeCoalescePayload("fresh"));
+
+      // The expired "expiring" entry is swept; only "fresh" remains.
+      expect(_getActiveCoalescedSizeForTest()).toBe(1);
+
+      Date.now = realDateNow;
     });
   });
 

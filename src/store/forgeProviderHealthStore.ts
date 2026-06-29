@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { ForgeRateLimitKind } from "@shared/types";
 import type { ForgeTokenHealthState } from "@shared/types/forge";
+import { usePluginRuntimeStore } from "./pluginRuntimeStore";
 
 /**
  * Renderer source of truth for forge provider health (rate-limit + token
@@ -70,6 +71,7 @@ interface ForgeProviderHealthStore {
   setTokenUnhealthy: (providerId: string, value: boolean, state?: ForgeTokenHealthState) => void;
   setProviderMeta: (providerId: string, meta: ForgeProviderMeta) => void;
   dismissTokenBanner: (providerId: string) => void;
+  removeProvider: (providerId: string) => void;
 }
 
 function mergeProvider(
@@ -141,7 +143,33 @@ export const useForgeProviderHealthStore = create<ForgeProviderHealthStore>((set
     set((s) => ({
       providers: mergeProvider(s, providerId, { tokenBannerDismissed: true }),
     })),
+  // Drop a provider's slice entirely. Without this the `providers` Record only
+  // ever grew (every `mergeProvider` adds, nothing removes), so a plugin that
+  // registered a forge provider leaked its health slice for the renderer's
+  // lifetime after the plugin was disabled (#10842).
+  removeProvider: (providerId) =>
+    set((s) => {
+      if (!(providerId in s.providers)) return s;
+      const { [providerId]: _removed, ...rest } = s.providers;
+      return { providers: rest };
+    }),
 }));
+
+// Evict health slices for providers whose owning plugin has been disabled.
+// `pluginRuntimeStore` is the renderer's ground truth for plugin enable state
+// (#9322 — renderer cleanup is a separate path from the main-process unload
+// cascade). Plain `subscribe` (pluginRuntimeStore has no `subscribeWithSelector`
+// middleware) fires on any state change, so guard on the `disabledPluginIds`
+// reference and bail when no providers are tracked.
+usePluginRuntimeStore.subscribe((state, prev) => {
+  if (state.disabledPluginIds === prev.disabledPluginIds) return;
+  const { providers, removeProvider } = useForgeProviderHealthStore.getState();
+  for (const [providerId, health] of Object.entries(providers)) {
+    if (health.pluginId && state.disabledPluginIds.has(health.pluginId)) {
+      removeProvider(providerId);
+    }
+  }
+});
 
 /**
  * Selector factory for one provider's health, with the default-fallback for a

@@ -146,6 +146,15 @@ export class WorkspaceHostEventRouter {
         // WORKTREE_DELETE IPC handler's eviction does not.
         gitServiceCache.delete(event.worktreeId);
         gitServiceCache.delete(path.resolve(event.worktreeId));
+        // Prune cloud-teardown failure-toast dedup keys for the removed
+        // worktree. Keys are `${worktreeId}:${startedAt}`, so a prefix scan
+        // covers every teardown attempt; otherwise the Set only grows until
+        // `dispose()` (#10842). Deleting during `for...of` over a Set is safe.
+        for (const key of this.cloudTeardownFailureToastKeys) {
+          if (key.startsWith(`${event.worktreeId}:`)) {
+            this.cloudTeardownFailureToastKeys.delete(key);
+          }
+        }
         break;
 
       case "clear-wsl-git-opt-in": {
