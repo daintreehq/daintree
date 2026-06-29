@@ -10,6 +10,8 @@ import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { AGENT_REGISTRY, getAgentDisplayTitle } from "@/config/agents";
 import { agentSettingsClient, cliAvailabilityClient } from "@/clients";
@@ -470,21 +472,30 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       ),
     }),
     run: async () => {
-      const [settings, availability] = await Promise.all([
-        agentSettingsClient.get(),
-        cliAvailabilityClient.get(),
-      ]);
+      // Mirror the toolbar's own resolution sources so `visible` stays in
+      // lockstep with what actually renders. The toolbar reads the normalized
+      // in-memory agent-settings store (initial pins seeded, legacy pins
+      // migrated — see agentSettingsStore) rather than the raw persisted
+      // settings, and the live CLI-availability store. Fall back to the
+      // cache-aware clients only when a store hasn't hydrated yet.
+      const storeSettings = useAgentSettingsStore.getState().settings;
+      const settings = storeSettings ?? (await agentSettingsClient.get());
+      const availabilityStore = useCliAvailabilityStore.getState();
+      const availability = availabilityStore.hasRealData
+        ? availabilityStore.availability
+        : await cliAvailabilityClient.get();
       return {
         agents: LAUNCHABLE_AGENT_IDS.map((id) => {
           const entry = settings.agents?.[id];
           const state = availability[id];
-          // Omit `pinned` entirely when the user hasn't set it (tri-state):
-          // an absent key means "follows CLI availability", distinct from an
-          // explicit true/false pin/unpin.
+          // Omit `pinned` unless it's an explicit boolean (tri-state): an
+          // absent key means "follows CLI availability", distinct from an
+          // explicit true/false pin/unpin. A non-boolean from a corrupted
+          // config is treated as absent, never forwarded.
           return {
             id,
             displayName: getAgentDisplayTitle(id),
-            ...(entry?.pinned !== undefined ? { pinned: entry.pinned } : {}),
+            ...(typeof entry?.pinned === "boolean" ? { pinned: entry.pinned } : {}),
             installed: isAgentInstalled(state),
             visible: isAgentToolbarVisible(entry, state),
           };
