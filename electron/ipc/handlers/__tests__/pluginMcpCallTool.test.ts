@@ -308,13 +308,18 @@ describe("handleCallTool pipeline", () => {
       expect(h.fakeWc.send).toHaveBeenCalledTimes(1);
       expect(h.supervisor.callTool).not.toHaveBeenCalled();
 
+      // Just before the deadline the prompt is still live — guards against a
+      // mis-set (e.g. 1ms) timeout silently passing the full-advance assertions.
+      await vi.advanceTimersByTimeAsync(PLUGIN_MCP_CONSENT_TIMEOUT_MS - 1);
+      const audit = h.audit as { append: ReturnType<typeof vi.fn> };
+      expect(audit.append).not.toHaveBeenCalled();
+
       // No reply ever arrives — the bridge timer fires and settles "timeout".
-      await vi.advanceTimersByTimeAsync(PLUGIN_MCP_CONSENT_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(1);
 
       const result = await pending;
       expect(result).toEqual({ kind: "denied", errorCode: PLUGIN_MCP_CONSENT_TIMEOUT_CODE });
       expect(h.supervisor.callTool).not.toHaveBeenCalled();
-      const audit = h.audit as { append: ReturnType<typeof vi.fn> };
       expect(audit.append.mock.calls[0][0]).toMatchObject({
         result: "timeout",
         consentDecision: "timeout",

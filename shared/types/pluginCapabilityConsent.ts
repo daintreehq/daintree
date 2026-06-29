@@ -68,6 +68,11 @@ export type PluginCapabilityConsentDecision =
  * gating promise (and the renderer dialog) never hangs forever. Both the
  * main-process bridge and the renderer confirm store arm an independent timer at
  * this duration.
+ *
+ * As with the MCP timeout, the clock starts when the prompt is raised, not when
+ * the dialog becomes visible — a queued prompt shares this window rather than
+ * getting its own per-display clock. The timeout is an abandonment backstop, and
+ * the rare queued-then-expired case fails closed (denied), the safe direction.
  */
 export const PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS = 5 * 60 * 1000;
 

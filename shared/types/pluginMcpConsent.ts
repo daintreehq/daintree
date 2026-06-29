@@ -131,6 +131,15 @@ export type PluginMcpConsentDecision =
  * read the tool surface and decide, short enough that the gating promise (and
  * the renderer dialog) never hangs forever. Both the main-process bridge and the
  * renderer confirm store arm an independent timer at this duration.
+ *
+ * The clock starts when the prompt is *raised* (the request is pushed / enqueued),
+ * not when the dialog becomes visible. The renderer FIFO shows one prompt at a
+ * time, so a prompt sitting behind others in the queue shares this same window —
+ * a deliberate simplification (no per-dialog clock, no suspend/resume drift) on
+ * the principle that the timeout is an abandonment backstop, not a precise
+ * read-time budget. Concurrent batched tool calls are the only case where a
+ * queued prompt could expire before display, and they fail closed (denied),
+ * which is the safe direction.
  */
 export const PLUGIN_MCP_CONSENT_TIMEOUT_MS = 5 * 60 * 1000;
 
