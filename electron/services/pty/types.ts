@@ -156,6 +156,21 @@ export interface TerminalInfo extends TerminalPublicState {
    */
   preservedSnapshot?: string;
   /**
+   * Wall-clock timestamp (`Date.now()`) captured when `preservedSnapshot` is
+   * assigned. Drives oldest-first eviction in
+   * `TerminalRegistry.evictPreservedSnapshots` (issue #10839). Runtime-only;
+   * not persisted, not crossed over IPC.
+   */
+  preservedAt?: number;
+  /**
+   * Wall-clock timestamp (`Date.now()`) of the last time `preservedSnapshot`
+   * was served by `serializeTerminal`/`serializeTerminalAsync`, seeded at
+   * capture time. Guards a currently-viewed snapshot from eviction within
+   * `PRESERVED_SNAPSHOT_RECENT_ACCESS_GUARD_MS`. Runtime-only; not persisted,
+   * not crossed over IPC.
+   */
+  preservedSnapshotLastAccessedAt?: number;
+  /**
    * Monotonic count of buffer mutations: PTY output chunks (bumped at the
    * pty-host routing site), resize reflows, and the preserved-snapshot
    * capture. Runtime-only; not persisted, not crossed over IPC. Vestigial: the
@@ -258,6 +273,18 @@ export const WRITE_INTERVAL_MS = 5;
 // output is needed for state detection; the renderer-visible scrollback is
 // larger so long agent runs don't truncate.
 export const DEFAULT_SCROLLBACK = 10000;
+
+// Preserved-snapshot eviction (issue #10839)
+// Agent terminals that exit cleanly retain their full serialized scrollback
+// (~1–4MB each) in memory so the user can reopen and inspect the session. They
+// are otherwise removed only on explicit trash/kill or project close, so within
+// an open project they accumulate without bound. Cap the in-memory count and
+// evict oldest-first; worst-case heap ceiling is ~20 × ~4MB ≈ 80MB.
+export const MAX_PRESERVED_TERMINAL_SNAPSHOTS = 20;
+// A preserved snapshot served (or freshly captured) within this window is
+// treated as currently-viewed and skipped by eviction even when over the cap,
+// so a snapshot the user is actively inspecting never vanishes mid-view.
+export const PRESERVED_SNAPSHOT_RECENT_ACCESS_GUARD_MS = 5 * 60 * 1000; // 5 min
 
 export { TRASH_TTL_MS } from "../../../shared/config/trash.js";
 

@@ -328,6 +328,52 @@ describe("TerminalProcess — snapshot and dispose preserved exited terminals", 
     await expect(terminal.getSerializedStateAsync()).resolves.toBe(info.preservedSnapshot);
   });
 
+  it("stamps preservedAt and preservedSnapshotLastAccessedAt on preserved exit", async () => {
+    const pty = createControllablePty();
+    const terminal = createTerminal(undefined, pty);
+
+    expect(terminal.getInfo().preservedAt).toBeUndefined();
+    expect(terminal.getInfo().preservedSnapshotLastAccessedAt).toBeUndefined();
+
+    const before = Date.now();
+    pty.emitData("stamp me\r\n");
+    await exitAndAwaitDispose(terminal, pty);
+    const after = Date.now();
+
+    const info = terminal.getInfo();
+    expect(info.preservedAt).toBeGreaterThanOrEqual(before);
+    expect(info.preservedAt).toBeLessThanOrEqual(after);
+    expect(info.preservedSnapshotLastAccessedAt).toBe(info.preservedAt);
+  });
+
+  it("does not stamp preserved timestamps on non-preserved (non-zero) exit", async () => {
+    const pty = createControllablePty();
+    const terminal = createTerminal(undefined, pty);
+
+    pty.emitData("crash output\r\n");
+    pty.emitExit(1);
+    await vi.waitFor(() => {
+      expect(terminal.getInfo().headlessTerminal).toBeUndefined();
+    });
+
+    const info = terminal.getInfo();
+    expect(info.preservedAt).toBeUndefined();
+    expect(info.preservedSnapshotLastAccessedAt).toBeUndefined();
+  });
+
+  it("refreshes preservedSnapshotLastAccessedAt each time the snapshot is served", async () => {
+    const pty = createControllablePty();
+    const terminal = createTerminal(undefined, pty);
+
+    pty.emitData("touch me\r\n");
+    await exitAndAwaitDispose(terminal, pty);
+
+    const info = terminal.getInfo();
+    info.preservedSnapshotLastAccessedAt = 0;
+    terminal.getSerializedState();
+    expect(info.preservedSnapshotLastAccessedAt).toBeGreaterThan(0);
+  });
+
   it("bails safely when dispose() lands before the drain callback fires", async () => {
     const pty = createControllablePty();
     const terminal = createTerminal(undefined, pty);

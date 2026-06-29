@@ -4,7 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { events } from "../events.js";
 import type { TerminalSnapshot } from "./types.js";
-import { TRASH_TTL_MS } from "./types.js";
+import {
+  TRASH_TTL_MS,
+  MAX_PRESERVED_TERMINAL_SNAPSHOTS,
+  PRESERVED_SNAPSHOT_RECENT_ACCESS_GUARD_MS,
+} from "./types.js";
 import type { TerminalProcess } from "./TerminalProcess.js";
 
 type ProjectIdCandidates = {
@@ -235,6 +239,57 @@ export class TerminalRegistry {
       roots.push({ terminalId: id, projectId: projectId ?? null, rootPid });
     }
     return roots;
+  }
+
+  /**
+   * Bound the number of in-memory preserved-snapshot terminals (issue #10839).
+   *
+   * Agent terminals that exit cleanly retain their full serialized scrollback
+   * (~1–4MB each) in memory and are otherwise removed only on explicit
+   * trash/kill or project close — within an open project they accumulate
+   * without bound. Evict oldest-first (by `preservedAt`) down to `max`, but
+   * never evict `skipId` (the terminal that just triggered eviction, whose
+   * snapshot may not be written yet) nor any snapshot served within the
+   * recent-access guard window (currently-viewed). Over-cap is tolerated rather
+   * than dropping a snapshot the user is actively inspecting.
+   *
+   * `now` is injectable for deterministic tests; callers use the default.
+   */
+  evictPreservedSnapshots(
+    max: number = MAX_PRESERVED_TERMINAL_SNAPSHOTS,
+    skipId?: string,
+    now: number = Date.now()
+  ): void {
+    const preserved: Array<{ id: string; preservedAt: number; lastAccessedAt: number }> = [];
+    for (const [id, terminal] of this.terminals.entries()) {
+      const info = terminal.getInfo();
+      if (info.preservedSnapshot === undefined) {
+        continue;
+      }
+      preserved.push({
+        id,
+        preservedAt: info.preservedAt ?? 0,
+        lastAccessedAt: info.preservedSnapshotLastAccessedAt ?? 0,
+      });
+    }
+
+    if (preserved.length <= max) {
+      return;
+    }
+
+    // Oldest first; only the entries past the cap are eviction candidates.
+    preserved.sort((a, b) => a.preservedAt - b.preservedAt);
+    const candidates = preserved.slice(0, preserved.length - max);
+
+    for (const entry of candidates) {
+      if (entry.id === skipId) {
+        continue;
+      }
+      if (now - entry.lastAccessedAt < PRESERVED_SNAPSHOT_RECENT_ACCESS_GUARD_MS) {
+        continue;
+      }
+      this.delete(entry.id);
+    }
   }
 
   /**

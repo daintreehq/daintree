@@ -615,6 +615,12 @@ export class TerminalProcess {
         }
       }
       terminal.preservedSnapshot = snapshot;
+      // Stamp capture + initial access time so eviction (issue #10839) sorts
+      // oldest-first and a just-preserved snapshot keeps a grace window before
+      // a later exit can evict it.
+      const preservedAt = Date.now();
+      terminal.preservedAt = preservedAt;
+      terminal.preservedSnapshotLastAccessedAt = preservedAt;
       // The buffer is final from here on: bump the epoch so the next wake
       // serves the preserved snapshot, and zero the parse counter (disposed
       // headless write callbacks never fire) so that serve can serve-mark.

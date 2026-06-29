@@ -4,8 +4,10 @@ import { getTerminalSerializerService } from "./TerminalSerializerService.js";
 
 export function serializeTerminal(id: string, terminalInfo: TerminalInfo): string | null {
   // Preserved exited terminal — the headless xterm is disposed and the final
-  // buffer lives as a cached string. Empty string is a valid snapshot.
+  // buffer lives as a cached string. Empty string is a valid snapshot. Stamp
+  // the access time so eviction (issue #10839) treats it as currently-viewed.
   if (terminalInfo.preservedSnapshot !== undefined) {
+    terminalInfo.preservedSnapshotLastAccessedAt = Date.now();
     return terminalInfo.preservedSnapshot;
   }
   // Non-preserved disposed terminal — disposeHeadless() clears the addon. No
@@ -24,7 +26,10 @@ export async function serializeTerminalAsync(
   id: string,
   terminalInfo: TerminalInfo
 ): Promise<string | null> {
+  // Preserved snapshot served — stamp access time so eviction (issue #10839)
+  // treats it as currently-viewed.
   if (terminalInfo.preservedSnapshot !== undefined) {
+    terminalInfo.preservedSnapshotLastAccessedAt = Date.now();
     return terminalInfo.preservedSnapshot;
   }
   // Non-preserved disposed terminal — disposeHeadless() clears both fields

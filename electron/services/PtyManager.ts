@@ -27,6 +27,7 @@ import {
   type TerminalInfo,
   TerminalSnapshot,
   type PtyManagerEvents,
+  MAX_PRESERVED_TERMINAL_SNAPSHOTS,
 } from "./pty/index.js";
 import { computeSpawnContext, acquirePtyProcess } from "./pty/terminalSpawn.js";
 import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
@@ -290,6 +291,14 @@ export class PtyManager extends EventEmitter {
             this.emit("exit", termId, exitCode, signal);
             if (!terminalProcess.shouldPreserveOnExit(exitCode)) {
               this.registry.delete(termId);
+            } else {
+              // Preserved terminals retain their full scrollback snapshot in
+              // memory and aren't otherwise removed until trash/kill or project
+              // close. Bound the in-memory count so long-lived projects don't
+              // accumulate snapshots without limit (issue #10839). skipId
+              // protects the just-exited terminal, whose snapshot write callback
+              // runs after this handler.
+              this.registry.evictPreservedSnapshots(MAX_PRESERVED_TERMINAL_SNAPSHOTS, termId);
             }
           },
         },
