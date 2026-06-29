@@ -164,8 +164,12 @@ export interface TerminalInfo extends TerminalPublicState {
   preservedAt?: number;
   /**
    * Wall-clock timestamp (`Date.now()`) of the last time `preservedSnapshot`
-   * was served by `serializeTerminal`/`serializeTerminalAsync`, seeded at
-   * capture time. Guards a currently-viewed snapshot from eviction within
+   * was served by `serializeTerminal`/`serializeTerminalAsync`. Set/updated only
+   * on an actual serve (a real view) — deliberately NOT seeded at capture, so a
+   * just-exited snapshot stays `undefined` until something serializes it. That
+   * fresh ≠ viewed distinction is what stops a burst of freshly-captured
+   * snapshots from masquerading as recently-accessed and evading eviction.
+   * Guards a currently-viewed snapshot from eviction within
    * `PRESERVED_SNAPSHOT_RECENT_ACCESS_GUARD_MS`. Runtime-only; not persisted,
    * not crossed over IPC.
    */
