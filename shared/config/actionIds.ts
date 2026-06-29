@@ -308,6 +308,7 @@ export const BUILT_IN_ACTION_IDS = [
   "agent.focusNextAgent",
   "agent.focusPreviousAgent",
   "agent.getState",
+  "agent.listToolbar",
 
   // -- app settings (other) --
   "app.settings.openTab",
