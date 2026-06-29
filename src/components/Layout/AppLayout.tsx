@@ -10,7 +10,6 @@ const LazyDiagnosticsDock = lazy(() =>
 import { ErrorBoundary } from "../ErrorBoundary";
 import { PortalDock, PortalVisibilityController } from "../Portal";
 import { ThemeBrowser } from "../ThemeBrowser";
-import { ProjectSwitchOverlay } from "@/components/Project";
 import { FleetArmingRibbon } from "@/components/Fleet";
 import { TerminalDestructiveActionConfirmDialog } from "@/components/Terminal/TerminalDestructiveActionConfirmDialog";
 import { PortalCloseConfirmDialog } from "@/components/Portal/PortalCloseConfirmDialog";
@@ -147,14 +146,6 @@ export function AppLayout({
   // paint (the new width arrives with the class already gone — no animation).
   const [isSidebarWidthHydrating, setIsSidebarWidthHydrating] = useState(true);
   const currentProject = useProjectStore((state) => state.currentProject);
-  const isSwitchingProject = useProjectStore((state) => state.isSwitching);
-  const switchingToProjectId = useProjectStore((state) => state.switchingToProjectId);
-  const switchingToProjectName = useProjectStore((state) =>
-    state.switchingToProjectId
-      ? state.projects.find((p) => p.id === state.switchingToProjectId)?.name
-      : undefined
-  );
-  const clearSwitching = useProjectStore((state) => state.clearSwitching);
   const layout = useLayoutState();
   const diagnosticsMounted = useKeepMounted(layout.diagnosticsOpen);
   const isThemeBrowserOpen = useOverlayOpen("theme-browser");
@@ -883,12 +874,6 @@ export function AppLayout({
         )}
       </div>
 
-      <ProjectSwitchOverlay
-        isSwitching={isSwitchingProject}
-        projectName={switchingToProjectName}
-        switchTargetId={switchingToProjectId}
-        onAutoDismiss={clearSwitching}
-      />
       <ChordIndicator />
 
       <AllClearOverlay />

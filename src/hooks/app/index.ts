@@ -22,7 +22,7 @@ export { useAgentWaitingNudge } from "./useAgentWaitingNudge";
 export { useForgeEnableRecommendation } from "./useForgeEnableRecommendation";
 export { useFocusOnActivateIntent } from "./useFocusOnActivateIntent";
 export { useBackgroundWindowResize } from "./useBackgroundWindowResize";
-export { useResetSwitchOverlayOnReveal } from "./useResetSwitchOverlayOnReveal";
+export { useClearSwitchBusyStateOnReveal } from "./useClearSwitchBusyStateOnReveal";
 export { usePluginDeepLink } from "./usePluginDeepLink";
 export type { PluginDeepLinkState } from "./usePluginDeepLink";
 export { useNotificationHistoryPruning } from "./useNotificationHistoryPruning";

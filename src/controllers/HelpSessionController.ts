@@ -843,7 +843,7 @@ export class HelpSessionController {
    * it can't reap the stall — and auto-launch is short-circuited while hidden,
    * so switching *back* never re-drives it. The loading skeleton then sticks
    * forever. We key off the same explicit `app:view-revealed` main-process
-   * signal `useResetSwitchOverlayOnReveal` uses (a bare DOM `visibilitychange`
+   * signal `useClearSwitchBusyStateOnReveal` uses (a bare DOM `visibilitychange`
    * is unreliable for a cached-view reveal).
    *
    * On reveal, silently reap a stuck loading-phase launch exactly as the
