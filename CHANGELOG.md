@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.21.0] - 2026-06-29
+
+A memory-reclamation release: projects can now free their memory on demand and idle background projects auto-close, backed by a round of memory-hygiene and lazy-loading work. Grok (xAI) joins the agent roster as the Gemini CLI agent is deprecated.
+
+### Features
+
+- Grok (xAI) agent support — launch Grok alongside Claude, Codex, and the rest of the roster
+- "Free memory" action in the project switcher releases a project's renderer and terminals without closing it (#10829)
+- Idle background projects with no terminals auto-close to reclaim memory (#10830)
+- Press a terminal's Cmd+1..9 hotkey again to maximize it, once more to restore the grid
+- MCP: agent.listToolbar discovery action surfaces pinned toolbar agents to automation consumers (#10838)
+
+### Bug Fixes
+
+- The idle-terminal "Close Them" action now actually kills the terminals it lists (#10831)
+- Empty-state grid no longer renders narrow on first load before snapping to the sidebar width (#10827)
+- Plugin consent prompts time out instead of hanging when a plugin abandons them (#10841)
+- Preserved agent-terminal snapshots are now bounded, fixing unbounded in-memory growth (#10839)
+
+### Performance
+
+- Lazy-load the xterm ImageAddon and Unicode11Addon so they load only when first needed (#10840)
+- Prune unbounded add-only maps and sets to curb steady memory growth (#10842)
+
+### Other Changes
+
+- The Gemini CLI agent is deprecated (kept working, no longer recommended) rather than removed (#8811)
+
 ## [0.20.0] - 2026-06-28
 
 The plugin system reaches its 1.0 contract, per-terminal hibernation is removed for good, and project switching becomes near-instant — the largest release since the project opened up, spanning 179 PRs. Most of the surface-level work is a deep terminal-rendering and project-switch reliability pass; underneath it, the plugin and MCP automation surfaces both grow substantially.
