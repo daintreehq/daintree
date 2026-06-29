@@ -56,6 +56,36 @@ describe("terminalSerialization guards", () => {
     expect(errSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("serializeTerminal stamps preservedSnapshotLastAccessedAt when serving a preserved snapshot", () => {
+    const info = makeTerminalInfo({
+      preservedSnapshot: "cached",
+      preservedSnapshotLastAccessedAt: 0,
+    });
+    const before = Date.now();
+    expect(serializeTerminal("t1", info)).toBe("cached");
+    expect(info.preservedSnapshotLastAccessedAt).toBeGreaterThanOrEqual(before);
+  });
+
+  it("serializeTerminalAsync stamps preservedSnapshotLastAccessedAt when serving a preserved snapshot", async () => {
+    const info = makeTerminalInfo({
+      preservedSnapshot: "cached",
+      preservedSnapshotLastAccessedAt: 0,
+    });
+    const before = Date.now();
+    await expect(serializeTerminalAsync("t1", info)).resolves.toBe("cached");
+    expect(info.preservedSnapshotLastAccessedAt).toBeGreaterThanOrEqual(before);
+  });
+
+  it("does not stamp preservedSnapshotLastAccessedAt on the non-preserved path", () => {
+    const info = makeTerminalInfo({
+      serializeAddon: makeAddon() as unknown as TerminalInfo["serializeAddon"],
+      preservedSnapshot: undefined,
+      preservedSnapshotLastAccessedAt: undefined,
+    });
+    expect(serializeTerminal("t1", info)).toBe("snapshot");
+    expect(info.preservedSnapshotLastAccessedAt).toBeUndefined();
+  });
+
   it("serializeTerminalAsync yields null without logging when disposal clears the addon mid-flight", async () => {
     const addon = makeAddon();
     // Large buffer forces the async (deferred) serialize path.

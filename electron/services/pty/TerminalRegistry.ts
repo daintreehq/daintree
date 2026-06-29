@@ -4,7 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { events } from "../events.js";
 import type { TerminalSnapshot } from "./types.js";
-import { TRASH_TTL_MS } from "./types.js";
+import {
+  TRASH_TTL_MS,
+  MAX_PRESERVED_TERMINAL_SNAPSHOTS,
+  PRESERVED_SNAPSHOT_RECENT_ACCESS_GUARD_MS,
+} from "./types.js";
 import type { TerminalProcess } from "./TerminalProcess.js";
 
 type ProjectIdCandidates = {
@@ -235,6 +239,61 @@ export class TerminalRegistry {
       roots.push({ terminalId: id, projectId: projectId ?? null, rootPid });
     }
     return roots;
+  }
+
+  /**
+   * Bound the number of in-memory preserved-snapshot terminals (issue #10839).
+   *
+   * Agent terminals that exit cleanly retain their full serialized scrollback
+   * (~1–4MB each) in memory and are otherwise removed only on explicit
+   * trash/kill or project close — within an open project they accumulate
+   * without bound. Walk preserved terminals oldest-first (by `preservedAt`) and
+   * evict until the count is back at `max`, but never evict `skipId` (the
+   * just-preserved terminal, kept as the newest entry) nor any snapshot served
+   * within the recent-access guard window (currently-viewed). When too many of
+   * the oldest entries are guarded to reach `max`, over-cap is tolerated rather
+   * than dropping a snapshot the user is actively inspecting.
+   *
+   * `now` is injectable for deterministic tests; callers use the default.
+   */
+  evictPreservedSnapshots(
+    max: number = MAX_PRESERVED_TERMINAL_SNAPSHOTS,
+    skipId?: string,
+    now: number = Date.now()
+  ): void {
+    const preserved: Array<{ id: string; preservedAt: number; lastAccessedAt: number }> = [];
+    for (const [id, terminal] of this.terminals.entries()) {
+      const info = terminal.getInfo();
+      if (info.preservedSnapshot === undefined) {
+        continue;
+      }
+      preserved.push({
+        id,
+        preservedAt: info.preservedAt ?? 0,
+        lastAccessedAt: info.preservedSnapshotLastAccessedAt ?? 0,
+      });
+    }
+
+    let excess = preserved.length - max;
+    if (excess <= 0) {
+      return;
+    }
+
+    // Oldest first — evict the oldest evictable entries until back at the cap.
+    preserved.sort((a, b) => a.preservedAt - b.preservedAt);
+    for (const entry of preserved) {
+      if (excess <= 0) {
+        break;
+      }
+      if (entry.id === skipId) {
+        continue;
+      }
+      if (now - entry.lastAccessedAt < PRESERVED_SNAPSHOT_RECENT_ACCESS_GUARD_MS) {
+        continue;
+      }
+      this.delete(entry.id);
+      excess--;
+    }
   }
 
   /**
