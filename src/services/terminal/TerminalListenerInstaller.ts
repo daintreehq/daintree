@@ -20,6 +20,76 @@ const OBSERVED_TITLE_DEBOUNCE_MS = 150;
 // when an agent briefly idles mid-task.
 const WAITING_TITLE_HYSTERESIS_MS = 250;
 
+// Fallback row height for the wheel normalizer when the terminal hasn't been
+// configured yet; lineHeight is 1.0 (xtermConfig.ts) so a row is ~fontSize tall.
+const DEFAULT_FONT_SIZE_PX = 14;
+
+// A pixel-mode wheel delta at least this large is treated as one discrete mouse
+// "notch" rather than continuous trackpad motion. Chromium reports a mouse
+// detent on macOS as a single pixel event of ~100-120px; trackpad/high-res
+// motion arrives as a stream of much smaller deltas.
+const WHEEL_NOTCH_PX = 40;
+
+// The synthetic wheel events the normalizer re-dispatches are tracked here so
+// its own capture-phase listener skips them instead of recursing. A WeakSet
+// (rather than `isTrusted`) keeps the behavior unit-testable — dispatched test
+// events are untrusted too — and lets the events be GC'd after handling.
+const amplifiedWheelEvents = new WeakSet<WheelEvent>();
+
+/**
+ * Convert a physical wheel event into a signed whole-line count for a TUI that
+ * captures the mouse. The goal is the "standard" feel — a notch scrolls a line
+ * or two — while never *dropping* a scroll, which is the actual complaint with
+ * xterm's own handling: its `MouseService._consumeWheelEvent` multiplies likely
+ * trackpad deltas by 0.3, so small movements fall below the one-line threshold,
+ * compute `lines === 0`, and send no report at all (scrolling feels dead).
+ *
+ * Here a discrete notch yields exactly one report (the app applies its own
+ * lines-per-wheel step), and fine/trackpad motion is accumulated at ~one line
+ * per row height via `carry` so every bit of movement eventually registers
+ * rather than being damped to nothing.
+ */
+export function wheelEventToLineCount(
+  ev: WheelEvent,
+  cellHeightCssPx: number,
+  rows: number,
+  carry: { partial: number }
+): number {
+  if (ev.deltaY === 0) return 0;
+  const sign = ev.deltaY > 0 ? 1 : -1;
+  const clamp = (n: number): number => Math.max(-rows, Math.min(rows, n));
+
+  if (ev.deltaMode === 1 /* DOM_DELTA_LINE */) {
+    // Already in lines (typically ±1 or ±3 per the OS wheel setting).
+    return clamp(Math.round(ev.deltaY));
+  }
+  if (ev.deltaMode === 2 /* DOM_DELTA_PAGE */) {
+    return sign * rows;
+  }
+  // Pixel mode.
+  if (Math.abs(ev.deltaY) >= WHEEL_NOTCH_PX) {
+    // Discrete notch reported in pixels — one report regardless of magnitude so
+    // a notch scrolls a line or two like a normal terminal. Drop any partial
+    // trackpad accumulation so a notch mixed into a swipe doesn't smear.
+    carry.partial = 0;
+    return sign;
+  }
+  // High-resolution / trackpad: accumulate ~one line per row height. The carried
+  // remainder means sub-line motion is never discarded — it adds up across
+  // events until it crosses a line, so slow scrolling still moves.
+  const delta = ev.deltaY / Math.max(1, cellHeightCssPx);
+  // Drop a stale opposite-direction remainder so a reversal registers right
+  // away instead of first having to cancel unreported forward motion — that
+  // would be a dead zone where a genuine reverse scroll does nothing.
+  if (carry.partial !== 0 && Math.sign(delta) !== Math.sign(carry.partial)) {
+    carry.partial = 0;
+  }
+  carry.partial += delta;
+  const whole = Math.trunc(carry.partial);
+  carry.partial -= whole;
+  return clamp(whole);
+}
+
 /**
  * Snap xterm DOM-renderer row heights to integer pixels that sum exactly to the
  * canvas height, eliminating HiDPI "zebra" banding (#10768).
@@ -191,6 +261,72 @@ export function installTerminalBoundListeners(
       return false;
     }
     return true;
+  });
+
+  // Reliable wheel forwarding for TUIs that capture the mouse and draw their own
+  // scroll region (e.g. the grok CLI, lazygit, btop). xterm dampens likely
+  // trackpad deltas (×0.3) before its one-line threshold, so small movements
+  // compute zero lines and send NO mouse-wheel report — whole scroll gestures
+  // get dropped and scrolling feels dead (see MouseService._consumeWheelEvent /
+  // _sendEvent in @xterm/xterm 6.1). We intercept the physical wheel in the
+  // capture phase, suppress xterm's handling, and re-dispatch one synthetic
+  // wheel event per line we computed — reusing xterm's own SGR/x10 encoding — so
+  // a notch scrolls a line or two and fine motion accumulates instead of being
+  // discarded. Gated on the alt buffer + active mouse tracking so plain shells
+  // and the wheel→arrow case above are untouched; modified wheels (ctrl-zoom
+  // etc.) pass through unchanged.
+  const wheelCarry = { partial: 0 };
+  const onWheelNormalize = (ev: WheelEvent) => {
+    if (amplifiedWheelEvents.has(ev)) return;
+    // Only take over for mouse modes that actually report wheel events: VT200
+    // (?1000), DRAG (?1002), ANY (?1003). X10 (?9, click-only) explicitly drops
+    // wheel reports in xterm's protocol — taking it over would route our
+    // synthetic wheels through xterm's passive alt-buffer path and emit ARROW
+    // keys to an app that never asked for the wheel. Leave x10 and none alone.
+    const mode = terminal.modes.mouseTrackingMode;
+    const appReportsWheel = mode === "vt200" || mode === "drag" || mode === "any";
+    if (
+      !managed.isAltBuffer ||
+      !appReportsWheel ||
+      ev.ctrlKey ||
+      ev.altKey ||
+      ev.metaKey ||
+      ev.shiftKey
+    ) {
+      return;
+    }
+    const target = terminal.element;
+    if (!target) return;
+
+    // Take over: stop xterm's (lossy) handling, replace with one report per line.
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+
+    const fontSize =
+      typeof terminal.options.fontSize === "number"
+        ? terminal.options.fontSize
+        : DEFAULT_FONT_SIZE_PX;
+    const lines = wheelEventToLineCount(ev, fontSize, terminal.rows, wheelCarry);
+    if (lines === 0) return;
+
+    const step = lines > 0 ? 1 : -1;
+    const count = Math.abs(lines); // already clamped to one screenful by the helper
+    for (let i = 0; i < count; i++) {
+      const synthetic = new WheelEvent("wheel", {
+        deltaY: step,
+        deltaMode: 1 /* DOM_DELTA_LINE — one report each, no partial-scroll carry */,
+        clientX: ev.clientX,
+        clientY: ev.clientY,
+        bubbles: true,
+        cancelable: true,
+      });
+      amplifiedWheelEvents.add(synthetic);
+      target.dispatchEvent(synthetic);
+    }
+  };
+  hostElement.addEventListener("wheel", onWheelNormalize, { capture: true, passive: false });
+  managed.listeners.push(() => {
+    hostElement.removeEventListener("wheel", onWheelNormalize, { capture: true });
   });
 
   const oscDisposable = terminal.parser.registerOscHandler(11, () => {

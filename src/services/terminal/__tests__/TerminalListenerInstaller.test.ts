@@ -4,6 +4,7 @@ import { TerminalRefreshTier } from "../../../../shared/types/panel";
 import type { ManagedTerminal } from "../types";
 import {
   installTerminalBoundListeners,
+  wheelEventToLineCount,
   type TerminalListenerInstallDeps,
 } from "../TerminalListenerInstaller";
 
@@ -616,6 +617,139 @@ describe("installTerminalBoundListeners", () => {
     expect(captured.wheelHandler!({} as WheelEvent)).toBe(true);
   });
 
+  describe("wheel amplification for mouse-tracking TUIs", () => {
+    // Wire a real host > xterm element pair so the capture-phase amplifier can
+    // intercept a physical wheel and re-dispatch synthetic reports onto the
+    // xterm element, exactly as it does in production.
+    function setupAmplifier(opts: {
+      mouseTrackingMode: string;
+      isAltBuffer: boolean;
+      fontSize?: number;
+    }) {
+      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+      const terminal = makeMockTerminal(captured);
+      const managed = makeMockManaged({ runtimeAgentId: "grok" });
+      const deps = makeDeps();
+
+      const xtermEl = document.createElement("div");
+      managed.hostElement.appendChild(xtermEl);
+      (terminal as { element: HTMLElement }).element = xtermEl;
+      (terminal.options as Record<string, number>).fontSize = opts.fontSize ?? 16;
+      document.body.appendChild(managed.hostElement);
+
+      managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
+      installTerminalBoundListeners(
+        terminal as unknown as Parameters<typeof installTerminalBoundListeners>[0],
+        managed,
+        "t1",
+        deps
+      );
+
+      managed.isAltBuffer = opts.isAltBuffer;
+      (terminal.modes as { mouseTrackingMode: string }).mouseTrackingMode = opts.mouseTrackingMode;
+
+      // Watch what reaches the xterm element. Synthetic reports arrive in line
+      // mode (deltaMode 1); a physical pixel-mode event (deltaMode 0) reaching
+      // here would mean the capture listener failed to suppress the original.
+      let reports = 0;
+      let leakedOriginal = false;
+      xtermEl.addEventListener("wheel", (e) => {
+        reports++;
+        if ((e as WheelEvent).deltaMode === 0) leakedOriginal = true;
+      });
+
+      return {
+        managed,
+        xtermEl,
+        dispatch: (init: WheelEventInit, target: HTMLElement = managed.hostElement) => {
+          const ev = new WheelEvent("wheel", { bubbles: true, cancelable: true, ...init });
+          const notCancelled = target.dispatchEvent(ev);
+          return { defaultPrevented: !notCancelled };
+        },
+        runCleanups: () => {
+          for (const cleanup of managed.listeners) cleanup();
+        },
+        getReports: () => reports,
+        getLeakedOriginal: () => leakedOriginal,
+      };
+    }
+
+    afterEach(() => {
+      document.querySelectorAll("body > div").forEach((el) => el.remove());
+    });
+
+    it("forwards exactly one report per discrete notch (does not over-amplify)", () => {
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      const { defaultPrevented } = h.dispatch({ deltaY: 120, deltaMode: 0 });
+      expect(h.getReports()).toBe(1);
+      expect(defaultPrevented).toBe(true);
+    });
+
+    it("accumulates fine/trackpad motion instead of dropping it", () => {
+      // 8px against a 16px row = half a line per event; xterm would damp this to
+      // zero and send nothing. One event registers nothing yet, but the carried
+      // remainder makes the second cross a line boundary — every scroll counts.
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      h.dispatch({ deltaY: 8, deltaMode: 0 });
+      expect(h.getReports()).toBe(0);
+      h.dispatch({ deltaY: 8, deltaMode: 0 });
+      expect(h.getReports()).toBe(1);
+    });
+
+    it("caps a page-mode fling at one screenful of lines", () => {
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      h.dispatch({ deltaY: 1, deltaMode: 2 });
+      expect(h.getReports()).toBe(24); // terminal.rows
+    });
+
+    it("does not intervene when the app has no mouse tracking", () => {
+      const h = setupAmplifier({ mouseTrackingMode: "none", isAltBuffer: true });
+      const { defaultPrevented } = h.dispatch({ deltaY: 120, deltaMode: 0 });
+      expect(h.getReports()).toBe(0);
+      expect(defaultPrevented).toBe(false);
+    });
+
+    it("does not intervene in the normal buffer", () => {
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: false });
+      h.dispatch({ deltaY: 120, deltaMode: 0 });
+      expect(h.getReports()).toBe(0);
+    });
+
+    it("passes modified wheels (ctrl-zoom etc.) through unchanged", () => {
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      const { defaultPrevented } = h.dispatch({ deltaY: 120, deltaMode: 0, ctrlKey: true });
+      expect(h.getReports()).toBe(0);
+      expect(defaultPrevented).toBe(false);
+    });
+
+    it("leaves x10 (click-only) mode alone so synthetic wheels can't become arrow keys", () => {
+      // x10 reports mousedown only; xterm drops wheel reports for it, so taking
+      // over would route synthetic wheels through the arrow-key fallback.
+      const h = setupAmplifier({ mouseTrackingMode: "x10", isAltBuffer: true });
+      const { defaultPrevented } = h.dispatch({ deltaY: 120, deltaMode: 0 });
+      expect(h.getReports()).toBe(0);
+      expect(defaultPrevented).toBe(false);
+    });
+
+    it("suppresses the physical wheel and forwards only synthetic reports (no leak/recursion)", () => {
+      // Dispatch the physical event from the xterm element itself: the capture
+      // listener on the host must stop it before it reaches xterm's own
+      // bubble-phase listener, while the tagged synthetic events still arrive.
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      h.dispatch({ deltaY: 120, deltaMode: 0 }, h.xtermEl);
+      expect(h.getReports()).toBe(1); // one synthetic line-mode report
+      expect(h.getLeakedOriginal()).toBe(false); // original pixel-mode event was stopped
+    });
+
+    it("stops intercepting once the listeners are cleaned up", () => {
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      h.runCleanups();
+      const { defaultPrevented } = h.dispatch({ deltaY: 120, deltaMode: 0 });
+      expect(h.getReports()).toBe(0);
+      expect(defaultPrevented).toBe(false);
+    });
+  });
+
   it("registers the same listener count on every call (idempotent shape)", () => {
     const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
     const terminal = makeMockTerminal(captured);
@@ -816,5 +950,61 @@ describe("installTerminalBoundListeners", () => {
       const rows = element.querySelector(".xterm-rows")!.children;
       expect((rows[0] as HTMLElement).style.height).toBe("auto");
     });
+  });
+});
+
+describe("wheelEventToLineCount", () => {
+  const ev = (deltaY: number, deltaMode: number): WheelEvent =>
+    ({ deltaY, deltaMode }) as unknown as WheelEvent;
+
+  it("forwards DOM_DELTA_LINE deltas as whole lines (the OS wheel step)", () => {
+    expect(wheelEventToLineCount(ev(3, 1), 16, 24, { partial: 0 })).toBe(3);
+    expect(wheelEventToLineCount(ev(1, 1), 16, 24, { partial: 0 })).toBe(1);
+  });
+
+  it("scrolls a full page for DOM_DELTA_PAGE deltas", () => {
+    expect(wheelEventToLineCount(ev(1, 2), 16, 24, { partial: 0 })).toBe(24);
+  });
+
+  it("treats a large pixel delta as a single discrete notch", () => {
+    // A ~120px detent is one notch regardless of magnitude — a line or two in
+    // the app, not a proportional fling.
+    expect(wheelEventToLineCount(ev(120, 0), 16, 24, { partial: 0 })).toBe(1);
+  });
+
+  it("preserves scroll direction for negative deltas", () => {
+    expect(wheelEventToLineCount(ev(-120, 0), 16, 24, { partial: 0 })).toBe(-1);
+  });
+
+  it("returns zero for a zero delta", () => {
+    expect(wheelEventToLineCount(ev(0, 0), 16, 24, { partial: 0 })).toBe(0);
+  });
+
+  it("caps a single event at one screenful of lines", () => {
+    expect(wheelEventToLineCount(ev(1, 2), 16, 10, { partial: 0 })).toBe(10);
+  });
+
+  it("accumulates sub-line (trackpad) motion across events rather than dropping it", () => {
+    // 8px against a 16px row = 0.5 line per event. The first event yields no
+    // whole line; the carried remainder makes the second cross a line boundary,
+    // so slow scrolling still moves instead of being discarded.
+    const carry = { partial: 0 };
+    expect(wheelEventToLineCount(ev(8, 0), 16, 24, carry)).toBe(0);
+    expect(wheelEventToLineCount(ev(8, 0), 16, 24, carry)).toBe(1);
+  });
+
+  it("resets the trackpad accumulator when a notch interrupts a swipe", () => {
+    const carry = { partial: 0.5 };
+    expect(wheelEventToLineCount(ev(120, 0), 16, 24, carry)).toBe(1);
+    expect(carry.partial).toBe(0);
+  });
+
+  it("registers a reversal immediately instead of cancelling stale forward motion", () => {
+    // Forward half a line (no whole line yet), then reverse a full line. Without
+    // dropping the stale +0.5 remainder the reversal would net -0.5 → 0 (a dead
+    // zone); the sign-change reset makes the reverse line register as -1.
+    const carry = { partial: 0 };
+    expect(wheelEventToLineCount(ev(8, 0), 16, 24, carry)).toBe(0);
+    expect(wheelEventToLineCount(ev(-16, 0), 16, 24, carry)).toBe(-1);
   });
 });
