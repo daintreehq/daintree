@@ -3,7 +3,6 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import type { ImageAddon } from "@xterm/addon-image";
 import { SearchAddon } from "@xterm/addon-search";
-import type { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { FileLinksAddon, HoverCallback } from "./FileLinksAddon";
 import { ImageLinksAddon, OnActivateFigure } from "./ImageLinksAddon";
@@ -17,8 +16,11 @@ const IMAGE_ADDON_OPTIONS = { pixelLimit: 2_000_000, storageLimit: 8 };
 // TerminalWebGLManager.ts: a module-level class cache plus a single in-flight
 // promise guard so concurrent callers share one import, and the promise is nulled
 // on failure so a later call can retry.
-type ImageAddonConstructor = new (options?: typeof IMAGE_ADDON_OPTIONS) => ImageAddon;
-type Unicode11AddonConstructor = new () => Unicode11Addon;
+// Constructor types are derived from the modules themselves (`typeof import(...)`
+// is a type-only construct — erased at compile time, no eager runtime import), so
+// the resolved class assigns to the cache without a type assertion.
+type ImageAddonConstructor = (typeof import("@xterm/addon-image"))["ImageAddon"];
+type Unicode11AddonConstructor = (typeof import("@xterm/addon-unicode11"))["Unicode11Addon"];
 
 let ImageAddonClass: ImageAddonConstructor | null = null;
 let imageAddonLoadPromise: Promise<ImageAddonConstructor> | null = null;
@@ -28,7 +30,7 @@ function loadImageAddon(): Promise<ImageAddonConstructor> {
   if (imageAddonLoadPromise) return imageAddonLoadPromise;
   imageAddonLoadPromise = import("@xterm/addon-image").then(
     (mod) => {
-      ImageAddonClass = mod.ImageAddon as unknown as ImageAddonConstructor;
+      ImageAddonClass = mod.ImageAddon;
       return ImageAddonClass;
     },
     (err) => {
@@ -47,7 +49,7 @@ function loadUnicode11Addon(): Promise<Unicode11AddonConstructor> {
   if (unicode11AddonLoadPromise) return unicode11AddonLoadPromise;
   unicode11AddonLoadPromise = import("@xterm/addon-unicode11").then(
     (mod) => {
-      Unicode11AddonClass = mod.Unicode11Addon as unknown as Unicode11AddonConstructor;
+      Unicode11AddonClass = mod.Unicode11Addon;
       return Unicode11AddonClass;
     },
     (err) => {
