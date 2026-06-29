@@ -22,14 +22,43 @@ const agentRegistryMock = vi.hoisted(() => ({
     claude: { name: "Claude" },
     codex: { name: "Codex" },
   },
+  getAgentDisplayTitle: vi.fn((id: string) => `Title:${id}`),
+}));
+
+const clientsMock = vi.hoisted(() => ({
+  agentSettingsClient: {
+    get: vi.fn(),
+  },
+  cliAvailabilityClient: {
+    get: vi.fn(),
+  },
+}));
+
+const agentSettingsStoreMock = vi.hoisted(() => ({
+  useAgentSettingsStore: { getState: vi.fn() },
+}));
+
+const cliAvailabilityStoreMock = vi.hoisted(() => ({
+  useCliAvailabilityStore: { getState: vi.fn() },
 }));
 
 vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
 vi.mock("@/store/createWorktreeStore", () => currentViewStoreMock);
 vi.mock("@/store/worktreeStore", () => worktreeSelectionMock);
+vi.mock("@/store/agentSettingsStore", () => agentSettingsStoreMock);
+vi.mock("@/store/cliAvailabilityStore", () => cliAvailabilityStoreMock);
 vi.mock("@/config/agents", () => agentRegistryMock);
+vi.mock("@/clients", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/clients")>();
+  return {
+    ...actual,
+    agentSettingsClient: clientsMock.agentSettingsClient,
+    cliAvailabilityClient: clientsMock.cliAvailabilityClient,
+  };
+});
 
 import { registerAgentActions } from "../agentActions";
+import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 
 function makeCallbacks() {
   return {
@@ -714,5 +743,180 @@ describe("agent.launch dispatch integration", () => {
       "claude",
       expect.objectContaining({ location: "overlay" })
     );
+  });
+});
+
+describe("agent.listToolbar (#10838)", () => {
+  type ToolbarRow = {
+    id: string;
+    displayName: string;
+    pinned?: boolean;
+    installed: boolean;
+    visible: boolean;
+  };
+
+  // Drive the normalized renderer stores the toolbar itself reads from, with
+  // `hasRealData: true` so the action takes the store path (not the client
+  // fallback) — the steady-state case.
+  function setStores(
+    settings: { agents?: Record<string, unknown> } | null,
+    availability: Record<string, string>,
+    hasRealData = true
+  ): void {
+    agentSettingsStoreMock.useAgentSettingsStore.getState.mockReturnValue({ settings });
+    cliAvailabilityStoreMock.useCliAvailabilityStore.getState.mockReturnValue({
+      availability,
+      hasRealData,
+    });
+  }
+
+  async function listToolbar(
+    settings: { agents?: Record<string, unknown> },
+    availability: Record<string, string>
+  ): Promise<ToolbarRow[]> {
+    setStores(settings, availability);
+    const actions = setupActions(makeCallbacks());
+    const result = (await callAction(actions, "agent.listToolbar")) as { agents: ToolbarRow[] };
+    return result.agents;
+  }
+
+  function rowFor(rows: ToolbarRow[], id: string): ToolbarRow {
+    const row = rows.find((r) => r.id === id);
+    if (!row) throw new Error(`no row for ${id}`);
+    return row;
+  }
+
+  it("returns one row per launchable agent, in registry order", async () => {
+    const rows = await listToolbar({ agents: {} }, {});
+    expect(rows.map((r) => r.id)).toEqual([...LAUNCHABLE_AGENT_IDS]);
+    // assistant-only agents are never launchable and must not appear
+    expect(rows.some((r) => r.id === "daintree-assistant")).toBe(false);
+  });
+
+  it("explicit pin (pinned:true) wins over a missing binary — visible:true, installed:false", async () => {
+    const rows = await listToolbar({ agents: { claude: { pinned: true } } }, { claude: "missing" });
+    const claude = rowFor(rows, "claude");
+    expect(claude.pinned).toBe(true);
+    expect(claude.installed).toBe(false);
+    expect(claude.visible).toBe(true);
+  });
+
+  it("explicit unpin (pinned:false) wins over an installed binary — visible:false, installed:true", async () => {
+    const rows = await listToolbar({ agents: { codex: { pinned: false } } }, { codex: "ready" });
+    const codex = rowFor(rows, "codex");
+    expect(codex.pinned).toBe(false);
+    expect(codex.installed).toBe(true);
+    expect(codex.visible).toBe(false);
+  });
+
+  it("omits pinned and follows live availability when no setting is present", async () => {
+    const rows = await listToolbar({ agents: {} }, { gemini: "ready", aider: "missing" });
+    const gemini = rowFor(rows, "gemini");
+    expect(gemini).not.toHaveProperty("pinned");
+    expect(gemini.installed).toBe(true);
+    expect(gemini.visible).toBe(true);
+
+    const aider = rowFor(rows, "aider");
+    expect(aider).not.toHaveProperty("pinned");
+    expect(aider.installed).toBe(false);
+    expect(aider.visible).toBe(false);
+  });
+
+  it.each([
+    ["ready", true, true],
+    ["installed", true, true],
+    ["blocked", true, true],
+    ["unauthenticated", true, true],
+    ["missing", false, false],
+  ] as const)(
+    "with no pin, availability %s -> installed:%s visible:%s",
+    async (state, installed, visible) => {
+      const rows = await listToolbar({ agents: {} }, { gemini: state });
+      const gemini = rowFor(rows, "gemini");
+      expect(gemini.installed).toBe(installed);
+      expect(gemini.visible).toBe(visible);
+    }
+  );
+
+  it("treats undefined availability (no entry) as not installed / not visible", async () => {
+    const rows = await listToolbar({ agents: {} }, {});
+    const gemini = rowFor(rows, "gemini");
+    expect(gemini.installed).toBe(false);
+    expect(gemini.visible).toBe(false);
+  });
+
+  it("uses getAgentDisplayTitle for displayName", async () => {
+    const rows = await listToolbar({ agents: {} }, {});
+    expect(rowFor(rows, "claude").displayName).toBe("Title:claude");
+  });
+
+  it("never leaks sensitive agent-settings fields — only the toolbar shape is returned", async () => {
+    const rows = await listToolbar(
+      {
+        agents: {
+          claude: {
+            pinned: true,
+            customFlags: "--dangerously-skip-permissions",
+            env: { SECRET: "shh" },
+            presets: [{ id: "p1" }],
+            dangerousEnabled: true,
+          },
+        },
+      },
+      { claude: "ready" }
+    );
+    expect(Object.keys(rowFor(rows, "claude")).sort()).toEqual(
+      ["displayName", "id", "installed", "pinned", "visible"].sort()
+    );
+  });
+
+  it("treats a non-boolean pinned (corrupted config) as absent — never forwarded", async () => {
+    const rows = await listToolbar(
+      { agents: { claude: { pinned: null as unknown as boolean } } },
+      { claude: "ready" }
+    );
+    const claude = rowFor(rows, "claude");
+    expect(claude).not.toHaveProperty("pinned");
+    // Falls through to availability since the bad pin is ignored.
+    expect(claude.visible).toBe(true);
+  });
+
+  it("reads from the renderer stores without probing the IPC clients in steady state", async () => {
+    await listToolbar({ agents: {} }, {});
+    expect(agentSettingsStoreMock.useAgentSettingsStore.getState).toHaveBeenCalledTimes(1);
+    expect(cliAvailabilityStoreMock.useCliAvailabilityStore.getState).toHaveBeenCalledTimes(1);
+    expect(clientsMock.agentSettingsClient.get).not.toHaveBeenCalled();
+    expect(clientsMock.cliAvailabilityClient.get).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the cache-aware clients when the stores have not hydrated", async () => {
+    setStores(null, {}, false);
+    clientsMock.agentSettingsClient.get.mockResolvedValue({ agents: { codex: { pinned: true } } });
+    clientsMock.cliAvailabilityClient.get.mockResolvedValue({ codex: "missing" });
+    const actions = setupActions(makeCallbacks());
+    const result = (await callAction(actions, "agent.listToolbar")) as { agents: ToolbarRow[] };
+    expect(clientsMock.agentSettingsClient.get).toHaveBeenCalledTimes(1);
+    expect(clientsMock.cliAvailabilityClient.get).toHaveBeenCalledTimes(1);
+    const codex = rowFor(result.agents, "codex");
+    expect(codex.pinned).toBe(true);
+    expect(codex.visible).toBe(true);
+  });
+
+  it("rejects without a partial result when the settings read fails", async () => {
+    setStores(null, {}, true);
+    clientsMock.agentSettingsClient.get.mockRejectedValue(new Error("IPC error"));
+    const actions = setupActions(makeCallbacks());
+    await expect(callAction(actions, "agent.listToolbar")).rejects.toThrow("IPC error");
+  });
+
+  it("registers with the expected read-only discovery metadata", () => {
+    const actions = setupActions(makeCallbacks());
+    const def = actions.get("agent.listToolbar")?.() as AnyActionDefinition;
+    expect(def).toBeDefined();
+    expect(def.kind).toBe("query");
+    expect(def.danger).toBe("safe");
+    expect(def.scope).toBe("renderer");
+    expect(def.mcpVisibility).toBe("discoverable");
+    expect(def.argsSchema).toBeUndefined();
   });
 });

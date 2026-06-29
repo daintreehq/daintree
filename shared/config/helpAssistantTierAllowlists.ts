@@ -37,6 +37,7 @@ export const WORKBENCH_TIER_TOOLS = [
   "portal.listTabs",
 
   "agent.getState",
+  "agent.listToolbar",
 
   "agentSettings.get",
   "keybinding.getOverrides",

@@ -1,15 +1,16 @@
 /**
  * @vitest-environment jsdom
  *
- * End-to-end guard for the stuck-overlay regression (#10736): wires the REAL
- * projectStore, the REAL useResetSwitchOverlayOnReveal hook, and the REAL
- * ProjectSwitchOverlay together. The per-unit tests mock the seams between
- * them, so they'd still pass if the units stopped composing — this proves a
- * cached view's stale switch flag actually clears (and the overlay disappears)
- * when the main process fires `app:view-revealed`.
+ * Integration guard for the stuck-busy-state regression (#10736): wires the REAL
+ * projectStore and the REAL useClearSwitchBusyStateOnReveal hook together. The
+ * hook's unit test mocks the store seam, so it'd still pass if the units stopped
+ * composing — this proves a cached view's stale switch flags (`isSwitching`,
+ * `switchingToProjectId`, `isLoading`) actually clear when the main process
+ * fires `app:view-revealed`, so the reactivated view's ProjectSwitcher never
+ * resurfaces a stuck busy spinner.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, act, cleanup } from "@testing-library/react";
+import { renderHook, act, cleanup } from "@testing-library/react";
 
 // projectStore pulls these in at module load; stub them so the real store
 // imports cleanly (mirrors projectStore.switching.test.ts).
@@ -35,8 +36,7 @@ vi.mock("../../../store/persistence/panelPersistence", () => ({
 }));
 
 import { useProjectStore } from "@/store/projectStore";
-import { useResetSwitchOverlayOnReveal } from "@/hooks/app/useResetSwitchOverlayOnReveal";
-import { ProjectSwitchOverlay, SWITCH_OVERLAY_ENTER_DELAY_MS } from "../ProjectSwitchOverlay";
+import { useClearSwitchBusyStateOnReveal } from "../useClearSwitchBusyStateOnReveal";
 
 let revealCallback: (() => void) | null = null;
 const onViewRevealedMock = vi.fn((cb: () => void) => {
@@ -44,33 +44,8 @@ const onViewRevealedMock = vi.fn((cb: () => void) => {
   return () => {};
 });
 
-function Harness() {
-  useResetSwitchOverlayOnReveal();
-  const isSwitching = useProjectStore((s) => s.isSwitching);
-  const switchTargetId = useProjectStore((s) => s.switchingToProjectId);
-  const clearSwitching = useProjectStore((s) => s.clearSwitching);
-  return (
-    <ProjectSwitchOverlay
-      isSwitching={isSwitching}
-      switchTargetId={switchTargetId}
-      onAutoDismiss={clearSwitching}
-    />
-  );
-}
-
-function overlay(): HTMLElement | null {
-  return document.querySelector<HTMLElement>('[role="status"]');
-}
-
-function advance(ms: number) {
-  act(() => {
-    vi.advanceTimersByTime(ms);
-  });
-}
-
-describe("ProjectSwitchOverlay reveal integration (#10736)", () => {
+describe("useClearSwitchBusyStateOnReveal reveal integration (#10736)", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
     revealCallback = null;
     onViewRevealedMock.mockClear();
     (window as unknown as { electron: unknown }).electron = {
@@ -81,15 +56,13 @@ describe("ProjectSwitchOverlay reveal integration (#10736)", () => {
 
   afterEach(() => {
     cleanup();
-    vi.runOnlyPendingTimers();
-    vi.useRealTimers();
   });
 
-  it("clears the stuck switch state and tears down the overlay when the view is revealed", () => {
-    render(<Harness />);
+  it("clears the stuck switch flags when the cached view is revealed", () => {
+    renderHook(() => useClearSwitchBusyStateOnReveal());
 
     // Reproduce the parked-renderer state: a switch was started and the flags
-    // were never cleared (happy path leaves them set).
+    // were never cleared (the happy path leaves them set).
     act(() => {
       useProjectStore.setState({
         isSwitching: true,
@@ -97,8 +70,6 @@ describe("ProjectSwitchOverlay reveal integration (#10736)", () => {
         isLoading: true,
       });
     });
-    advance(SWITCH_OVERLAY_ENTER_DELAY_MS + 50);
-    expect(overlay()).not.toBeNull();
 
     // Main reveals this cached view as the foreground again.
     act(() => {
@@ -108,6 +79,26 @@ describe("ProjectSwitchOverlay reveal integration (#10736)", () => {
     expect(useProjectStore.getState().isSwitching).toBe(false);
     expect(useProjectStore.getState().switchingToProjectId).toBeNull();
     expect(useProjectStore.getState().isLoading).toBe(false);
-    expect(overlay()).toBeNull();
+  });
+
+  it("a reveal with no switch in flight does not clobber an unrelated isLoading", () => {
+    renderHook(() => useClearSwitchBusyStateOnReveal());
+
+    // A non-switch load is in flight (load/add/remove all share `isLoading`),
+    // with no switch flagged.
+    act(() => {
+      useProjectStore.setState({
+        isSwitching: false,
+        switchingToProjectId: null,
+        isLoading: true,
+      });
+    });
+
+    act(() => {
+      revealCallback?.();
+    });
+
+    // clearSwitching's guard leaves the unrelated load untouched.
+    expect(useProjectStore.getState().isLoading).toBe(true);
   });
 });

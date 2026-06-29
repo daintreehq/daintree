@@ -687,6 +687,102 @@ describe("WorkspaceHostEventRouter", () => {
       expect(broadcastToRenderer).not.toHaveBeenCalled();
       expect(events.emit).toHaveBeenCalledWith("sys:worktree:update", event.worktree);
     });
+
+    it("prunes the dedup key on worktree-removed so a re-teardown re-fires (#10842)", () => {
+      const entry = makeEntry();
+      const failure = (worktreeId: string) =>
+        makeWorktreeUpdateEvent({
+          id: worktreeId,
+          worktreeId,
+          lifecycleStatus: lifecycleStatus("resource-teardown", "failed", 1000),
+        });
+
+      // First failure for wt-1 records the dedup key and toasts once.
+      router.routeHostEvent(entry, failure("wt-1"));
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+
+      // Removing the worktree prunes its `${worktreeId}:${startedAt}` keys.
+      router.routeHostEvent(entry, {
+        type: "worktree-removed",
+        worktreeId: "wt-1",
+        epoch: "550e8400-e29b-41d4-a716-446655440000",
+        seq: 2,
+      });
+
+      // A re-created worktree reusing the id with the same startedAt must toast
+      // again — the stale key is gone.
+      router.routeHostEvent(entry, failure("wt-1"));
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(2);
+    });
+
+    it("prunes every dedup key for the removed worktree, not just the first (#10842)", () => {
+      const entry = makeEntry();
+      // Two distinct teardown attempts for wt-1 produce two dedup keys
+      // (`wt-1:1000`, `wt-1:2000`).
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({
+          lifecycleStatus: lifecycleStatus("resource-teardown", "failed", 1000),
+        })
+      );
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({
+          lifecycleStatus: lifecycleStatus("resource-teardown", "failed", 2000),
+        })
+      );
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(2);
+
+      router.routeHostEvent(entry, {
+        type: "worktree-removed",
+        worktreeId: "wt-1",
+        epoch: "550e8400-e29b-41d4-a716-446655440000",
+        seq: 3,
+      });
+
+      // Both keys must be gone — a first-match-only prune would leave wt-1:2000.
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({
+          lifecycleStatus: lifecycleStatus("resource-teardown", "failed", 1000),
+        })
+      );
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({
+          lifecycleStatus: lifecycleStatus("resource-teardown", "failed", 2000),
+        })
+      );
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(4);
+    });
+
+    it("only prunes dedup keys for the removed worktree (#10842)", () => {
+      const entry = makeEntry();
+      const failure = (worktreeId: string) =>
+        makeWorktreeUpdateEvent({
+          id: worktreeId,
+          worktreeId,
+          lifecycleStatus: lifecycleStatus("resource-teardown", "failed", 1000),
+        });
+
+      router.routeHostEvent(entry, failure("wt-1"));
+      router.routeHostEvent(entry, failure("wt-2"));
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(2);
+
+      // Remove wt-1 only — wt-2's dedup key must survive.
+      router.routeHostEvent(entry, {
+        type: "worktree-removed",
+        worktreeId: "wt-1",
+        epoch: "550e8400-e29b-41d4-a716-446655440000",
+        seq: 3,
+      });
+
+      // wt-2 is still deduped (no new toast); wt-1 re-fires (key pruned).
+      router.routeHostEvent(entry, failure("wt-2"));
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(2);
+      router.routeHostEvent(entry, failure("wt-1"));
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(3);
+    });
   });
 
   describe("linked is the source of truth on re-emit (#8452)", () => {

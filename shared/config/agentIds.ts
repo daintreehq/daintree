@@ -9,6 +9,7 @@ export const BUILT_IN_AGENT_IDS = [
   "gemini",
   "antigravity",
   "codex",
+  "grok",
   "cursor",
   "copilot",
   "goose",

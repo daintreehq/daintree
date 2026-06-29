@@ -62,8 +62,8 @@ vi.mock("@/store/projectSettingsStore", () => ({
 
 const { terminalInstanceService } = await import("../TerminalInstanceService");
 
-function createManagedTerminal(id: string) {
-  return terminalInstanceService.getOrCreate(id, undefined, {
+async function createManagedTerminal(id: string) {
+  return await terminalInstanceService.getOrCreate(id, undefined, {
     rows: 24,
     cols: 80,
     allowProposedApi: true,
@@ -80,16 +80,16 @@ describe("captureBufferText", () => {
     expect(terminalInstanceService.captureBufferText("nonexistent")).toBe("");
   });
 
-  it("returns empty string for empty buffer", () => {
-    createManagedTerminal("test-1");
+  it("returns empty string for empty buffer", async () => {
+    await createManagedTerminal("test-1");
     // Fresh terminal has no content written
     const result = terminalInstanceService.captureBufferText("test-1");
     // Buffer may have empty lines from initialization, but should be blank
     expect(result.trim()).toBe("");
   });
 
-  it("captures written text from the buffer", () => {
-    const managed = createManagedTerminal("test-2");
+  it("captures written text from the buffer", async () => {
+    const managed = await createManagedTerminal("test-2");
     // Write some plain text to the terminal
     managed.terminal.write("Hello World\r\n");
     managed.terminal.write("Second line\r\n");
@@ -105,8 +105,8 @@ describe("captureBufferText", () => {
     });
   });
 
-  it("strips ANSI escape codes from captured text", () => {
-    const managed = createManagedTerminal("test-3");
+  it("strips ANSI escape codes from captured text", async () => {
+    const managed = await createManagedTerminal("test-3");
     // Write text with ANSI color codes
     managed.terminal.write("\x1b[31mRed text\x1b[0m\r\n");
     managed.terminal.write("\x1b[1;32mBold green\x1b[0m\r\n");
@@ -124,8 +124,8 @@ describe("captureBufferText", () => {
     });
   });
 
-  it("truncates to maxChars keeping the tail", () => {
-    const managed = createManagedTerminal("test-4");
+  it("truncates to maxChars keeping the tail", async () => {
+    const managed = await createManagedTerminal("test-4");
     // Write enough text to exceed a small maxChars limit
     for (let i = 0; i < 20; i++) {
       managed.terminal.write(`Line number ${i.toString().padStart(3, "0")}\r\n`);
@@ -142,8 +142,8 @@ describe("captureBufferText", () => {
     });
   });
 
-  it("preserves head lines when the whole buffer fits within maxChars", () => {
-    const managed = createManagedTerminal("test-head");
+  it("preserves head lines when the whole buffer fits within maxChars", async () => {
+    const managed = await createManagedTerminal("test-head");
     managed.terminal.write("FIRST line marker\r\n");
     managed.terminal.write("middle line\r\n");
     managed.terminal.write("LAST line marker\r\n");
@@ -163,8 +163,8 @@ describe("captureBufferText", () => {
     });
   });
 
-  it("fills maxChars from the tail when visible content exceeds it", () => {
-    const managed = createManagedTerminal("test-fill");
+  it("fills maxChars from the tail when visible content exceeds it", async () => {
+    const managed = await createManagedTerminal("test-fill");
     // ~50 lines of plain text — well over a small maxChars budget.
     for (let i = 0; i < 50; i++) {
       managed.terminal.write(`row ${i.toString().padStart(3, "0")} payload\r\n`);

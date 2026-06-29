@@ -8,32 +8,28 @@ export const config: AgentConfig = {
   color: "#4285F4",
   iconId: "gemini",
   supportsContextInjection: true,
-  // Gemini help sessions read MCP from `<sessionPath>/.gemini/settings.json`
-  // (written at provision time with the daintree entry using `httpUrl` +
-  // streamable HTTP + `${DAINTREE_MCP_TOKEN}` substitution + `trust: true`).
-  // The workspace-level settings file takes precedence over user-level
-  // `~/.gemini/settings.json` for same-name MCP entries, which gives us
-  // the isolation we need without redirecting `os.homedir()` (Gemini reads
-  // OAuth credentials from `~/.gemini/oauth_creds.json` and `~/.gemini/
-  // google_accounts.json`, so a redirect would break auth for users
-  // without `GEMINI_API_KEY`). The `--approval-mode=plan` flag is appended
-  // at spawn time via `HelpSessionService.buildGeminiLaunchArgs`. Held at
-  // the `"experimental"` tier so the help-panel picker stays Claude/Codex
-  // only until end-to-end validation lands.
+  // Marked `"deprecated"`: Gemini is excluded from the assistant overlay
+  // (picker and help-session launch path) following the Antigravity
+  // migration (#8808, #8811), but still launches normally from the main
+  // toolbar. The wiring shape below is retained for historical reference —
+  // the help-session overlay that consumed it (`.gemini/settings.json` MCP
+  // injection, `--approval-mode=plan`) has been removed from
+  // `HelpSessionService`.
   supports: {
     mcpInjection: "project-config",
     settingsOverlay: true,
     permissionBypass: false,
     trustDialog: true,
     versionProbe: true,
-    tier: "experimental",
+    tier: "deprecated",
   },
   shortcut: "Cmd/Ctrl+Alt+G",
   // Gemini CLI for consumer accounts (free, AI Pro, AI Ultra) is being
   // discontinued on 2026-06-18 in favour of Antigravity (`agy`). Enterprise
   // Gemini Code Assist keeps Gemini CLI. See issue #8808 and the
   // `antigravity` entry for the consumer successor.
-  tooltip: "Replaced by Antigravity (agy) for consumer accounts in June 2026",
+  tooltip:
+    "Consumer accounts replaced by Antigravity (agy); enterprise and API-key users still supported",
   version: {
     args: ["--version"],
     githubRepo: "google-gemini/gemini-cli",

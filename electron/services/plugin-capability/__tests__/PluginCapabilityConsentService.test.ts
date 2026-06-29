@@ -74,6 +74,23 @@ describe("PluginCapabilityConsentService", () => {
     ).rejects.toThrow(/PERMISSION_REQUIRED.*git:write/);
   });
 
+  it("treats a timeout decision as a fail-closed denial without persisting a grant (#10841)", async () => {
+    const { service, store } = makeService();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      service.setConsentBridge(async () => "timeout");
+      await expect(service.ensureAllowed("acme.x", "Acme", "shell:exec", CAPS)).rejects.toThrow(
+        /PERMISSION_REQUIRED.*shell:exec/
+      );
+      // A timed-out prompt must not leave a grant behind.
+      expect(store.hasGrant({ pluginId: "acme.x", capability: "shell:exec" })).toBe(false);
+      // Logged distinctly so an abandoned dialog is diagnosable.
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("timed out"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("treats a thrown bridge as a rejection (fail-closed)", async () => {
     const { service } = makeService();
     service.setConsentBridge(async () => {

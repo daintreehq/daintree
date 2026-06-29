@@ -20,9 +20,9 @@ vi.mock("@/store/projectStore", () => ({
   },
 }));
 
-import { useResetSwitchOverlayOnReveal } from "../useResetSwitchOverlayOnReveal";
+import { useClearSwitchBusyStateOnReveal } from "../useClearSwitchBusyStateOnReveal";
 
-describe("useResetSwitchOverlayOnReveal", () => {
+describe("useClearSwitchBusyStateOnReveal", () => {
   let revealCallback: (() => void) | null = null;
   let offReveal: ReturnType<typeof vi.fn>;
 
@@ -37,12 +37,12 @@ describe("useResetSwitchOverlayOnReveal", () => {
   });
 
   it("subscribes to the reveal signal on mount", () => {
-    renderHook(() => useResetSwitchOverlayOnReveal());
+    renderHook(() => useClearSwitchBusyStateOnReveal());
     expect(onViewRevealedMock).toHaveBeenCalledTimes(1);
   });
 
   it("clears the switch flag when the cached view is revealed", () => {
-    renderHook(() => useResetSwitchOverlayOnReveal());
+    renderHook(() => useClearSwitchBusyStateOnReveal());
 
     expect(clearSwitchingMock).not.toHaveBeenCalled();
     act(() => {
@@ -53,7 +53,7 @@ describe("useResetSwitchOverlayOnReveal", () => {
   });
 
   it("unsubscribes from the reveal signal on unmount", () => {
-    const { unmount } = renderHook(() => useResetSwitchOverlayOnReveal());
+    const { unmount } = renderHook(() => useClearSwitchBusyStateOnReveal());
     unmount();
 
     expect(offReveal).toHaveBeenCalledTimes(1);

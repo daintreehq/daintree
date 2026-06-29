@@ -249,244 +249,257 @@ export function XtermAdapter({
     if (!container) return;
 
     let disposed = false;
+    // Captured inside the async setup below and read by the synchronous cleanup
+    // closure. Stays undefined if the component unmounts before attach runs —
+    // detach()/setVisible() both tolerate the never-attached state.
+    let attachGen: number | undefined;
 
-    const managed = terminalInstanceService.getOrCreate(
-      terminalId,
-      launchAgentId,
-      terminalOptionsRef.current,
-      stableRefreshTierProvider,
-      stableOnInput,
-      stableCwdProvider
-    );
-    // getOrCreate applies the current options itself (creation or its internal
-    // updateOptions call for existing instances) — record them so the options
-    // effect doesn't re-apply the same values on this commit.
-    appliedOptionsRef.current = terminalOptionsRef.current;
+    // getOrCreate is async because the lazy Unicode11 addon (#10840) is awaited
+    // during terminal construction. Run the attach sequence in an IIFE and guard
+    // every post-await step with `disposed` so a fast unmount during the addon
+    // load can't attach a terminal whose cleanup has already run.
+    void (async () => {
+      const managed = await terminalInstanceService.getOrCreate(
+        terminalId,
+        launchAgentId,
+        terminalOptionsRef.current,
+        stableRefreshTierProvider,
+        stableOnInput,
+        stableCwdProvider
+      );
+      if (disposed) return;
+      // getOrCreate applies the current options itself (creation or its internal
+      // updateOptions call for existing instances) — record them so the options
+      // effect doesn't re-apply the same values on this commit.
+      appliedOptionsRef.current = terminalOptionsRef.current;
 
-    const wasDetachedForSwitch = managed.isDetached === true;
-    const hasSavedTargetDims = !!(managed.targetCols && managed.targetRows);
-    managed.isAttaching = true;
+      const wasDetachedForSwitch = managed.isDetached === true;
+      const hasSavedTargetDims = !!(managed.targetCols && managed.targetRows);
+      managed.isAttaching = true;
 
-    terminalInstanceService.attach(terminalId, container);
-    const attachGen = terminalInstanceService.getAttachGeneration(terminalId);
-    // Force visibility immediately on mount - don't wait for IntersectionObserver.
-    // This prevents data from being dropped during the brief window before the observer fires.
-    terminalInstanceService.setVisible(terminalId, true);
+      terminalInstanceService.attach(terminalId, container);
+      attachGen = terminalInstanceService.getAttachGeneration(terminalId);
+      // Force visibility immediately on mount - don't wait for IntersectionObserver.
+      // This prevents data from being dropped during the brief window before the observer fires.
+      terminalInstanceService.setVisible(terminalId, true);
 
-    if (!managed.keyHandlerInstalled) {
-      managed.terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
-        // Only process keydown events to avoid double-firing
-        if (event.type !== "keydown") {
-          return true;
-        }
+      if (!managed.keyHandlerInstalled) {
+        managed.terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+          // Only process keydown events to avoid double-firing
+          if (event.type !== "keydown") {
+            return true;
+          }
 
-        // Get normalized key for modifier-only detection
-        const normalizedKey = keybindingService.normalizeKeyForBinding(event);
-        const isModifierOnly = MODIFIER_KEYS.has(normalizedKey);
+          // Get normalized key for modifier-only detection
+          const normalizedKey = keybindingService.normalizeKeyForBinding(event);
+          const isModifierOnly = MODIFIER_KEYS.has(normalizedKey);
 
-        // Don't process modifier-only keypresses
-        if (isModifierOnly) {
-          return true;
-        }
+          // Don't process modifier-only keypresses
+          if (isModifierOnly) {
+            return true;
+          }
 
-        // During IME/voice composition, let xterm's CompositionHelper handle the
-        // full lifecycle (composed text + \r). keyCode 229 is Chromium's "Process"
-        // key signal during active composition where isComposing may not yet be set.
-        if (event.isComposing || event.keyCode === 229) {
-          return true;
-        }
+          // During IME/voice composition, let xterm's CompositionHelper handle the
+          // full lifecycle (composed text + \r). keyCode 229 is Chromium's "Process"
+          // key signal during active composition where isComposing may not yet be set.
+          if (event.isComposing || event.keyCode === 229) {
+            return true;
+          }
 
-        // Plain Tab and Shift+Tab are terminal input. xterm v6 intentionally
-        // leaves key events uncanceled in screen-reader mode, which lets
-        // Chromium's native focus traversal run after xterm accepts Tab.
-        // Cancel only the DOM/default path; return true so xterm still emits
-        // HT for Tab and CSI Z for Shift+Tab.
-        if (
-          (event.key === "Tab" || event.code === "Tab" || event.keyCode === 9) &&
-          !event.ctrlKey &&
-          !event.altKey &&
-          !event.metaKey
-        ) {
-          event.preventDefault();
-          event.stopPropagation();
-          return true;
-        }
-
-        // Bare F11 is Electron's fullscreen accelerator on Linux/Windows. xterm
-        // v6 leaves handled keys uncanceled in screen-reader mode, so the event
-        // bubbles to the menu accelerator. Cancel the DOM/default path; return
-        // true so xterm still emits the F11 sequence to the PTY.
-        if (
-          (event.key === "F11" || event.code === "F11" || event.keyCode === 122) &&
-          !event.ctrlKey &&
-          !event.altKey &&
-          !event.metaKey &&
-          !event.shiftKey
-        ) {
-          event.preventDefault();
-          event.stopPropagation();
-          return true;
-        }
-
-        // Skip repeat events
-        if (event.repeat) {
-          return true;
-        }
-
-        // Let Shift+F10 and ContextMenu key bubble to DOM for panel context menu
-        if (
-          event.key === "ContextMenu" ||
-          (event.key === "F10" &&
-            event.shiftKey &&
+          // Plain Tab and Shift+Tab are terminal input. xterm v6 intentionally
+          // leaves key events uncanceled in screen-reader mode, which lets
+          // Chromium's native focus traversal run after xterm accepts Tab.
+          // Cancel only the DOM/default path; return true so xterm still emits
+          // HT for Tab and CSI Z for Shift+Tab.
+          if (
+            (event.key === "Tab" || event.code === "Tab" || event.keyCode === 9) &&
             !event.ctrlKey &&
-            !event.metaKey &&
-            !event.altKey)
-        ) {
-          return false;
-        }
-
-        // Intercept F6 for macro-region focus cycling before terminal processing
-        if (event.key === "F6") {
-          return false;
-        }
-
-        // Allow critical Ctrl+<key> bindings to reach the TUI before checking global shortcuts
-        if (event.ctrlKey && !event.shiftKey && TUI_KEYBINDS.has(event.key)) {
-          return true;
-        }
-
-        // Intercept global keybindings before terminal processing
-        // Check when: (1) modifier is pressed, OR (2) chord is pending
-        const hasModifier = event.metaKey || event.ctrlKey;
-        const pendingChord = keybindingService.getPendingChord();
-        if (hasModifier || pendingChord) {
-          const result = keybindingService.resolveKeybinding(event);
-          if (result.shouldConsume) {
+            !event.altKey &&
+            !event.metaKey
+          ) {
             event.preventDefault();
             event.stopPropagation();
+            return true;
+          }
 
-            if (result.match) {
-              // Dispatch the matched action
-              void actionService
-                .dispatch(
-                  result.match.actionId as Parameters<typeof actionService.dispatch>[0],
-                  undefined,
-                  {
-                    source: "keybinding",
-                  }
-                )
-                .then((dispatchResult) => {
-                  if (!dispatchResult.ok) {
-                    logError(
-                      `[XtermKeybinding] Action "${result.match!.actionId}" failed`,
-                      undefined,
-                      { error: dispatchResult.error }
-                    );
-                  }
-                })
-                .catch((error) => {
-                  logError("[XtermKeybinding] Unexpected error", error);
-                });
-            }
-            // Chord prefix consumed to prevent terminal leakage
+          // Bare F11 is Electron's fullscreen accelerator on Linux/Windows. xterm
+          // v6 leaves handled keys uncanceled in screen-reader mode, so the event
+          // bubbles to the menu accelerator. Cancel the DOM/default path; return
+          // true so xterm still emits the F11 sequence to the PTY.
+          if (
+            (event.key === "F11" || event.code === "F11" || event.keyCode === 122) &&
+            !event.ctrlKey &&
+            !event.altKey &&
+            !event.metaKey &&
+            !event.shiftKey
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            return true;
+          }
+
+          // Skip repeat events
+          if (event.repeat) {
+            return true;
+          }
+
+          // Let Shift+F10 and ContextMenu key bubble to DOM for panel context menu
+          if (
+            event.key === "ContextMenu" ||
+            (event.key === "F10" &&
+              event.shiftKey &&
+              !event.ctrlKey &&
+              !event.metaKey &&
+              !event.altKey)
+          ) {
             return false;
           }
-        }
 
-        // Let the OS handle meta combinations (e.g., Cmd+C/V).
-        // Paste (Cmd+V) is handled by Electron's native Edit > Paste menu role,
-        // which dispatches a paste event that xterm.js processes natively
-        // (including bracketed paste mode wrapping).
-        // Keep Alt/Option available for word navigation/editing inside the TUI.
-        if (event.metaKey) {
-          return false;
-        }
+          // Intercept F6 for macro-region focus cycling before terminal processing
+          if (event.key === "F6") {
+            return false;
+          }
 
-        // Allow critical Ctrl+<key> bindings to reach the TUI
-        if (event.ctrlKey && !event.shiftKey && TUI_KEYBINDS.has(event.key)) {
+          // Allow critical Ctrl+<key> bindings to reach the TUI before checking global shortcuts
+          if (event.ctrlKey && !event.shiftKey && TUI_KEYBINDS.has(event.key)) {
+            return true;
+          }
+
+          // Intercept global keybindings before terminal processing
+          // Check when: (1) modifier is pressed, OR (2) chord is pending
+          const hasModifier = event.metaKey || event.ctrlKey;
+          const pendingChord = keybindingService.getPendingChord();
+          if (hasModifier || pendingChord) {
+            const result = keybindingService.resolveKeybinding(event);
+            if (result.shouldConsume) {
+              event.preventDefault();
+              event.stopPropagation();
+
+              if (result.match) {
+                // Dispatch the matched action
+                void actionService
+                  .dispatch(
+                    result.match.actionId as Parameters<typeof actionService.dispatch>[0],
+                    undefined,
+                    {
+                      source: "keybinding",
+                    }
+                  )
+                  .then((dispatchResult) => {
+                    if (!dispatchResult.ok) {
+                      logError(
+                        `[XtermKeybinding] Action "${result.match!.actionId}" failed`,
+                        undefined,
+                        { error: dispatchResult.error }
+                      );
+                    }
+                  })
+                  .catch((error) => {
+                    logError("[XtermKeybinding] Unexpected error", error);
+                  });
+              }
+              // Chord prefix consumed to prevent terminal leakage
+              return false;
+            }
+          }
+
+          // Let the OS handle meta combinations (e.g., Cmd+C/V).
+          // Paste (Cmd+V) is handled by Electron's native Edit > Paste menu role,
+          // which dispatches a paste event that xterm.js processes natively
+          // (including bracketed paste mode wrapping).
+          // Keep Alt/Option available for word navigation/editing inside the TUI.
+          if (event.metaKey) {
+            return false;
+          }
+
+          // Allow critical Ctrl+<key> bindings to reach the TUI
+          if (event.ctrlKey && !event.shiftKey && TUI_KEYBINDS.has(event.key)) {
+            return true;
+          }
+
+          if (
+            event.key === "Enter" &&
+            event.shiftKey &&
+            !event.ctrlKey &&
+            !event.altKey &&
+            !event.metaKey
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.type === "keydown" && !managed.isInputLocked) {
+              // "Soft" newline for agent CLIs.
+              // Codex CLI commonly expects LF (\n / Ctrl+J) for a newline without submit.
+              // Other agent CLIs use the legacy ESC+CR sequence.
+              // Soft-newline sequence follows the live process. If a Codex
+              // session is currently running, use its sequence even if this
+              // terminal was launched as Claude or as a plain shell.
+              const softNewline = getSoftNewlineSequence(
+                detectedAgentIdRef.current ?? launchAgentIdRef.current
+              );
+              writeTerminalInputOrFleet(terminalId, softNewline);
+              terminalInstanceService.notifyUserInput(terminalId);
+              stableOnInput(softNewline);
+            }
+            return false;
+          }
+
+          if (
+            (event.key === "Enter" || event.key === "Return" || event.code === "NumpadEnter") &&
+            !event.shiftKey &&
+            !event.ctrlKey &&
+            !event.altKey &&
+            !event.metaKey
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.type === "keydown" && !managed.isInputLocked) {
+              const submit = "\r";
+              writeTerminalInputOrFleet(terminalId, submit);
+              terminalInstanceService.notifyUserInput(terminalId);
+              stableOnInput(submit);
+              // Plain Enter is a submit. The custom key handler returns `false`
+              // before xterm's onKey/onData fire, so the listener-installed
+              // onEnterPressed path is bypassed — call it explicitly to close
+              // the `directing` synthetic state. No-op when not in directing.
+              terminalInstanceService.notifyEnterPressed(terminalId);
+            }
+            return false;
+          }
           return true;
-        }
-
-        if (
-          event.key === "Enter" &&
-          event.shiftKey &&
-          !event.ctrlKey &&
-          !event.altKey &&
-          !event.metaKey
-        ) {
-          event.preventDefault();
-          event.stopPropagation();
-          if (event.type === "keydown" && !managed.isInputLocked) {
-            // "Soft" newline for agent CLIs.
-            // Codex CLI commonly expects LF (\n / Ctrl+J) for a newline without submit.
-            // Other agent CLIs use the legacy ESC+CR sequence.
-            // Soft-newline sequence follows the live process. If a Codex
-            // session is currently running, use its sequence even if this
-            // terminal was launched as Claude or as a plain shell.
-            const softNewline = getSoftNewlineSequence(
-              detectedAgentIdRef.current ?? launchAgentIdRef.current
-            );
-            writeTerminalInputOrFleet(terminalId, softNewline);
-            terminalInstanceService.notifyUserInput(terminalId);
-            stableOnInput(softNewline);
-          }
-          return false;
-        }
-
-        if (
-          (event.key === "Enter" || event.key === "Return" || event.code === "NumpadEnter") &&
-          !event.shiftKey &&
-          !event.ctrlKey &&
-          !event.altKey &&
-          !event.metaKey
-        ) {
-          event.preventDefault();
-          event.stopPropagation();
-          if (event.type === "keydown" && !managed.isInputLocked) {
-            const submit = "\r";
-            writeTerminalInputOrFleet(terminalId, submit);
-            terminalInstanceService.notifyUserInput(terminalId);
-            stableOnInput(submit);
-            // Plain Enter is a submit. The custom key handler returns `false`
-            // before xterm's onKey/onData fire, so the listener-installed
-            // onEnterPressed path is bypassed — call it explicitly to close
-            // the `directing` synthetic state. No-op when not in directing.
-            terminalInstanceService.notifyEnterPressed(terminalId);
-          }
-          return false;
-        }
-        return true;
-      });
-      managed.keyHandlerInstalled = true;
-    }
-
-    exitUnsubRef.current = terminalInstanceService.addExitListener(terminalId, (code) => {
-      onExitRef.current?.(code);
-    });
-
-    if (!wasDetachedForSwitch || !hasSavedTargetDims) {
-      performFit();
-    }
-
-    if (
-      restoreOnAttach &&
-      !(wasDetachedForSwitch && hasSavedTargetDims) &&
-      !hasVisibleBufferContent()
-    ) {
-      void terminalInstanceService
-        .fetchAndRestore(terminalId)
-        .then((restored) => {
-          if (disposed) return;
-          if (restored) {
-            requestAnimationFrame(() => performFit());
-          }
-        })
-        .catch((err) => {
-          if (!disposed) logError("Failed to restore terminal buffer", err);
         });
-    }
+        managed.keyHandlerInstalled = true;
+      }
 
-    onReadyRef.current?.();
+      exitUnsubRef.current = terminalInstanceService.addExitListener(terminalId, (code) => {
+        onExitRef.current?.(code);
+      });
+
+      if (!wasDetachedForSwitch || !hasSavedTargetDims) {
+        performFit();
+      }
+
+      if (
+        restoreOnAttach &&
+        !(wasDetachedForSwitch && hasSavedTargetDims) &&
+        !hasVisibleBufferContent()
+      ) {
+        void terminalInstanceService
+          .fetchAndRestore(terminalId)
+          .then((restored) => {
+            if (disposed) return;
+            if (restored) {
+              requestAnimationFrame(() => performFit());
+            }
+          })
+          .catch((err) => {
+            if (!disposed) logError("Failed to restore terminal buffer", err);
+          });
+      }
+
+      onReadyRef.current?.();
+    })().catch((err) => {
+      if (!disposed) logError("[XtermAdapter] Terminal attach failed", err);
+    });
 
     return () => {
       disposed = true;

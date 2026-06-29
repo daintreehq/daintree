@@ -61,7 +61,7 @@ import {
   useForgeEnableRecommendation,
   useFocusOnActivateIntent,
   useBackgroundWindowResize,
-  useResetSwitchOverlayOnReveal,
+  useClearSwitchBusyStateOnReveal,
   usePluginDeepLink,
   useNotificationHistoryPruning,
   useUnloadCleanup,
@@ -765,9 +765,10 @@ function AppInner() {
   // Background window-resize receiver — keeps PTY geometry tracking the
   // window while this project view is detached (#10415).
   useBackgroundWindowResize();
-  // Clears a stale switch busy flag when this cached view is reactivated, so a
-  // view that switched away never re-shows its switch overlay on return (#10736).
-  useResetSwitchOverlayOnReveal();
+  // Clears the stale switch busy flags when this cached view is reactivated, so
+  // a view that switched away never resurfaces a stuck ProjectSwitcher spinner
+  // on return (#10736).
+  useClearSwitchBusyStateOnReveal();
   // `daintree://` deep-link receiver (#9559). Surfaces the intent once hydration
   // settles; the effect below opens the Plugin Manager, which consumes it.
   const pluginDeepLink = usePluginDeepLink(isStateLoaded);
@@ -1319,6 +1320,9 @@ function AppInner() {
                     onCloseProject={(projectId) =>
                       void projectSwitcherPalette.removeProject(projectId)
                     }
+                    onFreeMemoryProject={(projectId) =>
+                      void projectSwitcherPalette.freeMemoryProject(projectId)
+                    }
                     onLocateProject={(projectId) =>
                       void projectSwitcherPalette.locateProject(projectId)
                     }
@@ -1332,6 +1336,12 @@ function AppInner() {
                     }
                     onConfirmRemove={projectSwitcherPalette.confirmRemoveProject}
                     isRemovingProject={projectSwitcherPalette.isRemovingProject}
+                    freeMemoryConfirmProject={projectSwitcherPalette.freeMemoryConfirmProject}
+                    onFreeMemoryConfirmClose={() =>
+                      projectSwitcherPalette.setFreeMemoryConfirmProject(null)
+                    }
+                    onConfirmFreeMemory={projectSwitcherPalette.confirmFreeMemory}
+                    isFreeingMemory={projectSwitcherPalette.isFreeingMemory}
                     onSelectNewWindow={(project) => {
                       projectSwitcherPalette.close();
                       void actionService.dispatch(

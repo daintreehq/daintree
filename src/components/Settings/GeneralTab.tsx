@@ -24,6 +24,7 @@ import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import type {
   HibernationConfig,
   IdleTerminalNotifyConfig,
+  IdleBackgroundAutoCloseConfig,
   CliAvailability,
   AgentSettings,
 } from "@shared/types";
@@ -97,6 +98,13 @@ const IDLE_TERMINAL_THRESHOLD_PRESETS = [
   { value: 240, label: "4h" },
 ] as const;
 
+const IDLE_BACKGROUND_THRESHOLD_PRESETS = [
+  { value: 15, label: "15m" },
+  { value: 30, label: "30m" },
+  { value: 60, label: "1h" },
+  { value: 120, label: "2h" },
+] as const;
+
 const UPDATE_CHECK_REFRESH_INTERVAL_MS = 60_000;
 
 interface ShortcutDisplay {
@@ -124,6 +132,9 @@ export function GeneralTab({
   const [hibernationConfig, setHibernationConfig] = useState<HibernationConfig | null>(null);
   const [idleNotifyConfig, setIdleNotifyConfig] = useState<IdleTerminalNotifyConfig | null>(null);
   const [isIdleNotifySaving, setIsIdleNotifySaving] = useState(false);
+  const [idleAutoCloseConfig, setIdleAutoCloseConfig] =
+    useState<IdleBackgroundAutoCloseConfig | null>(null);
+  const [isIdleAutoCloseSaving, setIsIdleAutoCloseSaving] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
   const [cliAvailability, setCliAvailability] = useState<CliAvailability | null>(null);
@@ -319,6 +330,20 @@ export function GeneralTab({
       .catch((error) => {
         if (cancelled) return;
         logError("Failed to load idle terminal notify config", error);
+      });
+
+    actionService
+      .dispatch("idleBackgroundAutoClose.getConfig", undefined, { source: "user" })
+      .then((result) => {
+        if (cancelled) return;
+        if (!result.ok) {
+          throw new Error(result.error.message);
+        }
+        setIdleAutoCloseConfig(result.result as IdleBackgroundAutoCloseConfig);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        logError("Failed to load idle background auto-close config", error);
       });
 
     return () => {
@@ -525,6 +550,86 @@ export function GeneralTab({
     } finally {
       if (isMountedRef.current) {
         setIsIdleNotifySaving(false);
+      }
+    }
+  };
+
+  const handleIdleAutoCloseToggle = async () => {
+    if (!idleAutoCloseConfig || isIdleAutoCloseSaving) return;
+    const prev = idleAutoCloseConfig;
+    setIdleAutoCloseConfig({ ...prev, enabled: !prev.enabled });
+    setIsIdleAutoCloseSaving(true);
+    try {
+      const result = await actionService.dispatch(
+        "idleBackgroundAutoClose.updateConfig",
+        { enabled: !prev.enabled },
+        { source: "user" }
+      );
+      if (!isMountedRef.current) return;
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+      setIdleAutoCloseConfig(result.result as IdleBackgroundAutoCloseConfig);
+    } catch (error) {
+      if (!isMountedRef.current) return;
+      setIdleAutoCloseConfig(prev);
+      logError("Failed to update idle background auto-close config", error);
+      notify({
+        type: "error",
+        title: "Couldn't save setting",
+        message: "Auto-close for idle projects couldn't be updated.",
+        actions: [
+          {
+            label: "Try again",
+            variant: "primary",
+            onClick: () => void handleIdleAutoCloseToggle(),
+          },
+        ],
+        context: { eventKind: "uiFeedback" },
+      });
+    } finally {
+      if (isMountedRef.current) {
+        setIsIdleAutoCloseSaving(false);
+      }
+    }
+  };
+
+  const handleIdleAutoCloseThresholdChange = async (value: number) => {
+    if (!idleAutoCloseConfig || isIdleAutoCloseSaving) return;
+    const prev = idleAutoCloseConfig;
+    setIdleAutoCloseConfig({ ...prev, thresholdMinutes: value });
+    setIsIdleAutoCloseSaving(true);
+    try {
+      const result = await actionService.dispatch(
+        "idleBackgroundAutoClose.updateConfig",
+        { thresholdMinutes: value },
+        { source: "user" }
+      );
+      if (!isMountedRef.current) return;
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+      setIdleAutoCloseConfig(result.result as IdleBackgroundAutoCloseConfig);
+    } catch (error) {
+      if (!isMountedRef.current) return;
+      setIdleAutoCloseConfig(prev);
+      logError("Failed to update idle background auto-close threshold", error);
+      notify({
+        type: "error",
+        title: "Couldn't save setting",
+        message: "Idle auto-close threshold couldn't be updated.",
+        actions: [
+          {
+            label: "Try again",
+            variant: "primary",
+            onClick: () => void handleIdleAutoCloseThresholdChange(value),
+          },
+        ],
+        context: { eventKind: "uiFeedback" },
+      });
+    } finally {
+      if (isMountedRef.current) {
+        setIsIdleAutoCloseSaving(false);
       }
     }
   };
@@ -873,6 +978,49 @@ export function GeneralTab({
                   <p className="text-xs text-daintree-text/40">
                     A toast appears when background project terminals have been quiet this long,
                     with options to close them or dismiss the reminder.
+                  </p>
+                </div>
+              )}
+            </SettingsSection>
+          )}
+          {idleAutoCloseConfig && (
+            <SettingsSection
+              icon={Moon}
+              title="Auto-close idle projects"
+              description="Reclaim memory from background projects that have no terminals and have been idle for a while. They stay in the switcher and reopen right where you left off."
+              id="general-idle-background-auto-close"
+            >
+              <SettingsSwitchCard
+                icon={Moon}
+                title="Auto-close idle projects"
+                subtitle="Free memory from idle background projects that have no open terminals"
+                isEnabled={idleAutoCloseConfig.enabled}
+                onChange={handleIdleAutoCloseToggle}
+                ariaLabel="Auto-Close Idle Projects Toggle"
+              />
+
+              {idleAutoCloseConfig.enabled && (
+                <div id="general-idle-background-threshold" className="space-y-2 scroll-mt-12">
+                  <label className="text-sm text-daintree-text/70">Idle Threshold</label>
+                  <div className="flex gap-2">
+                    {IDLE_BACKGROUND_THRESHOLD_PRESETS.map(({ value, label }) => (
+                      <button
+                        key={value}
+                        onClick={() => handleIdleAutoCloseThresholdChange(value)}
+                        className={cn(
+                          "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
+                          idleAutoCloseConfig.thresholdMinutes === value
+                            ? "bg-overlay-selected border border-border-strong text-daintree-text font-medium"
+                            : "border border-daintree-border hover:bg-tint/5 text-daintree-text/70"
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-daintree-text/40">
+                    Only projects with no terminals are auto-closed. The active project is never
+                    touched, and reopening a project restores its panels.
                   </p>
                 </div>
               )}

@@ -11,8 +11,11 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
-import { AGENT_REGISTRY } from "@/config/agents";
-import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
+import { AGENT_REGISTRY, getAgentDisplayTitle } from "@/config/agents";
+import { agentSettingsClient, cliAvailabilityClient } from "@/clients";
+import { isAssistantOnlyAgentId, LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
+import { isAgentInstalled } from "@shared/utils/agentAvailability";
 import type { ActionId } from "@shared/types/actions";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
@@ -441,6 +444,68 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         spawnedAt: null,
         terminalId: null,
         found: false,
+      };
+    },
+  }));
+
+  actions.set("agent.listToolbar", () => ({
+    id: "agent.listToolbar",
+    title: "List Toolbar Agents",
+    description:
+      "List the built-in agents and their resolved toolbar visibility. Returns { agents: [{ id, displayName, pinned, installed, visible }] } for every launchable built-in agent. `pinned` is tri-state: true (explicitly pinned), false (explicitly hidden), or omitted (follows CLI availability). `installed` is whether the agent's CLI binary was detected. `visible` is the resolved toolbar state — true when the agent button currently shows in the toolbar. Use this to discover which agents the user has surfaced without reading the full agent settings.",
+    category: "agent",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    mcpVisibility: "discoverable",
+    resultSchema: z.object({
+      agents: z.array(
+        z.object({
+          id: z.string(),
+          displayName: z.string(),
+          pinned: z.boolean().optional(),
+          installed: z.boolean(),
+          visible: z.boolean(),
+        })
+      ),
+    }),
+    run: async () => {
+      // Mirror the toolbar's own resolution sources so `visible` stays in
+      // lockstep with what actually renders. The toolbar reads the normalized
+      // in-memory agent-settings store (initial pins seeded, legacy pins
+      // migrated — see agentSettingsStore) rather than the raw persisted
+      // settings, and the live CLI-availability store. Fall back to the
+      // cache-aware clients only when a store hasn't hydrated yet.
+      //
+      // Imported lazily so this module's static graph stays free of the store
+      // singletons — eager-importing them breaks unrelated action tests that
+      // only partially mock the agent-config graph the stores pull in.
+      const [{ useAgentSettingsStore }, { useCliAvailabilityStore }] = await Promise.all([
+        import("@/store/agentSettingsStore"),
+        import("@/store/cliAvailabilityStore"),
+      ]);
+      const storeSettings = useAgentSettingsStore.getState().settings;
+      const settings = storeSettings ?? (await agentSettingsClient.get());
+      const availabilityStore = useCliAvailabilityStore.getState();
+      const availability = availabilityStore.hasRealData
+        ? availabilityStore.availability
+        : await cliAvailabilityClient.get();
+      return {
+        agents: LAUNCHABLE_AGENT_IDS.map((id) => {
+          const entry = settings.agents?.[id];
+          const state = availability[id];
+          // Omit `pinned` unless it's an explicit boolean (tri-state): an
+          // absent key means "follows CLI availability", distinct from an
+          // explicit true/false pin/unpin. A non-boolean from a corrupted
+          // config is treated as absent, never forwarded.
+          return {
+            id,
+            displayName: getAgentDisplayTitle(id),
+            ...(typeof entry?.pinned === "boolean" ? { pinned: entry.pinned } : {}),
+            installed: isAgentInstalled(state),
+            visible: isAgentToolbarVisible(entry, state),
+          };
+        }),
       };
     },
   }));

@@ -165,6 +165,7 @@ export type {
   IssueNotFoundPayload,
   // Project close IPC types
   ProjectCloseResult,
+  ProjectFreeMemoryResult,
   ProjectStats,
   BulkProjectStatsEntry,
   BulkProjectStats,
@@ -185,6 +186,10 @@ export type {
   IdleTerminalNotifyConfig,
   IdleTerminalNotifyPayload,
   IdleTerminalProjectEntry,
+  // Idle background-project auto-close types
+  IdleBackgroundAutoCloseConfig,
+  IdleBackgroundClosedPayload,
+  IdleBackgroundClosedProjectEntry,
   // System Sleep types
   SleepPeriod,
   SystemSleepMetrics,

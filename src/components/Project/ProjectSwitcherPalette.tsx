@@ -1,5 +1,6 @@
 import { useMemo, useEffect, useRef, useState, useCallback } from "react";
 import {
+  ArchiveX,
   BellOff,
   ChevronDown,
   ChevronRight,
@@ -65,6 +66,7 @@ export interface ProjectSwitcherPaletteProps {
   onCreateFolder?: () => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
+  onFreeMemoryProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
   onCopyPath?: (path: string) => void;
@@ -86,6 +88,11 @@ export interface ProjectSwitcherPaletteProps {
   onRemoveConfirmClose?: () => void;
   onConfirmRemove?: () => void;
   isRemovingProject?: boolean;
+  /** Frozen snapshot of the project pending a "Free memory" confirm, or null. */
+  freeMemoryConfirmProject?: SearchableProject | null;
+  onFreeMemoryConfirmClose?: () => void;
+  onConfirmFreeMemory?: () => void;
+  isFreeingMemory?: boolean;
   /** Scratch (one-off agent workspace) results — rendered in their own collapsible section. */
   scratchResults?: SearchableScratch[];
   /** Callback to create and switch to a new scratch. */
@@ -115,6 +122,7 @@ interface ProjectListItemProps {
   onSelect: (project: SearchableProject) => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
+  onFreeMemoryProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
   onCopyPath?: (path: string) => void;
@@ -166,6 +174,7 @@ function ProjectListItem({
   onSelect,
   onStopProject,
   onCloseProject,
+  onFreeMemoryProject,
   onLocateProject,
   onTogglePinProject,
   onCopyPath,
@@ -174,6 +183,11 @@ function ProjectListItem({
   onHoverProjectEnd,
 }: ProjectListItemProps) {
   const showStop = project.processCount > 0 && !project.isMissing;
+  // "Free memory" reclaims a backgrounded project's resident RAM. Only
+  // meaningful for non-active, non-missing projects that still hold resources
+  // (the active project owns the live renderer; a missing one has nothing
+  // loaded; an already-closed one was reclaimed, so the action would no-op).
+  const showFreeMemory = !project.isActive && !project.isMissing && project.status !== "closed";
 
   const notificationOverrides = useProjectSettingsStore(
     (state) => state.notificationOverridesByProjectId[project.id]
@@ -187,6 +201,14 @@ function ProjectListItem({
       return { secondaryText: "Agent working\u2026", secondaryClass: "text-activity-working" };
     if (project.waitingAgentCount > 0)
       return { secondaryText: "Agent waiting…", secondaryClass: "text-activity-waiting" };
+    // Auto-closed by the background-idle sweep (#10830) — surface the distinct
+    // "parked" label instead of a plain time-ago so the user understands why the
+    // project left active state and that reopening restores it.
+    if (project.status === "closed" && project.autoParkedAt)
+      return {
+        secondaryText: "Suspended to free memory",
+        secondaryClass: "text-daintree-text/50",
+      };
     if (project.lastOpened > 0)
       return {
         secondaryText: formatTimeAgo(project.lastOpened),
@@ -264,7 +286,12 @@ function ProjectListItem({
   );
 
   const hasContextActions =
-    onTogglePinProject || onStopProject || onCloseProject || onCopyPath || onSelectNewWindow;
+    onTogglePinProject ||
+    onStopProject ||
+    onCloseProject ||
+    onFreeMemoryProject ||
+    onCopyPath ||
+    onSelectNewWindow;
   if (!hasContextActions) return row;
 
   return (
@@ -298,13 +325,18 @@ function ProjectListItem({
             Copy path
           </ContextMenuItem>
         )}
-        {(onTogglePinProject || onCopyPath) && (onStopProject || onCloseProject) && (
-          <ContextMenuSeparator />
-        )}
+        {(onTogglePinProject || onCopyPath) &&
+          (onStopProject || onFreeMemoryProject || onCloseProject) && <ContextMenuSeparator />}
         {showStop && onStopProject && (
           <ContextMenuItem destructive onSelect={() => onStopProject(project.id)}>
             <Square className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
             Stop all agents
+          </ContextMenuItem>
+        )}
+        {showFreeMemory && onFreeMemoryProject && (
+          <ContextMenuItem onSelect={() => onFreeMemoryProject(project.id)}>
+            <ArchiveX className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+            Free memory
           </ContextMenuItem>
         )}
         {onCloseProject && project.isActive && (
@@ -354,6 +386,7 @@ interface ProjectListContentProps {
   mode?: ProjectSwitcherMode;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
+  onFreeMemoryProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
   onCopyPath?: (path: string) => void;
@@ -371,6 +404,7 @@ function ProjectListContent({
   mode,
   onStopProject,
   onCloseProject,
+  onFreeMemoryProject,
   onLocateProject,
   onTogglePinProject,
   onCopyPath,
@@ -440,6 +474,7 @@ function ProjectListContent({
           onSelect={onSelect}
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
+          onFreeMemoryProject={onFreeMemoryProject}
           onLocateProject={onLocateProject}
           onTogglePinProject={onTogglePinProject}
           onCopyPath={onCopyPath}
@@ -716,6 +751,7 @@ interface ProjectPaletteInnerProps {
   onOpenProjectSettings?: () => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
+  onFreeMemoryProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
   onCopyPath?: (path: string) => void;
@@ -747,6 +783,7 @@ function ProjectPaletteInner({
   onOpenProjectSettings,
   onStopProject,
   onCloseProject,
+  onFreeMemoryProject,
   onLocateProject,
   onTogglePinProject,
   onCopyPath,
@@ -868,6 +905,7 @@ function ProjectPaletteInner({
           mode={mode}
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
+          onFreeMemoryProject={onFreeMemoryProject}
           onLocateProject={onLocateProject}
           onTogglePinProject={onTogglePinProject}
           onCopyPath={onCopyPath}
@@ -991,6 +1029,7 @@ function ModalContent({
         onOpenProjectSettings={innerProps.onOpenProjectSettings}
         onStopProject={innerProps.onStopProject}
         onCloseProject={innerProps.onCloseProject}
+        onFreeMemoryProject={innerProps.onFreeMemoryProject}
         onLocateProject={innerProps.onLocateProject}
         onTogglePinProject={innerProps.onTogglePinProject}
         onCopyPath={innerProps.onCopyPath}
@@ -1085,6 +1124,7 @@ function DropdownContent({
           onOpenProjectSettings={innerProps.onOpenProjectSettings}
           onStopProject={innerProps.onStopProject}
           onCloseProject={innerProps.onCloseProject}
+          onFreeMemoryProject={innerProps.onFreeMemoryProject}
           onLocateProject={innerProps.onLocateProject}
           onTogglePinProject={innerProps.onTogglePinProject}
           onCopyPath={innerProps.onCopyPath}
@@ -1118,6 +1158,7 @@ export function ProjectSwitcherPalette({
   onCreateFolder,
   onStopProject,
   onCloseProject,
+  onFreeMemoryProject,
   onLocateProject,
   onTogglePinProject,
   onCopyPath,
@@ -1132,6 +1173,10 @@ export function ProjectSwitcherPalette({
   onRemoveConfirmClose,
   onConfirmRemove,
   isRemovingProject = false,
+  freeMemoryConfirmProject,
+  onFreeMemoryConfirmClose,
+  onConfirmFreeMemory,
+  isFreeingMemory = false,
   scratchResults,
   onCreateScratch,
   onSelectScratch,
@@ -1166,6 +1211,7 @@ export function ProjectSwitcherPalette({
         onCreateFolder={onCreateFolder}
         onStopProject={onStopProject}
         onCloseProject={onCloseProject}
+        onFreeMemoryProject={onFreeMemoryProject}
         onLocateProject={onLocateProject}
         onTogglePinProject={onTogglePinProject}
         onCopyPath={onCopyPath}
@@ -1200,6 +1246,7 @@ export function ProjectSwitcherPalette({
         onCreateFolder={onCreateFolder}
         onStopProject={onStopProject}
         onCloseProject={onCloseProject}
+        onFreeMemoryProject={onFreeMemoryProject}
         onLocateProject={onLocateProject}
         onTogglePinProject={onTogglePinProject}
         onCopyPath={onCopyPath}
@@ -1276,6 +1323,49 @@ export function ProjectSwitcherPalette({
               {removeConfirmProject.isActive
                 ? "The project will remain in your list and can be reopened at any time."
                 : "This project will be removed from your list. You can add it back later, but any running terminals or processes will need to be restarted."}
+            </div>
+          </div>
+        </ConfirmDialog>
+      )}
+      {freeMemoryConfirmProject && onFreeMemoryConfirmClose && onConfirmFreeMemory && (
+        <ConfirmDialog
+          isOpen={true}
+          onClose={isFreeingMemory ? undefined : onFreeMemoryConfirmClose}
+          title={`Free memory for '${freeMemoryConfirmProject.name}'?`}
+          zIndex="nested"
+          confirmLabel="Free memory"
+          cancelLabel="Cancel"
+          onConfirm={onConfirmFreeMemory}
+          isConfirmLoading={isFreeingMemory}
+          variant="default"
+        >
+          <div className="space-y-3">
+            <div>
+              <div className="font-medium text-sm">{freeMemoryConfirmProject.name}</div>
+              <div className="text-xs text-daintree-text/50 font-mono mt-1">
+                {freeMemoryConfirmProject.path}
+              </div>
+            </div>
+            {(freeMemoryConfirmProject.processCount > 0 ||
+              freeMemoryConfirmProject.activeAgentCount > 0 ||
+              freeMemoryConfirmProject.waitingAgentCount > 0) && (
+              <div className="rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20 px-3 py-2 text-xs text-status-warning">
+                <div className="font-medium">Running processes will be stopped</div>
+                <div className="mt-1 text-status-warning/80">
+                  {freeMemoryConfirmProject.processCount > 0 && (
+                    <div>• {freeMemoryConfirmProject.processCount} running process(es)</div>
+                  )}
+                  {freeMemoryConfirmProject.activeAgentCount > 0 && (
+                    <div>• {freeMemoryConfirmProject.activeAgentCount} active agent(s)</div>
+                  )}
+                  {freeMemoryConfirmProject.waitingAgentCount > 0 && (
+                    <div>• {freeMemoryConfirmProject.waitingAgentCount} waiting agent(s)</div>
+                  )}
+                </div>
+              </div>
+            )}
+            <div className="text-xs text-daintree-text/60">
+              Sessions are preserved and restored when you reopen the project.
             </div>
           </div>
         </ConfirmDialog>

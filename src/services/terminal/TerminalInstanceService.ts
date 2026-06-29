@@ -188,7 +188,7 @@ class TerminalInstanceService {
           managed.lastScrollbackReduceAt = undefined;
           restoreScrollback(managed);
 
-          this.ensureDeferredAddons(id, managed);
+          void this.ensureDeferredAddons(id, managed);
         }
 
         if (this.wantsWebGLAtTier(managed, tier)) {
@@ -603,13 +603,13 @@ class TerminalInstanceService {
     this.agentStateController.clearDirectingState(id);
   }
 
-  prewarmTerminal(
+  async prewarmTerminal(
     id: string,
     launchAgentId: string | undefined,
     options: ConstructorParameters<typeof Terminal>[0],
     params: { offscreen?: boolean; widthPx?: number; heightPx?: number } = {}
-  ): ManagedTerminal {
-    const managed = this.getOrCreate(
+  ): Promise<ManagedTerminal> {
+    const managed = await this.getOrCreate(
       id,
       launchAgentId,
       options,
@@ -1354,14 +1354,14 @@ class TerminalInstanceService {
     });
   }
 
-  getOrCreate(
+  async getOrCreate(
     id: string,
     launchAgentId: string | undefined,
     options: ConstructorParameters<typeof Terminal>[0],
     getRefreshTier: RefreshTierProvider = () => TerminalRefreshTier.FOCUSED,
     onInput?: (data: string) => void,
     getCwd?: () => string
-  ): ManagedTerminal {
+  ): Promise<ManagedTerminal> {
     const existing = this.instances.get(id);
     if (existing) {
       existing.getRefreshTier = getRefreshTier;
@@ -1410,7 +1410,10 @@ class TerminalInstanceService {
     // Only the eager core addons are built here. Image/file-link/web-link addons
     // are deferred to ensureDeferredAddons(), called once the terminal is opened
     // in attach() — keeping their construction off the bulk-create cold path.
-    const addons = setupTerminalAddons(terminal);
+    // Awaited so Unicode11 (lazy-loaded, #10840) is active before the PTY data
+    // listener is wired below — terminalClient.onData flushes any buffered early
+    // output synchronously on registration, so the activation must land first.
+    const addons = await setupTerminalAddons(terminal);
 
     const hostElement = document.createElement("div");
     hostElement.style.width = "100%";
@@ -1873,14 +1876,10 @@ class TerminalInstanceService {
    * and the BACKGROUND→active tier-upgrade path. Never call it for a BACKGROUND
    * terminal; the tier machinery disposes these addons there on purpose (#9809).
    */
-  private ensureDeferredAddons(id: string, managed: ManagedTerminal): void {
-    if (!managed.imageAddon) {
-      try {
-        managed.imageAddon = createImageAddon(managed.terminal);
-      } catch (err) {
-        logWarn("Failed to create ImageAddon", { id, error: err });
-      }
-    }
+  private async ensureDeferredAddons(id: string, managed: ManagedTerminal): Promise<void> {
+    // The file/image/web link providers are synchronous, so build them first and
+    // unconditionally — the lazy, async ImageAddon load below must not defer them
+    // behind a microtask (they are observable synchronously on tier upgrade).
     if (!managed.fileLinksDisposable) {
       try {
         managed.fileLinksDisposable = createFileLinksAddon(
@@ -1938,6 +1937,27 @@ class TerminalInstanceService {
         logWarn("Failed to create WebLinksAddon", { id, error: err });
       }
     }
+    // ImageAddon is lazy-loaded (#10840), so creation is async and runs last —
+    // after the synchronous link providers above. Two callers can reach this
+    // concurrently (the cold-open path in ensureOpened() and the BACKGROUND→
+    // active tier-upgrade path), so re-check the slot after the await and dispose
+    // the loser to avoid loading two addons onto one terminal.
+    if (!managed.imageAddon) {
+      try {
+        const imageAddon = await createImageAddon(managed.terminal);
+        // Dispose the loser rather than leak it if, during the async import, a
+        // concurrent caller already populated the slot OR the terminal was
+        // destroyed/replaced (its instance is no longer the one in the map, so
+        // its own teardown will never dispose this addon).
+        if (managed.imageAddon || this.instances.get(id) !== managed) {
+          imageAddon.dispose();
+        } else {
+          managed.imageAddon = imageAddon;
+        }
+      } catch (err) {
+        logWarn("Failed to create ImageAddon", { id, error: err });
+      }
+    }
   }
 
   /**
@@ -1979,7 +1999,7 @@ class TerminalInstanceService {
     // panes stay fully content-live; only the WebGL context differs by
     // visibility (gated separately below). Previously this skipped the addons on
     // background, degrading content for hidden panes.
-    this.ensureDeferredAddons(id, managed);
+    void this.ensureDeferredAddons(id, managed);
     if (this.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
       this.webGLManager.ensureContext(id, managed);
     }

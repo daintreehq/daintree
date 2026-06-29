@@ -470,3 +470,46 @@ describe("AppLayout sidebar-width hydration transition gating — issue #10321",
     expect(source).not.toMatch(/flushSync\([^)]*setIsSidebarWidthHydrating/);
   });
 });
+
+describe("AppLayout grid-measurement hydration unlock — issue #10827", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
+  });
+
+  it("imports the hydration unlock from the layout-transition lock module", () => {
+    expect(source).toContain("unlockSidebarHydration");
+    expect(source).toContain('from "@/lib/layoutTransitionLock"');
+  });
+
+  it("releases the hydration lock in an effect once the hydrating flag clears", () => {
+    // The passive effect runs after React commits the restored sidebarWidth (and
+    // the cleared flag) into the DOM, so grid/pane measurement subscribers fire
+    // against the correct <main> width instead of the default 350px.
+    expect(source).toMatch(
+      /if \(!isSidebarWidthHydrating\)\s*\{\s*unlockSidebarHydration\(\);\s*return;\s*\}/
+    );
+  });
+
+  it("gates the unlock on isHydrated so the pre-hydration skeleton can't release the lock early", () => {
+    // App.tsx renders a skeleton <AppLayout isHydrated={false}> (no ContentGrid)
+    // whose fast appClient.getState() typically resolves before the real layout
+    // mounts. Without this gate the skeleton would unlock the global lock early,
+    // so the real grid would hit the already-unlocked fast path and measure at
+    // the default 350px — reproducing the snap.
+    expect(source).toMatch(/if \(!isHydrated\) return;[\s\S]{0,500}unlockSidebarHydration\(\)/);
+    expect(source).toMatch(/\}, \[isHydrated, isSidebarWidthHydrating\]\)/);
+  });
+
+  it("arms a fallback unlock so a hung width-restore IPC still measures the grid", () => {
+    // If appClient.getState() neither resolves nor rejects, isSidebarWidthHydrating
+    // stays true forever; the timeout releases the lock so the grid degrades to a
+    // visible (pre-#10827) state rather than never measuring. Cleared the instant
+    // the flag clears normally.
+    expect(source).toMatch(
+      /setTimeout\(\s*unlockSidebarHydration,\s*SIDEBAR_HYDRATION_UNLOCK_FALLBACK_MS\s*\)/
+    );
+    expect(source).toMatch(/clearTimeout\(fallback\)/);
+  });
+});

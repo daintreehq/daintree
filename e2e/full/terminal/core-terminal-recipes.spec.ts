@@ -57,15 +57,37 @@ test.describe.serial("Core: Terminal Recipes", () => {
     }
 
     function recipeNameInput(editor: ReturnType<typeof getRecipeEditor>) {
-      return editor.getByLabel("Recipe Name");
+      return editor.locator(SEL.recipeEditor.nameInput);
     }
 
     function terminalTitleInput(editor: ReturnType<typeof getRecipeEditor>, index: number) {
-      return editor.getByLabel("Title (optional)").nth(index);
+      return editor.locator(SEL.recipeEditor.terminalTitle(index));
     }
 
     function terminalCommandInput(editor: ReturnType<typeof getRecipeEditor>, index: number) {
-      return editor.getByLabel("Command (optional)").nth(index);
+      return editor.locator(SEL.recipeEditor.terminalCommand(index));
+    }
+
+    async function ensureTestRecipeExists() {
+      const { window } = ctx;
+      const editButton = window.locator(SEL.projectSettings.editRecipeButton("E2E Test Recipe"));
+      if ((await editButton.count()) > 0) return;
+
+      await window.locator(SEL.projectSettings.addRecipeButton).click();
+      const editor = getRecipeEditor();
+      await expect(editor).toBeVisible({ timeout: T_MEDIUM });
+
+      await recipeNameInput(editor).fill("E2E Test Recipe");
+      await terminalCommandInput(editor, 0).fill("echo hello");
+      await editor.locator(SEL.recipeEditor.addTerminalButton).click();
+      await expect(editor.locator(SEL.recipeEditor.terminalType(1))).toBeVisible({
+        timeout: T_SHORT,
+      });
+      await terminalTitleInput(editor, 1).fill("Second Terminal");
+
+      await editor.locator(SEL.recipeEditor.createButton).click();
+      await expect(editor).not.toBeVisible({ timeout: T_MEDIUM });
+      await expect(editButton).toBeAttached({ timeout: T_LONG });
     }
 
     test("recipe editor opens with name input and one terminal slot", async () => {
@@ -128,6 +150,7 @@ test.describe.serial("Core: Terminal Recipes", () => {
     test("edit reopens with saved values and cancel confirms unsaved changes", async () => {
       const { window } = ctx;
       await openRecipesTab();
+      await ensureTestRecipeExists();
       await window.waitForTimeout(300);
 
       // Click edit on the saved recipe (button is opacity-0 until hover)
@@ -188,6 +211,7 @@ test.describe.serial("Core: Terminal Recipes", () => {
       const { window } = ctx;
       await window.waitForTimeout(500);
       await openRecipesTab();
+      await ensureTestRecipeExists();
 
       const editBtn = window.locator(SEL.projectSettings.editRecipeButton("E2E Test Recipe"));
       await expect(editBtn).toBeVisible({ timeout: T_MEDIUM });

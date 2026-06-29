@@ -80,7 +80,7 @@ describe("TerminalInstanceService - options", () => {
       removeListener: vi.fn(),
     });
 
-    const managed = terminalInstanceService.getOrCreate(
+    const managed = await terminalInstanceService.getOrCreate(
       "test-options",
       undefined,
       {},
@@ -109,7 +109,7 @@ describe("TerminalInstanceService - options", () => {
       removeListener: vi.fn(),
     });
 
-    const managed = terminalInstanceService.getOrCreate(
+    const managed = await terminalInstanceService.getOrCreate(
       "test-options",
       "claude",
       {},
@@ -139,7 +139,7 @@ describe("TerminalInstanceService - options", () => {
       removeListener: vi.fn(),
     });
 
-    const managed = terminalInstanceService.getOrCreate(
+    const managed = await terminalInstanceService.getOrCreate(
       "test-options",
       "claude",
       {},
@@ -168,7 +168,7 @@ describe("TerminalInstanceService - options", () => {
     });
 
     // First creation — agent terminal
-    const managed = terminalInstanceService.getOrCreate(
+    const managed = await terminalInstanceService.getOrCreate(
       "test-options",
       "claude",
       {},
@@ -180,7 +180,7 @@ describe("TerminalInstanceService - options", () => {
 
     // Simulate XtermAdapter re-rendering with fresh options from getXtermOptions()
     // which includes cursorBlink: true from BASE_TERMINAL_OPTIONS
-    terminalInstanceService.getOrCreate(
+    await terminalInstanceService.getOrCreate(
       "test-options",
       "claude",
       { cursorBlink: true, fontSize: 14 },
@@ -207,7 +207,7 @@ describe("TerminalInstanceService - options", () => {
       removeListener: vi.fn(),
     });
 
-    const managed = terminalInstanceService.getOrCreate(
+    const managed = await terminalInstanceService.getOrCreate(
       "test-options-theme",
       undefined,
       {},
@@ -239,7 +239,7 @@ describe("TerminalInstanceService - options", () => {
       removeListener: vi.fn(),
     });
 
-    const managed = terminalInstanceService.getOrCreate(
+    const managed = await terminalInstanceService.getOrCreate(
       "test-options-font",
       undefined,
       {},
@@ -269,7 +269,7 @@ describe("TerminalInstanceService - options", () => {
       removeListener: vi.fn(),
     });
 
-    const managed = terminalInstanceService.getOrCreate(
+    const managed = await terminalInstanceService.getOrCreate(
       "test-options-both",
       undefined,
       {},
@@ -302,7 +302,7 @@ describe("TerminalInstanceService - options", () => {
       removeListener: vi.fn(),
     });
 
-    const managed = terminalInstanceService.getOrCreate(
+    const managed = await terminalInstanceService.getOrCreate(
       "test-options-hibernated",
       undefined,
       {},
@@ -338,14 +338,14 @@ describe("TerminalInstanceService - options", () => {
       removeListener: vi.fn(),
     });
 
-    const m1 = terminalInstanceService.getOrCreate(
+    const m1 = await terminalInstanceService.getOrCreate(
       "test-global-1",
       undefined,
       {},
       () => TerminalRefreshTier.FOCUSED,
       undefined
     );
-    const m2 = terminalInstanceService.getOrCreate(
+    const m2 = await terminalInstanceService.getOrCreate(
       "test-global-2",
       undefined,
       {},
@@ -378,14 +378,14 @@ describe("TerminalInstanceService - options", () => {
       removeListener: vi.fn(),
     });
 
-    const m1 = terminalInstanceService.getOrCreate(
+    const m1 = await terminalInstanceService.getOrCreate(
       "test-global-font-1",
       undefined,
       {},
       () => TerminalRefreshTier.FOCUSED,
       undefined
     );
-    const m2 = terminalInstanceService.getOrCreate(
+    const m2 = await terminalInstanceService.getOrCreate(
       "test-global-font-2",
       undefined,
       {},
@@ -416,14 +416,14 @@ describe("TerminalInstanceService - options", () => {
       removeListener: vi.fn(),
     });
 
-    const active = terminalInstanceService.getOrCreate(
+    const active = await terminalInstanceService.getOrCreate(
       "test-global-active",
       undefined,
       {},
       () => TerminalRefreshTier.FOCUSED,
       undefined
     );
-    const hibernated = terminalInstanceService.getOrCreate(
+    const hibernated = await terminalInstanceService.getOrCreate(
       "test-global-hibernated",
       undefined,
       {},

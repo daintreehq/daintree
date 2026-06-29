@@ -123,7 +123,7 @@ class TerminalRegistryController {
    * Prewarm a terminal's renderer-side xterm instance.
    * Call this after spawning to ensure no output is lost.
    */
-  prewarm(id: string, location: PanelLocation, launchAgentId?: string): void {
+  async prewarm(id: string, location: PanelLocation, launchAgentId?: string): Promise<void> {
     const isAgent = Boolean(launchAgentId);
     try {
       const appearance = getTerminalAppearanceSnapshot();
@@ -148,7 +148,10 @@ class TerminalRegistryController {
       const widthPx = location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH;
       const heightPx = location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT;
 
-      terminalInstanceService.prewarmTerminal(id, launchAgentId, terminalOptions, {
+      // Awaited so the instance exists before any sendPtyResize below targets
+      // it — prewarmTerminal is async now that the lazy Unicode11 addon is
+      // loaded during terminal construction (#10840).
+      await terminalInstanceService.prewarmTerminal(id, launchAgentId, terminalOptions, {
         offscreen,
         widthPx,
         heightPx,

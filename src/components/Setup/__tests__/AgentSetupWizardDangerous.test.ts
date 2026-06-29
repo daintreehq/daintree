@@ -47,6 +47,7 @@ describe("Skip permissions toggle gating", () => {
       "gemini",
       "antigravity",
       "codex",
+      "grok",
       "cursor",
       "amp",
       "crush",

@@ -70,50 +70,6 @@ export function BehavioralControls({
 
   return (
     <>
-      <div id="agents-skip-permissions" className="space-y-1.5">
-        <SettingsChoicebox<DangerousMode>
-          label="Skip permissions"
-          description="Auto-approve all file, command, and network actions. Off vetoes the global setting for this scope."
-          columns={3}
-          value={dangerousMode}
-          onChange={onDangerousModeChange}
-          options={dangerousModeOptions}
-        />
-        {dangerousMode === "inherit" && (
-          <p className="text-xs text-daintree-text/40 select-text">
-            Inherited from {inheritOriginLabel}
-          </p>
-        )}
-        {effectiveSkipPerms && defaultDangerousArg && (
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
-            <code className="text-xs text-status-error font-mono">{defaultDangerousArg}</code>
-            <span className="text-xs text-daintree-text/40">added to command</span>
-          </div>
-        )}
-      </div>
-
-      {supportsInlineMode && (
-        <div id="agents-inline-mode">
-          <SettingsSwitchCard
-            variant="compact"
-            title="Inline mode"
-            subtitle={
-              scopeKind === "custom" && inlineOverride === undefined
-                ? `Using default (${agentDefaultInline ? "On" : "Off"})`
-                : "Disable fullscreen TUI for better resize handling and scrollback"
-            }
-            isEnabled={effectiveInlineMode}
-            onChange={onInlineModeChange}
-            ariaLabel={`Inline mode for ${scopeLabel}`}
-            isModified={scopeKind === "custom" && inlineOverride !== undefined}
-            onReset={scopeKind === "custom" ? onInlineOverrideReset : undefined}
-            resetAriaLabel={
-              scopeKind === "custom" ? `Reset inline mode override for ${scopeLabel}` : undefined
-            }
-          />
-        </div>
-      )}
-
       <div id="agents-custom-args" className="group/args space-y-1.5">
         <div className="flex items-center gap-2">
           <label className="text-sm font-medium text-daintree-text">Custom arguments</label>
@@ -140,6 +96,50 @@ export function BehavioralControls({
           data-testid={scopeKind === "custom" ? "preset-custom-flags-input" : undefined}
         />
         <p className="text-xs text-daintree-text/40 select-text">{customArgsDescription}</p>
+      </div>
+
+      {supportsInlineMode && (
+        <div id="agents-inline-mode">
+          <SettingsSwitchCard
+            variant="compact"
+            title="Inline mode"
+            subtitle={
+              scopeKind === "custom" && inlineOverride === undefined
+                ? `Using default (${agentDefaultInline ? "On" : "Off"})`
+                : "Disable fullscreen TUI for better resize handling and scrollback"
+            }
+            isEnabled={effectiveInlineMode}
+            onChange={onInlineModeChange}
+            ariaLabel={`Inline mode for ${scopeLabel}`}
+            isModified={scopeKind === "custom" && inlineOverride !== undefined}
+            onReset={scopeKind === "custom" ? onInlineOverrideReset : undefined}
+            resetAriaLabel={
+              scopeKind === "custom" ? `Reset inline mode override for ${scopeLabel}` : undefined
+            }
+          />
+        </div>
+      )}
+
+      <div id="agents-skip-permissions" className="space-y-1.5">
+        <SettingsChoicebox<DangerousMode>
+          label="Skip permissions"
+          description="Auto-approve all file, command, and network actions. Off vetoes the global setting for this scope."
+          columns={3}
+          value={dangerousMode}
+          onChange={onDangerousModeChange}
+          options={dangerousModeOptions}
+        />
+        {dangerousMode === "inherit" && (
+          <p className="text-xs text-daintree-text/40 select-text">
+            Inherited from {inheritOriginLabel}
+          </p>
+        )}
+        {effectiveSkipPerms && defaultDangerousArg && (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
+            <code className="text-xs text-status-error font-mono">{defaultDangerousArg}</code>
+            <span className="text-xs text-daintree-text/40">added to command</span>
+          </div>
+        )}
       </div>
     </>
   );

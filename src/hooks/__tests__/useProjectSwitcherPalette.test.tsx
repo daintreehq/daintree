@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   getBulkStatsMock,
+  freeMemoryMock,
   setStatsMock,
   useProjectStoreMock,
   useProjectStatsStoreMock,
@@ -13,6 +14,7 @@ const {
   projectStatsState,
 } = vi.hoisted(() => {
   const getBulkStatsMock = vi.fn();
+  const freeMemoryMock = vi.fn();
   const copyMock = vi.fn().mockResolvedValue(true);
 
   const projectStatsState = {
@@ -62,6 +64,7 @@ const {
 
   return {
     getBulkStatsMock,
+    freeMemoryMock,
     setStatsMock,
     useProjectStoreMock,
     useProjectStatsStoreMock,
@@ -75,6 +78,7 @@ const {
 vi.mock("@/clients", () => ({
   projectClient: {
     getBulkStats: getBulkStatsMock,
+    freeMemory: freeMemoryMock,
   },
 }));
 
@@ -130,6 +134,11 @@ describe("useProjectSwitcherPalette", () => {
     projectState.currentProject = null;
     projectStatsState.stats = {};
     getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1"]));
+    freeMemoryMock.mockResolvedValue({
+      terminalsKilled: 0,
+      rendererEvicted: false,
+      workspaceEvicted: false,
+    });
     setStatsMock.mockImplementation((stats: typeof projectStatsState.stats) => {
       projectStatsState.stats = stats;
     });
@@ -570,6 +579,140 @@ describe("useProjectSwitcherPalette", () => {
           type: "error",
           title: "Couldn't close project",
         })
+      );
+    });
+  });
+
+  describe("free memory", () => {
+    beforeEach(() => {
+      // Pin a single, non-active project so ordering with describes that mutate
+      // the shared projects array can't change result counts.
+      projectState.projects = [
+        {
+          id: "project-1",
+          name: "Project One",
+          path: "/repo/one",
+          emoji: "🌲",
+          color: "#00aa00",
+          lastOpened: 123,
+          frecencyScore: 3.0,
+          status: "active" as const,
+        },
+      ];
+      projectState.currentProject = null;
+    });
+
+    const bulkStats = (
+      counts: { processCount?: number; activeAgentCount?: number; waitingAgentCount?: number } = {}
+    ) => ({
+      "project-1": {
+        processCount: counts.processCount ?? 0,
+        terminalCount: counts.processCount ?? 0,
+        estimatedMemoryMB: 0,
+        terminalTypes: {},
+        processIds: [],
+        activeAgentCount: counts.activeAgentCount ?? 0,
+        waitingAgentCount: counts.waitingAgentCount ?? 0,
+      },
+    });
+
+    it("D0: a project with no live processes frees immediately, no confirm dialog", async () => {
+      getBulkStatsMock.mockResolvedValue(bulkStats());
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(1);
+      });
+
+      await act(async () => {
+        await result.current.freeMemoryProject("project-1");
+      });
+
+      expect(freeMemoryMock).toHaveBeenCalledWith("project-1");
+      expect(result.current.freeMemoryConfirmProject).toBeNull();
+    });
+
+    it("D1: a project with live processes opens a confirm dialog before freeing", async () => {
+      getBulkStatsMock.mockResolvedValue(bulkStats({ processCount: 2, activeAgentCount: 1 }));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results[0]?.processCount).toBe(2);
+      });
+
+      await act(async () => {
+        await result.current.freeMemoryProject("project-1");
+      });
+
+      // Snapshot captured, nothing freed yet.
+      expect(result.current.freeMemoryConfirmProject?.id).toBe("project-1");
+      expect(result.current.freeMemoryConfirmProject?.processCount).toBe(2);
+      expect(freeMemoryMock).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await result.current.confirmFreeMemory();
+      });
+
+      expect(freeMemoryMock).toHaveBeenCalledWith("project-1");
+      expect(result.current.freeMemoryConfirmProject).toBeNull();
+    });
+
+    it("refuses to free the active project and surfaces guidance instead", async () => {
+      projectState.currentProject = { id: "project-1" };
+      getBulkStatsMock.mockResolvedValue(bulkStats());
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(1);
+      });
+
+      await act(async () => {
+        await result.current.freeMemoryProject("project-1");
+      });
+
+      expect(freeMemoryMock).not.toHaveBeenCalled();
+      expect(result.current.freeMemoryConfirmProject).toBeNull();
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Switch away first" })
+      );
+    });
+
+    it("shows an error notification when freeing fails", async () => {
+      notifyMock.mockClear();
+      freeMemoryMock.mockRejectedValueOnce(new Error("free failed"));
+      getBulkStatsMock.mockResolvedValue(bulkStats());
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(1);
+      });
+
+      await act(async () => {
+        await result.current.freeMemoryProject("project-1");
+      });
+
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error", title: "Couldn't free memory" })
       );
     });
   });

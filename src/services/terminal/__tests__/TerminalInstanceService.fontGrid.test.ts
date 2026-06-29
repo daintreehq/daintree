@@ -105,14 +105,14 @@ describe("TerminalInstanceService - repairFontGrid (#9776)", () => {
     const { terminalInstanceService } = await import("../TerminalInstanceService");
     stubMatchMedia();
 
-    const m1 = terminalInstanceService.getOrCreate(
+    const m1 = await terminalInstanceService.getOrCreate(
       "repair-fit-1",
       undefined,
       {},
       () => TerminalRefreshTier.FOCUSED,
       undefined
     );
-    const m2 = terminalInstanceService.getOrCreate(
+    const m2 = await terminalInstanceService.getOrCreate(
       "repair-fit-2",
       undefined,
       {},
@@ -136,14 +136,14 @@ describe("TerminalInstanceService - repairFontGrid (#9776)", () => {
     const { terminalInstanceService } = await import("../TerminalInstanceService");
     stubMatchMedia();
 
-    const active = terminalInstanceService.getOrCreate(
+    const active = await terminalInstanceService.getOrCreate(
       "repair-active",
       undefined,
       {},
       () => TerminalRefreshTier.FOCUSED,
       undefined
     );
-    const hibernated = terminalInstanceService.getOrCreate(
+    const hibernated = await terminalInstanceService.getOrCreate(
       "repair-hibernated",
       undefined,
       {},
@@ -168,7 +168,7 @@ describe("TerminalInstanceService - repairFontGrid (#9776)", () => {
     const { terminalInstanceService } = await import("../TerminalInstanceService");
     stubMatchMedia();
 
-    const managed = terminalInstanceService.getOrCreate(
+    const managed = await terminalInstanceService.getOrCreate(
       "repair-poke",
       undefined,
       {},
@@ -206,7 +206,7 @@ describe("TerminalInstanceService - repairFontGrid (#9776)", () => {
     const { terminalInstanceService } = await import("../TerminalInstanceService");
     stubMatchMedia();
 
-    const managed = terminalInstanceService.getOrCreate(
+    const managed = await terminalInstanceService.getOrCreate(
       "repair-default",
       undefined,
       {},
@@ -237,7 +237,7 @@ describe("TerminalInstanceService - repairFontGrid (#9776)", () => {
     const { terminalInstanceService } = await import("../TerminalInstanceService");
     stubMatchMedia();
 
-    const managed = terminalInstanceService.getOrCreate(
+    const managed = await terminalInstanceService.getOrCreate(
       "repair-dims",
       undefined,
       {},
@@ -261,7 +261,7 @@ describe("TerminalInstanceService - repairFontGrid (#9776)", () => {
 
     expect(registeredLateArrivalCallback).toBeTypeOf("function");
 
-    const managed = terminalInstanceService.getOrCreate(
+    const managed = await terminalInstanceService.getOrCreate(
       "repair-callback",
       undefined,
       {},

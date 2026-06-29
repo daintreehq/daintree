@@ -204,6 +204,7 @@ export const CHANNELS = {
   PROJECT_DETECT_RUNNERS: "project:detect-runners",
   PROJECT_LIST_REMOTES: "project:list-remotes",
   PROJECT_CLOSE: "project:close",
+  PROJECT_FREE_MEMORY: "project:free-memory",
   PROJECT_REOPEN: "project:reopen",
   PROJECT_GET_STATS: "project:get-stats",
   PROJECT_GET_BULK_STATS: "project:get-bulk-stats",
@@ -340,6 +341,10 @@ export const CHANNELS = {
   IDLE_TERMINAL_CLOSE_PROJECT: "idle-terminal:close-project",
   IDLE_TERMINAL_DISMISS_PROJECT: "idle-terminal:dismiss-project",
   IDLE_TERMINAL_NOTIFY: "idle-terminal:notify",
+
+  IDLE_BACKGROUND_GET_CONFIG: "idle-background:get-config",
+  IDLE_BACKGROUND_UPDATE_CONFIG: "idle-background:update-config",
+  IDLE_BACKGROUND_CLOSED: "idle-background:closed",
 
   WEBVIEW_SET_LIFECYCLE_STATE: "webview:set-lifecycle-state",
   WEBVIEW_REGISTER_PANEL: "webview:register-panel",

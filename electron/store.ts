@@ -90,6 +90,10 @@ export interface StoreSchema {
   };
   idleTerminalDismissals: Record<string, number>;
   idleTerminalNotifiedAt: Record<string, number>;
+  idleBackgroundAutoClose: {
+    enabled: boolean;
+    thresholdMinutes: number;
+  };
   appState: {
     activeWorktreeId?: string;
     sidebarWidth: number;
@@ -500,6 +504,13 @@ const storeOptions = {
     },
     idleTerminalDismissals: {},
     idleTerminalNotifiedAt: {},
+    // Auto-close defaults OFF: it's a structural change to project lifecycle
+    // (frees the renderer + workspace host), so users opt in. 15-min default
+    // threshold matches the issue spec.
+    idleBackgroundAutoClose: {
+      enabled: false,
+      thresholdMinutes: 15,
+    },
     appState: {
       sidebarWidth: 350,
       focusMode: false,

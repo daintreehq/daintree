@@ -1385,11 +1385,15 @@ describe("DemoCursor", () => {
       }
       expect(demoMock.sendCommandDone).not.toHaveBeenCalledWith("req-idle-term", undefined);
 
-      // Stop writing and let it settle.
-      await new Promise((r) => setTimeout(r, 200));
-      expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-idle-term", undefined);
-      // Subscription torn down on resolve.
-      expect(term.dispose).toHaveBeenCalledTimes(1);
+      // Stop writing and wait for the idle poll to observe a full settle window.
+      await vi.waitFor(
+        () => {
+          expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-idle-term", undefined);
+          // Subscription torn down on resolve.
+          expect(term.dispose).toHaveBeenCalledTimes(1);
+        },
+        { timeout: 3000, interval: 20 }
+      );
     });
 
     it("skips hibernated terminals", async () => {
@@ -1403,8 +1407,12 @@ describe("DemoCursor", () => {
       expect(live.managed.terminal.onWriteParsed).toHaveBeenCalledTimes(1);
       expect(hibernated.managed.terminal.onWriteParsed).not.toHaveBeenCalled();
 
-      await new Promise((r) => setTimeout(r, 150));
-      expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-idle-hib", undefined);
+      await vi.waitFor(
+        () => {
+          expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-idle-hib", undefined);
+        },
+        { timeout: 3000, interval: 20 }
+      );
     });
 
     it("skips panel ids with no terminal instance", async () => {
@@ -1414,8 +1422,12 @@ describe("DemoCursor", () => {
       render(<DemoCursor />);
       emit("demo:exec-wait-for-idle", { requestId: "req-idle-null", settleMs: 30, timeoutMs: 2000 });
 
-      await new Promise((r) => setTimeout(r, 150));
-      expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-idle-null", undefined);
+      await vi.waitFor(
+        () => {
+          expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-idle-null", undefined);
+        },
+        { timeout: 3000, interval: 20 }
+      );
     });
 
     it("does not report idle while a video is playing", async () => {
@@ -1429,10 +1441,14 @@ describe("DemoCursor", () => {
         });
 
         // Seeded as active → settle never completes → handler times out.
-        await new Promise((r) => setTimeout(r, 600));
-        expect(demoMock.sendCommandDone).toHaveBeenCalledWith(
-          "req-idle-video",
-          "Error: waitForIdle timed out"
+        await vi.waitFor(
+          () => {
+            expect(demoMock.sendCommandDone).toHaveBeenCalledWith(
+              "req-idle-video",
+              "Error: waitForIdle timed out"
+            );
+          },
+          { timeout: 2000, interval: 20 }
         );
       } finally {
         document.body.removeChild(video);
@@ -1457,8 +1473,15 @@ describe("DemoCursor", () => {
 
         // Pause fires a capture-phase 'pause' event → removed from active set.
         video.dispatchEvent(new Event("pause"));
-        await new Promise((r) => setTimeout(r, 150));
-        expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-idle-video-pause", undefined);
+        await vi.waitFor(
+          () => {
+            expect(demoMock.sendCommandDone).toHaveBeenCalledWith(
+              "req-idle-video-pause",
+              undefined
+            );
+          },
+          { timeout: 3000, interval: 20 }
+        );
       } finally {
         document.body.removeChild(video);
       }
@@ -1489,8 +1512,12 @@ describe("DemoCursor", () => {
         });
 
         // Let the settle timer fire check() → it schedules the first rAF.
-        await new Promise((r) => setTimeout(r, 40));
-        expect(rafQueue.length).toBe(1);
+        await vi.waitFor(
+          () => {
+            expect(rafQueue.length).toBe(1);
+          },
+          { timeout: 1000, interval: 10 }
+        );
 
         // Run the first frame → schedules the inner frame.
         rafQueue.shift()!(0);
@@ -1505,8 +1532,12 @@ describe("DemoCursor", () => {
 
         // Hand control back to the real loop; the next quiet cycle resolves.
         intercept = false;
-        await new Promise((r) => setTimeout(r, 150));
-        expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-raf-race", undefined);
+        await vi.waitFor(
+          () => {
+            expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-raf-race", undefined);
+          },
+          { timeout: 3000, interval: 20 }
+        );
       } finally {
         rafSpy.mockRestore();
       }
@@ -1525,18 +1556,21 @@ describe("DemoCursor", () => {
           timeoutMs: 300,
         });
 
-        await new Promise((r) => setTimeout(r, 500));
-        expect(demoMock.sendCommandDone).toHaveBeenCalledWith(
-          "req-idle-timeout",
-          "Error: waitForIdle timed out"
+        await vi.waitFor(
+          () => {
+            expect(demoMock.sendCommandDone).toHaveBeenCalledWith(
+              "req-idle-timeout",
+              "Error: waitForIdle timed out"
+            );
+            // Terminal subscription disposed.
+            expect(term.dispose).toHaveBeenCalledTimes(1);
+            // All four video listeners removed in the capture phase.
+            for (const evt of ["playing", "pause", "ended", "waiting"]) {
+              expect(removeSpy).toHaveBeenCalledWith(evt, expect.any(Function), true);
+            }
+          },
+          { timeout: 2000, interval: 20 }
         );
-
-        // Terminal subscription disposed.
-        expect(term.dispose).toHaveBeenCalledTimes(1);
-        // All four video listeners removed in the capture phase.
-        for (const evt of ["playing", "pause", "ended", "waiting"]) {
-          expect(removeSpy).toHaveBeenCalledWith(evt, expect.any(Function), true);
-        }
       } finally {
         removeSpy.mockRestore();
         document.body.removeChild(video);

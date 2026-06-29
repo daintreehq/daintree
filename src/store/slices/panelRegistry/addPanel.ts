@@ -547,7 +547,10 @@ export const createAddPanelActions = (
           (options.worktreeId ?? null) !== (currentActiveWorktreeId ?? null));
 
       if (!isAgent) {
-        terminalInstanceService.prewarmTerminal(id, launchAgentId, terminalOptions, {
+        // Awaited so the managed instance and its PTY data listener exist before
+        // the queued spawn runs — prewarmTerminal is async now that the lazy
+        // Unicode11 addon is loaded during terminal construction (#10840).
+        await terminalInstanceService.prewarmTerminal(id, launchAgentId, terminalOptions, {
           offscreen: false,
           widthPx: location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH,
           heightPx: location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT,
@@ -558,7 +561,10 @@ export const createAddPanelActions = (
         const widthPx = location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH;
         const heightPx = location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT;
 
-        terminalInstanceService.prewarmTerminal(id, launchAgentId, terminalOptions, {
+        // Awaited so the instance exists before the sendPtyResize below targets
+        // it — prewarmTerminal is async now that the lazy Unicode11 addon is
+        // loaded during terminal construction (#10840).
+        await terminalInstanceService.prewarmTerminal(id, launchAgentId, terminalOptions, {
           offscreen: false,
           widthPx,
           heightPx,

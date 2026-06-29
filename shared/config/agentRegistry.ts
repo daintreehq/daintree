@@ -334,8 +334,12 @@ export interface AssistantSupports {
    * - `"experimental"`: structurally enabled but hidden from the picker
    *   until promoted. Use for partial wiring that hasn't been validated end
    *   to end yet.
+   * - `"deprecated"`: was wired, now retired from the assistant overlay. The
+   *   wiring shape is preserved for historical reference, but the agent is
+   *   excluded from both the picker and the help-session launch path. The
+   *   agent still launches normally from the main toolbar.
    */
-  tier: "stable" | "experimental";
+  tier: "stable" | "experimental" | "deprecated";
 }
 
 export interface AgentConfig {
@@ -553,6 +557,7 @@ import { config as aiderConfig } from "./agents/aider.js";
 import { config as geminiConfig } from "./agents/gemini.js";
 import { config as antigravityConfig } from "./agents/antigravity.js";
 import { config as codexConfig } from "./agents/codex.js";
+import { config as grokConfig } from "./agents/grok.js";
 import { config as cursorConfig } from "./agents/cursor.js";
 import { config as copilotConfig } from "./agents/copilot.js";
 import { config as gooseConfig } from "./agents/goose.js";
@@ -601,6 +606,7 @@ export const AGENT_REGISTRY: Record<BuiltInAgentId, AgentConfig> = {
   gemini: geminiConfig,
   antigravity: antigravityConfig,
   codex: codexConfig,
+  grok: grokConfig,
   cursor: cursorConfig,
   copilot: copilotConfig,
   goose: gooseConfig,
@@ -691,7 +697,8 @@ export function getAgentModelConfig(
  * shadow user-defined entries with the same ID (enforced by `getEffectiveRegistry`).
  *
  * Excludes agents marked `supports: false` (structurally ineligible),
- * `supports: undefined` (not yet wired), and `tier: "experimental"`.
+ * `supports: undefined` (not yet wired), `tier: "experimental"`, and
+ * `tier: "deprecated"`.
  */
 export function getAssistantSupportedAgentIds(): string[] {
   const effective = getEffectiveRegistry();
@@ -716,8 +723,8 @@ export function getAssistantSupportedAgentIds(): string[] {
 
 /**
  * IDs of agents (built-in and user-defined) whose assistant wiring is
- * structurally complete at any tier (`"stable"` or `"experimental"`). Used
- * by `HelpSessionService`'s provision validator and `lifecycle.ts`'s
+ * structurally complete and active (tier `"stable"` or `"experimental"`).
+ * Used by `HelpSessionService`'s provision validator and `lifecycle.ts`'s
  * help-launch detector — both must accept experimental agents so a help
  * session can spawn under them, even though the picker (driven by
  * `getAssistantSupportedAgentIds`) keeps them hidden until promoted.
@@ -725,22 +732,26 @@ export function getAssistantSupportedAgentIds(): string[] {
  * Built-in agents appear first (in `BUILT_IN_AGENT_IDS` popularity order),
  * followed by user-defined agents in registration order.
  *
- * Excludes only `supports: false` (structurally ineligible) and
- * `supports: undefined` (not yet wired).
+ * Uses a positive allow-list (tier is `"stable"` or `"experimental"`), so it
+ * excludes `supports: false` (structurally ineligible), `supports: undefined`
+ * (not yet wired), and `tier: "deprecated"` (retired from the overlay). Any
+ * future tier addition is excluded by default until explicitly allow-listed.
  */
 export function getAssistantWiredAgentIds(): string[] {
   const effective = getEffectiveRegistry();
   const wired = new Set<string>();
+  const isWired = (supports: AgentConfig["supports"]): boolean =>
+    supports !== false &&
+    supports !== undefined &&
+    (supports.tier === "stable" || supports.tier === "experimental");
   for (const id of BUILT_IN_AGENT_IDS) {
-    const supports = effective[id]?.supports;
-    if (supports !== false && supports !== undefined) {
+    if (isWired(effective[id]?.supports)) {
       wired.add(id);
     }
   }
   for (const id of Object.keys(effective)) {
     if (wired.has(id)) continue;
-    const supports = effective[id]?.supports;
-    if (supports !== false && supports !== undefined) {
+    if (isWired(effective[id]?.supports)) {
       wired.add(id);
     }
   }

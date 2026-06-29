@@ -707,6 +707,11 @@ export function NewWorktreeDialog({
               correlationId: worktreeId,
               priority: "high",
               context: { eventKind: "uiFeedback" },
+              // Auto-dismiss after a short window instead of staying sticky:
+              // notify() defaults action-bearing toasts to duration 0, but the
+              // Undo here is an optional, time-limited affordance — not a reason
+              // to keep the confirmation on screen until manually dismissed.
+              duration: 5_000,
               action: {
                 label: "Undo",
                 onClick: undoOnClick,

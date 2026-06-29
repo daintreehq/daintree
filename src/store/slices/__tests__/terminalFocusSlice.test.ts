@@ -425,6 +425,134 @@ describe("TerminalFocusSlice - Tab Group Maximize", () => {
     expect(state.maximizedId).toBe(null);
     expect(state.maximizeTarget).toBe(null);
   });
+
+  describe("focusOrMaximizeByIndex - press-again-to-fullscreen", () => {
+    // 1 -> term-1, 2 -> term-2, 3 -> term-3, anything else unresolved.
+    const findByIndex = vi.fn((idx: number) =>
+      idx === 1 ? "term-1" : idx === 2 ? "term-2" : idx === 3 ? "term-3" : null
+    );
+    // term-3 stands alone (not in any group) per mockGetPanelGroupWithGroup.
+    const noGroup = vi.fn(() => undefined);
+
+    it("focuses an unfocused panel without maximizing or touching maximize state", () => {
+      state.focusedId = "term-2";
+      const toggleSpy = vi.spyOn(state, "toggleMaximize");
+
+      state.focusOrMaximizeByIndex(1, findByIndex, noGroup);
+
+      expect(state.focusedId).toBe("term-1");
+      expect(state.maximizedId).toBe(null);
+      // Nothing was maximized, so the unmaximize path must not run.
+      expect(toggleSpy).not.toHaveBeenCalled();
+    });
+
+    it("maximizes the panel when its index is pressed while already focused", () => {
+      state.focusedId = "term-3";
+
+      state.focusOrMaximizeByIndex(3, findByIndex, noGroup);
+
+      expect(state.focusedId).toBe("term-3");
+      expect(state.maximizedId).toBe("term-3");
+      expect(state.maximizeTarget).toEqual({ type: "panel", id: "term-3" });
+    });
+
+    it("restores when the focused-and-maximized panel's index is pressed again", () => {
+      state.focusedId = "term-3";
+      state.maximizedId = "term-3";
+      state.maximizeTarget = { type: "panel", id: "term-3" };
+
+      state.focusOrMaximizeByIndex(3, findByIndex, noGroup);
+
+      expect(state.focusedId).toBe("term-3");
+      expect(state.maximizedId).toBe(null);
+      expect(state.maximizeTarget).toBe(null);
+    });
+
+    it("exits fullscreen and focuses the new panel when a different index is pressed", () => {
+      state.focusedId = "term-3";
+      state.maximizedId = "term-3";
+      state.maximizeTarget = { type: "panel", id: "term-3" };
+      state.preMaximizeLayout = { gridCols: 2, gridItemCount: 3, worktreeId: "worktree-1" };
+
+      state.focusOrMaximizeByIndex(2, findByIndex, noGroup);
+
+      expect(state.focusedId).toBe("term-2");
+      expect(state.maximizedId).toBe(null);
+      expect(state.maximizeTarget).toBe(null);
+      // Switching panels unmaximizes via toggleMaximize, which preserves the
+      // snapshot so the grid's column count restores cleanly (not clearMaximize).
+      expect(state.preMaximizeLayout).toEqual({
+        gridCols: 2,
+        gridItemCount: 3,
+        worktreeId: "worktree-1",
+      });
+    });
+
+    it("reveals a background panel in the grid (not fullscreen) when it was opened during fullscreen", () => {
+      // term-1 is fullscreen; term-2 was opened while maximized, so it became
+      // focused in the background without ever being displayed. Pressing its
+      // index must restore the grid and focus it — NOT fullscreen it. (A second
+      // press would then fullscreen it, since nothing is maximized by then.)
+      state.focusedId = "term-2";
+      state.maximizedId = "term-1";
+      state.maximizeTarget = { type: "panel", id: "term-1" };
+
+      state.focusOrMaximizeByIndex(2, findByIndex, noGroup);
+
+      expect(state.maximizedId).toBe(null);
+      expect(state.maximizeTarget).toBe(null);
+      expect(state.focusedId).toBe("term-2");
+    });
+
+    it("maximizes the whole group when the focused panel's index is re-pressed (group-aware)", () => {
+      // term-1 is in group-1 (with term-2) per mockGetPanelGroupWithGroup.
+      state.focusedId = "term-1";
+
+      state.focusOrMaximizeByIndex(1, findByIndex, mockGetPanelGroupWithGroup);
+
+      expect(state.maximizeTarget).toEqual({ type: "group", id: "group-1" });
+    });
+
+    it("unmaximizes the group when a maximized group's cell index is re-pressed", () => {
+      state.focusedId = "term-1";
+      state.maximizedId = "term-1";
+      state.maximizeTarget = { type: "group", id: "group-1" };
+
+      state.focusOrMaximizeByIndex(1, findByIndex, mockGetPanelGroupWithGroup);
+
+      expect(state.maximizedId).toBe(null);
+      expect(state.maximizeTarget).toBe(null);
+    });
+
+    it("toggles the group when focus sits on a sibling tab and the cell's representative differs", () => {
+      // findByIndex resolves group-1's cell to term-1, but focus is on its
+      // sibling term-2. Same cell -> re-press must maximize, not switch+focus.
+      state.focusedId = "term-2";
+      const activateSpy = vi.spyOn(state, "activateTerminal");
+
+      state.focusOrMaximizeByIndex(1, findByIndex, mockGetPanelGroupWithGroup);
+
+      expect(state.maximizeTarget).toEqual({ type: "group", id: "group-1" });
+      expect(state.focusedId).toBe("term-2");
+      expect(activateSpy).not.toHaveBeenCalled();
+    });
+
+    it("is a no-op when the index does not resolve to a panel", () => {
+      state.focusedId = "term-1";
+      state.maximizedId = "term-1";
+      state.maximizeTarget = { type: "panel", id: "term-1" };
+      const toggleSpy = vi.spyOn(state, "toggleMaximize");
+      const activateSpy = vi.spyOn(state, "activateTerminal");
+
+      state.focusOrMaximizeByIndex(9, findByIndex, noGroup);
+
+      // Early return: nothing focused/maximized changes, no side effects.
+      expect(state.focusedId).toBe("term-1");
+      expect(state.maximizedId).toBe("term-1");
+      expect(toggleSpy).not.toHaveBeenCalled();
+      expect(activateSpy).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe("TerminalFocusSlice - dock focus sync invariant", () => {

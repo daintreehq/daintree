@@ -111,6 +111,7 @@ import type { RetryAction, ErrorRecord, RetryProgressPayload } from "./errors.js
 import type { EventRecord } from "./events.js";
 import type {
   ProjectCloseResult,
+  ProjectFreeMemoryResult,
   ProjectStats,
   ProjectStatusMap,
   BulkProjectStats,
@@ -132,6 +133,7 @@ import type {
 import type { TerminalConfig } from "./config.js";
 import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
+import type { IdleBackgroundClosedPayload } from "./idleBackgroundAutoClose.js";
 import type { KeyAction } from "../keymap.js";
 
 export interface KeybindingImportResult {
@@ -537,6 +539,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * @param options - Optional: { killTerminals: true } to kill running terminals (default: false, just backgrounds)
      */
     close(projectId: string, options?: { killTerminals?: boolean }): Promise<ProjectCloseResult>;
+    /**
+     * Reclaim a background project's resident memory — tears down its cached
+     * renderer, gracefully kills its PTYs (sessions preserved), and evicts its
+     * workspace host — while keeping the project in the list as `closed` and
+     * preserving its layout for a non-destructive reopen. Rejects if the
+     * project is currently active (switch away first).
+     */
+    freeMemory(projectId: string): Promise<ProjectFreeMemoryResult>;
     /**
      * Reopen a background project, making it the active project.
      * Terminals that were running in the background will be reconnected.
@@ -966,6 +976,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       ...args: IpcInvokeMap["idle-terminal:dismiss-project"]["args"]
     ): Promise<IpcInvokeMap["idle-terminal:dismiss-project"]["result"]>;
     onNotify(callback: (payload: IdleTerminalNotifyPayload) => void): () => void;
+  };
+  // Channel is `idle-background:*` but the renderer surface uses
+  // `idleBackgroundAutoClose`. The preload opts out of the API codegen via
+  // RENDERER_API_SKIP — methods are hand-typed here against IpcInvokeMap.
+  idleBackgroundAutoClose: {
+    getConfig(): Promise<IpcInvokeMap["idle-background:get-config"]["result"]>;
+    updateConfig(
+      ...args: IpcInvokeMap["idle-background:update-config"]["args"]
+    ): Promise<IpcInvokeMap["idle-background:update-config"]["result"]>;
+    onClosed(callback: (payload: IdleBackgroundClosedPayload) => void): () => void;
   };
   // Invoke methods come from GeneratedElectronAPI; suspend/wake are renderer-only subscriptions.
   systemSleep: GeneratedElectronAPI["systemSleep"] & {

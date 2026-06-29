@@ -648,6 +648,28 @@ export async function initGlobalServices(
     },
   });
 
+  registerDeferredTask({
+    name: "idle-background-auto-close-service",
+    run: async () => {
+      const { getIdleBackgroundAutoCloseService } =
+        await import("../services/IdleBackgroundAutoCloseService.js");
+      const svc = getIdleBackgroundAutoCloseService();
+      svc.setPtyClient(getPtyClient());
+      // Multi-window active guard — read every window's ProjectViewManager so a
+      // project visible in a non-focused window is never auto-closed (#8607).
+      // Lazy lambda: windows open/close after this wires, so re-read each sweep.
+      // Wired BEFORE start() so the first (5s) sweep already sees the provider.
+      svc.setProjectViewManagersProvider(
+        () =>
+          windowRegistry
+            ?.all()
+            .map((wCtx) => wCtx.services.projectViewManager)
+            .filter((pvm): pvm is ProjectViewManager => pvm !== undefined) ?? []
+      );
+      svc.start();
+    },
+  });
+
   // Must register AFTER event-loop-lag and app-metrics monitors so it can
   // read their data once its own start() fires.
   registerDeferredTask({

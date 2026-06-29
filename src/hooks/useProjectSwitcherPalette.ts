@@ -32,6 +32,8 @@ export interface SearchableProject {
   color?: string;
   lastOpened: number;
   status: Project["status"];
+  /** Set when the project was auto-closed by the background-idle sweep (#10830). */
+  autoParkedAt?: number;
   isActive: boolean;
   isBackground: boolean;
   isMissing: boolean;
@@ -80,6 +82,13 @@ export interface UseProjectSwitcherPaletteReturn {
   cloneRepo: () => void;
   stopProject: (projectId: string) => Promise<void>;
   removeProject: (projectId: string) => Promise<void>;
+  /**
+   * Reclaim a background project's resident memory (renderer + PTYs + workspace
+   * host) while keeping it in the list as `closed` for a non-destructive
+   * reopen. Shows a confirm dialog when the project has live processes, runs
+   * silently otherwise. No-op (with a toast) for the active project.
+   */
+  freeMemoryProject: (projectId: string) => Promise<void>;
   locateProject: (projectId: string) => Promise<void>;
   togglePinProject: (projectId: string) => Promise<void>;
   /**
@@ -96,6 +105,16 @@ export interface UseProjectSwitcherPaletteReturn {
   setRemoveConfirmProject: (project: SearchableProject | null) => void;
   confirmRemoveProject: () => Promise<void>;
   isRemovingProject: boolean;
+  /**
+   * Frozen snapshot of the project pending a "Free memory" confirmation —
+   * captured at menu-select time so the dialog's process/agent counts don't
+   * drift if agents finish while the dialog is open (lesson #8725). Null when
+   * no confirm is pending (D0 path runs without it).
+   */
+  freeMemoryConfirmProject: SearchableProject | null;
+  setFreeMemoryConfirmProject: (project: SearchableProject | null) => void;
+  confirmFreeMemory: () => Promise<void>;
+  isFreeingMemory: boolean;
   backgroundWaitingCount: number;
   /** Scratch (one-off agent workspace) view-models, sorted by lastOpened desc. */
   scratchResults: SearchableScratch[];
@@ -154,6 +173,9 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const [isStoppingProject, setIsStoppingProject] = useState(false);
   const [removeConfirmProject, setRemoveConfirmProject] = useState<SearchableProject | null>(null);
   const [isRemovingProject, setIsRemovingProject] = useState(false);
+  const [freeMemoryConfirmProject, setFreeMemoryConfirmProject] =
+    useState<SearchableProject | null>(null);
+  const [isFreeingMemory, setIsFreeingMemory] = useState(false);
   const [saveAsProjectConfirm, setSaveAsProjectConfirm] = useState<{
     scratch: SearchableScratch;
     project: Project;
@@ -230,6 +252,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         color: p.color,
         lastOpened: p.lastOpened ?? 0,
         status: p.status,
+        autoParkedAt: p.autoParkedAt,
         isActive,
         isBackground,
         isMissing,
@@ -321,6 +344,14 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       setRemoveConfirmProject(null);
     }
   }, [removeConfirmProject, searchableProjects]);
+
+  useEffect(() => {
+    if (!freeMemoryConfirmProject) return;
+    const stillExists = searchableProjects.some((p) => p.id === freeMemoryConfirmProject.id);
+    if (!stillExists) {
+      setFreeMemoryConfirmProject(null);
+    }
+  }, [freeMemoryConfirmProject, searchableProjects]);
 
   const open = useCallback(
     (nextMode: ProjectSwitcherMode = "modal") => {
@@ -581,6 +612,83 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     [searchableProjects, removeConfirmProject]
   );
 
+  const doFreeMemory = useCallback(
+    async (projectId: string) => {
+      const run = () => projectClient.freeMemory(projectId).then(() => loadProjects());
+      try {
+        await run();
+      } catch (error) {
+        const retry = async () => {
+          try {
+            await run();
+          } catch (retryError) {
+            notify({
+              type: "error",
+              title: "Couldn't free memory",
+              message: formatErrorMessage(retryError, "Couldn't free the project's memory"),
+              actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+              context: { eventKind: "uiFeedback" },
+            });
+          }
+        };
+        notify({
+          type: "error",
+          title: "Couldn't free memory",
+          message: formatErrorMessage(error, "Couldn't free the project's memory"),
+          actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+          context: { eventKind: "uiFeedback" },
+        });
+      }
+    },
+    [loadProjects]
+  );
+
+  const freeMemoryProject = useCallback(
+    async (projectId: string) => {
+      const project = searchableProjects.find((p) => p.id === projectId);
+      if (!project) return;
+
+      // The active project can't free its own renderer/host — surface the
+      // same guidance the backend guard enforces instead of a silent no-op.
+      if (project.isActive) {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "info",
+          title: "Switch away first",
+          message: "Switch to another project to free this one's memory.",
+          context: { eventKind: "uiFeedback" },
+        });
+        return;
+      }
+
+      close();
+
+      const hasProcesses =
+        project.processCount > 0 || project.activeAgentCount > 0 || project.waitingAgentCount > 0;
+
+      // D1 (confirm) when live processes would be stopped; D0 (immediate) when
+      // there's nothing running to interrupt. The snapshot freezes the counts.
+      if (hasProcesses) {
+        setFreeMemoryConfirmProject(project);
+      } else {
+        await doFreeMemory(projectId);
+      }
+    },
+    [searchableProjects, close, doFreeMemory]
+  );
+
+  const confirmFreeMemory = useCallback(async () => {
+    if (!freeMemoryConfirmProject || isFreeingMemory) return;
+    setIsFreeingMemory(true);
+    const capturedId = freeMemoryConfirmProject.id;
+    try {
+      await doFreeMemory(capturedId);
+      setFreeMemoryConfirmProject(null);
+    } finally {
+      setIsFreeingMemory(false);
+    }
+  }, [freeMemoryConfirmProject, isFreeingMemory, doFreeMemory]);
+
   const scratchResults = useMemo<SearchableScratch[]>(() => {
     const list: SearchableScratch[] = scratches.map((s: Scratch) => ({
       id: s.id,
@@ -774,6 +882,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     cloneRepo,
     stopProject,
     removeProject: removeProjectFromList,
+    freeMemoryProject,
     locateProject,
     togglePinProject,
     copyPath,
@@ -785,6 +894,10 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     setRemoveConfirmProject,
     confirmRemoveProject,
     isRemovingProject,
+    freeMemoryConfirmProject,
+    setFreeMemoryConfirmProject,
+    confirmFreeMemory,
+    isFreeingMemory,
     backgroundWaitingCount,
     scratchResults,
     createScratch,

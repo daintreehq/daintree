@@ -107,6 +107,10 @@ export const BUILT_IN_ACTION_IDS = [
   "idleTerminalNotify.closeProject",
   "idleTerminalNotify.muteProject",
 
+  // -- idleBackgroundAutoCloseActions --
+  "idleBackgroundAutoClose.getConfig",
+  "idleBackgroundAutoClose.updateConfig",
+
   // -- agentSettingsActions --
   "agentSettings.get",
   "agentSettings.set",
@@ -304,6 +308,7 @@ export const BUILT_IN_ACTION_IDS = [
   "agent.focusNextAgent",
   "agent.focusPreviousAgent",
   "agent.getState",
+  "agent.listToolbar",
 
   // -- app settings (other) --
   "app.settings.openTab",

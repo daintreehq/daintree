@@ -208,9 +208,9 @@ describe("instant switch feedback: deferred snapshot + IPC", () => {
     const { useProjectStore } = await import("../projectStore");
     useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
 
-    // Call without awaiting: the busy flag must be set synchronously (so the
-    // overlay can mount immediately) while buildOutgoingState + the switch IPC
-    // are deferred past the paint yield — the whole point of the reorder.
+    // Call without awaiting: the busy flag must be set synchronously (so switch
+    // feedback is immediate) while buildOutgoingState + the switch IPC are
+    // deferred past the paint yield — the whole point of the reorder.
     const pending = useProjectStore.getState().switchProject(projectB.id);
     expect(useProjectStore.getState().isSwitching).toBe(true);
     expect(useProjectStore.getState().switchingToProjectId).toBe(projectB.id);
@@ -274,7 +274,7 @@ describe("instant switch feedback: deferred snapshot + IPC", () => {
     const { useProjectStore } = await import("../projectStore");
     useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
 
-    // Click → time to the busy flag that mounts the switch overlay.
+    // Click → time to the busy flag being set (synchronous switch feedback).
     const t0 = performance.now();
     const pending = useProjectStore.getState().switchProject(projectB.id);
     const timeToFeedbackMs = performance.now() - t0;
@@ -838,7 +838,7 @@ describe("switch busy indication (#10736)", () => {
   it("a superseded switch's rejection does not clobber the newer transition's busy state", async () => {
     // Switch A→B (requestId N), then A→C supersedes it (requestId N+1). When B's
     // IPC later rejects, the staleness guard must keep C's busy state intact so
-    // the overlay keeps tracking the live switch rather than clearing early.
+    // the busy state keeps tracking the live switch rather than clearing early.
     projectClientMock.switch.mockRejectedValueOnce(new Error("B failed")); // first call (B)
     const { useProjectStore } = await import("../projectStore");
     useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });

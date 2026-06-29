@@ -79,7 +79,6 @@ import { HelpSessionService } from "../HelpSessionService.js";
 async function makeBundledHelpFolder(root: string): Promise<string> {
   const helpDir = path.join(root, "help");
   await fs.mkdir(path.join(helpDir, ".claude"), { recursive: true });
-  await fs.mkdir(path.join(helpDir, ".gemini"), { recursive: true });
   await fs.writeFile(
     path.join(helpDir, ".mcp.json"),
     JSON.stringify({
@@ -122,17 +121,7 @@ async function makeBundledHelpFolder(root: string): Promise<string> {
       },
     })
   );
-  await fs.writeFile(
-    path.join(helpDir, ".gemini", "settings.json"),
-    JSON.stringify({
-      toolsAllowlist: ["read_file", "list_directory", "search_files", "web_search", "shell"],
-      mcpServers: {
-        "daintree-docs": { httpUrl: "https://daintree.org/api/mcp", trust: true },
-      },
-    })
-  );
   await fs.writeFile(path.join(helpDir, "CLAUDE.md"), "# Help");
-  await fs.writeFile(path.join(helpDir, "GEMINI.md"), "# Gemini Help");
   await fs.writeFile(path.join(helpDir, "AGENTS.md"), "# Agents Help");
   return helpDir;
 }
@@ -1868,293 +1857,16 @@ describe("HelpSessionService", () => {
     });
   });
 
-  describe("Gemini (#7542)", () => {
-    function geminiInput() {
-      return { ...provisionInput(), agentId: "gemini" };
-    }
-
-    it("accepts agentId: 'gemini' even though the picker stays Claude/Codex only", async () => {
-      const result = await service.provisionSession(geminiInput());
-      expect(result).not.toBeNull();
-    });
-
-    it("returns the /mcp Streamable HTTP URL for Gemini when daintreeControl is on", async () => {
-      const result = await service.provisionSession(geminiInput());
-      if (!result) throw new Error("expected result");
-      expect(result.mcpUrl).toBe("http://127.0.0.1:45454/mcp");
-    });
-
-    it("does NOT rewrite .mcp.json with a Claude-shaped daintree entry", async () => {
-      const result = await service.provisionSession(geminiInput());
-      if (!result) throw new Error("expected result");
-
-      // Gemini reads `.gemini/settings.json`, not `.mcp.json` — the latter
-      // must not carry a Claude-shaped entry that would only be a stale
-      // bearer here.
-      const mcp = JSON.parse(
-        await fs.readFile(path.join(result.sessionPath, ".mcp.json"), "utf-8")
-      );
-      expect(mcp.mcpServers.daintree).toBeUndefined();
-    });
-
-    it("writes .gemini/settings.json with daintree using httpUrl + ${DAINTREE_MCP_TOKEN} + trust:true", async () => {
-      const result = await service.provisionSession(geminiInput());
-      if (!result) throw new Error("expected result");
-
-      const settings = JSON.parse(
-        await fs.readFile(path.join(result.sessionPath, ".gemini", "settings.json"), "utf-8")
-      );
-      expect(settings.mcpServers.daintree).toEqual({
-        httpUrl: "http://127.0.0.1:45454/mcp",
-        headers: { Authorization: "Bearer ${DAINTREE_MCP_TOKEN}" },
-        trust: true,
-      });
-      // The bundled docs entry must survive the overlay.
-      expect(settings.mcpServers["daintree-docs"]).toEqual({
-        httpUrl: "https://daintree.org/api/mcp",
-        trust: true,
-      });
-      // No literal token is ever embedded — the bearer is delivered via
-      // PTY env. The literal `${...}` substitution placeholder is the
-      // expected form.
-      expect(JSON.stringify(settings)).not.toContain(result.token);
-      expect(settings.toolsAllowlist).toContain("read_file");
-    });
-
-    it("omits the daintree entry from .gemini/settings.json when daintreeControl is off", async () => {
-      mockStoreGet.mockReturnValue({ daintreeControl: false });
-
-      const result = await service.provisionSession(geminiInput());
-      if (!result) throw new Error("expected result");
-
-      const settings = JSON.parse(
-        await fs.readFile(path.join(result.sessionPath, ".gemini", "settings.json"), "utf-8")
-      );
-      expect(settings.mcpServers.daintree).toBeUndefined();
-      expect(settings.mcpServers["daintree-docs"]).toBeDefined();
-    });
-
-    it("omits the daintree-docs entry from .gemini/settings.json when docSearch is off", async () => {
-      mockStoreGet.mockReturnValue({ daintreeControl: true, docSearch: false });
-
-      const result = await service.provisionSession(geminiInput());
-      if (!result) throw new Error("expected result");
-
-      const settings = JSON.parse(
-        await fs.readFile(path.join(result.sessionPath, ".gemini", "settings.json"), "utf-8")
-      );
-      expect(settings.mcpServers["daintree-docs"]).toBeUndefined();
-      expect(settings.mcpServers.daintree).toBeDefined();
-    });
-
-    it("does NOT rewrite .claude/settings.json with help-assistant overrides (Claude-only overlay)", async () => {
-      // The bundled template contains the Claude settings file because the
-      // template is shared (`fs.cp` copies the whole tree). The Gemini
-      // branch must NOT re-overlay it with help-assistant overrides —
-      // those carry Claude-only keys (`enableAllProjectMcpServers`,
-      // `defaultMode`, `mcp__daintree__*` allow entry) that have no
-      // meaning for Gemini and would clutter the on-disk session.
-      const result = await service.provisionSession(geminiInput());
-      if (!result) throw new Error("expected result");
-      const settings = JSON.parse(
-        await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
-      );
-      expect(settings.enableAllProjectMcpServers).toBeUndefined();
-      expect(settings.permissions?.allow ?? []).not.toContain("mcp__daintree__*");
-    });
-
-    it("probes /mcp (Streamable HTTP) for Gemini with the session token", async () => {
-      // ensureMcpServerReady runs probeMcpServer once with the API key
-      // before provision; the Gemini branch then probes /mcp with the
-      // freshly minted session token. Total: probeMcpServer twice,
-      // probeMcpSseServer never.
-      const result = await service.provisionSession(geminiInput());
-      if (!result) throw new Error("expected result");
-
-      expect(mockProbeMcpServer).toHaveBeenCalledTimes(2);
-      expect(mockProbeMcpServer).toHaveBeenLastCalledWith(45454, result.token);
-      expect(mockProbeMcpSseServer).not.toHaveBeenCalled();
-    });
-
-    it("getGeminiLaunchArgs returns ['--approval-mode=plan'] for a Gemini session", async () => {
-      const result = await service.provisionSession(geminiInput());
-      if (!result) throw new Error("expected result");
-
-      const args = service.getGeminiLaunchArgs(result.token);
-      expect(args).toEqual(["--approval-mode=plan"]);
-    });
-
-    it.each([
-      {
-        name: "getGeminiLaunchArgs returns null for a Claude session",
-        provision: () => provisionInput(),
-        call: (token: string) => service.getGeminiLaunchArgs(token),
-      },
-      {
-        name: "getGeminiLaunchArgs returns null for a Codex session",
-        provision: () => ({ ...provisionInput(), agentId: "codex" as const }),
-        call: (token: string) => service.getGeminiLaunchArgs(token),
-      },
-      {
-        name: "getCodexLaunchArgs returns null for a Gemini session",
-        provision: () => geminiInput(),
-        call: (token: string) => service.getCodexLaunchArgs(token),
-      },
-    ])("$name (cross-agent defense)", async ({ provision, call }) => {
-      const result = await service.provisionSession(provision());
-      if (!result) throw new Error("expected result");
-
-      expect(call(result.token)).toBeNull();
-    });
-
-    it("getGeminiLaunchArgs returns null for unknown / revoked tokens", async () => {
-      const result = await service.provisionSession(geminiInput());
-      if (!result) throw new Error("expected result");
-
-      expect(service.getGeminiLaunchArgs("not-a-real-token")).toBeNull();
-      expect(service.getGeminiLaunchArgs("")).toBeNull();
-
-      await service.revokeSession(result.sessionId);
-      expect(service.getGeminiLaunchArgs(result.token)).toBeNull();
-    });
-
-    it("getGeminiSpawnEnv returns {} for a Gemini session (intentionally no GEMINI_CLI_HOME)", async () => {
-      // Redirecting `os.homedir()` via `GEMINI_CLI_HOME` would break OAuth
-      // credential lookup at `~/.gemini/oauth_creds.json`. MCP isolation is
-      // achieved via workspace-level `.gemini/settings.json` precedence
-      // instead — the shape returned is a typed extension point for
-      // future per-agent env without breaking the contract.
-      const result = await service.provisionSession(geminiInput());
-      if (!result) throw new Error("expected result");
-
-      expect(service.getGeminiSpawnEnv(result.token)).toEqual({});
-    });
-
-    it("getGeminiSpawnEnv returns null for a Claude session (cross-agent defense)", async () => {
-      const result = await service.provisionSession(provisionInput());
-      if (!result) throw new Error("expected result");
-
-      expect(service.getGeminiSpawnEnv(result.token)).toBeNull();
-    });
-
-    it("getGeminiSpawnEnv returns null for unknown / revoked tokens", async () => {
-      const result = await service.provisionSession(geminiInput());
-      if (!result) throw new Error("expected result");
-
-      expect(service.getGeminiSpawnEnv("not-a-real-token")).toBeNull();
-      expect(service.getGeminiSpawnEnv("")).toBeNull();
-
-      await service.revokeSession(result.sessionId);
-      expect(service.getGeminiSpawnEnv(result.token)).toBeNull();
-    });
-
-    it("revokeSession strips the daintree entry from .gemini/settings.json", async () => {
-      const result = await service.provisionSession(geminiInput());
-      if (!result) throw new Error("expected result");
-
-      const target = path.join(result.sessionPath, ".gemini", "settings.json");
-      const before = JSON.parse(await fs.readFile(target, "utf-8"));
-      expect(before.mcpServers.daintree).toBeDefined();
-      expect(before.mcpServers["daintree-docs"]).toBeDefined();
-
-      await service.revokeSession(result.sessionId);
-
-      const after = JSON.parse(await fs.readFile(target, "utf-8"));
-      expect(after.mcpServers.daintree).toBeUndefined();
-      // The docs entry doesn't depend on a live session.
-      expect(after.mcpServers["daintree-docs"]).toBeDefined();
-    });
-
-    it("gcStaleSessions strips a stale daintree entry from .gemini/settings.json (post-restart cleanup)", async () => {
-      // Models the post-restart state: a previous run left
-      // `.gemini/settings.json` carrying the daintree MCP entry whose
-      // session record didn't survive boot. The settings file is hygiene
-      // only (the literal token is never in the file — it's a
-      // `${DAINTREE_MCP_TOKEN}` placeholder), but stripping keeps the CLI
-      // from surfacing a configured-but-broken server.
-      const sessionsRoot = path.join(userData, "help-sessions");
-      const staleDir = path.join(sessionsRoot, "cafebabecafebabe");
-      await fs.mkdir(path.join(staleDir, ".gemini"), { recursive: true });
-      await fs.writeFile(
-        path.join(staleDir, ".gemini", "settings.json"),
-        JSON.stringify(
-          {
-            mcpServers: {
-              daintree: {
-                httpUrl: "http://127.0.0.1:45454/mcp",
-                headers: { Authorization: "Bearer ${DAINTREE_MCP_TOKEN}" },
-                trust: true,
-              },
-              "daintree-docs": { httpUrl: "https://daintree.org/api/mcp", trust: true },
-            },
-          },
-          null,
-          2
-        )
-      );
-
-      await service.gcStaleSessions();
-
-      await fs.access(staleDir);
-      const cleaned = JSON.parse(
-        await fs.readFile(path.join(staleDir, ".gemini", "settings.json"), "utf-8")
-      );
-      expect(cleaned.mcpServers.daintree).toBeUndefined();
-      expect(cleaned.mcpServers["daintree-docs"]).toBeDefined();
-    });
-
-    it("strips a prior Claude bearer from .mcp.json on Gemini hash-skip switch (no stale Authorization in cwd)", async () => {
-      // Provision Claude first — writes `.mcp.json` with a literal Bearer.
-      const claudeResult = await service.provisionSession(provisionInput());
-      if (!claudeResult) throw new Error("expected claude provision");
-      const claudeMcp = JSON.parse(
-        await fs.readFile(path.join(claudeResult.sessionPath, ".mcp.json"), "utf-8")
-      );
-      expect(claudeMcp.mcpServers.daintree.headers.Authorization).toBe(
-        `Bearer ${claudeResult.token}`
-      );
-
-      // Provision Gemini for the same project. Template hash unchanged →
-      // `fs.cp` is skipped. Gemini doesn't rewrite `.mcp.json`, so the dead
-      // Claude bearer would survive in cwd without the explicit strip in
-      // the Gemini branch.
-      const geminiResult = await service.provisionSession(geminiInput());
-      if (!geminiResult) throw new Error("expected gemini provision");
-      expect(geminiResult.sessionPath).toBe(claudeResult.sessionPath);
-
-      const afterMcp = JSON.parse(
-        await fs.readFile(path.join(geminiResult.sessionPath, ".mcp.json"), "utf-8")
-      );
-      expect(afterMcp.mcpServers.daintree).toBeUndefined();
-      expect(afterMcp.mcpServers["daintree-docs"]).toBeDefined();
-
-      // And the new Gemini entry is in .gemini/settings.json.
-      const geminiSettings = JSON.parse(
-        await fs.readFile(path.join(geminiResult.sessionPath, ".gemini", "settings.json"), "utf-8")
-      );
-      expect(geminiSettings.mcpServers.daintree.httpUrl).toBe("http://127.0.0.1:45454/mcp");
-    });
-
-    it("throws MCP_PROBE_FAILED and strips the daintree entry when the Gemini /mcp probe fails", async () => {
-      // First probe call (ensureMcpServerReady) succeeds; second (session
-      // token probe) fails.
-      mockProbeMcpServer.mockResolvedValueOnce(undefined);
-      mockProbeMcpServer.mockRejectedValueOnce(new Error("/mcp returned status 500"));
-
-      await expect(service.provisionSession(geminiInput())).rejects.toMatchObject({
-        name: "HelpSessionError",
-        code: "MCP_PROBE_FAILED",
-      });
-
-      // Session dir survives — but the daintree entry must be gone.
-      const sessionsRoot = path.join(userData, "help-sessions");
-      const entries = await fs.readdir(sessionsRoot);
-      expect(entries.length).toBe(1);
-      const settings = JSON.parse(
-        await fs.readFile(path.join(sessionsRoot, entries[0]!, ".gemini", "settings.json"), "utf-8")
-      );
-      expect(settings.mcpServers.daintree).toBeUndefined();
-      expect(settings.mcpServers["daintree-docs"]).toBeDefined();
+  describe("deprecated agents (#8811)", () => {
+    it("rejects agentId: 'gemini' — deprecated tier is excluded from the wired-list gate", async () => {
+      // Gemini was retired from the assistant overlay (#8811): its
+      // `supports.tier` is `"deprecated"`, so `getAssistantWiredAgentIds()`
+      // no longer lists it and `provisionSession` must refuse to spawn a
+      // help session under it. The agent still launches from the main
+      // toolbar — only the assistant overlay path is gone.
+      await expect(
+        service.provisionSession({ ...provisionInput(), agentId: "gemini" })
+      ).rejects.toThrow(/not assistant-supported/);
     });
 
     it("rejects an unknown agentId via the wired-list gate", async () => {
@@ -2254,13 +1966,7 @@ describe("HelpSessionService", () => {
       expect(service.getCopilotLaunchArgs(result.token)).toEqual(["--plan"]);
     });
 
-    it.each([
-      { name: "a Claude session", provision: () => provisionInput() },
-      {
-        name: "a Gemini session",
-        provision: () => ({ ...provisionInput(), agentId: "gemini" as const }),
-      },
-    ])(
+    it.each([{ name: "a Claude session", provision: () => provisionInput() }])(
       "getCopilotLaunchArgs returns null for $name (cross-agent defense)",
       async ({ provision }) => {
         const result = await service.provisionSession(provision());
@@ -2279,13 +1985,6 @@ describe("HelpSessionService", () => {
 
       await service.revokeSession(result.sessionId);
       expect(service.getCopilotLaunchArgs(result.token)).toBeNull();
-    });
-
-    it("getGeminiSpawnEnv returns null for a Copilot session (cross-agent defense)", async () => {
-      const result = await service.provisionSession(copilotInput());
-      if (!result) throw new Error("expected result");
-
-      expect(service.getGeminiSpawnEnv(result.token)).toBeNull();
     });
 
     it("revokeSession strips the daintree entry from .mcp.json", async () => {
@@ -2515,20 +2214,9 @@ describe("HelpSessionService", () => {
       // basename) ensures order stability.
       const altHelp = path.join(tmpRoot, "help-alt");
       await fs.mkdir(path.join(altHelp, ".claude"), { recursive: true });
-      await fs.mkdir(path.join(altHelp, ".gemini"), { recursive: true });
       // Write in REVERSE order from makeBundledHelpFolder to test stability.
-      await fs.writeFile(path.join(altHelp, "GEMINI.md"), "# Gemini Help");
       await fs.writeFile(path.join(altHelp, "AGENTS.md"), "# Agents Help");
       await fs.writeFile(path.join(altHelp, "CLAUDE.md"), "# Help");
-      await fs.writeFile(
-        path.join(altHelp, ".gemini", "settings.json"),
-        JSON.stringify({
-          toolsAllowlist: ["read_file", "list_directory", "search_files", "web_search", "shell"],
-          mcpServers: {
-            "daintree-docs": { httpUrl: "https://daintree.org/api/mcp", trust: true },
-          },
-        })
-      );
       await fs.writeFile(
         path.join(altHelp, ".claude", "settings.json"),
         JSON.stringify({
@@ -2677,14 +2365,14 @@ describe("HelpSessionService", () => {
       expect(service.getAssistantScratchEnv(result.token)).toBeNull();
     });
 
-    it("writes the scratch-path addendum into CLAUDE.md, AGENTS.md, and GEMINI.md", async () => {
+    it("writes the scratch-path addendum into CLAUDE.md and AGENTS.md", async () => {
       const result = await service.provisionSession(provisionInput());
       if (!result) throw new Error("expected result");
 
       const env = service.getAssistantScratchEnv(result.token);
       const scratchDir = env!.DAINTREE_ASSISTANT_SCRATCH_DIR;
 
-      for (const name of ["CLAUDE.md", "AGENTS.md", "GEMINI.md"]) {
+      for (const name of ["CLAUDE.md", "AGENTS.md"]) {
         const content = await fs.readFile(path.join(result.sessionPath, name), "utf-8");
         expect(content).toContain("<!-- DAINTREE_ASSISTANT_SCRATCH_START -->");
         expect(content).toContain("<!-- DAINTREE_ASSISTANT_SCRATCH_END -->");

@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   useForgeProviderHealthStore,
   selectForgeProviderHealth,
   DEFAULT_PROVIDER_HEALTH,
 } from "@/store/forgeProviderHealthStore";
+import { usePluginRuntimeStore, _resetPluginRuntimeStoreForTest } from "@/store/pluginRuntimeStore";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 
 const FAKE = "acme.gitlab.gitlab";
@@ -11,6 +12,10 @@ const FAKE = "acme.gitlab.gitlab";
 describe("forgeProviderHealthStore", () => {
   beforeEach(() => {
     useForgeProviderHealthStore.setState({ providers: {} });
+  });
+
+  afterEach(() => {
+    _resetPluginRuntimeStoreForTest();
   });
 
   it("returns the default health for an unseen provider", () => {
@@ -257,5 +262,64 @@ describe("forgeProviderHealthStore", () => {
       selectForgeProviderHealth(BUILTIN_GITHUB_PROVIDER_ID)(useForgeProviderHealthStore.getState())
         .tokenBannerDismissed
     ).toBe(false);
+  });
+
+  describe("removeProvider (#10842)", () => {
+    it("drops one provider's slice and preserves the others", () => {
+      const store = useForgeProviderHealthStore.getState();
+      store.applyRateLimit(BUILTIN_GITHUB_PROVIDER_ID, { blocked: true, kind: "primary" });
+      store.applyRateLimit(FAKE, { blocked: true, kind: "primary" });
+
+      store.removeProvider(FAKE);
+
+      // Removed provider falls back to the frozen default.
+      expect(selectForgeProviderHealth(FAKE)(useForgeProviderHealthStore.getState())).toEqual(
+        DEFAULT_PROVIDER_HEALTH
+      );
+      // The other provider is untouched.
+      expect(
+        selectForgeProviderHealth(BUILTIN_GITHUB_PROVIDER_ID)(
+          useForgeProviderHealthStore.getState()
+        ).rateLimitBlocked
+      ).toBe(true);
+      expect(FAKE in useForgeProviderHealthStore.getState().providers).toBe(false);
+    });
+
+    it("is a no-op for an absent provider (no new object reference)", () => {
+      const before = useForgeProviderHealthStore.getState().providers;
+      useForgeProviderHealthStore.getState().removeProvider("never.seen.provider");
+      expect(useForgeProviderHealthStore.getState().providers).toBe(before);
+    });
+  });
+
+  describe("plugin-disable pruning (#10842)", () => {
+    it("removes providers whose owning plugin is disabled, keeping the rest", () => {
+      const store = useForgeProviderHealthStore.getState();
+      store.applyRateLimit(FAKE, { blocked: true, kind: "primary" });
+      store.setProviderMeta(FAKE, { providerName: "GitLab", pluginId: "acme.gitlab" });
+      store.applyRateLimit(BUILTIN_GITHUB_PROVIDER_ID, { blocked: true, kind: "primary" });
+      store.setProviderMeta(BUILTIN_GITHUB_PROVIDER_ID, {
+        providerName: "GitHub",
+        pluginId: "daintree.github",
+      });
+
+      // Disabling the GitLab plugin must evict only its provider slice.
+      usePluginRuntimeStore.setState({ disabledPluginIds: new Set(["acme.gitlab"]) });
+
+      expect(FAKE in useForgeProviderHealthStore.getState().providers).toBe(false);
+      expect(BUILTIN_GITHUB_PROVIDER_ID in useForgeProviderHealthStore.getState().providers).toBe(
+        true
+      );
+    });
+
+    it("leaves providers without a pluginId untouched when a plugin is disabled", () => {
+      const store = useForgeProviderHealthStore.getState();
+      // No setProviderMeta → pluginId stays null.
+      store.applyRateLimit(FAKE, { blocked: true, kind: "primary" });
+
+      usePluginRuntimeStore.setState({ disabledPluginIds: new Set(["some.other.plugin"]) });
+
+      expect(FAKE in useForgeProviderHealthStore.getState().providers).toBe(true);
+    });
   });
 });

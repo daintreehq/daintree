@@ -3,6 +3,7 @@ import type {
   ProjectSettings,
   RunCommand,
   ProjectCloseResult,
+  ProjectFreeMemoryResult,
   ProjectStats,
   BulkProjectStats,
   TerminalRecipe,
@@ -210,6 +211,11 @@ export const projectClient = {
   ): Promise<ProjectCloseResult> => {
     invalidateCurrentCache();
     return window.electron.project.close(projectId, options);
+  },
+
+  freeMemory: (projectId: string): Promise<ProjectFreeMemoryResult> => {
+    invalidateCurrentCache();
+    return window.electron.project.freeMemory(projectId);
   },
 
   reopen: (projectId: string, outgoingState?: ProjectSwitchOutgoingState): Promise<Project> => {

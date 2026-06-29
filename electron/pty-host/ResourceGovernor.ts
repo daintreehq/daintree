@@ -438,11 +438,13 @@ export class ResourceGovernor {
   }
 
   private checkFdUsage(): void {
-    if (!this.fdMonitor.supported) return;
-
     const now = Date.now();
 
-    // Collect orphan candidates: PIDs killed long enough ago to have exited
+    // Collect orphan candidates: PIDs killed long enough ago to have exited.
+    // Runs unconditionally — `killedPids` is populated on every platform via
+    // `trackKilledPid`, but FD monitoring is unsupported on Windows. Gating the
+    // sweep behind `fdMonitor.supported` (as before) leaked the map there until
+    // `dispose()`; prune first, then bail out of the FD-leak check (#10842).
     const orphanCandidates: number[] = [];
     for (const [pid, killedAt] of this.killedPids) {
       if (now - killedAt > this.ORPHAN_GRACE_MS) {
@@ -450,6 +452,8 @@ export class ResourceGovernor {
         this.killedPids.delete(pid);
       }
     }
+
+    if (!this.fdMonitor.supported) return;
 
     const result = this.fdMonitor.checkForLeaks(this.deps.getTerminalCount(), orphanCandidates);
 

@@ -207,6 +207,17 @@ Group everything into these categories based on commit prefixes and issue/PR lab
 | **Breaking Changes** | `BREAKING CHANGE`, `!:` | `breaking` |
 | **Other** | `chore:`, `docs:`, `refactor:`, `style:`, `ci:`, `build:` | — |
 
+**Labels are usually empty** on this repo's PRs and issues — when they are, categorize by the conventional-commit prefix in the PR/commit title, not by label. The merged-PR list (`gh pr list --search "merged:>=DATE"`) is the cleanest single source for a gitflow repo — cleaner than the raw commit list.
+
+**Verify the baseline; don't trust raw counts.** On an active gitflow repo `git rev-list <baseline>..HEAD --count` can read in the hundreds because it counts every merge commit, and a plain `git log --oneline` is often display-truncated mid-list. Confirm the tag is reachable (`git merge-base --is-ancestor <baseline> HEAD`) and use explicit `git rev-list --count` (with and without `--no-merges`) for accurate feature/fix/perf tallies.
+
+### Net effect, not a PR ledger (large releases)
+
+For a release spanning many PRs over days or weeks, the changelog must report the **net effect** a user gets relative to the baseline — NOT one line per PR. Two failure modes to avoid, both seen in practice:
+
+- **Fold out churn.** Work that was added and then reverted, superseded, or "stabilized" within the window is net-zero — exclude it (a feature added mid-window and removed before the tag; an intermediate fix replaced by a later, decisive one; an add-then-remove pair). Reading actual PR **bodies and diffs** — not just titles — is what surfaces this. For a very large release (100+ PRs), fan out sub-agents (or a Workflow) to investigate clusters of PRs, identify what truly shipped vs. what cancelled out, then adversarially verify the draft against that churn list.
+- **Exclude not-yet-released / internal-only work.** A `feat:` PR that is gated off by default, sits behind an unpublished binary, or is otherwise invisible to a normal user is NOT a shipped feature — do not announce it. When unsure whether something is genuinely user-visible in this build, **ask the user** before listing it. Control-plane plumbing that an external/automation surface (e.g. MCP) genuinely exposes can still be listed — framed neutrally — even if an internal consumer of it is unreleased.
+
 Present a summary to the user:
 
 > ### Release v0.X.0 Summary
@@ -238,6 +249,8 @@ If the file doesn't exist, create it. If it exists, prepend the new release sect
 - Group long sections by `**Subcategory**` bold paragraphs where it aids skimming.
 - Entries are concise, user-facing, one line each. Reference issues as `#NNN`.
 - For the **initial release**, replace granular sections with a single `### Highlights` summarising the major capabilities of the app as shipped.
+- **Calibrate detail to the existing `CHANGELOG.md` entries** (read the top few before drafting). Bullets are concise one-liners grouped under `**Subcategory**` paragraphs. For a big release, scale the _number_ of bullets — not the length of each — and curate hard: drop purely internal/test/refactor PRs, fold related fixes into a single line. Avoid both extremes: a granular paragraph-per-PR ledger, and an over-summarized highlights blurb that loses real substance. Lead with the release's two or three headline stories.
+- When the user picks **"Edit specific entries"** without saying what, ask for the specifics before redrafting — don't guess at a rewrite.
 
 Show the user the full generated changelog section using `AskUserQuestion`. Ask:
 

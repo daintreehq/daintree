@@ -1,6 +1,6 @@
 import { Terminal } from "@xterm/xterm";
 import { TerminalRefreshTier } from "@/types";
-import { isSidebarLayoutTransitionLocked } from "@/lib/layoutTransitionLock";
+import { isSidebarMeasurementLocked } from "@/lib/layoutTransitionLock";
 import { logDebug, logWarn } from "@/utils/logger";
 import type { ManagedTerminal } from "./types";
 
@@ -149,10 +149,11 @@ export class TerminalReconciliationWatchdog {
    */
   tick(): void {
     if (typeof document === "undefined" || document.visibilityState !== "visible") return;
-    // Mid-drag and mid-layout-animation geometry is not ground truth, and
-    // repairs during either would fight legitimate transient suppression.
+    // Mid-drag, mid-layout-animation, and pre-hydration (#10827) geometry is
+    // not ground truth, and repairs during any of them would fight legitimate
+    // transient suppression.
     if (document.documentElement.dataset.dragging === "true") return;
-    if (isSidebarLayoutTransitionLocked()) return;
+    if (isSidebarMeasurementLocked()) return;
 
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;

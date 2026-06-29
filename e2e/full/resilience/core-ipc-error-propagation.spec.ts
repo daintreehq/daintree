@@ -104,21 +104,45 @@ async function clearErrorsAndCloseDock(window: Page) {
   }
 }
 
-async function openRecoveryMenu(window: Page, banner: Locator): Promise<Locator> {
+async function openRecoveryMenu(
+  window: Page,
+  banner: Locator,
+  expectedButtonLabels: string[]
+): Promise<Locator> {
   const trigger = banner.locator('[aria-label="More recovery options"]');
   await expect(trigger).toBeVisible();
-  await trigger.focus();
-  await window.keyboard.press("Enter");
 
-  // Scope to the popper that contains at least one recovery button so we never
-  // accidentally latch onto a concurrently open Radix dropdown from elsewhere.
+  await window.keyboard.press("Escape").catch(() => undefined);
+
   const menu = window
     .locator("[data-radix-popper-content-wrapper]")
-    .filter({ has: window.locator("button[aria-label]") });
-  if (!(await menu.isVisible({ timeout: T_SHORT }).catch(() => false))) {
-    await trigger.click({ force: true });
+    .filter({
+      has: window.getByRole("button", { name: expectedButtonLabels[0], exact: true }),
+    })
+    .last();
+
+  let opened = false;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await trigger.focus();
+    if (attempt === 0) {
+      await trigger.evaluate((element: HTMLElement) => element.click());
+    } else if (attempt === 1) {
+      await window.keyboard.press("Enter");
+    } else {
+      await window.keyboard.press("Space");
+    }
+    if (await menu.isVisible({ timeout: T_MEDIUM }).catch(() => false)) {
+      opened = true;
+      break;
+    }
+    await window.keyboard.press("Escape").catch(() => undefined);
   }
+
+  expect(opened).toBe(true);
   await expect(menu).toBeVisible({ timeout: T_MEDIUM });
+  for (const label of expectedButtonLabels) {
+    await expect(menu.getByRole("button", { name: label, exact: true })).toBeVisible();
+  }
   return menu;
 }
 
@@ -322,8 +346,7 @@ test.describe.serial("Core: IPC Error Propagation", () => {
 
     // Retry and Trash buttons should be visible
     await expect(banner.locator('[aria-label="Retry starting terminal"]')).toBeVisible();
-    const recoveryMenu = await openRecoveryMenu(ctx.window, banner);
-    await expect(recoveryMenu.locator('button[aria-label="Move to trash"]')).toBeVisible();
+    await openRecoveryMenu(ctx.window, banner, ["Move to trash"]);
   });
 
   test("ENOTDIR spawn error shows Change directory action", async () => {
@@ -353,10 +376,6 @@ test.describe.serial("Core: IPC Error Propagation", () => {
     await expect(banner.locator('[aria-label="Update working directory"]')).toBeVisible();
 
     // Retry is demoted into overflow when Change directory is the primary action.
-    const recoveryMenu = await openRecoveryMenu(ctx.window, banner);
-    await expect(
-      recoveryMenu.locator('button[aria-label="Retry starting terminal"]')
-    ).toBeVisible();
-    await expect(recoveryMenu.locator('button[aria-label="Move to trash"]')).toBeVisible();
+    await openRecoveryMenu(ctx.window, banner, ["Retry starting terminal", "Move to trash"]);
   });
 });

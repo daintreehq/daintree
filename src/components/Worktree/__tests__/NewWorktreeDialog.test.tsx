@@ -960,6 +960,24 @@ describe("NewWorktreeDialog — self-assign cache mutation", () => {
     expect(getGeneration(ISSUE_CACHE_KEY)).toBe(genBefore);
   });
 
+  it("auto-dismisses the assign toast instead of leaving it sticky", async () => {
+    const { notify } = await import("@/lib/notify");
+    seedIssueCache(makeIssue());
+
+    await createWithSelfAssign();
+
+    const assignedCall = vi
+      .mocked(notify)
+      .mock.calls.find(([payload]) => payload.title === "Issue assigned");
+    expect(assignedCall).toBeDefined();
+    // The Undo action would otherwise make notify() default this toast to a
+    // sticky duration of 0; assert it carries an explicit finite window so it
+    // dismisses on its own rather than lingering until manually closed.
+    const duration = assignedCall?.[0].duration;
+    expect(duration).toBeGreaterThan(0);
+    expect(duration).toBeLessThanOrEqual(10_000);
+  });
+
   it("reverses the optimistic patch when the undo action fires", async () => {
     const { notify } = await import("@/lib/notify");
     seedIssueCache(makeIssue());

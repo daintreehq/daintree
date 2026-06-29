@@ -161,7 +161,8 @@ export function AgentIdentityBlock({
   compact?: boolean;
 }) {
   const activeScheme = useActiveAppScheme();
-  const tileBackground = resolveBrandChip(color, activeScheme)?.background ?? `${color}15`;
+  const chip = resolveBrandChip(color, activeScheme);
+  const tileBackground = chip?.background ?? `${color}15`;
   return (
     <>
       <div
@@ -171,7 +172,7 @@ export function AgentIdentityBlock({
         )}
         style={{ backgroundColor: tileBackground }}
       >
-        <Icon size={compact ? 16 : 18} brandColor={color} />
+        <Icon size={compact ? 16 : 18} brandColor={chip?.tint ?? color} />
       </div>
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium text-daintree-text">{name}</div>

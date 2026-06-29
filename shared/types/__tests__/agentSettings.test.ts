@@ -351,6 +351,19 @@ describe("generateAgentCommand per-agent prompt injection", () => {
     expect(cmd).toMatch(/-p\s+'Fix the bug'/);
   });
 
+  it("grok seeds the TUI with a bare positional, headless uses -p", () => {
+    const interactiveCmd = generateAgentCommand("grok", {}, "grok", {
+      initialPrompt: "Fix the bug",
+    });
+    const oneShotCmd = generateAgentCommand("grok", {}, "grok", {
+      initialPrompt: "Fix the bug",
+      interactive: false,
+    });
+    expect(interactiveCmd).toMatch(/'Fix the bug'$/);
+    expect(interactiveCmd).not.toMatch(/-p\s+'Fix the bug'/);
+    expect(oneShotCmd).toMatch(/-p\s+'Fix the bug'/);
+  });
+
   it("opencode uses --prompt for interactive (bare positional is a project path)", () => {
     const cmd = generateAgentCommand("opencode", {}, "opencode", {
       initialPrompt: "Fix the bug",

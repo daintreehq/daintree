@@ -147,6 +147,22 @@ export interface TerminalFocusSlice {
     findNearest: (id: string, dir: NavigationDirection) => string | null
   ) => void;
   focusByIndex: (index: number, findByIndex: (idx: number) => string | null) => void;
+  /**
+   * Stateless "press-again-to-fullscreen" for the index hotkeys (Cmd+1..9).
+   * While a panel is fullscreen: pressing the shown (maximized) cell's index
+   * restores the grid; pressing any other index restores the grid and reveals
+   * that panel in it — so a panel opened in the background while fullscreen
+   * shows in the grid first, and only goes fullscreen on a second press. The
+   * shown cell is the maximized one, which may differ from the focused panel.
+   * When nothing is fullscreen: pressing the focused cell's index (or a sibling
+   * tab of the focused group) maximizes it; pressing any other index focuses
+   * that panel.
+   */
+  focusOrMaximizeByIndex: (
+    index: number,
+    findByIndex: (idx: number) => string | null,
+    getPanelGroup?: (panelId: string) => { id: string; panelIds: string[] } | undefined
+  ) => void;
   focusDockDirection: (
     direction: "left" | "right",
     findDockByIndex: (id: string, dir: "left" | "right") => string | null
@@ -476,6 +492,53 @@ export const createTerminalFocusSlice =
         if (nextId) {
           get().activateTerminal(nextId);
         }
+      },
+
+      focusOrMaximizeByIndex: (index, findByIndex, getPanelGroup) => {
+        const targetId = findByIndex(index);
+        if (!targetId) return;
+        const { focusedId, maximizedId, maximizeTarget, toggleMaximize, activateTerminal } = get();
+
+        if (maximizedId) {
+          // A panel/group is fullscreen. The cell actually *shown* is the
+          // maximized one — which may differ from focusedId, since a panel
+          // opened while fullscreen becomes focused in the background without
+          // ever being displayed. Anchor on the maximized cell (not focus) so
+          // that background panel is revealed in the grid on first press and
+          // only goes fullscreen on a second press.
+          const targetIsMaximizedCell =
+            maximizedId === targetId ||
+            (maximizeTarget?.type === "group" &&
+              getPanelGroup?.(targetId)?.id === maximizeTarget.id);
+          // Exit fullscreen. Unmaximize via toggleMaximize (not clearMaximize)
+          // to preserve preMaximizeLayout, so the column count restores exactly
+          // as a manual unmaximize would. Re-pressing the shown cell just
+          // restores; any other index also focuses that panel in the grid.
+          toggleMaximize(maximizedId, undefined, undefined, getPanelGroup);
+          if (!targetIsMaximizedCell) {
+            activateTerminal(targetId);
+          }
+          return;
+        }
+
+        // Nothing is fullscreen. Re-pressing the focused cell goes fullscreen.
+        // findByIndex resolves a tab group to its active-tab representative, so
+        // a focused *sibling* tab of the same group still counts as the same
+        // cell — re-pressing it should maximize the group, not switch+focus.
+        const focusedGroupId = focusedId ? getPanelGroup?.(focusedId)?.id : undefined;
+        const inSameCell =
+          focusedId === targetId ||
+          (focusedGroupId !== undefined && focusedGroupId === getPanelGroup?.(targetId)?.id);
+
+        if (inSameCell) {
+          // Re-pressing the focused cell goes fullscreen (group-aware:
+          // maximizes the whole tab group when grouped).
+          toggleMaximize(targetId, undefined, undefined, getPanelGroup);
+          return;
+        }
+
+        // A different cell with nothing maximized: just focus it.
+        activateTerminal(targetId);
       },
 
       focusDockDirection: (direction, findDockByIndex) => {

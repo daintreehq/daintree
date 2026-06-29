@@ -171,7 +171,7 @@ async function expectAgentChromeSurvivesIdle(
   panel: Locator,
   terminalId: string,
   agentId: string,
-  idleMs = AGENT_IDLE_STICKINESS_MS * SLOW_HOST_MULTIPLIER
+  idleMs = AGENT_IDLE_STICKINESS_MS
 ): Promise<void> {
   await page.waitForTimeout(idleMs);
   await expect
@@ -694,7 +694,7 @@ test.describe("Terminal chrome ↔ live process identity (bidirectional)", () =>
         panel,
         plainPanelId,
         "claude",
-        TYPED_AGENT_IDLE_STICKINESS_MS * SLOW_HOST_MULTIPLIER
+        TYPED_AGENT_IDLE_STICKINESS_MS
       );
       await diagnostics?.captureSnapshot("typed Claude survived idle wait", window);
     });
