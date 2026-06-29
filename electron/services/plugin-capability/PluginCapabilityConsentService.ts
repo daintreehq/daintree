@@ -95,6 +95,15 @@ export class PluginCapabilityConsentService {
     }
     if (decision === "approved-once") return;
 
+    if (decision === "timeout") {
+      // Fail closed exactly like "rejected", but log distinctly so an abandoned
+      // dialog is diagnosable in the operator logs rather than reading as a
+      // deliberate refusal (#10841).
+      console.warn(
+        `[PluginCapabilityConsentService] consent prompt timed out for plugin "${pluginId}" capability "${capability}"`
+      );
+    }
+
     throw new Error(
       `${PLUGIN_CAPABILITY_DENIED_PREFIX}: plugin "${pluginId}" was denied use of the "${capability}" capability`
     );

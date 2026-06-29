@@ -38,11 +38,16 @@ vi.mock("../../../window/windowRef.js", () => ({
   getMainWindow: () => focusedWindow,
 }));
 
-import { handleResolveConsent, _resetCapabilityConsentBridgeForTest } from "../pluginCapability.js";
+import {
+  handleResolveConsent,
+  registerPluginCapabilityHandlers,
+  _resetCapabilityConsentBridgeForTest,
+} from "../pluginCapability.js";
 import {
   getPluginCapabilityConsentService,
   _resetPluginCapabilityServicesForTest,
 } from "../../../services/plugin-capability/instances.js";
+import { PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS } from "../../../../shared/types/pluginCapabilityConsent.js";
 import type { IpcContext } from "../../types.js";
 
 function ctx(webContentsId: number): IpcContext {
@@ -99,5 +104,89 @@ describe("pluginCapability consent bridge", () => {
     await expect(
       handleResolveConsent(ctx(7), { requestId: "does-not-exist", decision: "rejected" })
     ).resolves.toBeUndefined();
+  });
+
+  it("settles an abandoned prompt as a timeout denial and ignores a late reply (#10841)", async () => {
+    vi.useFakeTimers();
+    try {
+      const dispose = registerPluginCapabilityHandlers();
+
+      const decisionPromise = getPluginCapabilityConsentService().ensureAllowed(
+        "acme.x",
+        "Acme",
+        "shell:exec",
+        ["shell:exec"]
+      );
+      // Surface the rejection synchronously so an unhandled rejection isn't
+      // flagged while we advance the fake clock.
+      const settled = decisionPromise.then(
+        () => ({ ok: true }) as const,
+        (err: Error) => ({ ok: false, err }) as const
+      );
+
+      const requestId = (
+        focusedWindow!.webContents.send.mock.calls[0][1] as {
+          payload: { requestId: string };
+        }
+      ).payload.requestId;
+
+      await vi.advanceTimersByTimeAsync(PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS);
+
+      // The gating call fails closed (PERMISSION_REQUIRED) rather than hanging.
+      const outcome = await settled;
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) {
+        expect(outcome.err.message).toContain("PERMISSION_REQUIRED");
+      }
+      // The destroyed listener was torn down on settle.
+      expect(focusedWindow!.webContents.removeListener).toHaveBeenCalled();
+
+      // A late reply for the timed-out request is a no-op (pending entry gone).
+      await handleResolveConsent(ctx(7), { requestId, decision: "approved-and-pin" });
+
+      dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("times out even when only a wrong-sender reply ever arrives (#10841)", async () => {
+    vi.useFakeTimers();
+    try {
+      const dispose = registerPluginCapabilityHandlers();
+
+      const decisionPromise = getPluginCapabilityConsentService().ensureAllowed(
+        "acme.x",
+        "Acme",
+        "shell:exec",
+        ["shell:exec"]
+      );
+      const settled = decisionPromise.then(
+        () => ({ ok: true }) as const,
+        (err: Error) => ({ ok: false, err }) as const
+      );
+
+      const requestId = (
+        focusedWindow!.webContents.send.mock.calls[0][1] as {
+          payload: { requestId: string };
+        }
+      ).payload.requestId;
+
+      // A reply from the wrong WebContents is ignored and must NOT settle or
+      // disarm the timer — otherwise the prompt would hang forever.
+      await handleResolveConsent(ctx(999), { requestId, decision: "approved-and-pin" });
+
+      await vi.advanceTimersByTimeAsync(PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS);
+
+      const outcome = await settled;
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) {
+        expect(outcome.err.message).toContain("PERMISSION_REQUIRED");
+      }
+
+      dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

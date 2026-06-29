@@ -72,11 +72,19 @@ import { PluginMcpConsentStore } from "../../../services/plugin-mcp/PluginMcpCon
 import { PluginMcpRateLimiter } from "../../../services/plugin-mcp/PluginMcpRateLimiter.js";
 import {
   PLUGIN_MCP_CAPABILITY_CAP_EXCEEDED_CODE,
+  PLUGIN_MCP_CONSENT_TIMEOUT_CODE,
   PLUGIN_MCP_RATE_LIMITED_CODE,
   PLUGIN_MCP_USER_REJECTED_CODE,
 } from "../../../../shared/types/ipc/pluginMcpAudit.js";
+import { PLUGIN_MCP_CONSENT_TIMEOUT_MS } from "../../../../shared/types/pluginMcpConsent.js";
 import type { IpcContext } from "../../types.js";
 import type { PluginMcpCallToolInput } from "../../../../shared/types/ipc/pluginMcp.js";
+
+/** Flush the awaited resolution chain (dynamic imports + mocked async) so the
+ * consent-request push fires under fake timers without relying on wall-clock. */
+async function flushMicrotasks(turns = 30): Promise<void> {
+  for (let i = 0; i < turns; i++) await Promise.resolve();
+}
 
 function makeConsentStore(): PluginMcpConsentStore {
   let cfg: Record<string, unknown> = {};
@@ -278,6 +286,54 @@ describe("handleCallTool pipeline", () => {
     expect(h.supervisor.callTool).not.toHaveBeenCalled();
     const audit = h.audit as { append: ReturnType<typeof vi.fn> };
     expect(audit.append.mock.calls[0][0]).toMatchObject({ result: "rejected" });
+  });
+
+  it("settles consent as a timeout denial when the prompt is abandoned (#10841)", async () => {
+    vi.useFakeTimers();
+    try {
+      setSchema({
+        found: true,
+        tool: {
+          name: "do_thing",
+          description: "Maybe mutate.",
+          inputSchema: { type: "object" },
+          annotations: { destructiveHint: false },
+        },
+      });
+
+      const pending = handleCallTool(ctx, input);
+      // Resolve the await chain so the consent-request is pushed and the bridge
+      // timer is armed.
+      await flushMicrotasks();
+      expect(h.fakeWc.send).toHaveBeenCalledTimes(1);
+      expect(h.supervisor.callTool).not.toHaveBeenCalled();
+
+      // Just before the deadline the prompt is still live — guards against a
+      // mis-set (e.g. 1ms) timeout silently passing the full-advance assertions.
+      await vi.advanceTimersByTimeAsync(PLUGIN_MCP_CONSENT_TIMEOUT_MS - 1);
+      const audit = h.audit as { append: ReturnType<typeof vi.fn> };
+      expect(audit.append).not.toHaveBeenCalled();
+
+      // No reply ever arrives — the bridge timer fires and settles "timeout".
+      await vi.advanceTimersByTimeAsync(1);
+
+      const result = await pending;
+      expect(result).toEqual({ kind: "denied", errorCode: PLUGIN_MCP_CONSENT_TIMEOUT_CODE });
+      expect(h.supervisor.callTool).not.toHaveBeenCalled();
+      expect(audit.append.mock.calls[0][0]).toMatchObject({
+        result: "timeout",
+        consentDecision: "timeout",
+        errorCode: PLUGIN_MCP_CONSENT_TIMEOUT_CODE,
+      });
+
+      // A late reply for the timed-out request is a no-op.
+      const requestId = (h.fakeWc.send.mock.calls[0][1] as { payload: { requestId: string } })
+        .payload.requestId;
+      await handleResolveConsent(ctx, { requestId, decision: "approved-once" });
+      expect(h.supervisor.callTool).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("pins on approve-and-pin so the next call skips the prompt", async () => {

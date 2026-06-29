@@ -1,7 +1,8 @@
 import { create } from "zustand";
-import type {
-  PluginMcpConsentDecision,
-  PluginMcpConsentRequestEvent,
+import {
+  PLUGIN_MCP_CONSENT_TIMEOUT_MS,
+  type PluginMcpConsentDecision,
+  type PluginMcpConsentRequestEvent,
 } from "@shared/types/pluginMcpConsent";
 
 /**
@@ -31,7 +32,12 @@ interface PluginMcpConfirmActions {
   reset: () => void;
 }
 
-const resolvers = new Map<string, (decision: PluginMcpConsentDecision) => void>();
+interface PendingResolver {
+  resolve: (decision: PluginMcpConsentDecision) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+const resolvers = new Map<string, PendingResolver>();
 
 function advance(
   set: (partial: Partial<PluginMcpConfirmState>) => void,
@@ -62,17 +68,23 @@ export const usePluginMcpConfirmStore = create<PluginMcpConfirmState & PluginMcp
     resolveCurrent: (decision) => {
       const { current, queue } = get();
       if (current === null) return;
-      const resolve = resolvers.get(current.requestId);
+      const entry = resolvers.get(current.requestId);
       resolvers.delete(current.requestId);
-      resolve?.(decision);
+      if (entry) {
+        clearTimeout(entry.timer);
+        entry.resolve(decision);
+      }
       advance(set, queue);
     },
 
     drop: (requestId) => {
       const { current, queue } = get();
-      const resolve = resolvers.get(requestId);
-      resolvers.delete(requestId);
-      resolve?.("rejected");
+      const entry = resolvers.get(requestId);
+      if (entry) {
+        resolvers.delete(requestId);
+        clearTimeout(entry.timer);
+        entry.resolve("rejected");
+      }
       if (current?.requestId === requestId) {
         advance(set, queue);
         return;
@@ -84,6 +96,7 @@ export const usePluginMcpConfirmStore = create<PluginMcpConfirmState & PluginMcp
     },
 
     reset: () => {
+      for (const { timer } of resolvers.values()) clearTimeout(timer);
       resolvers.clear();
       set({ queue: [], current: null });
     },
@@ -104,7 +117,19 @@ export function requestPluginMcpConsent(
       resolve("rejected");
       return;
     }
-    resolvers.set(item.requestId, resolve);
+    const { requestId } = item;
+    // Safety net: an abandoned dialog settles itself as "timeout" so the gating
+    // promise never hangs and the stale prompt is evicted from the store. The
+    // resolver is pre-deleted before delegating state cleanup to drop(), which
+    // then finds no resolver and only advances the queue (#10841).
+    const timer = setTimeout(() => {
+      const entry = resolvers.get(requestId);
+      if (!entry) return;
+      resolvers.delete(requestId);
+      entry.resolve("timeout");
+      usePluginMcpConfirmStore.getState().drop(requestId);
+    }, PLUGIN_MCP_CONSENT_TIMEOUT_MS);
+    resolvers.set(requestId, { resolve, timer });
     usePluginMcpConfirmStore.getState().enqueue({ ...item, enqueuedAt: Date.now() });
   });
 }

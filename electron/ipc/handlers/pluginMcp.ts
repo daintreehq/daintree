@@ -23,9 +23,10 @@ import type {
 } from "../../services/plugin-mcp/PluginMcpConsentService.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { PLUGIN_MCP_RATE_LIMITED_CODE } from "../../../shared/types/ipc/pluginMcpAudit.js";
-import type {
-  PluginMcpConsentDecision,
-  PluginMcpDangerTier,
+import {
+  PLUGIN_MCP_CONSENT_TIMEOUT_MS,
+  type PluginMcpConsentDecision,
+  type PluginMcpDangerTier,
 } from "../../../shared/types/pluginMcpConsent.js";
 import {
   PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION,
@@ -191,6 +192,7 @@ interface PendingConsent {
   resolve: (decision: PluginMcpConsentDecision) => void;
   webContentsId: number;
   cleanup: () => void;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 const pendingConsents = new Map<string, PendingConsent>();
@@ -201,6 +203,7 @@ function settleConsent(requestId: string, decision: PluginMcpConsentDecision): v
   const pending = pendingConsents.get(requestId);
   if (!pending) return;
   pendingConsents.delete(requestId);
+  clearTimeout(pending.timer);
   pending.cleanup();
   pending.resolve(decision);
 }
@@ -224,7 +227,13 @@ function pushConsentRequest(
         // best-effort — the WebContents may already be torn down
       }
     };
-    pendingConsents.set(requestId, { resolve, webContentsId, cleanup });
+    // Safety net: an abandoned prompt settles itself as "timeout" so the gating
+    // promise never hangs and the pending entry is freed (#10841).
+    const timer = setTimeout(
+      () => settleConsent(requestId, "timeout"),
+      PLUGIN_MCP_CONSENT_TIMEOUT_MS
+    );
+    pendingConsents.set(requestId, { resolve, webContentsId, cleanup, timer });
     wc.once("destroyed", onDestroyed);
     try {
       wc.send(CHANNELS.EVENTS_PUSH, {
