@@ -124,7 +124,10 @@ export function registerTerminalNavigationActions(
     },
   }));
 
-  // Panel focus by index (parameterized)
+  // Panel focus by index (parameterized). Intentionally pure focus — this is
+  // the agent/MCP-facing action, where "focus panel N" must be idempotent and
+  // never toggle fullscreen. The press-again-to-maximize behavior lives only on
+  // the Cmd+1..9 keybindings below (terminal.focusIndexN).
   actions.set("panel.focusIndex", () => ({
     id: "panel.focusIndex",
     title: "Focus Panel by Index",
@@ -148,7 +151,7 @@ export function registerTerminalNavigationActions(
     actions.set(actionId, () => ({
       id: actionId,
       title: `Focus Terminal ${index}`,
-      description: `Focus terminal at position ${index}`,
+      description: `Focus terminal at position ${index}; press again to toggle fullscreen`,
       category: "terminal",
       kind: "command",
       danger: "safe",
@@ -156,7 +159,8 @@ export function registerTerminalNavigationActions(
       nonRepeatable: true,
       run: async () => {
         const nav = callbacks.getGridNavigation();
-        usePanelStore.getState().focusByIndex(index, nav.findByIndex);
+        const state = usePanelStore.getState();
+        state.focusOrMaximizeByIndex(index, nav.findByIndex, state.getPanelGroup);
       },
     }));
   }
