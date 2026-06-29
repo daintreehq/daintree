@@ -22,6 +22,7 @@ import {
   createWebLinksAddon,
   createFileLinksAddon,
   SEARCH_HIGHLIGHT_LIMIT,
+  __testing,
 } from "../TerminalAddonManager";
 import type { Terminal } from "@xterm/xterm";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -38,12 +39,15 @@ function createMockTerminal() {
 describe("TerminalAddonManager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // ImageAddon and Unicode11Addon are lazy-loaded and cached at module scope
+    // (#10840); reset that cache so each test re-imports against a clean mock.
+    __testing.resetLoaderState();
   });
 
   describe("setupTerminalAddons", () => {
-    it("defers ImageAddon off the eager core set (#9809)", () => {
+    it("defers ImageAddon off the eager core set (#9809)", async () => {
       const terminal = createMockTerminal();
-      const addons = setupTerminalAddons(terminal);
+      const addons = await setupTerminalAddons(terminal);
 
       // ImageAddon is built lazily via createImageAddon once a terminal is
       // actually opened, not on the bulk-create cold path.
@@ -51,9 +55,9 @@ describe("TerminalAddonManager", () => {
       expect(addons.imageAddon).toBeNull();
     });
 
-    it("defers file-link and web-link providers off the eager core set (#9809)", () => {
+    it("defers file-link and web-link providers off the eager core set (#9809)", async () => {
       const terminal = createMockTerminal();
-      const addons = setupTerminalAddons(terminal);
+      const addons = await setupTerminalAddons(terminal);
 
       expect(FileLinksAddon).not.toHaveBeenCalled();
       expect(WebLinksAddon).not.toHaveBeenCalled();
@@ -61,29 +65,44 @@ describe("TerminalAddonManager", () => {
       expect(addons.webLinksAddon).toBeNull();
     });
 
-    it("creates SearchAddon eagerly with highlightLimit for bounded match counts", () => {
+    it("creates SearchAddon eagerly with highlightLimit for bounded match counts", async () => {
       const terminal = createMockTerminal();
-      setupTerminalAddons(terminal);
+      await setupTerminalAddons(terminal);
 
       expect(mockSearchAddon).toHaveBeenCalledWith({
         highlightLimit: SEARCH_HIGHLIGHT_LIMIT,
       });
     });
 
-    it("activates Unicode 11 widths so modern emoji and CJK glyphs render at 2 cells (issue #7205)", () => {
+    it("activates Unicode 11 widths so modern emoji and CJK glyphs render at 2 cells (issue #7205)", async () => {
       const terminal = createMockTerminal();
-      setupTerminalAddons(terminal);
+      await setupTerminalAddons(terminal);
 
       expect(mockUnicode11Addon).toHaveBeenCalledTimes(1);
       expect(terminal.loadAddon).toHaveBeenCalledWith(expect.any(mockUnicode11Addon));
       expect(terminal.unicode.activeVersion).toBe("11");
     });
+
+    it("degrades to Unicode 6 widths when the Unicode11 addon fails rather than failing setup", async () => {
+      mockUnicode11Addon.mockImplementationOnce(() => {
+        throw new Error("addon load failed");
+      });
+      const terminal = createMockTerminal();
+
+      // Setup still resolves with the rest of the eager core intact — a terminal
+      // with mis-measured emoji beats no terminal at all.
+      const addons = await setupTerminalAddons(terminal);
+
+      expect(terminal.unicode.activeVersion).toBe("6");
+      expect(mockSearchAddon).toHaveBeenCalledTimes(1);
+      expect(addons.searchAddon).toBeDefined();
+    });
   });
 
   describe("createImageAddon", () => {
-    it("creates ImageAddon with memory-safe options", () => {
+    it("creates ImageAddon with memory-safe options", async () => {
       const terminal = createMockTerminal();
-      createImageAddon(terminal);
+      await createImageAddon(terminal);
 
       expect(mockImageAddon).toHaveBeenCalledWith({
         pixelLimit: 2_000_000,
@@ -91,9 +110,9 @@ describe("TerminalAddonManager", () => {
       });
     });
 
-    it("loads the addon onto the terminal", () => {
+    it("loads the addon onto the terminal", async () => {
       const terminal = createMockTerminal();
-      createImageAddon(terminal);
+      await createImageAddon(terminal);
 
       expect(terminal.loadAddon).toHaveBeenCalledWith(expect.any(mockImageAddon));
     });
