@@ -10,9 +10,10 @@ import type {
   PluginCapabilityConsentRequest,
 } from "../../services/plugin-capability/PluginCapabilityConsentService.js";
 import { getMainWindow } from "../../window/windowRef.js";
-import type {
-  PluginCapabilityConsentDecision,
-  PluginCapabilityResolveConsentInput,
+import {
+  PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS,
+  type PluginCapabilityConsentDecision,
+  type PluginCapabilityResolveConsentInput,
 } from "../../../shared/types/pluginCapabilityConsent.js";
 
 // --- Consent bridge (main → renderer prompt, renderer → main decision) --------
@@ -28,6 +29,7 @@ interface PendingConsent {
   resolve: (decision: PluginCapabilityConsentDecision) => void;
   webContentsId: number;
   cleanup: () => void;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 const pendingConsents = new Map<string, PendingConsent>();
@@ -46,6 +48,7 @@ function settleConsent(requestId: string, decision: PluginCapabilityConsentDecis
   const pending = pendingConsents.get(requestId);
   if (!pending) return;
   pendingConsents.delete(requestId);
+  clearTimeout(pending.timer);
   pending.cleanup();
   pending.resolve(decision);
 }
@@ -67,7 +70,13 @@ const consentBridge: PluginCapabilityConsentBridge = (request: PluginCapabilityC
         // best-effort — the WebContents may already be torn down
       }
     };
-    pendingConsents.set(requestId, { resolve, webContentsId: wc.id, cleanup });
+    // Safety net: an abandoned prompt settles itself as "timeout" so the gating
+    // promise never hangs and the pending entry is freed (#10841).
+    const timer = setTimeout(
+      () => settleConsent(requestId, "timeout"),
+      PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS
+    );
+    pendingConsents.set(requestId, { resolve, webContentsId: wc.id, cleanup, timer });
     wc.once("destroyed", onDestroyed);
     try {
       wc.send(CHANNELS.EVENTS_PUSH, {

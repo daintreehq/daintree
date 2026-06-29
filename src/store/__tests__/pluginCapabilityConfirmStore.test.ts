@@ -1,10 +1,13 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __resetPluginCapabilityConfirmStoreForTesting,
   requestPluginCapabilityConsent,
   usePluginCapabilityConfirmStore,
 } from "../pluginCapabilityConfirmStore";
-import type { PluginCapabilityConsentRequestEvent } from "@shared/types/pluginCapabilityConsent";
+import {
+  PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS,
+  type PluginCapabilityConsentRequestEvent,
+} from "@shared/types/pluginCapabilityConsent";
 
 function req(id: string): Omit<PluginCapabilityConsentRequestEvent, never> {
   return {
@@ -69,5 +72,72 @@ describe("pluginCapabilityConfirmStore", () => {
     expect(usePluginCapabilityConfirmStore.getState().current?.requestId).toBe("r1");
     usePluginCapabilityConfirmStore.getState().resolveCurrent("approved-once");
     await expect(p1).resolves.toBe("approved-once");
+  });
+
+  describe("consent timeout safety net (#10841)", () => {
+    it("settles an abandoned prompt as 'timeout' and evicts it from the store", async () => {
+      vi.useFakeTimers();
+      try {
+        const p = requestPluginCapabilityConsent(req("r1"));
+        expect(usePluginCapabilityConfirmStore.getState().current?.requestId).toBe("r1");
+
+        await vi.advanceTimersByTimeAsync(PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS);
+
+        await expect(p).resolves.toBe("timeout");
+        expect(usePluginCapabilityConfirmStore.getState().current).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not fire after a user decision clears the timer", async () => {
+      vi.useFakeTimers();
+      try {
+        const p = requestPluginCapabilityConsent(req("r1"));
+        usePluginCapabilityConfirmStore.getState().resolveCurrent("approved-and-pin");
+        await expect(p).resolves.toBe("approved-and-pin");
+
+        // Advancing past the deadline must not re-settle the already-decided promise.
+        await vi.advanceTimersByTimeAsync(PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS * 2);
+        await expect(p).resolves.toBe("approved-and-pin");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("advances the FIFO queue when a queued prompt times out", async () => {
+      vi.useFakeTimers();
+      try {
+        const p1 = requestPluginCapabilityConsent(req("r1"));
+        const p2 = requestPluginCapabilityConsent(req("r2"));
+
+        usePluginCapabilityConfirmStore.getState().resolveCurrent("approved-once");
+        await expect(p1).resolves.toBe("approved-once");
+        expect(usePluginCapabilityConfirmStore.getState().current?.requestId).toBe("r2");
+
+        await vi.advanceTimersByTimeAsync(PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS);
+        await expect(p2).resolves.toBe("timeout");
+        expect(usePluginCapabilityConfirmStore.getState().current).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("reset clears pending timers so they never fire into a cleared store", async () => {
+      vi.useFakeTimers();
+      try {
+        const p = requestPluginCapabilityConsent(req("r1"));
+        __resetPluginCapabilityConfirmStoreForTesting();
+
+        await vi.advanceTimersByTimeAsync(PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS * 2);
+        // The promise stays unsettled (the timer was cleared); no leaked timer
+        // re-enqueued or re-settled anything.
+        expect(usePluginCapabilityConfirmStore.getState().current).toBeNull();
+        expect(vi.getTimerCount()).toBe(0);
+        void p;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

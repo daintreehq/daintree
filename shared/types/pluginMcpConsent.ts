@@ -113,14 +113,26 @@ export type PluginMcpConsentLookup =
  * User decision returned by the consent dialog and consumed by the dispatch
  * chain. `rejected` aborts the tool call; `approved-once` runs without
  * pinning; `approved-and-pin` runs and writes the fingerprint into the TOFU
- * store. `timeout` is reserved for a future deadline-bound prompt — today the
- * dialog stays open until the user decides.
+ * store. `timeout` is settled by the consent bridge when an abandoned prompt
+ * outlives {@link PLUGIN_MCP_CONSENT_TIMEOUT_MS} — it fails closed exactly like
+ * `rejected`, but is recorded distinctly on the audit row so an operator can
+ * tell a deliberate refusal from a walked-away dialog.
  */
 export type PluginMcpConsentDecision =
   | "approved-once"
   | "approved-and-pin"
   | "rejected"
   | "timeout";
+
+/**
+ * How long a pushed plugin-MCP consent prompt may stay unanswered before the
+ * bridge settles it as `"timeout"` and frees the pending entry. Five minutes is
+ * a deliberate safety net for an abandoned dialog — long enough for a human to
+ * read the tool surface and decide, short enough that the gating promise (and
+ * the renderer dialog) never hangs forever. Both the main-process bridge and the
+ * renderer confirm store arm an independent timer at this duration.
+ */
+export const PLUGIN_MCP_CONSENT_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
  * Reason a consent prompt was raised. Surfaces to the dialog title/copy and

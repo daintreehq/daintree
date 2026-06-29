@@ -48,9 +48,28 @@ export interface PluginCapabilityConsentRecord {
  * User decision returned by the consent dialog. `rejected` aborts the gated
  * host call (the closure throws a `PERMISSION_REQUIRED:` error); `approved-once`
  * runs the call without persisting; `approved-and-pin` runs it and writes the
- * grant so future calls skip the prompt.
+ * grant so future calls skip the prompt. `timeout` is settled by the consent
+ * bridge when an abandoned prompt outlives
+ * {@link PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS}; it fails closed exactly like
+ * `rejected` (the gated call still throws `PERMISSION_REQUIRED:`) but is
+ * distinguished for diagnostics so a walked-away dialog reads differently from a
+ * deliberate refusal in the logs.
  */
-export type PluginCapabilityConsentDecision = "approved-once" | "approved-and-pin" | "rejected";
+export type PluginCapabilityConsentDecision =
+  | "approved-once"
+  | "approved-and-pin"
+  | "rejected"
+  | "timeout";
+
+/**
+ * How long a pushed plugin-capability consent prompt may stay unanswered before
+ * the bridge settles it as `"timeout"` and frees the pending entry. Mirrors the
+ * plugin-MCP timeout: a five-minute safety net for an abandoned dialog so the
+ * gating promise (and the renderer dialog) never hangs forever. Both the
+ * main-process bridge and the renderer confirm store arm an independent timer at
+ * this duration.
+ */
+export const PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
  * Display-safe consent prompt pushed from main to the renderer over the typed

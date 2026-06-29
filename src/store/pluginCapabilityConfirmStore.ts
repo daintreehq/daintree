@@ -1,7 +1,8 @@
 import { create } from "zustand";
-import type {
-  PluginCapabilityConsentDecision,
-  PluginCapabilityConsentRequestEvent,
+import {
+  PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS,
+  type PluginCapabilityConsentDecision,
+  type PluginCapabilityConsentRequestEvent,
 } from "@shared/types/pluginCapabilityConsent";
 
 /**
@@ -26,7 +27,12 @@ interface PluginCapabilityConfirmActions {
   reset: () => void;
 }
 
-const resolvers = new Map<string, (decision: PluginCapabilityConsentDecision) => void>();
+interface PendingResolver {
+  resolve: (decision: PluginCapabilityConsentDecision) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+const resolvers = new Map<string, PendingResolver>();
 
 function advance(
   set: (partial: Partial<PluginCapabilityConfirmState>) => void,
@@ -58,17 +64,23 @@ export const usePluginCapabilityConfirmStore = create<
   resolveCurrent: (decision) => {
     const { current, queue } = get();
     if (current === null) return;
-    const resolve = resolvers.get(current.requestId);
+    const entry = resolvers.get(current.requestId);
     resolvers.delete(current.requestId);
-    resolve?.(decision);
+    if (entry) {
+      clearTimeout(entry.timer);
+      entry.resolve(decision);
+    }
     advance(set, queue);
   },
 
   drop: (requestId) => {
     const { current, queue } = get();
-    const resolve = resolvers.get(requestId);
-    resolvers.delete(requestId);
-    resolve?.("rejected");
+    const entry = resolvers.get(requestId);
+    if (entry) {
+      resolvers.delete(requestId);
+      clearTimeout(entry.timer);
+      entry.resolve("rejected");
+    }
     if (current?.requestId === requestId) {
       advance(set, queue);
       return;
@@ -80,6 +92,7 @@ export const usePluginCapabilityConfirmStore = create<
   },
 
   reset: () => {
+    for (const { timer } of resolvers.values()) clearTimeout(timer);
     resolvers.clear();
     set({ queue: [], current: null });
   },
@@ -101,7 +114,19 @@ export function requestPluginCapabilityConsent(
       resolve("rejected");
       return;
     }
-    resolvers.set(item.requestId, resolve);
+    const { requestId } = item;
+    // Safety net: an abandoned dialog settles itself as "timeout" so the gating
+    // promise never hangs and the stale prompt is evicted from the store. The
+    // resolver is pre-deleted before delegating state cleanup to drop(), which
+    // then finds no resolver and only advances the queue (#10841).
+    const timer = setTimeout(() => {
+      const entry = resolvers.get(requestId);
+      if (!entry) return;
+      resolvers.delete(requestId);
+      entry.resolve("timeout");
+      usePluginCapabilityConfirmStore.getState().drop(requestId);
+    }, PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS);
+    resolvers.set(requestId, { resolve, timer });
     usePluginCapabilityConfirmStore.getState().enqueue({ ...item, enqueuedAt: Date.now() });
   });
 }
