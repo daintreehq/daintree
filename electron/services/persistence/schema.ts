@@ -13,6 +13,11 @@ export const projects = sqliteTable("projects", {
   pinned: integer("pinned").notNull().default(0),
   frecencyScore: real("frecency_score").notNull().default(3.0),
   lastAccessedAt: integer("last_accessed_at").notNull().default(0),
+  // Timestamp (ms) the background-idle auto-close swept this project to `closed`.
+  // Null for projects closed manually or still open; drives the distinct
+  // "Suspended to free memory" label in the project switcher. Cleared when the
+  // project is reopened (`setCurrentProject`).
+  autoParkedAt: integer("auto_parked_at"),
 });
 
 export const appState = sqliteTable("app_state", {

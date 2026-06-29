@@ -1,0 +1,1 @@
+ALTER TABLE `projects` ADD `auto_parked_at` integer;

@@ -32,6 +32,8 @@ export interface SearchableProject {
   color?: string;
   lastOpened: number;
   status: Project["status"];
+  /** Set when the project was auto-closed by the background-idle sweep (#10830). */
+  autoParkedAt?: number;
   isActive: boolean;
   isBackground: boolean;
   isMissing: boolean;
@@ -250,6 +252,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         color: p.color,
         lastOpened: p.lastOpened ?? 0,
         status: p.status,
+        autoParkedAt: p.autoParkedAt,
         isActive,
         isBackground,
         isMissing,

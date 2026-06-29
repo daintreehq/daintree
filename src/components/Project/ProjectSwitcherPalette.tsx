@@ -201,6 +201,14 @@ function ProjectListItem({
       return { secondaryText: "Agent working\u2026", secondaryClass: "text-activity-working" };
     if (project.waitingAgentCount > 0)
       return { secondaryText: "Agent waiting…", secondaryClass: "text-activity-waiting" };
+    // Auto-closed by the background-idle sweep (#10830) — surface the distinct
+    // "parked" label instead of a plain time-ago so the user understands why the
+    // project left active state and that reopening restores it.
+    if (project.status === "closed" && project.autoParkedAt)
+      return {
+        secondaryText: "Suspended to free memory",
+        secondaryClass: "text-daintree-text/50",
+      };
     if (project.lastOpened > 0)
       return {
         secondaryText: formatTimeAgo(project.lastOpened),

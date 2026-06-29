@@ -186,6 +186,10 @@ export type {
   IdleTerminalNotifyConfig,
   IdleTerminalNotifyPayload,
   IdleTerminalProjectEntry,
+  // Idle background-project auto-close types
+  IdleBackgroundAutoCloseConfig,
+  IdleBackgroundClosedPayload,
+  IdleBackgroundClosedProjectEntry,
   // System Sleep types
   SleepPeriod,
   SystemSleepMetrics,

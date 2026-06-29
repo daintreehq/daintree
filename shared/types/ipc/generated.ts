@@ -606,6 +606,14 @@ export interface GeneratedIpcInvokeMap {
     args: [config: Partial<import("./hibernation.js").HibernationConfig>];
     result: import("./hibernation.js").HibernationConfig;
   };
+  "idle-background:get-config": {
+    args: [];
+    result: import("./idleBackgroundAutoClose.js").IdleBackgroundAutoCloseConfig;
+  };
+  "idle-background:update-config": {
+    args: [config: Partial<import("./idleBackgroundAutoClose.js").IdleBackgroundAutoCloseConfig>];
+    result: import("./idleBackgroundAutoClose.js").IdleBackgroundAutoCloseConfig;
+  };
   "idle-terminal:close-project": {
     args: [projectId: string];
     result: void;

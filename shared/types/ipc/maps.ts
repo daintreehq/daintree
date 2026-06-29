@@ -105,6 +105,7 @@ import type {
 } from "../pty-host.js";
 import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
+import type { IdleBackgroundClosedPayload } from "./idleBackgroundAutoClose.js";
 import type { AppThemeConfig } from "../appTheme.js";
 import type {
   DemoMoveToPayload,
@@ -1786,6 +1787,9 @@ export interface IpcEventMap {
 
   // Idle terminal notification events
   "idle-terminal:notify": IdleTerminalNotifyPayload;
+
+  // Idle background-project auto-close events
+  "idle-background:closed": IdleBackgroundClosedPayload;
 
   // App theme events
   "app-theme:system-appearance-changed": { isDark: boolean; schemeId: string };

@@ -214,6 +214,33 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
     );
     expect(screen.getByText("my-project")).toBeTruthy();
   });
+
+  it("shows 'Suspended to free memory' for an auto-parked closed project", () => {
+    const twoHoursAgo = Date.now() - 2 * 3600000;
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[
+          makeProject({ status: "closed", autoParkedAt: Date.now(), lastOpened: twoHoursAgo }),
+        ]}
+      />
+    );
+    // The parked label wins over the plain time-ago for an auto-closed project.
+    expect(screen.getByText("Suspended to free memory")).toBeTruthy();
+    expect(screen.queryByText("2h ago")).toBeNull();
+  });
+
+  it("shows time-ago (not the parked label) for a closed project without the marker", () => {
+    const twoHoursAgo = Date.now() - 2 * 3600000;
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ status: "closed", lastOpened: twoHoursAgo })]}
+      />
+    );
+    expect(screen.getByText("2h ago")).toBeTruthy();
+    expect(screen.queryByText("Suspended to free memory")).toBeNull();
+  });
 });
 
 describe("ProjectSwitcherPalette status dot", () => {

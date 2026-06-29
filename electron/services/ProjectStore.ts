@@ -63,6 +63,7 @@ function rowToProject(row: ProjectRow): Project {
   project.frecencyScore =
     typeof row.frecencyScore === "number" ? row.frecencyScore : FRECENCY_COLD_START;
   project.lastAccessedAt = typeof row.lastAccessedAt === "number" ? row.lastAccessedAt : 0;
+  if (typeof row.autoParkedAt === "number") project.autoParkedAt = row.autoParkedAt;
   return project;
 }
 
@@ -386,7 +387,15 @@ export class ProjectStore {
     }
   }
 
-  updateProject(projectId: string, updates: Partial<Project>): Project {
+  updateProject(
+    projectId: string,
+    // `autoParkedAt` widened to allow an explicit `null` so callers can CLEAR the
+    // marker (the DB column is nullable). Passing `null` writes NULL; passing a
+    // number sets it; omitting the key leaves it untouched. Don't route the clear
+    // through `undefined` — a callee that strips undefined keys would silently
+    // drop the clear (review #4).
+    updates: Partial<Omit<Project, "autoParkedAt">> & { autoParkedAt?: number | null }
+  ): Project {
     const db = getSharedDb();
 
     const set: Partial<{
@@ -401,6 +410,7 @@ export class ProjectStore {
       pinned: number;
       frecencyScore: number;
       lastAccessedAt: number;
+      autoParkedAt: number | null;
     }> = {};
     if (updates.name !== undefined) set.name = updates.name;
     if (updates.path !== undefined) set.path = updates.path;
@@ -414,6 +424,7 @@ export class ProjectStore {
     if (updates.pinned !== undefined) set.pinned = updates.pinned ? 1 : 0;
     if (updates.frecencyScore !== undefined) set.frecencyScore = updates.frecencyScore;
     if (updates.lastAccessedAt !== undefined) set.lastAccessedAt = updates.lastAccessedAt;
+    if ("autoParkedAt" in updates) set.autoParkedAt = updates.autoParkedAt ?? null;
 
     if (Object.keys(set).length > 0) {
       db.update(projectsTable).set(set).where(eq(projectsTable.id, projectId)).run();
@@ -424,8 +435,19 @@ export class ProjectStore {
     return rowToProject(row);
   }
 
-  updateProjectStatus(projectId: string, status: ProjectStatus): Project {
-    return this.updateProject(projectId, { status });
+  updateProjectStatus(
+    projectId: string,
+    status: ProjectStatus,
+    options?: { autoParkedAt?: number | null }
+  ): Project {
+    const updates: Partial<Omit<Project, "autoParkedAt">> & { autoParkedAt?: number | null } = {
+      status,
+    };
+    if (options && "autoParkedAt" in options) {
+      // Pass null straight through to clear; updateProject writes NULL for it.
+      updates.autoParkedAt = options.autoParkedAt;
+    }
+    return this.updateProject(projectId, updates);
   }
 
   getAllProjects(): Project[] {
@@ -522,7 +544,10 @@ export class ProjectStore {
           this.updateProjectStatus(project.id, "missing");
           missingIds.push(project.id);
         } else if (exists && project.status === "missing") {
-          this.updateProjectStatus(project.id, "closed");
+          // Clear any stale auto-parked marker — a project that went missing and
+          // came back wasn't suspended by the idle sweep, so the switcher must
+          // not label it "Suspended to free memory".
+          this.updateProjectStatus(project.id, "closed", { autoParkedAt: null });
         }
       })
     );
@@ -701,7 +726,10 @@ export class ProjectStore {
           lastOpened?: number;
           frecencyScore?: number;
           lastAccessedAt?: number;
-        } = { status: "active" };
+          autoParkedAt: number | null;
+          // Reopening a project clears any background-idle "parked" marker so the
+          // switcher stops showing "Suspended to free memory" once it's live again.
+        } = { status: "active", autoParkedAt: null };
         if (!writesSuppressed && newScore !== null) {
           activeUpdate.lastOpened = now;
           activeUpdate.frecencyScore = newScore;

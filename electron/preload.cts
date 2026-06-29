@@ -60,6 +60,7 @@ import { buildTelemetryPreloadBindings } from "./ipc/handlers/telemetry.preload.
 import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.preload.js";
 import { buildHibernationPreloadBindings } from "./ipc/handlers/hibernation.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
+import { buildIdleBackgroundAutoClosePreloadBindings } from "./ipc/handlers/idleBackgroundAutoClose.preload.js";
 import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.preload.js";
 import { buildAppVersionInfoPreloadBindings } from "./ipc/handlers/appVersionInfo.preload.js";
 import { buildResourceProfilePreloadBindings } from "./ipc/handlers/resourceProfile.preload.js";
@@ -2053,6 +2054,18 @@ function buildElectronApi(): ElectronAPI {
           timestamp: number;
         }) => void
       ): (() => void) => _typedOn(CHANNELS.IDLE_TERMINAL_NOTIFY, callback),
+    },
+
+    // Idle Background-Project Auto-Close API
+    idleBackgroundAutoClose: {
+      ...buildIdleBackgroundAutoClosePreloadBindings(_unwrappingInvoke),
+
+      onClosed: (
+        callback: (payload: {
+          projects: Array<{ projectId: string; projectName: string }>;
+          timestamp: number;
+        }) => void
+      ): (() => void) => _typedOn(CHANNELS.IDLE_BACKGROUND_CLOSED, callback),
     },
 
     // System Sleep API

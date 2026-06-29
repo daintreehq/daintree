@@ -342,6 +342,10 @@ export const CHANNELS = {
   IDLE_TERMINAL_DISMISS_PROJECT: "idle-terminal:dismiss-project",
   IDLE_TERMINAL_NOTIFY: "idle-terminal:notify",
 
+  IDLE_BACKGROUND_GET_CONFIG: "idle-background:get-config",
+  IDLE_BACKGROUND_UPDATE_CONFIG: "idle-background:update-config",
+  IDLE_BACKGROUND_CLOSED: "idle-background:closed",
+
   WEBVIEW_SET_LIFECYCLE_STATE: "webview:set-lifecycle-state",
   WEBVIEW_REGISTER_PANEL: "webview:register-panel",
   WEBVIEW_DIALOG_REQUEST: "webview:dialog-request",

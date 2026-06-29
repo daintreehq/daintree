@@ -302,7 +302,7 @@ describe("openDb (integration)", () => {
     }
   });
 
-  it("applies a later migration to a DB already migrated through an earlier one (regression: audit_rings skip)", async () => {
+  it("applies a later migration to a DB already migrated through an earlier one (regression: journal-timestamp skip)", async () => {
     // Reproduces the journal-timestamp bug: drizzle only applies a migration when
     // its folderMillis (the journal `when`) is greater than the newest recorded
     // `created_at`. A migration stamped with a `when` that predates an already-
@@ -342,16 +342,18 @@ describe("openDb (integration)", () => {
     for (const entry of applied) ins.run(entry.tag, entry.when);
     seed.close();
 
-    // The migration's table must be absent before the upgrade for the test to mean
-    // anything — guards against the seed accidentally creating it.
-    expect(latest.tag).toContain("audit_rings");
+    // The last migration's effect must be absent before the upgrade for the test
+    // to mean anything — the seed `projects` table above omits `auto_parked_at`,
+    // which the final migration (0005) adds.
+    expect(latest.tag).toContain("auto_parked_at");
 
     const { sqlite } = openDb(dbPath, migrationsFolder);
     try {
-      const hasAuditRings = sqlite
-        .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='audit_rings'")
-        .get();
-      expect(hasAuditRings).toBeTruthy();
+      const projectColumns = sqlite.prepare("PRAGMA table_info(projects)").all() as Array<{
+        name: string;
+      }>;
+      const hasAutoParkedAt = projectColumns.some((c) => c.name === "auto_parked_at");
+      expect(hasAutoParkedAt).toBe(true);
 
       // The skipped migration is now recorded — total equals the full journal.
       const migrations = sqlite.prepare("SELECT id FROM __drizzle_migrations").all();

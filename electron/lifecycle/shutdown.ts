@@ -19,6 +19,7 @@ import { getPanelSuspectLedger } from "../services/PanelSuspectLedgerService.js"
 import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceService.js";
 import { getPeriodicCleanupService } from "../services/PeriodicCleanupService.js";
 import { getHibernationService } from "../services/HibernationService.js";
+import { getIdleBackgroundAutoCloseService } from "../services/IdleBackgroundAutoCloseService.js";
 import { getIdleTerminalNotificationService } from "../services/IdleTerminalNotificationService.js";
 import { getSystemSleepService } from "../services/SystemSleepService.js";
 import { getOsDndService } from "../services/OsDndService.js";
@@ -293,6 +294,11 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
               getIdleTerminalNotificationService().stop();
             } catch (err) {
               console.warn("[MAIN] IdleTerminalNotificationService.stop failed:", err);
+            }
+            try {
+              getIdleBackgroundAutoCloseService().stop();
+            } catch (err) {
+              console.warn("[MAIN] IdleBackgroundAutoCloseService.stop failed:", err);
             }
             try {
               getSystemSleepService().dispose();

@@ -47,6 +47,13 @@ export interface Project {
   frecencyScore?: number;
   /** Timestamp (ms) of last frecency update */
   lastAccessedAt?: number;
+  /**
+   * Timestamp (ms) the background-idle auto-close reclaimed this project's
+   * memory and marked it `closed`. Absent for projects closed manually or still
+   * open; the project switcher surfaces it as a distinct "Suspended to free
+   * memory" label. Cleared when the project is reopened.
+   */
+  autoParkedAt?: number;
 }
 
 /** Panel snapshot for state preservation. */
