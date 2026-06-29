@@ -22,14 +22,33 @@ const agentRegistryMock = vi.hoisted(() => ({
     claude: { name: "Claude" },
     codex: { name: "Codex" },
   },
+  getAgentDisplayTitle: vi.fn((id: string) => `Title:${id}`),
+}));
+
+const clientsMock = vi.hoisted(() => ({
+  agentSettingsClient: {
+    get: vi.fn(),
+  },
+  cliAvailabilityClient: {
+    get: vi.fn(),
+  },
 }));
 
 vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
 vi.mock("@/store/createWorktreeStore", () => currentViewStoreMock);
 vi.mock("@/store/worktreeStore", () => worktreeSelectionMock);
 vi.mock("@/config/agents", () => agentRegistryMock);
+vi.mock("@/clients", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/clients")>();
+  return {
+    ...actual,
+    agentSettingsClient: clientsMock.agentSettingsClient,
+    cliAvailabilityClient: clientsMock.cliAvailabilityClient,
+  };
+});
 
 import { registerAgentActions } from "../agentActions";
+import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 
 function makeCallbacks() {
   return {
@@ -714,5 +733,92 @@ describe("agent.launch dispatch integration", () => {
       "claude",
       expect.objectContaining({ location: "overlay" })
     );
+  });
+});
+
+describe("agent.listToolbar (#10838)", () => {
+  type ToolbarRow = {
+    id: string;
+    displayName: string;
+    pinned?: boolean;
+    installed: boolean;
+    visible: boolean;
+  };
+
+  async function listToolbar(
+    settings: { agents?: Record<string, { pinned?: boolean }> },
+    availability: Record<string, string>
+  ): Promise<ToolbarRow[]> {
+    clientsMock.agentSettingsClient.get.mockResolvedValue(settings);
+    clientsMock.cliAvailabilityClient.get.mockResolvedValue(availability);
+    const actions = setupActions(makeCallbacks());
+    const result = (await callAction(actions, "agent.listToolbar")) as { agents: ToolbarRow[] };
+    return result.agents;
+  }
+
+  function rowFor(rows: ToolbarRow[], id: string): ToolbarRow {
+    const row = rows.find((r) => r.id === id);
+    if (!row) throw new Error(`no row for ${id}`);
+    return row;
+  }
+
+  it("returns one row per launchable agent, in registry order", async () => {
+    const rows = await listToolbar({ agents: {} }, {});
+    expect(rows.map((r) => r.id)).toEqual([...LAUNCHABLE_AGENT_IDS]);
+    // assistant-only agents are never launchable and must not appear
+    expect(rows.some((r) => r.id === "daintree-assistant")).toBe(false);
+  });
+
+  it("explicit pin (pinned:true) wins over a missing binary — visible:true, installed:false", async () => {
+    const rows = await listToolbar({ agents: { claude: { pinned: true } } }, { claude: "missing" });
+    const claude = rowFor(rows, "claude");
+    expect(claude.pinned).toBe(true);
+    expect(claude.installed).toBe(false);
+    expect(claude.visible).toBe(true);
+  });
+
+  it("explicit unpin (pinned:false) wins over an installed binary — visible:false, installed:true", async () => {
+    const rows = await listToolbar({ agents: { codex: { pinned: false } } }, { codex: "ready" });
+    const codex = rowFor(rows, "codex");
+    expect(codex.pinned).toBe(false);
+    expect(codex.installed).toBe(true);
+    expect(codex.visible).toBe(false);
+  });
+
+  it("omits pinned and follows live availability when no setting is present", async () => {
+    const rows = await listToolbar({ agents: {} }, { gemini: "ready", aider: "missing" });
+    const gemini = rowFor(rows, "gemini");
+    expect(gemini).not.toHaveProperty("pinned");
+    expect(gemini.installed).toBe(true);
+    expect(gemini.visible).toBe(true);
+
+    const aider = rowFor(rows, "aider");
+    expect(aider).not.toHaveProperty("pinned");
+    expect(aider.installed).toBe(false);
+    expect(aider.visible).toBe(false);
+  });
+
+  it("treats blocked/unauthenticated binaries as installed", async () => {
+    const rows = await listToolbar({ agents: {} }, { gemini: "blocked", aider: "unauthenticated" });
+    expect(rowFor(rows, "gemini").installed).toBe(true);
+    expect(rowFor(rows, "aider").installed).toBe(true);
+  });
+
+  it("uses getAgentDisplayTitle for displayName", async () => {
+    const rows = await listToolbar({ agents: {} }, {});
+    expect(rowFor(rows, "claude").displayName).toBe("Title:claude");
+  });
+
+  it("reads settings and availability once each — no fresh probing", async () => {
+    await listToolbar({ agents: {} }, {});
+    expect(clientsMock.agentSettingsClient.get).toHaveBeenCalledTimes(1);
+    expect(clientsMock.cliAvailabilityClient.get).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects without a partial result when the settings read fails", async () => {
+    clientsMock.agentSettingsClient.get.mockRejectedValue(new Error("IPC error"));
+    clientsMock.cliAvailabilityClient.get.mockResolvedValue({});
+    const actions = setupActions(makeCallbacks());
+    await expect(callAction(actions, "agent.listToolbar")).rejects.toThrow("IPC error");
   });
 });

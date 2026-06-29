@@ -11,8 +11,11 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
-import { AGENT_REGISTRY } from "@/config/agents";
-import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
+import { AGENT_REGISTRY, getAgentDisplayTitle } from "@/config/agents";
+import { agentSettingsClient, cliAvailabilityClient } from "@/clients";
+import { isAssistantOnlyAgentId, LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
+import { isAgentInstalled } from "@shared/utils/agentAvailability";
 import type { ActionId } from "@shared/types/actions";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
@@ -441,6 +444,51 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         spawnedAt: null,
         terminalId: null,
         found: false,
+      };
+    },
+  }));
+
+  actions.set("agent.listToolbar", () => ({
+    id: "agent.listToolbar",
+    title: "List Toolbar Agents",
+    description:
+      "List the built-in agents and their resolved toolbar visibility. Returns { agents: [{ id, displayName, pinned, installed, visible }] } for every launchable built-in agent. `pinned` is tri-state: true (explicitly pinned), false (explicitly hidden), or omitted (follows CLI availability). `installed` is whether the agent's CLI binary was detected. `visible` is the resolved toolbar state — true when the agent button currently shows in the toolbar. Use this to discover which agents the user has surfaced without reading the full agent settings.",
+    category: "agent",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    mcpVisibility: "discoverable",
+    resultSchema: z.object({
+      agents: z.array(
+        z.object({
+          id: z.string(),
+          displayName: z.string(),
+          pinned: z.boolean().optional(),
+          installed: z.boolean(),
+          visible: z.boolean(),
+        })
+      ),
+    }),
+    run: async () => {
+      const [settings, availability] = await Promise.all([
+        agentSettingsClient.get(),
+        cliAvailabilityClient.get(),
+      ]);
+      return {
+        agents: LAUNCHABLE_AGENT_IDS.map((id) => {
+          const entry = settings.agents?.[id];
+          const state = availability[id];
+          // Omit `pinned` entirely when the user hasn't set it (tri-state):
+          // an absent key means "follows CLI availability", distinct from an
+          // explicit true/false pin/unpin.
+          return {
+            id,
+            displayName: getAgentDisplayTitle(id),
+            ...(entry?.pinned !== undefined ? { pinned: entry.pinned } : {}),
+            installed: isAgentInstalled(state),
+            visible: isAgentToolbarVisible(entry, state),
+          };
+        }),
       };
     },
   }));

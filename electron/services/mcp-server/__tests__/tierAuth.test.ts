@@ -544,3 +544,25 @@ describe("help-session tier policy (#10640)", () => {
     }
   });
 });
+
+// agent.listToolbar (#10838) is the narrow, read-only discovery surface for the
+// toolbar agent set. It must be reachable by every tier — including external
+// api-key consumers and workbench help sessions — WITHOUT exposing the broad
+// `agentSettings.get` (which leaks custom flags, dangerous args, global env, and
+// presets). These assertions pin that exact boundary: the safe alternative is
+// reachable everywhere the leaky one must stay walled off from external.
+describe("agent.listToolbar tier reachability (#10838)", () => {
+  it.each(["workbench", "action", "system", "external"] as const)(
+    "permits agent.listToolbar at the %s tier",
+    (tier) => {
+      expect(isTierPermitted(tier, "agent.listToolbar", false)).toBe(true);
+    }
+  );
+
+  it("keeps the broad agentSettings.get off the external tier so the narrow alternative is the only external path", () => {
+    expect(isTierPermitted("external", "agentSettings.get", false)).toBe(false);
+    // Sanity check the contrast is real, not a typo'd id: agentSettings.get IS
+    // reachable for the trusted in-app workbench session.
+    expect(isTierPermitted("workbench", "agentSettings.get", false)).toBe(true);
+  });
+});
