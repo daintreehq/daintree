@@ -557,6 +557,7 @@ import { config as aiderConfig } from "./agents/aider.js";
 import { config as geminiConfig } from "./agents/gemini.js";
 import { config as antigravityConfig } from "./agents/antigravity.js";
 import { config as codexConfig } from "./agents/codex.js";
+import { config as grokConfig } from "./agents/grok.js";
 import { config as cursorConfig } from "./agents/cursor.js";
 import { config as copilotConfig } from "./agents/copilot.js";
 import { config as gooseConfig } from "./agents/goose.js";
@@ -605,6 +606,7 @@ export const AGENT_REGISTRY: Record<BuiltInAgentId, AgentConfig> = {
   gemini: geminiConfig,
   antigravity: antigravityConfig,
   codex: codexConfig,
+  grok: grokConfig,
   cursor: cursorConfig,
   copilot: copilotConfig,
   goose: gooseConfig,

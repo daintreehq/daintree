@@ -54,6 +54,7 @@ export const AGENT_DESCRIPTIONS: Record<string, string> = {
   gemini: "Quick exploration and broad knowledge lookup",
   antigravity: "Google's agy — successor to Gemini CLI for consumer accounts",
   codex: "Careful, methodical runs with sandboxed execution",
+  grok: "xAI's terminal agent with plan mode and parallel subagents",
   opencode: "Provider-agnostic, open-source flexibility",
   cursor: "Cursor's agentic coding assistant",
   kiro: "Spec-driven development with autonomous execution",

@@ -224,6 +224,7 @@ export function AgentCliStep({
           const currentMethodIdx = selectedMethodIndex[agentId] ?? 0;
           const currentBlock = blocks?.[currentMethodIdx] ?? blocks?.[0];
           const Icon = config.icon;
+          const brandChip = resolveBrandChip(config.color, activeScheme);
           const description = AGENT_DESCRIPTIONS[agentId] ?? config.tooltip ?? "";
           const isInstalling = status === "installing";
           const isInstalled = status === "installed";
@@ -249,12 +250,10 @@ export function AgentCliStep({
                 <div
                   className="w-8 h-8 rounded-[var(--radius-sm)] flex items-center justify-center shrink-0"
                   style={{
-                    backgroundColor:
-                      resolveBrandChip(config.color, activeScheme)?.background ??
-                      `${config.color}15`,
+                    backgroundColor: brandChip?.background ?? `${config.color}15`,
                   }}
                 >
-                  <Icon size={18} brandColor={config.color} />
+                  <Icon size={18} brandColor={brandChip?.tint ?? config.color} />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium text-daintree-text">{config.name}</div>

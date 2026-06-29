@@ -1278,6 +1278,7 @@ describe("all built-in agents have Windows or generic install", () => {
     "claude",
     "gemini",
     "codex",
+    "grok",
     "opencode",
     "cursor",
     "copilot",

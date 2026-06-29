@@ -121,6 +121,7 @@ export const DEFAULT_DANGEROUS_ARGS: Record<string, string> = {
   gemini: "--yolo",
   antigravity: "--dangerously-skip-permissions",
   codex: "--dangerously-bypass-approvals-and-sandbox",
+  grok: "--always-approve",
   cursor: "--force",
   interpreter: "--auto_run",
   amp: "--dangerously-allow-all",
@@ -607,6 +608,16 @@ export function generateAgentCommand(
         // the explicit chat --no-interactive form
         if (!interactive) {
           parts.push("chat", "--no-interactive");
+        }
+        parts.push(escapedPrompt);
+        break;
+
+      case "grok":
+        // Grok Build: a bare positional seeds the interactive TUI
+        // (`grok "fix the bug"`, per `grok --help`); headless one-shot uses
+        // -p/--single.
+        if (!interactive) {
+          parts.push("-p");
         }
         parts.push(escapedPrompt);
         break;
