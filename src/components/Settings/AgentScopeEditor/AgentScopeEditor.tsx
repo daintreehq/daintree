@@ -107,6 +107,26 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
           />
         )}
 
+        {/* Env editor — most common config, shown first */}
+        {(scope.scopeKind === "default" || scope.scopeKind === "custom") && (
+          <EnvBlock
+            scopeKind={scope.scopeKind}
+            agentId={props.agentId}
+            globalEnv={props.activeEntry.globalEnv as Record<string, string> | undefined}
+            selectedPreset={scope.scopeKind === "custom" ? scope.selectedPreset : undefined}
+            suggestions={scope.agentEnvSuggestions}
+            onGlobalEnvChange={(env) => {
+              void (async () => {
+                await props.updateAgent(props.agentId, {
+                  globalEnv: Object.keys(env).length > 0 ? env : undefined,
+                } as Partial<AgentSettingsEntry>);
+                props.onSettingsChange?.();
+              })();
+            }}
+            onPresetEnvChange={(env) => scope.handleUpdatePreset(scope.selectedPreset!.id, { env })}
+          />
+        )}
+
         {/* Behavioral settings (Default / Custom scopes — editable) */}
         {scope.isEditableScope && (
           <BehavioralControls
@@ -130,26 +150,6 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
             onCustomFlagsChange={scope.handleCustomFlagsChange}
             onInlineOverrideReset={scope.handleInlineOverrideReset}
             onCustomFlagsOverrideReset={scope.handleCustomFlagsOverrideReset}
-          />
-        )}
-
-        {/* Env editor */}
-        {(scope.scopeKind === "default" || scope.scopeKind === "custom") && (
-          <EnvBlock
-            scopeKind={scope.scopeKind}
-            agentId={props.agentId}
-            globalEnv={props.activeEntry.globalEnv as Record<string, string> | undefined}
-            selectedPreset={scope.scopeKind === "custom" ? scope.selectedPreset : undefined}
-            suggestions={scope.agentEnvSuggestions}
-            onGlobalEnvChange={(env) => {
-              void (async () => {
-                await props.updateAgent(props.agentId, {
-                  globalEnv: Object.keys(env).length > 0 ? env : undefined,
-                } as Partial<AgentSettingsEntry>);
-                props.onSettingsChange?.();
-              })();
-            }}
-            onPresetEnvChange={(env) => scope.handleUpdatePreset(scope.selectedPreset!.id, { env })}
           />
         )}
 
