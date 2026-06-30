@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.21.1] - 2026-06-30
+
+A follow-up to the full-screen TUI scroll work in 0.21.0. That release smoothed wheel and trackpad scrolling in mouse-reporting TUIs, but lag and stutter remained under load — most notably a "smooth at first, then slow and stays slow" case. This patch finishes the job, retuning the wheel-input path to VS Code parity.
+
+### Bug Fixes
+
+- Fix laggy, stuttering scroll in full-screen mouse-reporting TUIs like grok, lazygit, and btop — including the "smooth at first, then permanently slow" case where an actively-scrolled pane latched into the Efficiency profile and never recovered (#10848)
+- Pace wheel and trackpad reports per animation frame so a trackpad momentum flood no longer saturates the PTY round-trip, and convert scroll distance off the live rendered cell height so the feel holds at any font size (#10848)
+
+### Performance
+
+- Trim terminal resize storms and reduce hover-regex cost on the render path (#10848)
+
 ## [0.21.0] - 2026-06-30
 
 A memory-reclamation release: projects can now free their memory on demand and idle background projects auto-close, backed by a round of memory-hygiene and lazy-loading work. Grok (xAI) joins the agent roster — with terminal scrolling retuned for mouse-tracking TUIs — as the Gemini CLI agent is deprecated.
