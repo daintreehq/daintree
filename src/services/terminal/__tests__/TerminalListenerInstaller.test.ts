@@ -70,6 +70,10 @@ function makeMockTerminal(captured: CapturedCallbacks) {
     rows: 24,
     cols: 80,
     modes: { bracketedPasteMode: false, mouseTrackingMode: "none" as const },
+    // Rendered cell dimensions read by getXtermCellDimensions(): a 20px cell
+    // height makes the wheel normalizer's px-per-line basis exactly 20, the
+    // value the amplifier/normalizer tests are written against.
+    _core: { _renderService: { dimensions: { css: { cell: { width: 9, height: 20 } } } } },
     buffer: {
       active: { length: 0, type: "normal", baseY: 0, viewportY: 0 },
       onBufferChange: vi.fn(() => ({ dispose: vi.fn() })),
@@ -177,6 +181,7 @@ function makeDeps(
     notifyUserInput: vi.fn(),
     clearDirectingState: vi.fn(),
     onUserInput: vi.fn(),
+    onActiveWheel: vi.fn(),
     onEnterPressed: vi.fn(),
     updateLastObservedTitle: vi.fn(),
     notifyXtermFocused: vi.fn(),
@@ -636,9 +641,15 @@ describe("installTerminalBoundListeners", () => {
       mouseTrackingMode: string;
       isAltBuffer: boolean;
       runtimeAgentId?: string;
+      cellHeight?: number;
     }) {
       const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
       const terminal = makeMockTerminal(captured);
+      if (opts.cellHeight !== undefined) {
+        // Override the rendered cell height the px-per-line basis resolves from,
+        // so a test can exercise the live-cell-height resolution end to end.
+        terminal._core._renderService.dimensions.css.cell.height = opts.cellHeight;
+      }
       // The normalizer gate does NOT depend on runtimeAgentId (a plain
       // lazygit/btop terminal must amplify too); default to an agent but let
       // callers clear it to cover the no-agent case.
@@ -676,6 +687,7 @@ describe("installTerminalBoundListeners", () => {
       return {
         managed,
         terminal,
+        deps,
         xtermEl,
         dispatch: (init: WheelEventInit, target: HTMLElement = managed.hostElement) => {
           const ev = new WheelEvent("wheel", { bubbles: true, cancelable: true, ...init });
@@ -963,6 +975,117 @@ describe("installTerminalBoundListeners", () => {
       h.flushFrames();
       expect(h.getReports()).toBe(0); // queued drain was cancelled
     });
+
+    it("paces a trackpad fling more gently per frame than an equivalent wheel fling", () => {
+      // The device-aware send-rate cap: a trackpad's momentum stream (the gesture
+      // that actually floods the PTY round-trip) drains fewer lines per frame than
+      // a physical wheel's discrete detents, even for the same total distance.
+      const wheel = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      wheel.dispatch({ deltaX: 0, deltaY: 240, deltaMode: 0 }); // integer single-axis → wheel
+      wheel.flushFrame();
+      const wheelFirstFrame = wheel.getReports();
+
+      const trackpad = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      trackpad.dispatch({ deltaX: 6, deltaY: 240.5, deltaMode: 0 }); // dual-axis fractional → trackpad
+      trackpad.flushFrame();
+      const trackpadFirstFrame = trackpad.getReports();
+
+      expect(trackpadFirstFrame).toBeGreaterThan(0);
+      expect(trackpadFirstFrame).toBeLessThan(wheelFirstFrame);
+      // Pacing changes the per-frame rate, not the total: both devices deliver the
+      // same gesture in full (same distance ⇒ same line count), just spread
+      // differently across frames.
+      wheel.flushFrames();
+      trackpad.flushFrames();
+      expect(trackpad.getReports()).toBe(wheel.getReports());
+      expect(wheel.getReports()).toBeGreaterThan(wheelFirstFrame);
+    });
+
+    it("re-detects the device after an idle gap (stale wheel history doesn't pin the cap)", () => {
+      // The classifier is reset at a gesture boundary, so a trackpad gesture that
+      // follows a long pause after wheel scrolling is paced by the TRACKPAD cap on
+      // its very first frame — not the leftover physical-wheel verdict. Compared
+      // against the same sequence with no gap, where the rolling history still
+      // reads as a wheel.
+      function trackpadFirstFrameAfterWheel(gapMs: number): number {
+        const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+        // Fill the classifier with a physical-wheel streak and let it drain.
+        for (let i = 0; i < 5; i++) h.dispatch({ deltaX: 0, deltaY: 120, deltaMode: 0 });
+        h.flushFrames();
+        const drained = h.getReports();
+        vi.advanceTimersByTime(gapMs);
+        // Now a trackpad fling (dual-axis fractional).
+        h.dispatch({ deltaX: 6, deltaY: 240.5, deltaMode: 0 });
+        h.flushFrame();
+        return h.getReports() - drained;
+      }
+      const afterGap = trackpadFirstFrameAfterWheel(1000); // gesture boundary → reset
+      const noGap = trackpadFirstFrameAfterWheel(0); // continuous → wheel history persists
+      expect(afterGap).toBeLessThan(noGap);
+    });
+
+    it("preserves sub-line carry across an idle gap (slow scrolling still accumulates)", () => {
+      // The gap resets the device/backlog but NOT the lossless pixel carry: two
+      // sub-line nudges separated by a long pause must still combine into a line,
+      // otherwise a slow hi-res wheel would scroll nothing.
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      h.dispatch({ deltaY: 10, deltaMode: 0 }); // half a line (20px basis), carried
+      h.flushFrames();
+      expect(h.getReports()).toBe(0);
+
+      vi.advanceTimersByTime(1000); // a clearly human-idle pause
+
+      h.dispatch({ deltaY: 10, deltaMode: 0 }); // resume same direction
+      h.flushFrames();
+      expect(h.getReports()).toBe(1); // the two halves still crossed a line boundary
+    });
+
+    it("signals onActiveWheel only when a real scroll is forwarded, not for sub-line motion", () => {
+      // onActiveWheel drives the renderer BURST boost + resource-profile hold,
+      // so it must fire on a forwarded scroll (lines !== 0) and stay silent for a
+      // sub-line nudge that forwards nothing.
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      h.dispatch({ deltaY: 10, deltaMode: 0 }); // half a line (20px basis) → no forward
+      expect(h.deps.onActiveWheel).not.toHaveBeenCalled();
+      h.dispatch({ deltaY: 120, deltaMode: 0 }); // a real notch → forwarded
+      expect(h.deps.onActiveWheel).toHaveBeenCalledWith("t1");
+    });
+
+    it("does not signal onActiveWheel when it does not take over the wheel", () => {
+      // Normal buffer (no mouse-reporting TUI): the wheel passes through to
+      // xterm's own scrollback, so no boost is requested.
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: false });
+      h.dispatch({ deltaY: 120, deltaMode: 0 });
+      expect(h.deps.onActiveWheel).not.toHaveBeenCalled();
+    });
+
+    it("clears a single notch within one frame and adds nothing on the next", () => {
+      // A discrete notch (below the per-frame cap) must not be split across frames
+      // — it should land whole on the first frame, then the next frame is a no-op.
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      h.dispatch({ deltaY: 120, deltaMode: 0 });
+      h.flushFrame();
+      const afterOneFrame = h.getReports();
+      expect(afterOneFrame).toBe(NOTCH_REPORTS); // all of the notch, in one frame
+      h.flushFrame();
+      expect(h.getReports()).toBe(afterOneFrame); // nothing left to drain
+    });
+
+    it("resolves lines from the live rendered cell height (bigger cell ⇒ fewer lines)", () => {
+      // End-to-end through the real handler: the px-per-line basis is the rendered
+      // cell height, so the SAME 120px gesture yields fewer line reports on a
+      // taller cell. Guards the getXtermCellDimensions resolution path.
+      const tall = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true, cellHeight: 40 });
+      tall.dispatch({ deltaY: 120, deltaMode: 0 });
+      tall.flushFrames();
+
+      const short = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true, cellHeight: 10 });
+      short.dispatch({ deltaY: 120, deltaMode: 0 });
+      short.flushFrames();
+
+      expect(tall.getReports()).toBeGreaterThan(0);
+      expect(tall.getReports()).toBeLessThan(short.getReports()); // 120/40 < 120/10
+    });
   });
 
   it("registers the same listener count on every call (idempotent shape)", () => {
@@ -1190,6 +1313,34 @@ describe("wheelEventToLineCount", () => {
     // value; the tests below pin the surrounding invariants relationally so they
     // survive retuning the budget.
     expect(wheelEventToLineCount(ev(120, 0), 24, { partial: 0 })).toBe(6);
+  });
+
+  it("converts pixels at the supplied cell-height basis, inversely to cell size", () => {
+    // The px-per-line basis is the live rendered cell height, not a constant. The
+    // same 120px gesture must scroll proportionally fewer lines as the basis grows
+    // (line count × basis ≈ the pixel distance), and halving the basis doubles the
+    // lines — a relationship, not a pinned literal.
+    const at10 = wheelEventToLineCount(ev(120, 0), 99, { partial: 0 }, 10);
+    const at20 = wheelEventToLineCount(ev(120, 0), 99, { partial: 0 }, 20);
+    const at40 = wheelEventToLineCount(ev(120, 0), 99, { partial: 0 }, 40);
+    expect(at10).toBe(at20 * 2);
+    expect(at20).toBe(at40 * 2);
+    expect(at20 * 20).toBe(120); // basis × lines recovers the gesture distance
+  });
+
+  it("falls back to the default basis for a non-positive pixelsPerLine", () => {
+    // A zero/negative basis (e.g. a degenerate cell measurement) must not divide
+    // by zero or invert the sign — it behaves exactly as if the arg were omitted.
+    const omitted = wheelEventToLineCount(ev(120, 0), 99, { partial: 0 });
+    expect(wheelEventToLineCount(ev(120, 0), 99, { partial: 0 }, 0)).toBe(omitted);
+    expect(wheelEventToLineCount(ev(120, 0), 99, { partial: 0 }, -5)).toBe(omitted);
+  });
+
+  it("ignores pixelsPerLine for line-mode and page-mode events", () => {
+    // Only pixel-mode (deltaMode 0) events divide by the basis; line/page events
+    // carry the OS step already, so a wildly different basis must not change them.
+    expect(wheelEventToLineCount(ev(3, 1), 24, { partial: 0 }, 7)).toBe(3); // line mode
+    expect(wheelEventToLineCount(ev(1, 2), 24, { partial: 0 }, 7)).toBe(24); // page mode → rows
   });
 
   it("scrolls clearly more than a single line per notch (the dead-scroll fix)", () => {

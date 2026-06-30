@@ -21,7 +21,9 @@ const appMock = vi.hoisted(() => ({
   exit: vi.fn(),
   // GPU feature status is empty until Chromium classifies the GPU; default to
   // undefined so the startup-status logger is a no-op unless a test opts in.
-  getGPUFeatureStatus: vi.fn(() => undefined),
+  // Annotate the return type so `mockReturnValue({...})` opt-ins type-check —
+  // a bare `() => undefined` pins the mock's return to `undefined`.
+  getGPUFeatureStatus: vi.fn((): Record<string, string> | undefined => undefined),
   getGPUInfo: vi.fn(() => Promise.resolve(null)),
 }));
 

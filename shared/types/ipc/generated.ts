@@ -1249,6 +1249,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../resourceProfile.js").ResourceProfileSnapshot;
   };
+  "system:request-interactive-override": {
+    args: [durationMs: number];
+    result: void;
+  };
   "telemetry:get": {
     args: [];
     result: { enabled: boolean; hasSeenPrompt: boolean };
