@@ -965,8 +965,14 @@ export function setupWebviewCSP(): void {
         }
 
         const isReload = mod && input.key.toLowerCase() === "r" && !input.alt && !input.shift;
+        // Match the host-level guard in createWindow.ts: require the
+        // platform-correct close modifier and reject the opposite one, so
+        // Ctrl+Cmd+W isn't treated as a plain close.
         const isCloseShortcut =
-          mod && input.key.toLowerCase() === "w" && !input.alt && !input.shift;
+          input.key.toLowerCase() === "w" &&
+          ((isMac && input.meta && !input.control) || (!isMac && input.control && !input.meta)) &&
+          !input.alt &&
+          !input.shift;
 
         if (!shortcut && !isReload && !isCloseShortcut) return;
 

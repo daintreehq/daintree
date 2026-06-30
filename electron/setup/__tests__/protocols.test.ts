@@ -543,7 +543,7 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
         type: "keyDown",
         key: "w",
         meta: true,
-        control: true,
+        control: false,
         alt: false,
         shift: false,
       });
@@ -576,7 +576,7 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
         type: "keyDown",
         key: "w",
         meta: true,
-        control: true,
+        control: false,
         alt: false,
         shift: false,
       });
@@ -609,9 +609,42 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
         type: "keyDown",
         key: "w",
         meta: true,
-        control: true,
+        control: false,
         alt: false,
         shift: true,
+      });
+
+      expect(mockEvent.preventDefault).not.toHaveBeenCalled();
+      expect(mockSend).not.toHaveBeenCalledWith("webview:close-shortcut", expect.anything());
+    });
+
+    it("ignores Ctrl+Cmd+W on macOS — the opposite-platform modifier disqualifies it (#10859)", () => {
+      const mockSend = vi.fn();
+      mockFromWebContents.mockReturnValue({
+        isDestroyed: () => false,
+        webContents: { send: mockSend },
+      });
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => "panel-1"),
+        getPanelKind: vi.fn(() => "dev-preview"),
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      simulateWebContentsCreated(contents);
+
+      const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
+      const mockEvent = { preventDefault: vi.fn() };
+      // On macOS (the test platform) the close chord is Cmd+W; adding Ctrl
+      // must disqualify it so it isn't treated as a plain panel close.
+      beforeInputHandlers[0](mockEvent, {
+        type: "keyDown",
+        key: "w",
+        meta: true,
+        control: true,
+        alt: false,
+        shift: false,
       });
 
       expect(mockEvent.preventDefault).not.toHaveBeenCalled();

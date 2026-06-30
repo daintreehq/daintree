@@ -249,6 +249,7 @@ describe("BrowserPane webview lifecycle regression", () => {
         onNavigationBlocked: vi.fn(() => vi.fn()),
         onUnresponsive: vi.fn(() => vi.fn()),
         onResponsive: vi.fn(() => vi.fn()),
+        onCloseShortcut: vi.fn(() => vi.fn()),
         getNavigationHistory: vi.fn(() =>
           Promise.resolve({ entries: [], activeIndex: 0, canGoBack: false, canGoForward: false })
         ),
@@ -922,6 +923,35 @@ describe("BrowserPane webview lifecycle regression", () => {
         "browser.openExternal",
         { terminalId: "browser-panel-1", url: "https://oauth.provider.com/auth" },
         { source: "user" }
+      );
+    });
+
+    it("closes this panel when onCloseShortcut fires for it, and ignores other panels (#10859)", () => {
+      render(<BrowserPane {...baseProps} />);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mock = (window as any).electron.webview.onCloseShortcut;
+      const closeCb = mock.mock.calls[mock.mock.calls.length - 1][0] as (payload: {
+        panelId: string;
+      }) => void;
+
+      // A shortcut targeting a different panel must not close this one
+      act(() => {
+        closeCb({ panelId: "some-other-panel" });
+      });
+      expect(actionDispatchMock).not.toHaveBeenCalledWith(
+        "terminal.close",
+        expect.anything(),
+        expect.anything()
+      );
+
+      // A shortcut targeting this panel closes exactly this panel by id
+      act(() => {
+        closeCb({ panelId: "browser-panel-1" });
+      });
+      expect(actionDispatchMock).toHaveBeenCalledWith(
+        "terminal.close",
+        { terminalId: "browser-panel-1" },
+        { source: "keybinding" }
       );
     });
 
