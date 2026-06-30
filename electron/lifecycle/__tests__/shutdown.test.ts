@@ -1110,6 +1110,48 @@ describe("registerShutdownHandler", () => {
       expect(persistAgentSessionMock).not.toHaveBeenCalled();
     });
 
+    it("journals captures from every project even if one persist call fails", async () => {
+      projectStoreMock.getAllProjects.mockReturnValue([
+        { id: "proj-1" },
+        { id: "proj-2" },
+      ] as never);
+      const ptyClient = makePtyClient({
+        getAllTerminalsAsync: vi.fn(async () => [
+          { ...agentTerminal, id: "t1", worktreeId: "wt-1" },
+          { ...agentTerminal, id: "t2", worktreeId: "wt-2" },
+        ]),
+        gracefulKillByProject: vi.fn(async (pid: string) =>
+          pid === "proj-1"
+            ? [{ id: "t1", agentSessionId: "sess-1" }]
+            : [{ id: "t2", agentSessionId: "sess-2" }]
+        ),
+      });
+      const workspaceClient = {
+        dispose: vi.fn(),
+        getMonitorAsync: vi.fn(async () => ({ branch: "feature/x" })),
+      };
+      // First persist rejects; the loop's per-record try/catch must still
+      // journal the second project's capture.
+      persistAgentSessionMock
+        .mockRejectedValueOnce(new Error("disk full"))
+        .mockResolvedValue(undefined);
+
+      const { beforeQuitCb } = await setup({
+        getPtyClient: () => ptyClient,
+        getWorkspaceClient: () => workspaceClient as never,
+      });
+
+      await beforeQuitCb(makeEvent());
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+      expect(persistAgentSessionMock).toHaveBeenCalledTimes(2);
+      const persistedIds = persistAgentSessionMock.mock.calls.map(
+        (c) => (c[0] as Record<string, unknown>).sessionId
+      );
+      expect(persistedIds).toContain("sess-1");
+      expect(persistedIds).toContain("sess-2");
+    });
+
     it("still journals (branch undefined) when the branch lookup rejects", async () => {
       projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
       const ptyClient = makePtyClient({

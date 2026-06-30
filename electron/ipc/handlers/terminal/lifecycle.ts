@@ -586,15 +586,20 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     svc: WorkspaceClient | undefined
   ): Promise<string | undefined> => {
     if (!worktreeId || !svc) return undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const snapshot = await Promise.race([
         svc.getMonitorAsync(worktreeId),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 200)),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), 200);
+        }),
       ]);
       const branch = snapshot?.branch;
       return branch && branch !== "HEAD" ? branch : undefined;
     } catch {
       return undefined;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   };
 

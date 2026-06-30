@@ -178,12 +178,24 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
 
         const allProjects = projectStore.getAllProjects();
         const projectIds = allProjects.map((p) => p.id);
-        const allResults = await Promise.race([
-          Promise.all(projectIds.map((pid) => ptyClient.gracefulKillByProject(pid))),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("graceful shutdown timeout")), 4000)
-          ),
-        ]);
+        // Cap each project's graceful kill independently (in parallel) rather
+        // than racing the whole batch against one 4s deadline: a single slow
+        // project must not discard the captured sessions of projects that did
+        // finish in time — both the projectStore write and the resume journal
+        // below depend on those partial results. Wall-clock stays ~4s (parallel).
+        const allResults = await Promise.all(
+          projectIds.map((pid) => {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            return Promise.race([
+              ptyClient.gracefulKillByProject(pid),
+              new Promise<Array<{ id: string; agentSessionId: string | null }>>((resolve) => {
+                timer = setTimeout(() => resolve([]), 4000);
+              }),
+            ]).finally(() => {
+              if (timer) clearTimeout(timer);
+            });
+          })
+        );
 
         for (let i = 0; i < projectIds.length; i++) {
           const results = allResults[i];
@@ -226,15 +238,20 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           const branchByWorktree = new Map<string, string>();
           await Promise.all(
             uniqueWorktreeIds.map(async (wid) => {
+              let timer: ReturnType<typeof setTimeout> | undefined;
               try {
                 const snapshot = await Promise.race([
                   workspaceClient ? workspaceClient.getMonitorAsync(wid) : Promise.resolve(null),
-                  new Promise<null>((resolve) => setTimeout(() => resolve(null), 200)),
+                  new Promise<null>((resolve) => {
+                    timer = setTimeout(() => resolve(null), 200);
+                  }),
                 ]);
                 const branch = snapshot?.branch;
                 if (branch && branch !== "HEAD") branchByWorktree.set(wid, branch);
               } catch {
                 // best-effort
+              } finally {
+                if (timer) clearTimeout(timer);
               }
             })
           );
