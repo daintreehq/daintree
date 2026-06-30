@@ -5,9 +5,11 @@ description: Drive Daintree to a fully green, stable state across every check we
 
 # Stabilize
 
-Drive the Daintree tree to green and keep it there. This is the replacement for the old scheduled nightly: instead of a dumb cron that runs everything once and opens a low-signal `[Nightly] Tests failed` issue every time an E2E flake trips, an agent runs the whole surface, reads the results, tells flakes apart from real regressions, re-runs intelligently, fixes the real failures, and only reports when the work is actually done. Treat this as a durable, multi-hour, overnight loop. The work proceeds strictly one OS at a time — macOS (local) → Linux (CI) → Windows (CI) — each driven fully green before the next begins, so no GitHub runner time is wasted re-discovering a failure an earlier stage would have caught. All the work happens on a dedicated stabilize branch off `origin/develop`. The job is complete only when the full local gate is green AND `stabilize.yml` has passed for Linux and then Windows on the branch (plus release dry-runs when stabilizing for a release) AND that work has been squashed into a single commit, merged into `develop`, and pushed to origin — with the working tree left back on `develop`. See **Finalization** for the exact close-out and its "done means" checklist.
+Drive the Daintree tree to green and keep it there. This is the replacement for the old scheduled nightly: instead of a dumb cron that runs everything once and opens a low-signal `[Nightly] Tests failed` issue every time an E2E flake trips, an agent runs the whole surface, reads the results, tells flakes apart from real regressions, re-runs intelligently, fixes the real failures, and only reports when the work is actually done. Treat this as a durable, multi-hour, overnight loop. The work proceeds strictly one OS at a time — macOS (local) → Linux (CI) → Windows (CI) — each driven fully green before the next begins, so no GitHub runner time is wasted re-discovering a failure an earlier stage would have caught. All the work happens on a dedicated stabilize branch off `origin/develop`. The job is complete only when the full local gate is green AND `stabilize.yml` has passed for Linux and then Windows on the branch (plus release dry-runs when stabilizing for a release) AND — if any fixes were made — they have been squashed into a single commit, merged into `develop`, and pushed to origin, with the working tree left back on `develop`. A run that needed no fixes commits nothing and simply deletes its branch. See **Finalization** for both close-out cases and their "done means" checklists.
 
 There is no issue-creation step anywhere in this flow. You are the triage. Do not open or update a `nightly-failure` issue — that mechanism was retired with the scheduled nightly.
+
+**A clean run lands nothing.** Stabilization commits exist to carry real fixes. If the whole surface passes without you changing a single file, there is nothing to commit and nothing to merge — `develop` is already in the state you validated. NEVER manufacture an empty or marker commit to "record" that stabilization ran; `git commit --allow-empty` is banned in this skill. The evidence of a clean run is your final report plus the `stabilize.yml` run URLs, not a no-op SHA on `develop` (see commit `915a9aeda` for exactly the wrong outcome). See **Finalization** for the two close-out cases.
 
 ## What "stabilize" covers
 
@@ -21,6 +23,7 @@ Nightly BINARY publishing is NOT part of stabilize. `nightly-publish.yml` builds
 
 - Always work on a separate branch based on `origin/develop`; never stabilize directly on `develop` or `main`.
 - Keep the branch focused on stabilization. Do not mix unrelated cleanup, dependency upgrades, or feature work into the fix.
+- **No empty or marker commits, ever.** Every commit this skill produces must carry an actual fix (a changed file). If the run validates clean with no fixes, it ends with zero commits — not a "stabilize develop" placeholder. `git commit --allow-empty` is forbidden.
 - Prefer fixing Daintree over relaxing tests. Update a test only when it is stale, over-specific, or asserting behavior the product no longer promises. A flaky test is still a real signal — stabilize it (state-based waits, scoped locators, `expect.poll`), don't delete it.
 - **Local-first is the default, not an option.** This repo is worked on from a powerful local Mac, so the full local suite is the primary validation line. Everything that can run locally must pass locally before any GitHub Actions run is dispatched. GitHub Actions is reserved for what genuinely cannot run locally: the non-macOS platforms (Linux, Windows) and CI-only packaging/signing/notarization/Store/R2/update-metadata steps. Do not use a GitHub macOS run to discover failures the local Mac can surface in full — it is slower and costs runner money.
 - **Triage before you re-run.** Never blindly re-run a failing job. Either you fixed something (code/test/workflow) and are re-validating, or you have positively classified the failure as a flake (see "Intelligent flake triage") and are confirming it with a scoped re-run. Re-running the same red job hoping for green is not allowed.
@@ -313,12 +316,36 @@ Each dry run executes that OS's checks, unit tests, E2E gates, and its platform 
 
 ## Finalization
 
-This is mandatory, not optional. All of the work above happens on the stabilize branch; stabilization is not finished until that work has been folded into `develop` as a **single commit**, pushed to origin, with the working tree left back on `develop`. A green branch that was never merged is an incomplete run.
+This is mandatory, not optional. How you close out depends on whether stabilization actually changed any files. Before anything else, settle that question against the base — do NOT decide from memory:
+
+```bash
+git fetch origin develop
+git diff --quiet origin/develop...HEAD && echo "NO CHANGES — Case 1" || echo "FIXES PRESENT — Case 2"
+git diff --stat origin/develop...HEAD   # see exactly what (if anything) the branch changed
+```
+
+### Case 1 — nothing needed fixing (the tree was already green)
+
+If the full local gate and `stabilize.yml` (Linux + Windows) all passed without you editing a single file, there is **nothing to commit and nothing to merge**. `develop` is already in the exact state you validated. Do NOT fabricate a commit to record that stabilization ran — an empty `chore(ci): stabilize develop` commit (like `915a9aeda`) is the precise failure this skill forbids: it adds a meaningless SHA and history entry while changing nothing. The proof of a clean run is your final report and the run URLs.
+
+Clean up and report instead — return to `develop` and remove the stabilize branch:
+
+```bash
+git switch develop
+git branch -D <branch>
+git push origin --delete <branch>   # only if you pushed it for CI
+```
+
+Then report: develop was already green, no commit was made, citing the local gate result and both `stabilize.yml` run URLs. **Done means (Case 1):** you are on `develop`, `develop` has NO new commit, and the stabilize branch is gone locally and on origin.
+
+### Case 2 — fixes were made
+
+All of the work above happens on the stabilize branch; stabilization is not finished until that work has been folded into `develop` as a **single commit**, pushed to origin, with the working tree left back on `develop`. A green branch that was never merged is an incomplete run.
 
 When the full local gate is green and `stabilize.yml` has passed for both Linux (Phase B) and Windows (Phase C) on the branch (plus release dry-runs when targeting a release):
 
 1. Run the relevant local final checks for touched areas, at minimum `npm run check` plus targeted tests.
-2. Squash the branch to ONE commit (the entire stabilization lands as a single commit, not one commit per fix). Do this non-interactively from the stabilize branch — `git rebase -i` is not available here:
+2. Squash the branch to ONE commit (the entire stabilization lands as a single commit, not one commit per fix). Do this non-interactively from the stabilize branch — `git rebase -i` is not available here. Never pass `--allow-empty`; if `git commit` reports nothing to commit, you are actually in Case 1 — go back and close out there:
 
    ```bash
    git switch <branch>
@@ -358,11 +385,11 @@ git push --force-with-lease origin <branch>
 # re-run validation, then repeat step 5
 ```
 
-**Done means** — all four must be true before you report completion:
+**Done means (Case 2)** — all four must be true before you report completion:
 
 - You are on `develop` (not the stabilize branch).
-- The stabilization is exactly one new commit on `develop`.
+- The stabilization is exactly one new commit on `develop`, and that commit changes files (never empty).
 - `develop` has been pushed to origin.
 - The stabilize branch has been deleted locally and on origin.
 
-Final response must include the branch name (now deleted), the final commit SHA on `develop`, both `stabilize.yml` run URLs and conclusions (the Linux Phase-B run and the Windows Phase-C run, plus any release dry-run URLs), the local checks run, the flakes hardened, and confirmation that `develop` was pushed.
+Final response must include the branch name (now deleted), the final commit SHA on `develop` (or, in Case 1, an explicit "no commit — develop was already green"), both `stabilize.yml` run URLs and conclusions (the Linux Phase-B run and the Windows Phase-C run, plus any release dry-run URLs), the local checks run, the flakes hardened, and confirmation that `develop` was pushed (Case 2) or untouched (Case 1).
