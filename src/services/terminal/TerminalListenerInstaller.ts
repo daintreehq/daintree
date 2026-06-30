@@ -20,24 +20,23 @@ const OBSERVED_TITLE_DEBOUNCE_MS = 150;
 // when an agent briefly idles mid-task.
 const WAITING_TITLE_HYSTERESIS_MS = 250;
 
-// Fallback row height for the wheel normalizer when the terminal hasn't been
-// configured yet; lineHeight is 1.0 (xtermConfig.ts) so a row is ~fontSize tall.
-const DEFAULT_FONT_SIZE_PX = 14;
-
-// A pixel-mode wheel delta at least this large is treated as one discrete mouse
-// "notch" rather than continuous trackpad motion. Chromium reports a mouse
-// detent on macOS as a single pixel event of ~100-120px; trackpad/high-res
-// motion arrives as a stream of much smaller deltas.
-const WHEEL_NOTCH_PX = 40;
-
-// Lines a single discrete notch scrolls in a mouse-reporting TUI. Pixel-mode
-// wheel events (macOS) carry no OS lines-per-notch signal, so a notch otherwise
-// moved a single line and scrolling felt several times slower than every other
-// terminal — you had to spin the wheel far more than anywhere else. 6 is double
-// the conventional 3-line default, tuned so a notch covers ground briskly in
-// dense agent TUIs. Line-mode events (Windows / Linux mice) already carry the OS
-// step in deltaY and are left untouched.
-const WHEEL_LINES_PER_NOTCH = 6;
+// Pixel-mode gesture distance (CSS px) that scrolls one line / emits one wheel
+// report in a mouse-reporting TUI. macOS reports a physical mouse detent as a
+// single ~120px pixel event, so 20px/line makes one detent scroll ~6 lines —
+// the brisk feel we want in dense agent TUIs — while keeping the mapping
+// PROPORTIONAL to distance. Proportionality is the point: the previous bimodal
+// rule (any pixel event >=40px -> a FLAT 6 lines, magnitude ignored) dropped
+// motion in two opposite ways. (1) When Chromium coalesces several physical
+// detents into one large-delta event under render load, the flat rule collapsed
+// them to a single 6-line scroll — genuinely "eaten" scrolling. (2) A trackpad /
+// Magic Mouse momentum stream (many medium continuous deltas, each >=40px) was
+// amplified to 6 lines *per event*, running away into a disconnected overscroll.
+// Dividing by a fixed pixel budget fixes both: coalesced detents scroll
+// proportionally more, momentum scrolls its true distance, and sub-line motion
+// still accumulates via `carry` so slow scrolling never damps to nothing.
+// Line-mode events (Windows / Linux mice) carry the OS step in deltaY and are
+// left untouched.
+const WHEEL_PIXELS_PER_LINE = 20;
 
 // The synthetic wheel events the normalizer re-dispatches are tracked here so
 // its own capture-phase listener skips them instead of recursing. A WeakSet
@@ -53,19 +52,20 @@ const amplifiedWheelEvents = new WeakSet<WheelEvent>();
  * trackpad deltas by 0.3, so small movements fall below the one-line threshold,
  * compute `lines === 0`, and send no report at all (scrolling feels dead).
  *
- * Here a discrete notch yields WHEEL_LINES_PER_NOTCH reports (pixel mode carries
- * no OS lines-per-notch signal, so we supply the conventional default), and
- * fine/trackpad motion is accumulated at ~one line per row height via `carry` so
- * every bit of movement eventually registers rather than being damped to nothing.
+ * Pixel-mode deltas (macOS mice/trackpads, and precision touchpads on any OS)
+ * accumulate as pixels in `carry` and are converted to lines at a fixed
+ * px-per-line budget, so the line count is proportional to the gesture distance:
+ * a single detent scrolls a few lines, coalesced detents and momentum scroll
+ * proportionally more (never collapsed to one notch), and sub-line motion adds
+ * up across events instead of being damped to nothing. Line-mode and page-mode
+ * events already carry an OS step and pass through unchanged.
  */
 export function wheelEventToLineCount(
   ev: WheelEvent,
-  cellHeightCssPx: number,
   rows: number,
   carry: { partial: number }
 ): number {
   if (ev.deltaY === 0) return 0;
-  const sign = ev.deltaY > 0 ? 1 : -1;
   const clamp = (n: number): number => Math.max(-rows, Math.min(rows, n));
 
   if (ev.deltaMode === 1 /* DOM_DELTA_LINE */) {
@@ -73,30 +73,25 @@ export function wheelEventToLineCount(
     return clamp(Math.round(ev.deltaY));
   }
   if (ev.deltaMode === 2 /* DOM_DELTA_PAGE */) {
-    return sign * rows;
+    return (ev.deltaY > 0 ? 1 : -1) * rows;
   }
-  // Pixel mode.
-  if (Math.abs(ev.deltaY) >= WHEEL_NOTCH_PX) {
-    // Discrete notch reported in pixels — scroll the conventional lines-per-notch
-    // (regardless of magnitude) so it matches a normal terminal instead of
-    // crawling one line at a time. Drop any partial trackpad accumulation so a
-    // notch mixed into a swipe doesn't smear.
-    carry.partial = 0;
-    return clamp(sign * WHEEL_LINES_PER_NOTCH);
-  }
-  // High-resolution / trackpad: accumulate ~one line per row height. The carried
-  // remainder means sub-line motion is never discarded — it adds up across
-  // events until it crosses a line, so slow scrolling still moves.
-  const delta = ev.deltaY / Math.max(1, cellHeightCssPx);
-  // Drop a stale opposite-direction remainder so a reversal registers right
-  // away instead of first having to cancel unreported forward motion — that
-  // would be a dead zone where a genuine reverse scroll does nothing.
-  if (carry.partial !== 0 && Math.sign(delta) !== Math.sign(carry.partial)) {
+  // Pixel mode (macOS mouse + trackpad; also precision touchpads on any OS).
+  // `carry.partial` accumulates raw pixels and we divide ONCE to whole lines, so
+  // the count is proportional to the gesture (coalesced detents and momentum
+  // both scroll their true distance) and sub-line motion is never discarded.
+  // Accumulating pixels rather than pre-divided line fractions keeps exact
+  // multiples exact: ten 2px events sum to 20px = one line, whereas summing
+  // ten `2/20` fractions lands at 0.9999999999999999 and silently drops the line.
+  //
+  // Drop a stale opposite-direction remainder so a reversal registers right away
+  // instead of first having to cancel unreported forward motion — that would be
+  // a dead zone where a genuine reverse scroll does nothing.
+  if (carry.partial !== 0 && Math.sign(ev.deltaY) !== Math.sign(carry.partial)) {
     carry.partial = 0;
   }
-  carry.partial += delta;
-  const whole = Math.trunc(carry.partial);
-  carry.partial -= whole;
+  carry.partial += ev.deltaY;
+  const whole = Math.trunc(carry.partial / WHEEL_PIXELS_PER_LINE);
+  carry.partial -= whole * WHEEL_PIXELS_PER_LINE;
   return clamp(whole);
 }
 
@@ -312,11 +307,7 @@ export function installTerminalBoundListeners(
     ev.preventDefault();
     ev.stopImmediatePropagation();
 
-    const fontSize =
-      typeof terminal.options.fontSize === "number"
-        ? terminal.options.fontSize
-        : DEFAULT_FONT_SIZE_PX;
-    const lines = wheelEventToLineCount(ev, fontSize, terminal.rows, wheelCarry);
+    const lines = wheelEventToLineCount(ev, terminal.rows, wheelCarry);
     if (lines === 0) return;
 
     const step = lines > 0 ? 1 : -1;

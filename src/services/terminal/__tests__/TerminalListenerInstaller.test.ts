@@ -626,13 +626,12 @@ describe("installTerminalBoundListeners", () => {
     // helper computes; assert against it so these survive WHEEL_LINES_PER_NOTCH
     // tuning instead of restating the value.
     const NOTCH_REPORTS = Math.abs(
-      wheelEventToLineCount({ deltaY: 120, deltaMode: 0 } as WheelEvent, 16, 24, { partial: 0 })
+      wheelEventToLineCount({ deltaY: 120, deltaMode: 0 } as WheelEvent, 24, { partial: 0 })
     );
 
     function setupAmplifier(opts: {
       mouseTrackingMode: string;
       isAltBuffer: boolean;
-      fontSize?: number;
       runtimeAgentId?: string;
     }) {
       const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
@@ -647,7 +646,6 @@ describe("installTerminalBoundListeners", () => {
       const xtermEl = document.createElement("div");
       managed.hostElement.appendChild(xtermEl);
       (terminal as { element: HTMLElement }).element = xtermEl;
-      (terminal.options as Record<string, number>).fontSize = opts.fontSize ?? 16;
       document.body.appendChild(managed.hostElement);
 
       managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
@@ -742,13 +740,14 @@ describe("installTerminalBoundListeners", () => {
     });
 
     it("accumulates fine/trackpad motion instead of dropping it", () => {
-      // 8px against a 16px row = half a line per event; xterm would damp this to
-      // zero and send nothing. One event registers nothing yet, but the carried
-      // remainder makes the second cross a line boundary — every scroll counts.
+      // 10px against the 20px/line budget = half a line per event; xterm would
+      // damp this to zero and send nothing. One event registers nothing yet, but
+      // the carried remainder makes the second cross a line boundary — every
+      // scroll counts.
       const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
-      h.dispatch({ deltaY: 8, deltaMode: 0 });
+      h.dispatch({ deltaY: 10, deltaMode: 0 });
       expect(h.getReports()).toBe(0);
-      h.dispatch({ deltaY: 8, deltaMode: 0 });
+      h.dispatch({ deltaY: 10, deltaMode: 0 });
       expect(h.getReports()).toBe(1);
     });
 
@@ -1016,73 +1015,113 @@ describe("wheelEventToLineCount", () => {
     ({ deltaY, deltaMode }) as unknown as WheelEvent;
 
   it("forwards DOM_DELTA_LINE deltas as whole lines (the OS wheel step)", () => {
-    expect(wheelEventToLineCount(ev(3, 1), 16, 24, { partial: 0 })).toBe(3);
-    expect(wheelEventToLineCount(ev(1, 1), 16, 24, { partial: 0 })).toBe(1);
+    expect(wheelEventToLineCount(ev(3, 1), 24, { partial: 0 })).toBe(3);
+    expect(wheelEventToLineCount(ev(1, 1), 24, { partial: 0 })).toBe(1);
   });
 
-  it("scrolls a full page for DOM_DELTA_PAGE deltas", () => {
-    expect(wheelEventToLineCount(ev(1, 2), 16, 24, { partial: 0 })).toBe(24);
+  it("scrolls one screenful per page-mode event, in the event's direction", () => {
+    // DOM_DELTA_PAGE => a full viewport, sign-following, regardless of rows.
+    expect(wheelEventToLineCount(ev(1, 2), 24, { partial: 0 })).toBe(24);
+    expect(wheelEventToLineCount(ev(-1, 2), 24, { partial: 0 })).toBe(-24);
+    expect(wheelEventToLineCount(ev(1, 2), 10, { partial: 0 })).toBe(10);
   });
 
-  it("scrolls the tuned lines-per-notch for a discrete pixel notch", () => {
-    // A ~120px detent is one notch; pixel mode carries no OS lines signal, so we
-    // emit a fixed number of lines (6 — double the conventional default) rather
-    // than crawling one. This is the canonical value; the tests below pin the
-    // surrounding invariants relationally so they survive retuning.
-    expect(wheelEventToLineCount(ev(120, 0), 16, 24, { partial: 0 })).toBe(6);
+  it("scrolls several lines for a single discrete pixel notch", () => {
+    // A ~120px detent is one physical notch; at the 20px/line budget it moves a
+    // brisk handful of lines rather than crawling one at a time. Canonical
+    // value; the tests below pin the surrounding invariants relationally so they
+    // survive retuning the budget.
+    expect(wheelEventToLineCount(ev(120, 0), 24, { partial: 0 })).toBe(6);
   });
 
   it("scrolls clearly more than a single line per notch (the dead-scroll fix)", () => {
-    // The whole point of the change: a notch must move more than one line so it
-    // doesn't feel like only every few clicks register. Relationship, not literal.
-    expect(wheelEventToLineCount(ev(120, 0), 16, 24, { partial: 0 })).toBeGreaterThan(1);
+    // The original point of the amplifier: a notch must move more than one line
+    // so it doesn't feel like only every few clicks register. Relationship, not
+    // literal.
+    expect(wheelEventToLineCount(ev(120, 0), 24, { partial: 0 })).toBeGreaterThan(1);
   });
 
-  it("scrolls the same line count for any notch magnitude (magnitude ignored)", () => {
-    // One physical detent is one notch whether Chromium reports 40px or 2000px;
-    // the count must not scale with pixels — asserting all-equal is the invariant.
-    const counts = [40, 120, 240, 2000].map((d) =>
-      wheelEventToLineCount(ev(d, 0), 16, 24, { partial: 0 })
-    );
-    expect(new Set(counts).size).toBe(1);
+  it("scrolls proportionally to pixel magnitude — coalesced detents aren't dropped", () => {
+    // The bug this replaced: any pixel event >=40px scrolled a FLAT line count,
+    // so when Chromium coalesces several physical detents into one large-delta
+    // event the extra detents were silently eaten. Proportionality is the fix —
+    // 2x/3x the pixels scrolls 2x/3x the lines (large rows so the clamp doesn't
+    // mask it), and a coalesced multi-detent event scrolls strictly more than a
+    // single detent.
+    const one = wheelEventToLineCount(ev(120, 0), 999, { partial: 0 });
+    const two = wheelEventToLineCount(ev(240, 0), 999, { partial: 0 });
+    const three = wheelEventToLineCount(ev(360, 0), 999, { partial: 0 });
+    expect(two).toBe(2 * one);
+    expect(three).toBe(3 * one);
+    expect(three).toBeGreaterThan(one);
+  });
+
+  it("scrolls momentum-sized deltas by distance, not a flat amount per event", () => {
+    // macOS inertial scrolling emits a stream of medium continuous deltas. The
+    // old rule amplified EACH to a flat 6 lines, running away into overscroll;
+    // now the per-event count tracks the per-event distance.
+    const small = wheelEventToLineCount(ev(40, 0), 999, { partial: 0 });
+    const large = wheelEventToLineCount(ev(200, 0), 999, { partial: 0 });
+    expect(large).toBeGreaterThan(small);
   });
 
   it("preserves scroll direction symmetrically (down === -up)", () => {
-    const up = wheelEventToLineCount(ev(120, 0), 16, 24, { partial: 0 });
-    const down = wheelEventToLineCount(ev(-120, 0), 16, 24, { partial: 0 });
+    const up = wheelEventToLineCount(ev(120, 0), 24, { partial: 0 });
+    const down = wheelEventToLineCount(ev(-120, 0), 24, { partial: 0 });
     expect(down).toBe(-up);
   });
 
-  it("clamps a notch to at most one screenful of lines, both directions", () => {
-    // A full notch scrolls several lines, but never past a short viewport.
-    expect(Math.abs(wheelEventToLineCount(ev(120, 0), 16, 24, { partial: 0 }))).toBeGreaterThan(2);
-    expect(wheelEventToLineCount(ev(120, 0), 16, 2, { partial: 0 })).toBe(2);
-    expect(wheelEventToLineCount(ev(-120, 0), 16, 2, { partial: 0 })).toBe(-2);
+  it("clamps a pixel event to at most one screenful of lines, both directions", () => {
+    // A huge fling (or a coalesced burst) never scrolls past a short viewport.
+    expect(wheelEventToLineCount(ev(120, 0), 2, { partial: 0 })).toBe(2);
+    expect(wheelEventToLineCount(ev(-120, 0), 2, { partial: 0 })).toBe(-2);
+    expect(wheelEventToLineCount(ev(99999, 0), 24, { partial: 0 })).toBe(24);
   });
 
   it("returns zero for a zero delta", () => {
-    expect(wheelEventToLineCount(ev(0, 0), 16, 24, { partial: 0 })).toBe(0);
+    expect(wheelEventToLineCount(ev(0, 0), 24, { partial: 0 })).toBe(0);
   });
 
-  it("caps a single event at one screenful of lines", () => {
-    expect(wheelEventToLineCount(ev(1, 2), 16, 10, { partial: 0 })).toBe(10);
-  });
-
-  it("accumulates sub-line (trackpad) motion across events rather than dropping it", () => {
-    // 8px against a 16px row = 0.5 line per event. The first event yields no
-    // whole line; the carried remainder makes the second cross a line boundary,
-    // so slow scrolling still moves instead of being discarded.
+  it("carries the sub-line remainder forward instead of discarding it per event", () => {
+    // Two 0.5-line (10px) events net one whole line and leave no stray remainder
+    // — the accumulator is preserved across events, not reset or truncated each
+    // time, so slow scrolling still moves instead of being damped to nothing.
     const carry = { partial: 0 };
-    expect(wheelEventToLineCount(ev(8, 0), 16, 24, carry)).toBe(0);
-    expect(wheelEventToLineCount(ev(8, 0), 16, 24, carry)).toBe(1);
+    expect(wheelEventToLineCount(ev(10, 0), 24, carry)).toBe(0); // 10px -> 0
+    expect(wheelEventToLineCount(ev(10, 0), 24, carry)).toBe(1); // 20px -> 1
+    expect(carry.partial).toBeCloseTo(0);
   });
 
-  it("resets the trackpad accumulator when a notch interrupts a swipe", () => {
-    const carry = { partial: 0.5 };
-    // The notch still reports (value-agnostic), and crucially clears the stale
-    // sub-line remainder so it can't smear the next fine scroll.
-    expect(wheelEventToLineCount(ev(120, 0), 16, 24, carry)).toBeGreaterThan(0);
-    expect(carry.partial).toBe(0);
+  it("preserves the pixel accumulator across line-mode and page-mode events", () => {
+    // Line/page modes return before touching the accumulator, so a partial pixel
+    // scroll in progress is neither flushed nor cleared by them — it resumes.
+    const carry = { partial: 10 };
+    expect(wheelEventToLineCount(ev(3, 1), 24, carry)).toBe(3);
+    expect(wheelEventToLineCount(ev(1, 2), 24, carry)).toBe(24);
+    expect(carry.partial).toBe(10);
+    // 10px carried + 10px now = one line.
+    expect(wheelEventToLineCount(ev(10, 0), 24, carry)).toBe(1);
+  });
+
+  it("drops a clamped fling's overflow instead of stranding it as a backlog", () => {
+    // A huge coalesced burst clamps to one screenful; the un-emitted overflow
+    // must NOT pile up in the accumulator, or the terminal would keep scrolling
+    // for thousands of lines after the gesture. The next event scrolls only its
+    // own distance.
+    const carry = { partial: 0 };
+    expect(wheelEventToLineCount(ev(99999, 0), 24, carry)).toBe(24);
+    expect(wheelEventToLineCount(ev(20, 0), 24, carry)).toBe(1);
+  });
+
+  it("sums many small same-direction events to the true gesture distance", () => {
+    // A momentum stream of eight 5px deltas covers 40px = exactly two lines, so
+    // the run must report two in total — not zero from per-event truncation, nor
+    // a flat amount per event. Proportionality across a realistic sequence, and
+    // a guard against the float-stranding that pre-divided fractions would cause.
+    const carry = { partial: 0 };
+    let total = 0;
+    for (let i = 0; i < 8; i++) total += wheelEventToLineCount(ev(5, 0), 24, carry);
+    expect(total).toBe(2);
   });
 
   it("registers a reversal immediately instead of cancelling stale forward motion", () => {
@@ -1090,7 +1129,7 @@ describe("wheelEventToLineCount", () => {
     // dropping the stale +0.5 remainder the reversal would net -0.5 → 0 (a dead
     // zone); the sign-change reset makes the reverse line register as -1.
     const carry = { partial: 0 };
-    expect(wheelEventToLineCount(ev(8, 0), 16, 24, carry)).toBe(0);
-    expect(wheelEventToLineCount(ev(-16, 0), 16, 24, carry)).toBe(-1);
+    expect(wheelEventToLineCount(ev(10, 0), 24, carry)).toBe(0);
+    expect(wheelEventToLineCount(ev(-20, 0), 24, carry)).toBe(-1);
   });
 });
