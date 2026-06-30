@@ -212,7 +212,7 @@ describe("TerminalInstanceService — installTerminalBoundListeners call-site pa
   it("onUserScrollIntent dep requests an interactive profile-hold over IPC (#10858)", async () => {
     await service.getOrCreate("t1", undefined, {});
 
-    const deps = installMock.mock.calls[0][3] as { onUserScrollIntent: (id: string) => void };
+    const deps = installMock.mock.calls[0]?.[3] as { onUserScrollIntent: (id: string) => void };
     deps.onUserScrollIntent("t1");
 
     expect(
