@@ -566,9 +566,16 @@ export function installTerminalBoundListeners(
   managed.listeners.push(() => scrollDisposable.dispose());
 
   const SCROLL_KEYS = new Set(["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"]);
-  const onWheel = () => {
+  const onWheel = (ev: WheelEvent) => {
     managed._userScrollIntent = true;
     managed.lastWheelAt = Date.now();
+    // Skip the synthetic per-line events the alt-buffer mouse-reporting
+    // amplifier dispatches (already drives the profile hold via onActiveWheel)
+    // and modifier-held wheels (pinch-zoom/etc, not scrollback navigation) —
+    // mirrors the gating onWheelNormalize already applies for the same reasons.
+    if (amplifiedWheelEvents.has(ev) || ev.ctrlKey || ev.altKey || ev.metaKey || ev.shiftKey) {
+      return;
+    }
     deps.onUserScrollIntent(id);
   };
   const onKeydownScroll = (e: KeyboardEvent) => {
