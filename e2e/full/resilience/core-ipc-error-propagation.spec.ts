@@ -122,16 +122,22 @@ async function openRecoveryMenu(
     .last();
 
   let opened = false;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    await trigger.focus();
-    if (attempt === 0) {
-      await trigger.evaluate((element: HTMLElement) => element.click());
-    } else if (attempt === 1) {
-      await window.keyboard.press("Enter");
-    } else {
-      await window.keyboard.press("Space");
-    }
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    // Lead with a DOM-level click: it re-resolves the locator each call and
+    // only needs the trigger momentarily attached, so it survives the banner
+    // re-rendering and detaching the button mid-action. Leading with focus()
+    // (the prior form) retried against the detaching node until its 30s
+    // timeout on headless Linux/Windows under release load.
+    await trigger.evaluate((element: HTMLElement) => element.click()).catch(() => undefined);
     if (await menu.isVisible({ timeout: T_MEDIUM }).catch(() => false)) {
+      opened = true;
+      break;
+    }
+    // Keyboard fallback in case the click landed during a re-render and was
+    // dropped; focus is best-effort and must not block on a detaching node.
+    await trigger.focus({ timeout: T_SHORT }).catch(() => undefined);
+    await window.keyboard.press(attempt % 2 === 0 ? "Enter" : "Space").catch(() => undefined);
+    if (await menu.isVisible({ timeout: T_SHORT }).catch(() => false)) {
       opened = true;
       break;
     }
