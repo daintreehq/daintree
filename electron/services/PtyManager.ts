@@ -33,6 +33,7 @@ import { computeSpawnContext, acquirePtyProcess } from "./pty/terminalSpawn.js";
 import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
 import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
 import { persistAgentSession } from "./pty/agentSessionHistory.js";
+import { getGitBranch } from "../utils/gitUtils.js";
 
 /**
  * PtyManager - Facade for terminal process management.
@@ -465,6 +466,10 @@ export class PtyManager extends EventEmitter {
         try {
           const sessionId = await this.gracefulKill(termId);
           if (sessionId && info?.launchAgentId) {
+            // Best-effort branch stamp for resume sanity checks. The pty-host
+            // has FS access but no WorkspaceClient, so resolve directly from
+            // git with a short timeout; never let it block or fail the close.
+            const branch = info.cwd ? getGitBranch(info.cwd) : null;
             await persistAgentSession({
               sessionId,
               agentId: info.launchAgentId,
@@ -473,6 +478,8 @@ export class PtyManager extends EventEmitter {
               projectId: info.projectId ?? null,
               agentLaunchFlags: info.agentLaunchFlags,
               agentModelId: info.agentModelId,
+              cwd: info.cwd ?? undefined,
+              branch: branch ?? undefined,
             });
           }
         } catch (err) {

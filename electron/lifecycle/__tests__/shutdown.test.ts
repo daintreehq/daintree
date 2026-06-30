@@ -3,6 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const appMock = vi.hoisted(() => ({
   on: vi.fn(),
   exit: vi.fn(),
+  getPath: vi.fn(() => "/tmp/test-shutdown"),
+}));
+
+const persistAgentSessionMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+
+vi.mock("../../services/pty/agentSessionHistory.js", () => ({
+  persistAgentSession: persistAgentSessionMock,
 }));
 
 const dialogMock = vi.hoisted(() => ({
@@ -1027,6 +1034,106 @@ describe("registerShutdownHandler", () => {
 
       consoleSpy.mockRestore();
       vi.useRealTimers();
+    });
+  });
+
+  describe("resume journaling on shutdown", () => {
+    beforeEach(() => {
+      // The hard-timeout test above leaves mcpServerMock.stop returning a
+      // never-resolving promise; the suite's beforeEach only clearAllMocks
+      // (history, not implementations), so reset it here or the cleanup chain
+      // hangs and app.exit is never reached.
+      mcpServerMock.stop.mockResolvedValue(undefined);
+      persistAgentSessionMock.mockResolvedValue(undefined);
+    });
+
+    function makePtyClient(overrides?: Record<string, unknown>) {
+      return {
+        gracefulKillByProject: vi.fn(async () => []),
+        getAllTerminalsAsync: vi.fn(async () => []),
+        dispose: vi.fn(),
+        ...overrides,
+      } as never;
+    }
+
+    const agentTerminal = {
+      id: "t1",
+      launchAgentId: "claude",
+      worktreeId: "wt-1",
+      title: "Claude",
+      projectId: "proj-1",
+      cwd: "/repo",
+      agentLaunchFlags: ["--resume"],
+      agentModelId: "claude-opus-4-8",
+    };
+
+    it("journals a resume record for each captured agent session", async () => {
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
+      const ptyClient = makePtyClient({
+        getAllTerminalsAsync: vi.fn(async () => [agentTerminal, { id: "t2", cwd: "/repo" }]),
+        gracefulKillByProject: vi.fn(async () => [
+          { id: "t1", agentSessionId: "sess-1" },
+          { id: "t2", agentSessionId: null },
+        ]),
+      });
+      const workspaceClient = {
+        dispose: vi.fn(),
+        getMonitorAsync: vi.fn(async () => ({ branch: "feature/x" })),
+      };
+      const { beforeQuitCb } = await setup({
+        getPtyClient: () => ptyClient,
+        getWorkspaceClient: () => workspaceClient as never,
+      });
+
+      await beforeQuitCb(makeEvent());
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+      expect(persistAgentSessionMock).toHaveBeenCalledTimes(1);
+      const record = persistAgentSessionMock.mock.calls[0][0] as Record<string, unknown>;
+      expect(record.sessionId).toBe("sess-1");
+      expect(record.agentId).toBe("claude");
+      expect(record.cwd).toBe("/repo");
+      expect(record.branch).toBe("feature/x");
+    });
+
+    it("does not journal non-agent terminals or null-session captures", async () => {
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
+      const ptyClient = makePtyClient({
+        getAllTerminalsAsync: vi.fn(async () => [{ id: "t2", cwd: "/repo" }]),
+        gracefulKillByProject: vi.fn(async () => [{ id: "t2", agentSessionId: null }]),
+      });
+      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+      await beforeQuitCb(makeEvent());
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+      expect(persistAgentSessionMock).not.toHaveBeenCalled();
+    });
+
+    it("still journals (branch undefined) when the branch lookup rejects", async () => {
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
+      const ptyClient = makePtyClient({
+        getAllTerminalsAsync: vi.fn(async () => [agentTerminal]),
+        gracefulKillByProject: vi.fn(async () => [{ id: "t1", agentSessionId: "sess-1" }]),
+      });
+      const workspaceClient = {
+        dispose: vi.fn(),
+        getMonitorAsync: vi.fn(async () => {
+          throw new Error("workspace host gone");
+        }),
+      };
+      const { beforeQuitCb } = await setup({
+        getPtyClient: () => ptyClient,
+        getWorkspaceClient: () => workspaceClient as never,
+      });
+
+      await beforeQuitCb(makeEvent());
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+      expect(persistAgentSessionMock).toHaveBeenCalledTimes(1);
+      const record = persistAgentSessionMock.mock.calls[0][0] as Record<string, unknown>;
+      expect(record.sessionId).toBe("sess-1");
+      expect(record.branch).toBeUndefined();
     });
   });
 });
