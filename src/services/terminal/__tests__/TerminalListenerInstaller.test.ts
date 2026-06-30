@@ -182,6 +182,7 @@ function makeDeps(
     clearDirectingState: vi.fn(),
     onUserInput: vi.fn(),
     onActiveWheel: vi.fn(),
+    onUserScrollIntent: vi.fn(),
     onEnterPressed: vi.fn(),
     updateLastObservedTitle: vi.fn(),
     notifyXtermFocused: vi.fn(),
@@ -620,6 +621,73 @@ describe("installTerminalBoundListeners", () => {
     (terminal.modes as { mouseTrackingMode: string }).mouseTrackingMode = "any";
 
     expect(captured.wheelHandler!({} as WheelEvent)).toBe(true);
+  });
+
+  describe("onUserScrollIntent (#10858)", () => {
+    function install() {
+      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+      const terminal = makeMockTerminal(captured);
+      const managed = makeMockManaged();
+      const deps = makeDeps();
+
+      managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
+      installTerminalBoundListeners(
+        terminal as unknown as Parameters<typeof installTerminalBoundListeners>[0],
+        managed,
+        "t1",
+        deps
+      );
+      return { managed, deps };
+    }
+
+    it("fires on an ordinary scrollback wheel event", () => {
+      const { managed, deps } = install();
+
+      managed.hostElement.dispatchEvent(new WheelEvent("wheel", { deltaY: 10 }));
+
+      expect(deps.onUserScrollIntent).toHaveBeenCalledWith("t1");
+    });
+
+    it.each(["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"])(
+      "fires on a %s keydown",
+      (key) => {
+        const { managed, deps } = install();
+
+        managed.hostElement.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+
+        expect(deps.onUserScrollIntent).toHaveBeenCalledWith("t1");
+      }
+    );
+
+    it("does not fire for a non-scroll keydown", () => {
+      const { managed, deps } = install();
+
+      managed.hostElement.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+
+      expect(deps.onUserScrollIntent).not.toHaveBeenCalled();
+    });
+
+    it("does not fire from terminal.onScroll (programmatic auto-scroll guard)", () => {
+      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+      const terminal = makeMockTerminal(captured);
+      const managed = makeMockManaged();
+      const deps = makeDeps();
+
+      managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
+      installTerminalBoundListeners(
+        terminal as unknown as Parameters<typeof installTerminalBoundListeners>[0],
+        managed,
+        "t1",
+        deps
+      );
+
+      // Simulate a PTY-output-driven programmatic scroll via xterm's onScroll —
+      // must NOT be wired to onUserScrollIntent, or every streaming terminal
+      // would stay pinned off efficiency indefinitely (defeats the downgrade).
+      captured.onScroll?.();
+
+      expect(deps.onUserScrollIntent).not.toHaveBeenCalled();
+    });
   });
 
   describe("wheel amplification for mouse-tracking TUIs", () => {

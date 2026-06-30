@@ -262,6 +262,15 @@ export interface TerminalListenerInstallDeps {
    * efficiency so an active scroll stays responsive (symptom B).
    */
   onActiveWheel: (id: string) => void;
+  /**
+   * Fired on ordinary scrollback wheel/key scrolling (not mouse-reporting
+   * forwarding). Holds the resource profile off efficiency for the scroll's
+   * duration so an in-progress profile downgrade doesn't drop the terminal's
+   * WebGL threshold mid-scroll (#10858). Unlike `onActiveWheel`, this does
+   * not boost the renderer tier — plain scrollback is client-side xterm
+   * rendering, not a PTY round-trip per redraw.
+   */
+  onUserScrollIntent: (id: string) => void;
   onEnterPressed: (id: string) => void;
 
   // Panel store side effects (routed through deps to keep this module
@@ -560,9 +569,13 @@ export function installTerminalBoundListeners(
   const onWheel = () => {
     managed._userScrollIntent = true;
     managed.lastWheelAt = Date.now();
+    deps.onUserScrollIntent(id);
   };
   const onKeydownScroll = (e: KeyboardEvent) => {
-    if (SCROLL_KEYS.has(e.key)) managed._userScrollIntent = true;
+    if (SCROLL_KEYS.has(e.key)) {
+      managed._userScrollIntent = true;
+      deps.onUserScrollIntent(id);
+    }
   };
   hostElement.addEventListener("wheel", onWheel, { passive: true });
   hostElement.addEventListener("keydown", onKeydownScroll);
