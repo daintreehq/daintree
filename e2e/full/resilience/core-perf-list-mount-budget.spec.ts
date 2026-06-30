@@ -34,6 +34,15 @@ const MAX_DOM_DELTA = 25_000;
 // by platform so runner scheduling noise does not fail otherwise healthy builds.
 const MAX_LONG_TASKS = process.platform === "darwin" ? 25 : process.platform === "win32" ? 20 : 10;
 
+// The 1000-row ReviewHub list mounts non-virtualized by design (this test
+// measures its DOM-node and long-animation-frame budgets, not its render
+// speed). On a release runner executing every E2E bucket at once, painting the
+// full span can take well past T_LONG before the last row attaches — that slow
+// paint timed out at T_LONG and masqueraded as a failure on both macOS and
+// Linux. Give the full-list mount a generous ceiling (still well under the
+// per-test coreTimeout) so only a genuinely stuck mount fails here.
+const T_LIST_MOUNT = T_LONG * 3;
+
 const clickReviewHubSetupButton = async (locator: Locator) => {
   await expect(locator).toBeVisible({ timeout: T_LONG });
   await expect(locator).toBeEnabled({ timeout: T_LONG });
@@ -170,8 +179,8 @@ test.describe.serial("Core: List Mount Perf Budget", () => {
       // Wait for both last and mid-range rows — confirms full list span
       const lastStageBtn = hub.locator(SEL.reviewHub.stageButton(lastFileName));
       const midStageBtn = hub.locator(SEL.reviewHub.stageButton(midFileName));
-      await expect(lastStageBtn).toBeVisible({ timeout: T_LONG });
-      await expect(midStageBtn).toBeVisible({ timeout: T_SHORT });
+      await expect(lastStageBtn).toBeVisible({ timeout: T_LIST_MOUNT });
+      await expect(midStageBtn).toBeVisible({ timeout: T_MEDIUM });
 
       // Allow a brief settle for final paints and observer callbacks
       await window.waitForTimeout(T_SETTLE);
