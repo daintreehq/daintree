@@ -6,7 +6,9 @@ const appMock = vi.hoisted(() => ({
   getPath: vi.fn(() => "/tmp/test-shutdown"),
 }));
 
-const persistAgentSessionMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+const persistAgentSessionMock = vi.hoisted(() =>
+  vi.fn((_record: unknown, _userData?: string) => Promise.resolve())
+);
 
 vi.mock("../../services/pty/agentSessionHistory.js", () => ({
   persistAgentSession: persistAgentSessionMock,
