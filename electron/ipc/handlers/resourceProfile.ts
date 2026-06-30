@@ -41,6 +41,15 @@ export function registerResourceProfileHandlers(_deps: HandlerDependencies): () 
           );
         }
       ),
+      // Renderer-driven, fire-and-forget: hold the profile at ≥ balanced for a
+      // short window because the user is actively interacting (scrolling a
+      // full-screen mouse-reporting TUI). No-ops if the service hasn't started.
+      requestInteractiveOverride: op(
+        RESOURCE_PROFILE_METHOD_CHANNELS.requestInteractiveOverride,
+        async (durationMs: number): Promise<void> => {
+          getResourceProfileService()?.requestInteractiveOverride(durationMs);
+        }
+      ),
     },
   });
 

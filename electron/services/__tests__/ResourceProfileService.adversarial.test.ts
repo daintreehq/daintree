@@ -1178,6 +1178,139 @@ describe("ResourceProfileService adversarial", () => {
     });
   });
 
+  describe("interactive override (symptom B — keep active TUI scroll off efficiency)", () => {
+    it("lifts lag-driven efficiency back to balanced immediately on request", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+      mockGetAppMetrics.mockReturnValue([]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      setLag(300, 0.85); // sustained event-loop lag
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      expect(service.getProfile()).toBe("efficiency");
+
+      service.requestInteractiveOverride(2_000);
+      // The hold lifts out of efficiency synchronously (the win: restores the
+      // pty-host's 16ms port-batch delay instead of efficiency's 40ms).
+      expect(service.getProfile()).toBe("balanced");
+
+      service.stop();
+    });
+
+    it("blocks lag from (re-)entering efficiency while interaction is ongoing", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+      mockGetAppMetrics.mockReturnValue([]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      setLag(300, 0.85); // sustained lag that would normally latch efficiency in ~10s
+      // Continuous interaction re-requests the override well within its window
+      // (mirrors the renderer's throttled re-requests while scrolling). Drive 20s
+      // of lag — well past the sustained-entry threshold — and assert efficiency
+      // is never entered.
+      for (let elapsed = 0; elapsed < 20_000; elapsed += 1_000) {
+        service.requestInteractiveOverride(2_000);
+        vi.advanceTimersByTime(1_000);
+        expect(service.getProfile()).not.toBe("efficiency");
+      }
+
+      service.stop();
+    });
+
+    it("resumes normal lag-driven efficiency once interaction stops and the hold expires", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+      mockGetAppMetrics.mockReturnValue([]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      setLag(300, 0.85);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      expect(service.getProfile()).toBe("efficiency");
+
+      service.requestInteractiveOverride(2_000);
+      expect(service.getProfile()).toBe("balanced");
+
+      // Interaction stopped — no further re-requests. Sustained lag continues, so
+      // after the hold expires the latch re-engages on the normal cadence.
+      vi.advanceTimersByTime(20_000);
+      expect(service.getProfile()).toBe("efficiency");
+
+      service.stop();
+    });
+
+    it("caps the hold so a runaway caller can't pin the profile off efficiency", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+      mockGetAppMetrics.mockReturnValue([]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      setLag(300, 0.85);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      expect(service.getProfile()).toBe("efficiency");
+
+      // Request an absurdly long hold ONCE; it is clamped, so sustained lag
+      // re-latches efficiency well before the requested duration elapses.
+      service.requestInteractiveOverride(10 * 60_000);
+      expect(service.getProfile()).toBe("balanced");
+      vi.advanceTimersByTime(20_000);
+      expect(service.getProfile()).toBe("efficiency");
+
+      service.stop();
+    });
+
+    it("ignores a non-finite duration without poisoning later valid requests", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+      mockGetAppMetrics.mockReturnValue([]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      setLag(300, 0.85);
+      vi.advanceTimersByTime(5_000);
+      vi.advanceTimersByTime(5_000);
+      expect(service.getProfile()).toBe("efficiency");
+
+      // A malformed call (NaN) must no-op, not brick the deadline — NaN would
+      // make `Date.now() < until` and `Math.max(until, ...)` permanently false.
+      service.requestInteractiveOverride(Number.NaN);
+      expect(service.getProfile()).toBe("efficiency"); // not lifted by garbage
+
+      // A subsequent VALID request still works (the deadline wasn't poisoned).
+      service.requestInteractiveOverride(2_000);
+      expect(service.getProfile()).toBe("balanced");
+
+      service.stop();
+    });
+
+    it("does not strand the lag latch while blocking entry from balanced", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+      mockGetAppMetrics.mockReturnValue([]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      setLag(300, 0.85); // sustained lag throughout
+      for (let elapsed = 0; elapsed < 15_000; elapsed += 1_000) {
+        service.requestInteractiveOverride(2_000);
+        vi.advanceTimersByTime(1_000);
+      }
+      // Entry was blocked, AND the latch flag itself was never set — so when the
+      // override lapses, detection resumes from a clean state rather than a
+      // held-but-not-applied latch.
+      expect(service.getProfile()).not.toBe("efficiency");
+      expect(service.getSnapshot().lagPressureActive).toBe(false);
+
+      service.stop();
+    });
+  });
+
   describe("active-agent count filtering", () => {
     it("counts terminals across all ACTIVE_AGENT_STATES (working, waiting, directing)", async () => {
       const { deps, pty } = createDeps();

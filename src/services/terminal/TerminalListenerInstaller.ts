@@ -256,6 +256,12 @@ export interface TerminalListenerInstallDeps {
   // Input
   clearDirectingState: (id: string, trigger?: string) => void;
   onUserInput: (id: string, data: string) => void;
+  /**
+   * Fired when a wheel scroll is actively forwarded to a mouse-reporting TUI.
+   * Lets the host boost the renderer tier and hold the resource profile off
+   * efficiency so an active scroll stays responsive (symptom B).
+   */
+  onActiveWheel: (id: string) => void;
   onEnterPressed: (id: string) => void;
 
   // Panel store side effects (routed through deps to keep this module
@@ -476,6 +482,10 @@ export function installTerminalBoundListeners(
       resolveWheelPixelsPerLine(terminal)
     );
     if (lines === 0) return;
+
+    // A real scroll is being forwarded to the TUI — keep the pane fast: boost the
+    // renderer tier and hold the resource profile off efficiency for the gesture.
+    deps.onActiveWheel(id);
 
     pendingWheelLines += lines;
     // Clamp the backlog so a long momentum tail can't queue an unbounded coast.

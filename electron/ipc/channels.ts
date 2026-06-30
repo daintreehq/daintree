@@ -118,6 +118,7 @@ export const CHANNELS = {
   SYSTEM_GET_HARDWARE_INFO: "system:get-hardware-info",
   SYSTEM_GET_RESOURCE_PROFILE: "system:get-resource-profile",
   SYSTEM_GET_RESOURCE_PROFILE_SNAPSHOT: "system:get-resource-profile-snapshot",
+  SYSTEM_REQUEST_INTERACTIVE_OVERRIDE: "system:request-interactive-override",
   DIAGNOSTICS_GET_PROCESS_METRICS: "diagnostics:get-process-metrics",
   DIAGNOSTICS_GET_HEAP_STATS: "diagnostics:get-heap-stats",
   DIAGNOSTICS_GET_INFO: "diagnostics:get-info",

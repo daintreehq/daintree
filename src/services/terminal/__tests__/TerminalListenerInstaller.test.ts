@@ -181,6 +181,7 @@ function makeDeps(
     notifyUserInput: vi.fn(),
     clearDirectingState: vi.fn(),
     onUserInput: vi.fn(),
+    onActiveWheel: vi.fn(),
     onEnterPressed: vi.fn(),
     updateLastObservedTitle: vi.fn(),
     notifyXtermFocused: vi.fn(),
@@ -686,6 +687,7 @@ describe("installTerminalBoundListeners", () => {
       return {
         managed,
         terminal,
+        deps,
         xtermEl,
         dispatch: (init: WheelEventInit, target: HTMLElement = managed.hostElement) => {
           const ev = new WheelEvent("wheel", { bubbles: true, cancelable: true, ...init });
@@ -1036,6 +1038,25 @@ describe("installTerminalBoundListeners", () => {
       h.dispatch({ deltaY: 10, deltaMode: 0 }); // resume same direction
       h.flushFrames();
       expect(h.getReports()).toBe(1); // the two halves still crossed a line boundary
+    });
+
+    it("signals onActiveWheel only when a real scroll is forwarded, not for sub-line motion", () => {
+      // onActiveWheel drives the renderer BURST boost + resource-profile hold,
+      // so it must fire on a forwarded scroll (lines !== 0) and stay silent for a
+      // sub-line nudge that forwards nothing.
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      h.dispatch({ deltaY: 10, deltaMode: 0 }); // half a line (20px basis) → no forward
+      expect(h.deps.onActiveWheel).not.toHaveBeenCalled();
+      h.dispatch({ deltaY: 120, deltaMode: 0 }); // a real notch → forwarded
+      expect(h.deps.onActiveWheel).toHaveBeenCalledWith("t1");
+    });
+
+    it("does not signal onActiveWheel when it does not take over the wheel", () => {
+      // Normal buffer (no mouse-reporting TUI): the wheel passes through to
+      // xterm's own scrollback, so no boost is requested.
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: false });
+      h.dispatch({ deltaY: 120, deltaMode: 0 });
+      expect(h.deps.onActiveWheel).not.toHaveBeenCalled();
     });
 
     it("clears a single notch within one frame and adds nothing on the next", () => {
