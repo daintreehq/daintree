@@ -354,6 +354,7 @@ export const CHANNELS = {
   WEBVIEW_DIALOG_DISMISS: "webview:dialog-dismiss",
   WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut",
   WEBVIEW_RELOAD_SHORTCUT: "webview:reload-shortcut",
+  WEBVIEW_CLOSE_SHORTCUT: "webview:close-shortcut",
   WEBVIEW_NAVIGATION_BLOCKED: "webview:navigation-blocked",
   WEBVIEW_UNRESPONSIVE: "webview:unresponsive",
   WEBVIEW_RESPONSIVE: "webview:responsive",

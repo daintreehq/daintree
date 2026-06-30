@@ -886,6 +886,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): () => void;
     /** Subscribe to reload shortcut (Cmd/Ctrl+R) forwarded from focused webview guests */
     onReloadShortcut(callback: (payload: { panelId: string }) => void): () => void;
+    /** Subscribe to close shortcut (Cmd/Ctrl+W) forwarded from focused webview guests */
+    onCloseShortcut(callback: (payload: { panelId: string }) => void): () => void;
     /** Subscribe to blocked cross-origin navigation events from webview guests */
     onNavigationBlocked(
       callback: (payload: { panelId: string; url: string; canOpenExternal: boolean }) => void

@@ -1960,6 +1960,8 @@ function buildElectronApi(): ElectronAPI {
       ): (() => void) => _typedOn(CHANNELS.WEBVIEW_FIND_SHORTCUT, callback),
       onReloadShortcut: (callback: (payload: { panelId: string }) => void): (() => void) =>
         _typedOn(CHANNELS.WEBVIEW_RELOAD_SHORTCUT, callback),
+      onCloseShortcut: (callback: (payload: { panelId: string }) => void): (() => void) =>
+        _typedOn(CHANNELS.WEBVIEW_CLOSE_SHORTCUT, callback),
       onNavigationBlocked: (
         callback: (payload: { panelId: string; url: string; canOpenExternal: boolean }) => void
       ): (() => void) => _typedOn(CHANNELS.WEBVIEW_NAVIGATION_BLOCKED, callback),
