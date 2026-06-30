@@ -539,11 +539,15 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
       const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
       const mockEvent = { preventDefault: vi.fn() };
+      // The close chord is platform-specific: Cmd+W on macOS, Ctrl+W
+      // elsewhere. Match the runtime platform so this passes on both the dev
+      // machine (macOS) and CI (Linux).
+      const isMac = process.platform === "darwin";
       beforeInputHandlers[0](mockEvent, {
         type: "keyDown",
         key: "w",
-        meta: true,
-        control: false,
+        meta: isMac,
+        control: !isMac,
         alt: false,
         shift: false,
       });
@@ -572,11 +576,12 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
       const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
       const mockEvent = { preventDefault: vi.fn() };
+      const isMac = process.platform === "darwin";
       beforeInputHandlers[0](mockEvent, {
         type: "keyDown",
         key: "w",
-        meta: true,
-        control: false,
+        meta: isMac,
+        control: !isMac,
         alt: false,
         shift: false,
       });
@@ -605,11 +610,12 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
       const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
       const mockEvent = { preventDefault: vi.fn() };
+      const isMac = process.platform === "darwin";
       beforeInputHandlers[0](mockEvent, {
         type: "keyDown",
         key: "w",
-        meta: true,
-        control: false,
+        meta: isMac,
+        control: !isMac,
         alt: false,
         shift: true,
       });
@@ -618,7 +624,7 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       expect(mockSend).not.toHaveBeenCalledWith("webview:close-shortcut", expect.anything());
     });
 
-    it("ignores Ctrl+Cmd+W on macOS — the opposite-platform modifier disqualifies it (#10859)", () => {
+    it("ignores Cmd+Ctrl+W — the opposite-platform modifier disqualifies the close chord (#10859)", () => {
       const mockSend = vi.fn();
       mockFromWebContents.mockReturnValue({
         isDestroyed: () => false,
@@ -636,8 +642,9 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
       const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
       const mockEvent = { preventDefault: vi.fn() };
-      // On macOS (the test platform) the close chord is Cmd+W; adding Ctrl
-      // must disqualify it so it isn't treated as a plain panel close.
+      // Both modifiers held is always disqualified: on macOS the extra Ctrl
+      // voids the Cmd+W chord, and on Linux/Windows the extra Cmd voids the
+      // Ctrl+W chord — so this is rejected on every platform.
       beforeInputHandlers[0](mockEvent, {
         type: "keyDown",
         key: "w",
