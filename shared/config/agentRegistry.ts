@@ -393,6 +393,14 @@ export interface AgentConfig {
     resizeStrategy?: "default" | "settled";
     /** CLI flag to disable alt-screen and use inline rendering (e.g., "--no-alt-screen") */
     inlineModeFlag?: string;
+    /**
+     * Default inline-mode state when the user hasn't chosen one. Agents with an
+     * `inlineModeFlag` otherwise default to inline (`true`); set this to `false`
+     * for a full-screen TUI that renders better on the alternate screen (clean
+     * scroll region, no garbled redraw history in scrollback) while still
+     * exposing the inline flag as an opt-in.
+     */
+    defaultInlineMode?: boolean;
     /** Whether the agent CLI supports bracketed paste input (default: true) */
     supportsBracketedPaste?: boolean;
     /** Escape sequence sent for Shift+Enter / soft newline (default: "\x1b\r") */

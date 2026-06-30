@@ -700,7 +700,12 @@ export function XtermAdapter({
     <div
       className={cn(
         "w-full h-full text-text-primary overflow-hidden",
-        !isAltBuffer && ["pl-3 pt-3 pb-3 pr-3", !hasBottomBar && "rounded-b-[var(--radius-lg)]"],
+        // Full-screen TUIs run on the alternate buffer, which has no scrollback —
+        // `terminal-alt-buffer` hides xterm's overlay scrollbar (see index.css) so
+        // it doesn't draw a dead full-height thumb over the TUI.
+        isAltBuffer
+          ? "terminal-alt-buffer"
+          : ["pl-3 pt-3 pb-3 pr-3", !hasBottomBar && "rounded-b-[var(--radius-lg)]"],
         className
       )}
       style={{ backgroundColor: wrapperBackground, contain: "strict" }}

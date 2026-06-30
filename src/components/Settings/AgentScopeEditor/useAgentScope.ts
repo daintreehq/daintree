@@ -67,7 +67,8 @@ export function useAgentScope({
   const agentCfg = getAgentConfig(agentId);
   const supportsInlineMode = !!agentCfg?.capabilities?.inlineModeFlag;
 
-  const agentDefaultInline = activeEntry.inlineMode ?? true;
+  const agentDefaultInline =
+    activeEntry.inlineMode ?? agentCfg?.capabilities?.defaultInlineMode ?? true;
   const agentDefaultCustomFlags = activeEntry.customFlags ?? "";
 
   const inlineOverride = selectedPreset?.inlineMode;

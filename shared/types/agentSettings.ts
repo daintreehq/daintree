@@ -142,7 +142,9 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
         customFlags: "",
         dangerousArgs: DEFAULT_DANGEROUS_ARGS[id] ?? "",
         dangerousEnabled: false,
-        inlineMode: !!AGENT_REGISTRY[id]?.capabilities?.inlineModeFlag,
+        inlineMode:
+          AGENT_REGISTRY[id]?.capabilities?.defaultInlineMode ??
+          !!AGENT_REGISTRY[id]?.capabilities?.inlineModeFlag,
       },
     ])
   ),
@@ -427,10 +429,13 @@ export function generateAgentCommand(
       }
     }
 
-    // Add inline mode flag when enabled and agent supports it
-    // Default to true when agent supports it (handles pre-existing stored settings without this field)
+    // Add inline mode flag when enabled and agent supports it. When the user
+    // hasn't chosen (entry.inlineMode === undefined), fall back to the agent's
+    // `defaultInlineMode` (or true for flag-bearing agents that don't override),
+    // so an agent like Grok defaults to the alternate screen instead of inline.
     const inlineModeFlag = agentConfig?.capabilities?.inlineModeFlag;
-    if (inlineModeFlag && entry.inlineMode !== false) {
+    const inlineDefault = agentConfig?.capabilities?.defaultInlineMode ?? true;
+    if (inlineModeFlag && (entry.inlineMode ?? inlineDefault)) {
       parts.push(inlineModeFlag);
     }
   }
@@ -651,9 +656,12 @@ export function buildAgentLaunchFlags(
     flags.push(...agentConfig.args);
   }
 
-  // Inline mode flag when agent supports it and it's enabled
+  // Inline mode flag when agent supports it and it's enabled. With no explicit
+  // choice, fall back to the agent's `defaultInlineMode` (or true for flag-bearing
+  // agents without an override) so e.g. Grok defaults to the alternate screen.
   const inlineModeFlag = agentConfig?.capabilities?.inlineModeFlag;
-  if (inlineModeFlag && entry.inlineMode !== false) {
+  const inlineDefault = agentConfig?.capabilities?.defaultInlineMode ?? true;
+  if (inlineModeFlag && (entry.inlineMode ?? inlineDefault)) {
     flags.push(inlineModeFlag);
   }
 

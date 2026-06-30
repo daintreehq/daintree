@@ -72,9 +72,13 @@ export const config: AgentConfig = {
   contextWindow: 200_000,
   capabilities: {
     scrollback: 10000,
-    // Rust TUI that takes over the alternate screen by default, with an inline
-    // opt-out flag — mirrors Codex.
+    // Rust TUI that takes over the alternate screen. We keep it ON the alt
+    // screen by default: forcing it inline (--no-alt-screen) renders every frame
+    // into the normal-buffer scrollback, so scrolling up shows garbled overdrawn
+    // history and the overlay scrollbar can't be auto-hidden. The flag stays
+    // available as an opt-in via the inline-mode toggle.
     inlineModeFlag: "--no-alt-screen",
+    defaultInlineMode: false,
     supportsBracketedPaste: true,
     // Rust TUI reads the PTY buffer atomically, so the quit-command body and
     // Enter must be sent as separate writes (same rationale as Codex).

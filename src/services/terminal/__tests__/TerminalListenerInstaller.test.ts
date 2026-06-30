@@ -621,14 +621,27 @@ describe("installTerminalBoundListeners", () => {
     // Wire a real host > xterm element pair so the capture-phase amplifier can
     // intercept a physical wheel and re-dispatch synthetic reports onto the
     // xterm element, exactly as it does in production.
+
+    // The amplifier dispatches one single-line synthetic event per line the
+    // helper computes; assert against it so these survive WHEEL_LINES_PER_NOTCH
+    // tuning instead of restating the value.
+    const NOTCH_REPORTS = Math.abs(
+      wheelEventToLineCount({ deltaY: 120, deltaMode: 0 } as WheelEvent, 16, 24, { partial: 0 })
+    );
+
     function setupAmplifier(opts: {
       mouseTrackingMode: string;
       isAltBuffer: boolean;
       fontSize?: number;
+      runtimeAgentId?: string;
     }) {
       const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
       const terminal = makeMockTerminal(captured);
-      const managed = makeMockManaged({ runtimeAgentId: "grok" });
+      // The normalizer gate does NOT depend on runtimeAgentId (a plain
+      // lazygit/btop terminal must amplify too); default to an agent but let
+      // callers clear it to cover the no-agent case.
+      const runtimeAgentId = "runtimeAgentId" in opts ? opts.runtimeAgentId : "grok";
+      const managed = makeMockManaged({ runtimeAgentId });
       const deps = makeDeps();
 
       const xtermEl = document.createElement("div");
@@ -651,11 +664,12 @@ describe("installTerminalBoundListeners", () => {
       // Watch what reaches the xterm element. Synthetic reports arrive in line
       // mode (deltaMode 1); a physical pixel-mode event (deltaMode 0) reaching
       // here would mean the capture listener failed to suppress the original.
-      let reports = 0;
+      const synthetic: WheelEvent[] = [];
       let leakedOriginal = false;
       xtermEl.addEventListener("wheel", (e) => {
-        reports++;
-        if ((e as WheelEvent).deltaMode === 0) leakedOriginal = true;
+        const we = e as WheelEvent;
+        synthetic.push(we);
+        if (we.deltaMode === 0) leakedOriginal = true;
       });
 
       return {
@@ -669,7 +683,8 @@ describe("installTerminalBoundListeners", () => {
         runCleanups: () => {
           for (const cleanup of managed.listeners) cleanup();
         },
-        getReports: () => reports,
+        getReports: () => synthetic.length,
+        getSynthetic: () => synthetic,
         getLeakedOriginal: () => leakedOriginal,
       };
     }
@@ -678,11 +693,52 @@ describe("installTerminalBoundListeners", () => {
       document.querySelectorAll("body > div").forEach((el) => el.remove());
     });
 
-    it("forwards exactly one report per discrete notch (does not over-amplify)", () => {
+    it("forwards the conventional lines-per-notch for a discrete notch", () => {
       const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
       const { defaultPrevented } = h.dispatch({ deltaY: 120, deltaMode: 0 });
-      expect(h.getReports()).toBe(1);
+      // A pixel-mode notch carries no OS lines signal, so we emit a fixed number
+      // of line-reports — scrolling matches a normal terminal instead of crawling.
+      expect(h.getReports()).toBe(NOTCH_REPORTS);
+      // Each synthetic report MUST be a single-line event (deltaMode 1, deltaY 1):
+      // xterm sends one mouse report per event, so N 1-line events scroll N lines,
+      // whereas one N-line event would under-report (and a deltaY > 1 could
+      // over-scroll an app that multiplies). This guards the per-line shape.
+      for (const e of h.getSynthetic()) {
+        expect(e.deltaMode).toBe(1);
+        expect(e.deltaY).toBe(1);
+      }
       expect(defaultPrevented).toBe(true);
+    });
+
+    it("emits single-line synthetic events in the scroll direction (downward)", () => {
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      h.dispatch({ deltaY: -120, deltaMode: 0 });
+      expect(h.getReports()).toBe(NOTCH_REPORTS);
+      for (const e of h.getSynthetic()) {
+        expect(e.deltaMode).toBe(1);
+        expect(e.deltaY).toBe(-1);
+      }
+    });
+
+    it.each(["vt200", "drag", "any"] as const)(
+      "amplifies under %s mouse tracking (all wheel-reporting modes, not just 'any')",
+      (mouseTrackingMode) => {
+        const h = setupAmplifier({ mouseTrackingMode, isAltBuffer: true });
+        h.dispatch({ deltaY: 120, deltaMode: 0 });
+        expect(h.getReports()).toBe(NOTCH_REPORTS);
+      }
+    );
+
+    it("amplifies for a plain no-agent mouse-tracking TUI (lazygit/btop)", () => {
+      // The gate keys on alt buffer + mouse tracking, not runtimeAgentId, so a
+      // TUI launched directly in a shell must still get smooth scrolling.
+      const h = setupAmplifier({
+        mouseTrackingMode: "any",
+        isAltBuffer: true,
+        runtimeAgentId: undefined,
+      });
+      h.dispatch({ deltaY: 120, deltaMode: 0 });
+      expect(h.getReports()).toBe(NOTCH_REPORTS);
     });
 
     it("accumulates fine/trackpad motion instead of dropping it", () => {
@@ -711,8 +767,10 @@ describe("installTerminalBoundListeners", () => {
 
     it("does not intervene in the normal buffer", () => {
       const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: false });
-      h.dispatch({ deltaY: 120, deltaMode: 0 });
+      const { defaultPrevented } = h.dispatch({ deltaY: 120, deltaMode: 0 });
       expect(h.getReports()).toBe(0);
+      // The physical wheel is left intact so xterm's viewport scrollback runs.
+      expect(defaultPrevented).toBe(false);
     });
 
     it("passes modified wheels (ctrl-zoom etc.) through unchanged", () => {
@@ -737,7 +795,7 @@ describe("installTerminalBoundListeners", () => {
       // bubble-phase listener, while the tagged synthetic events still arrive.
       const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
       h.dispatch({ deltaY: 120, deltaMode: 0 }, h.xtermEl);
-      expect(h.getReports()).toBe(1); // one synthetic line-mode report
+      expect(h.getReports()).toBe(NOTCH_REPORTS); // one single-line report per line
       expect(h.getLeakedOriginal()).toBe(false); // original pixel-mode event was stopped
     });
 
@@ -966,14 +1024,40 @@ describe("wheelEventToLineCount", () => {
     expect(wheelEventToLineCount(ev(1, 2), 16, 24, { partial: 0 })).toBe(24);
   });
 
-  it("treats a large pixel delta as a single discrete notch", () => {
-    // A ~120px detent is one notch regardless of magnitude — a line or two in
-    // the app, not a proportional fling.
-    expect(wheelEventToLineCount(ev(120, 0), 16, 24, { partial: 0 })).toBe(1);
+  it("scrolls the tuned lines-per-notch for a discrete pixel notch", () => {
+    // A ~120px detent is one notch; pixel mode carries no OS lines signal, so we
+    // emit a fixed number of lines (6 — double the conventional default) rather
+    // than crawling one. This is the canonical value; the tests below pin the
+    // surrounding invariants relationally so they survive retuning.
+    expect(wheelEventToLineCount(ev(120, 0), 16, 24, { partial: 0 })).toBe(6);
   });
 
-  it("preserves scroll direction for negative deltas", () => {
-    expect(wheelEventToLineCount(ev(-120, 0), 16, 24, { partial: 0 })).toBe(-1);
+  it("scrolls clearly more than a single line per notch (the dead-scroll fix)", () => {
+    // The whole point of the change: a notch must move more than one line so it
+    // doesn't feel like only every few clicks register. Relationship, not literal.
+    expect(wheelEventToLineCount(ev(120, 0), 16, 24, { partial: 0 })).toBeGreaterThan(1);
+  });
+
+  it("scrolls the same line count for any notch magnitude (magnitude ignored)", () => {
+    // One physical detent is one notch whether Chromium reports 40px or 2000px;
+    // the count must not scale with pixels — asserting all-equal is the invariant.
+    const counts = [40, 120, 240, 2000].map((d) =>
+      wheelEventToLineCount(ev(d, 0), 16, 24, { partial: 0 })
+    );
+    expect(new Set(counts).size).toBe(1);
+  });
+
+  it("preserves scroll direction symmetrically (down === -up)", () => {
+    const up = wheelEventToLineCount(ev(120, 0), 16, 24, { partial: 0 });
+    const down = wheelEventToLineCount(ev(-120, 0), 16, 24, { partial: 0 });
+    expect(down).toBe(-up);
+  });
+
+  it("clamps a notch to at most one screenful of lines, both directions", () => {
+    // A full notch scrolls several lines, but never past a short viewport.
+    expect(Math.abs(wheelEventToLineCount(ev(120, 0), 16, 24, { partial: 0 }))).toBeGreaterThan(2);
+    expect(wheelEventToLineCount(ev(120, 0), 16, 2, { partial: 0 })).toBe(2);
+    expect(wheelEventToLineCount(ev(-120, 0), 16, 2, { partial: 0 })).toBe(-2);
   });
 
   it("returns zero for a zero delta", () => {
@@ -995,7 +1079,9 @@ describe("wheelEventToLineCount", () => {
 
   it("resets the trackpad accumulator when a notch interrupts a swipe", () => {
     const carry = { partial: 0.5 };
-    expect(wheelEventToLineCount(ev(120, 0), 16, 24, carry)).toBe(1);
+    // The notch still reports (value-agnostic), and crucially clears the stale
+    // sub-line remainder so it can't smear the next fine scroll.
+    expect(wheelEventToLineCount(ev(120, 0), 16, 24, carry)).toBeGreaterThan(0);
     expect(carry.partial).toBe(0);
   });
 

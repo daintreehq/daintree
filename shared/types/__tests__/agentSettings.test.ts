@@ -247,6 +247,20 @@ describe("buildAgentLaunchFlags", () => {
     expect(flags).not.toContain("--no-alt-screen");
   });
 
+  it("defaults grok to the alternate screen (defaultInlineMode false → no flag)", () => {
+    // Grok declares defaultInlineMode: false, so an unset inlineMode must NOT add
+    // --no-alt-screen — it should run full-screen on the alt buffer, unlike codex.
+    const grok = buildAgentLaunchFlags({}, "grok");
+    const codex = buildAgentLaunchFlags({}, "codex");
+    expect(grok).not.toContain("--no-alt-screen");
+    expect(codex).toContain("--no-alt-screen");
+  });
+
+  it("still lets grok opt into inline mode explicitly", () => {
+    const flags = buildAgentLaunchFlags({ inlineMode: true }, "grok");
+    expect(flags).toContain("--no-alt-screen");
+  });
+
   it("does not include clipboard directory", () => {
     const flags = buildAgentLaunchFlags({ shareClipboardDirectory: true }, "gemini");
     expect(flags).not.toContain("--include-directories");
@@ -362,6 +376,16 @@ describe("generateAgentCommand per-agent prompt injection", () => {
     expect(interactiveCmd).toMatch(/'Fix the bug'$/);
     expect(interactiveCmd).not.toMatch(/-p\s+'Fix the bug'/);
     expect(oneShotCmd).toMatch(/-p\s+'Fix the bug'/);
+  });
+
+  it("grok's first-spawn command defaults to the alternate screen, unlike codex", () => {
+    // Covers the generateAgentCommand inline-flag path (separate from
+    // buildAgentLaunchFlags): an unset inlineMode must not add --no-alt-screen
+    // for grok (defaultInlineMode false), while codex still gets it.
+    const grok = generateAgentCommand("grok", {}, "grok");
+    const codex = generateAgentCommand("codex", {}, "codex");
+    expect(grok).not.toContain("--no-alt-screen");
+    expect(codex).toContain("--no-alt-screen");
   });
 
   it("opencode uses --prompt for interactive (bare positional is a project path)", () => {

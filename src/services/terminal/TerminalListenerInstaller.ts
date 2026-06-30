@@ -30,6 +30,15 @@ const DEFAULT_FONT_SIZE_PX = 14;
 // motion arrives as a stream of much smaller deltas.
 const WHEEL_NOTCH_PX = 40;
 
+// Lines a single discrete notch scrolls in a mouse-reporting TUI. Pixel-mode
+// wheel events (macOS) carry no OS lines-per-notch signal, so a notch otherwise
+// moved a single line and scrolling felt several times slower than every other
+// terminal — you had to spin the wheel far more than anywhere else. 6 is double
+// the conventional 3-line default, tuned so a notch covers ground briskly in
+// dense agent TUIs. Line-mode events (Windows / Linux mice) already carry the OS
+// step in deltaY and are left untouched.
+const WHEEL_LINES_PER_NOTCH = 6;
+
 // The synthetic wheel events the normalizer re-dispatches are tracked here so
 // its own capture-phase listener skips them instead of recursing. A WeakSet
 // (rather than `isTrusted`) keeps the behavior unit-testable — dispatched test
@@ -44,10 +53,10 @@ const amplifiedWheelEvents = new WeakSet<WheelEvent>();
  * trackpad deltas by 0.3, so small movements fall below the one-line threshold,
  * compute `lines === 0`, and send no report at all (scrolling feels dead).
  *
- * Here a discrete notch yields exactly one report (the app applies its own
- * lines-per-wheel step), and fine/trackpad motion is accumulated at ~one line
- * per row height via `carry` so every bit of movement eventually registers
- * rather than being damped to nothing.
+ * Here a discrete notch yields WHEEL_LINES_PER_NOTCH reports (pixel mode carries
+ * no OS lines-per-notch signal, so we supply the conventional default), and
+ * fine/trackpad motion is accumulated at ~one line per row height via `carry` so
+ * every bit of movement eventually registers rather than being damped to nothing.
  */
 export function wheelEventToLineCount(
   ev: WheelEvent,
@@ -68,11 +77,12 @@ export function wheelEventToLineCount(
   }
   // Pixel mode.
   if (Math.abs(ev.deltaY) >= WHEEL_NOTCH_PX) {
-    // Discrete notch reported in pixels — one report regardless of magnitude so
-    // a notch scrolls a line or two like a normal terminal. Drop any partial
-    // trackpad accumulation so a notch mixed into a swipe doesn't smear.
+    // Discrete notch reported in pixels — scroll the conventional lines-per-notch
+    // (regardless of magnitude) so it matches a normal terminal instead of
+    // crawling one line at a time. Drop any partial trackpad accumulation so a
+    // notch mixed into a swipe doesn't smear.
     carry.partial = 0;
-    return sign;
+    return clamp(sign * WHEEL_LINES_PER_NOTCH);
   }
   // High-resolution / trackpad: accumulate ~one line per row height. The carried
   // remainder means sub-line motion is never discarded — it adds up across

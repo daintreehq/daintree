@@ -896,6 +896,17 @@ code.hljs {
     display: none;
   }
 
+  /* Full-screen TUIs (vim, htop, lazygit, AI agent UIs) run on the alternate
+     screen buffer, which has no scrollback. xterm v6's overlay scrollbar would
+     otherwise draw a non-functional full-height thumb over the TUI. Hide it
+     while the alt buffer is active; XtermAdapter toggles `.terminal-alt-buffer`
+     on the wrapper from the onBufferChange signal. The overlay is absolutely
+     positioned, so hiding it shifts no content, and the normal-buffer scrollbar
+     (where scrollback actually exists) is untouched. */
+  .terminal-alt-buffer .xterm-scrollbar {
+    display: none !important;
+  }
+
   /* Mitigate xterm #5893 / #9812: the DOM renderer applies negative inline
      letter-spacing to emoji spans because OffscreenCanvas.measureText mismeasures
      them. Author !important wins over the inline style at the same origin. We clamp
