@@ -38,6 +38,28 @@ const WAITING_TITLE_HYSTERESIS_MS = 250;
 // left untouched.
 const WHEEL_PIXELS_PER_LINE = 20;
 
+// Max synthetic line-reports flushed per animation frame for a mouse-reporting
+// TUI. Each report is an independent PTY round-trip — the app redraws its whole
+// scroll region and ships a full frame back through IPC — so dispatching a whole
+// gesture's worth at once (a trackpad/Magic-Mouse momentum flick coalesces into
+// dozens of lines, a page-mode fling into a screenful) floods the pipe with
+// redraws the user never sees: the renderer paints once per frame, so every
+// returned frame but the last is parsed and immediately overwritten. We instead
+// accumulate the gesture and drain it at most this many lines per frame, pacing
+// reports to roughly the rate the TUI can repaint. A single physical notch
+// (~120px → 6 lines) still clears in one frame, so discrete scrolling stays
+// crisp; only floods are spread. Tunable: lower = gentler on the pipe but slower
+// momentum, higher = brisker momentum but larger per-frame bursts.
+const WHEEL_MAX_LINES_PER_FRAME = 8;
+
+// Ceiling on the un-drained backlog, in screenfuls. The proportional normalizer
+// already bounds pending to the distance physically scrolled, so this only
+// catches a pathological long momentum tail — it caps how far the view can keep
+// coasting after the gesture ends (≈ this many screenfuls ÷ per-frame rate), so
+// pacing never resurrects the disconnected-overscroll feel the proportional
+// rewrite removed.
+const WHEEL_MAX_PENDING_SCREENFULS = 3;
+
 // The synthetic wheel events the normalizer re-dispatches are tracked here so
 // its own capture-phase listener skips them instead of recursing. A WeakSet
 // (rather than `isTrusted`) keeps the behavior unit-testable — dispatched test
@@ -281,6 +303,62 @@ export function installTerminalBoundListeners(
   // and the wheel→arrow case above are untouched; modified wheels (ctrl-zoom
   // etc.) pass through unchanged.
   const wheelCarry = { partial: 0 };
+  // Whole-line backlog awaiting dispatch, signed (down positive). Filled
+  // synchronously from each physical wheel event, drained at WHEEL_MAX_LINES_PER_FRAME
+  // per animation frame so a momentum flood paces to the TUI's redraw rate
+  // instead of round-tripping every line at once.
+  let pendingWheelLines = 0;
+  let wheelFlushRaf: number | undefined;
+  // Coords of the most recent physical wheel — synthetic reports inherit them so
+  // xterm encodes the mouse report at the cursor's actual cell.
+  let lastWheelClientX = 0;
+  let lastWheelClientY = 0;
+
+  const flushWheelLines = () => {
+    wheelFlushRaf = undefined;
+    if (pendingWheelLines === 0) return;
+    const target = terminal.element;
+    // A multi-frame drain can outlive the mouse-reporting context: the TUI may
+    // leave the alt screen or disable mouse tracking before the backlog empties.
+    // Re-check the same gate as onWheelNormalize and drop the rest if it no longer
+    // holds — otherwise queued synthetic wheels leak into xterm's arrow-key
+    // fallback (non-agent alt-buffer) or normal-buffer viewport scroll once the
+    // app no longer owns the wheel.
+    const mode = terminal.modes.mouseTrackingMode;
+    const appReportsWheel = mode === "vt200" || mode === "drag" || mode === "any";
+    if (!target || !managed.isAltBuffer || !appReportsWheel) {
+      pendingWheelLines = 0;
+      return;
+    }
+    // Re-clamp against the CURRENT row count: a resize that shrank the viewport
+    // mid-drain would otherwise leave a backlog of many more screenfuls than the
+    // cap intends, coasting far past the gesture.
+    const maxPending = terminal.rows * WHEEL_MAX_PENDING_SCREENFULS;
+    if (pendingWheelLines > maxPending) pendingWheelLines = maxPending;
+    else if (pendingWheelLines < -maxPending) pendingWheelLines = -maxPending;
+
+    const step = pendingWheelLines > 0 ? 1 : -1;
+    const emit = Math.min(Math.abs(pendingWheelLines), WHEEL_MAX_LINES_PER_FRAME);
+    pendingWheelLines -= step * emit;
+    for (let i = 0; i < emit; i++) {
+      const synthetic = new WheelEvent("wheel", {
+        deltaY: step,
+        deltaMode: 1 /* DOM_DELTA_LINE — one report each, no partial-scroll carry */,
+        clientX: lastWheelClientX,
+        clientY: lastWheelClientY,
+        bubbles: true,
+        cancelable: true,
+      });
+      amplifiedWheelEvents.add(synthetic);
+      target.dispatchEvent(synthetic);
+    }
+    // Drain the remaining backlog on the next frame so a large gesture keeps
+    // moving without dispatching it all in one burst.
+    if (pendingWheelLines !== 0) {
+      wheelFlushRaf = requestAnimationFrame(flushWheelLines);
+    }
+  };
+
   const onWheelNormalize = (ev: WheelEvent) => {
     if (amplifiedWheelEvents.has(ev)) return;
     // Only take over for mouse modes that actually report wheel events: VT200
@@ -303,31 +381,49 @@ export function installTerminalBoundListeners(
     const target = terminal.element;
     if (!target) return;
 
-    // Take over: stop xterm's (lossy) handling, replace with one report per line.
+    // Take over: stop xterm's (lossy) handling, replace with paced line reports.
     ev.preventDefault();
     ev.stopImmediatePropagation();
+
+    // A direction change drops the stale opposite-direction backlog so the
+    // reversal scrolls the new way immediately rather than first coasting out
+    // un-dispatched travel. Keyed on the raw deltaY sign, NOT the whole-line
+    // `lines` below — the first reversal event from a trackpad is usually
+    // sub-line (lines === 0), and gating the drop on `lines` would let the stale
+    // backlog keep scrolling the old way until the reversal accumulated a whole
+    // line. Mirrors the carry reset inside wheelEventToLineCount.
+    if (
+      ev.deltaY !== 0 &&
+      pendingWheelLines !== 0 &&
+      Math.sign(ev.deltaY) !== Math.sign(pendingWheelLines)
+    ) {
+      pendingWheelLines = 0;
+    }
 
     const lines = wheelEventToLineCount(ev, terminal.rows, wheelCarry);
     if (lines === 0) return;
 
-    const step = lines > 0 ? 1 : -1;
-    const count = Math.abs(lines); // already clamped to one screenful by the helper
-    for (let i = 0; i < count; i++) {
-      const synthetic = new WheelEvent("wheel", {
-        deltaY: step,
-        deltaMode: 1 /* DOM_DELTA_LINE — one report each, no partial-scroll carry */,
-        clientX: ev.clientX,
-        clientY: ev.clientY,
-        bubbles: true,
-        cancelable: true,
-      });
-      amplifiedWheelEvents.add(synthetic);
-      target.dispatchEvent(synthetic);
+    pendingWheelLines += lines;
+    // Clamp the backlog so a long momentum tail can't queue an unbounded coast.
+    const maxPending = terminal.rows * WHEEL_MAX_PENDING_SCREENFULS;
+    if (pendingWheelLines > maxPending) pendingWheelLines = maxPending;
+    else if (pendingWheelLines < -maxPending) pendingWheelLines = -maxPending;
+
+    lastWheelClientX = ev.clientX;
+    lastWheelClientY = ev.clientY;
+
+    if (wheelFlushRaf === undefined) {
+      wheelFlushRaf = requestAnimationFrame(flushWheelLines);
     }
   };
   hostElement.addEventListener("wheel", onWheelNormalize, { capture: true, passive: false });
   managed.listeners.push(() => {
     hostElement.removeEventListener("wheel", onWheelNormalize, { capture: true });
+    if (wheelFlushRaf !== undefined) {
+      cancelAnimationFrame(wheelFlushRaf);
+      wheelFlushRaf = undefined;
+    }
+    pendingWheelLines = 0;
   });
 
   const oscDisposable = terminal.parser.registerOscHandler(11, () => {

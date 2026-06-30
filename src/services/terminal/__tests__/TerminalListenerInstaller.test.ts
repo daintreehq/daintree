@@ -620,11 +620,14 @@ describe("installTerminalBoundListeners", () => {
   describe("wheel amplification for mouse-tracking TUIs", () => {
     // Wire a real host > xterm element pair so the capture-phase amplifier can
     // intercept a physical wheel and re-dispatch synthetic reports onto the
-    // xterm element, exactly as it does in production.
+    // xterm element, exactly as it does in production. Dispatch is paced across
+    // animation frames (requestAnimationFrame, faked by the suite's fake timers),
+    // so tests drive `flushFrame()` / `flushFrames()` to drain the backlog.
 
     // The amplifier dispatches one single-line synthetic event per line the
-    // helper computes; assert against it so these survive WHEEL_LINES_PER_NOTCH
-    // tuning instead of restating the value.
+    // helper computes; assert against it so these survive WHEEL_PIXELS_PER_LINE
+    // tuning instead of restating the value. A single notch (≤ one frame's cap)
+    // drains in one frame.
     const NOTCH_REPORTS = Math.abs(
       wheelEventToLineCount({ deltaY: 120, deltaMode: 0 } as WheelEvent, 24, { partial: 0 })
     );
@@ -672,6 +675,7 @@ describe("installTerminalBoundListeners", () => {
 
       return {
         managed,
+        terminal,
         xtermEl,
         dispatch: (init: WheelEventInit, target: HTMLElement = managed.hostElement) => {
           const ev = new WheelEvent("wheel", { bubbles: true, cancelable: true, ...init });
@@ -680,6 +684,17 @@ describe("installTerminalBoundListeners", () => {
         },
         runCleanups: () => {
           for (const cleanup of managed.listeners) cleanup();
+        },
+        // Advance exactly one animation frame's worth of paced dispatch.
+        flushFrame: () => vi.advanceTimersToNextFrame(),
+        // Drain the whole backlog: advance frames until one produces no new
+        // report (the flush only re-arms a frame while lines remain).
+        flushFrames: (maxFrames = 128) => {
+          for (let i = 0; i < maxFrames; i++) {
+            const before = synthetic.length;
+            vi.advanceTimersToNextFrame();
+            if (synthetic.length === before) break;
+          }
         },
         getReports: () => synthetic.length,
         getSynthetic: () => synthetic,
@@ -694,6 +709,10 @@ describe("installTerminalBoundListeners", () => {
     it("forwards the conventional lines-per-notch for a discrete notch", () => {
       const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
       const { defaultPrevented } = h.dispatch({ deltaY: 120, deltaMode: 0 });
+      // preventDefault is synchronous (suppresses xterm immediately) even though
+      // the synthetic reports are paced onto the next frame.
+      expect(defaultPrevented).toBe(true);
+      h.flushFrames();
       // A pixel-mode notch carries no OS lines signal, so we emit a fixed number
       // of line-reports — scrolling matches a normal terminal instead of crawling.
       expect(h.getReports()).toBe(NOTCH_REPORTS);
@@ -705,12 +724,23 @@ describe("installTerminalBoundListeners", () => {
         expect(e.deltaMode).toBe(1);
         expect(e.deltaY).toBe(1);
       }
-      expect(defaultPrevented).toBe(true);
+    });
+
+    it("dispatches nothing synchronously — reports are paced onto a later frame", () => {
+      // The whole fix: a physical wheel must NOT fan out its lines inline (that
+      // round-trips every line at once and floods the PTY). Before any frame
+      // runs, zero synthetic reports have been sent.
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      h.dispatch({ deltaY: 120, deltaMode: 0 });
+      expect(h.getReports()).toBe(0);
+      h.flushFrames();
+      expect(h.getReports()).toBe(NOTCH_REPORTS);
     });
 
     it("emits single-line synthetic events in the scroll direction (downward)", () => {
       const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
       h.dispatch({ deltaY: -120, deltaMode: 0 });
+      h.flushFrames();
       expect(h.getReports()).toBe(NOTCH_REPORTS);
       for (const e of h.getSynthetic()) {
         expect(e.deltaMode).toBe(1);
@@ -723,6 +753,7 @@ describe("installTerminalBoundListeners", () => {
       (mouseTrackingMode) => {
         const h = setupAmplifier({ mouseTrackingMode, isAltBuffer: true });
         h.dispatch({ deltaY: 120, deltaMode: 0 });
+        h.flushFrames();
         expect(h.getReports()).toBe(NOTCH_REPORTS);
       }
     );
@@ -736,6 +767,7 @@ describe("installTerminalBoundListeners", () => {
         runtimeAgentId: undefined,
       });
       h.dispatch({ deltaY: 120, deltaMode: 0 });
+      h.flushFrames();
       expect(h.getReports()).toBe(NOTCH_REPORTS);
     });
 
@@ -746,20 +778,129 @@ describe("installTerminalBoundListeners", () => {
       // scroll counts.
       const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
       h.dispatch({ deltaY: 10, deltaMode: 0 });
+      h.flushFrames();
       expect(h.getReports()).toBe(0);
       h.dispatch({ deltaY: 10, deltaMode: 0 });
+      h.flushFrames();
       expect(h.getReports()).toBe(1);
     });
 
-    it("caps a page-mode fling at one screenful of lines", () => {
+    it("delivers a page-mode fling's full screenful, paced across frames", () => {
+      // A page event normalizes to one screenful (terminal.rows). Pacing must
+      // still deliver every line — just spread over frames, not in one burst.
       const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
       h.dispatch({ deltaY: 1, deltaMode: 2 });
-      expect(h.getReports()).toBe(24); // terminal.rows
+      h.flushFrames();
+      expect(h.getReports()).toBe(24); // terminal.rows — full screenful, nothing dropped
+    });
+
+    it("paces a large fling across multiple frames rather than dispatching it at once", () => {
+      // The flood guard: one frame may dispatch only a bounded slice of a
+      // screenful-sized backlog; the rest drains on following frames. Asserted
+      // structurally (first frame < total, full drain === total) so it survives
+      // per-frame-cap tuning without restating the constant.
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      h.dispatch({ deltaY: 1, deltaMode: 2 }); // one screenful (24 lines) pending
+      h.flushFrame();
+      const firstFrame = h.getReports();
+      expect(firstFrame).toBeGreaterThan(0);
+      expect(firstFrame).toBeLessThan(24);
+      h.flushFrames();
+      expect(h.getReports()).toBe(24);
+    });
+
+    it("coalesces several wheel events arriving before a frame into one paced drain", () => {
+      // Many physical events in a single frame (a momentum stream) accumulate
+      // into one backlog and drain at the per-frame cap — not one synchronous
+      // burst per event. Three notches (18 lines) queue with zero sync dispatch,
+      // the first frame stays capped below the total, and all 18 still arrive.
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      h.dispatch({ deltaY: 120, deltaMode: 0 });
+      h.dispatch({ deltaY: 120, deltaMode: 0 });
+      h.dispatch({ deltaY: 120, deltaMode: 0 });
+      expect(h.getReports()).toBe(0); // nothing dispatched synchronously
+      h.flushFrame();
+      expect(h.getReports()).toBeLessThan(3 * NOTCH_REPORTS); // first frame is capped
+      h.flushFrames();
+      expect(h.getReports()).toBe(3 * NOTCH_REPORTS); // every line still delivered
+    });
+
+    it("drops stale opposite-direction backlog on reversal", () => {
+      // Mid-drain, a direction flip must scroll the new way immediately instead
+      // of first cancelling un-dispatched travel. After one frame of a downward
+      // fling, an upward notch should truncate the remaining downward backlog.
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      h.dispatch({ deltaY: 1, deltaMode: 2 }); // 24 lines down pending
+      h.flushFrame(); // dispatch one capped slice downward, backlog remains
+      h.dispatch({ deltaY: -120, deltaMode: 0 }); // reverse: an upward notch
+      h.flushFrames();
+      const down = h.getSynthetic().filter((e) => e.deltaY > 0).length;
+      const up = h.getSynthetic().filter((e) => e.deltaY < 0).length;
+      // The downward fling was cut short (never reached its full screenful)...
+      expect(down).toBeGreaterThan(0);
+      expect(down).toBeLessThan(24);
+      // ...and the upward notch was delivered in full.
+      expect(up).toBe(NOTCH_REPORTS);
+      // No downward report after the first upward one (stale backlog was dropped).
+      const firstUp = h.getSynthetic().findIndex((e) => e.deltaY < 0);
+      expect(
+        h
+          .getSynthetic()
+          .slice(firstUp)
+          .every((e) => e.deltaY < 0)
+      ).toBe(true);
+    });
+
+    it("halts the coast on a sub-line reversal (first reverse event is < one line)", () => {
+      // A trackpad reversal's first event is usually below the px-per-line budget,
+      // so wheelEventToLineCount yields 0. The stale downward backlog must still
+      // be cancelled by the raw direction flip — otherwise the view keeps coasting
+      // down for several frames after the user has started scrolling up.
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      h.dispatch({ deltaY: 1, deltaMode: 2 }); // 24 lines down pending
+      h.flushFrame();
+      const afterFirstFrame = h.getReports();
+      expect(afterFirstFrame).toBeGreaterThan(0);
+      expect(afterFirstFrame).toBeLessThan(24); // backlog still pending
+      h.dispatch({ deltaY: -10, deltaMode: 0 }); // sub-line upward flick (0 lines)
+      h.flushFrames();
+      expect(h.getReports()).toBe(afterFirstFrame); // coast stopped — no more reports
+      expect(h.getSynthetic().every((e) => e.deltaY > 0)).toBe(true); // none upward yet
+    });
+
+    it("drops queued reports if the pane leaves the alt buffer mid-drain", () => {
+      // A multi-frame drain can outlast the mouse-reporting context. Once the TUI
+      // exits the alt screen, the queued synthetic wheels must not keep firing
+      // (they would leak into arrow-key fallback or normal-buffer scroll).
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      h.dispatch({ deltaY: 1, deltaMode: 2 }); // one screenful pending
+      h.flushFrame();
+      const afterFirstFrame = h.getReports();
+      expect(afterFirstFrame).toBeGreaterThan(0);
+      expect(afterFirstFrame).toBeLessThan(24); // backlog still pending
+      h.managed.isAltBuffer = false; // TUI left the alt screen mid-drain
+      h.flushFrames();
+      expect(h.getReports()).toBe(afterFirstFrame); // nothing further dispatched
+    });
+
+    it("re-clamps the backlog to the current row count after a mid-drain shrink", () => {
+      // The backlog cap scales with rows. A pane that shrinks mid-drain must not
+      // keep draining the larger pre-resize queue; the remaining backlog is
+      // re-clamped to the smaller viewport so it can't coast far past the gesture.
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      h.dispatch({ deltaY: 1, deltaMode: 2 }); // one 24-row screenful pending
+      h.flushFrame();
+      expect(h.getReports()).toBeLessThan(24); // still draining
+      (h.terminal as { rows: number }).rows = 1; // pane collapses mid-drain
+      h.flushFrames();
+      // Without the flush-time re-clamp the full 24-line queue would still drain.
+      expect(h.getReports()).toBeLessThan(24);
     });
 
     it("does not intervene when the app has no mouse tracking", () => {
       const h = setupAmplifier({ mouseTrackingMode: "none", isAltBuffer: true });
       const { defaultPrevented } = h.dispatch({ deltaY: 120, deltaMode: 0 });
+      h.flushFrames();
       expect(h.getReports()).toBe(0);
       expect(defaultPrevented).toBe(false);
     });
@@ -767,6 +908,7 @@ describe("installTerminalBoundListeners", () => {
     it("does not intervene in the normal buffer", () => {
       const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: false });
       const { defaultPrevented } = h.dispatch({ deltaY: 120, deltaMode: 0 });
+      h.flushFrames();
       expect(h.getReports()).toBe(0);
       // The physical wheel is left intact so xterm's viewport scrollback runs.
       expect(defaultPrevented).toBe(false);
@@ -775,6 +917,7 @@ describe("installTerminalBoundListeners", () => {
     it("passes modified wheels (ctrl-zoom etc.) through unchanged", () => {
       const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
       const { defaultPrevented } = h.dispatch({ deltaY: 120, deltaMode: 0, ctrlKey: true });
+      h.flushFrames();
       expect(h.getReports()).toBe(0);
       expect(defaultPrevented).toBe(false);
     });
@@ -784,6 +927,7 @@ describe("installTerminalBoundListeners", () => {
       // over would route synthetic wheels through the arrow-key fallback.
       const h = setupAmplifier({ mouseTrackingMode: "x10", isAltBuffer: true });
       const { defaultPrevented } = h.dispatch({ deltaY: 120, deltaMode: 0 });
+      h.flushFrames();
       expect(h.getReports()).toBe(0);
       expect(defaultPrevented).toBe(false);
     });
@@ -794,6 +938,7 @@ describe("installTerminalBoundListeners", () => {
       // bubble-phase listener, while the tagged synthetic events still arrive.
       const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
       h.dispatch({ deltaY: 120, deltaMode: 0 }, h.xtermEl);
+      h.flushFrames();
       expect(h.getReports()).toBe(NOTCH_REPORTS); // one single-line report per line
       expect(h.getLeakedOriginal()).toBe(false); // original pixel-mode event was stopped
     });
@@ -802,8 +947,21 @@ describe("installTerminalBoundListeners", () => {
       const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
       h.runCleanups();
       const { defaultPrevented } = h.dispatch({ deltaY: 120, deltaMode: 0 });
+      h.flushFrames();
       expect(h.getReports()).toBe(0);
       expect(defaultPrevented).toBe(false);
+    });
+
+    it("cancels a pending frame on cleanup so a queued drain never dispatches late", () => {
+      // A wheel arrives (arming a frame), then the pane is torn down before the
+      // frame runs. The cancelled frame must not fire stray reports at a
+      // disposed terminal.
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      h.dispatch({ deltaY: 120, deltaMode: 0 });
+      expect(h.getReports()).toBe(0); // still queued, not yet flushed
+      h.runCleanups();
+      h.flushFrames();
+      expect(h.getReports()).toBe(0); // queued drain was cancelled
     });
   });
 
