@@ -402,34 +402,42 @@ function createPortQueueManager(windowId: number): PortQueueManager {
   });
 }
 
-/** Recompute activity tiers for all terminals based on union of connected windows' projects */
-function recomputeActivityTiers(): void {
-  // EXPERIMENT (hibernation teardown step 1 — #10807): never demote a
-  // switched-away/backgrounded terminal to the "background" tier. Pinning every
-  // terminal to "active" keeps the producer gate below from suppressing the
-  // visual byte stream, so background panes keep streaming live — nothing goes
-  // stale, so there is nothing to lossily resync on wake. The old logic built an
-  // `activeProjects` set from `windowProjectMap` and demoted terminals whose
-  // project wasn't active (issue #9778 handling); intentionally disabled for the
-  // experiment. See docs/HIBERNATION-REMOVAL-EXPERIMENT.md.
-  for (const terminal of ptyManager.getAll()) {
+/**
+ * Force-activate the terminals of the project that just became foreground for
+ * some window (#10857). Scoped to `nextProjectId` only — terminals belonging
+ * to other projects, or with no project, are left untouched, preserving
+ * whatever tier TerminalRendererPolicy's own "set-activity-tier" IPC last set
+ * for them instead of bouncing every terminal in every project back to the
+ * expensive 50ms poll on each project switch.
+ *
+ * Never demotes anything (`nextProjectId === null` is a no-op): the visual
+ * byte stream is unconditional regardless of tier (see the isBackgrounded
+ * gate below), so the only effect of this function is ActivityMonitor's
+ * polling cadence — demoting on switch-away would just be redundant with
+ * the renderer's own background-tier push, while skipping it here keeps the
+ * hibernation-removal invariant (#10805/#10807) intact: nothing ever goes
+ * stale, so there is nothing to lossily resync on wake.
+ */
+function recomputeActivityTiers(nextProjectId: string | null): void {
+  if (nextProjectId === null) return;
+  for (const id of ptyManager.getTerminalsForProject(nextProjectId)) {
     const tier = "active" as const;
-    backpressureManager.setActivityTier(terminal.id, tier, "recompute-activity-tiers");
-    ptyManager.setActivityMonitorTier(terminal.id, tier, 50);
+    backpressureManager.setActivityTier(id, tier, "recompute-activity-tiers");
+    ptyManager.setActivityMonitorTier(id, tier, 50);
 
-    // Reconcile the renderer's dedupe baseline. The host rewrites tiers here
-    // unilaterally, but TerminalRendererPolicy.setBackendTier dedupes outbound
-    // tier messages against its last-known tier — so without this push the
-    // renderer can believe a terminal is still "active" while the producer gate
-    // suppresses its bytes, leaving the pane frozen (issue #9778). Posted on the
-    // same per-window MessagePort as data so it stays FIFO-ordered ahead of any
-    // subsequently gated chunk. Projects are filtered exactly like the data path.
-    const termProject = terminal.projectId ?? null;
+    // Reconcile the renderer's dedupe baseline. The host rewrites the tier
+    // here unilaterally, but TerminalRendererPolicy.setBackendTier dedupes
+    // outbound tier messages against its last-known tier — so without this
+    // push the renderer can believe a terminal is still "active" while the
+    // producer gate suppresses its bytes, leaving the pane frozen (issue
+    // #9778). Posted on the same per-window MessagePort as data so it stays
+    // FIFO-ordered ahead of any subsequently gated chunk. Projects are
+    // filtered exactly like the data path.
     for (const [windowId, conn] of rendererConnections) {
       const windowProject = windowProjectMap.get(windowId) ?? null;
-      if (windowProject !== null && termProject !== windowProject) continue;
+      if (windowProject !== null && nextProjectId !== windowProject) continue;
       try {
-        conn.port.postMessage({ type: "tier-changed", id: terminal.id, tier });
+        conn.port.postMessage({ type: "tier-changed", id, tier });
       } catch {
         // Port closing between iteration and post — disconnect handles cleanup.
       }
@@ -476,7 +484,10 @@ function disconnectWindow(windowId: number, reason: string): void {
   if (reason === "explicit-disconnect") {
     windowProjectMap.delete(windowId);
   }
-  recomputeActivityTiers();
+  // A disconnect never grows scope (no project gains a viewer), so this is
+  // intentionally a no-op today — kept as the single chokepoint all 3
+  // recompute call sites route through, for discoverability.
+  recomputeActivityTiers(null);
   console.log(`[PtyHost] Window ${windowId} disconnected (${reason})`);
 }
 

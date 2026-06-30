@@ -128,6 +128,23 @@ describe("init-buffers handler", () => {
 
     expect(ctx.windowProjectMap.get(1)).toBe("proj-a");
     expect(ctx.recomputeActivityTiers).toHaveBeenCalledTimes(1);
+    expect(ctx.recomputeActivityTiers).toHaveBeenCalledWith("proj-a");
+  });
+
+  it("project-switch handler updates the window→project map and recomputes activity tiers scoped to the new project (#10857)", () => {
+    const stateRef = {
+      visualBuffers: [] as SharedRingBuffer[],
+      visualSignalView: null as Int32Array | null,
+      analysisBuffer: null as SharedRingBuffer | null,
+    };
+    const ctx = makeCtx(stateRef);
+    const handlers = createConnectionHandlers(ctx);
+
+    handlers["project-switch"]({ windowId: 1, projectId: "proj-b" });
+
+    expect(ctx.windowProjectMap.get(1)).toBe("proj-b");
+    expect(ctx.recomputeActivityTiers).toHaveBeenCalledTimes(1);
+    expect(ctx.recomputeActivityTiers).toHaveBeenCalledWith("proj-b");
   });
 });
 
