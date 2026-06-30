@@ -121,10 +121,22 @@ export class FileLinksAddon implements ILinkProvider {
     }
 
     const lineText = line.translateToString(true);
-    const regex = new RegExp(FILE_PATH_REGEX);
-    let match;
 
-    while ((match = regex.exec(lineText)) !== null) {
+    // Fast path: every FILE_PATH_REGEX alternative requires a path separator
+    // ('/' or '\'), so a line with neither can never contain a file path. Most
+    // agent output (code without imports, prose, prompts) hits this and skips
+    // the regex entirely. provideLinks is pointer-driven (xterm Linkifier2
+    // _activeLine cache, fires when the pointer crosses a new row), so this is
+    // scroll-feel regex/GC cost, not write throughput.
+    if (!lineText.includes("/") && !lineText.includes("\\")) {
+      callback(undefined);
+      return;
+    }
+
+    // matchAll on the module-scope global regex clones it internally (per spec)
+    // and never mutates lastIndex, so the regex is reused across hover calls
+    // without the per-call `new RegExp(FILE_PATH_REGEX)` allocation.
+    for (const match of lineText.matchAll(FILE_PATH_REGEX)) {
       const fullMatch = match[1];
       if (fullMatch === undefined) continue;
       if (this._isExcluded(fullMatch)) {

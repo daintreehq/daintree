@@ -6,6 +6,7 @@ import { SEL } from "../../helpers/selectors";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { openTerminal } from "../../helpers/panels";
+import { waitForTerminalReady } from "../../helpers/terminal";
 import { T_SHORT, T_MEDIUM } from "../../helpers/timeouts";
 import type { ElectronApplication } from "@playwright/test";
 
@@ -122,16 +123,22 @@ async function openRecoveryMenu(
     .last();
 
   let opened = false;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    await trigger.focus();
-    if (attempt === 0) {
-      await trigger.evaluate((element: HTMLElement) => element.click());
-    } else if (attempt === 1) {
-      await window.keyboard.press("Enter");
-    } else {
-      await window.keyboard.press("Space");
-    }
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    // Lead with a DOM-level click: it re-resolves the locator each call and
+    // only needs the trigger momentarily attached, so it survives the banner
+    // re-rendering and detaching the button mid-action. Leading with focus()
+    // (the prior form) retried against the detaching node until its 30s
+    // timeout on headless Linux/Windows under release load.
+    await trigger.evaluate((element: HTMLElement) => element.click()).catch(() => undefined);
     if (await menu.isVisible({ timeout: T_MEDIUM }).catch(() => false)) {
+      opened = true;
+      break;
+    }
+    // Keyboard fallback in case the click landed during a re-render and was
+    // dropped; focus is best-effort and must not block on a detaching node.
+    await trigger.focus({ timeout: T_SHORT }).catch(() => undefined);
+    await window.keyboard.press(attempt % 2 === 0 ? "Enter" : "Space").catch(() => undefined);
+    if (await menu.isVisible({ timeout: T_SHORT }).catch(() => false)) {
       opened = true;
       break;
     }
@@ -330,14 +337,19 @@ test.describe.serial("Core: IPC Error Propagation", () => {
     await expect(gridPanel.first()).toBeVisible({ timeout: 10000 });
 
     // Get the terminal ID from the panel
-    const terminalId = await gridPanel.last().getAttribute("data-panel-id");
+    const targetPanel = gridPanel.last();
+    const terminalId = await targetPanel.getAttribute("data-panel-id");
     expect(terminalId).toBeTruthy();
+
+    // Wait for the real spawn-result success before injecting a synthetic
+    // failure. Otherwise Linux CI can deliver the success event after this test
+    // emits the failure, clearing the banner before the overflow menu opens.
+    await waitForTerminalReady(ctx.window, targetPanel, T_MEDIUM);
 
     // Send a synthetic spawn error result for this terminal
     await emitSpawnResult(ctx.app, terminalId!, "ENOENT", "spawn /nonexistent ENOENT");
 
     // SpawnErrorBanner should appear with role="alert"
-    const targetPanel = gridPanel.last();
     const banner = targetPanel.locator('[role="alert"]');
     await expect(banner).toBeVisible({ timeout: 5000 });
 
@@ -363,6 +375,8 @@ test.describe.serial("Core: IPC Error Propagation", () => {
 
     const terminalId = await lastPanel.getAttribute("data-panel-id");
     expect(terminalId).toBeTruthy();
+
+    await waitForTerminalReady(ctx.window, lastPanel, T_MEDIUM);
 
     await emitSpawnResult(ctx.app, terminalId!, "ENOTDIR", "ENOTDIR: not a directory");
 

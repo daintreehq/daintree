@@ -9,6 +9,9 @@ import type { ManagedTerminal } from "./types";
 import { isNonKeyboardInput } from "./inputUtils";
 import { installLinuxPrimarySelectionListeners } from "./primarySelection";
 import { writeTerminalInputOrFleet } from "./fleetInputRouter";
+import { getXtermCellDimensions } from "./TerminalResizeController";
+import { MouseWheelClassifier } from "./mouseWheelClassifier";
+import { getTerminalMetrics } from "@/config/xtermConfig";
 
 // Debounce: coalesce a burst of OSC 0/2 title changes from agent shells
 // (which can emit many per second) into a single panel-store / main-process
@@ -20,24 +23,78 @@ const OBSERVED_TITLE_DEBOUNCE_MS = 150;
 // when an agent briefly idles mid-task.
 const WAITING_TITLE_HYSTERESIS_MS = 250;
 
-// Fallback row height for the wheel normalizer when the terminal hasn't been
-// configured yet; lineHeight is 1.0 (xtermConfig.ts) so a row is ~fontSize tall.
+// ─────────────────────────────────────────────────────────────────────────────
+// Wheel forwarding for full-screen mouse-reporting TUIs (grok, lazygit, btop).
+//
+// xterm-audit (beta.288): xterm's own scroll fixes #5391 (partial wheel
+// tracking), #5037 (smooth scroll ≤ once/frame) and #5437 (alt-buffer page-
+// scroll guard) are ALL present. We still override xterm's wheel handling for
+// the alt-screen mouse-reporting case on purpose: `MouseService._consumeWheelEvent`
+// multiplies likely-trackpad deltas by 0.3 then floors, so a small gesture
+// computes `lines === 0` and sends NO report (scrolling feels dead). We
+// intercept the physical wheel, normalize it ourselves (lossless accumulator,
+// below), and re-dispatch synthetic `deltaMode:1` events — deltaMode 1 routes
+// through xterm's encoder with NO 0.3×/partial-scroll math, so each synthetic
+// event maps to exactly one SGR mouse report. `attachCustomWheelEventHandler`
+// (already wired below) is the supported suppression hook. smoothScrollDuration
+// is globally 0 (xtermConfig.ts) and never runs on this synthetic-report path
+// regardless. Do NOT "delete this as redundant with #5391" — the override is
+// deliberate.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Fallback CSS px-per-line when the rendered cell height is unavailable (pre
+// first-render). The live basis is the actual rendered cell height
+// (getXtermCellDimensions → getTerminalMetrics(fontSize) → this), matching the
+// quantity xterm itself normalizes against (cell height / dpr). One rendered
+// text-row of pixel travel ⇒ one line report: a ~120px macOS mouse detent ⇒
+// ~6 lines at a 14px font. Pixel-mode only — line/page events carry the OS step.
+const WHEEL_FALLBACK_PIXELS_PER_LINE = 20;
 const DEFAULT_FONT_SIZE_PX = 14;
 
-// A pixel-mode wheel delta at least this large is treated as one discrete mouse
-// "notch" rather than continuous trackpad motion. Chromium reports a mouse
-// detent on macOS as a single pixel event of ~100-120px; trackpad/high-res
-// motion arrives as a stream of much smaller deltas.
-const WHEEL_NOTCH_PX = 40;
+// Max synthetic line-reports flushed per animation frame for a mouse-reporting
+// TUI — the SEND-RATE lever (NOT a render-FPS lever). Each report is an
+// independent PTY round-trip: the app redraws its whole scroll region and ships
+// a full frame back through IPC, so dispatching a whole gesture at once floods
+// the pipe with redraws the user never sees (the renderer paints once per
+// frame). We drain at most this many lines per frame. Split by input device:
+// a physical wheel's discrete detents stay crisp at a higher cap, while a
+// trackpad/Magic-Mouse momentum stream (dozens of events/sec — the actual
+// symptom-A flood) is paced gentler. Keep ≤ ~10: above that the IPC redraw
+// return saturates the renderer, which IS the flood we are avoiding.
+const WHEEL_MAX_LINES_PER_FRAME_WHEEL = 8;
+const WHEEL_MAX_LINES_PER_FRAME_TRACKPAD = 4;
 
-// Lines a single discrete notch scrolls in a mouse-reporting TUI. Pixel-mode
-// wheel events (macOS) carry no OS lines-per-notch signal, so a notch otherwise
-// moved a single line and scrolling felt several times slower than every other
-// terminal — you had to spin the wheel far more than anywhere else. 6 is double
-// the conventional 3-line default, tuned so a notch covers ground briskly in
-// dense agent TUIs. Line-mode events (Windows / Linux mice) already carry the OS
-// step in deltaY and are left untouched.
-const WHEEL_LINES_PER_NOTCH = 6;
+// Ceiling on the un-drained backlog, in screenfuls. The proportional normalizer
+// already bounds pending to the distance physically scrolled, so this only
+// catches a pathological long momentum tail — it caps how far the view can keep
+// coasting after the gesture ends, so pacing never resurrects the disconnected-
+// overscroll feel the proportional rewrite removed.
+const WHEEL_MAX_PENDING_SCREENFULS = 3;
+
+// A physical-wheel gap longer than this ends the gesture: a paused-then-resumed
+// scroll re-detects the device (classifier reset) and drops any un-drained coast,
+// instead of letting the previous gesture bias the cap or keep scrolling. Trackpad
+// momentum events arrive ~every 8-16ms, so 120ms cannot chop a continuous gesture;
+// it only fires after a real pause. Sub-line carry is preserved across the gap so
+// slow continuous scrolling still accumulates. Don't drop below ~80ms.
+const WHEEL_STALE_GAP_MS = 120;
+
+/**
+ * Resolve the CSS px-per-line basis from the live rendered cell height, falling
+ * back to the font-metric estimate and finally a fixed default. This is the
+ * "intent unit" for a mouse-reporting TUI: the app scrolls its own region, so
+ * px-per-line is one visible text-row of travel ⇒ one report, not a viewport
+ * distance. Cheap (one private-field read); fine to call per gesture.
+ */
+function resolveWheelPixelsPerLine(terminal: Terminal): number {
+  const measured = getXtermCellDimensions(terminal)?.height;
+  if (typeof measured === "number" && measured > 0) return measured;
+  const fontSize =
+    typeof terminal.options.fontSize === "number"
+      ? terminal.options.fontSize
+      : DEFAULT_FONT_SIZE_PX;
+  return getTerminalMetrics(fontSize).cellHeight;
+}
 
 // The synthetic wheel events the normalizer re-dispatches are tracked here so
 // its own capture-phase listener skips them instead of recursing. A WeakSet
@@ -53,19 +110,25 @@ const amplifiedWheelEvents = new WeakSet<WheelEvent>();
  * trackpad deltas by 0.3, so small movements fall below the one-line threshold,
  * compute `lines === 0`, and send no report at all (scrolling feels dead).
  *
- * Here a discrete notch yields WHEEL_LINES_PER_NOTCH reports (pixel mode carries
- * no OS lines-per-notch signal, so we supply the conventional default), and
- * fine/trackpad motion is accumulated at ~one line per row height via `carry` so
- * every bit of movement eventually registers rather than being damped to nothing.
+ * Pixel-mode deltas (macOS mice/trackpads, and precision touchpads on any OS)
+ * accumulate as pixels in `carry` and are converted to lines at a fixed
+ * px-per-line budget, so the line count is proportional to the gesture distance:
+ * a single detent scrolls a few lines, coalesced detents and momentum scroll
+ * proportionally more (never collapsed to one notch), and sub-line motion adds
+ * up across events instead of being damped to nothing. Line-mode and page-mode
+ * events already carry an OS step and pass through unchanged.
+ *
+ * `pixelsPerLine` is the CSS px-per-line basis for pixel-mode events (the live
+ * rendered cell height; see `resolveWheelPixelsPerLine`). Defaults to the fixed
+ * fallback so callers/tests that don't need the live basis stay simple.
  */
 export function wheelEventToLineCount(
   ev: WheelEvent,
-  cellHeightCssPx: number,
   rows: number,
-  carry: { partial: number }
+  carry: { partial: number },
+  pixelsPerLine: number = WHEEL_FALLBACK_PIXELS_PER_LINE
 ): number {
   if (ev.deltaY === 0) return 0;
-  const sign = ev.deltaY > 0 ? 1 : -1;
   const clamp = (n: number): number => Math.max(-rows, Math.min(rows, n));
 
   if (ev.deltaMode === 1 /* DOM_DELTA_LINE */) {
@@ -73,30 +136,27 @@ export function wheelEventToLineCount(
     return clamp(Math.round(ev.deltaY));
   }
   if (ev.deltaMode === 2 /* DOM_DELTA_PAGE */) {
-    return sign * rows;
+    return (ev.deltaY > 0 ? 1 : -1) * rows;
   }
-  // Pixel mode.
-  if (Math.abs(ev.deltaY) >= WHEEL_NOTCH_PX) {
-    // Discrete notch reported in pixels — scroll the conventional lines-per-notch
-    // (regardless of magnitude) so it matches a normal terminal instead of
-    // crawling one line at a time. Drop any partial trackpad accumulation so a
-    // notch mixed into a swipe doesn't smear.
-    carry.partial = 0;
-    return clamp(sign * WHEEL_LINES_PER_NOTCH);
-  }
-  // High-resolution / trackpad: accumulate ~one line per row height. The carried
-  // remainder means sub-line motion is never discarded — it adds up across
-  // events until it crosses a line, so slow scrolling still moves.
-  const delta = ev.deltaY / Math.max(1, cellHeightCssPx);
-  // Drop a stale opposite-direction remainder so a reversal registers right
-  // away instead of first having to cancel unreported forward motion — that
-  // would be a dead zone where a genuine reverse scroll does nothing.
-  if (carry.partial !== 0 && Math.sign(delta) !== Math.sign(carry.partial)) {
+  // Pixel mode (macOS mouse + trackpad; also precision touchpads on any OS).
+  // `carry.partial` accumulates raw pixels and we divide ONCE by the live
+  // px-per-line basis (rendered cell height), so the count is proportional to
+  // the gesture (coalesced detents and momentum both scroll their true distance)
+  // and sub-line motion is never discarded. Accumulating pixels rather than
+  // pre-divided line fractions keeps exact multiples exact: ten 2px events sum to
+  // 20px = one line at a 20px basis, whereas summing ten `2/20` fractions lands
+  // at 0.9999999999999999 and silently drops the line.
+  //
+  // Drop a stale opposite-direction remainder so a reversal registers right away
+  // instead of first having to cancel unreported forward motion — that would be
+  // a dead zone where a genuine reverse scroll does nothing.
+  if (carry.partial !== 0 && Math.sign(ev.deltaY) !== Math.sign(carry.partial)) {
     carry.partial = 0;
   }
-  carry.partial += delta;
-  const whole = Math.trunc(carry.partial);
-  carry.partial -= whole;
+  const basis = pixelsPerLine > 0 ? pixelsPerLine : WHEEL_FALLBACK_PIXELS_PER_LINE;
+  carry.partial += ev.deltaY;
+  const whole = Math.trunc(carry.partial / basis);
+  carry.partial -= whole * basis;
   return clamp(whole);
 }
 
@@ -196,6 +256,12 @@ export interface TerminalListenerInstallDeps {
   // Input
   clearDirectingState: (id: string, trigger?: string) => void;
   onUserInput: (id: string, data: string) => void;
+  /**
+   * Fired when a wheel scroll is actively forwarded to a mouse-reporting TUI.
+   * Lets the host boost the renderer tier and hold the resource profile off
+   * efficiency so an active scroll stays responsive (symptom B).
+   */
+  onActiveWheel: (id: string) => void;
   onEnterPressed: (id: string) => void;
 
   // Panel store side effects (routed through deps to keep this module
@@ -274,18 +340,79 @@ export function installTerminalBoundListeners(
   });
 
   // Reliable wheel forwarding for TUIs that capture the mouse and draw their own
-  // scroll region (e.g. the grok CLI, lazygit, btop). xterm dampens likely
-  // trackpad deltas (×0.3) before its one-line threshold, so small movements
-  // compute zero lines and send NO mouse-wheel report — whole scroll gestures
-  // get dropped and scrolling feels dead (see MouseService._consumeWheelEvent /
-  // _sendEvent in @xterm/xterm 6.1). We intercept the physical wheel in the
-  // capture phase, suppress xterm's handling, and re-dispatch one synthetic
-  // wheel event per line we computed — reusing xterm's own SGR/x10 encoding — so
-  // a notch scrolls a line or two and fine motion accumulates instead of being
-  // discarded. Gated on the alt buffer + active mouse tracking so plain shells
-  // and the wheel→arrow case above are untouched; modified wheels (ctrl-zoom
-  // etc.) pass through unchanged.
+  // scroll region (e.g. the grok CLI, lazygit, btop). See the wheel-audit block
+  // at the top of this file for why we override xterm here and re-dispatch
+  // synthetic deltaMode:1 events. Gated on the alt buffer + active mouse tracking
+  // so plain shells and the wheel→arrow case above are untouched; modified wheels
+  // (ctrl-zoom etc.) pass through unchanged.
   const wheelCarry = { partial: 0 };
+  // Per-terminal device classifier (trackpad vs physical wheel). Drives only the
+  // per-frame send-rate cap — trackpad momentum is the gesture that floods.
+  const wheelClassifier = new MouseWheelClassifier();
+  // Latest device verdict, updated on each physical event and read by the flush
+  // (which runs a frame later, so it must read the closure, not recompute).
+  let wheelMaxLinesPerFrame = WHEEL_MAX_LINES_PER_FRAME_TRACKPAD;
+  // Wall-clock of the last accepted physical wheel, for the stale-gesture gap.
+  let lastPhysicalWheelAt = 0;
+  // Whole-line backlog awaiting dispatch, signed (down positive). Filled
+  // synchronously from each physical wheel event, drained per animation frame so
+  // a momentum flood paces to the TUI's redraw rate instead of round-tripping
+  // every line at once.
+  let pendingWheelLines = 0;
+  let wheelFlushRaf: number | undefined;
+  // Coords of the most recent physical wheel — synthetic reports inherit them so
+  // xterm encodes the mouse report at the cursor's actual cell.
+  let lastWheelClientX = 0;
+  let lastWheelClientY = 0;
+
+  const flushWheelLines = () => {
+    wheelFlushRaf = undefined;
+    if (pendingWheelLines === 0) return;
+    const target = terminal.element;
+    // A multi-frame drain can outlive the mouse-reporting context: the TUI may
+    // leave the alt screen or disable mouse tracking before the backlog empties.
+    // Re-check the same gate as onWheelNormalize and drop the rest if it no longer
+    // holds — otherwise queued synthetic wheels leak into xterm's arrow-key
+    // fallback (non-agent alt-buffer) or normal-buffer viewport scroll once the
+    // app no longer owns the wheel.
+    const mode = terminal.modes.mouseTrackingMode;
+    const appReportsWheel = mode === "vt200" || mode === "drag" || mode === "any";
+    if (!target || !managed.isAltBuffer || !appReportsWheel) {
+      pendingWheelLines = 0;
+      return;
+    }
+    // Re-clamp against the CURRENT row count: a resize that shrank the viewport
+    // mid-drain would otherwise leave a backlog of many more screenfuls than the
+    // cap intends, coasting far past the gesture.
+    const maxPending = terminal.rows * WHEEL_MAX_PENDING_SCREENFULS;
+    if (pendingWheelLines > maxPending) pendingWheelLines = maxPending;
+    else if (pendingWheelLines < -maxPending) pendingWheelLines = -maxPending;
+
+    const step = pendingWheelLines > 0 ? 1 : -1;
+    // Fixed per-frame cap (no `elapsed`/timestamp multiply) so a late frame can
+    // never "catch up" by dispatching a larger burst — that would reintroduce
+    // the flood under main-thread jank. Device-aware: gentler for trackpads.
+    const emit = Math.min(Math.abs(pendingWheelLines), wheelMaxLinesPerFrame);
+    pendingWheelLines -= step * emit;
+    for (let i = 0; i < emit; i++) {
+      const synthetic = new WheelEvent("wheel", {
+        deltaY: step,
+        deltaMode: 1 /* DOM_DELTA_LINE — one report each, no partial-scroll carry */,
+        clientX: lastWheelClientX,
+        clientY: lastWheelClientY,
+        bubbles: true,
+        cancelable: true,
+      });
+      amplifiedWheelEvents.add(synthetic);
+      target.dispatchEvent(synthetic);
+    }
+    // Drain the remaining backlog on the next frame so a large gesture keeps
+    // moving without dispatching it all in one burst.
+    if (pendingWheelLines !== 0) {
+      wheelFlushRaf = requestAnimationFrame(flushWheelLines);
+    }
+  };
+
   const onWheelNormalize = (ev: WheelEvent) => {
     if (amplifiedWheelEvents.has(ev)) return;
     // Only take over for mouse modes that actually report wheel events: VT200
@@ -308,35 +435,79 @@ export function installTerminalBoundListeners(
     const target = terminal.element;
     if (!target) return;
 
-    // Take over: stop xterm's (lossy) handling, replace with one report per line.
+    // Take over: stop xterm's (lossy) handling, replace with paced line reports.
     ev.preventDefault();
     ev.stopImmediatePropagation();
 
-    const fontSize =
-      typeof terminal.options.fontSize === "number"
-        ? terminal.options.fontSize
-        : DEFAULT_FONT_SIZE_PX;
-    const lines = wheelEventToLineCount(ev, fontSize, terminal.rows, wheelCarry);
+    // Stale-gesture gap: a long pause since the last physical event ends the
+    // gesture. Treat the resumed scroll as fresh — forget the previous device so
+    // its rolling history can't bias the new cap, and drop any coast the rAF
+    // hasn't drained yet (e.g. while the main thread was janked). MUST run before
+    // classify/accumulate below. Sub-line carry is deliberately PRESERVED: a
+    // genuinely slow continuous scroll (hi-res wheel emitting sub-line pixel
+    // deltas >120ms apart) must still accumulate, not be reset to nothing.
+    const now = Date.now();
+    if (now - lastPhysicalWheelAt > WHEEL_STALE_GAP_MS) {
+      wheelClassifier.reset();
+      pendingWheelLines = 0;
+    }
+    lastPhysicalWheelAt = now;
+
+    // Classify the device from the raw deltas and pick the per-frame send-rate
+    // cap accordingly (physical wheel = crisper, trackpad = gentler flood pacing).
+    wheelClassifier.accept(ev.timeStamp, ev.deltaX, ev.deltaY);
+    wheelMaxLinesPerFrame = wheelClassifier.isPhysicalMouseWheel()
+      ? WHEEL_MAX_LINES_PER_FRAME_WHEEL
+      : WHEEL_MAX_LINES_PER_FRAME_TRACKPAD;
+
+    // A direction change drops the stale opposite-direction backlog so the
+    // reversal scrolls the new way immediately rather than first coasting out
+    // un-dispatched travel. Keyed on the raw deltaY sign, NOT the whole-line
+    // `lines` below — the first reversal event from a trackpad is usually
+    // sub-line (lines === 0), and gating the drop on `lines` would let the stale
+    // backlog keep scrolling the old way until the reversal accumulated a whole
+    // line. Mirrors the carry reset inside wheelEventToLineCount.
+    if (
+      ev.deltaY !== 0 &&
+      pendingWheelLines !== 0 &&
+      Math.sign(ev.deltaY) !== Math.sign(pendingWheelLines)
+    ) {
+      pendingWheelLines = 0;
+    }
+
+    const lines = wheelEventToLineCount(
+      ev,
+      terminal.rows,
+      wheelCarry,
+      resolveWheelPixelsPerLine(terminal)
+    );
     if (lines === 0) return;
 
-    const step = lines > 0 ? 1 : -1;
-    const count = Math.abs(lines); // already clamped to one screenful by the helper
-    for (let i = 0; i < count; i++) {
-      const synthetic = new WheelEvent("wheel", {
-        deltaY: step,
-        deltaMode: 1 /* DOM_DELTA_LINE — one report each, no partial-scroll carry */,
-        clientX: ev.clientX,
-        clientY: ev.clientY,
-        bubbles: true,
-        cancelable: true,
-      });
-      amplifiedWheelEvents.add(synthetic);
-      target.dispatchEvent(synthetic);
+    // A real scroll is being forwarded to the TUI — keep the pane fast: boost the
+    // renderer tier and hold the resource profile off efficiency for the gesture.
+    deps.onActiveWheel(id);
+
+    pendingWheelLines += lines;
+    // Clamp the backlog so a long momentum tail can't queue an unbounded coast.
+    const maxPending = terminal.rows * WHEEL_MAX_PENDING_SCREENFULS;
+    if (pendingWheelLines > maxPending) pendingWheelLines = maxPending;
+    else if (pendingWheelLines < -maxPending) pendingWheelLines = -maxPending;
+
+    lastWheelClientX = ev.clientX;
+    lastWheelClientY = ev.clientY;
+
+    if (wheelFlushRaf === undefined) {
+      wheelFlushRaf = requestAnimationFrame(flushWheelLines);
     }
   };
   hostElement.addEventListener("wheel", onWheelNormalize, { capture: true, passive: false });
   managed.listeners.push(() => {
     hostElement.removeEventListener("wheel", onWheelNormalize, { capture: true });
+    if (wheelFlushRaf !== undefined) {
+      cancelAnimationFrame(wheelFlushRaf);
+      wheelFlushRaf = undefined;
+    }
+    pendingWheelLines = 0;
   });
 
   const oscDisposable = terminal.parser.registerOscHandler(11, () => {

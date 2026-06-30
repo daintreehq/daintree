@@ -10,6 +10,7 @@ import { getCrashLoopGuard } from "./CrashLoopGuardService.js";
 import { getCrashRecoveryService } from "./CrashRecoveryService.js";
 import { getPanelSuspectLedger } from "./PanelSuspectLedgerService.js";
 import { GPU_DISABLED_FLAG_FILENAME, writeGpuDisabledFlagFile } from "./gpuDisabledFlag.js";
+import { withTimeout } from "../utils/withTimeout.js";
 import type { GpuDisabledReason } from "../../shared/types/ipc/app.js";
 
 const GPU_DISABLED_FLAG = GPU_DISABLED_FLAG_FILENAME;
@@ -302,8 +303,59 @@ export function getGpuCrashMonitorService(): GpuCrashMonitorService {
   return instance;
 }
 
+// Once-per-process trace of the GPU path the session actually started on, so a
+// "terminal scroll feels janky" report can be triaged without a blind
+// investigation. The happy hardware-accelerated path is otherwise silent — only
+// the readback/software branch logs at hydration. getGPUFeatureStatus() is
+// empty until Chromium classifies the GPU, so emit on the first valid sample;
+// gpu-info-update is the documented signal that the status is now meaningful.
+let startupGpuStatusLogged = false;
+let startupGpuListenerBound = false;
+function logStartupGpuStatus(): void {
+  const emit = (): void => {
+    if (startupGpuStatusLogged) return;
+    // Read app.getGPUFeatureStatus() directly rather than via the cached
+    // getGpuFeatureStatus() helper: that helper latches the FIRST sample, which
+    // is empty until Chromium classifies the GPU at boot, so a cached empty
+    // value would never refresh on later gpu-info-update events. This path
+    // polls, so it wants a fresh read each event.
+    const status = app.getGPUFeatureStatus();
+    if (!status || !status.webgl2) return;
+    startupGpuStatusLogged = true;
+    logger.info("gpu-startup-status", {
+      webgl2: status.webgl2,
+      webgl: status.webgl,
+      gpu_compositing: status.gpu_compositing,
+    });
+    // getGPUInfo can hang on some drivers (and is absent in some test/host
+    // environments) — guard + bound it so diagnostics never wedge boot.
+    if (typeof app.getGPUInfo !== "function") return;
+    void withTimeout(app.getGPUInfo("basic"), 5000, "gpu-info-timeout")
+      .then((info) => {
+        const renderer = (info as { auxAttributes?: { renderer?: string } } | null)?.auxAttributes
+          ?.renderer;
+        if (typeof renderer === "string" && renderer.length > 0) {
+          logger.info("gpu-startup-renderer", { renderer });
+        }
+      })
+      .catch(() => {
+        /* timeout/unavailable — the status log above is the durable trace */
+      });
+  };
+  emit();
+  // Bind the refresh listener once per process: initializeGpuCrashMonitor can
+  // be called more than once (tests), and an unguarded app.on would stack
+  // listeners. The startupGpuStatusLogged guard makes repeated emits no-ops
+  // anyway, but a stacked listener is still a leak.
+  if (!startupGpuListenerBound) {
+    startupGpuListenerBound = true;
+    app.on("gpu-info-update", emit);
+  }
+}
+
 export function initializeGpuCrashMonitor(): GpuCrashMonitorService {
   const service = getGpuCrashMonitorService();
   service.initialize();
+  logStartupGpuStatus();
   return service;
 }

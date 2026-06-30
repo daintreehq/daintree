@@ -236,6 +236,46 @@ describe("AppLayout drag-resize transition gating — issue #7627", () => {
   });
 });
 
+describe("AppLayout drag-resize terminal lock — full-screen TUI SIGWINCH storm", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
+  });
+
+  it("locks terminal resize at drag start so per-frame <main> reflows don't SIGWINCH agent panes", () => {
+    // Without the lock, every mousemove of a sidebar/assistant divider reflows
+    // <main flex:1>, firing xterm's ResizeObserver -> PTY SIGWINCH -> a full
+    // alt-screen repaint of every agent pane on the active worktree plus the
+    // assistant's own terminal. The lock mirrors TwoPaneSplitLayout's divider and
+    // must be wired into both drag-start handlers.
+    expect(source).toMatch(/handleSidebarResizeStart[\s\S]{0,200}lockResizeForLayoutDrag\(\)/);
+    expect(source).toMatch(/handleAssistantResizeStart[\s\S]{0,200}lockResizeForLayoutDrag\(\)/);
+    expect(source).toContain("terminalInstanceService.lockResize(id, true)");
+  });
+
+  it("unlocks and runs a corrective resize pass at drag end", () => {
+    // ResizeObserver does not retroactively fire when a lock releases and no
+    // grid-dep change fires at drag end, so an explicit runResizePass applies the
+    // final geometry once instead of N times mid-drag.
+    expect(source).toMatch(/handleSidebarResizeEnd[\s\S]{0,200}unlockResizeForLayoutDrag\(\)/);
+    expect(source).toMatch(/handleAssistantResizeEnd[\s\S]{0,200}unlockResizeForLayoutDrag\(\)/);
+    expect(source).toContain("terminalInstanceService.runResizePass(ids)");
+    // Ordering invariant: runResizePass skips ids that are still locked, so the
+    // unlock must precede the corrective pass.
+    expect(source).toMatch(/lockResize\(id, false\)[\s\S]{0,140}runResizePass\(ids\)/);
+  });
+
+  it("re-arms the lock each frame during the drag so a grid-breakpoint clobber can't resume the storm", () => {
+    // useContentGridContext's breakpoint-crossing path calls
+    // suppressResizesDuringLayoutTransition mid-drag, whose 200ms unlock would
+    // wipe the drag lock (one expiry per id, last write wins). A rAF loop gated
+    // on the active-drag flags re-arms it for the drag's duration.
+    expect(source).toMatch(/!isSidebarResizing && !isAssistantResizing/);
+    expect(source).toMatch(/requestAnimationFrame\(rearm\)/);
+  });
+});
+
 describe("Sidebar unmount-mid-drag safety net — issue #7627", () => {
   let source: string;
 

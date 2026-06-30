@@ -3,6 +3,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 export const RESOURCE_PROFILE_METHOD_CHANNELS = {
   getResourceProfile: "system:get-resource-profile",
   getResourceProfileSnapshot: "system:get-resource-profile-snapshot",
+  requestInteractiveOverride: "system:request-interactive-override",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof RESOURCE_PROFILE_METHOD_CHANNELS;

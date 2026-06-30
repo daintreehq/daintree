@@ -47,6 +47,7 @@ import { logDebug, logWarn, logError } from "@/utils/logger";
 import { yieldToScheduler } from "@/lib/schedulerYield";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
 
 export { isNonKeyboardInput } from "./inputUtils";
@@ -89,6 +90,16 @@ const TERMINAL_BATCH_SETTLE_TIMEOUT_MS = 30000;
 // terminals instead of freezing the renderer for the whole batch.
 const RESIZE_PASS_CHUNK_SIZE = 1;
 
+// Interactive resource-profile override (symptom B): while actively scrolling a
+// full-screen TUI, ask the main process to hold the profile off efficiency.
+// DURATION must exceed THROTTLE so re-requests overlap and the hold never lapses
+// mid-scroll; both are short so the hold self-expires soon after scrolling stops.
+const INTERACTIVE_OVERRIDE_DURATION_MS = 1500;
+const INTERACTIVE_OVERRIDE_THROTTLE_MS = 500;
+// BURST-tier hold after a wheel scroll before reverting to the computed tier —
+// matches the keystroke input-burst decay so a scroll feels just as responsive.
+const WHEEL_BURST_DECAY_MS = 1000;
+
 interface Waiter {
   resolve: () => void;
   reject: (error: Error) => void;
@@ -104,6 +115,8 @@ function canAutoInitializeTerminalIngest(): boolean {
 
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
+  // Throttle for the interactive resource-profile override IPC (see onActiveWheel).
+  private lastInteractiveOverrideRequestAt = 0;
   private dataBuffer = new TerminalOutputIngestService((id, data, chunkCount) =>
     this.writeToTerminal(id, data, chunkCount)
   );
@@ -327,6 +340,7 @@ class TerminalInstanceService {
       clearDirectingState: (id, trigger) =>
         this.agentStateController.clearDirectingState(id, trigger),
       onUserInput: (id, data) => this.onUserInput(id, data),
+      onActiveWheel: (id) => this.onActiveWheel(id),
       onEnterPressed: (id) => this.onEnterPressed(id),
       updateLastObservedTitle: (id, title) =>
         usePanelStore.getState().updateLastObservedTitle(id, title),
@@ -546,6 +560,61 @@ class TerminalInstanceService {
     }, 1000);
 
     this.agentStateController.onUserInput(id, data);
+  }
+
+  /**
+   * Active wheel scroll in a focused full-screen mouse-reporting TUI. Scrolling
+   * such a TUI is an app-owned PTY round-trip per line, and a focused-but-idle
+   * pane sits at FOCUSED (10fps): without this the first flick repaints slowly
+   * until the TUI's own redraw output happens to bump the tier. We (1) lift the
+   * renderer to BURST (60fps) for the scroll — reusing the input-burst decay
+   * timer, since a scroll wants the same ~1s revert as a keystroke — and (2) ask
+   * the main process to hold the resource profile at ≥ balanced, so efficiency
+   * mode's stretched port-batch delay (40ms vs 16ms) can't throttle the
+   * returned-redraw stream mid-scroll ("gets slow and stays slow", symptom B).
+   */
+  private onActiveWheel(id: string): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+
+    this.rendererPolicy.applyRendererPolicy(id, TerminalRefreshTier.BURST);
+    if (managed.inputBurstTimer !== undefined) {
+      clearTimeout(managed.inputBurstTimer);
+    }
+    managed.inputBurstTimer = window.setTimeout(() => {
+      const current = this.instances.get(id);
+      if (!current) return;
+      current.inputBurstTimer = undefined;
+      this.rendererPolicy.applyRendererPolicy(id, current.getRefreshTier());
+    }, WHEEL_BURST_DECAY_MS);
+
+    this.requestInteractiveProfileOverride();
+  }
+
+  /**
+   * Fire-and-forget request that the main process keep the resource profile off
+   * efficiency while the user is actively scrolling. Throttled hard because a
+   * trackpad momentum stream calls this dozens of times/sec; the override window
+   * (INTERACTIVE_OVERRIDE_DURATION_MS) is longer than the throttle so the hold
+   * never lapses between requests, and self-expires shortly after scrolling stops.
+   */
+  private requestInteractiveProfileOverride(): void {
+    const now = Date.now();
+    if (now - this.lastInteractiveOverrideRequestAt < INTERACTIVE_OVERRIDE_THROTTLE_MS) return;
+    this.lastInteractiveOverrideRequestAt = now;
+    try {
+      // safeFireAndForget swallows the ASYNC rejection (channel skew during a
+      // reload, future validation), which a bare synchronous try/catch around a
+      // Promise-returning IPC call would miss; the try/catch still guards a
+      // synchronous throw if `window.electron.system` is absent. Either way the
+      // renderer-side BURST boost above already applied — this is non-critical.
+      safeFireAndForget(
+        window.electron.system.requestInteractiveOverride(INTERACTIVE_OVERRIDE_DURATION_MS),
+        { context: "terminal.requestInteractiveProfileOverride" }
+      );
+    } catch {
+      // window.electron.system unavailable — non-critical.
+    }
   }
 
   /**

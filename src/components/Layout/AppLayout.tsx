@@ -38,7 +38,12 @@ import type { CliAvailability, AgentSettings } from "@shared/types";
 import { useLayoutState, useOverlayOpen } from "@/hooks";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
-import { repaintAssistantAfterTransition, suppressSidebarResizes } from "@/lib/sidebarToggle";
+import {
+  repaintAssistantAfterTransition,
+  suppressSidebarResizes,
+  getSidebarAffectedTerminalIds,
+} from "@/lib/sidebarToggle";
+import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
 import { unlockSidebarHydration } from "@/lib/layoutTransitionLock";
 import { logError } from "@/utils/logger";
 
@@ -645,24 +650,80 @@ export function AppLayout({
     setSidebarWidth(clampedWidth);
   }, []);
 
+  // While a sidebar/assistant divider is dragged, `<main flex:1>` reflows every
+  // mousemove; each reflow fires xterm's ResizeObserver -> PTY SIGWINCH -> a
+  // full alt-screen repaint of every agent pane on the active worktree plus the
+  // assistant's own terminal (one full-frame TUI redraw per drag frame). Lock
+  // resize on drag start and unlock + correct on drag end, mirroring the
+  // two-pane divider (TwoPaneSplitLayout.handleDragStateChange). The explicit
+  // runResizePass is required because ResizeObserver does not retroactively
+  // fire when a lock releases (see suppressResizesDuringLayoutTransition) and no
+  // grid-dep change fires at drag end to re-measure. lockResize's 5s default TTL
+  // is the dead-man's switch for a drag whose end is lost (mid-drag project
+  // switch): the lock expires and the next observer entry self-heals geometry.
+  const dragLockedIdsRef = useRef<string[]>([]);
+  const lockResizeForLayoutDrag = useCallback(() => {
+    const ids = getSidebarAffectedTerminalIds();
+    dragLockedIdsRef.current = ids;
+    for (const id of ids) {
+      terminalInstanceService.lockResize(id, true);
+    }
+  }, []);
+  const unlockResizeForLayoutDrag = useCallback(() => {
+    const ids = dragLockedIdsRef.current;
+    dragLockedIdsRef.current = [];
+    for (const id of ids) {
+      terminalInstanceService.lockResize(id, false);
+    }
+    if (ids.length > 0) {
+      terminalInstanceService.runResizePass(ids);
+    }
+  }, []);
+
+  // Self-heal the drag lock every frame while a divider is being dragged.
+  // Crossing an auto-grid breakpoint mid-drag makes useContentGridContext call
+  // suppressResizesDuringLayoutTransition, whose 200ms unlock + explicit
+  // lockResize(id, false) would otherwise wipe this drag lock (the controller
+  // holds one expiry per id — last write wins) and let the SIGWINCH storm
+  // resume for the rest of the drag. Re-arming on rAF recovers within a frame.
+  // The loop reads dragLockedIdsRef, which the drag-end helper clears, so a
+  // late rAF firing after unlock iterates an empty set and the effect cleanup
+  // cancels the next one.
+  useEffect(() => {
+    if (!isSidebarResizing && !isAssistantResizing) return;
+    let rafId = 0;
+    const rearm = () => {
+      for (const id of dragLockedIdsRef.current) {
+        terminalInstanceService.lockResize(id, true);
+      }
+      rafId = requestAnimationFrame(rearm);
+    };
+    rafId = requestAnimationFrame(rearm);
+    return () => cancelAnimationFrame(rafId);
+  }, [isSidebarResizing, isAssistantResizing]);
+
   // flushSync on the start setter so the gating class is removed from the DOM
   // before the first mousemove fires — without it, React 19's batching can
   // leave one eased frame at the start of the drag.
   const handleSidebarResizeStart = useCallback(() => {
     flushSync(() => setIsSidebarResizing(true));
-  }, []);
+    lockResizeForLayoutDrag();
+  }, [lockResizeForLayoutDrag]);
 
   const handleSidebarResizeEnd = useCallback(() => {
     setIsSidebarResizing(false);
-  }, []);
+    unlockResizeForLayoutDrag();
+  }, [unlockResizeForLayoutDrag]);
 
   const handleAssistantResizeStart = useCallback(() => {
     flushSync(() => setIsAssistantResizing(true));
-  }, []);
+    lockResizeForLayoutDrag();
+  }, [lockResizeForLayoutDrag]);
 
   const handleAssistantResizeEnd = useCallback(() => {
     setIsAssistantResizing(false);
-  }, []);
+    unlockResizeForLayoutDrag();
+  }, [unlockResizeForLayoutDrag]);
 
   const handleLaunchAgent = useCallback(
     (type: string) => {
