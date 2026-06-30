@@ -1,8 +1,8 @@
 # Changelog
 
-## [0.21.0] - 2026-06-29
+## [0.21.0] - 2026-06-30
 
-A memory-reclamation release: projects can now free their memory on demand and idle background projects auto-close, backed by a round of memory-hygiene and lazy-loading work. Grok (xAI) joins the agent roster as the Gemini CLI agent is deprecated.
+A memory-reclamation release: projects can now free their memory on demand and idle background projects auto-close, backed by a round of memory-hygiene and lazy-loading work. Grok (xAI) joins the agent roster — with terminal scrolling retuned for mouse-tracking TUIs — as the Gemini CLI agent is deprecated.
 
 ### Features
 
@@ -11,6 +11,7 @@ A memory-reclamation release: projects can now free their memory on demand and i
 - Idle background projects with no terminals auto-close to reclaim memory (#10830)
 - Press a terminal's Cmd+1..9 hotkey again to maximize it, once more to restore the grid
 - MCP: agent.listToolbar discovery action surfaces pinned toolbar agents to automation consumers (#10838)
+- Trackpad and mouse-wheel scrolling is smooth and precise in mouse-tracking TUIs like lazygit, btop, and the Grok CLI — sub-line trackpad motion is preserved, and each wheel notch advances a sensible number of lines
 
 ### Bug Fixes
 
@@ -18,6 +19,8 @@ A memory-reclamation release: projects can now free their memory on demand and i
 - Empty-state grid no longer renders narrow on first load before snapping to the sidebar width (#10827)
 - Plugin consent prompts time out instead of hanging when a plugin abandons them (#10841)
 - Preserved agent-terminal snapshots are now bounded, fixing unbounded in-memory growth (#10839)
+- Full-screen TUIs no longer leave a dead overlay scrollbar thumb on screen — the terminal hides it while the alternate-screen buffer is active, where there's no scrollback to scroll
+- The worktree assignment toast now auto-dismisses instead of staying stuck on screen
 
 ### Performance
 
