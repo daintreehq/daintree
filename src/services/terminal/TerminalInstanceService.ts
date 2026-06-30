@@ -96,6 +96,9 @@ const RESIZE_PASS_CHUNK_SIZE = 1;
 // mid-scroll; both are short so the hold self-expires soon after scrolling stops.
 const INTERACTIVE_OVERRIDE_DURATION_MS = 1500;
 const INTERACTIVE_OVERRIDE_THROTTLE_MS = 500;
+// BURST-tier hold after a wheel scroll before reverting to the computed tier —
+// matches the keystroke input-burst decay so a scroll feels just as responsive.
+const WHEEL_BURST_DECAY_MS = 1000;
 
 interface Waiter {
   resolve: () => void;
@@ -583,7 +586,7 @@ class TerminalInstanceService {
       if (!current) return;
       current.inputBurstTimer = undefined;
       this.rendererPolicy.applyRendererPolicy(id, current.getRefreshTier());
-    }, 1000);
+    }, WHEEL_BURST_DECAY_MS);
 
     this.requestInteractiveProfileOverride();
   }
