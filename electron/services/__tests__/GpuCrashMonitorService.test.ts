@@ -19,6 +19,10 @@ const appMock = vi.hoisted(() => ({
   }),
   relaunch: vi.fn(),
   exit: vi.fn(),
+  // GPU feature status is empty until Chromium classifies the GPU; default to
+  // undefined so the startup-status logger is a no-op unless a test opts in.
+  getGPUFeatureStatus: vi.fn(() => undefined),
+  getGPUInfo: vi.fn(() => Promise.resolve(null)),
 }));
 
 const loggerMethods = vi.hoisted(() => ({
@@ -1187,6 +1191,48 @@ describe("GpuCrashMonitorService", () => {
       expect(appMock.exit).not.toHaveBeenCalled();
 
       dateSpy.mockRestore();
+    });
+  });
+
+  describe("startup GPU status logging", () => {
+    async function initFresh() {
+      vi.resetModules();
+      const mod = await import("../GpuCrashMonitorService.js");
+      mod.initializeGpuCrashMonitor();
+      return mod;
+    }
+
+    it("logs gpu-startup-status once webgl2 is classified", async () => {
+      appMock.getGPUFeatureStatus.mockReturnValue({
+        webgl2: "enabled",
+        webgl: "enabled",
+        gpu_compositing: "enabled",
+      });
+      await initFresh();
+      expect(loggerMethods.info).toHaveBeenCalledWith("gpu-startup-status", {
+        webgl2: "enabled",
+        webgl: "enabled",
+        gpu_compositing: "enabled",
+      });
+    });
+
+    it("skips logging while the GPU is not yet classified (no webgl2)", async () => {
+      // Chromium has not yet classified the GPU — the sample has no webgl2, so
+      // the logger must stay silent rather than emitting an empty trace.
+      appMock.getGPUFeatureStatus.mockReturnValue({});
+      await initFresh();
+      expect(loggerMethods.info).not.toHaveBeenCalledWith("gpu-startup-status", expect.anything());
+    });
+
+    it("binds the gpu-info-update refresh listener at most once across re-init", async () => {
+      // initializeGpuCrashMonitor can be called more than once (tests); the
+      // refresh listener must not stack on every call.
+      appMock.getGPUFeatureStatus.mockReturnValue({});
+      const mod = await initFresh();
+      mod.initializeGpuCrashMonitor();
+      mod.initializeGpuCrashMonitor();
+      const gpuInfoBinds = appMock.on.mock.calls.filter((call) => call[0] === "gpu-info-update");
+      expect(gpuInfoBinds.length).toBe(1);
     });
   });
 });

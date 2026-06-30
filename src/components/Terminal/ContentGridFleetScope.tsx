@@ -20,6 +20,20 @@ export function ContentGridFleetScope({
 }) {
   "use memo";
 
+  // framer-motion's `layout="position"` snapshots every wrapper via
+  // getBoundingClientRect on any commit whose layoutDependency changed — or is
+  // undefined. Without a key, every fleet-subtree commit (focus, agent-state,
+  // title) forces a per-panel layout read on the same frame the WebGL canvas
+  // composites. Derive the key from exactly what moves a fleet panel's box:
+  // column count + container width (column widths derive from it, shifting the
+  // origin of every non-first column) + the ordered panel-id set. Mirrors
+  // ContentGridDefault's gridLayoutDependency, including the gridWidth term.
+  const fleetLayoutDependency = [
+    ctx.fleetGridCols,
+    ctx.gridWidth ?? 0,
+    ctx.fleetPanels.map((p) => p.id).join(","),
+  ].join("|");
+
   return (
     <div
       key="fleet-scope-mode"
@@ -92,6 +106,7 @@ export function ContentGridFleetScope({
                     <m.div
                       key={terminal.id}
                       layout={ctx.layoutAnimationEnabled ? "position" : false}
+                      layoutDependency={fleetLayoutDependency}
                       transition={ctx.layoutTransition}
                       transformTemplate={pixelSnapTransform}
                       className="h-full min-w-0"

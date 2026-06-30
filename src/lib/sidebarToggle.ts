@@ -18,7 +18,15 @@ import { SIDEBAR_TOGGLE_LOCK_MS } from "./terminalLayout";
  * transitions). Both transitions can be triggered from the same focus-mode
  * gesture, so we lock everything for the same duration.
  */
-export function suppressSidebarResizes(): void {
+/**
+ * Terminal ids affected by a sidebar/assistant-panel width change on the active
+ * worktree: every grid panel on the active worktree plus the assistant's dock
+ * terminal. Shared by the toggle-time suppression (suppressSidebarResizes,
+ * TTL-based) and the drag-time resize lock (AppLayout's sidebar/assistant
+ * divider drag, boolean lockResize). Both reflow `<main flex:1>`, which holds
+ * the grid.
+ */
+export function getSidebarAffectedTerminalIds(): string[] {
   const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
   const panelState = usePanelStore.getState();
   const ids: string[] = [];
@@ -32,6 +40,11 @@ export function suppressSidebarResizes(): void {
   if (assistantTerminalId && panelState.panelsById[assistantTerminalId]) {
     ids.push(assistantTerminalId);
   }
+  return ids;
+}
+
+export function suppressSidebarResizes(): void {
+  const ids = getSidebarAffectedTerminalIds();
   terminalInstanceService.suppressResizesDuringLayoutTransition(ids, SIDEBAR_TOGGLE_LOCK_MS);
   // Block ResizeObserver-driven grid-width re-renders for the same window.
   // PTY suppression alone leaves the visual grid jittering as `<main flex:1>`
