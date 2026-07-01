@@ -199,21 +199,10 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
       // Reveal-in-file-manager only selects the item — it never launches it —
       // so the "editor" flavor (containment check, relaxed executable
       // deny-list) is correct: revealing an .app/.exe the user can already see
-      // must not be blocked.
+      // must not be blocked. assertPathAllowed → resolveContainedPath realpaths
+      // the target, so a since-deleted path is already rejected (INVALID_PATH)
+      // before we reach shell.showItemInFolder (which gives no failure signal).
       const realTarget = await assertPathAllowed(targetPath, "editor");
-      // shell.showItemInFolder is void and gives no success/failure signal, so
-      // a since-deleted path would silently no-op. Stat first to surface a
-      // real NOT_FOUND error the renderer can toast.
-      const fs = await import("fs");
-      try {
-        await fs.promises.stat(realTarget);
-      } catch {
-        throw new AppError({
-          code: "NOT_FOUND",
-          message: `Cannot reveal path that no longer exists: ${realTarget}`,
-          context: { targetPath: realTarget },
-        });
-      }
       shell.showItemInFolder(realTarget);
     } catch (error) {
       console.error("Failed to reveal item in folder:", error);

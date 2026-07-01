@@ -277,6 +277,10 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [payload: SystemOpenPathPayload];
     result: void;
   };
+  "system:show-item-in-folder": {
+    args: [payload: SystemOpenPathPayload];
+    result: void;
+  };
   "system:open-in-editor": {
     args: [payload: SystemOpenInEditorPayload];
     result: void;

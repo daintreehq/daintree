@@ -58,9 +58,6 @@ export function reportFileLinkFailure(reason: string, error: unknown, absolutePa
     case "INVALID_PATH":
       body = "Path is not a valid file";
       break;
-    case "NOT_FOUND":
-      body = "File no longer exists";
-      break;
     default:
       body = userMessage ?? formatErrorMessage(error, "Couldn't open this file");
   }

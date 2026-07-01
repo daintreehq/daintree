@@ -25,7 +25,6 @@ vi.mock("electron", () => ({
 const fsMock = vi.hoisted(() => ({
   promises: {
     realpath: vi.fn<(p: string) => Promise<string>>((p: string) => Promise.resolve(p)),
-    stat: vi.fn<(p: string) => Promise<unknown>>(() => Promise.resolve({})),
   },
 }));
 
@@ -256,7 +255,6 @@ describe("system:show-item-in-folder containment", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     fsMock.promises.realpath.mockImplementation(realpathEcho);
-    fsMock.promises.stat.mockImplementation(() => Promise.resolve({}));
     projectStoreMock.getAllProjects.mockReturnValue([{ path: PROJECT_ROOT }]);
     appMock.getPath.mockImplementation((name: string) => path.join(USERDATA_PARENT, name));
     storeMock.get.mockReturnValue(undefined);
@@ -301,14 +299,21 @@ describe("system:show-item-in-folder containment", () => {
     expect(shellMock.showItemInFolder).toHaveBeenCalledWith(executablePath);
   });
 
-  it("throws NOT_FOUND without revealing when the path no longer exists", async () => {
-    fsMock.promises.stat.mockRejectedValueOnce(
-      Object.assign(new Error("ENOENT"), { code: "ENOENT" })
+  // A file detected in terminal output can be deleted before the user reveals
+  // it. resolveContainedPath realpaths the target, so a missing path is
+  // rejected (INVALID_PATH) before shell.showItemInFolder — which has no
+  // failure signal — is ever called. Mock realpath to reject like real Node.
+  it("rejects a since-deleted path (realpath ENOENT) without revealing", async () => {
+    const missing = path.join(PROJECT_ROOT, "gone.txt");
+    fsMock.promises.realpath.mockImplementation((p: string) =>
+      path.normalize(p) === path.normalize(missing)
+        ? Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }))
+        : realpathEcho(p)
     );
     const handler = getHandler(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER);
-    await expect(
-      handler(fakeEvent, { path: path.join(PROJECT_ROOT, "gone.txt") })
-    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(handler(fakeEvent, { path: missing })).rejects.toMatchObject({
+      code: "INVALID_PATH",
+    });
     expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
   });
 
