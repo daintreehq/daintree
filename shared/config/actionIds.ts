@@ -312,6 +312,7 @@ export const BUILT_IN_ACTION_IDS = [
   "agent.getState",
   "agent.listToolbar",
   "agentSessionHistory.list",
+  "agentSessionHistory.getSnapshot",
 
   // -- app settings (other) --
   "app.settings.openTab",

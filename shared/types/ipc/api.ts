@@ -1227,6 +1227,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     clear(worktreeId?: string): Promise<void>;
     getRetentionDays(): Promise<AgentSessionRetentionDays>;
     setRetentionDays(days: AgentSessionRetentionDays): Promise<void>;
+    getSnapshot(sessionId: string): Promise<{ found: boolean; snapshot: string | null }>;
   };
   // clipboard is generated — see GeneratedElectronAPI.
   webUtils: {

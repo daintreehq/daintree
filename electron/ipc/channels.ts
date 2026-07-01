@@ -68,6 +68,7 @@ export const CHANNELS = {
   AGENT_SESSION_CLEAR: "agent-session:clear",
   AGENT_SESSION_GET_RETENTION: "agent-session:get-retention",
   AGENT_SESSION_SET_RETENTION: "agent-session:set-retention",
+  AGENT_SESSION_GET_SNAPSHOT: "agent-session:get-snapshot",
 
   FILES_SEARCH: "files:search",
   FILES_READ: "files:read",

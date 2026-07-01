@@ -994,6 +994,24 @@ describe("agentSessionHistory.list (#10854)", () => {
     expect(result).toEqual({ sessions: [] });
   });
 
+  it("strips the raw snapshot from listed records (getSnapshot is the sole accessor, #10855)", async () => {
+    listMock.mockResolvedValue([
+      { ...SAMPLE_SESSIONS[0], snapshot: "verbatim scrollback that must not bulk-leak" },
+      { ...SAMPLE_SESSIONS[1], snapshot: "" },
+    ]);
+    const actions = setupActions(makeCallbacks());
+    const result = (await callAction(actions, "agentSessionHistory.list", {})) as {
+      sessions: Array<Record<string, unknown>>;
+    };
+    expect(result.sessions).toHaveLength(2);
+    for (const session of result.sessions) {
+      expect(session).not.toHaveProperty("snapshot");
+    }
+    // Non-snapshot fields still pass through unchanged.
+    expect(result.sessions[0]!.sessionId).toBe("sess-1");
+    expect(result.sessions[0]!.title).toBe("Auth refactor");
+  });
+
   it("registers as a read-only query action advertising an MCP output schema", () => {
     const def = getDef();
     expect(def.kind).toBe("query");
@@ -1023,5 +1041,78 @@ describe("agentSessionHistory.list (#10854)", () => {
 
   it("argsSchema rejects an empty worktreeId (would silently unfilter to cross-project)", () => {
     expect(getDef().argsSchema?.safeParse({ worktreeId: "" }).success).toBe(false);
+  });
+});
+
+describe("agentSessionHistory.getSnapshot (#10855)", () => {
+  const getSnapshotMock = vi.fn();
+
+  beforeEach(() => {
+    getSnapshotMock.mockReset();
+    getSnapshotMock.mockResolvedValue({ found: true, snapshot: "captured scrollback" });
+    // @ts-expect-error - minimal window.electron stub for the renderer IPC call
+    globalThis.window = { electron: { agentSessionHistory: { getSnapshot: getSnapshotMock } } };
+  });
+
+  afterEach(() => {
+    // @ts-expect-error - tear down the stub so it doesn't leak to other suites
+    delete globalThis.window;
+  });
+
+  function getDef(): AnyActionDefinition {
+    const def = setupActions(makeCallbacks()).get("agentSessionHistory.getSnapshot")?.() as
+      | AnyActionDefinition
+      | undefined;
+    if (!def) throw new Error("agentSessionHistory.getSnapshot not registered");
+    return def;
+  }
+
+  it("forwards the sessionId to the bridge and merges it into the result", async () => {
+    const actions = setupActions(makeCallbacks());
+    const result = await callAction(actions, "agentSessionHistory.getSnapshot", {
+      sessionId: "sess-1",
+    });
+    expect(getSnapshotMock).toHaveBeenCalledWith("sess-1");
+    expect(result).toEqual({ sessionId: "sess-1", found: true, snapshot: "captured scrollback" });
+  });
+
+  it("passes through found:false / snapshot:null for an unknown session (never throws)", async () => {
+    getSnapshotMock.mockResolvedValue({ found: false, snapshot: null });
+    const actions = setupActions(makeCallbacks());
+    const result = await callAction(actions, "agentSessionHistory.getSnapshot", {
+      sessionId: "missing",
+    });
+    expect(result).toEqual({ sessionId: "missing", found: false, snapshot: null });
+  });
+
+  it("passes through found:true / snapshot:null when the record has no snapshot", async () => {
+    getSnapshotMock.mockResolvedValue({ found: true, snapshot: null });
+    const actions = setupActions(makeCallbacks());
+    const result = await callAction(actions, "agentSessionHistory.getSnapshot", {
+      sessionId: "no-snap",
+    });
+    expect(result).toEqual({ sessionId: "no-snap", found: true, snapshot: null });
+  });
+
+  it("registers as a read-only query action advertising an MCP output schema", () => {
+    const def = getDef();
+    expect(def.kind).toBe("query");
+    expect(def.danger).toBe("safe");
+    expect(def.scope).toBe("renderer");
+    expect(def.mcpOutputSchema).toBe(true);
+  });
+
+  it("resultSchema accepts a string snapshot and a null snapshot", () => {
+    const schema = getDef().resultSchema;
+    expect(schema?.safeParse({ sessionId: "s", found: true, snapshot: "text" }).success).toBe(true);
+    expect(schema?.safeParse({ sessionId: "s", found: false, snapshot: null }).success).toBe(true);
+  });
+
+  it("argsSchema requires a non-empty sessionId", () => {
+    const schema = getDef().argsSchema;
+    expect(schema?.safeParse({ sessionId: "sess-1" }).success).toBe(true);
+    expect(schema?.safeParse({ sessionId: "" }).success).toBe(false);
+    expect(schema?.safeParse({}).success).toBe(false);
+    expect(schema?.safeParse(undefined).success).toBe(false);
   });
 });

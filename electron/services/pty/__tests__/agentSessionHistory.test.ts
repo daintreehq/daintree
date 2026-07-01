@@ -8,6 +8,7 @@ import {
   listAgentSessions,
   clearAgentSessions,
   pruneAgentSessions,
+  getAgentSessionSnapshot,
   getSessionHistoryPath,
   MAX_RECORDS_PER_WORKTREE,
   SESSION_HISTORY_TTL_MS,
@@ -431,6 +432,98 @@ describe("agentSessionHistory", () => {
       expect(records.some((r) => r.sessionId === `session-${MAX_RECORDS_PER_WORKTREE + 9}`)).toBe(
         true
       );
+    });
+  });
+
+  describe("getAgentSessionSnapshot (#10855)", () => {
+    it("returns found:true with the verbatim snapshot for a matching session", async () => {
+      await persistAgentSession(
+        {
+          sessionId: "with-snap",
+          agentId: "claude",
+          worktreeId: "wt-1",
+          title: null,
+          projectId: null,
+          snapshot: "line one\nline two\n[31mred[0m",
+        },
+        userDataDir
+      );
+
+      expect(getAgentSessionSnapshot("with-snap", userDataDir)).toEqual({
+        found: true,
+        snapshot: "line one\nline two\n[31mred[0m",
+      });
+    });
+
+    it("returns found:false with null snapshot for an unknown sessionId", () => {
+      expect(getAgentSessionSnapshot("does-not-exist", userDataDir)).toEqual({
+        found: false,
+        snapshot: null,
+      });
+    });
+
+    it("returns found:true with null snapshot when the record has no snapshot", async () => {
+      await persistAgentSession(
+        {
+          sessionId: "no-snap",
+          agentId: "claude",
+          worktreeId: "wt-1",
+          title: null,
+          projectId: null,
+        },
+        userDataDir
+      );
+
+      expect(getAgentSessionSnapshot("no-snap", userDataDir)).toEqual({
+        found: true,
+        snapshot: null,
+      });
+    });
+
+    it("preserves an empty-string snapshot rather than coercing it to null", async () => {
+      await persistAgentSession(
+        {
+          sessionId: "empty-snap",
+          agentId: "claude",
+          worktreeId: "wt-1",
+          title: null,
+          projectId: null,
+          snapshot: "",
+        },
+        userDataDir
+      );
+
+      expect(getAgentSessionSnapshot("empty-snap", userDataDir)).toEqual({
+        found: true,
+        snapshot: "",
+      });
+    });
+
+    it("honors the retention window — an aged-out session is not found", async () => {
+      // Seed a 20-day-old record carrying a snapshot, keep-forever on write so
+      // the read path does the filtering, then query with a 7-day window.
+      const filePath = getSessionHistoryPath(userDataDir)!;
+      const agedRecord = {
+        sessionId: "aged-snap",
+        agentId: "claude",
+        worktreeId: "wt-1",
+        title: null,
+        projectId: null,
+        savedAt: Date.now() - 20 * DAY_MS,
+        snapshot: "secret scrollback",
+      };
+      await fsp.writeFile(filePath, JSON.stringify([agedRecord]));
+
+      // Within a 90-day window the snapshot is reachable...
+      expect(getAgentSessionSnapshot("aged-snap", userDataDir, 90)).toEqual({
+        found: true,
+        snapshot: "secret scrollback",
+      });
+      // ...but a 7-day window evicts it, so it must not leak.
+      expect(getAgentSessionSnapshot("aged-snap", userDataDir, 7)).toEqual({
+        found: false,
+        snapshot: null,
+      });
     });
   });
 

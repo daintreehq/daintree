@@ -16,6 +16,7 @@ import type { HandlerDependencies, IpcContext } from "../../types.js";
 import {
   TerminalSpawnOptionsSchema,
   AgentSessionRetentionDaysSchema,
+  AgentSessionGetSnapshotPayloadSchema,
 } from "../../../schemas/ipc.js";
 import { store } from "../../../store.js";
 import type { AgentSessionRetentionDays } from "../../../../shared/types/ipc/agentSessionHistory.js";
@@ -84,6 +85,7 @@ import {
   clearAgentSessions,
   persistAgentSession,
   pruneAgentSessions,
+  getAgentSessionSnapshot,
 } from "../../../services/pty/agentSessionHistory.js";
 import { getAgentSessionRetentionDays } from "../../../services/pty/agentSessionRetention.js";
 import type { WorkspaceClient } from "../../../services/WorkspaceClient.js";
@@ -721,6 +723,17 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     await clearAgentSessions(payload?.worktreeId, app.getPath("userData"));
   };
 
+  const handleAgentSessionGetSnapshot = async (payload: {
+    sessionId: string;
+  }): Promise<{ found: boolean; snapshot: string | null }> => {
+    const { app } = await import("electron");
+    return getAgentSessionSnapshot(
+      payload.sessionId,
+      app.getPath("userData"),
+      getAgentSessionRetentionDays()
+    );
+  };
+
   const handleAgentSessionGetRetention = async (): Promise<AgentSessionRetentionDays> =>
     getAgentSessionRetentionDays();
 
@@ -753,6 +766,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       restartService: op(CHANNELS.TERMINAL_RESTART_SERVICE, handleTerminalRestartService),
       agentSessionList: op(CHANNELS.AGENT_SESSION_LIST, handleAgentSessionList),
       agentSessionClear: op(CHANNELS.AGENT_SESSION_CLEAR, handleAgentSessionClear),
+      agentSessionGetSnapshot: opValidated(
+        CHANNELS.AGENT_SESSION_GET_SNAPSHOT,
+        AgentSessionGetSnapshotPayloadSchema,
+        handleAgentSessionGetSnapshot
+      ),
       agentSessionGetRetention: op(
         CHANNELS.AGENT_SESSION_GET_RETENTION,
         handleAgentSessionGetRetention

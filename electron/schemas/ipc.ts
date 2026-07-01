@@ -379,6 +379,15 @@ export const AgentSessionRetentionDaysSchema = z.union([
   z.literal(0),
 ]);
 
+/**
+ * Payload for looking up a single closed session's snapshot by id (#10855).
+ * `sessionId` is required — a missing/empty value is a caller bug worth
+ * rejecting at the IPC boundary rather than silently returning `found: false`.
+ */
+export const AgentSessionGetSnapshotPayloadSchema = z.object({
+  sessionId: z.string().min(1),
+});
+
 export const FileSearchPayloadSchema = z.object({
   cwd: z.string().min(1),
   query: z.string(),
