@@ -232,7 +232,10 @@ export interface PanelGridState
   detachTerminalsForProjectSwitch: () => void;
   clearTerminalStoreForSwitch: () => void;
   lastClosedConfig: AddPanelOptions | null;
-  restoreLastTrashed: () => void;
+  /** Restores the most recently trashed terminal. Returns `false` when the
+   * trash is empty (nothing restored) so callers can fall back to another
+   * source (e.g. the resume journal). */
+  restoreLastTrashed: () => boolean;
 }
 
 /**
@@ -830,16 +833,67 @@ export const usePanelStore = create<PanelGridState>()(
       restoreLastTrashed: () => {
         const trashedTerminals = get().trashedTerminals;
         const trashedIds = Array.from(trashedTerminals.keys());
-        if (trashedIds.length === 0) return;
+        if (trashedIds.length === 0) return false;
 
         const lastId = trashedIds[trashedIds.length - 1]!;
         const lastTrashed = trashedTerminals.get(lastId);
 
         if (lastTrashed?.groupRestoreId) {
-          get().restoreTrashedGroup(lastTrashed.groupRestoreId);
-        } else {
-          get().restoreTerminal(lastId);
+          const { groupRestoreId } = lastTrashed;
+          const groupIds: string[] = [];
+          for (const [id, trashed] of trashedTerminals.entries()) {
+            if (trashed.groupRestoreId === groupRestoreId) {
+              groupIds.push(id);
+            }
+          }
+
+          // Same stale-entry race as the single-panel case below, but for a
+          // whole group: a throttled expiry timer can prune every member from
+          // panelsById while the trashedTerminals entries linger.
+          // `restoreTrashedGroup` only mutates panelsById for ids that still
+          // exist, so a fully-ghosted group is a silent no-op that would
+          // otherwise still report success — wrongly suppressing the
+          // resume-journal fallback. Treat "no surviving member" as "nothing
+          // restored": drop the stale entries and return false so the caller
+          // can fall through.
+          const hasSurvivingMember = groupIds.some((id) => {
+            const panel = get().panelsById[id];
+            return panel?.location === "trash";
+          });
+          if (!hasSurvivingMember) {
+            set((state) => {
+              const newTrashed = new Map(state.trashedTerminals);
+              for (const id of groupIds) {
+                newTrashed.delete(id);
+              }
+              return { trashedTerminals: newTrashed };
+            });
+            return false;
+          }
+
+          get().restoreTrashedGroup(groupRestoreId);
+          return true;
         }
+
+        // A stale map entry can outlive its panel row: a background-throttled
+        // expiry timer can fire late, and `restoreTerminal` no-ops (without
+        // even cleaning the map) when `panelsById[id]` is already gone.
+        // Restoring it would be a silent no-op that still reports success —
+        // wrongly suppressing the resume-journal fallback the caller wants.
+        // Treat a missing/non-trash panel as "nothing restored": drop the stale
+        // entry and return false so the caller can fall through.
+        const panel = get().panelsById[lastId];
+        if (!panel || panel.location !== "trash") {
+          set((state) => {
+            const newTrashed = new Map(state.trashedTerminals);
+            newTrashed.delete(lastId);
+            return { trashedTerminals: newTrashed };
+          });
+          return false;
+        }
+
+        get().restoreTerminal(lastId);
+        return true;
       },
 
       moveTerminalToPosition: (

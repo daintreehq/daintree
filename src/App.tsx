@@ -82,14 +82,7 @@ import { PanelTransitionOverlay } from "./components/Panel";
 
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
-import {
-  buildResumeCommand,
-  buildResumeLatestCommand,
-  reconcileBypassFlags,
-  resolveEffectiveBypass,
-} from "@shared/types/agentSettings";
-import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
-import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
+import { buildResumePanelOptions } from "./services/agentResume";
 import { resolveResumeLaunchTarget } from "./utils/resumeLaunch";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
 import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
@@ -106,31 +99,6 @@ const loadE2ENotificationBackdoor = () => import("./lib/e2eNotificationBackdoor"
 const loadJetbrainsMono500 = () => import("@fontsource/jetbrains-mono/latin-500.css");
 const loadJetbrainsMono600 = () => import("@fontsource/jetbrains-mono/latin-600.css");
 const preloadFileViewerModal = () => import("@/components/FileViewer/FileViewerModal");
-
-// Reconciles a resumed session's persisted launch flags against the current
-// global skip-permissions setting (#10432, the "resume trap"): the snapshot may
-// have been captured while the global switch was in a different state, so strip
-// the agent's canonical bypass flag and re-add it only if it currently resolves.
-function reconcileResumeLaunchFlags(session: {
-  agentId: string;
-  agentLaunchFlags?: string[];
-}): string[] | undefined {
-  const settings = useAgentSettingsStore.getState().settings;
-  const entry = settings?.agents?.[session.agentId] ?? {};
-  const effectiveBypass = resolveEffectiveBypass(
-    entry,
-    session.agentId,
-    settings?.globalSkipPermissions
-  );
-  // Pass [] when no flags were captured so global-on still injects the bypass
-  // token for a supported agent (reconcileBypassFlags no-ops for others).
-  return reconcileBypassFlags(
-    session.agentLaunchFlags ?? [],
-    session.agentId,
-    effectiveBypass,
-    entry.dangerousArgs as string | undefined
-  );
-}
 
 // Direct file import (not the Project barrel) so the lazy chunk doesn't pull
 // in barrel siblings. Renders only when no project is open, so it stays off
@@ -419,7 +387,6 @@ import { usePluginConfirmStore } from "./store/pluginConfirmStore";
 import { usePluginMcpConfirmStore } from "./store/pluginMcpConfirmStore";
 import { usePluginCapabilityConfirmStore } from "./store/pluginCapabilityConfirmStore";
 import { useDiagnosticsReviewStore } from "./store/diagnosticsReviewStore";
-import { useAgentSettingsStore } from "./store/agentSettingsStore";
 // Eager side-effect import: auto-discovers every built-in plugin renderer and
 // registers its builtin view slots at module-eval time, before first render.
 // Must stay static — a deferred/idle import races the user, so getBuiltinView
@@ -887,31 +854,6 @@ function AppInner() {
     [launchAgent]
   );
 
-  const launchResumeSession = useCallback(
-    (session: AgentSessionRecord) => {
-      const agentConfig = getEffectiveAgentConfig(session.agentId);
-      const resumeFlags = reconcileResumeLaunchFlags(session);
-      const command =
-        buildResumeCommand(session.agentId, session.sessionId, resumeFlags) ??
-        buildResumeLatestCommand(session.agentId, resumeFlags);
-      if (!command || !agentConfig) return;
-      const { cwd, worktreeId } = resolveResumeLaunchTarget(session, {
-        defaultTerminalCwd,
-        activeWorktreeId,
-      });
-      addPanel({
-        kind: "terminal",
-        launchAgentId: session.agentId,
-        title: agentConfig.name,
-        cwd,
-        worktreeId,
-        command,
-        location: "grid",
-      });
-    },
-    [addPanel, defaultTerminalCwd, activeWorktreeId]
-  );
-
   const closeThemePalette = useCallback(() => {
     usePaletteStore.getState().closePalette("theme");
   }, []);
@@ -1250,7 +1192,16 @@ function AppInner() {
                       const result = panelPalette.handleSelect(kind);
                       if (!result) return;
                       if (result.resumeSession) {
-                        launchResumeSession(result.resumeSession);
+                        const options = buildResumePanelOptions(
+                          result.resumeSession,
+                          resolveResumeLaunchTarget(result.resumeSession, {
+                            defaultTerminalCwd,
+                            activeWorktreeId,
+                          })
+                        );
+                        if (options) {
+                          addPanel(options);
+                        }
                       } else if (result.id.startsWith("agent:")) {
                         const agentId = result.id.slice("agent:".length);
                         if (agentId) {
@@ -1270,7 +1221,16 @@ function AppInner() {
                       if (!selected) return;
                       if (selected.id === MORE_AGENTS_PANEL_ID) return;
                       if (selected.resumeSession) {
-                        launchResumeSession(selected.resumeSession);
+                        const options = buildResumePanelOptions(
+                          selected.resumeSession,
+                          resolveResumeLaunchTarget(selected.resumeSession, {
+                            defaultTerminalCwd,
+                            activeWorktreeId,
+                          })
+                        );
+                        if (options) {
+                          addPanel(options);
+                        }
                       } else if (selected.id.startsWith("agent:")) {
                         const agentId = selected.id.slice("agent:".length);
                         if (agentId) {
