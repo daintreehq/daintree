@@ -127,6 +127,9 @@ const DURABLE_ALLOWLIST = new Set([
   // PanelPalette selected-row left-edge accent stripe (single primary anchor per active focus region)
   "src/components/PanelPalette/PanelPalette.tsx",
 
+  // ResumeSessionsPalette selected-row left-edge accent stripe (single primary anchor per active focus region)
+  "src/components/Terminal/ResumeSessionsPalette.tsx",
+
   // ProjectSwitcherPalette selected-row left-edge accent stripe (single primary anchor per active focus region)
   "src/components/Project/ProjectSwitcherPalette.tsx",
 

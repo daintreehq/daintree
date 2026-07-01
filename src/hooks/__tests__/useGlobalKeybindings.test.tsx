@@ -52,6 +52,24 @@ vi.mock("@/services/KeybindingService", () => ({
   keybindingService: mocks.keybindingService,
   normalizeKeyForBinding: (event: KeyboardEvent) => event.key,
   parseCombo: parseComboLite,
+  // Lite, mac-style field comparison — sufficient for the single-combo prefix
+  // check (`Cmd+K`) the command-HUD routing performs.
+  combosFieldsEqual: (a: string, b: string) => {
+    const sa = a.trim().split(/\s+/).filter(Boolean);
+    const sb = b.trim().split(/\s+/).filter(Boolean);
+    if (sa.length === 0 || sa.length !== sb.length) return false;
+    return sa.every((seg, i) => {
+      const pa = parseComboLite(seg);
+      const pb = parseComboLite(sb[i]!);
+      return (
+        pa.cmd === pb.cmd &&
+        pa.ctrl === pb.ctrl &&
+        pa.shift === pb.shift &&
+        pa.alt === pb.alt &&
+        pa.key.toLowerCase() === pb.key.toLowerCase()
+      );
+    });
+  },
 }));
 
 vi.mock("@/services/ActionService", () => ({

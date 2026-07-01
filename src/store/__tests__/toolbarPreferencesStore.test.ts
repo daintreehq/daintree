@@ -361,6 +361,33 @@ describe("toolbarPreferencesStore", () => {
       expect(right.indexOf("command-palette")).toBeLessThan(right.indexOf("settings"));
     });
 
+    it("includes resume-sessions in default right buttons before settings", async () => {
+      const store = await loadStore();
+      const right = store.getState().layout.rightButtons;
+      expect(right).toContain("resume-sessions");
+      expect(right.indexOf("resume-sessions")).toBeLessThan(right.indexOf("settings"));
+    });
+
+    it("re-inserts resume-sessions for persisted state missing it via mergeButtonList", async () => {
+      setStoredState(
+        {
+          layout: {
+            leftButtons: ["terminal", "browser"],
+            rightButtons: ["copy-tree", "command-palette", "settings"],
+            pinnedButtons: {},
+          },
+          launcher: { alwaysShowDevServer: false },
+        },
+        10
+      );
+
+      const store = await loadStore();
+      const right = store.getState().layout.rightButtons;
+      expect(right).toContain("resume-sessions");
+      // Visibility preserved (not implicitly hidden) for the newly added default.
+      expect(store.getState().layout.pinnedButtons["resume-sessions"]).toBeUndefined();
+    });
+
     it("re-inserts command-palette for persisted state missing it via mergeButtonList", async () => {
       setStoredState(
         {

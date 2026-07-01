@@ -35,6 +35,7 @@ export type ToolbarButtonId =
   | "forge-stats"
   | "copy-tree"
   | "command-palette"
+  | "resume-sessions"
   | "settings"
   | "problems"
   | "notification-center"
@@ -98,6 +99,7 @@ export const TOOLBAR_BUTTON_PRIORITIES: Record<ToolbarButtonId, ToolbarButtonPri
   browser: 3,
   "dev-server": 3,
   "command-palette": 4,
+  "resume-sessions": 4,
   settings: 5,
   "notification-center": 5,
   "copy-tree": 5,

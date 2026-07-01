@@ -50,6 +50,7 @@ export function useActionRegistry(options: ActionCallbacks): void {
       onOpenWorktreeOverview: () => callbacksRef.current.onOpenWorktreeOverview(),
       onCloseWorktreeOverview: () => callbacksRef.current.onCloseWorktreeOverview(),
       onOpenPanelPalette: () => callbacksRef.current.onOpenPanelPalette(),
+      onOpenResumeSessionsPalette: () => callbacksRef.current.onOpenResumeSessionsPalette(),
       onOpenProjectSwitcherPalette: () => callbacksRef.current.onOpenProjectSwitcherPalette(),
       onConfirmCloseActiveProject: (projectId) =>
         callbacksRef.current.onConfirmCloseActiveProject(projectId),

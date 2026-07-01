@@ -82,8 +82,7 @@ import { PanelTransitionOverlay } from "./components/Panel";
 
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
-import { buildResumePanelOptions } from "./services/agentResume";
-import { resolveResumeLaunchTarget } from "./utils/resumeLaunch";
+import { useResumeAgentSession } from "./hooks/useResumeAgentSession";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
 import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
 import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
@@ -213,6 +212,11 @@ function preloadThemePalette() {
 }
 const LazyThemePalette = lazy(() =>
   preloadThemePalette().then((m) => ({ default: m.ThemePalette }))
+);
+const LazyResumeSessionsPalette = lazy(() =>
+  import("./components/Terminal/ResumeSessionsPalette").then((m) => ({
+    default: m.ResumeSessionsPalette,
+  }))
 );
 
 function preloadLogLevelPalette() {
@@ -580,6 +584,7 @@ function AppInner() {
   );
 
   const { activeWorktree, defaultTerminalCwd } = useActiveWorktreeSync();
+  const resumeSession = useResumeAgentSession();
 
   const worktreePalette = useWorktreePalette({ worktrees });
   const quickCreatePalette = useQuickCreatePalette();
@@ -637,6 +642,10 @@ function AppInner() {
   const shouldMountQuickCreatePalette = useKeepMounted(quickCreatePalette.isOpen);
   const shouldMountPanelPalette = useKeepMounted(panelPalette.isOpen);
   const shouldMountThemePalette = useKeepMounted(isThemePaletteOpen);
+  const isResumeSessionsPaletteOpen = usePaletteStore(
+    (state) => state.activePaletteId === "resume-sessions"
+  );
+  const shouldMountResumeSessionsPalette = useKeepMounted(isResumeSessionsPaletteOpen);
   const shouldMountLogLevelPalette = useKeepMounted(isLogLevelPaletteOpen);
   const shouldMountActionPalette = useKeepMounted(actionPalette.isOpen);
   const shouldMountCrossDiffDialog = useKeepMounted(crossDiffDialog.isOpen);
@@ -900,6 +909,7 @@ function AppInner() {
     onOpenWorktreeOverview: openWorktreeOverview,
     onCloseWorktreeOverview: closeWorktreeOverview,
     onOpenPanelPalette: panelPalette.open,
+    onOpenResumeSessionsPalette: () => usePaletteStore.getState().openPalette("resume-sessions"),
     onOpenProjectSwitcherPalette: projectSwitcherPalette.toggle,
     onConfirmCloseActiveProject: (projectId: string) => {
       void projectSwitcherPalette.removeProject(projectId);
@@ -1192,16 +1202,7 @@ function AppInner() {
                       const result = panelPalette.handleSelect(kind);
                       if (!result) return;
                       if (result.resumeSession) {
-                        const options = buildResumePanelOptions(
-                          result.resumeSession,
-                          resolveResumeLaunchTarget(result.resumeSession, {
-                            defaultTerminalCwd,
-                            activeWorktreeId,
-                          })
-                        );
-                        if (options) {
-                          addPanel(options);
-                        }
+                        void resumeSession(result.resumeSession);
                       } else if (result.id.startsWith("agent:")) {
                         const agentId = result.id.slice("agent:".length);
                         if (agentId) {
@@ -1221,16 +1222,7 @@ function AppInner() {
                       if (!selected) return;
                       if (selected.id === MORE_AGENTS_PANEL_ID) return;
                       if (selected.resumeSession) {
-                        const options = buildResumePanelOptions(
-                          selected.resumeSession,
-                          resolveResumeLaunchTarget(selected.resumeSession, {
-                            defaultTerminalCwd,
-                            activeWorktreeId,
-                          })
-                        );
-                        if (options) {
-                          addPanel(options);
-                        }
+                        void resumeSession(selected.resumeSession);
                       } else if (selected.id.startsWith("agent:")) {
                         const agentId = selected.id.slice("agent:".length);
                         if (agentId) {
@@ -1351,6 +1343,18 @@ function AppInner() {
               {shouldMountThemePalette && (
                 <Suspense fallback={null}>
                   <LazyThemePalette isOpen={isThemePaletteOpen} onClose={closeThemePalette} />
+                </Suspense>
+              )}
+            </ErrorBoundary>
+
+            <ErrorBoundary
+              variant="component"
+              componentName="ResumeSessionsPalette"
+              resetKeys={[Number(isResumeSessionsPaletteOpen)]}
+            >
+              {shouldMountResumeSessionsPalette && (
+                <Suspense fallback={null}>
+                  <LazyResumeSessionsPalette />
                 </Suspense>
               )}
             </ErrorBoundary>

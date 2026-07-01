@@ -103,10 +103,9 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
   // ── Chord Sequences ────────────────────────────────────────
 
   test.describe.serial("Chord Sequences", () => {
-    const chordIndicator = () =>
-      ctx.window.locator('[role="status"]').filter({ hasText: "Esc to cancel" });
+    const chordIndicator = () => ctx.window.locator("[data-command-hud]");
 
-    test("Cmd+K shows chord indicator and Escape cancels it", async () => {
+    test("Cmd+K shows command HUD and Escape cancels it", async () => {
       const { window } = ctx;
       await window.keyboard.press(`${mod}+k`);
       await expect(chordIndicator()).toBeVisible({ timeout: T_MEDIUM });
@@ -129,9 +128,9 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
       await expect(title).not.toBeAttached({ timeout: T_SHORT });
     });
 
-    test("Cmd+K W opens worktree palette", async () => {
+    test("Cmd+K Cmd+O opens worktree palette", async () => {
       const { window } = ctx;
-      await pressChord(window, `${mod}+k`, "w");
+      await pressChord(window, `${mod}+k`, `${mod}+o`);
 
       const palette = window.locator('[role="dialog"][aria-label="Worktree palette"]');
       await expect(palette).toBeVisible({ timeout: T_MEDIUM });

@@ -13,6 +13,7 @@ export {
   FolderGit2, // git worktree (single)
   Folders, // copy tree / file hierarchy capture (two overlapping folders)
   GitPullRequest, // forge provider / code-host plugin category
+  History, // resume closed session / session history
   Layers, // worktree overview (multiple worktrees, stacked)
   LayoutPanelTop, // workspace plugin category (panels, notes)
   Plug, // agent (integration that plugs into the host system)

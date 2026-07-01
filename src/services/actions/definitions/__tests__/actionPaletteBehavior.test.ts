@@ -20,6 +20,7 @@ function createStubCallbacks(): ActionCallbacks {
     onOpenWorktreeOverview: () => {},
     onCloseWorktreeOverview: () => {},
     onOpenPanelPalette: () => {},
+    onOpenResumeSessionsPalette: () => {},
     onOpenProjectSwitcherPalette: () => {},
     onConfirmCloseActiveProject: () => {},
     onOpenActionPalette: () => {},

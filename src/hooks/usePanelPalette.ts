@@ -14,6 +14,11 @@ import { useProjectStore } from "@/store/projectStore";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { keybindingService } from "@/services/KeybindingService";
 import { formatTimeAgo } from "@/utils/timeAgo";
+import {
+  NO_WORKTREE_GROUP_KEY,
+  pathBasename,
+  prettifyModelId,
+} from "@/services/resumeSessionItems";
 import { isUselessTitle } from "@shared/utils/isUselessTitle";
 import type { KeyAction } from "@shared/types/keymap";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
@@ -58,16 +63,6 @@ import { isAgentInstalled } from "../../shared/utils/agentAvailability";
 
 const STALE_THRESHOLD_MS = 5 * 60 * 1000;
 
-// Group key for resume records that were never tied to a worktree (e.g. a
-// terminal launched at the project root before worktree scoping existed).
-const NO_WORKTREE_GROUP_KEY = "__no-worktree__";
-
-function pathBasename(p: string | null | undefined): string {
-  if (!p) return "";
-  const parts = p.split(/[/\\]/).filter(Boolean);
-  return parts[parts.length - 1] ?? "";
-}
-
 const AGENT_LAUNCH_ACTIONS: Record<string, KeyAction> = Object.fromEntries(
   LAUNCHABLE_AGENT_IDS.map((id) => [id, `agent.${id}` as KeyAction])
 );
@@ -81,17 +76,6 @@ const PANEL_FUSE_OPTIONS: IFuseOptions<PanelKindOption> = {
   threshold: 0.4,
   includeScore: true,
 };
-
-function prettifyModelId(modelId: string): string {
-  let name = modelId;
-  const slashIdx = name.lastIndexOf("/");
-  if (slashIdx >= 0) name = name.slice(slashIdx + 1);
-  name = name
-    .replace(/^claude-/, "")
-    .replace(/-/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-  return name;
-}
 
 export const MORE_AGENTS_PANEL_ID = "more-agents";
 

@@ -70,7 +70,7 @@ export interface UseActionPaletteReturn {
 const MAX_RESULTS = 20;
 const MAX_MRU_RESULTS = 10;
 
-function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
+export function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
   const title =
     typeof entry.title === "string" && entry.title.trim().length > 0 ? entry.title : entry.id;
   const description = typeof entry.description === "string" ? entry.description : "";

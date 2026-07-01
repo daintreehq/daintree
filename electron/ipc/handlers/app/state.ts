@@ -10,6 +10,7 @@ import {
   filterValidTerminalEntries,
 } from "../../../schemas/ipc.js";
 import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.js";
+import { USAGE_WINDOW_MS, MAX_USES_PER_ENTRY } from "../../../../shared/utils/actionUsage.js";
 
 export const CRASH_CRITICAL_FIELDS = new Set([
   "terminals",
@@ -684,8 +685,8 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       if ("actionMruList" in partialState && Array.isArray(partialState.actionMruList)) {
         const ACTION_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9._-]{0,127}$/;
         const MAX_ENTRIES = 20;
-        const MAX_SCORE = 100;
         const now = Date.now();
+        const cutoff = now - USAGE_WINDOW_MS;
 
         const isLegacy =
           partialState.actionMruList.length > 0 &&
@@ -708,33 +709,54 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
           updates.actionMruList = sanitized;
         } else {
           const seen = new Set<string>();
-          const sanitized: Array<{ id: string; score: number; lastAccessedAt: number }> = [];
+          const sanitized: Array<{ id: string; uses: number[] }> = [];
           for (const entry of partialState.actionMruList as Array<{
             id?: unknown;
+            uses?: unknown;
             score?: unknown;
             lastAccessedAt?: unknown;
           }>) {
             if (entry == null) continue;
             const id = entry.id;
-            const rawScore = typeof entry.score === "number" ? entry.score : 0;
-            const score = Number.isFinite(rawScore) ? rawScore : 0;
-            const rawLastAccessedAt =
-              typeof entry.lastAccessedAt === "number" ? entry.lastAccessedAt : 0;
-            const lastAccessedAt = Number.isFinite(rawLastAccessedAt) ? rawLastAccessedAt : 0;
-
             if (
-              typeof id === "string" &&
-              ACTION_ID_PATTERN.test(id) &&
-              !seen.has(id) &&
-              sanitized.length < MAX_ENTRIES
+              typeof id !== "string" ||
+              !ACTION_ID_PATTERN.test(id) ||
+              seen.has(id) ||
+              sanitized.length >= MAX_ENTRIES
             ) {
-              seen.add(id);
-              sanitized.push({
-                id,
-                score: Math.max(0, Math.min(MAX_SCORE, score)),
-                lastAccessedAt: Math.max(0, Math.min(now, lastAccessedAt)),
-              });
+              continue;
             }
+
+            let uses: number[];
+            if (Array.isArray(entry.uses)) {
+              uses = entry.uses
+                .filter(
+                  (t): t is number =>
+                    typeof t === "number" && Number.isFinite(t) && t > cutoff && t <= now
+                )
+                .sort((a: number, b: number) => a - b);
+              if (uses.length > MAX_USES_PER_ENTRY) {
+                uses = uses.slice(uses.length - MAX_USES_PER_ENTRY);
+              }
+            } else {
+              // Migrate a legacy frecency entry ({ score, lastAccessedAt }) by
+              // replaying round(score) uses at its last-access time; it drops out
+              // entirely if that timestamp predates the rolling window.
+              const rawScore = typeof entry.score === "number" ? entry.score : 0;
+              const score = Number.isFinite(rawScore) ? rawScore : 0;
+              const rawLast = typeof entry.lastAccessedAt === "number" ? entry.lastAccessedAt : 0;
+              const lastAccessedAt = Number.isFinite(rawLast) ? Math.min(now, rawLast) : 0;
+              if (lastAccessedAt > cutoff) {
+                const count = Math.max(1, Math.min(MAX_USES_PER_ENTRY, Math.round(score)));
+                uses = new Array(count).fill(lastAccessedAt);
+              } else {
+                uses = [];
+              }
+            }
+
+            if (uses.length === 0) continue;
+            seen.add(id);
+            sanitized.push({ id, uses });
           }
           updates.actionMruList = sanitized;
         }

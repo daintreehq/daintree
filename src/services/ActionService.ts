@@ -358,7 +358,21 @@ export class ActionService {
 
     let validatedArgs = args;
     if (definition.argsSchema) {
-      const validation = definition.argsSchema.safeParse(args);
+      // Rescue `undefined` args ONLY for an all-optional object schema — one that
+      // rejects `undefined` but accepts `{}` (e.g. terminal.kill resolves the
+      // focused terminal when no id is passed). Keybinding/HUD dispatch sites pass
+      // `undefined`, which would otherwise fail with "Invalid arguments". A truly
+      // required field still fails (that's `requiresArgs`), and a schema that
+      // meaningfully accepts `undefined` (z.void/z.undefined) is left untouched.
+      let toValidate = args;
+      if (
+        args === undefined &&
+        !definition.argsSchema.safeParse(undefined).success &&
+        definition.argsSchema.safeParse({}).success
+      ) {
+        toValidate = {};
+      }
+      const validation = definition.argsSchema.safeParse(toValidate);
       if (!validation.success) {
         const error: ActionError = {
           code: "VALIDATION_ERROR",

@@ -787,24 +787,25 @@ describe("KeybindingService", () => {
       expect(result.chordPrefix).toBe(false);
     });
 
-    it("does not fire a standalone modified shortcut as the invalid second key (Cmd+K then Cmd+T)", () => {
+    it("does not fire a standalone modified shortcut as the invalid second key (Cmd+K then Cmd+B)", () => {
       setPlatform("MacIntel");
       const service = new KeybindingService();
       startCmdKChord(service);
 
-      // Cmd+T is normally bound to terminal.duplicate. As an invalid second
-      // key after Cmd+K, it must NOT resolve to that action — the user pressed
-      // it as part of a cancelled chord, not as an intentional duplicate.
-      const cmdT = createKeyboardEvent({
-        key: "t",
-        code: "KeyT",
+      // Cmd+B is normally bound to nav.toggleSidebar and is not a Cmd+K chord
+      // completion. As an invalid second key after Cmd+K, it must NOT resolve to
+      // that action — the user pressed it as part of a cancelled chord, not as
+      // an intentional sidebar toggle.
+      const cmdB = createKeyboardEvent({
+        key: "b",
+        code: "KeyB",
         metaKey: true,
       });
-      const result = service.resolveKeybinding(cmdT);
+      const result = service.resolveKeybinding(cmdB);
 
       expect(result.match).toBeUndefined();
       expect(result.shouldConsume).toBe(true);
-      expect(service.getLastInvalidKey()).toBe("Cmd+t");
+      expect(service.getLastInvalidKey()).toBe("Cmd+b");
     });
 
     it("notifies listeners synchronously when lastInvalidKey is set via resolveKeybinding", () => {
@@ -859,14 +860,17 @@ describe("KeybindingService", () => {
       expect(service.getLastInvalidKey()).toBeNull();
     });
 
-    it("does not set lastInvalidKey when the chord auto-clear timeout fires", () => {
+    it("keeps the pending chord alive indefinitely (no auto-clear timeout)", () => {
       vi.useFakeTimers();
       try {
         const service = new KeybindingService();
         startCmdKChord(service);
 
-        vi.advanceTimersByTime(2000);
-        expect(service.getPendingChord()).toBeNull();
+        // Chords no longer expire on a timer — the Cmd+K command HUD stays open
+        // until explicitly completed/cancelled. Advancing well past the old
+        // 1000ms window must leave the chord pending and lastInvalidKey null.
+        vi.advanceTimersByTime(5000);
+        expect(service.getPendingChord()).not.toBeNull();
         expect(service.getLastInvalidKey()).toBeNull();
       } finally {
         vi.useRealTimers();
@@ -983,7 +987,7 @@ describe("KeybindingService", () => {
       expect(listener).toHaveBeenCalledTimes(1);
     });
 
-    it("cancels the chord auto-clear timeout", () => {
+    it("leaves no lingering timer after pop (no delayed re-notify)", () => {
       vi.useFakeTimers();
       try {
         setPlatform("MacIntel");
@@ -1002,8 +1006,8 @@ describe("KeybindingService", () => {
         const listener = vi.fn();
         service.subscribe(listener);
 
-        // The original 1000ms timeout would have fired here and re-notified
-        // listeners. After pop, no further notification should occur.
+        // Pending chords no longer arm a timer, so advancing the clock must
+        // never re-notify listeners once the chord has been popped.
         vi.advanceTimersByTime(2000);
 
         expect(listener).not.toHaveBeenCalled();
@@ -1558,21 +1562,21 @@ describe("KeybindingService", () => {
   });
 
   describe("worktree empty-state shortcut defaults — issue #6437", () => {
-    it("registers Cmd+K N as the default for worktree.createDialog.open", () => {
+    it("registers Cmd+K Cmd+N as the default for worktree.createDialog.open", () => {
       const binding = DEFAULT_KEYBINDINGS.find((b) => b.actionId === "worktree.createDialog.open");
       expect(binding).toBeDefined();
-      expect(binding?.combo).toBe("Cmd+K N");
+      expect(binding?.combo).toBe("Cmd+K Cmd+N");
       expect(binding?.scope).toBe("global");
       expect(binding?.category).toBe("Worktrees");
     });
 
-    it("does not collide with the existing Cmd+K W worktree-palette chord", () => {
+    it("does not collide with the existing Cmd+K Cmd+O worktree-palette chord", () => {
       const createDialog = DEFAULT_KEYBINDINGS.find(
         (b) => b.actionId === "worktree.createDialog.open"
       );
       const palette = DEFAULT_KEYBINDINGS.find((b) => b.actionId === "worktree.openPalette");
-      expect(createDialog?.combo).toBe("Cmd+K N");
-      expect(palette?.combo).toBe("Cmd+K W");
+      expect(createDialog?.combo).toBe("Cmd+K Cmd+N");
+      expect(palette?.combo).toBe("Cmd+K Cmd+O");
       expect(createDialog?.combo).not.toBe(palette?.combo);
     });
 
@@ -1615,8 +1619,8 @@ describe("KeybindingService", () => {
     // pins one chord and asserts (a) the display combo resolves to the
     // expected key glyphs on Mac, and (b) the chord has no exact or prefix
     // shadow against any other registered binding. The chord family matches
-    // the existing terminal bulk-action convention (closeAll/killAll/
-    // restartAll use the same Cmd+K Cmd+<letter> shape).
+    // the existing terminal bulk-action convention (closeAll/restartAll use
+    // the same Cmd+K Cmd+<letter> shape).
     const RECOVERY_CHORDS: Array<{ actionId: string; combo: string; letter: string }> = [
       { actionId: "terminal.kill", combo: "Cmd+K Cmd+Q", letter: "Q" },
       { actionId: "terminal.restart", combo: "Cmd+K Cmd+E", letter: "E" },

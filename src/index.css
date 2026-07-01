@@ -2582,6 +2582,16 @@ body[data-performance-mode="true"] .surface-overlay.active-sessions-menu {
   background-color: var(--color-surface-canvas) !important;
 }
 
+/* Command HUD glass — the generic backdrop-blur kill rule below strips the
+ * frost in performance mode; give it a solid elevated surface so it stays
+ * legible (mirrors the .surface-overlay perf fallback above). */
+body[data-performance-mode="true"] .command-hud-glass {
+  background-color: var(--color-surface-panel-elevated) !important;
+}
+.light body[data-performance-mode="true"] .command-hud-glass {
+  background-color: var(--color-surface-panel-elevated) !important;
+}
+
 body[data-performance-mode="true"] .surface-chrome {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
@@ -2625,6 +2635,14 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
 
   .xterm {
     forced-color-adjust: none;
+  }
+
+  /* Command HUD glass — drop the frosted material for a solid system surface;
+   * the UA forces bg to Canvas and removes the shadow anyway. */
+  .command-hud-glass {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background-color: Canvas;
   }
 
   .terminal-selected {
@@ -2888,6 +2906,27 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     background-color: var(--color-surface-panel-elevated);
   }
 
+  /* Cmd+K command HUD — a distinct dark-glass "spotlight" surface. Deeper and
+   * more translucent than .surface-overlay (canvas plane @70% vs sidebar @94%)
+   * so it reads as its own command mode floating over the terminals. The blur +
+   * saturation are applied on the element via Tailwind using the theme material
+   * tokens; this rule carries the tint + float shadow. */
+  .command-hud-glass {
+    background-color: color-mix(in oklab, var(--color-surface-canvas) 70%, transparent);
+    box-shadow:
+      var(--shadow-modal),
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
+  }
+
+  /* Light schemes: lift to the elevated plane and brighten the inner sheen so the
+   * glass stays legible over a near-white canvas. */
+  .light .command-hud-glass {
+    background-color: color-mix(in oklab, var(--color-surface-panel-elevated) 82%, transparent);
+    box-shadow:
+      var(--shadow-modal),
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.55);
+  }
+
   /* High-contrast users want solid chrome behind text; drop the frosted-glass
    * material. Same shape as the prefers-reduced-transparency fallbacks in
    * toolbar.css and panels.css. Inside @layer utilities so the layer
@@ -2900,6 +2939,17 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     }
 
     .light .surface-overlay {
+      background-color: var(--color-surface-panel-elevated);
+    }
+
+    /* High-contrast users want solid chrome — drop the frosted material. */
+    .command-hud-glass {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+      background-color: var(--color-surface-sidebar);
+    }
+
+    .light .command-hud-glass {
       background-color: var(--color-surface-panel-elevated);
     }
   }

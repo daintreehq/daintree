@@ -167,7 +167,7 @@ test.describe.serial("Core: Command Palette Accessibility", () => {
 
     await window.keyboard.press(`${mod}+K`);
     await window.waitForTimeout(120);
-    await window.keyboard.press("t");
+    await window.keyboard.press(`${mod}+t`);
     await expect(window.locator(SEL.themePalette.dialog)).toBeVisible({ timeout: T_MEDIUM });
     await window.waitForTimeout(T_SETTLE);
 

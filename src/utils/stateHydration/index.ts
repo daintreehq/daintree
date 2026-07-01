@@ -15,7 +15,7 @@ import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { inferKind } from "./statePatcher";
 import { RECONNECT_TIMEOUT_MS } from "./reconnectManager";
-import type { ActionFrecencyEntry } from "@shared/types/actions";
+import type { ActionFrecencyEntry, ActionUsageEntry } from "@shared/types/actions";
 import { panelPersistence } from "@/store/persistence/panelPersistence";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
@@ -116,7 +116,7 @@ export interface HydrationOptions {
   setReconnectError?: (id: string, error: TerminalReconnectError) => void;
   hydrateTabGroups?: (tabGroups: TabGroup[], options?: { skipPersist?: boolean }) => void;
   hydrateMru?: (list: string[]) => void;
-  hydrateActionMru?: (list: ActionFrecencyEntry[] | string[]) => void;
+  hydrateActionMru?: (list: ActionUsageEntry[] | ActionFrecencyEntry[] | string[]) => void;
   hydrateActionPrefs?: (prefs: { pinnedIds?: string[]; hiddenIds?: string[] }) => void;
   restoreTerminalOrder?: (orderedIds: string[]) => void;
   /**

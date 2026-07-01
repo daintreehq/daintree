@@ -330,10 +330,27 @@ export interface ActionDispatchPayload {
   confirmed?: boolean;
 }
 
+/**
+ * Ranking projection consumed by the palette search ranker and the agent tray.
+ * `score` is the action's usage count within the rolling window (see
+ * {@link ActionUsageEntry}); `lastAccessedAt` is its most-recent use. Produced
+ * by `getSortedActionMruList()` — not the persisted shape.
+ */
 export interface ActionFrecencyEntry {
   id: string;
   score: number;
   lastAccessedAt: number;
+}
+
+/**
+ * Persisted / IPC shape for action usage. Stores the raw use timestamps (within
+ * the rolling window) so a genuine 7-day count can be recomputed on load rather
+ * than a decaying scalar. See `shared/utils/actionUsage.ts`.
+ */
+export interface ActionUsageEntry {
+  id: string;
+  /** Sorted-ascending epoch-ms use timestamps within the rolling window. */
+  uses: number[];
 }
 
 /**
