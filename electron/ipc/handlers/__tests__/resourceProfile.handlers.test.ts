@@ -8,9 +8,8 @@ const ipcMainMock = vi.hoisted(() => ({
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
 
-// define.js wires plain ops through typedHandle; record (channel, handler) so
-// each op's body can be invoked directly. The other typedHandle* variants are
-// unused by this namespace but must exist for the module to import cleanly.
+// define.js wires ops through typedHandle/typedHandleValidated; record
+// (channel, handler) so each op's body can be invoked directly.
 const utilsMock = vi.hoisted(() => ({
   typedHandle: (channel: string, handler: unknown) => {
     ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
@@ -18,7 +17,16 @@ const utilsMock = vi.hoisted(() => ({
     );
     return () => ipcMainMock.removeHandler(channel);
   },
-  typedHandleValidated: vi.fn(),
+  typedHandleValidated: (
+    channel: string,
+    schema: { parse: (input: unknown) => unknown },
+    handler: unknown
+  ) => {
+    ipcMainMock.handle(channel, async (_e: unknown, ...args: unknown[]) =>
+      (handler as (payload: unknown) => unknown)(schema.parse(args[0]))
+    );
+    return () => ipcMainMock.removeHandler(channel);
+  },
   typedHandleWithContext: vi.fn(),
   typedHandleWithContextValidated: vi.fn(),
 }));
@@ -77,5 +85,45 @@ describe("registerResourceProfileHandlers — getResourceProfileSnapshot", () =>
       speedLimit: 100,
       lagPressureActive: false,
     });
+  });
+});
+
+describe("registerResourceProfileHandlers — requestInteractiveOverride", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("forwards a validated duration to the live service", async () => {
+    const requestInteractiveOverride = vi.fn();
+    serviceRefsMock.getResourceProfileService.mockReturnValue({
+      requestInteractiveOverride,
+    });
+
+    registerResourceProfileHandlers({} as never);
+    await getHandler("system:request-interactive-override")(1500);
+
+    expect(requestInteractiveOverride).toHaveBeenCalledWith(1500);
+  });
+
+  it("no-ops when the service is unavailable", async () => {
+    serviceRefsMock.getResourceProfileService.mockReturnValue(null);
+
+    registerResourceProfileHandlers({} as never);
+    await expect(getHandler("system:request-interactive-override")(1500)).resolves.toBeUndefined();
+  });
+
+  it("rejects malformed durations at the IPC boundary", async () => {
+    const requestInteractiveOverride = vi.fn();
+    serviceRefsMock.getResourceProfileService.mockReturnValue({
+      requestInteractiveOverride,
+    });
+
+    registerResourceProfileHandlers({} as never);
+    await expect(getHandler("system:request-interactive-override")(Number.NaN)).rejects.toThrow();
+    await expect(getHandler("system:request-interactive-override")(Infinity)).rejects.toThrow();
+    await expect(getHandler("system:request-interactive-override")(-1)).rejects.toThrow();
+    await expect(getHandler("system:request-interactive-override")(5001)).rejects.toThrow();
+
+    expect(requestInteractiveOverride).not.toHaveBeenCalled();
   });
 });

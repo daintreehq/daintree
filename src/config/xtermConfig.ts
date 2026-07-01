@@ -69,9 +69,9 @@ export function getXtermOptions(config: TerminalAppearanceConfig): ITerminalOpti
     scrollback: config.scrollback,
     screenReaderMode: config.screenReaderMode ?? false,
     smoothScrollDuration: 0,
-    // xterm 6.1 moved the overview ruler under `scrollbar`; setting `width`
-    // enables the ruler (search match markers) at that CSS-pixel width.
-    scrollbar: { width: 15 },
+    // xterm 6.1 exposes the overview ruler directly; setting `width` enables
+    // the ruler (search match markers) at that CSS-pixel width.
+    overviewRuler: { width: 15 },
   };
 }
 
