@@ -216,7 +216,7 @@ describe("PrivacyDataTab", () => {
 
     // The log-retention picker renders before the session-history picker, so
     // index 0 of each duplicated day label is the log-retention control.
-    const logRetentionButton = (label: string) => screen.getAllByText(label)[0].closest("button")!;
+    const logRetentionButton = (label: string) => screen.getAllByText(label)[0]!.closest("button")!;
 
     await waitFor(() => {
       expect(logRetentionButton("30 days").className).toContain("bg-overlay-selected");
