@@ -152,7 +152,7 @@ export function registerFileActions(actions: ActionRegistry, _callbacks: ActionC
     scope: "renderer",
     argsSchema: showItemInFolderArgsSchema,
     run: async (args: unknown) => {
-      const { path } = args as z.infer<typeof showItemInFolderArgsSchema>;
+      const { path } = showItemInFolderArgsSchema.parse(args);
       await systemClient.showItemInFolder(path);
     },
   }));
