@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { getSharedBuffersMock } = vi.hoisted(() => ({
   getSharedBuffersMock: vi.fn(),
@@ -578,6 +578,108 @@ describe("TerminalOutputIngestService", () => {
 
       expect(service.getQueuedBytes("term-1")).toBe(6);
       expect(service.getStalledBytes("term-1")).toBe(0);
+    });
+  });
+
+  // #10881: a background (non-focused) terminal's drain must yield to the
+  // scheduler so a queued wheel/scroll/keystroke event on the focused terminal
+  // dispatches first, while the focused terminal keeps draining synchronously.
+  // yieldToScheduler falls back to setTimeout(0) when no native `scheduler`
+  // exists, so these tests stub it away and drive fake timers to observe the
+  // deferral deterministically (mirrors schedulerYield.test.ts).
+  describe("focused-drain priority (#10881)", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    });
+
+    it("drains the focused terminal synchronously (echo latency unchanged)", () => {
+      const writeToTerminal = vi.fn();
+      const service = new TerminalOutputIngestService(writeToTerminal, () => "term-focused");
+
+      service.bufferData("term-focused", "hello");
+
+      // No timer advance — the focused pane's write lands inline, in the same
+      // task the keystroke echo arrived in.
+      expect(writeToTerminal).toHaveBeenCalledTimes(1);
+      expect(writeToTerminal).toHaveBeenCalledWith("term-focused", "hello", 1);
+    });
+
+    it("drains synchronously when focus is unknown (null must not defer everyone)", () => {
+      const writeToTerminal = vi.fn();
+      const service = new TerminalOutputIngestService(writeToTerminal, () => null);
+
+      service.bufferData("term-bg", "data");
+
+      expect(writeToTerminal).toHaveBeenCalledTimes(1);
+      expect(writeToTerminal).toHaveBeenCalledWith("term-bg", "data", 1);
+    });
+
+    it("defers a background terminal's drain until a scheduler tick", async () => {
+      vi.stubGlobal("scheduler", undefined);
+      vi.useFakeTimers();
+      const writeToTerminal = vi.fn();
+      const service = new TerminalOutputIngestService(writeToTerminal, () => "term-focused");
+
+      service.bufferData("term-bg", "background");
+
+      // Held, not written — the focused pane's input gets the current task.
+      expect(writeToTerminal).not.toHaveBeenCalled();
+      expect(service.getQueuedBytes("term-bg")).toBe(10);
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(writeToTerminal).toHaveBeenCalledTimes(1);
+      expect(writeToTerminal).toHaveBeenCalledWith("term-bg", "background", 1);
+    });
+
+    it("coalesces background chunks arriving before the deferred drain fires", async () => {
+      vi.stubGlobal("scheduler", undefined);
+      vi.useFakeTimers();
+      const writeToTerminal = vi.fn();
+      const service = new TerminalOutputIngestService(writeToTerminal, () => "term-focused");
+
+      service.bufferData("term-bg", "a");
+      service.bufferData("term-bg", "b");
+      service.bufferData("term-bg", "c");
+
+      // One scheduled continuation, not one per chunk (#8150).
+      expect(writeToTerminal).not.toHaveBeenCalled();
+      expect(service.getQueuedBytes("term-bg")).toBe(3);
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      // The deferred drain still routes through the capped coalescer (#4853),
+      // so three chunks land as one write carrying chunkCount 3.
+      expect(writeToTerminal).toHaveBeenCalledTimes(1);
+      expect(writeToTerminal).toHaveBeenCalledWith("term-bg", "abc", 3);
+    });
+
+    it("gates the notifyWriteComplete resume path, not just chunk arrival (#8371)", async () => {
+      vi.stubGlobal("scheduler", undefined);
+      vi.useFakeTimers();
+      const writeToTerminal = vi.fn();
+      const service = new TerminalOutputIngestService(writeToTerminal, () => "term-focused");
+
+      // Background terminal pushed past the high watermark: the first chunk
+      // drains (deferred), the next is held behind backpressure.
+      service.bufferData("term-bg", "x".repeat(140_000));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(writeToTerminal).toHaveBeenCalledTimes(1);
+
+      service.bufferData("term-bg", "held");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(writeToTerminal).toHaveBeenCalledTimes(1); // still over watermark, nothing drains
+
+      // Acknowledging the in-flight write drops below the low watermark and
+      // releases the hold — this resume must defer for a background terminal,
+      // not write inline (regression: gating only enqueueChunk would leak here).
+      service.notifyWriteComplete("term-bg", 140_000);
+      expect(writeToTerminal).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(writeToTerminal).toHaveBeenCalledTimes(2);
+      expect(writeToTerminal).toHaveBeenLastCalledWith("term-bg", "held", 1);
     });
   });
 });

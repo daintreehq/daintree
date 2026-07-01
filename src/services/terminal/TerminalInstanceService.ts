@@ -118,8 +118,9 @@ class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
   // Throttle for the interactive resource-profile override IPC (see onActiveWheel).
   private lastInteractiveOverrideRequestAt = 0;
-  private dataBuffer = new TerminalOutputIngestService((id, data, chunkCount) =>
-    this.writeToTerminal(id, data, chunkCount)
+  private dataBuffer = new TerminalOutputIngestService(
+    (id, data, chunkCount) => this.writeToTerminal(id, data, chunkCount),
+    () => usePanelStore.getState().focusedId
   );
   private suppressedExitUntil = new Map<string, number>();
   private unseenTracker = new TerminalUnseenOutputTracker();
