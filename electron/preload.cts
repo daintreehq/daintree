@@ -1755,6 +1755,9 @@ function buildElectronApi(): ElectronAPI {
 
       setGlobal: (value: boolean) => _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET_GLOBAL, value),
 
+      setGlobalInline: (value: boolean) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET_GLOBAL_INLINE, value),
+
       reset: (agentType?: string) => _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_RESET, agentType),
 
       stampVersion: (version: number) =>

@@ -478,6 +478,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             cachedLaunchCliDetail
           );
           const globalSkipPermissions = launchSettings?.globalSkipPermissions ?? false;
+          const globalUseAltScreen = launchSettings?.globalUseAltScreen ?? false;
           command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
             initialPrompt: launchOptions?.prompt,
             interactive: launchOptions?.interactive ?? true,
@@ -485,6 +486,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             modelId: launchOptions?.modelId,
             presetArgs: preset?.args?.join(" "),
             globalSkipPermissions,
+            globalUseAltScreen,
           });
 
           // Capture process-level flags for session resume persistence
@@ -493,6 +495,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               modelId: launchOptions?.modelId,
               presetArgs: preset?.args,
               globalSkipPermissions,
+              globalUseAltScreen,
             });
           }
 

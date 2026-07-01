@@ -7,8 +7,12 @@ import {
   isAgentBypassSupported,
   resolveDangerousMode,
   combineDangerousModes,
+  resolveInlineMode,
+  combineInlineModes,
+  resolveEffectiveInlineMode,
   type AgentSettingsEntry,
   type DangerousMode,
+  type InlineMode,
 } from "@shared/types";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 
@@ -67,11 +71,8 @@ export function useAgentScope({
   const agentCfg = getAgentConfig(agentId);
   const supportsInlineMode = !!agentCfg?.capabilities?.inlineModeFlag;
 
-  const agentDefaultInline =
-    activeEntry.inlineMode ?? agentCfg?.capabilities?.defaultInlineMode ?? true;
   const agentDefaultCustomFlags = activeEntry.customFlags ?? "";
 
-  const inlineOverride = selectedPreset?.inlineMode;
   const customFlagsOverride = selectedPreset?.customFlags;
 
   // Tri-state bypass (#10432 follow-up). The control edits the *active scope's
@@ -105,8 +106,31 @@ export function useAgentScope({
       ? resolveMode(combineDangerousModes(agentMode, presetMode))
       : agentResolvedDangerous;
 
+  // Tri-state alt-screen mode (#10876), mirroring the bypass control above. The
+  // stored value polarity is "on" = inline, "off" = alt screen; "Default"
+  // (inherit) defers to the agent registry default and then the global
+  // "Use alt-screen mode by default" switch.
+  const globalUseAltScreen = useAgentSettingsStore((s) => s.settings?.globalUseAltScreen ?? false);
+  const agentInlineMode = resolveInlineMode(activeEntry);
+  const presetInlineMode = selectedPreset ? resolveInlineMode(selectedPreset) : undefined;
+  const inlineMode: InlineMode =
+    scopeKind === "custom" ? (presetInlineMode ?? "inherit") : agentInlineMode;
+
+  // Resolve a tri-state to the effective "is inline" decision via the SAME
+  // shared chokepoint the launch path uses, so the UI can't drift from behavior.
+  const resolveInline = (mode: InlineMode): boolean =>
+    resolveEffectiveInlineMode({ inlineMode: mode }, agentId, globalUseAltScreen);
+
+  const agentResolvedInline = resolveInline(agentInlineMode);
+  // What the inline "Default" (inherit) segment resolves to and where from.
+  const inlineInheritResolvesToInline =
+    scopeKind === "custom" ? agentResolvedInline : resolveInline("inherit");
+  const inlineInheritOriginLabel = scopeKind === "custom" ? "agent default" : "global setting";
+
   const effectiveInlineMode =
-    scopeKind === "custom" ? (inlineOverride ?? agentDefaultInline) : agentDefaultInline;
+    scopeKind === "custom"
+      ? resolveInline(combineInlineModes(agentInlineMode, presetInlineMode))
+      : agentResolvedInline;
 
   const isEditableScope = scopeKind === "default" || scopeKind === "custom";
   const customArgsValue =
@@ -234,16 +258,16 @@ export function useAgentScope({
     }
   };
 
-  const handleInlineModeChange = () => {
+  const handleInlineModeChange = (mode: InlineMode) => {
     if (scopeKind === "default") {
       void (async () => {
-        await updateAgent(agentId, {
-          inlineMode: !agentDefaultInline,
-        } as Partial<AgentSettingsEntry>);
+        await updateAgent(agentId, { inlineMode: mode } as Partial<AgentSettingsEntry>);
         onSettingsChange?.();
       })();
     } else if (scopeKind === "custom" && selectedPreset) {
-      handleUpdatePreset(selectedPreset.id, { inlineMode: !effectiveInlineMode });
+      // "Default" clears the override (undefined, dropped on serialize) so the
+      // preset inherits the agent's resolved mode.
+      handleUpdatePreset(selectedPreset.id, { inlineMode: mode === "inherit" ? undefined : mode });
     }
   };
 
@@ -259,12 +283,6 @@ export function useAgentScope({
     if (scopeKind === "custom" && selectedPreset) {
       // Store empty/whitespace as undefined so the title falls back to `name`.
       handleUpdatePreset(selectedPreset.id, { displayTitle: value.trim() ? value : undefined });
-    }
-  };
-
-  const handleInlineOverrideReset = () => {
-    if (scopeKind === "custom" && selectedPreset) {
-      handleUpdatePreset(selectedPreset.id, { inlineMode: undefined });
     }
   };
 
@@ -290,14 +308,15 @@ export function useAgentScope({
     globalBypassActive,
     inheritResolvesToOn,
     inheritOriginLabel,
+    inlineMode,
     effectiveInlineMode,
+    inlineInheritResolvesToInline,
+    inlineInheritOriginLabel,
     customArgsValue,
     customArgsPlaceholder,
     customArgsDescription,
     agentEnvSuggestions,
-    agentDefaultInline,
     agentDefaultCustomFlags,
-    inlineOverride,
     customFlagsOverride,
     customPresets,
     ccrPresets,
@@ -315,7 +334,6 @@ export function useAgentScope({
     handleInlineModeChange,
     handleCustomFlagsChange,
     handleDisplayTitleChange,
-    handleInlineOverrideReset,
     handleCustomFlagsOverrideReset,
   };
 }

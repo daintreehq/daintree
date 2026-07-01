@@ -7,6 +7,7 @@ let agentSettingsClient: typeof import("../agentSettingsClient").agentSettingsCl
 let getMock: ReturnType<typeof vi.fn>;
 let setMock: ReturnType<typeof vi.fn>;
 let setGlobalMock: ReturnType<typeof vi.fn>;
+let setGlobalInlineMock: ReturnType<typeof vi.fn>;
 let resetMock: ReturnType<typeof vi.fn>;
 let stampVersionMock: ReturnType<typeof vi.fn>;
 
@@ -17,6 +18,7 @@ describe("agentSettingsClient", () => {
     getMock = vi.fn();
     setMock = vi.fn().mockResolvedValue({});
     setGlobalMock = vi.fn().mockResolvedValue({});
+    setGlobalInlineMock = vi.fn().mockResolvedValue({});
     resetMock = vi.fn().mockResolvedValue({});
     stampVersionMock = vi.fn().mockResolvedValue({});
 
@@ -26,6 +28,7 @@ describe("agentSettingsClient", () => {
           get: getMock,
           set: setMock,
           setGlobal: setGlobalMock,
+          setGlobalInline: setGlobalInlineMock,
           reset: resetMock,
           stampVersion: stampVersionMock,
         },
@@ -148,6 +151,26 @@ describe("agentSettingsClient", () => {
 
     resolve({});
     await expect(fresh).resolves.toEqual({ globalSkipPermissions: true });
+  });
+
+  it("setGlobalInline() forwards the value and clears the inflight get() (#10876)", async () => {
+    let resolve!: (v: unknown) => void;
+    const deferred = new Promise((r) => {
+      resolve = r;
+    });
+    getMock.mockReturnValueOnce(deferred);
+
+    const stale = agentSettingsClient.get();
+    void agentSettingsClient.setGlobalInline(true);
+    expect(setGlobalInlineMock).toHaveBeenCalledWith(true);
+
+    getMock.mockResolvedValue({ globalUseAltScreen: true });
+    const fresh = agentSettingsClient.get();
+    expect(fresh).not.toBe(stale);
+    expect(getMock).toHaveBeenCalledTimes(2);
+
+    resolve({});
+    await expect(fresh).resolves.toEqual({ globalUseAltScreen: true });
   });
 
   it("reset() and stampVersion() also clear the inflight get()", async () => {

@@ -171,8 +171,14 @@ export interface AgentPreset {
   dangerousMode?: "inherit" | "on" | "off";
   /** Per-preset override: extra CLI flags merged on top of agent-level customFlags */
   customFlags?: string;
-  /** Per-preset override: when set, overrides the agent-level inlineMode setting */
-  inlineMode?: boolean;
+  /**
+   * Per-preset tri-state alt-screen override (`InlineMode`), layered on top of
+   * the agent's resolved mode: `"off"` (alt-screen) vetoes an agent/global
+   * `"on"` (inline), `"inherit"`/absent defers to the agent's Default scope. A
+   * legacy boolean is read literally (`true → "on"`). Inlined union to avoid a
+   * config→types import cycle.
+   */
+  inlineMode?: boolean | "inherit" | "on" | "off";
   /** Optional brand color (CSS hex) used to tint the agent icon for this preset */
   color?: string;
   /** Optional free-form panel/button title; falls back to `name` when unset */
@@ -199,7 +205,7 @@ export interface AgentProviderTemplate {
   dangerousEnabled?: boolean;
   dangerousMode?: "inherit" | "on" | "off";
   customFlags?: string;
-  inlineMode?: boolean;
+  inlineMode?: boolean | "inherit" | "on" | "off";
 }
 
 /**

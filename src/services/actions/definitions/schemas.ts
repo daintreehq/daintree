@@ -108,7 +108,7 @@ export const AgentPresetSchema = z.object({
   dangerousEnabled: z.boolean().optional(),
   dangerousMode: z.enum(["inherit", "on", "off"]).optional(),
   customFlags: z.string().optional(),
-  inlineMode: z.boolean().optional(),
+  inlineMode: z.union([z.boolean(), z.enum(["inherit", "on", "off"])]).optional(),
   color: z.string().optional(),
   displayTitle: z.string().optional(),
   fallbacks: z.array(z.string()).optional(),

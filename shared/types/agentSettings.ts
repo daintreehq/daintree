@@ -11,6 +11,19 @@ import { escapeShellArg, escapeShellArgOptional } from "../utils/shellEscape.js"
  */
 export type DangerousMode = "inherit" | "on" | "off";
 
+/**
+ * Tri-state alt-screen intent, stored on the `inlineMode` field. `"on"` =
+ * inline rendering (inject the agent's `inlineModeFlag`, e.g. `--no-alt-screen`);
+ * `"off"` = full-screen alternate buffer (no flag); `"inherit"` defers to the
+ * next level up (preset → agent registry default → the global "Use alt-screen
+ * mode by default" switch). Value polarity intentionally matches the legacy
+ * `inlineMode` boolean (`true` was inline), so a persisted boolean maps
+ * literally — `true → "on"`, `false → "off"` (see {@link resolveInlineMode}).
+ * The UI labels are decoupled from these values (the Settings control presents
+ * the choice in alt-screen terms).
+ */
+export type InlineMode = "inherit" | "on" | "off";
+
 export interface AgentSettingsEntry {
   /**
    * Tri-state pin for the toolbar: `true` (explicit pin), `false` (explicit
@@ -43,8 +56,15 @@ export interface AgentSettingsEntry {
    * top via {@link combineDangerousModes}.
    */
   dangerousMode?: DangerousMode;
-  /** Use inline rendering instead of fullscreen alt-screen TUI */
-  inlineMode?: boolean;
+  /**
+   * Alt-screen rendering intent for this agent's Default scope (#10876). Tri-state
+   * {@link InlineMode}: `"on"` = inline (inject `inlineModeFlag`), `"off"` =
+   * alt-screen, `"inherit"`/absent defers to the agent registry default and then
+   * the global `globalUseAltScreen` switch. A persisted legacy boolean is read
+   * literally by {@link resolveInlineMode} (`true → "on"`, `false → "off"`);
+   * preset overrides layer on top via {@link combineInlineModes}.
+   */
+  inlineMode?: boolean | InlineMode;
   /** When true, inject --include-directories for the clipboard temp directory (Gemini only) */
   shareClipboardDirectory?: boolean;
   /**
@@ -78,7 +98,14 @@ export interface AgentSettingsEntry {
      */
     dangerousMode?: DangerousMode;
     customFlags?: string;
-    inlineMode?: boolean;
+    /**
+     * Tri-state alt-screen override for this preset ({@link InlineMode}), layered
+     * on top of the agent's resolved mode via {@link combineInlineModes}. `"off"`
+     * (alt-screen) vetoes an agent/global `"on"`; `"inherit"`/absent defers to the
+     * agent's Default scope. Legacy boolean is read literally by
+     * {@link resolveInlineMode}.
+     */
+    inlineMode?: boolean | InlineMode;
     color?: string;
     /** Ordered preset IDs to fall over to when provider is unreachable. */
     fallbacks?: string[];
@@ -114,6 +141,18 @@ export interface AgentSettings {
    * their own independent bypass setting.
    */
   globalSkipPermissions?: boolean;
+  /**
+   * Global "use alt-screen mode by default" override (#10876). Controls what an
+   * agent's `"inherit"` inline-mode resolves to when no per-agent/preset choice
+   * and no curated registry default apply. Default off — so `inlineMode`
+   * resolves to inline (no alt-screen) globally unless something overrides it,
+   * mirroring how `globalSkipPermissions` defaults off. A curated per-agent
+   * registry `defaultInlineMode` (e.g. Grok's alt-screen) still wins over this
+   * switch; an explicit per-agent/preset `"on"`/`"off"` always vetoes it. Like
+   * the bypass override it is a *live* value OR-ed in at flag-generation time
+   * (see {@link resolveEffectiveInlineMode}), never mutating per-agent state.
+   */
+  globalUseAltScreen?: boolean;
 }
 
 export const DEFAULT_DANGEROUS_ARGS: Record<string, string> = {
@@ -142,13 +181,17 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
         customFlags: "",
         dangerousArgs: DEFAULT_DANGEROUS_ARGS[id] ?? "",
         dangerousEnabled: false,
-        inlineMode:
-          AGENT_REGISTRY[id]?.capabilities?.defaultInlineMode ??
-          !!AGENT_REGISTRY[id]?.capabilities?.inlineModeFlag,
+        // `inlineMode` is intentionally NOT seeded (#10876). Leaving it absent
+        // means an untouched agent resolves to `"inherit"`, so the agent's
+        // curated registry `defaultInlineMode` and then the global
+        // `globalUseAltScreen` switch decide — a concrete seed here would pin
+        // every agent and make the new global toggle a no-op for new users.
+        // Existing persisted booleans are still honoured via resolveInlineMode.
       },
     ])
   ),
   globalSkipPermissions: false,
+  globalUseAltScreen: false,
 };
 
 /**
@@ -191,6 +234,97 @@ export function combineDangerousModes(
   presetMode?: DangerousMode
 ): DangerousMode {
   return presetMode && presetMode !== "inherit" ? presetMode : agentMode;
+}
+
+/**
+ * Reads the tri-state {@link InlineMode} from a settings entry or preset (#10876).
+ * A persisted legacy boolean is mapped LITERALLY — `true → "on"` (inline),
+ * `false → "off"` (alt-screen) — not `false → "inherit"` the way
+ * {@link resolveDangerousMode} treats `dangerousEnabled`. The difference is
+ * deliberate: `inlineMode` was historically seeded with a concrete per-agent
+ * boolean (Grok `false`, Codex `true`), so a `false → "inherit"` mapping would
+ * retroactively hand those established choices to the new global switch. Only a
+ * genuinely-absent value resolves to `"inherit"`.
+ */
+export function resolveInlineMode(source: { inlineMode?: boolean | InlineMode }): InlineMode {
+  const value = source.inlineMode;
+  if (value === undefined) return "inherit";
+  if (typeof value === "boolean") return value ? "on" : "off";
+  return value;
+}
+
+/**
+ * Layers a preset's inline mode on top of the agent's resolved mode: the preset
+ * wins unless it defers (`"inherit"`). Mirrors {@link combineDangerousModes} —
+ * a preset `"off"` (alt-screen) is a true veto over an agent `"on"` (inline).
+ */
+export function combineInlineModes(agentMode: InlineMode, presetMode?: InlineMode): InlineMode {
+  return presetMode && presetMode !== "inherit" ? presetMode : agentMode;
+}
+
+/**
+ * Resolves the effective alt-screen decision for a launch from the (already
+ * preset-merged) entry's tri-state mode. Returns `true` when the agent should
+ * render inline — i.e. when the agent's `inlineModeFlag` should be injected.
+ *
+ * - `"on"`  → inline (inject flag).
+ * - `"off"` → alt-screen (no flag); an explicit veto that beats the global switch.
+ * - `"inherit"` → a curated per-agent registry `capabilities.defaultInlineMode`
+ *   (e.g. Grok's `false`, kept on the alternate screen because inline renders its
+ *   Rust TUI as garbled scrollback) wins if declared; otherwise defer to the
+ *   global "Use alt-screen mode by default" switch (`globalUseAltScreen` on →
+ *   alt-screen, off → inline).
+ *
+ * Callers that resolve a launch from a preset must bake the combined mode onto
+ * the entry first (see `applyPresetBehaviorOverrides`) so this single chokepoint
+ * sees the final intent.
+ */
+export function resolveEffectiveInlineMode(
+  entry: AgentSettingsEntry,
+  agentId: string | undefined,
+  globalUseAltScreen?: boolean
+): boolean {
+  const mode = resolveInlineMode(entry);
+  if (mode === "on") return true;
+  if (mode === "off") return false;
+  const registryDefault = agentId
+    ? getEffectiveAgentConfig(agentId)?.capabilities?.defaultInlineMode
+    : undefined;
+  if (typeof registryDefault === "boolean") return registryDefault;
+  return !globalUseAltScreen;
+}
+
+/**
+ * Reconciles a persisted `agentLaunchFlags` snapshot against the current
+ * effective inline-mode decision (#10876) — the alt-screen analog of
+ * {@link reconcileBypassFlags}'s "resume trap" fix.
+ *
+ * The agent's canonical single-token `inlineModeFlag` (e.g. `--no-alt-screen`)
+ * is baked into `agentLaunchFlags` by the same `buildAgentLaunchFlags` that
+ * captures the bypass flag, so a snapshot can carry a stale `--no-alt-screen`
+ * forward after the user (or the global switch) flips the decision. This strips
+ * every occurrence of that flag and re-appends a single copy only when
+ * `effectiveInline` is true, making every spawn/restart/restore/resume
+ * idempotent. Agents with no `inlineModeFlag` are left untouched.
+ */
+export function reconcileInlineModeFlag(
+  flags: readonly string[],
+  agentId: string,
+  effectiveInline: boolean
+): string[] {
+  const flag = getEffectiveAgentConfig(agentId)?.capabilities?.inlineModeFlag;
+  if (!flag) return [...flags];
+  if (!effectiveInline) return flags.filter((f) => f !== flag);
+  if (!flags.includes(flag)) return [...flags, flag];
+  // Wanted and already present: keep the first occurrence in place (preserving
+  // order so an already-correct snapshot is untouched), drop any duplicates.
+  let kept = false;
+  return flags.filter((f) => {
+    if (f !== flag) return true;
+    if (kept) return false;
+    kept = true;
+    return true;
+  });
 }
 
 /**
@@ -383,6 +517,12 @@ export interface GenerateAgentCommandOptions {
   presetArgs?: string;
   /** Global skip-permissions override (#10432); forwarded to {@link generateAgentFlags}. */
   globalSkipPermissions?: boolean;
+  /**
+   * Global "use alt-screen mode by default" override (#10876); resolves an
+   * agent's `"inherit"` inline mode when no per-agent/preset choice or curated
+   * registry default applies (see {@link resolveEffectiveInlineMode}).
+   */
+  globalUseAltScreen?: boolean;
 }
 
 /**
@@ -429,13 +569,12 @@ export function generateAgentCommand(
       }
     }
 
-    // Add inline mode flag when enabled and agent supports it. When the user
-    // hasn't chosen (entry.inlineMode === undefined), fall back to the agent's
-    // `defaultInlineMode` (or true for flag-bearing agents that don't override),
-    // so an agent like Grok defaults to the alternate screen instead of inline.
+    // Add inline mode flag when the resolved tri-state says inline and the agent
+    // supports it (#10876). resolveEffectiveInlineMode encodes the full chain:
+    // explicit on/off → preset (already baked onto the entry) → curated registry
+    // default → the global `globalUseAltScreen` switch.
     const inlineModeFlag = agentConfig?.capabilities?.inlineModeFlag;
-    const inlineDefault = agentConfig?.capabilities?.defaultInlineMode ?? true;
-    if (inlineModeFlag && (entry.inlineMode ?? inlineDefault)) {
+    if (inlineModeFlag && resolveEffectiveInlineMode(entry, agentId, options?.globalUseAltScreen)) {
       parts.push(inlineModeFlag);
     }
   }
@@ -646,7 +785,12 @@ export function generateAgentCommand(
 export function buildAgentLaunchFlags(
   entry: AgentSettingsEntry,
   agentId: string,
-  options?: { modelId?: string; presetArgs?: string[]; globalSkipPermissions?: boolean }
+  options?: {
+    modelId?: string;
+    presetArgs?: string[];
+    globalSkipPermissions?: boolean;
+    globalUseAltScreen?: boolean;
+  }
 ): string[] {
   const agentConfig = getEffectiveAgentConfig(agentId);
   const flags: string[] = [];
@@ -656,12 +800,10 @@ export function buildAgentLaunchFlags(
     flags.push(...agentConfig.args);
   }
 
-  // Inline mode flag when agent supports it and it's enabled. With no explicit
-  // choice, fall back to the agent's `defaultInlineMode` (or true for flag-bearing
-  // agents without an override) so e.g. Grok defaults to the alternate screen.
+  // Inline mode flag when the resolved tri-state says inline and the agent
+  // supports it (#10876) — same resolution chain as generateAgentCommand.
   const inlineModeFlag = agentConfig?.capabilities?.inlineModeFlag;
-  const inlineDefault = agentConfig?.capabilities?.defaultInlineMode ?? true;
-  if (inlineModeFlag && (entry.inlineMode ?? inlineDefault)) {
+  if (inlineModeFlag && resolveEffectiveInlineMode(entry, agentId, options?.globalUseAltScreen)) {
     flags.push(inlineModeFlag);
   }
 

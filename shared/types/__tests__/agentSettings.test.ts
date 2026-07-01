@@ -10,7 +10,12 @@ import {
   resolveDangerousMode,
   combineDangerousModes,
   reconcileBypassFlags,
+  resolveInlineMode,
+  combineInlineModes,
+  resolveEffectiveInlineMode,
+  reconcileInlineModeFlag,
   isAgentBypassSupported,
+  DEFAULT_AGENT_SETTINGS,
   DEFAULT_DANGEROUS_ARGS,
 } from "../agentSettings.js";
 
@@ -922,5 +927,152 @@ describe("buildAgentLaunchFlags with globalSkipPermissions", () => {
       globalSkipPermissions: true,
     });
     expect(flags).not.toContain(DEFAULT_DANGEROUS_ARGS.gemini);
+  });
+});
+
+describe("resolveInlineMode (tri-state, #10876)", () => {
+  it("maps a genuinely-absent value to inherit", () => {
+    expect(resolveInlineMode({})).toBe("inherit");
+    expect(resolveInlineMode({ inlineMode: undefined })).toBe("inherit");
+  });
+
+  it("maps a legacy boolean literally, NOT like resolveDangerousMode", () => {
+    // The literal mapping (false → "off") is the deliberate difference from
+    // resolveDangerousMode (false → "inherit"): inlineMode was seeded with a
+    // concrete per-agent boolean, so false must stay an explicit alt-screen veto.
+    expect(resolveInlineMode({ inlineMode: true })).toBe("on");
+    expect(resolveInlineMode({ inlineMode: false })).toBe("off");
+    // Contrast: the bypass resolver collapses false to inherit.
+    expect(resolveDangerousMode({ dangerousEnabled: false })).toBe("inherit");
+  });
+
+  it("passes an explicit tri-state string through unchanged", () => {
+    expect(resolveInlineMode({ inlineMode: "inherit" })).toBe("inherit");
+    expect(resolveInlineMode({ inlineMode: "on" })).toBe("on");
+    expect(resolveInlineMode({ inlineMode: "off" })).toBe("off");
+  });
+});
+
+describe("combineInlineModes (#10876)", () => {
+  it("lets an explicit preset mode win over the agent mode", () => {
+    expect(combineInlineModes("on", "off")).toBe("off");
+    expect(combineInlineModes("off", "on")).toBe("on");
+  });
+
+  it("defers to the agent mode when the preset inherits", () => {
+    expect(combineInlineModes("on", "inherit")).toBe("on");
+    expect(combineInlineModes("off", undefined)).toBe("off");
+  });
+});
+
+describe("resolveEffectiveInlineMode (#10876)", () => {
+  it("honours an explicit on/off regardless of the global switch", () => {
+    expect(resolveEffectiveInlineMode({ inlineMode: "on" }, "codex", true)).toBe(true);
+    expect(resolveEffectiveInlineMode({ inlineMode: "off" }, "codex", false)).toBe(false);
+    // Explicit off is a veto that beats a global "use alt-screen" of false too.
+    expect(resolveEffectiveInlineMode({ inlineMode: "off" }, "codex", true)).toBe(false);
+  });
+
+  it("keeps a curated registry default winning over the global switch on inherit", () => {
+    // Grok declares defaultInlineMode: false (alt-screen) — it must stay
+    // alt-screen even when the global "use alt-screen by default" is OFF.
+    expect(resolveEffectiveInlineMode({}, "grok", false)).toBe(false);
+    expect(resolveEffectiveInlineMode({}, "grok", true)).toBe(false);
+    expect(resolveEffectiveInlineMode({ inlineMode: "inherit" }, "grok", false)).toBe(false);
+  });
+
+  it("falls back to the global switch on inherit when no registry default is declared", () => {
+    // Codex declares no defaultInlineMode → global switch decides.
+    expect(resolveEffectiveInlineMode({}, "codex", false)).toBe(true); // global off → inline
+    expect(resolveEffectiveInlineMode({}, "codex", true)).toBe(false); // global on → alt-screen
+  });
+
+  it("still lets an agent override its curated registry default explicitly", () => {
+    expect(resolveEffectiveInlineMode({ inlineMode: "on" }, "grok", false)).toBe(true);
+  });
+});
+
+describe("reconcileInlineModeFlag (resume trap, #10876)", () => {
+  it("strips a stale --no-alt-screen when the resolved decision is alt-screen", () => {
+    const flags = ["--model", "gpt", "--no-alt-screen"];
+    expect(reconcileInlineModeFlag(flags, "codex", false)).toEqual(["--model", "gpt"]);
+  });
+
+  it("re-appends the flag when inline is wanted but the snapshot lacks it", () => {
+    expect(reconcileInlineModeFlag(["--model", "gpt"], "codex", true)).toEqual([
+      "--model",
+      "gpt",
+      "--no-alt-screen",
+    ]);
+  });
+
+  it("is idempotent when the snapshot already matches the decision", () => {
+    const inline = ["--no-alt-screen", "--model", "gpt"];
+    expect(reconcileInlineModeFlag(inline, "codex", true)).toEqual(inline);
+    const alt = ["--model", "gpt"];
+    expect(reconcileInlineModeFlag(alt, "codex", false)).toEqual(alt);
+  });
+
+  it("dedupes duplicate flags, keeping the first in place, when inline is wanted", () => {
+    const flags = ["--no-alt-screen", "--model", "gpt", "--no-alt-screen"];
+    expect(reconcileInlineModeFlag(flags, "codex", true)).toEqual([
+      "--no-alt-screen",
+      "--model",
+      "gpt",
+    ]);
+  });
+
+  it("leaves flags untouched for an agent with no inlineModeFlag", () => {
+    const flags = ["--foo", "--no-alt-screen"];
+    expect(reconcileInlineModeFlag(flags, "claude", false)).toEqual(flags);
+    expect(reconcileInlineModeFlag(flags, "claude", true)).toEqual(flags);
+  });
+});
+
+describe("global alt-screen threading through command generation (#10876)", () => {
+  it("drops --no-alt-screen for an inherit agent when globalUseAltScreen is on", () => {
+    // Codex inherits (no explicit choice, no registry default) → follows global.
+    expect(buildAgentLaunchFlags({}, "codex", { globalUseAltScreen: true })).not.toContain(
+      "--no-alt-screen"
+    );
+    expect(generateAgentCommand("codex", {}, "codex", { globalUseAltScreen: true })).not.toContain(
+      "--no-alt-screen"
+    );
+  });
+
+  it("keeps --no-alt-screen for an inherit agent when globalUseAltScreen is off", () => {
+    expect(buildAgentLaunchFlags({}, "codex", { globalUseAltScreen: false })).toContain(
+      "--no-alt-screen"
+    );
+  });
+
+  it("keeps grok on alt-screen regardless of the global switch (curated default)", () => {
+    expect(buildAgentLaunchFlags({}, "grok", { globalUseAltScreen: false })).not.toContain(
+      "--no-alt-screen"
+    );
+    expect(buildAgentLaunchFlags({}, "grok", { globalUseAltScreen: true })).not.toContain(
+      "--no-alt-screen"
+    );
+  });
+
+  it("lets an explicit per-agent choice veto the global switch", () => {
+    expect(
+      buildAgentLaunchFlags({ inlineMode: "on" }, "codex", { globalUseAltScreen: true })
+    ).toContain("--no-alt-screen");
+    expect(
+      buildAgentLaunchFlags({ inlineMode: "off" }, "codex", { globalUseAltScreen: false })
+    ).not.toContain("--no-alt-screen");
+  });
+});
+
+describe("DEFAULT_AGENT_SETTINGS inline seeding (#10876)", () => {
+  it("no longer seeds a concrete per-agent inlineMode so untouched agents inherit", () => {
+    for (const entry of Object.values(DEFAULT_AGENT_SETTINGS.agents)) {
+      expect(entry.inlineMode).toBeUndefined();
+    }
+  });
+
+  it("defaults globalUseAltScreen off", () => {
+    expect(DEFAULT_AGENT_SETTINGS.globalUseAltScreen).toBe(false);
   });
 });

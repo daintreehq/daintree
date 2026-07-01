@@ -260,6 +260,7 @@ export const CHANNELS = {
   AGENT_SETTINGS_GET: "agent-settings:get",
   AGENT_SETTINGS_SET: "agent-settings:set",
   AGENT_SETTINGS_SET_GLOBAL: "agent-settings:set-global",
+  AGENT_SETTINGS_SET_GLOBAL_INLINE: "agent-settings:set-global-inline",
   AGENT_SETTINGS_RESET: "agent-settings:reset",
   AGENT_SETTINGS_STAMP_VERSION: "agent-settings:stamp-version",
 

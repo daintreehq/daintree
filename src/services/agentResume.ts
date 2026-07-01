@@ -2,7 +2,9 @@ import {
   buildResumeCommand,
   buildResumeLatestCommand,
   reconcileBypassFlags,
+  reconcileInlineModeFlag,
   resolveEffectiveBypass,
+  resolveEffectiveInlineMode,
 } from "@shared/types/agentSettings";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import type { AddPanelOptions } from "@shared/types/addPanelOptions";
@@ -11,9 +13,10 @@ import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 
 /**
  * Reconciles a resumed session's persisted launch flags against the current
- * global skip-permissions setting (#10432, the "resume trap"): the snapshot may
- * have been captured while the global switch was in a different state, so strip
- * the agent's canonical bypass flag and re-add it only if it currently resolves.
+ * global settings (#10432 skip-permissions, #10876 alt-screen — both "resume
+ * traps"): the snapshot may have been captured while a global switch was in a
+ * different state, so strip the agent's canonical bypass / inline flags and
+ * re-add them only if they currently resolve.
  *
  * Reads `useAgentSettingsStore` synchronously (a Zustand store read, not
  * React-bound), so it is safe to call from action definitions and effects alike.
@@ -29,13 +32,22 @@ export function reconcileResumeLaunchFlags(session: {
     session.agentId,
     settings?.globalSkipPermissions
   );
-  // Pass [] when no flags were captured so global-on still injects the bypass
-  // token for a supported agent (reconcileBypassFlags no-ops for others).
-  return reconcileBypassFlags(
-    session.agentLaunchFlags ?? [],
+  const effectiveInline = resolveEffectiveInlineMode(
+    entry,
     session.agentId,
-    effectiveBypass,
-    entry.dangerousArgs as string | undefined
+    settings?.globalUseAltScreen
+  );
+  // Pass [] when no flags were captured so a global-on still injects the token
+  // for a supported agent (each reconcile no-ops for agents without one).
+  return reconcileInlineModeFlag(
+    reconcileBypassFlags(
+      session.agentLaunchFlags ?? [],
+      session.agentId,
+      effectiveBypass,
+      entry.dangerousArgs as string | undefined
+    ),
+    session.agentId,
+    effectiveInline
   );
 }
 
