@@ -490,6 +490,42 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     },
   }));
 
+  actions.set("agentSessionHistory.getSnapshot", () => ({
+    id: "agentSessionHistory.getSnapshot",
+    title: "Get Closed Session Snapshot",
+    description:
+      'Fetch the captured terminal snapshot for one closed agent session, identified by `sessionId` (from `agentSessionHistory.list`). The snapshot is a faithful, verbatim slice of the session\'s final scrollback captured at close time — NOT a summary or interpretation of what happened. Use it to preview a closed session before deciding whether to relaunch it. Args: `sessionId` (required) — the id of the closed session. Returns { sessionId, found, snapshot }: `found` is false when no session matches the id; `found` is true with `snapshot: null` when the session exists but has no captured snapshot (snapshot capture disabled, project excluded, or a record predating the feature); `found` is true with `snapshot: "…"` (verbatim text) on success. Never errors — returns { found: false, snapshot: null } for an unknown id.',
+    category: "agent",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({
+      sessionId: z
+        .string()
+        .min(1)
+        .describe(
+          "The id of the closed session to fetch the snapshot for (from agentSessionHistory.list)."
+        ),
+    }),
+    examples: [
+      {
+        args: { sessionId: "abc-123" },
+        description: "Preview the captured snapshot of a closed session before relaunching it",
+      },
+    ],
+    resultSchema: z.object({
+      sessionId: z.string(),
+      found: z.boolean(),
+      snapshot: z.string().nullable(),
+    }),
+    mcpOutputSchema: true,
+    run: async (args: unknown) => {
+      const { sessionId } = args as { sessionId: string };
+      const result = await window.electron.agentSessionHistory.getSnapshot(sessionId);
+      return { sessionId, ...result };
+    },
+  }));
+
   actions.set("agent.listToolbar", () => ({
     id: "agent.listToolbar",
     title: "List Toolbar Agents",

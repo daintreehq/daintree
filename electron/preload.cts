@@ -2355,6 +2355,8 @@ function buildElectronApi(): ElectronAPI {
       getRetentionDays: () => _unwrappingInvoke(CHANNELS.AGENT_SESSION_GET_RETENTION),
       setRetentionDays: (days: number) =>
         _unwrappingInvoke(CHANNELS.AGENT_SESSION_SET_RETENTION, days),
+      getSnapshot: (sessionId: string) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SESSION_GET_SNAPSHOT, { sessionId }),
     },
 
     // Clipboard API — bindings built from the preload-safe channel map in

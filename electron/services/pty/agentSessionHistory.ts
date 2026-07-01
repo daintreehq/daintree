@@ -163,6 +163,29 @@ export function listAgentSessions(
 }
 
 /**
+ * Look up a single closed session by `sessionId` and return its captured
+ * scrollback snapshot (#10855). Reuses `listAgentSessions` — not raw
+ * `readSessionHistory` — so retention-eviction and per-worktree-cap semantics
+ * stay identical to the `list` action: a record aged past the user's retention
+ * window (but not yet physically pruned from disk) must not leak its snapshot
+ * here. `found` distinguishes "no such session" from "session exists but has no
+ * snapshot" (opt-out, excluded project, or a pre-#10850 record). An empty-string
+ * snapshot is preserved as-is; only a truly-absent (`undefined`) snapshot maps
+ * to `null`.
+ */
+export function getAgentSessionSnapshot(
+  sessionId: string,
+  userData?: string,
+  retentionDays?: AgentSessionRetentionDays
+): { found: boolean; snapshot: string | null } {
+  const record = listAgentSessions(undefined, userData, retentionDays).find(
+    (r) => r.sessionId === sessionId
+  );
+  if (!record) return { found: false, snapshot: null };
+  return { found: true, snapshot: record.snapshot ?? null };
+}
+
+/**
  * Prune the journal to the given retention window immediately, rewriting the
  * file through the shared write queue so it can't interleave with an in-flight
  * persist. Used when the user shortens the retention setting — mirrors
