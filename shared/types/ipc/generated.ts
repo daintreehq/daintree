@@ -1265,6 +1265,10 @@ export interface GeneratedIpcInvokeMap {
     args: [durationMs: number];
     result: void;
   };
+  "system:show-item-in-folder": {
+    args: [payload: { path: string }];
+    result: void;
+  };
   "telemetry:get": {
     args: [];
     result: { enabled: boolean; hasSeenPrompt: boolean };

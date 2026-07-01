@@ -21,6 +21,7 @@ import {
 } from "../../schemas/index.js";
 import type { HandlerDependencies } from "../types.js";
 import { typedHandle, typedHandleValidated } from "../utils.js";
+import { defineIpcNamespace, opValidated } from "../define.js";
 import type {
   SystemOpenExternalPayload,
   SystemOpenPathPayload,
@@ -194,28 +195,35 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
     )
   );
 
-  const handleSystemShowItemInFolder = async ({ path: targetPath }: SystemOpenPathPayload) => {
-    try {
-      // Reveal-in-file-manager only selects the item — it never launches it —
-      // so the "editor" flavor (containment check, relaxed executable
-      // deny-list) is correct: revealing an .app/.exe the user can already see
-      // must not be blocked. assertPathAllowed → resolveContainedPath realpaths
-      // the target, so a since-deleted path is already rejected (INVALID_PATH)
-      // before we reach shell.showItemInFolder (which gives no failure signal).
-      const realTarget = await assertPathAllowed(targetPath, "editor");
-      shell.showItemInFolder(realTarget);
-    } catch (error) {
-      console.error("Failed to reveal item in folder:", error);
-      throw error;
-    }
-  };
-  handlers.push(
-    typedHandleValidated(
-      CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER,
-      SystemOpenPathPayloadSchema,
-      handleSystemShowItemInFolder
-    )
-  );
+  // Registered via defineIpcNamespace (not a hand-written IpcInvokeMap entry)
+  // so the channel is codegen'd into GeneratedIpcInvokeMap — new IPC handlers
+  // must not grow the hand-written map (ipc-handwritten ratchet).
+  const systemShellNamespace = defineIpcNamespace({
+    name: "systemShell",
+    ops: {
+      showItemInFolder: opValidated(
+        CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER,
+        SystemOpenPathPayloadSchema,
+        async (payload: SystemOpenPathPayload): Promise<void> => {
+          try {
+            // Reveal-in-file-manager only selects the item — it never launches
+            // it — so the "editor" flavor (containment check, relaxed
+            // executable deny-list) is correct: revealing an .app/.exe the user
+            // can already see must not be blocked. assertPathAllowed →
+            // resolveContainedPath realpaths the target, so a since-deleted
+            // path is already rejected (INVALID_PATH) before we reach
+            // shell.showItemInFolder (which gives no failure signal).
+            const realTarget = await assertPathAllowed(payload.path, "editor");
+            shell.showItemInFolder(realTarget);
+          } catch (error) {
+            console.error("Failed to reveal item in folder:", error);
+            throw error;
+          }
+        }
+      ),
+    },
+  });
+  handlers.push(systemShellNamespace.register());
 
   const handleSystemOpenInEditor = async ({
     path: targetPath,
