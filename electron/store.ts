@@ -34,7 +34,11 @@ import type { BuiltInAgentId } from "../shared/config/agentIds.js";
 import type { AgentId } from "../shared/types/agent.js";
 import { DEFAULT_AGENT_SETTINGS, DEFAULT_APP_AGENT_CONFIG } from "../shared/types/index.js";
 import type { AppThemeConfig } from "../shared/types/appTheme.js";
-import type { SettingsRecovery, ActionFrecencyEntry } from "../shared/types/ipc/app.js";
+import type {
+  SettingsRecovery,
+  ActionFrecencyEntry,
+  ActionUsageEntry,
+} from "../shared/types/ipc/app.js";
 import type { HelpAssistantTier } from "../shared/types/ipc/maps.js";
 
 interface WindowStateEntry {
@@ -161,7 +165,7 @@ export interface StoreSchema {
     }>;
     panelGridConfig?: PanelGridConfig;
     mruList?: string[];
-    actionMruList?: ActionFrecencyEntry[] | string[];
+    actionMruList?: ActionUsageEntry[] | ActionFrecencyEntry[] | string[];
     actionPinnedIds?: string[];
     actionHiddenIds?: string[];
     fleetScopeMode?: "legacy" | "scoped";

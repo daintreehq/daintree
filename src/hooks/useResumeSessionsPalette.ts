@@ -18,7 +18,7 @@ const RESUME_FUSE_OPTIONS: IFuseOptions<ResumeSessionItem> = {
 };
 
 /**
- * Data + search state for the resume-sessions launcher (`Cmd+K R` / toolbar).
+ * Data + search state for the resume-sessions launcher (`Cmd+K Cmd+R` / toolbar).
  * Fetches the journal unscoped on open (gated so closing doesn't re-read the
  * whole file), scopes it to the current project across all worktrees, and feeds
  * the rich items through the shared searchable-palette machinery.

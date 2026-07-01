@@ -68,7 +68,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
   {
     actionId: "terminal.resumeSessions",
-    combo: "Cmd+K R",
+    combo: "Cmd+K Cmd+R",
     scope: "global",
     priority: 0,
     description: "Resume a closed session",
@@ -83,16 +83,8 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Terminal",
   },
   {
-    actionId: "terminal.killAll",
-    combo: "Cmd+K Cmd+K",
-    scope: "global",
-    priority: 0,
-    description: "End all terminals",
-    category: "Terminal",
-  },
-  {
     actionId: "terminal.restartAll",
-    combo: "Cmd+K Cmd+R",
+    combo: "Cmd+K Cmd+A",
     scope: "global",
     priority: 0,
     description: "Restart all terminals",
@@ -742,7 +734,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
   {
     actionId: "nav.toggleFocusMode",
-    combo: "Cmd+K Z",
+    combo: "Cmd+K Cmd+F",
     scope: "global",
     priority: 0,
     description: "Toggle focus mode (hide sidebar and assistant)",
@@ -838,7 +830,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
   {
     actionId: "worktree.openPalette",
-    combo: "Cmd+K W",
+    combo: "Cmd+K Cmd+O",
     scope: "global",
     priority: 0,
     description: "Open worktree palette",
@@ -846,7 +838,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
   {
     actionId: "worktree.createDialog.open",
-    combo: "Cmd+K N",
+    combo: "Cmd+K Cmd+N",
     scope: "global",
     priority: 0,
     description: "Create a new worktree",
@@ -886,7 +878,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
   {
     actionId: "app.theme.pick",
-    combo: "Cmd+K T",
+    combo: "Cmd+K Cmd+T",
     scope: "global",
     priority: 0,
     description: "Open theme palette",
@@ -1113,7 +1105,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   // Git write operations (Cmd+K chord prefix)
   {
     actionId: "git.stageAll",
-    combo: "Cmd+K Cmd+A",
+    combo: "Cmd+K Cmd+G",
     scope: "global",
     priority: 0,
     description: "Stage all changes",
@@ -1154,7 +1146,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
   {
     actionId: "worktree.sessions.resetRenderers",
-    combo: "Cmd+K Cmd+N",
+    combo: "Cmd+K Cmd+V",
     scope: "global",
     priority: 0,
     description: "Reset renderers for all sessions in active worktree",

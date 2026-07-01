@@ -1,9 +1,20 @@
 import { useEffect, useSyncExternalStore } from "react";
-import { keybindingService, normalizeKeyForBinding } from "../services/KeybindingService";
+import {
+  combosFieldsEqual,
+  keybindingService,
+  normalizeKeyForBinding,
+} from "../services/KeybindingService";
 import { actionService } from "../services/ActionService";
 import { logError } from "@/utils/logger";
 import { dispatchEscape, hasHandlers } from "@/lib/escapeStack";
 import { usePaletteStore, usePanelStore } from "../store";
+
+/**
+ * Canonical first-step combo of every chord (they all begin `Cmd+K`). Opening
+ * this chord shows the command HUD; the service stores it in `eventToCombo`
+ * form (`"Cmd+k"`), so compare with `combosFieldsEqual`, never `===`.
+ */
+export const COMMAND_HUD_PREFIX = "Cmd+K";
 
 /**
  * Global keybinding handler that provides:
@@ -84,6 +95,23 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
 
       // Escape cancels any pending chord — consume the event to prevent xterm leakage
       const pendingChord = keybindingService.getPendingChord();
+      const hudPending =
+        pendingChord !== null && combosFieldsEqual(pendingChord, COMMAND_HUD_PREFIX);
+      // The command HUD's search input is the active typing surface while the
+      // Cmd+K chord is pending AND focus sits inside the HUD.
+      const insideHud = hudPending && target.closest("[data-command-hud]") != null;
+
+      // A second Cmd+K closes the command HUD (toggle) rather than starting a
+      // fresh chord. Cmd+K Cmd+K is intentionally reserved for this close
+      // toggle — no chord binds it (terminal.killAll stays reachable from the
+      // command palette).
+      if (hudPending && keybindingService.matchesEvent(e, COMMAND_HUD_PREFIX)) {
+        e.preventDefault();
+        e.stopPropagation();
+        keybindingService.clearPendingChord();
+        return;
+      }
+
       if (e.key === "Escape" && pendingChord) {
         e.preventDefault();
         e.stopPropagation();
@@ -104,11 +132,33 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         return;
       }
 
+      // Keys inside the open command HUD belong to its search input: bail before
+      // the chord state machine so they neither invalidate the pending chord
+      // (closing the HUD) nor pop it. Bare keys are text/navigation; Backspace —
+      // bare OR modifier-held (Cmd+Backspace to delete a word) — always edits the
+      // search since no chord binds it. Other modifier-held keys deliberately
+      // fall through so chords still complete (e.g. Cmd+W → terminal.closeAll);
+      // Escape (above) still closes the HUD.
+      if (insideHud && (e.key === "Backspace" || (!e.metaKey && !e.ctrlKey))) {
+        return;
+      }
+
+      // Open→render→focus gap: the HUD is pending but its input hasn't grabbed
+      // focus yet. Swallow bare printable keys so they neither leak into the
+      // focused terminal nor invalidate the chord and close the HUD; the input
+      // takes over on the next tick.
+      if (hudPending && !insideHud && !e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+
       // Backspace pops the last key off the pending chord. The current chord buffer
       // holds a single token, so a pop empties it. During IME composition, bail
       // out entirely — otherwise the resolveKeybinding fallthrough below would
-      // silently clear the chord while the user is mid-composition.
-      if (e.key === "Backspace" && pendingChord) {
+      // silently clear the chord while the user is mid-composition. Skip inside
+      // the HUD (handled above — Backspace edits the search there).
+      if (e.key === "Backspace" && pendingChord && !insideHud) {
         if (e.isComposing) return;
         e.preventDefault();
         e.stopPropagation();

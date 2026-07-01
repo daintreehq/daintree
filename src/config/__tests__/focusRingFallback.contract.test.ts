@@ -469,6 +469,12 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
     reason:
       "PRE-EXISTING #8940: autoFocus issue/PR search input lacks a focus indicator — follow-up",
   },
+  {
+    file: "src/components/Layout/ChordIndicator.tsx",
+    fragment: "focus:outline-hidden",
+    reason:
+      "Command HUD search input is auto-focused for the HUD's entire lifetime (a modal, single-input command surface) — there is no ambiguous focus state to indicate, and the dark-glass panel is the focus surface.",
+  },
 ];
 
 // ── Tests ──────────────────────────────────────────────────────────────

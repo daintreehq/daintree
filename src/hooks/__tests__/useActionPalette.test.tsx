@@ -65,7 +65,7 @@ describe("useActionPalette", () => {
     vi.clearAllMocks();
     getContextMock.mockReturnValue({});
     usePaletteStore.setState({ activePaletteId: null });
-    useActionMruStore.setState({ actionFrecencyEntries: new Map() });
+    useActionMruStore.setState({ actionUsageEntries: new Map() });
     useActionPrefsStore.setState({ pinnedActionIds: [], hiddenActionIds: [] });
   });
 
