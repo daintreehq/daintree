@@ -687,6 +687,16 @@ export function useContentGridContext({
   // the same `useLayoutEffect` that settles `hysteresisGridCols`.
   const [hysteresisScrollMode, setHysteresisScrollMode] = useState<boolean | undefined>(undefined);
 
+  // Switching worktrees reuses this same hook instance (`activeWorktreeId` is
+  // reactive state, not a remount key), so a scroll-mode hold entered in one
+  // view would otherwise carry into the next — pinning a smaller-panel-count
+  // view in scroll mode at the same window size. Drop the hold on any view
+  // change so the incoming worktree evaluates against the fresh threshold. The
+  // close-path reset lives in the settle effect below.
+  useEffect(() => {
+    setHysteresisScrollMode(undefined);
+  }, [activeWorktreeId]);
+
   const gridCols = useMemo(() => {
     if (
       !maximizedId &&
@@ -929,11 +939,20 @@ export function useContentGridContext({
       layoutConfig.strategy === "automatic" && !showPlaceholder ? gridCols : undefined
     );
 
-    // Settle the scroll-mode Schmitt trigger unconditionally: unlike column
-    // hysteresis (automatic-strategy only), `isScrollMode` is computed for every
-    // layout strategy, so gating this on strategy would silently re-disable the
-    // row-overflow dead band for fixed-rows / fixed-columns layouts (#10871).
-    setHysteresisScrollMode(isScrollMode);
+    // Settle the scroll-mode Schmitt trigger. Unlike column hysteresis
+    // (automatic-strategy only), `isScrollMode` is computed for every layout
+    // strategy, so this is NOT gated on strategy (that would silently re-disable
+    // the row-overflow dead band for fixed-rows / fixed-columns layouts).
+    //
+    // The dead band exists to smooth *resize*-driven jitter, not content-shape
+    // changes. On a panel close the layout genuinely has fewer rows, and the
+    // ~1.5-row buffer would otherwise dwarf that swing and pin the grid in
+    // scroll mode until the window grew ~500px — a stale hold unrelated to the
+    // resize the buffer is for. Reset to `undefined` on a close so the next
+    // render re-evaluates against the fresh (bare) threshold; the worktree-switch
+    // reset effect below covers the analogous cross-view case. `applyHysteresis`
+    // gets the same self-correction for free via its `countCeiling` cap.
+    setHysteresisScrollMode(isPureClose ? undefined : isScrollMode);
 
     if (isProjectSwitching || isDraggingRef.current) return;
 

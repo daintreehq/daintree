@@ -262,6 +262,19 @@ describe("gridRowsOverflowWithHysteresis — scroll-mode Schmitt trigger (#10871
     expect(gridRowsOverflowWithHysteresis(3, Math.floor(buffer / 2), true)).toBe(true);
   });
 
+  it("releases immediately when previous is reset to undefined (content-shrink path)", () => {
+    // The dead band is for resize jitter only. When the grid's content shrinks
+    // (a panel closes, or a worktree switch drops the count), the caller resets
+    // the fed-back `previous` to undefined so the buffer can't pin scroll mode
+    // to a now-smaller layout. This is the pure-function half of that contract:
+    // at a height inside the buffer, `previous=true` holds but `previous=undefined`
+    // (the reset state) falls back to the bare threshold and releases.
+    const needed = hRows(2);
+    const holdHeight = needed + gridRowOverflowHysteresisBuffer() - 1;
+    expect(gridRowsOverflowWithHysteresis(2, holdHeight, true)).toBe(true); // held (resize)
+    expect(gridRowsOverflowWithHysteresis(2, holdHeight, undefined)).toBe(false); // released (reset)
+  });
+
   it("documents the pre-fix bug: the bare threshold has no dead band", () => {
     // The un-hysteretic `gridRowsOverflow` this fix supersedes flips at the SAME
     // height in both directions (no previous-state memory) — H_on === H_off,
