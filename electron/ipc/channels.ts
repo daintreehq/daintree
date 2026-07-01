@@ -94,6 +94,7 @@ export const CHANNELS = {
 
   SYSTEM_OPEN_EXTERNAL: "system:open-external",
   SYSTEM_OPEN_PATH: "system:open-path",
+  SYSTEM_SHOW_ITEM_IN_FOLDER: "system:show-item-in-folder",
   SYSTEM_OPEN_IN_EDITOR: "system:open-in-editor",
   SYSTEM_CHECK_COMMAND: "system:check-command",
   SYSTEM_CHECK_DIRECTORY: "system:check-directory",

@@ -1303,6 +1303,18 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "files",
     "danger": "safe",
     "dangerRationale": undefined,
+    "description": "Reveal a file or directory in the OS file manager (Finder on macOS, Explorer on Windows, the default file manager on Linux) with the item selected. Args: \`path\` (required) — absolute file or directory path. Reveals only; it never opens or launches the item. Errors when the path is missing, outside your project roots, or no longer exists.",
+    "examples": undefined,
+    "id": "file.showItemInFolder",
+    "keywords": undefined,
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Reveal in File Manager",
+  },
+  {
+    "category": "files",
+    "danger": "safe",
+    "dangerRationale": undefined,
     "description": "Open a file in the in-app file viewer modal (read-only, with optional line/column scroll). Args: \`path\` (required) — absolute or repo-relative file path; \`rootPath\` (optional) — repo root used to resolve a relative \`path\`; \`line\`/\`col\` (optional, positive ints) to scroll to a location. Returns nothing (fires the viewer event). Errors when \`path\` is missing. Use \`file.openInEditor\` instead to open in the external editor.",
     "examples": [
       {

@@ -6,6 +6,7 @@ import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { isClientAppError } from "@/utils/clientAppError";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import type { TerminalLink } from "./types";
 
 interface ResolvedFilePath {
   absolutePath: string;
@@ -57,6 +58,9 @@ export function reportFileLinkFailure(reason: string, error: unknown, absolutePa
     case "INVALID_PATH":
       body = "Path is not a valid file";
       break;
+    case "NOT_FOUND":
+      body = "File no longer exists";
+      break;
     default:
       body = userMessage ?? formatErrorMessage(error, "Couldn't open this file");
   }
@@ -95,7 +99,7 @@ export function reportFileLinkFailure(reason: string, error: unknown, absolutePa
   logError(`[FileLinksAddon] ${reason}`, error, { absolutePath });
 }
 
-export type HoverCallback = (link: ILink | null) => void;
+export type HoverCallback = (link: TerminalLink | null) => void;
 
 export class FileLinksAddon implements ILinkProvider {
   private _terminal: Terminal;
@@ -217,6 +221,11 @@ export class FileLinksAddon implements ILinkProvider {
 }
 
 class FileLink implements ILink {
+  // Structural discriminant read by the context menu (via `TerminalLink`) to
+  // distinguish a resolved file link from a plain URL link without an
+  // `instanceof` check across the addon/service boundary.
+  readonly kind = "file" as const;
+
   constructor(
     public range: IBufferRange,
     public text: string,
@@ -226,6 +235,11 @@ class FileLink implements ILink {
     private _rootPath?: string,
     private _onHover?: HoverCallback
   ) {}
+
+  /** Resolved absolute path for this file link (relative paths already joined to cwd). */
+  get absolutePath(): string {
+    return this._absolutePath;
+  }
 
   activate(event: MouseEvent, _text: string): void {
     const isModified = event.metaKey || event.ctrlKey;

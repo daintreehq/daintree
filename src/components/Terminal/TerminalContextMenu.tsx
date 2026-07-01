@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { isMac } from "@/lib/platform";
+import { isMac, isWindows } from "@/lib/platform";
 import type React from "react";
 import { type PanelLocation } from "@/types";
 import { usePanelStore } from "@/store";
@@ -12,6 +12,7 @@ import { actionService } from "@/services/ActionService";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isBrowserPanel, isDevPreviewPanel, isPtyPanel, isReviewPanel } from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { reportFileLinkFailure } from "@/services/terminal/FileLinksAddon";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
 import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
@@ -49,7 +50,7 @@ import {
   Trash2,
   Unlock,
 } from "lucide-react";
-import { FolderGit2 } from "@/components/icons";
+import { FolderGit2, FolderOpen } from "@/components/icons";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -119,6 +120,7 @@ export function TerminalContextMenu({
 
   const [hasSelection, setHasSelection] = useState(false);
   const [hoveredUrl, setHoveredUrl] = useState<string | null>(null);
+  const [hoveredFilePath, setHoveredFilePath] = useState<string | null>(null);
   const suppressNextCloseAutoFocusRef = useRef(false);
   // Local confirm dialog for single-terminal kill/restart when an agent
   // session is mid-work. Bare PTY terminals skip this gate and run
@@ -177,11 +179,13 @@ export function TerminalContextMenu({
       if (!managed?.terminal) {
         setHasSelection(false);
         setHoveredUrl(null);
+        setHoveredFilePath(null);
         return;
       }
       const selection = managed.terminal.getSelection();
       setHasSelection(!!selection);
       setHoveredUrl(terminalInstanceService.getHoveredLinkText(terminalId));
+      setHoveredFilePath(terminalInstanceService.getHoveredFilePath(terminalId));
     },
     [terminalId, recentVoiceTargets]
   );
@@ -209,6 +213,22 @@ export function TerminalContextMenu({
       if (actionId.startsWith("copy-link:")) {
         const url = actionId.slice("copy-link:".length);
         void actionService.dispatch("terminal.copyLink", { url }, { source: sourceRef.current });
+        return;
+      }
+
+      if (actionId.startsWith("reveal-in-finder:")) {
+        const path = actionId.slice("reveal-in-finder:".length);
+        // Unlike copy-link, guard rejections (OUTSIDE_ROOT) and a since-deleted
+        // file (NOT_FOUND) are real, expected failure modes here — surface them
+        // rather than fire-and-forget. dispatch wraps the thrown error as
+        // EXECUTION_ERROR, so the original coded error lives on `.details`.
+        void actionService
+          .dispatch("file.showItemInFolder", { path }, { source: sourceRef.current })
+          .then((result) => {
+            if (!result.ok) {
+              reportFileLinkFailure("Failed to reveal in file manager", result.error.details, path);
+            }
+          });
         return;
       }
 
@@ -752,6 +772,17 @@ export function TerminalContextMenu({
                   <ContextMenuItem onSelect={() => handleAction(`copy-link:${hoveredUrl}`)}>
                     <Link className={ICON_CLASS} aria-hidden="true" />
                     Copy link address
+                  </ContextMenuItem>
+                </>
+              )}
+              {hoveredFilePath && (
+                <>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem
+                    onSelect={() => handleAction(`reveal-in-finder:${hoveredFilePath}`)}
+                  >
+                    <FolderOpen className={ICON_CLASS} aria-hidden="true" />
+                    {mac ? "Reveal in Finder" : isWindows() ? "Show in Explorer" : "Show in folder"}
                   </ContextMenuItem>
                 </>
               )}

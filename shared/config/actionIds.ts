@@ -146,6 +146,7 @@ export const BUILT_IN_ACTION_IDS = [
   "file.openDiff",
   "file.openInEditor",
   "file.openImageViewer",
+  "file.showItemInFolder",
 
   // -- slashCommandsActions --
   "slashCommands.list",

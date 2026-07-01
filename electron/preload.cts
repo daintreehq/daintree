@@ -1300,6 +1300,9 @@ function buildElectronApi(): ElectronAPI {
 
       openPath: (path: string) => _unwrappingInvoke(CHANNELS.SYSTEM_OPEN_PATH, { path }),
 
+      showItemInFolder: (path: string) =>
+        _unwrappingInvoke(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER, { path }),
+
       openInEditor: (payload: { path: string; line?: number; col?: number; projectId?: string }) =>
         _unwrappingInvoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, payload),
 

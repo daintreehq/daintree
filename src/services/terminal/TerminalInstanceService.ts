@@ -1,4 +1,4 @@
-import { Terminal, ILink, IBufferRange } from "@xterm/xterm";
+import { Terminal, IBufferRange } from "@xterm/xterm";
 import { isMac } from "@/lib/platform";
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
@@ -8,6 +8,7 @@ import {
   RefreshTierProvider,
   AgentStateCallback,
   PostCompleteHook,
+  TerminalLink,
   isWebGLEligibleTier,
   WRITE_BURST_DECAY_MS,
 } from "./types";
@@ -364,6 +365,18 @@ class TerminalInstanceService {
   }
 
   /**
+   * Returns the resolved absolute path of the currently-hovered link when it's
+   * a file link (not a URL / OSC 8 link), else null. Used by the right-click
+   * context menu to show a "Reveal in Finder" item only for genuine file
+   * paths. Distinct from {@link getHoveredLinkText}, which returns the raw
+   * matched text for any link kind.
+   */
+  getHoveredFilePath(id: string): string | null {
+    const link = this.instances.get(id)?.hoveredLink;
+    return link?.kind === "file" ? (link.absolutePath ?? null) : null;
+  }
+
+  /**
    * Opens the currently-hovered link by delegating to its own activate()
    * method. File links route through the actionService (file.view); URL and
    * OSC 8 links route through TerminalLinkHandler (localhost → browser panel
@@ -392,8 +405,13 @@ class TerminalInstanceService {
    * don't expose an ILink natively). activate() routes through the link
    * handler so localhost URLs hit the browser-panel path when needed.
    */
-  private makeSyntheticLink(text: string, range: IBufferRange | null, terminalId: string): ILink {
+  private makeSyntheticLink(
+    text: string,
+    range: IBufferRange | null,
+    terminalId: string
+  ): TerminalLink {
     return {
+      kind: "url",
       range: range ?? { start: { x: 0, y: 0 }, end: { x: 0, y: 0 } },
       text,
       activate: (event: MouseEvent, uri: string) => {
@@ -1468,7 +1486,7 @@ class TerminalInstanceService {
       this.linkHandler.openLink(url, id, event);
     };
 
-    const setHoveredLink = (link: ILink | null) => {
+    const setHoveredLink = (link: TerminalLink | null) => {
       const current = this.instances.get(id);
       if (!current) return;
       current.hoveredLink = link;

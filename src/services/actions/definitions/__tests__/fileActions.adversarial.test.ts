@@ -5,6 +5,7 @@ import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../..
 const systemClientMock = vi.hoisted(() => ({
   openInEditor: vi.fn(),
   openPath: vi.fn(),
+  showItemInFolder: vi.fn(),
 }));
 
 const projectStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
@@ -33,6 +34,7 @@ beforeEach(() => {
   dispatchSpy.mockReset().mockReturnValue(true);
   systemClientMock.openInEditor.mockResolvedValue(undefined);
   systemClientMock.openPath.mockResolvedValue(undefined);
+  systemClientMock.showItemInFolder.mockResolvedValue(undefined);
   projectStoreMock.getState.mockReturnValue({
     currentProject: { id: "proj-1", path: "/repo" },
   });
@@ -99,6 +101,22 @@ describe("fileActions adversarial", () => {
     await run("file.openImageViewer", { path: "/img/x.png" });
 
     expect(systemClientMock.openPath).toHaveBeenCalledWith("/img/x.png");
+  });
+
+  it("file.showItemInFolder forwards path to systemClient.showItemInFolder", async () => {
+    const run = setupActions();
+    await run("file.showItemInFolder", { path: "/repo/src/x.ts" });
+
+    expect(systemClientMock.showItemInFolder).toHaveBeenCalledWith("/repo/src/x.ts");
+  });
+
+  it("file.showItemInFolder propagates systemClient errors to caller", async () => {
+    systemClientMock.showItemInFolder.mockRejectedValueOnce(new Error("outside root"));
+    const run = setupActions();
+
+    await expect(run("file.showItemInFolder", { path: "/repo/x.ts" })).rejects.toThrow(
+      "outside root"
+    );
   });
 
   it("file.view dispatches correct shape even with only path supplied", async () => {
