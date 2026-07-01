@@ -44,12 +44,25 @@ function createTerminalConfigApi() {
   };
 }
 
+function createAgentSessionHistoryApi(
+  overrides: Partial<typeof window.electron.agentSessionHistory> = {}
+) {
+  return {
+    list: vi.fn().mockResolvedValue([]),
+    clear: vi.fn().mockResolvedValue(undefined),
+    getRetentionDays: vi.fn().mockResolvedValue(30),
+    setRetentionDays: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
 describe("PrivacyDataTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.electron = {
       terminalConfig: createTerminalConfigApi(),
       privacy: createPrivacyApi(),
+      agentSessionHistory: createAgentSessionHistoryApi(),
     } as unknown as typeof window.electron;
   });
 
@@ -63,6 +76,7 @@ describe("PrivacyDataTab", () => {
           dataFolderPath: "/tmp",
         }),
       }),
+      agentSessionHistory: createAgentSessionHistoryApi(),
     } as unknown as typeof window.electron;
 
     render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />);
@@ -84,6 +98,7 @@ describe("PrivacyDataTab", () => {
         }),
         setTelemetryLevel: vi.fn().mockRejectedValue(new Error("IPC fail")),
       }),
+      agentSessionHistory: createAgentSessionHistoryApi(),
     } as unknown as typeof window.electron;
 
     render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />);
@@ -128,6 +143,7 @@ describe("PrivacyDataTab", () => {
         }),
         setTelemetryLevel: setTelemetry,
       }),
+      agentSessionHistory: createAgentSessionHistoryApi(),
     } as unknown as typeof window.electron;
 
     render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />);
@@ -174,7 +190,9 @@ describe("PrivacyDataTab", () => {
     render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />);
 
     await waitFor(() => {
-      expect(screen.getByText("30 days")).toBeTruthy();
+      // Two retention pickers now live on this subtab (log retention + session
+      // history), so the "30 days" label is intentionally non-unique.
+      expect(screen.getAllByText("30 days").length).toBeGreaterThan(0);
     });
 
     expect(screen.queryByText(/What's collected at each level/i)).toBeNull();
@@ -191,26 +209,25 @@ describe("PrivacyDataTab", () => {
         }),
         setLogRetention: vi.fn().mockRejectedValue(new Error("IPC fail")),
       }),
+      agentSessionHistory: createAgentSessionHistoryApi(),
     } as unknown as typeof window.electron;
 
     render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />);
 
+    // The log-retention picker renders before the session-history picker, so
+    // index 0 of each duplicated day label is the log-retention control.
+    const logRetentionButton = (label: string) => screen.getAllByText(label)[0].closest("button")!;
+
     await waitFor(() => {
-      expect(screen.getByText("30 days").closest("button")!.className).toContain(
-        "bg-overlay-selected"
-      );
+      expect(logRetentionButton("30 days").className).toContain("bg-overlay-selected");
     });
 
-    fireEvent.click(screen.getByText("90 days").closest("button")!);
+    fireEvent.click(logRetentionButton("90 days"));
 
     await waitFor(() => {
       // Should revert back to 30 days
-      expect(screen.getByText("30 days").closest("button")!.className).toContain(
-        "bg-overlay-selected"
-      );
-      expect(screen.getByText("90 days").closest("button")!.className).not.toContain(
-        "bg-overlay-selected"
-      );
+      expect(logRetentionButton("30 days").className).toContain("bg-overlay-selected");
+      expect(logRetentionButton("90 days").className).not.toContain("bg-overlay-selected");
     });
 
     expect(window.electron.privacy.setLogRetention).toHaveBeenCalledWith(90);
