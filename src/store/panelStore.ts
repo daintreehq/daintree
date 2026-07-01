@@ -839,7 +839,39 @@ export const usePanelStore = create<PanelGridState>()(
         const lastTrashed = trashedTerminals.get(lastId);
 
         if (lastTrashed?.groupRestoreId) {
-          get().restoreTrashedGroup(lastTrashed.groupRestoreId);
+          const { groupRestoreId } = lastTrashed;
+          const groupIds: string[] = [];
+          for (const [id, trashed] of trashedTerminals.entries()) {
+            if (trashed.groupRestoreId === groupRestoreId) {
+              groupIds.push(id);
+            }
+          }
+
+          // Same stale-entry race as the single-panel case below, but for a
+          // whole group: a throttled expiry timer can prune every member from
+          // panelsById while the trashedTerminals entries linger.
+          // `restoreTrashedGroup` only mutates panelsById for ids that still
+          // exist, so a fully-ghosted group is a silent no-op that would
+          // otherwise still report success — wrongly suppressing the
+          // resume-journal fallback. Treat "no surviving member" as "nothing
+          // restored": drop the stale entries and return false so the caller
+          // can fall through.
+          const hasSurvivingMember = groupIds.some((id) => {
+            const panel = get().panelsById[id];
+            return panel?.location === "trash";
+          });
+          if (!hasSurvivingMember) {
+            set((state) => {
+              const newTrashed = new Map(state.trashedTerminals);
+              for (const id of groupIds) {
+                newTrashed.delete(id);
+              }
+              return { trashedTerminals: newTrashed };
+            });
+            return false;
+          }
+
+          get().restoreTrashedGroup(groupRestoreId);
           return true;
         }
 

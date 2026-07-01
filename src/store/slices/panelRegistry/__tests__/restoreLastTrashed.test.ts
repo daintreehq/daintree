@@ -63,6 +63,20 @@ function seedTrashEntry(id: string) {
   });
 }
 
+function seedTrashGroupEntry(id: string, groupRestoreId: string) {
+  const entry: TrashedTerminal = {
+    id,
+    expiresAt: 1_000,
+    originalLocation: "grid",
+    groupRestoreId,
+  };
+  usePanelStore.setState((state) => {
+    const trashedTerminals = new Map(state.trashedTerminals);
+    trashedTerminals.set(id, entry);
+    return { trashedTerminals };
+  });
+}
+
 describe("restoreLastTrashed boolean contract", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
@@ -110,5 +124,35 @@ describe("restoreLastTrashed boolean contract", () => {
 
     expect(restored).toBe(false);
     expect(usePanelStore.getState().trashedTerminals.has("moved")).toBe(false);
+  });
+
+  it("returns false and drops stale entries for a fully-ghosted group", () => {
+    // Every member of the group was already pruned from panelsById (same
+    // throttled-expiry-timer race as the single-panel ghost case), but the
+    // trashedTerminals map entries linger — restoreTrashedGroup would be a
+    // silent no-op that must not report a phantom success.
+    seedTrashGroupEntry("ghost-a", "group-1");
+    seedTrashGroupEntry("ghost-b", "group-1");
+
+    const restored = usePanelStore.getState().restoreLastTrashed();
+
+    expect(restored).toBe(false);
+    expect(usePanelStore.getState().trashedTerminals.has("ghost-a")).toBe(false);
+    expect(usePanelStore.getState().trashedTerminals.has("ghost-b")).toBe(false);
+  });
+
+  it("restores a group with at least one surviving member and returns true", () => {
+    // One member of the group still exists in panelsById with location
+    // "trash"; the group restore should proceed and report success even
+    // though a sibling member was already pruned.
+    seedPanel("live-a", "trash");
+    seedTrashGroupEntry("live-a", "group-2");
+    seedTrashGroupEntry("ghost-c", "group-2");
+
+    const restored = usePanelStore.getState().restoreLastTrashed();
+
+    expect(restored).toBe(true);
+    expect(usePanelStore.getState().trashedTerminals.has("live-a")).toBe(false);
+    expect(usePanelStore.getState().trashedTerminals.has("ghost-c")).toBe(false);
   });
 });
