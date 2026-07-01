@@ -994,6 +994,24 @@ describe("agentSessionHistory.list (#10854)", () => {
     expect(result).toEqual({ sessions: [] });
   });
 
+  it("strips the raw snapshot from listed records (getSnapshot is the sole accessor, #10855)", async () => {
+    listMock.mockResolvedValue([
+      { ...SAMPLE_SESSIONS[0], snapshot: "verbatim scrollback that must not bulk-leak" },
+      { ...SAMPLE_SESSIONS[1], snapshot: "" },
+    ]);
+    const actions = setupActions(makeCallbacks());
+    const result = (await callAction(actions, "agentSessionHistory.list", {})) as {
+      sessions: Array<Record<string, unknown>>;
+    };
+    expect(result.sessions).toHaveLength(2);
+    for (const session of result.sessions) {
+      expect(session).not.toHaveProperty("snapshot");
+    }
+    // Non-snapshot fields still pass through unchanged.
+    expect(result.sessions[0]!.sessionId).toBe("sess-1");
+    expect(result.sessions[0]!.title).toBe("Auth refactor");
+  });
+
   it("registers as a read-only query action advertising an MCP output schema", () => {
     const def = getDef();
     expect(def.kind).toBe("query");

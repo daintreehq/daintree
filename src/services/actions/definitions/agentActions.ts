@@ -486,7 +486,15 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     run: async (args: unknown) => {
       const { worktreeId } = (args ?? {}) as { worktreeId?: string };
       const sessions = await window.electron.agentSessionHistory.list(worktreeId);
-      return { sessions };
+      // Strip the raw `snapshot` from the bulk listing so the runtime output
+      // matches the declared resultSchema (AgentSessionRecordSchema omits it)
+      // and the list stays a lean index for choosing a session to resume. The
+      // full scrollback is fetched deliberately, one record at a time, via
+      // `agentSessionHistory.getSnapshot` (#10855) — returning it here would
+      // dump every session's captured scrollback (up to 32KB each) in a single
+      // call, defeating the scoped accessor and flooding the caller.
+      const lean = sessions.map(({ snapshot: _snapshot, ...rest }) => rest);
+      return { sessions: lean };
     },
   }));
 

@@ -341,7 +341,6 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "agent.getState",
   "agent.listToolbar",
   "agentSessionHistory.list",
-  "agentSessionHistory.getSnapshot",
 
   "git.getProjectPulse",
   "git.getFileDiff",
