@@ -313,6 +313,9 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
   };
 
   const handleClearSessionHistory = async () => {
+    // Close the confirm dialog up front — ConfirmDialog doesn't self-close on
+    // confirm, and the clear is fast + surfaces its own error toast on failure.
+    setShowClearHistoryConfirm(false);
     try {
       await window.electron.agentSessionHistory.clear();
       setHistoryCleared(true);

@@ -407,6 +407,31 @@ describe("agentSessionHistory", () => {
       const records = await readSessionHistory(userDataDir);
       expect(records.map((r) => r.sessionId)).toEqual(["ancient"]);
     });
+
+    it("keep-forever (0) still enforces the per-worktree cap", async () => {
+      // The pty-host trash-expiry path persists with retentionDays=0 (no store
+      // access). This proves that even without age-eviction, growth is bounded
+      // at MAX_RECORDS_PER_WORKTREE — the guarantee that makes that safe.
+      for (let i = 0; i < MAX_RECORDS_PER_WORKTREE + 10; i++) {
+        await persistAgentSession(
+          {
+            sessionId: `session-${i}`,
+            agentId: "claude",
+            worktreeId: "wt-1",
+            title: null,
+            projectId: null,
+          },
+          userDataDir,
+          0
+        );
+      }
+      const records = await readSessionHistory(userDataDir);
+      expect(records).toHaveLength(MAX_RECORDS_PER_WORKTREE);
+      // Newest survive: the last-written session must be present.
+      expect(records.some((r) => r.sessionId === `session-${MAX_RECORDS_PER_WORKTREE + 9}`)).toBe(
+        true
+      );
+    });
   });
 
   it("handles corrupt JSON gracefully", async () => {
