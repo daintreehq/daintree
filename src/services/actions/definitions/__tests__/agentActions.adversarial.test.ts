@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
 const panelStoreMock = vi.hoisted(() => ({
@@ -918,5 +918,110 @@ describe("agent.listToolbar (#10838)", () => {
     expect(def.scope).toBe("renderer");
     expect(def.mcpVisibility).toBe("discoverable");
     expect(def.argsSchema).toBeUndefined();
+  });
+});
+
+describe("agentSessionHistory.list (#10854)", () => {
+  const SAMPLE_SESSIONS = [
+    {
+      sessionId: "sess-1",
+      agentId: "claude",
+      worktreeId: "wt-1",
+      title: "Auth refactor",
+      projectId: "proj-1",
+      savedAt: 1_700_000_000_000,
+      agentLaunchFlags: ["--model", "opus"],
+      agentModelId: "claude-opus",
+      cwd: "/repo",
+      branch: "feature/auth",
+    },
+    {
+      // Minimal record: nullable fields null, all optionals absent.
+      sessionId: "sess-2",
+      agentId: "codex",
+      worktreeId: null,
+      title: null,
+      projectId: null,
+      savedAt: 1_699_000_000_000,
+    },
+  ];
+
+  const listMock = vi.fn();
+
+  beforeEach(() => {
+    listMock.mockReset();
+    listMock.mockResolvedValue(SAMPLE_SESSIONS);
+    // @ts-expect-error - minimal window.electron stub for the renderer IPC call
+    globalThis.window = { electron: { agentSessionHistory: { list: listMock } } };
+  });
+
+  afterEach(() => {
+    // @ts-expect-error - tear down the stub so it doesn't leak to other suites
+    delete globalThis.window;
+  });
+
+  function getDef(): AnyActionDefinition {
+    const def = setupActions(makeCallbacks()).get("agentSessionHistory.list")?.() as
+      | AnyActionDefinition
+      | undefined;
+    if (!def) throw new Error("agentSessionHistory.list not registered");
+    return def;
+  }
+
+  it("forwards the worktreeId arg to the bridge and wraps the result in { sessions }", async () => {
+    const actions = setupActions(makeCallbacks());
+    const result = await callAction(actions, "agentSessionHistory.list", { worktreeId: "wt-1" });
+    expect(listMock).toHaveBeenCalledWith("wt-1");
+    expect(result).toEqual({ sessions: SAMPLE_SESSIONS });
+  });
+
+  it("passes undefined (cross-project) when no worktreeId is given", async () => {
+    const actions = setupActions(makeCallbacks());
+    await callAction(actions, "agentSessionHistory.list");
+    expect(listMock).toHaveBeenCalledWith(undefined);
+  });
+
+  it("passes undefined when called with an empty args object", async () => {
+    const actions = setupActions(makeCallbacks());
+    await callAction(actions, "agentSessionHistory.list", {});
+    expect(listMock).toHaveBeenCalledWith(undefined);
+  });
+
+  it("returns the bridge's empty array verbatim (never throws on empty journal)", async () => {
+    listMock.mockResolvedValue([]);
+    const actions = setupActions(makeCallbacks());
+    const result = await callAction(actions, "agentSessionHistory.list", {});
+    expect(result).toEqual({ sessions: [] });
+  });
+
+  it("registers as a read-only query action advertising an MCP output schema", () => {
+    const def = getDef();
+    expect(def.kind).toBe("query");
+    expect(def.danger).toBe("safe");
+    expect(def.scope).toBe("renderer");
+    expect(def.mcpOutputSchema).toBe(true);
+  });
+
+  it("resultSchema accepts both a full record and a null/absent-optional record", () => {
+    const parsed = getDef().resultSchema?.safeParse({ sessions: SAMPLE_SESSIONS });
+    expect(parsed?.success).toBe(true);
+  });
+
+  it("resultSchema rejects a session missing the required sessionId", () => {
+    const parsed = getDef().resultSchema?.safeParse({
+      sessions: [{ agentId: "claude", worktreeId: null, title: null, projectId: null, savedAt: 1 }],
+    });
+    expect(parsed?.success).toBe(false);
+  });
+
+  it("argsSchema accepts an omitted worktreeId and a non-empty one", () => {
+    const schema = getDef().argsSchema;
+    expect(schema?.safeParse(undefined).success).toBe(true);
+    expect(schema?.safeParse({}).success).toBe(true);
+    expect(schema?.safeParse({ worktreeId: "wt-1" }).success).toBe(true);
+  });
+
+  it("argsSchema rejects an empty worktreeId (would silently unfilter to cross-project)", () => {
+    expect(getDef().argsSchema?.safeParse({ worktreeId: "" }).success).toBe(false);
   });
 });

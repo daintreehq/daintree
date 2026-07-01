@@ -38,6 +38,7 @@ export const WORKBENCH_TIER_TOOLS = [
 
   "agent.getState",
   "agent.listToolbar",
+  "agentSessionHistory.list",
 
   "agentSettings.get",
   "keybinding.getOverrides",

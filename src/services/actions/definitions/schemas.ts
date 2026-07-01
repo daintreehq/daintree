@@ -221,3 +221,23 @@ export const RecipeSummarySchema = z.object({
   terminalCount: z.number(),
   showInEmptyState: z.boolean(),
 });
+
+// Mirror of `AgentSessionRecord` (shared/types/ipc/agentSessionHistory.ts) — the
+// journaled record for a closed, resumable agent session. Nullable vs optional
+// tracks the TS type exactly: `worktreeId`/`title`/`projectId` are always present
+// but may be null; `agentLaunchFlags`/`agentModelId`/`cwd`/`branch` are `?:` and
+// may be absent, so the advertised MCP outputSchema must not mark them required.
+export const AgentSessionRecordSchema = z.object({
+  sessionId: z.string(),
+  agentId: z.string(),
+  worktreeId: z.string().nullable(),
+  title: z.string().nullable(),
+  projectId: z.string().nullable(),
+  // Epoch ms the resume record was captured (session close), for newest-first ordering.
+  savedAt: z.number(),
+  // Original launch flags/model, preserved so a relaunch reproduces the session (#3175).
+  agentLaunchFlags: z.array(z.string()).optional(),
+  agentModelId: z.string().optional(),
+  cwd: z.string().optional(),
+  branch: z.string().optional(),
+});

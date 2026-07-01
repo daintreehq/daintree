@@ -4,6 +4,7 @@ import {
   LaunchLocationSchema,
   TerminalSpawnSourceSchema,
   AddPanelFocusPolicySchema,
+  AgentSessionRecordSchema,
 } from "./schemas";
 import { z } from "zod";
 import { usePanelStore } from "@/store/panelStore";
@@ -445,6 +446,47 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         terminalId: null,
         found: false,
       };
+    },
+  }));
+
+  actions.set("agentSessionHistory.list", () => ({
+    id: "agentSessionHistory.list",
+    title: "List Resumable Sessions",
+    description:
+      "List resumable agent sessions from the on-disk journal — the closed sessions the user can relaunch. This is a faithful record listing, NOT a summary of what happened in each session. Args: `worktreeId` (optional) — restrict to one worktree; omit to list every resumable session across all worktrees and projects (the default). Returns { sessions: [{ sessionId, agentId, worktreeId, title, projectId, savedAt (epoch ms; the list is newest-first), agentLaunchFlags?, agentModelId?, cwd?, branch? }] }, capped and pruned by the journal's retention policy. Never errors — returns { sessions: [] } when the journal is empty or unreadable. To relaunch a listed session, feed its `agentId`/`cwd`/`worktreeId`/`agentLaunchFlags`/`agentModelId` into `agent.launch`.",
+    category: "agent",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z
+      .object({
+        // `.min(1)`: an empty string would fall through the bridge's `if
+        // (!worktreeId)` guard to an unfiltered cross-project listing — a
+        // surprising result for a caller that passed a (blank) id expecting a
+        // scoped one. Reject it; omit the arg to list across all worktrees.
+        worktreeId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Restrict the listing to one worktree id. Omit to list resumable sessions across all worktrees and projects."
+          ),
+      })
+      .optional(),
+    examples: [
+      {
+        args: {},
+        description: "List every resumable agent session across the whole workspace",
+      },
+    ],
+    resultSchema: z.object({
+      sessions: z.array(AgentSessionRecordSchema),
+    }),
+    mcpOutputSchema: true,
+    run: async (args: unknown) => {
+      const { worktreeId } = (args ?? {}) as { worktreeId?: string };
+      const sessions = await window.electron.agentSessionHistory.list(worktreeId);
+      return { sessions };
     },
   }));
 
