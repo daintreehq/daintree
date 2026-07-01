@@ -93,6 +93,9 @@ const TELEMETRY_DISCLOSURE: Array<{
   },
 ];
 
+/** How long the "History cleared" confirmation label stays visible. */
+const CLEARED_FLASH_MS = 3000;
+
 const RETENTION_OPTIONS: Array<{ value: LogRetention; label: string }> = [
   { value: 7, label: "7 days" },
   { value: 30, label: "30 days" },
@@ -298,6 +301,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
             title: "Couldn't save setting",
             message: "Session history retention couldn't be saved.",
             actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+            context: { eventKind: "uiFeedback" },
           });
           logError("Failed to set session history retention", retryErr);
         }
@@ -307,6 +311,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
         title: "Couldn't save setting",
         message: "Session history retention couldn't be saved.",
         actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+        context: { eventKind: "uiFeedback" },
       });
       logError("Failed to set session history retention", err);
     }
@@ -319,7 +324,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
     try {
       await window.electron.agentSessionHistory.clear();
       setHistoryCleared(true);
-      setTimeout(() => setHistoryCleared(false), 3000);
+      setTimeout(() => setHistoryCleared(false), CLEARED_FLASH_MS);
     } catch (err) {
       notify({
         type: "error",
@@ -332,6 +337,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
             onClick: () => void handleClearSessionHistory(),
           },
         ],
+        context: { eventKind: "uiFeedback" },
       });
       logError("Failed to clear agent session history", err);
     }

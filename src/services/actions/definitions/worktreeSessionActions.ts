@@ -6,6 +6,10 @@ import { usePanelStore } from "@/store/panelStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
 import { collectRunningAgentTerminals } from "@/utils/destructiveSessionConfirm";
 
+// Shared by argsSchema + run() so the worktree id is extracted via a validated
+// parse rather than an unchecked `as` cast (keeps the lint ratchet green).
+const clearHistoryArgsSchema = z.object({ worktreeId: z.string().optional() });
+
 export function registerWorktreeSessionActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
@@ -233,9 +237,10 @@ export function registerWorktreeSessionActions(
     scope: "renderer",
     dangerRationale:
       "Permanently deletes this worktree's recorded resumable-session history. Records can't be recovered.",
-    argsSchema: z.object({ worktreeId: z.string().optional() }),
+    argsSchema: clearHistoryArgsSchema,
     run: async (args: unknown, ctx: ActionContext) => {
-      const { worktreeId } = args as { worktreeId?: string };
+      const parsed = clearHistoryArgsSchema.safeParse(args ?? {});
+      const worktreeId = parsed.success ? parsed.data.worktreeId : undefined;
       const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
       await window.electron.agentSessionHistory.clear(targetWorktreeId);
