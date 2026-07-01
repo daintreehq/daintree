@@ -219,6 +219,7 @@ export function registerTerminalConfigActions(
     scope: "renderer",
     argsSchema: z.object({ enabled: z.boolean() }),
     run: async (args: unknown) => {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- validated by argsSchema
       const { enabled } = args as { enabled: boolean };
       await terminalConfigClient.setExitSnapshot(enabled);
     },

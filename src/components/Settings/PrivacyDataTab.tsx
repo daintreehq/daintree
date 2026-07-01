@@ -180,6 +180,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
         type: "error",
         title: "Couldn't save setting",
         message: "Exit snapshot capture couldn't be updated.",
+        context: { eventKind: "settings" },
         actions: [
           {
             label: "Try again",
