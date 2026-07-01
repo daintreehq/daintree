@@ -92,6 +92,33 @@ describe("PanelPalette browsable resume list (#10851)", () => {
     expect(listbox.querySelectorAll('[aria-hidden="true"]').length).toBeGreaterThan(0);
   });
 
+  it("keys groups off groupKey, not the display label (same label, distinct keys → two headers)", () => {
+    const sameLabel: PanelKindOption[] = [
+      {
+        id: "resume:x",
+        name: "Resume: X",
+        iconId: "terminal",
+        color: "#fff",
+        category: "resume",
+        groupKey: "wt-1",
+        groupLabel: "main",
+      },
+      {
+        id: "resume:y",
+        name: "Resume: Y",
+        iconId: "terminal",
+        color: "#fff",
+        category: "resume",
+        groupKey: "wt-2",
+        groupLabel: "main",
+      },
+    ];
+    render(<PanelPalette {...baseProps} query="" results={sameLabel} />);
+    // Two worktrees that happen to share a branch name "main" must render as two
+    // separate group headers, not merge into one.
+    expect(screen.getAllByText("main")).toHaveLength(2);
+  });
+
   it("flattens the list (no section or group headers) while searching", () => {
     render(<PanelPalette {...baseProps} query="fix" results={resumeResults} />);
     expect(screen.queryByText("Resume Sessions")).toBeNull();

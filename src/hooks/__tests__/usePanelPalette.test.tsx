@@ -76,6 +76,20 @@ vi.mock("@/store/projectStore", () => {
   return { useProjectStore: store };
 });
 
+// The panel palette reads its open state from the palette store; mark it active
+// so the session-history fetch (now gated on `isOpen`) runs under test.
+vi.mock("@/store/paletteStore", () => {
+  const state = { activePaletteId: "panel" as const };
+  const getState = () => ({
+    ...state,
+    openPalette: vi.fn(),
+    closePalette: vi.fn(),
+  });
+  const store = (selector: (s: typeof state) => unknown) => selector(state);
+  store.getState = getState;
+  return { usePaletteStore: store };
+});
+
 import { usePanelPalette } from "../usePanelPalette";
 
 describe("usePanelPalette", () => {
@@ -406,6 +420,26 @@ describe("usePanelPalette", () => {
         expect(resume!.searchAliases).toEqual(
           expect.arrayContaining(["claude", "Claude", "Feature X", "feature/x"])
         );
+      });
+    });
+
+    it("makes a stale entry findable by its cwd basename when it has no branch", async () => {
+      (window.electron!.agentSessionHistory!.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makeSession({
+          sessionId: "orphan",
+          worktreeId: "wt-removed",
+          branch: undefined,
+          cwd: "/repo/feature-auth",
+        }),
+      ]);
+
+      const { result, rerender } = renderHook(() => usePanelPalette());
+      await vi.waitFor(() => {
+        rerender();
+        const resume = result.current.results.find((item) => item.id === "resume:orphan");
+        expect(resume).toBeDefined();
+        expect(resume!.groupLabel).toBe("feature-auth");
+        expect(resume!.searchAliases).toContain("feature-auth");
       });
     });
 

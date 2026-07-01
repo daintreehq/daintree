@@ -233,13 +233,16 @@ export function usePanelPalette(): UsePanelPaletteReturn {
         const description = descriptionParts.join(" · ");
 
         // Broaden search beyond the title so an agent, branch, model, or
-        // worktree name matches even when it never appears in the title.
+        // worktree name matches even when it never appears in the title. The
+        // cwd basename is included so a stale entry whose group label falls
+        // back to it (no branch, no live worktree) stays findable.
         const searchAliases = [
           session.agentId,
           agentName,
           modelPart,
           worktreeName,
           branchName,
+          pathBasename(session.cwd),
         ].filter((alias): alias is string => !!alias);
 
         return {
@@ -309,9 +312,11 @@ export function usePanelPalette(): UsePanelPaletteReturn {
   }, [isOpen]);
 
   useEffect(() => {
+    if (!isOpen) return;
     let cancelled = false;
     // Fetch unscoped (all worktrees) so the list is browsable; the memo above
-    // filters to the current project and flags stale entries (#10851).
+    // filters to the current project and flags stale entries (#10851). Gated on
+    // open so closing the palette doesn't re-read the whole journal.
     window.electron?.agentSessionHistory
       ?.list()
       .then((sessions) => {
