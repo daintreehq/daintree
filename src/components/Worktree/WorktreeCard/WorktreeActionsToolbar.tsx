@@ -71,6 +71,7 @@ interface WorktreeActionsToolbarProps {
     onMaximizeAll: () => void;
     onCloseAll: () => void;
     onTerminateAll: () => void;
+    onClearHistory: () => void;
     onResetRenderers: () => void;
     onSelectAllAgents: () => void;
     onSelectWaitingAgents: () => void;
@@ -228,6 +229,7 @@ export function WorktreeActionsToolbar({
             onMaximizeAll={menu.onMaximizeAll}
             onCloseAll={menu.onCloseAll}
             onTerminateAll={menu.onTerminateAll}
+            onClearHistory={menu.onClearHistory}
             onResetRenderers={menu.onResetRenderers}
             onSelectAllAgents={menu.onSelectAllAgents}
             onSelectWaitingAgents={menu.onSelectWaitingAgents}

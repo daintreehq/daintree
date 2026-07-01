@@ -104,6 +104,7 @@ const baseMenu: WorktreeHeaderProps["menu"] = {
   onMaximizeAll: noop,
   onCloseAll: noop,
   onTerminateAll: noop,
+  onClearHistory: noop,
   onResetRenderers: noop,
   onSelectAllAgents: noop,
   onSelectWaitingAgents: noop,

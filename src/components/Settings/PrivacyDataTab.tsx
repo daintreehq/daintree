@@ -9,10 +9,12 @@ import {
   Eye,
   EyeOff,
   Camera,
+  History,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSubtabBar } from "./SettingsSubtabBar";
@@ -113,6 +115,9 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
   const [cacheCleared, setCacheCleared] = useState(false);
   const [resetState, setResetState] = useState<"idle" | "confirming">("idle");
   const [exitSnapshotEnabled, setExitSnapshotEnabled] = useState(false);
+  const [sessionRetentionDays, setSessionRetentionDays] = useState<LogRetention>(30);
+  const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false);
+  const [historyCleared, setHistoryCleared] = useState(false);
 
   useEffect(() => {
     window.electron.privacy
@@ -254,6 +259,78 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
         actions: [{ label: "Try again", variant: "primary", onClick: retry }],
       });
       logError("Failed to set log retention", err);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    window.electron.agentSessionHistory
+      .getRetentionDays()
+      .then((days) => {
+        if (!cancelled) setSessionRetentionDays(days);
+      })
+      .catch((err) => {
+        // Non-blocking: the picker falls back to the 30-day default already in
+        // state. No error toast — the setting is still adjustable and re-reads
+        // on the next open (Doherty: silent recovery over interrupting the user).
+        logError("Failed to load agent session retention", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleSessionRetentionChange = async (days: LogRetention) => {
+    const prev = sessionRetentionDays;
+    setSessionRetentionDays(days);
+    try {
+      await window.electron.agentSessionHistory.setRetentionDays(days);
+    } catch (err) {
+      setSessionRetentionDays(prev);
+      const retry = async () => {
+        try {
+          await window.electron.agentSessionHistory.setRetentionDays(days);
+          setSessionRetentionDays(days);
+        } catch (retryErr) {
+          setSessionRetentionDays(prev);
+          notify({
+            type: "error",
+            title: "Couldn't save setting",
+            message: "Session history retention couldn't be saved.",
+            actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+          });
+          logError("Failed to set session history retention", retryErr);
+        }
+      };
+      notify({
+        type: "error",
+        title: "Couldn't save setting",
+        message: "Session history retention couldn't be saved.",
+        actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+      });
+      logError("Failed to set session history retention", err);
+    }
+  };
+
+  const handleClearSessionHistory = async () => {
+    try {
+      await window.electron.agentSessionHistory.clear();
+      setHistoryCleared(true);
+      setTimeout(() => setHistoryCleared(false), 3000);
+    } catch (err) {
+      notify({
+        type: "error",
+        title: "Couldn't clear history",
+        message: "Session history couldn't be cleared.",
+        actions: [
+          {
+            label: "Try again",
+            variant: "primary",
+            onClick: () => void handleClearSessionHistory(),
+          },
+        ],
+      });
+      logError("Failed to clear agent session history", err);
     }
   };
 
@@ -497,6 +574,45 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
           </SettingsSection>
 
           <SettingsSection
+            icon={History}
+            title="Session history"
+            description="Daintree records resumable agent sessions so you can pick up where you left off. Prune records older than the selected period, or clear them all now."
+          >
+            <div className="flex gap-2">
+              {RETENTION_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => void handleSessionRetentionChange(option.value)}
+                  className={cn(
+                    "px-3 py-2 rounded-[var(--radius-md)] text-sm font-medium transition-colors",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                    sessionRetentionDays === option.value
+                      ? "bg-overlay-selected text-daintree-text font-medium border border-border-strong"
+                      : "text-daintree-text/60 border border-daintree-border hover:bg-tint/5 hover:text-daintree-text"
+                  )}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-daintree-text/40 mt-2 select-text">
+              Applies to every project. Shortening the window prunes older records immediately.
+            </p>
+            <div className="mt-4">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowClearHistoryConfirm(true)}
+                className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text"
+              >
+                <Trash2 className="w-4 h-4" />
+                {historyCleared ? "History cleared" : "Clear session history"}
+              </Button>
+            </div>
+          </SettingsSection>
+
+          <SettingsSection
             icon={EyeOff}
             title="Hidden commands"
             description="Commands you've hidden from 'Recently used' in the action palette. Resetting restores all of them."
@@ -564,6 +680,16 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
           </SettingsSection>
         </>
       )}
+
+      <ConfirmDialog
+        isOpen={showClearHistoryConfirm}
+        variant="destructive"
+        onConfirm={() => void handleClearSessionHistory()}
+        onClose={() => setShowClearHistoryConfirm(false)}
+        title="Clear all session history?"
+        description="This permanently deletes recorded resumable-session history across every project on this machine. Open sessions aren't affected; the records can't be recovered."
+        confirmLabel="Clear history"
+      />
     </div>
   );
 }

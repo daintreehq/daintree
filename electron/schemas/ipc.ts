@@ -367,6 +367,18 @@ export const TerminalResizePayloadSchema = z.object({
   rows: z.number().int().positive(),
 });
 
+/**
+ * Agent-session-history retention window in days. Fixed set of choices
+ * (`0` = keep forever) mirroring the privacy log-retention picker — reject any
+ * other value at the IPC boundary.
+ */
+export const AgentSessionRetentionDaysSchema = z.union([
+  z.literal(7),
+  z.literal(30),
+  z.literal(90),
+  z.literal(0),
+]);
+
 export const FileSearchPayloadSchema = z.object({
   cwd: z.string().min(1),
   query: z.string(),

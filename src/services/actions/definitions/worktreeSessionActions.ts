@@ -213,4 +213,32 @@ export function registerWorktreeSessionActions(
       usePanelStore.getState().bulkCloseByWorktree(targetWorktreeId);
     },
   }));
+
+  actions.set("worktree.sessions.clearHistory", () => ({
+    id: "worktree.sessions.clearHistory",
+    title: "Clear Session History",
+    description:
+      "Permanently delete this worktree's recorded resumable-session history so those sessions no longer appear when resuming agents. Open sessions are unaffected.",
+    category: "worktree",
+    kind: "command",
+    danger: "confirm",
+    // danger:"confirm" with the confirm wired at the WorktreeCard call site
+    // (useWorktreeActions), NOT in run() — run() clears the journal immediately.
+    // ActionService doesn't gate user-source dispatch, so a palette pick would
+    // bypass the D1 confirm. Hide from the palette; it stays reachable from the
+    // worktree card menu (with confirm). Mirrors `endAll`, not `trashAll`'s
+    // pending-store double-guard — that guard warns about *running* agent
+    // terminals being lost; this clears the historical journal, not live panels.
+    palette: { mode: "hidden" },
+    scope: "renderer",
+    dangerRationale:
+      "Permanently deletes this worktree's recorded resumable-session history. Records can't be recovered.",
+    argsSchema: z.object({ worktreeId: z.string().optional() }),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { worktreeId } = args as { worktreeId?: string };
+      const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
+      if (!targetWorktreeId) return;
+      await window.electron.agentSessionHistory.clear(targetWorktreeId);
+    },
+  }));
 }

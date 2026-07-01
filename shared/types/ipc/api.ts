@@ -73,7 +73,7 @@ import type {
   AgentHelpRequest,
   AgentHelpResult,
 } from "./agent.js";
-import type { AgentSessionRecord } from "./agentSessionHistory.js";
+import type { AgentSessionRecord, AgentSessionRetentionDays } from "./agentSessionHistory.js";
 import type {
   DemoScreenshotResult,
   DemoStartCapturePayload,
@@ -1225,6 +1225,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   agentSessionHistory: {
     list(worktreeId?: string): Promise<AgentSessionRecord[]>;
     clear(worktreeId?: string): Promise<void>;
+    getRetentionDays(): Promise<AgentSessionRetentionDays>;
+    setRetentionDays(days: AgentSessionRetentionDays): Promise<void>;
   };
   // clipboard is generated — see GeneratedElectronAPI.
   webUtils: {

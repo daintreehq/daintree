@@ -75,6 +75,7 @@ export const BUILT_IN_ACTION_IDS = [
   "worktree.sessions.closeCompleted",
   "worktree.sessions.trashAll",
   "worktree.sessions.endAll",
+  "worktree.sessions.clearHistory",
 
   // -- worktreeBulkActions (overview multi-select) --
   "worktree.bulk.closeSessions",

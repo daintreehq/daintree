@@ -23,6 +23,7 @@ import {
   GitCompare,
   GitPullRequest,
   Globe,
+  History,
   LayoutGrid,
   Layers,
   Link,
@@ -124,6 +125,7 @@ export interface WorktreeMenuItemsProps {
   onSelectWorkingAgents: () => void;
   onCloseAll: () => void;
   onTerminateAll: () => void;
+  onClearHistory: () => void;
   onOpenPanelPalette?: () => void;
   onDeleteWorktree?: () => void;
   onRevertAgentChanges?: () => void;
@@ -181,6 +183,7 @@ export function WorktreeMenuItems({
   onSelectWorkingAgents,
   onCloseAll,
   onTerminateAll,
+  onClearHistory,
   onOpenPanelPalette,
   onDeleteWorktree,
   onRevertAgentChanges,
@@ -301,6 +304,13 @@ export function WorktreeMenuItems({
             <RefreshCw className="w-3.5 h-3.5 mr-2" />
             Reset All Renderers
             <C.Shortcut>({counts.active})</C.Shortcut>
+          </C.Item>
+
+          <C.Separator />
+
+          <C.Item onSelect={onClearHistory}>
+            <History className="w-3.5 h-3.5 mr-2" />
+            Clear Session History
           </C.Item>
 
           <C.Separator />

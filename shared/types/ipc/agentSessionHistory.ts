@@ -1,3 +1,10 @@
+/**
+ * User-adjustable retention window for the agent resume journal, in days.
+ * `0` means "keep forever" — records are never evicted by age (the per-worktree
+ * cap still applies).
+ */
+export type AgentSessionRetentionDays = 7 | 30 | 90 | 0;
+
 export interface AgentSessionRecord {
   sessionId: string;
   agentId: string;

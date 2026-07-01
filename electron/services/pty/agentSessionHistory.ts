@@ -3,15 +3,33 @@ import { readFileSync } from "fs";
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { resilientAtomicWriteFile } from "../../utils/fs.js";
-import type { AgentSessionRecord } from "../../../shared/types/ipc/agentSessionHistory.js";
+import type {
+  AgentSessionRecord,
+  AgentSessionRetentionDays,
+} from "../../../shared/types/ipc/agentSessionHistory.js";
 
 export type { AgentSessionRecord };
 
 const MAX_RECORDS_PER_WORKTREE = 50;
-const SESSION_HISTORY_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_RETENTION_DAYS = 30;
+const SESSION_HISTORY_TTL_MS = DEFAULT_RETENTION_DAYS * DAY_MS; // 30 days
+
+export { MAX_RECORDS_PER_WORKTREE, SESSION_HISTORY_TTL_MS, DEFAULT_RETENTION_DAYS };
+
 const HISTORY_FILENAME = "agent-session-history.json";
 
-export { MAX_RECORDS_PER_WORKTREE, SESSION_HISTORY_TTL_MS };
+/**
+ * Convert a retention window in days to the eviction TTL in ms. `0` (keep
+ * forever) maps to `Infinity` so the age filter never drops a record — the
+ * per-worktree cap is the only remaining bound. This module stays
+ * electron-free: retention arrives as a plain number from the caller (read from
+ * the store at the IPC/call-site layer), never read here.
+ */
+function retentionDaysToMs(retentionDays?: AgentSessionRetentionDays): number {
+  if (retentionDays === undefined) return SESSION_HISTORY_TTL_MS;
+  return retentionDays > 0 ? retentionDays * DAY_MS : Infinity;
+}
 
 function getUserDataDir(): string | null {
   return process.env.DAINTREE_USER_DATA || null;
@@ -37,9 +55,13 @@ function enqueueWrite<T>(fn: () => Promise<T>): Promise<T> {
   return run as Promise<T>;
 }
 
-function evictRecords(records: AgentSessionRecord[], now: number): AgentSessionRecord[] {
-  // Filter expired records
-  const fresh = records.filter((r) => now - r.savedAt < SESSION_HISTORY_TTL_MS);
+function evictRecords(
+  records: AgentSessionRecord[],
+  now: number,
+  retentionMs: number = SESSION_HISTORY_TTL_MS
+): AgentSessionRecord[] {
+  // Filter expired records (retentionMs === Infinity ⇒ never age out)
+  const fresh = records.filter((r) => now - r.savedAt < retentionMs);
 
   // Deduplicate on sessionId, keeping the newest. Multiple close paths can fire
   // for the same terminal (e.g. a user kill landing mid-shutdown), each writing
@@ -107,7 +129,8 @@ export async function readSessionHistory(userData?: string): Promise<AgentSessio
 
 export async function persistAgentSession(
   record: Omit<AgentSessionRecord, "savedAt">,
-  userData?: string
+  userData?: string,
+  retentionDays?: AgentSessionRetentionDays
 ): Promise<void> {
   const filePath = getSessionHistoryPath(userData);
   if (!filePath) return;
@@ -120,19 +143,44 @@ export async function persistAgentSession(
     const fullRecord: AgentSessionRecord = { ...record, savedAt: now };
 
     const existing = await readSessionHistory(userData);
-    const updated = evictRecords([fullRecord, ...existing], now);
+    const updated = evictRecords([fullRecord, ...existing], now, retentionDaysToMs(retentionDays));
 
     await resilientAtomicWriteFile(filePath, JSON.stringify(updated, null, 2));
   });
 }
 
-export function listAgentSessions(worktreeId?: string, userData?: string): AgentSessionRecord[] {
+export function listAgentSessions(
+  worktreeId?: string,
+  userData?: string,
+  retentionDays?: AgentSessionRetentionDays
+): AgentSessionRecord[] {
   const records = readSessionHistorySync(userData);
   const now = Date.now();
-  const fresh = evictRecords(records, now);
+  const fresh = evictRecords(records, now, retentionDaysToMs(retentionDays));
 
   if (!worktreeId) return fresh;
   return fresh.filter((r) => r.worktreeId === worktreeId);
+}
+
+/**
+ * Prune the journal to the given retention window immediately, rewriting the
+ * file through the shared write queue so it can't interleave with an in-flight
+ * persist. Used when the user shortens the retention setting — mirrors
+ * `helpAssistant`'s `pruneAuditByRetention` so a tighter privacy window takes
+ * effect at once rather than lazily on the next persist/list.
+ */
+export async function pruneAgentSessions(
+  retentionDays: AgentSessionRetentionDays,
+  userData?: string
+): Promise<void> {
+  const filePath = getSessionHistoryPath(userData);
+  if (!filePath) return;
+
+  await enqueueWrite(async () => {
+    const existing = await readSessionHistory(userData);
+    const pruned = evictRecords(existing, Date.now(), retentionDaysToMs(retentionDays));
+    await resilientAtomicWriteFile(filePath, JSON.stringify(pruned, null, 2));
+  });
 }
 
 export async function clearAgentSessions(worktreeId?: string, userData?: string): Promise<void> {
