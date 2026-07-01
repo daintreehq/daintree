@@ -9,7 +9,8 @@ import {
 } from "@shared/config/pluginAgentRegistry";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useProjectStore } from "@/store/projectStore";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { keybindingService } from "@/services/KeybindingService";
 import { formatTimeAgo } from "@/utils/timeAgo";
@@ -27,6 +28,20 @@ export interface PanelKindOption {
   category: "agent" | "tool" | "resume";
   installed?: boolean;
   resumeSession?: AgentSessionRecord;
+  /**
+   * Resume entry whose recorded worktree no longer resolves in the live
+   * worktree map (deleted/removed). Rendered greyed-out with a "Worktree
+   * removed" badge and excluded from keyboard navigation / launch (#10851).
+   */
+  isStale?: boolean;
+  /** Live worktree display name for a resume entry, when it still resolves. */
+  worktreeName?: string;
+  /** Branch a resume entry was captured on (live value preferred over recorded). */
+  branchName?: string;
+  /** Grouping key for the browse view: worktree id, or a no-worktree sentinel. */
+  groupKey?: string;
+  /** Human label for the resume entry's worktree group header. */
+  groupLabel?: string;
 }
 
 export type UsePanelPaletteReturn = UseSearchablePaletteReturn<PanelKindOption> & {
@@ -42,6 +57,16 @@ import {
 import { isAgentInstalled } from "../../shared/utils/agentAvailability";
 
 const STALE_THRESHOLD_MS = 5 * 60 * 1000;
+
+// Group key for resume records that were never tied to a worktree (e.g. a
+// terminal launched at the project root before worktree scoping existed).
+const NO_WORKTREE_GROUP_KEY = "__no-worktree__";
+
+function pathBasename(p: string | null | undefined): string {
+  if (!p) return "";
+  const parts = p.split(/[/\\]/).filter(Boolean);
+  return parts[parts.length - 1] ?? "";
+}
 
 const AGENT_LAUNCH_ACTIONS: Record<string, KeyAction> = Object.fromEntries(
   LAUNCHABLE_AGENT_IDS.map((id) => [id, `agent.${id}` as KeyAction])
@@ -76,7 +101,10 @@ export function usePanelPalette(): UsePanelPaletteReturn {
   const isAvailabilityInitialized = useCliAvailabilityStore((state) => state.isInitialized);
   const [keybindingVersion, setKeybindingVersion] = useState(0);
   const [resumeSessions, setResumeSessions] = useState<AgentSessionRecord[]>([]);
-  const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
+  // Live per-view worktree map: drives stale-entry detection and group labels.
+  const worktrees = useWorktreeStore((state) => state.worktrees);
+  // Scope the browsable resume list to the current project's own history.
+  const currentProjectId = useProjectStore((state) => state.currentProject?.id ?? null);
   // Re-render when a plugin loads/unloads mid-session so agent icon/name/color
   // refresh from the updated registry (#9879).
   const pluginAgentRegistry = useSyncExternalStore(
@@ -163,9 +191,17 @@ export function usePanelPalette(): UsePanelPaletteReturn {
       }
     }
 
+    // The journal is fetched unscoped (all worktrees/projects, newest-first).
+    // Keep this project's records, then map each to a rich, groupable option.
+    // Legacy records with a null projectId (pre-scoping) are kept only when
+    // their worktree still resolves in the live map — otherwise there's no
+    // reliable way to know they belong here.
     const resumeOptions: PanelKindOption[] = resumeSessions
       .filter((session) => !!session.sessionId)
-      .slice(0, 5)
+      .filter((session) => {
+        if (session.projectId) return session.projectId === currentProjectId;
+        return !!session.worktreeId && worktrees.has(session.worktreeId);
+      })
       .map((session) => {
         const agentConfig = getEffectiveAgentConfig(session.agentId);
         const timeAgo = formatTimeAgo(session.savedAt);
@@ -173,18 +209,53 @@ export function usePanelPalette(): UsePanelPaletteReturn {
         const agentName = agentConfig?.name ?? session.agentId;
         const hasMeaningfulTitle = !!session.title && !isUselessTitle(session.title);
         const name = hasMeaningfulTitle ? `Resume: ${session.title}` : `Resume ${agentName}`;
-        const descriptionParts = [modelPart, hasMeaningfulTitle ? agentName : null, timeAgo].filter(
-          (part): part is string => !!part
-        );
+
+        const liveWorktree = session.worktreeId ? worktrees.get(session.worktreeId) : undefined;
+        const isStale = !!session.worktreeId && !liveWorktree;
+        const worktreeName = liveWorktree?.name;
+        const branchName = liveWorktree?.branch ?? session.branch;
+
+        const groupKey = session.worktreeId ?? NO_WORKTREE_GROUP_KEY;
+        const groupLabel = liveWorktree
+          ? liveWorktree.name
+          : isStale
+            ? session.branch || pathBasename(session.cwd) || "Removed worktree"
+            : "No worktree";
+
+        // Second metadata line: agent/model, where it ran, and how long ago.
+        const locationPart = isStale ? "Worktree removed" : (worktreeName ?? branchName ?? null);
+        const descriptionParts = [
+          modelPart,
+          hasMeaningfulTitle ? agentName : null,
+          locationPart,
+          timeAgo,
+        ].filter((part): part is string => !!part);
         const description = descriptionParts.join(" · ");
+
+        // Broaden search beyond the title so an agent, branch, model, or
+        // worktree name matches even when it never appears in the title.
+        const searchAliases = [
+          session.agentId,
+          agentName,
+          modelPart,
+          worktreeName,
+          branchName,
+        ].filter((alias): alias is string => !!alias);
+
         return {
           id: `resume:${session.sessionId}`,
           name,
           iconId: agentConfig?.iconId ?? "terminal",
           color: agentConfig?.color ?? "var(--color-daintree-text)",
           description,
+          searchAliases,
           category: "resume" as const,
           resumeSession: session,
+          isStale,
+          worktreeName,
+          branchName,
+          groupKey,
+          groupLabel,
         };
       });
 
@@ -205,6 +276,8 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     userRegistry,
     keybindingVersion,
     resumeSessions,
+    worktrees,
+    currentProjectId,
     availability,
     isAvailabilityInitialized,
     pluginAgentRegistry,
@@ -215,7 +288,11 @@ export function usePanelPalette(): UsePanelPaletteReturn {
       items: availableKinds,
       fuseOptions: PANEL_FUSE_OPTIONS,
       includeMatches: true,
-      maxResults: 20,
+      // Higher ceiling than the default 20 so the browsable resume list can
+      // surface many closed sessions across worktrees without one crowding out
+      // agents/tools; rendered DOM stays capped via the palette overflow notice.
+      maxResults: 60,
+      canNavigate: (item) => !item.isStale,
       paletteId: "panel",
     });
 
@@ -233,8 +310,10 @@ export function usePanelPalette(): UsePanelPaletteReturn {
 
   useEffect(() => {
     let cancelled = false;
+    // Fetch unscoped (all worktrees) so the list is browsable; the memo above
+    // filters to the current project and flags stale entries (#10851).
     window.electron?.agentSessionHistory
-      ?.list(activeWorktreeId ?? undefined)
+      ?.list()
       .then((sessions) => {
         if (!cancelled) setResumeSessions(sessions);
       })
@@ -242,10 +321,13 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     return () => {
       cancelled = true;
     };
-  }, [isOpen, activeWorktreeId]);
+  }, [isOpen]);
 
   const handleSelect = useCallback(
     (option: PanelKindOption): PanelKindOption | null => {
+      // Stale resume entries (removed worktree) can't be launched — swallow the
+      // click rather than routing to the setup wizard or attempting a resume.
+      if (option.isStale) return null;
       if (option.id === MORE_AGENTS_PANEL_ID || option.installed === false) {
         close();
         window.dispatchEvent(
@@ -265,6 +347,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     if (results.length === 0 || selectedIndex < 0) return null;
     const selected = results[selectedIndex];
     if (!selected) return null;
+    if (selected.isStale) return null;
 
     if (selected.id === MORE_AGENTS_PANEL_ID || selected.installed === false) {
       close();
