@@ -460,8 +460,13 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     scope: "renderer",
     argsSchema: z
       .object({
+        // `.min(1)`: an empty string would fall through the bridge's `if
+        // (!worktreeId)` guard to an unfiltered cross-project listing — a
+        // surprising result for a caller that passed a (blank) id expecting a
+        // scoped one. Reject it; omit the arg to list across all worktrees.
         worktreeId: z
           .string()
+          .min(1)
           .optional()
           .describe(
             "Restrict the listing to one worktree id. Omit to list resumable sessions across all worktrees and projects."

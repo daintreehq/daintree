@@ -1013,4 +1013,15 @@ describe("agentSessionHistory.list (#10854)", () => {
     });
     expect(parsed?.success).toBe(false);
   });
+
+  it("argsSchema accepts an omitted worktreeId and a non-empty one", () => {
+    const schema = getDef().argsSchema;
+    expect(schema?.safeParse(undefined).success).toBe(true);
+    expect(schema?.safeParse({}).success).toBe(true);
+    expect(schema?.safeParse({ worktreeId: "wt-1" }).success).toBe(true);
+  });
+
+  it("argsSchema rejects an empty worktreeId (would silently unfilter to cross-project)", () => {
+    expect(getDef().argsSchema?.safeParse({ worktreeId: "" }).success).toBe(false);
+  });
 });
