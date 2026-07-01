@@ -119,7 +119,6 @@ export function HelpPanel({
   onResizeEnd,
 }: HelpPanelProps) {
   const panelRef = useRef<HTMLElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
   const inputBarRef = useRef<HybridInputBarHandle>(null);
   // Element that owned focus when the panel last opened. We restore focus to
   // it on close so keyboard users return to where they were rather than
@@ -705,70 +704,6 @@ export function HelpPanel({
     };
   }, [isOpen, isVisible, hasDomFocus, terminalId]);
 
-  // Post-reveal repaint for the assistant terminal (#10362). The project-level
-  // reveal sweep folds the assistant into its targets, but it repaints on a
-  // fixed double-rAF tuned to the project grid — and this slide-out panel can
-  // finish laying out a few frames later, so that pass can land before this
-  // container has real geometry and no-op. Re-run the repaint from the panel's
-  // own context, gated on the terminal container actually being sized, so it
-  // fires exactly when the assistant is paintable.
-  useEffect(() => {
-    if (!isOpen || !isVisible || !terminalId) return;
-    if (typeof requestAnimationFrame !== "function") return;
-
-    // One reveal-correction pass: poll a few frames for the slide-out panel to
-    // settle to real width, then repaint. Visibility-guarded so a backstop that
-    // fires after the user switched away again no-ops.
-    const runRepaintPass = (): void => {
-      if (document.visibilityState !== "visible") return;
-      let frames = 0;
-      const tick = (): void => {
-        if (!useHelpPanelStore.getState().isOpen) return;
-        if (document.visibilityState !== "visible") return;
-        // Wait for the container to have real width before repainting —
-        // repaintForReveal's own size guard would otherwise no-op against a
-        // not-yet-laid-out panel. Give up after a bounded window.
-        if ((contentRef.current?.clientWidth ?? 0) >= HELP_PANEL_MIN_WIDTH / 4) {
-          terminalInstanceService.repaintForReveal(terminalId);
-          return;
-        }
-        if (++frames < 8) requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
-    };
-
-    // Timed redraw backstop, mirroring the worktree-terminal reveal cadence
-    // (WorktreeStoreContext): the single frame-sweep above is bounded to ~130ms
-    // and never retries, but that window falls before the compositor presents
-    // the foreground view, before xterm's IntersectionObserver un-pauses the
-    // renderer, and inside the project-switch resize lock — exactly when a
-    // repaint can't stick, leaving the Assistant garbled with no Redraw button
-    // to recover it. Re-run the same cheap, idempotent, box-/visibility-guarded
-    // repaint on a fixed cadence so a late-settling panel self-corrects: 1s
-    // catches the common settle, 3s a late straggler.
-    const REVEAL_BACKSTOP_DELAYS_MS = [1000, 3000];
-    let backstopTimers: ReturnType<typeof setTimeout>[] = [];
-    const clearRevealBackstops = (): void => {
-      for (const timer of backstopTimers) clearTimeout(timer);
-      backstopTimers = [];
-    };
-
-    const off = window.electron?.app?.onViewRevealed?.(() => {
-      runRepaintPass();
-      // Cancel any backstops still pending from a prior switch so rapid
-      // back-and-forth switching can't stack passes, then arm this switch's.
-      clearRevealBackstops();
-      for (const delay of REVEAL_BACKSTOP_DELAYS_MS) {
-        backstopTimers.push(setTimeout(runRepaintPass, delay));
-      }
-    });
-
-    return () => {
-      clearRevealBackstops();
-      off?.();
-    };
-  }, [isOpen, isVisible, terminalId]);
-
   // Resize via mouse drag
   const handleResizeStart = useCallback(
     (e: React.MouseEvent) => {
@@ -1104,7 +1039,7 @@ export function HelpPanel({
       />
 
       {/* Content */}
-      <div ref={contentRef} className="flex-1 flex flex-col min-h-0 relative">
+      <div className="flex-1 flex flex-col min-h-0 relative">
         {/* Banners render above every content state — the launch-error banner
             must stay visible in the empty state a failed launch falls back to.
             The other banners are null unless a session is live, so this mount
