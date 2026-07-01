@@ -7,4 +7,8 @@ export interface AgentSessionRecord {
   savedAt: number;
   agentLaunchFlags?: string[];
   agentModelId?: string;
+  /** Working directory the terminal was running in at capture time. */
+  cwd?: string;
+  /** Git branch checked out in `cwd` at capture time, for resume sanity checks. */
+  branch?: string;
 }

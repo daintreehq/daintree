@@ -33,6 +33,16 @@ vi.mock("../../../../services/pty/terminalShell.js", () => ({
   getDefaultShell: vi.fn(() => "/bin/zsh"),
 }));
 
+const { persistAgentSessionMock } = vi.hoisted(() => ({
+  persistAgentSessionMock: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../../../../services/pty/agentSessionHistory.js", () => ({
+  persistAgentSession: persistAgentSessionMock,
+  listAgentSessions: vi.fn(() => []),
+  clearAgentSessions: vi.fn().mockResolvedValue(undefined),
+}));
+
 type SafeParseable = {
   safeParse: (v: unknown) => { success: true; data: unknown } | { success: false; error: unknown };
 };
@@ -2048,5 +2058,129 @@ describe("terminal spawn handler - plugin agent ${settings:*} resolution (#10619
     expect(mockResolveSettingTemplate).not.toHaveBeenCalled();
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.command).toBe("acme-cli --interactive");
+  });
+});
+
+describe("terminal close handlers - resume journaling", () => {
+  function getKillHandler() {
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const call = calls.find((c) => c[0] === CHANNELS.TERMINAL_KILL);
+    return call?.[1] as (event: unknown, id: string) => Promise<void>;
+  }
+
+  function getGracefulKillHandler() {
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const call = calls.find((c) => c[0] === CHANNELS.TERMINAL_GRACEFUL_KILL);
+    return call?.[1] as (event: unknown, id: string) => Promise<string | null>;
+  }
+
+  let ptyClient: {
+    getTerminalAsync: ReturnType<typeof vi.fn>;
+    gracefulKill: ReturnType<typeof vi.fn>;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  let worktreeService: { getMonitorAsync: ReturnType<typeof vi.fn> };
+
+  const agentInfo = {
+    id: "term-1",
+    launchAgentId: "claude",
+    worktreeId: "wt-1",
+    title: "Claude",
+    projectId: "proj-1",
+    cwd: "/repo/feature",
+    agentLaunchFlags: ["--resume"],
+    agentModelId: "claude-opus-4-8",
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    persistAgentSessionMock.mockResolvedValue(undefined);
+    ptyClient = {
+      getTerminalAsync: vi.fn(),
+      gracefulKill: vi.fn(),
+      kill: vi.fn(),
+    };
+    worktreeService = { getMonitorAsync: vi.fn().mockResolvedValue({ branch: "feature/foo" }) };
+  });
+
+  function register() {
+    const deps = { ptyClient, worktreeService } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+  }
+
+  it("routes an agent terminal kill through gracefulKill and journals a record", async () => {
+    ptyClient.getTerminalAsync.mockResolvedValue(agentInfo);
+    ptyClient.gracefulKill.mockResolvedValue("sess-abc");
+    register();
+
+    await getKillHandler()({}, "term-1");
+
+    expect(ptyClient.gracefulKill).toHaveBeenCalledWith("term-1");
+    expect(ptyClient.kill).not.toHaveBeenCalled();
+    expect(persistAgentSessionMock).toHaveBeenCalledTimes(1);
+    const [record] = persistAgentSessionMock.mock.calls[0];
+    expect(record.sessionId).toBe("sess-abc");
+    expect(record.agentId).toBe("claude");
+    expect(record.cwd).toBe("/repo/feature");
+    expect(record.branch).toBe("feature/foo");
+  });
+
+  it("hard-kills a non-agent terminal without journaling", async () => {
+    ptyClient.getTerminalAsync.mockResolvedValue({ id: "term-2", cwd: "/repo" });
+    register();
+
+    await getKillHandler()({}, "term-2");
+
+    expect(ptyClient.kill).toHaveBeenCalledWith("term-2");
+    expect(ptyClient.gracefulKill).not.toHaveBeenCalled();
+    expect(persistAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("does not journal when gracefulKill yields no session id", async () => {
+    ptyClient.getTerminalAsync.mockResolvedValue(agentInfo);
+    ptyClient.gracefulKill.mockResolvedValue(null);
+    register();
+
+    await getKillHandler()({}, "term-1");
+
+    expect(ptyClient.gracefulKill).toHaveBeenCalledWith("term-1");
+    expect(persistAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("journals on the gracefulKill handler and returns the session id", async () => {
+    ptyClient.getTerminalAsync.mockResolvedValue(agentInfo);
+    ptyClient.gracefulKill.mockResolvedValue("sess-xyz");
+    register();
+
+    const result = await getGracefulKillHandler()({}, "term-1");
+
+    expect(result).toBe("sess-xyz");
+    expect(persistAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(persistAgentSessionMock.mock.calls[0][0].sessionId).toBe("sess-xyz");
+  });
+
+  it("still journals (branch undefined) when the branch lookup fails", async () => {
+    ptyClient.getTerminalAsync.mockResolvedValue(agentInfo);
+    ptyClient.gracefulKill.mockResolvedValue("sess-abc");
+    worktreeService.getMonitorAsync.mockRejectedValue(new Error("workspace host gone"));
+    register();
+
+    await getKillHandler()({}, "term-1");
+
+    expect(persistAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(persistAgentSessionMock.mock.calls[0][0].branch).toBeUndefined();
+  });
+
+  it("treats a detached HEAD as no branch", async () => {
+    ptyClient.getTerminalAsync.mockResolvedValue(agentInfo);
+    ptyClient.gracefulKill.mockResolvedValue("sess-abc");
+    worktreeService.getMonitorAsync.mockResolvedValue({ branch: "HEAD" });
+    register();
+
+    await getKillHandler()({}, "term-1");
+
+    expect(persistAgentSessionMock.mock.calls[0][0].branch).toBeUndefined();
   });
 });

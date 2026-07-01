@@ -105,6 +105,32 @@ export function getGitCommonDir(worktreePath: string, options: GitDirOptions = {
   }
 }
 
+/**
+ * Resolve the currently checked-out branch name for a worktree. Returns `null`
+ * for a detached HEAD (git emits the literal "HEAD") or on any failure. Not
+ * cached: unlike the git dir, the branch is mutable over a worktree's life.
+ * Used best-effort at terminal-close time to stamp a resume sanity-check onto
+ * the journal record, so it runs with a short default timeout and never throws.
+ */
+export function getGitBranch(
+  worktreePath: string,
+  options: { timeout?: number } = {}
+): string | null {
+  const { timeout = 500 } = options;
+  try {
+    const result = execSync("git rev-parse --abbrev-ref HEAD", {
+      cwd: worktreePath,
+      encoding: "utf-8",
+      timeout,
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    if (!result || result === "HEAD") return null;
+    return result;
+  } catch {
+    return null;
+  }
+}
+
 export function clearGitDirCache(worktreePath?: string): void {
   if (worktreePath) {
     gitDirCache.invalidate(worktreePath);

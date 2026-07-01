@@ -77,7 +77,9 @@ async function getPluginService(): Promise<PluginServiceSingleton> {
 import {
   listAgentSessions,
   clearAgentSessions,
+  persistAgentSession,
 } from "../../../services/pty/agentSessionHistory.js";
+import type { WorkspaceClient } from "../../../services/WorkspaceClient.js";
 import { getDefaultShell } from "../../../services/pty/terminalShell.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { quoteCommandArg } from "../../../../shared/utils/shellEscape.js";
@@ -575,12 +577,82 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     }
   };
 
+  // Resolve the worktree's branch in the main process (where the pty-host's
+  // direct-git path is unavailable). Best-effort and time-boxed: a stalled
+  // workspace-host must not hold up a terminal close, so cap the lookup at
+  // 200ms and treat any miss/timeout/detached-HEAD as "no branch".
+  const resolveBranchForMain = async (
+    worktreeId: string | undefined,
+    svc: WorkspaceClient | undefined
+  ): Promise<string | undefined> => {
+    if (!worktreeId || !svc) return undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const snapshot = await Promise.race([
+        svc.getMonitorAsync(worktreeId),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), 200);
+        }),
+      ]);
+      const branch = snapshot?.branch;
+      return branch && branch !== "HEAD" ? branch : undefined;
+    } catch {
+      return undefined;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+
+  // Journal a resume record for an agent terminal close (kill / gracefulKill).
+  // Best-effort: a null sessionId (no resumable session — e.g. Cursor or a
+  // non-resume-config agent), a non-agent terminal, or a branch-lookup failure
+  // all skip silently and never fail the close. Mirrors PtyManager's trash-
+  // expiry capture, the fourth close path that already journals.
+  const persistCloseRecord = async (
+    info: Awaited<ReturnType<typeof ptyClient.getTerminalAsync>>,
+    sessionId: string | null
+  ): Promise<void> => {
+    if (!sessionId || !info?.launchAgentId) return;
+    try {
+      const branch = await resolveBranchForMain(info.worktreeId, deps.worktreeService);
+      const { app } = await import("electron");
+      await persistAgentSession(
+        {
+          sessionId,
+          agentId: info.launchAgentId,
+          worktreeId: info.worktreeId ?? null,
+          title: info.title ?? null,
+          projectId: info.projectId ?? null,
+          agentLaunchFlags: info.agentLaunchFlags,
+          agentModelId: info.agentModelId,
+          cwd: info.cwd ?? undefined,
+          branch,
+        },
+        app.getPath("userData")
+      );
+    } catch (err) {
+      console.warn("[TerminalLifecycle] Failed to persist agent session on close:", err);
+    }
+  };
+
   const handleTerminalKill = async (id: string): Promise<void> => {
     try {
       if (typeof id !== "string") {
         throw new Error("Invalid terminal ID: must be a string");
       }
-      ptyClient.kill(id);
+      // Capture a resume record before tearing down an agent terminal. The info
+      // snapshot must precede the kill (it's gone afterward), and gracefulKill —
+      // not a bare kill — is what extracts the session id, so route agent
+      // terminals through it. Plain terminals keep the original hard kill. A
+      // failed snapshot (host gone) falls back to a plain kill — never block the
+      // close on the resume-capture path.
+      const info = await ptyClient.getTerminalAsync(id).catch(() => null);
+      if (info?.launchAgentId) {
+        const sessionId = await ptyClient.gracefulKill(id);
+        await persistCloseRecord(info, sessionId);
+      } else {
+        ptyClient.kill(id);
+      }
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "Failed to kill terminal");
       throw new Error(`Failed to kill terminal: ${errorMessage}`);
@@ -591,7 +663,10 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     if (typeof id !== "string") {
       throw new Error("Invalid terminal ID: must be a string");
     }
-    return ptyClient.gracefulKill(id);
+    const info = await ptyClient.getTerminalAsync(id).catch(() => null);
+    const sessionId = await ptyClient.gracefulKill(id);
+    await persistCloseRecord(info, sessionId);
+    return sessionId;
   };
 
   const handleTerminalTrash = async (id: string): Promise<void> => {

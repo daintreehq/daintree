@@ -201,6 +201,117 @@ describe("agentSessionHistory", () => {
     expect(records[0].worktreeId).toBe("wt-2");
   });
 
+  it("round-trips cwd and branch", async () => {
+    await persistAgentSession(
+      {
+        sessionId: "with-meta",
+        agentId: "claude",
+        worktreeId: "wt-1",
+        title: null,
+        projectId: null,
+        cwd: "/repo/worktrees/feature",
+        branch: "feature/foo",
+      },
+      userDataDir
+    );
+
+    const records = await readSessionHistory(userDataDir);
+    expect(records).toHaveLength(1);
+    expect(records[0].cwd).toBe("/repo/worktrees/feature");
+    expect(records[0].branch).toBe("feature/foo");
+  });
+
+  it("preserves all records under concurrent writes (no lost update)", async () => {
+    const N = 25;
+    // Fire all writes without awaiting between them — the serial queue must
+    // prevent the read-modify-write from dropping records.
+    await Promise.all(
+      Array.from({ length: N }, (_, i) =>
+        persistAgentSession(
+          {
+            sessionId: `concurrent-${i}`,
+            agentId: "claude",
+            // Spread across worktrees so the per-worktree cap can't evict any.
+            worktreeId: `wt-${i}`,
+            title: null,
+            projectId: null,
+          },
+          userDataDir
+        )
+      )
+    );
+
+    const records = await readSessionHistory(userDataDir);
+    const ids = new Set(records.map((r) => r.sessionId));
+    expect(ids.size).toBe(N);
+    for (let i = 0; i < N; i++) {
+      expect(ids.has(`concurrent-${i}`)).toBe(true);
+    }
+  });
+
+  it("deduplicates on sessionId, keeping the newest record", async () => {
+    await persistAgentSession(
+      {
+        sessionId: "dup",
+        agentId: "claude",
+        worktreeId: "wt-1",
+        title: "old title",
+        projectId: null,
+        branch: "old-branch",
+      },
+      userDataDir
+    );
+    await persistAgentSession(
+      {
+        sessionId: "dup",
+        agentId: "claude",
+        worktreeId: "wt-1",
+        title: "new title",
+        projectId: null,
+        branch: "new-branch",
+      },
+      userDataDir
+    );
+
+    const records = await readSessionHistory(userDataDir);
+    const dups = records.filter((r) => r.sessionId === "dup");
+    expect(dups).toHaveLength(1);
+    expect(dups[0].title).toBe("new title");
+    expect(dups[0].branch).toBe("new-branch");
+  });
+
+  it("keeps old records that predate the cwd/branch fields", async () => {
+    const filePath = getSessionHistoryPath(userDataDir)!;
+    const legacyRecord = {
+      sessionId: "legacy",
+      agentId: "claude",
+      worktreeId: "wt-1",
+      title: null,
+      projectId: null,
+      savedAt: Date.now() - 1000,
+    };
+    await fsp.writeFile(filePath, JSON.stringify([legacyRecord]));
+
+    await persistAgentSession(
+      {
+        sessionId: "fresh",
+        agentId: "claude",
+        worktreeId: "wt-1",
+        title: null,
+        projectId: null,
+        cwd: "/repo",
+        branch: "main",
+      },
+      userDataDir
+    );
+
+    const records = await readSessionHistory(userDataDir);
+    const legacy = records.find((r) => r.sessionId === "legacy");
+    expect(legacy).toBeDefined();
+    expect(legacy?.cwd).toBeUndefined();
+    expect(legacy?.branch).toBeUndefined();
+  });
+
   it("handles corrupt JSON gracefully", async () => {
     const filePath = getSessionHistoryPath(userDataDir)!;
     await fsp.writeFile(filePath, "not json at all");
