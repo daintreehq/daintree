@@ -681,5 +681,26 @@ describe("TerminalOutputIngestService", () => {
       expect(writeToTerminal).toHaveBeenCalledTimes(2);
       expect(writeToTerminal).toHaveBeenLastCalledWith("term-bg", "held", 1);
     });
+
+    it("flushForTerminal drains a pending deferred background drain synchronously, once", async () => {
+      vi.stubGlobal("scheduler", undefined);
+      vi.useFakeTimers();
+      const writeToTerminal = vi.fn();
+      const service = new TerminalOutputIngestService(writeToTerminal, () => "term-focused");
+
+      service.bufferData("term-bg", "pending");
+      expect(writeToTerminal).not.toHaveBeenCalled(); // deferred behind the yield
+
+      // A teardown/resize flush is a forceDrain path — it must not wait on the
+      // scheduler; it drains the held bytes now and deletes the queue.
+      service.flushForTerminal("term-bg");
+      expect(writeToTerminal).toHaveBeenCalledTimes(1);
+      expect(writeToTerminal).toHaveBeenCalledWith("term-bg", "pending", 1);
+
+      // The already-scheduled continuation must be a no-op: its stale-queue
+      // identity guard bails because the queue was deleted — no double write.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(writeToTerminal).toHaveBeenCalledTimes(1);
+    });
   });
 });
