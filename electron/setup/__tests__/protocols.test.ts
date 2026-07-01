@@ -128,6 +128,7 @@ vi.mock("../../ipc/channels.js", () => ({
   CHANNELS: {
     WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut",
     WEBVIEW_RELOAD_SHORTCUT: "webview:reload-shortcut",
+    WEBVIEW_CLOSE_SHORTCUT: "webview:close-shortcut",
     WEBVIEW_NAVIGATION_BLOCKED: "webview:navigation-blocked",
     WEBVIEW_DIALOG_DISMISS: "webview:dialog-dismiss",
   },
@@ -518,6 +519,143 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
       expect(mockEvent.preventDefault).not.toHaveBeenCalled();
       expect(mockSend).not.toHaveBeenCalledWith("webview:reload-shortcut", expect.anything());
+    });
+
+    it("sends close shortcut (Cmd/Ctrl+W) to the parent window and prevents default for dev-preview webviews (#10859)", () => {
+      const mockSend = vi.fn();
+      mockFromWebContents.mockReturnValue({
+        isDestroyed: () => false,
+        webContents: { send: mockSend },
+      });
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => "panel-1"),
+        getPanelKind: vi.fn(() => "dev-preview"),
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      simulateWebContentsCreated(contents);
+
+      const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
+      const mockEvent = { preventDefault: vi.fn() };
+      // The close chord is platform-specific: Cmd+W on macOS, Ctrl+W
+      // elsewhere. Match the runtime platform so this passes on both the dev
+      // machine (macOS) and CI (Linux).
+      const isMac = process.platform === "darwin";
+      beforeInputHandlers[0](mockEvent, {
+        type: "keyDown",
+        key: "w",
+        meta: isMac,
+        control: !isMac,
+        alt: false,
+        shift: false,
+      });
+
+      expect(mockEvent.preventDefault).toHaveBeenCalledTimes(1);
+      expect(mockSend).toHaveBeenCalledWith("webview:close-shortcut", {
+        panelId: "panel-1",
+      });
+    });
+
+    it("also sends close shortcut (Cmd/Ctrl+W) for non-dev-preview webviews like browser panels — unlike reload, no panel-kind gate applies (#10859)", () => {
+      const mockSend = vi.fn();
+      mockFromWebContents.mockReturnValue({
+        isDestroyed: () => false,
+        webContents: { send: mockSend },
+      });
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => "panel-browser-1"),
+        getPanelKind: vi.fn(() => "browser"),
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      simulateWebContentsCreated(contents);
+
+      const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
+      const mockEvent = { preventDefault: vi.fn() };
+      const isMac = process.platform === "darwin";
+      beforeInputHandlers[0](mockEvent, {
+        type: "keyDown",
+        key: "w",
+        meta: isMac,
+        control: !isMac,
+        alt: false,
+        shift: false,
+      });
+
+      expect(mockEvent.preventDefault).toHaveBeenCalledTimes(1);
+      expect(mockSend).toHaveBeenCalledWith("webview:close-shortcut", {
+        panelId: "panel-browser-1",
+      });
+    });
+
+    it("ignores Cmd/Ctrl+Shift+W so it does not shadow other shortcuts (#10859)", () => {
+      const mockSend = vi.fn();
+      mockFromWebContents.mockReturnValue({
+        isDestroyed: () => false,
+        webContents: { send: mockSend },
+      });
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => "panel-1"),
+        getPanelKind: vi.fn(() => "dev-preview"),
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      simulateWebContentsCreated(contents);
+
+      const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
+      const mockEvent = { preventDefault: vi.fn() };
+      const isMac = process.platform === "darwin";
+      beforeInputHandlers[0](mockEvent, {
+        type: "keyDown",
+        key: "w",
+        meta: isMac,
+        control: !isMac,
+        alt: false,
+        shift: true,
+      });
+
+      expect(mockEvent.preventDefault).not.toHaveBeenCalled();
+      expect(mockSend).not.toHaveBeenCalledWith("webview:close-shortcut", expect.anything());
+    });
+
+    it("ignores Cmd+Ctrl+W — the opposite-platform modifier disqualifies the close chord (#10859)", () => {
+      const mockSend = vi.fn();
+      mockFromWebContents.mockReturnValue({
+        isDestroyed: () => false,
+        webContents: { send: mockSend },
+      });
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => "panel-1"),
+        getPanelKind: vi.fn(() => "dev-preview"),
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      simulateWebContentsCreated(contents);
+
+      const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
+      const mockEvent = { preventDefault: vi.fn() };
+      // Both modifiers held is always disqualified: on macOS the extra Ctrl
+      // voids the Cmd+W chord, and on Linux/Windows the extra Cmd voids the
+      // Ctrl+W chord — so this is rejected on every platform.
+      beforeInputHandlers[0](mockEvent, {
+        type: "keyDown",
+        key: "w",
+        meta: true,
+        control: true,
+        alt: false,
+        shift: false,
+      });
+
+      expect(mockEvent.preventDefault).not.toHaveBeenCalled();
+      expect(mockSend).not.toHaveBeenCalledWith("webview:close-shortcut", expect.anything());
     });
   });
 

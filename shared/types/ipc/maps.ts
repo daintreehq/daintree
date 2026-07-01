@@ -1733,6 +1733,11 @@ export interface IpcEventMap {
     panelId: string;
   };
 
+  // Webview close shortcut (Cmd/Ctrl+W) forwarded from focused guest
+  "webview:close-shortcut": {
+    panelId: string;
+  };
+
   // Webview navigation blocked — cross-origin navigation was prevented
   "webview:navigation-blocked": {
     panelId: string;
