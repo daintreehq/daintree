@@ -119,7 +119,6 @@ export function HelpPanel({
   onResizeEnd,
 }: HelpPanelProps) {
   const panelRef = useRef<HTMLElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
   const inputBarRef = useRef<HybridInputBarHandle>(null);
   // Element that owned focus when the panel last opened. We restore focus to
   // it on close so keyboard users return to where they were rather than
@@ -1040,7 +1039,7 @@ export function HelpPanel({
       />
 
       {/* Content */}
-      <div ref={contentRef} className="flex-1 flex flex-col min-h-0 relative">
+      <div className="flex-1 flex flex-col min-h-0 relative">
         {/* Banners render above every content state — the launch-error banner
             must stay visible in the empty state a failed launch falls back to.
             The other banners are null unless a session is live, so this mount

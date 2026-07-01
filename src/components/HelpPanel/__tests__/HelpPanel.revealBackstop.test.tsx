@@ -211,16 +211,6 @@ function setVisibilityState(state: DocumentVisibilityState): void {
   });
 }
 
-// The reveal poll only repaints once the container reports real width. jsdom
-// leaves clientWidth at 0, so stub it to a sized value (>= MIN_WIDTH/4 = 80).
-let clientWidthDescriptor: PropertyDescriptor | undefined;
-function setContainerWidth(width: number): void {
-  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
-    configurable: true,
-    get: () => width,
-  });
-}
-
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   rafQueue.clear();
@@ -238,8 +228,6 @@ beforeEach(() => {
   }) as typeof globalThis.cancelAnimationFrame;
 
   setVisibilityState("visible");
-  clientWidthDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
-  setContainerWidth(400);
 
   helpPanelState.isOpen = true;
   helpPanelState.terminalId = "t-1";
@@ -272,11 +260,6 @@ beforeEach(() => {
 
 afterEach(() => {
   Reflect.deleteProperty(document, "visibilityState");
-  if (clientWidthDescriptor) {
-    Object.defineProperty(HTMLElement.prototype, "clientWidth", clientWidthDescriptor);
-  } else {
-    Reflect.deleteProperty(HTMLElement.prototype, "clientWidth");
-  }
   vi.useRealTimers();
 });
 
