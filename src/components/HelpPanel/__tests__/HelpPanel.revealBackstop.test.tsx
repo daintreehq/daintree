@@ -2,10 +2,14 @@
 import { render, act } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mirrors the worktree-terminal reveal cadence test
-// (WorktreeStoreContext.scheduleWake) for the Daintree Assistant: the panel
-// arms 1s/3s timed backstops on `app:view-revealed`, each re-running the same
-// visibility-/box-guarded repaintForReveal, and clears them on re-reveal/unmount.
+// Regression guard for #10863: the Daintree Assistant must NOT run its own
+// reveal-repaint cascade. The project-level reveal sweep
+// (`repaintActiveWorktreeTerminals`) already folds the Assistant terminal into
+// its targets (#9637) and is the sole owner of the reveal repaint. A second
+// per-frame/timed cascade in HelpPanel raced the shared sweep's reconcile
+// against live PTY output and corrupted xterm's line-wrap metadata (duplicated /
+// garbled output on reveal). This asserts HelpPanel never calls repaintForReveal
+// on `app:view-revealed` or on any timed backstop.
 
 const { repaintForRevealMock, helpPanelState, panelStoreState } = vi.hoisted(() => ({
   repaintForRevealMock: vi.fn(),
@@ -285,80 +289,45 @@ function fireReveal(): void {
   act(() => flushFrame());
 }
 
-describe("HelpPanel — Daintree Assistant reveal redraw backstop", () => {
-  it("repaints immediately on reveal, then re-runs on the 1s and 3s backstops", () => {
+describe("HelpPanel — Daintree Assistant reveal (no local repaint cascade, #10863)", () => {
+  it("does not repaint on `app:view-revealed` — the shared sweep owns reveal repaint", () => {
     render(<HelpPanel width={380} />);
+    // HelpPanel still subscribes to onViewRevealed for launch-stall recovery
+    // (#10739), so a listener exists — but it must never drive repaintForReveal.
     expect(viewRevealedCbs.length).toBeGreaterThan(0);
     repaintForRevealMock.mockClear();
 
     fireReveal();
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(1);
-
-    // Each backstop delay re-runs the same repaint with no further user action —
-    // this is what replaces a manual Redraw the Assistant never had.
-    act(() => vi.advanceTimersByTime(1000));
-    act(() => flushFrame());
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(2);
-
-    act(() => vi.advanceTimersByTime(2000));
-    act(() => flushFrame());
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(3);
-
-    // No further passes scheduled past the last backstop.
-    act(() => vi.advanceTimersByTime(10_000));
-    act(() => flushFrame());
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(3);
+    expect(repaintForRevealMock).not.toHaveBeenCalled();
   });
 
-  it("suppresses backstop repaints once the view is hidden again", () => {
+  it("never arms a timed repaint backstop after reveal", () => {
     render(<HelpPanel width={380} />);
     repaintForRevealMock.mockClear();
 
     fireReveal();
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(1);
-
-    // User switches away before the backstops fire: timers still elapse, but the
-    // visibility guard no-ops them, so a backgrounded Assistant is never repainted.
-    setVisibilityState("hidden");
-    act(() => vi.advanceTimersByTime(5000));
+    // Advance well past the old 1s/3s backstop cadence and flush every frame —
+    // a reintroduced local cascade would fire here.
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
     act(() => flushFrame());
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(1);
+    expect(repaintForRevealMock).not.toHaveBeenCalled();
   });
 
-  it("cancels a prior switch's pending backstops on re-reveal (no stacking)", () => {
+  it("stays quiet across repeated reveals (no cascade to stack)", () => {
     render(<HelpPanel width={380} />);
     repaintForRevealMock.mockClear();
 
-    // Reveal 1 at t=0 arms its first backstop for t=1000.
     fireReveal();
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(1);
-
-    // Reveal 2 at t=500 must cancel reveal 1's pending timers and re-arm its own.
-    act(() => vi.advanceTimersByTime(500));
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
     fireReveal();
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(2);
-
-    // At t=1000 reveal 1's stale backstop WOULD have fired if not cancelled.
-    act(() => vi.advanceTimersByTime(500));
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
     act(() => flushFrame());
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(2);
-
-    // Reveal 2's own first backstop fires on schedule at t=1500.
-    act(() => vi.advanceTimersByTime(500));
-    act(() => flushFrame());
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(3);
-  });
-
-  it("cancels pending backstops when the panel unmounts", () => {
-    const { unmount } = render(<HelpPanel width={380} />);
-    repaintForRevealMock.mockClear();
-
-    fireReveal();
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(1);
-
-    unmount();
-    act(() => vi.advanceTimersByTime(5000));
-    act(() => flushFrame());
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(1);
+    expect(repaintForRevealMock).not.toHaveBeenCalled();
   });
 });
