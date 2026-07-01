@@ -292,6 +292,62 @@ export function gridRowsOverflow(
 }
 
 /**
+ * Dead-band multiplier for the scroll-mode (row-overflow) boundary, in
+ * multiples of one minimum-height grid row. Deliberately generous — larger
+ * than the column boundary's ~15%-of-a-column ratio — because it must dominate
+ * a *continuous* OS-window resize drag, not just a one-shot boundary crossing.
+ * The #10871 failure mode is per-frame chatter across the threshold, so the
+ * band has to comfortably exceed a frame's worth of measurement jitter plus the
+ * content-box/border-box padding gap.
+ */
+export const GRID_ROW_OVERFLOW_HYSTERESIS_MULTIPLIER = 1.5;
+
+/**
+ * Pixel dead-band for the scroll-mode Schmitt trigger
+ * (`gridRowsOverflowWithHysteresis`). Expressed in multiples of one
+ * minimum-height grid row so it scales with the measured cell metrics rather
+ * than being a fixed pixel band.
+ */
+export function gridRowOverflowHysteresisBuffer(
+  metrics: TerminalMetrics = DEFAULT_TERMINAL_METRICS
+): number {
+  return Math.ceil(
+    pxForRows(GRID_MIN_PANEL_ROWS, metrics) * GRID_ROW_OVERFLOW_HYSTERESIS_MULTIPLIER
+  );
+}
+
+/**
+ * Schmitt-trigger variant of `gridRowsOverflow`. `previous` is the last
+ * committed scroll-mode boolean. Entering scroll mode uses the bare threshold
+ * (`needed > containerHeight`); *exiting* requires the container to grow a full
+ * `gridRowOverflowHysteresisBuffer` past that threshold. This asymmetry gives
+ * the scroll-mode boundary the same dead band the column boundary already has
+ * via `applyHysteresis`, so a resize through the row-overflow threshold flips
+ * scroll mode at most once per direction of travel instead of oscillating every
+ * frame (#10871). `previous === undefined` (first paint) uses the bare entry
+ * threshold so the initial mode is never sticky.
+ */
+export function gridRowsOverflowWithHysteresis(
+  rows: number,
+  containerHeight: number | null,
+  previous: boolean | undefined,
+  metrics: TerminalMetrics = DEFAULT_TERMINAL_METRICS
+): boolean {
+  if (rows <= 1) return false;
+  if (!containerHeight || containerHeight <= 0) return false;
+  const minRow = pxForRows(GRID_MIN_PANEL_ROWS, metrics);
+  const needed = rows * minRow + (rows - 1) * GRID_GAP_PX + GRID_PADDING_PX;
+  // Once in scroll mode, hold it until the container grows a full buffer past
+  // the overflow point. Computed inline (not via `gridRowsOverflow` on a
+  // reduced height) so a container smaller than the buffer still stays in
+  // scroll mode instead of being read as "no overflow" by the <= 0 guard.
+  if (previous === true) {
+    return needed > containerHeight - gridRowOverflowHysteresisBuffer(metrics);
+  }
+  return needed > containerHeight;
+}
+
+/**
  * Row height (px) for scroll mode. The grid only scrolls once even
  * minimum-height rows overflow the viewport, so scroll rows sit at — or just
  * above — the `GRID_MIN_PANEL_ROWS` floor: the rows that fit are divided
