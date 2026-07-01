@@ -10,6 +10,20 @@ import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
 
 export type RefreshTierProvider = () => TerminalRefreshTier;
 
+/**
+ * A hovered terminal link, tagged with a structural discriminant so the
+ * right-click context menu can tell a resolved file-path link (`kind: "file"`,
+ * carrying the resolved `absolutePath`) from a plain URL / OSC 8 link
+ * (`kind: "url"`). Avoids an `instanceof FileLink` check across the addon/service
+ * module boundary. `hoveredLink` is polymorphic — real `FileLink` instances from
+ * FileLinksAddon and synthetic link objects for URLs both land here.
+ */
+export interface TerminalLink extends ILink {
+  kind: "file" | "url";
+  /** Resolved absolute path — present only when `kind === "file"`. */
+  absolutePath?: string;
+}
+
 export type AgentStateCallback = (state: AgentState) => void;
 
 export type PostCompleteHook = (output: string) => void | Promise<void>;
@@ -35,7 +49,7 @@ export interface ManagedTerminal {
   // Currently-hovered link (tracked via xterm addon hover/leave callbacks).
   // Read synchronously by the right-click context menu so it reflects the
   // same detection xterm uses for plain URLs, file paths, and OSC 8 links.
-  hoveredLink: ILink | null;
+  hoveredLink: TerminalLink | null;
   hostElement: HTMLDivElement;
   isOpened: boolean;
   listeners: Array<() => void>;

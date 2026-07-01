@@ -58,6 +58,7 @@ describe("TerminalInstanceService hovered link API", () => {
   const service = terminalInstanceService as unknown as {
     instances: Map<string, unknown>;
     getHoveredLinkText: (id: string) => string | null;
+    getHoveredFilePath: (id: string) => string | null;
     openHoveredLink: (id: string, event?: MouseEvent) => Promise<void>;
   };
 
@@ -83,6 +84,28 @@ describe("TerminalInstanceService hovered link API", () => {
     const link = { text: "https://example.com", range: {}, activate: vi.fn() };
     service.instances.set("t1", { hoveredLink: link });
     expect(service.getHoveredLinkText("t1")).toBe("https://example.com");
+  });
+
+  it("getHoveredFilePath returns null when terminal is missing", () => {
+    expect(service.getHoveredFilePath("missing")).toBeNull();
+  });
+
+  it("getHoveredFilePath returns the absolute path for a file link", () => {
+    const link = {
+      kind: "file",
+      text: "./src/x.ts",
+      absolutePath: "/repo/src/x.ts",
+      range: {},
+      activate: vi.fn(),
+    };
+    service.instances.set("t1", { hoveredLink: link });
+    expect(service.getHoveredFilePath("t1")).toBe("/repo/src/x.ts");
+  });
+
+  it("getHoveredFilePath returns null for a URL link (not a file)", () => {
+    const link = { kind: "url", text: "https://example.com", range: {}, activate: vi.fn() };
+    service.instances.set("t1", { hoveredLink: link });
+    expect(service.getHoveredFilePath("t1")).toBeNull();
   });
 
   it("openHoveredLink delegates to the link's activate() with link.text", async () => {

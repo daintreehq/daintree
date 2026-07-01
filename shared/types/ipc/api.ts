@@ -360,6 +360,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   system: GeneratedElectronAPI["system"] & {
     openExternal(url: string): Promise<void>;
     openPath(path: string): Promise<void>;
+    showItemInFolder(path: string): Promise<void>;
     openInEditor(payload: SystemOpenInEditorPayload & { projectId?: string }): Promise<void>;
     checkCommand(command: string): Promise<boolean>;
     checkDirectory(path: string): Promise<boolean>;
