@@ -66,6 +66,12 @@ vi.mock("../../../store.js", () => ({
   store: storeMock,
 }));
 
+const excludedProjectsState = vi.hoisted(() => ({ ids: [] as string[] }));
+
+vi.mock("../../../services/exitSnapshotExclusions.js", () => ({
+  computeExitSnapshotExcludedProjectIds: vi.fn(async () => excludedProjectsState.ids),
+}));
+
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { registerTerminalConfigHandlers } from "../terminalConfig.js";
@@ -348,7 +354,10 @@ describe("terminalConfig handlers", () => {
   });
 
   it("setExitSnapshot persists the flag and pushes it to the pty-host (#10850)", async () => {
-    const mockPtyClient = { setExitSnapshotEnabled: vi.fn() };
+    const mockPtyClient = {
+      setExitSnapshotEnabled: vi.fn(),
+      setExitSnapshotExcludedProjects: vi.fn(),
+    };
     registerTerminalConfigHandlers({ ptyClient: mockPtyClient } as never);
     const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_EXIT_SNAPSHOT);
 
@@ -361,8 +370,43 @@ describe("terminalConfig handlers", () => {
     expect(mockPtyClient.setExitSnapshotEnabled).toHaveBeenCalledWith(false);
   });
 
+  it("setExitSnapshot syncs the per-project exclusion set when enabling (#10850)", async () => {
+    excludedProjectsState.ids = ["p1", "p2"];
+    const mockPtyClient = {
+      setExitSnapshotEnabled: vi.fn(),
+      setExitSnapshotExcludedProjects: vi.fn(),
+    };
+    registerTerminalConfigHandlers({ ptyClient: mockPtyClient } as never);
+    const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_EXIT_SNAPSHOT);
+
+    await handler({}, true);
+
+    // Exclusions must be pushed so an opted-out project can't leak in the gap
+    // between enabling globally and the next project-settings save.
+    expect(mockPtyClient.setExitSnapshotExcludedProjects).toHaveBeenCalledWith(["p1", "p2"]);
+    expect(mockPtyClient.setExitSnapshotEnabled).toHaveBeenCalledWith(true);
+    excludedProjectsState.ids = [];
+  });
+
+  it("setExitSnapshot does not push exclusions when disabling (#10850)", async () => {
+    const mockPtyClient = {
+      setExitSnapshotEnabled: vi.fn(),
+      setExitSnapshotExcludedProjects: vi.fn(),
+    };
+    registerTerminalConfigHandlers({ ptyClient: mockPtyClient } as never);
+    const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_EXIT_SNAPSHOT);
+
+    await handler({}, false);
+
+    expect(mockPtyClient.setExitSnapshotExcludedProjects).not.toHaveBeenCalled();
+    expect(mockPtyClient.setExitSnapshotEnabled).toHaveBeenCalledWith(false);
+  });
+
   it("setExitSnapshot ignores non-boolean values without mutating store", async () => {
-    const mockPtyClient = { setExitSnapshotEnabled: vi.fn() };
+    const mockPtyClient = {
+      setExitSnapshotEnabled: vi.fn(),
+      setExitSnapshotExcludedProjects: vi.fn(),
+    };
     registerTerminalConfigHandlers({ ptyClient: mockPtyClient } as never);
     const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_EXIT_SNAPSHOT);
 
