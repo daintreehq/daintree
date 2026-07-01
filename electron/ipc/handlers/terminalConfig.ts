@@ -215,6 +215,33 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
           store.set("terminalConfig.memoryLeakAutoRestartThresholdMb", thresholdMb);
         }
       ),
+      setExitSnapshot: op(
+        TERMINAL_CONFIG_METHOD_CHANNELS.setExitSnapshot,
+        async (enabled: boolean) => {
+          if (typeof enabled !== "boolean") {
+            console.warn("Invalid terminal exitSnapshotEnabled:", enabled);
+            return;
+          }
+          store.set("terminalConfig.exitSnapshotEnabled", enabled);
+          const ptyClient = deps?.ptyClient;
+          if (!ptyClient) return;
+          // Push the current per-project exclusion set BEFORE enabling so an
+          // opted-out project can't be captured in the window between enabling
+          // globally and the next project-settings save (#10850). The excluded
+          // set is otherwise only synced at boot or on a project save.
+          if (enabled) {
+            try {
+              const { computeExitSnapshotExcludedProjectIds } =
+                await import("../../services/exitSnapshotExclusions.js");
+              const excluded = await computeExitSnapshotExcludedProjectIds();
+              ptyClient.setExitSnapshotExcludedProjects(excluded);
+            } catch (err) {
+              console.warn("[terminalConfig] Failed to sync exit-snapshot exclusions:", err);
+            }
+          }
+          ptyClient.setExitSnapshotEnabled(enabled);
+        }
+      ),
       setCachedProjectViews: op(
         TERMINAL_CONFIG_METHOD_CHANNELS.setCachedProjectViews,
         async (cachedProjectViews: number) => {

@@ -1293,6 +1293,10 @@ export interface GeneratedIpcInvokeMap {
     args: [schemes: unknown];
     result: void;
   };
+  "terminal-config:set-exit-snapshot": {
+    args: [enabled: boolean];
+    result: void;
+  };
   "terminal-config:set-font-family": {
     args: [fontFamily: string];
     result: void;

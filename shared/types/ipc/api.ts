@@ -842,6 +842,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     setMemoryLeakDetection(enabled: boolean): Promise<void>;
     setMemoryLeakAutoRestartThresholdMb(thresholdMb: number): Promise<void>;
     setCachedProjectViews(cachedProjectViews: number): Promise<void>;
+    setExitSnapshot(enabled: boolean): Promise<void>;
   };
   // getEnabled comes from GeneratedElectronAPI; onSupportChanged is a
   // renderer-only subscription.

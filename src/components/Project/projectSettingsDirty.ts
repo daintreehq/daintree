@@ -39,6 +39,7 @@ export interface ProjectSettingsSnapshot {
   resourceEnvironments: Record<string, ResourceEnvironment> | undefined;
   activeResourceEnvironment: string | undefined;
   defaultWorktreeMode: string | undefined;
+  exitSnapshotExcluded: boolean;
 }
 
 export interface EnvVar {
@@ -81,7 +82,8 @@ export function createProjectSettingsSnapshot(
   defaultWorktreeMode: string | undefined = undefined,
   turbopackEnabled: boolean = true,
   daintreeMcpTier: DaintreeMcpTier = "off",
-  forgeProviderOverride: string | null = null
+  forgeProviderOverride: string | null = null,
+  exitSnapshotExcluded: boolean = false
 ): ProjectSettingsSnapshot {
   const envVarRecord: Record<string, string> = {};
   const seenKeys = new Map<string, number>();
@@ -169,6 +171,7 @@ export function createProjectSettingsSnapshot(
     resourceEnvironments,
     activeResourceEnvironment,
     defaultWorktreeMode,
+    exitSnapshotExcluded,
   };
 }
 
@@ -225,6 +228,7 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
   if (a.devServerLoadTimeout !== b.devServerLoadTimeout) return false;
   if (a.turbopackEnabled !== b.turbopackEnabled) return false;
   if (a.daintreeMcpTier !== b.daintreeMcpTier) return false;
+  if (a.exitSnapshotExcluded !== b.exitSnapshotExcluded) return false;
   if (a.projectIconSvg !== b.projectIconSvg) return false;
   if (a.defaultWorktreeRecipeId !== b.defaultWorktreeRecipeId) return false;
 

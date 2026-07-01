@@ -28,7 +28,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     trash: vi.fn(),
     restore: vi.fn(),
     killByProject: vi.fn(() => 0),
-    gracefulKill: vi.fn(async () => undefined),
+    gracefulKill: vi.fn(async () => ({ sessionId: null })),
     gracefulKillByProject: vi.fn(async () => []),
     getProjectStats: vi.fn(() => ({
       terminalCount: 0,
@@ -255,7 +255,7 @@ describe("createPtyHostMessageDispatcher", () => {
 
   it("returns a promise for handlers that perform real async work", async () => {
     const ctx = makeCtx();
-    ctx.ptyManager.gracefulKill = vi.fn(async () => "session-42");
+    ctx.ptyManager.gracefulKill = vi.fn(async () => ({ sessionId: "session-42" }));
 
     const dispatch = createPtyHostMessageDispatcher(ctx);
     const ret = dispatch({ type: "graceful-kill", id: "term-1", requestId: 7 });
@@ -267,6 +267,7 @@ describe("createPtyHostMessageDispatcher", () => {
       requestId: 7,
       id: "term-1",
       agentSessionId: "session-42",
+      exitSnapshot: undefined,
     });
   });
 });

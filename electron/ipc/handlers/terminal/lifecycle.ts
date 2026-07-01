@@ -610,7 +610,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
   // expiry capture, the fourth close path that already journals.
   const persistCloseRecord = async (
     info: Awaited<ReturnType<typeof ptyClient.getTerminalAsync>>,
-    sessionId: string | null
+    sessionId: string | null,
+    snapshot?: string
   ): Promise<void> => {
     if (!sessionId || !info?.launchAgentId) return;
     try {
@@ -627,6 +628,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           agentModelId: info.agentModelId,
           cwd: info.cwd ?? undefined,
           branch,
+          snapshot,
         },
         app.getPath("userData")
       );
@@ -648,8 +650,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // close on the resume-capture path.
       const info = await ptyClient.getTerminalAsync(id).catch(() => null);
       if (info?.launchAgentId) {
-        const sessionId = await ptyClient.gracefulKill(id);
-        await persistCloseRecord(info, sessionId);
+        const { sessionId, exitSnapshot } = await ptyClient.gracefulKillWithSnapshot(id);
+        await persistCloseRecord(info, sessionId, exitSnapshot);
       } else {
         ptyClient.kill(id);
       }
@@ -664,8 +666,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       throw new Error("Invalid terminal ID: must be a string");
     }
     const info = await ptyClient.getTerminalAsync(id).catch(() => null);
-    const sessionId = await ptyClient.gracefulKill(id);
-    await persistCloseRecord(info, sessionId);
+    const { sessionId, exitSnapshot } = await ptyClient.gracefulKillWithSnapshot(id);
+    await persistCloseRecord(info, sessionId, exitSnapshot);
     return sessionId;
   };
 

@@ -443,6 +443,10 @@ export function decode(raw: unknown): ProjectSettingsDecodeResult {
       typeof migrated.cloudSyncWarningDismissed === "boolean"
         ? migrated.cloudSyncWarningDismissed
         : undefined,
+    exitSnapshotExcluded:
+      typeof migrated.exitSnapshotExcluded === "boolean"
+        ? migrated.exitSnapshotExcluded
+        : undefined,
     devServerLoadTimeout: decodeDevServerLoadTimeout(migrated.devServerLoadTimeout),
     turbopackEnabled:
       typeof migrated.turbopackEnabled === "boolean" ? migrated.turbopackEnabled : undefined,
@@ -557,6 +561,7 @@ export const ProjectSettingsSaveSchema = z
     devServerDismissed: z.boolean().optional(),
     devServerAutoDetected: z.boolean().optional(),
     cloudSyncWarningDismissed: z.boolean().optional(),
+    exitSnapshotExcluded: z.boolean().optional(),
     devServerLoadTimeout: z.number().optional(),
     turbopackEnabled: z.boolean().optional(),
     copyTreeSettings: z.unknown().optional(),

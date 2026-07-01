@@ -439,6 +439,12 @@ export interface ProjectSettings {
   devServerAutoDetected?: boolean;
   /** User dismissed cloud sync folder warning for this project */
   cloudSyncWarningDismissed?: boolean;
+  /**
+   * Opt this project OUT of exit-snapshot capture even when the global
+   * `terminalConfig.exitSnapshotEnabled` toggle is on (#10850). Local-scope —
+   * a per-machine privacy choice, never synced with a shared repo.
+   */
+  exitSnapshotExcluded?: boolean;
   /** Timeout in seconds before a slow-loading dev preview is automatically reloaded (default: 30, max: 120) */
   devServerLoadTimeout?: number;
   /** Whether to auto-inject --turbopack for Next.js 15+ projects (default: true) */
@@ -538,6 +544,7 @@ export const PROJECT_SETTINGS_SHAREABILITY = {
   devServerDismissed: "local",
   devServerAutoDetected: "local",
   cloudSyncWarningDismissed: "local",
+  exitSnapshotExcluded: "local",
   devServerLoadTimeout: "shareable",
   turbopackEnabled: "shareable",
   copyTreeSettings: "shareable",

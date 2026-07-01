@@ -19,6 +19,7 @@
  *  10. AgentVersionService error-message scrubbing
  *  11. WorktreeLifecycleService full-output teardown log write (writeTeardownLog)
  *  12. PluginService.recordPluginLog (plugin log ring buffer + console mirror)
+ *  13. Exit-snapshot capture (`prepareExitSnapshot` in electron/services/pty/exitSnapshot.ts)
  *
  * All patterns use bounded quantifiers for ReDoS safety. See the
  * `secretScrubber.test.ts` sibling for the `safe-regex2` assertion that

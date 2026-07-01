@@ -132,6 +132,7 @@ export const BUILT_IN_ACTION_IDS = [
   "terminalConfig.setHybridInputAutoFocus",
   "terminalConfig.setScreenReaderMode",
   "terminalConfig.setCachedProjectViews",
+  "terminalConfig.setExitSnapshot",
 
   // -- worktreeConfigActions --
   "worktreeConfig.get",
