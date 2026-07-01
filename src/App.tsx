@@ -89,6 +89,8 @@ import {
   resolveEffectiveBypass,
 } from "@shared/types/agentSettings";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
+import { resolveResumeLaunchTarget } from "./utils/resumeLaunch";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
 import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
 import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
@@ -885,6 +887,31 @@ function AppInner() {
     [launchAgent]
   );
 
+  const launchResumeSession = useCallback(
+    (session: AgentSessionRecord) => {
+      const agentConfig = getEffectiveAgentConfig(session.agentId);
+      const resumeFlags = reconcileResumeLaunchFlags(session);
+      const command =
+        buildResumeCommand(session.agentId, session.sessionId, resumeFlags) ??
+        buildResumeLatestCommand(session.agentId, resumeFlags);
+      if (!command || !agentConfig) return;
+      const { cwd, worktreeId } = resolveResumeLaunchTarget(session, {
+        defaultTerminalCwd,
+        activeWorktreeId,
+      });
+      addPanel({
+        kind: "terminal",
+        launchAgentId: session.agentId,
+        title: agentConfig.name,
+        cwd,
+        worktreeId,
+        command,
+        location: "grid",
+      });
+    },
+    [addPanel, defaultTerminalCwd, activeWorktreeId]
+  );
+
   const closeThemePalette = useCallback(() => {
     usePaletteStore.getState().closePalette("theme");
   }, []);
@@ -1223,23 +1250,7 @@ function AppInner() {
                       const result = panelPalette.handleSelect(kind);
                       if (!result) return;
                       if (result.resumeSession) {
-                        const session = result.resumeSession;
-                        const agentConfig = getEffectiveAgentConfig(session.agentId);
-                        const resumeFlags = reconcileResumeLaunchFlags(session);
-                        const command =
-                          buildResumeCommand(session.agentId, session.sessionId, resumeFlags) ??
-                          buildResumeLatestCommand(session.agentId, resumeFlags);
-                        if (command && agentConfig) {
-                          addPanel({
-                            kind: "terminal",
-                            launchAgentId: session.agentId,
-                            title: agentConfig.name,
-                            cwd: defaultTerminalCwd,
-                            worktreeId: activeWorktreeId ?? undefined,
-                            command,
-                            location: "grid",
-                          });
-                        }
+                        launchResumeSession(result.resumeSession);
                       } else if (result.id.startsWith("agent:")) {
                         const agentId = result.id.slice("agent:".length);
                         if (agentId) {
@@ -1259,23 +1270,7 @@ function AppInner() {
                       if (!selected) return;
                       if (selected.id === MORE_AGENTS_PANEL_ID) return;
                       if (selected.resumeSession) {
-                        const session = selected.resumeSession;
-                        const agentConfig = getEffectiveAgentConfig(session.agentId);
-                        const resumeFlags = reconcileResumeLaunchFlags(session);
-                        const command =
-                          buildResumeCommand(session.agentId, session.sessionId, resumeFlags) ??
-                          buildResumeLatestCommand(session.agentId, resumeFlags);
-                        if (command && agentConfig) {
-                          addPanel({
-                            kind: "terminal",
-                            launchAgentId: session.agentId,
-                            title: agentConfig.name,
-                            cwd: defaultTerminalCwd,
-                            worktreeId: activeWorktreeId ?? undefined,
-                            command,
-                            location: "grid",
-                          });
-                        }
+                        launchResumeSession(selected.resumeSession);
                       } else if (selected.id.startsWith("agent:")) {
                         const agentId = selected.id.slice("agent:".length);
                         if (agentId) {

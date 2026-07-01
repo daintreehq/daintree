@@ -10,6 +10,8 @@ const {
   getEffectiveAgentIdsMock,
   getEffectiveAgentConfigMock,
   cliAvailabilityState,
+  worktreeState,
+  projectState,
 } = vi.hoisted(() => ({
   getPanelKindIdsMock: vi.fn(),
   getPanelKindConfigMock: vi.fn(),
@@ -26,6 +28,8 @@ const {
     initialize: vi.fn().mockResolvedValue(undefined),
     refresh: vi.fn().mockResolvedValue(undefined),
   },
+  worktreeState: { worktrees: new Map<string, { id: string; name: string; branch?: string }>() },
+  projectState: { currentProject: { id: "proj-1" } as { id: string } | null },
 }));
 
 vi.mock("@shared/config/panelKindRegistry", () => ({
@@ -56,11 +60,28 @@ vi.mock("@/store/cliAvailabilityStore", () => {
   return { useCliAvailabilityStore: store };
 });
 
-vi.mock("@/store/worktreeStore", () => {
-  const state = { activeWorktreeId: null as string | null };
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: (selector: (s: typeof worktreeState) => unknown) => selector(worktreeState),
+}));
+
+vi.mock("@/store/projectStore", () => {
+  const store = (selector: (s: typeof projectState) => unknown) => selector(projectState);
+  store.getState = () => projectState;
+  return { useProjectStore: store };
+});
+
+// The panel palette reads its open state from the palette store; mark it active
+// so the session-history fetch (now gated on `isOpen`) runs under test.
+vi.mock("@/store/paletteStore", () => {
+  const state = { activePaletteId: "panel" as const };
+  const getState = () => ({
+    ...state,
+    openPalette: vi.fn(),
+    closePalette: vi.fn(),
+  });
   const store = (selector: (s: typeof state) => unknown) => selector(state);
-  store.getState = () => state;
-  return { useWorktreeSelectionStore: store };
+  store.getState = getState;
+  return { usePaletteStore: store };
 });
 
 import { usePanelPalette } from "../usePanelPalette";
@@ -108,6 +129,9 @@ describe("usePanelPalette", () => {
     cliAvailabilityState.availability = { claude: "ready", gemini: "missing" };
     cliAvailabilityState.isInitialized = true;
     cliAvailabilityState.lastCheckedAt = Date.now();
+
+    worktreeState.worktrees = new Map();
+    projectState.currentProject = { id: "proj-1" };
 
     getEffectiveAgentIdsMock.mockReturnValue(["claude", "claude"]);
     getEffectiveAgentConfigMock.mockReturnValue({
@@ -160,7 +184,7 @@ describe("usePanelPalette", () => {
         agentId: "claude",
         worktreeId: null,
         title: null,
-        projectId: null,
+        projectId: "proj-1",
         savedAt: Date.now() - 3600000,
         agentModelId: "claude-opus-4-5",
       },
@@ -183,7 +207,7 @@ describe("usePanelPalette", () => {
         agentId: "claude",
         worktreeId: null,
         title: "Fixing bug",
-        projectId: null,
+        projectId: "proj-1",
         savedAt: Date.now() - 1000,
       },
       {
@@ -191,7 +215,7 @@ describe("usePanelPalette", () => {
         agentId: "claude",
         worktreeId: null,
         title: null,
-        projectId: null,
+        projectId: "proj-1",
         savedAt: Date.now() - 2000,
       },
     ]);
@@ -212,7 +236,7 @@ describe("usePanelPalette", () => {
         agentId: "claude",
         worktreeId: null,
         title: "Fixing auth bug",
-        projectId: null,
+        projectId: "proj-1",
         savedAt: Date.now() - 1000,
       },
     ]);
@@ -233,7 +257,7 @@ describe("usePanelPalette", () => {
         agentId: "claude",
         worktreeId: null,
         title: "claude",
-        projectId: null,
+        projectId: "proj-1",
         savedAt: Date.now() - 1000,
       },
     ]);
@@ -254,7 +278,7 @@ describe("usePanelPalette", () => {
         agentId: "claude",
         worktreeId: null,
         title: null,
-        projectId: null,
+        projectId: "proj-1",
         savedAt: Date.now() - 7200000,
         agentModelId: "claude-opus-4-5",
       },
@@ -267,6 +291,165 @@ describe("usePanelPalette", () => {
       expect(resume).toBeDefined();
       expect(resume!.description).toContain("Opus 4 5");
       expect(resume!.description).toContain("ago");
+    });
+  });
+
+  describe("browsable resume list (#10851)", () => {
+    const makeSession = (overrides: Record<string, unknown>) => ({
+      agentId: "claude",
+      worktreeId: null,
+      title: null,
+      projectId: "proj-1",
+      savedAt: Date.now() - 1000,
+      ...overrides,
+    });
+
+    it("surfaces more than 5 sessions (no hardcoded cap)", async () => {
+      (window.electron!.agentSessionHistory!.list as ReturnType<typeof vi.fn>).mockResolvedValue(
+        Array.from({ length: 8 }, (_, i) =>
+          makeSession({ sessionId: `s-${i}`, savedAt: Date.now() - i * 1000 })
+        )
+      );
+
+      const { result, rerender } = renderHook(() => usePanelPalette());
+      await vi.waitFor(() => {
+        rerender();
+        const resume = result.current.results.filter((item) => item.id.startsWith("resume:"));
+        expect(resume).toHaveLength(8);
+      });
+    });
+
+    it("fetches sessions across all worktrees (unscoped list call)", async () => {
+      const listSpy = window.electron!.agentSessionHistory!.list as ReturnType<typeof vi.fn>;
+      renderHook(() => usePanelPalette());
+      await vi.waitFor(() => {
+        expect(listSpy).toHaveBeenCalled();
+      });
+      // No worktree-id argument — the renderer no longer scopes to the active worktree.
+      expect(listSpy.mock.calls[0]?.[0]).toBeUndefined();
+    });
+
+    it("excludes sessions belonging to another project", async () => {
+      (window.electron!.agentSessionHistory!.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makeSession({ sessionId: "mine", projectId: "proj-1" }),
+        makeSession({ sessionId: "theirs", projectId: "other-proj" }),
+      ]);
+
+      const { result, rerender } = renderHook(() => usePanelPalette());
+      await vi.waitFor(() => {
+        rerender();
+        const ids = result.current.results.map((item) => item.id);
+        expect(ids).toContain("resume:mine");
+        expect(ids).not.toContain("resume:theirs");
+      });
+    });
+
+    it("keeps legacy null-project records only when their worktree resolves", async () => {
+      worktreeState.worktrees = new Map([["wt-1", { id: "wt-1", name: "Feature X" }]]);
+      (window.electron!.agentSessionHistory!.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makeSession({ sessionId: "legacy-live", projectId: null, worktreeId: "wt-1" }),
+        makeSession({ sessionId: "legacy-gone", projectId: null, worktreeId: "wt-missing" }),
+        makeSession({ sessionId: "legacy-none", projectId: null, worktreeId: null }),
+      ]);
+
+      const { result, rerender } = renderHook(() => usePanelPalette());
+      await vi.waitFor(() => {
+        rerender();
+        const ids = result.current.results.map((item) => item.id);
+        expect(ids).toContain("resume:legacy-live");
+        expect(ids).not.toContain("resume:legacy-gone");
+        expect(ids).not.toContain("resume:legacy-none");
+      });
+    });
+
+    it("marks a record whose worktree was removed as stale", async () => {
+      (window.electron!.agentSessionHistory!.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makeSession({ sessionId: "orphan", worktreeId: "wt-removed", branch: "old-branch" }),
+      ]);
+
+      const { result, rerender } = renderHook(() => usePanelPalette());
+      await vi.waitFor(() => {
+        rerender();
+        const resume = result.current.results.find((item) => item.id === "resume:orphan");
+        expect(resume).toBeDefined();
+        expect(resume!.isStale).toBe(true);
+        expect(resume!.description).toContain("Worktree removed");
+      });
+    });
+
+    it("resolves live worktree name, branch, and group label", async () => {
+      worktreeState.worktrees = new Map([
+        ["wt-1", { id: "wt-1", name: "Feature X", branch: "feature/x" }],
+      ]);
+      (window.electron!.agentSessionHistory!.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makeSession({ sessionId: "live", worktreeId: "wt-1" }),
+      ]);
+
+      const { result, rerender } = renderHook(() => usePanelPalette());
+      await vi.waitFor(() => {
+        rerender();
+        const resume = result.current.results.find((item) => item.id === "resume:live");
+        expect(resume).toBeDefined();
+        expect(resume!.isStale).toBe(false);
+        expect(resume!.worktreeName).toBe("Feature X");
+        expect(resume!.branchName).toBe("feature/x");
+        expect(resume!.groupKey).toBe("wt-1");
+        expect(resume!.groupLabel).toBe("Feature X");
+      });
+    });
+
+    it("broadens search aliases to agent, branch, and worktree name", async () => {
+      worktreeState.worktrees = new Map([
+        ["wt-1", { id: "wt-1", name: "Feature X", branch: "feature/x" }],
+      ]);
+      (window.electron!.agentSessionHistory!.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makeSession({ sessionId: "aliased", worktreeId: "wt-1", title: "Some title" }),
+      ]);
+
+      const { result, rerender } = renderHook(() => usePanelPalette());
+      await vi.waitFor(() => {
+        rerender();
+        const resume = result.current.results.find((item) => item.id === "resume:aliased");
+        expect(resume).toBeDefined();
+        expect(resume!.searchAliases).toEqual(
+          expect.arrayContaining(["claude", "Claude", "Feature X", "feature/x"])
+        );
+      });
+    });
+
+    it("makes a stale entry findable by its cwd basename when it has no branch", async () => {
+      (window.electron!.agentSessionHistory!.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makeSession({
+          sessionId: "orphan",
+          worktreeId: "wt-removed",
+          branch: undefined,
+          cwd: "/repo/feature-auth",
+        }),
+      ]);
+
+      const { result, rerender } = renderHook(() => usePanelPalette());
+      await vi.waitFor(() => {
+        rerender();
+        const resume = result.current.results.find((item) => item.id === "resume:orphan");
+        expect(resume).toBeDefined();
+        expect(resume!.groupLabel).toBe("feature-auth");
+        expect(resume!.searchAliases).toContain("feature-auth");
+      });
+    });
+
+    it("does not launch a stale entry via handleSelect", async () => {
+      (window.electron!.agentSessionHistory!.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makeSession({ sessionId: "orphan", worktreeId: "wt-removed" }),
+      ]);
+
+      const { result, rerender } = renderHook(() => usePanelPalette());
+      await vi.waitFor(() => {
+        rerender();
+        expect(result.current.results.some((item) => item.id === "resume:orphan")).toBe(true);
+      });
+      const stale = result.current.results.find((item) => item.id === "resume:orphan");
+      expect(stale!.isStale).toBe(true);
+      expect(result.current.handleSelect(stale!)).toBeNull();
     });
   });
 

@@ -110,7 +110,13 @@ export function PanelPalette({
     selectedIndex >= 0 && selectedIndex < results.length ? results[selectedIndex] : null;
 
   const renderOption = (kind: PanelKindOption, index: number) => {
-    const isUnavailable = kind.installed === false;
+    const isStale = kind.isStale === true;
+    const isUnavailable = kind.installed === false || isStale;
+    const badgeLabel = isStale
+      ? "Worktree removed"
+      : kind.installed === false
+        ? "Not installed"
+        : null;
     return (
       <button
         key={kind.id}
@@ -146,9 +152,9 @@ export function PanelPalette({
             <div className="text-xs text-daintree-text/50 truncate">{kind.description}</div>
           )}
         </div>
-        {isUnavailable && (
+        {badgeLabel && (
           <span className="shrink-0 text-[10px] font-medium text-daintree-text/40">
-            Not installed
+            {badgeLabel}
           </span>
         )}
       </button>
@@ -178,9 +184,52 @@ export function PanelPalette({
       });
     };
 
+    // Resume entries get a second grouping tier (by worktree) beneath the
+    // section header. Items already arrive newest-first, so iterating in order
+    // and keying a Map gives correct group order and intra-group recency for
+    // free. Sub-headers stay aria-hidden divs (never role="group", #9006) and
+    // are excluded from the results array that drives selection.
+    const renderResumeSection = (items: typeof results) => {
+      if (items.length === 0) return;
+      elements.push(
+        <div
+          key="header-resume"
+          className="px-3 pt-3 pb-1 text-[10px] font-medium tracking-wider uppercase text-daintree-text/40 select-none"
+          aria-hidden="true"
+        >
+          {SECTION_LABELS.resume}
+        </div>
+      );
+      const groups = new Map<string, typeof results>();
+      for (const kind of items) {
+        const groupKey = kind.groupKey ?? "";
+        const bucket = groups.get(groupKey);
+        if (bucket) bucket.push(kind);
+        else groups.set(groupKey, [kind]);
+      }
+      for (const [groupKey, groupItems] of groups) {
+        const label = groupItems[0]?.groupLabel;
+        if (label) {
+          elements.push(
+            <div
+              key={`resume-group-${groupKey}`}
+              className="px-4 pt-2 pb-1 text-[10px] font-medium text-daintree-text/30 select-none truncate"
+              aria-hidden="true"
+            >
+              {label}
+            </div>
+          );
+        }
+        groupItems.forEach((kind) => {
+          const index = results.indexOf(kind);
+          elements.push(renderOption(kind, index));
+        });
+      }
+    };
+
     renderSection("agent", agents);
     renderSection("tool", tools);
-    renderSection("resume", resumeSessions);
+    renderResumeSection(resumeSessions);
 
     return elements;
   };
