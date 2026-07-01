@@ -341,6 +341,7 @@ class TerminalInstanceService {
         this.agentStateController.clearDirectingState(id, trigger),
       onUserInput: (id, data) => this.onUserInput(id, data),
       onActiveWheel: (id) => this.onActiveWheel(id),
+      onUserScrollIntent: (id) => this.onUserScrollIntent(id),
       onEnterPressed: (id) => this.onEnterPressed(id),
       updateLastObservedTitle: (id, title) =>
         usePanelStore.getState().updateLastObservedTitle(id, title),
@@ -587,6 +588,22 @@ class TerminalInstanceService {
       current.inputBurstTimer = undefined;
       this.rendererPolicy.applyRendererPolicy(id, current.getRefreshTier());
     }, WHEEL_BURST_DECAY_MS);
+
+    this.requestInteractiveProfileOverride();
+  }
+
+  /**
+   * Ordinary scrollback wheel/key scrolling (not mouse-reporting forwarding).
+   * Holds the resource profile off efficiency for the same reason as
+   * `onActiveWheel` — a profile downgrade mid-scroll drops the WebGL upper
+   * threshold and can force the visible terminal onto the DOM renderer right
+   * as the user is scrolling it (#10858). Unlike `onActiveWheel`, plain
+   * scrollback is client-side xterm rendering with no PTY round-trip per
+   * line, so there's no renderer-tier boost to apply here.
+   */
+  private onUserScrollIntent(id: string): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
 
     this.requestInteractiveProfileOverride();
   }
