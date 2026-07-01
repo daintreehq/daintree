@@ -10,6 +10,14 @@ import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
 import type { PtyPanelData, TerminalSpawnSource } from "@shared/types/panel";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
+
+// Guards the async journal-resume fallback of `terminal.reopenLast` against a
+// second dispatch racing the first's pending `list`/`addPanel` — two rapid
+// presses could otherwise both pass the duplicate scan and spawn two terminals
+// resuming the same transcript. Module-scoped, so it's per project view (each
+// view has its own module instance), matching the worktree scope of the guard.
+let reopenJournalInFlight = false;
+
 export function registerTerminalSpawnActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -159,35 +167,50 @@ export function registerTerminalSpawnActions(
       // resumed record's cwd matches the directory we launch into — session
       // resume is directory-scoped (#4781); a globally-newest record could be
       // relaunched into the wrong worktree.
+      if (reopenJournalInFlight) return;
       const activeWorktreeId = callbacks.getActiveWorktreeId();
       if (!activeWorktreeId) return;
+      // Freeze the cwd alongside the worktree id BEFORE the await: both are live
+      // getters (useActionRegistry's ref proxy), so a worktree switch mid-IPC
+      // would otherwise pair this record's worktree with a different worktree's
+      // cwd — the exact directory mismatch #4781 warns about.
+      const cwd = callbacks.getDefaultCwd();
 
-      const sessions = await (window.electron?.agentSessionHistory
-        ?.list(activeWorktreeId)
-        .catch(() => [] as AgentSessionRecord[]) ?? Promise.resolve([]));
-      const session = sessions[0];
-      if (!session) return;
+      reopenJournalInFlight = true;
+      try {
+        const sessions = await (window.electron?.agentSessionHistory
+          ?.list(activeWorktreeId)
+          .catch(() => [] as AgentSessionRecord[]) ?? Promise.resolve([]));
+        const session = sessions[0];
+        if (!session) return;
 
-      const options = buildResumePanelOptions(session, {
-        cwd: callbacks.getDefaultCwd(),
-        worktreeId: activeWorktreeId,
-      });
-      if (!options) return;
+        const options = buildResumePanelOptions(session, { cwd, worktreeId: activeWorktreeId });
+        if (!options) return;
 
-      // Records are non-destructive/unconsumed, so a repeat press would try to
-      // resume the same session again — concurrent transcript access. If a live
-      // panel already carries this session, focus it instead of respawning.
-      const state = usePanelStore.getState();
-      const existingId = state.panelIds.find((id) => {
-        const panel = state.panelsById[id];
-        return panel && panel.location !== "trash" && panel.agentSessionId === session.sessionId;
-      });
-      if (existingId) {
-        state.activateTerminal(existingId);
-        return;
+        // Records are non-destructive/unconsumed, so a repeat press would try to
+        // resume the same session again — concurrent transcript access. If a live
+        // panel in this worktree already carries the session, focus it instead of
+        // respawning. Scope by worktree too so a panel moved to another worktree
+        // can't steal focus across worktrees.
+        const state = usePanelStore.getState();
+        const existingId = state.panelIds.find((id) => {
+          const panel = state.panelsById[id];
+          return (
+            panel &&
+            panel.location !== "trash" &&
+            panel.agentSessionId === session.sessionId &&
+            panel.worktreeId === activeWorktreeId
+          );
+        });
+        if (existingId) {
+          state.activateTerminal(existingId);
+          return;
+        }
+
+        await state.addPanel(options);
+      } finally {
+        reopenJournalInFlight = false;
       }
-
-      await state.addPanel(options);
     },
   }));
 

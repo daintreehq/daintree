@@ -77,6 +77,7 @@ type MockPanel = {
   detectedAgentId?: string;
   title?: string;
   agentSessionId?: string;
+  worktreeId?: string;
 };
 
 function setPanelState(options: {
@@ -491,11 +492,19 @@ describe("terminal.reopenLast journal fallback", () => {
     expect(addPanel).not.toHaveBeenCalled();
   });
 
-  it("focuses an already-open panel with the same session instead of spawning a duplicate", async () => {
+  it("focuses an already-open panel with the same session in the active worktree instead of spawning a duplicate", async () => {
     const addPanel = vi.fn().mockResolvedValue(undefined);
     const activateTerminal = vi.fn();
     setPanelState({
-      panels: [{ id: "p-live", location: "grid", kind: "terminal", agentSessionId: "s-1" }],
+      panels: [
+        {
+          id: "p-live",
+          location: "grid",
+          kind: "terminal",
+          agentSessionId: "s-1",
+          worktreeId: "wt-1",
+        },
+      ],
       addPanel,
       activateTerminal,
       restoreLastTrashed: vi.fn().mockReturnValue(false),
@@ -508,6 +517,60 @@ describe("terminal.reopenLast journal fallback", () => {
 
     expect(activateTerminal).toHaveBeenCalledWith("p-live");
     expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("does not steal focus across worktrees: a same-session panel in another worktree is ignored and a fresh resume spawns", async () => {
+    const addPanel = vi.fn().mockResolvedValue(undefined);
+    const activateTerminal = vi.fn();
+    setPanelState({
+      panels: [
+        {
+          id: "p-elsewhere",
+          location: "grid",
+          kind: "terminal",
+          agentSessionId: "s-1",
+          worktreeId: "wt-2",
+        },
+      ],
+      addPanel,
+      activateTerminal,
+      restoreLastTrashed: vi.fn().mockReturnValue(false),
+    });
+    listAgentSessionsMock.mockResolvedValue([session]);
+    buildResumePanelOptionsMock.mockReturnValue(resumeOptions);
+    const run = setupActions();
+
+    await run("terminal.reopenLast");
+
+    expect(activateTerminal).not.toHaveBeenCalled();
+    expect(addPanel).toHaveBeenCalledWith(resumeOptions);
+  });
+
+  it("blocks a second overlapping dispatch so the same session is not resumed twice", async () => {
+    const addPanel = vi.fn().mockResolvedValue(undefined);
+    setPanelState({
+      panels: [],
+      addPanel,
+      restoreLastTrashed: vi.fn().mockReturnValue(false),
+    });
+    // Hold the journal lookup pending so both dispatches overlap in flight.
+    let releaseList: (records: (typeof session)[]) => void = () => {};
+    listAgentSessionsMock.mockReturnValue(
+      new Promise((resolve) => {
+        releaseList = resolve;
+      })
+    );
+    buildResumePanelOptionsMock.mockReturnValue(resumeOptions);
+    const run = setupActions();
+
+    const first = run("terminal.reopenLast");
+    const second = run("terminal.reopenLast");
+    releaseList([session]);
+    await Promise.all([first, second]);
+
+    // First dispatch set the in-flight guard before awaiting; the second bailed.
+    expect(listAgentSessionsMock).toHaveBeenCalledTimes(1);
+    expect(addPanel).toHaveBeenCalledTimes(1);
   });
 
   it("ignores a trashed panel with the same session and spawns a fresh resume", async () => {

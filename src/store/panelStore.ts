@@ -840,9 +840,27 @@ export const usePanelStore = create<PanelGridState>()(
 
         if (lastTrashed?.groupRestoreId) {
           get().restoreTrashedGroup(lastTrashed.groupRestoreId);
-        } else {
-          get().restoreTerminal(lastId);
+          return true;
         }
+
+        // A stale map entry can outlive its panel row: a background-throttled
+        // expiry timer can fire late, and `restoreTerminal` no-ops (without
+        // even cleaning the map) when `panelsById[id]` is already gone.
+        // Restoring it would be a silent no-op that still reports success —
+        // wrongly suppressing the resume-journal fallback the caller wants.
+        // Treat a missing/non-trash panel as "nothing restored": drop the stale
+        // entry and return false so the caller can fall through.
+        const panel = get().panelsById[lastId];
+        if (!panel || panel.location !== "trash") {
+          set((state) => {
+            const newTrashed = new Map(state.trashedTerminals);
+            newTrashed.delete(lastId);
+            return { trashedTerminals: newTrashed };
+          });
+          return false;
+        }
+
+        get().restoreTerminal(lastId);
         return true;
       },
 
