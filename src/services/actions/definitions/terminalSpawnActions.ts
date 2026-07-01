@@ -196,6 +196,7 @@ export function registerTerminalSpawnActions(
           const panel = state.panelsById[id];
           return (
             panel &&
+            panel.kind === "terminal" &&
             panel.location !== "trash" &&
             panel.agentSessionId === session.sessionId &&
             panel.worktreeId === activeWorktreeId
