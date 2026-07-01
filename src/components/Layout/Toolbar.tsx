@@ -88,6 +88,7 @@ import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { NotificationCenterToolbarButton } from "./NotificationCenterToolbarButton";
 import { ToolbarLauncherButton } from "./ToolbarLauncherButton";
 import { ToolbarCommandPaletteButton } from "./ToolbarCommandPaletteButton";
+import { ResumeSessionsToolbarButton } from "./ResumeSessionsToolbarButton";
 import { ToolbarSettingsButton } from "./ToolbarSettingsButton";
 import { ToolbarProblemsButton } from "./ToolbarProblemsButton";
 import { ToolbarPortalButton } from "./ToolbarPortalButton";
@@ -579,6 +580,7 @@ export function Toolbar({
   const devServerShortcut = useKeybindingDisplay("devServer.start");
   const notificationsShortcut = useKeybindingDisplay("notifications.toggle");
   const commandPaletteShortcut = useKeybindingDisplay("action.palette.open");
+  const resumeSessionsShortcut = useKeybindingDisplay("terminal.resumeSessions");
   const settingsShortcut = useKeybindingDisplay("app.settings");
   const problemsShortcut = useKeybindingDisplay("panel.toggleDiagnostics");
   const terminalShortcut = useKeybindingDisplay("agent.terminal");
@@ -1019,6 +1021,10 @@ export function Toolbar({
         render: () => <ToolbarCommandPaletteButton key="command-palette" data-toolbar-item="" />,
         isAvailable: true,
       },
+      "resume-sessions": {
+        render: () => <ResumeSessionsToolbarButton key="resume-sessions" data-toolbar-item="" />,
+        isAvailable: true,
+      },
       settings: {
         render: () => (
           <ToolbarSettingsButton
@@ -1299,6 +1305,9 @@ export function Toolbar({
       "command-palette": () => {
         void actionService.dispatch("action.palette.open", undefined, { source: "user" });
       },
+      "resume-sessions": () => {
+        void actionService.dispatch("terminal.resumeSessions", undefined, { source: "user" });
+      },
       settings: onSettings,
       problems: onToggleProblems,
       ...Object.fromEntries(
@@ -1333,6 +1342,7 @@ export function Toolbar({
     "copy-tree": copyTreeShortcut,
     "notification-center": notificationsShortcut,
     "command-palette": commandPaletteShortcut,
+    "resume-sessions": resumeSessionsShortcut,
     "dev-server": devServerShortcut,
     settings: settingsShortcut,
     problems: problemsShortcut,

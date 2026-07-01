@@ -52,6 +52,21 @@ export function registerTerminalSpawnActions(
     },
   }));
 
+  actions.set("terminal.resumeSessions", () => ({
+    id: "terminal.resumeSessions",
+    title: "Resume Session…",
+    description: "Browse and resume a closed agent session in this project",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["resume", "reopen", "closed", "history", "session", "restore"],
+    nonRepeatable: true,
+    run: async () => {
+      callbacks.onOpenResumeSessionsPalette();
+    },
+  }));
+
   actions.set("terminal.duplicate", () => ({
     id: "terminal.duplicate",
     title: "Duplicate Panel",

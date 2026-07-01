@@ -16,6 +16,7 @@ function createCallbacks() {
     onOpenWorktreeOverview: () => {},
     onCloseWorktreeOverview: () => {},
     onOpenPanelPalette: () => {},
+    onOpenResumeSessionsPalette: () => {},
     onOpenProjectSwitcherPalette: () => {},
     onConfirmCloseActiveProject: () => {},
     onOpenShortcuts: () => {},

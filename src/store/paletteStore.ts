@@ -12,6 +12,7 @@ export type PaletteId =
   | "send-to-agent"
   | "bulk-command"
   | "theme"
+  | "resume-sessions"
   | "log-level";
 
 interface PaletteState {

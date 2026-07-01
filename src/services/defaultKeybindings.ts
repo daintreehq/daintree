@@ -67,6 +67,14 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Terminal",
   },
   {
+    actionId: "terminal.resumeSessions",
+    combo: "Cmd+K R",
+    scope: "global",
+    priority: 0,
+    description: "Resume a closed session",
+    category: "Terminal",
+  },
+  {
     actionId: "terminal.closeAll",
     combo: "Cmd+K Cmd+W",
     scope: "global",

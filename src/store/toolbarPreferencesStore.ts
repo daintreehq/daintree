@@ -23,6 +23,7 @@ const DEFAULT_RIGHT_BUTTONS: ToolbarButtonId[] = [
   "forge-stats",
   "notification-center",
   "copy-tree",
+  "resume-sessions",
   "command-palette",
   "settings",
   "problems",

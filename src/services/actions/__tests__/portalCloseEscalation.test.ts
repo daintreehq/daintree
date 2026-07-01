@@ -32,6 +32,7 @@ async function createRegistry() {
     onOpenWorktreeOverview: () => {},
     onCloseWorktreeOverview: () => {},
     onOpenPanelPalette: () => {},
+    onOpenResumeSessionsPalette: () => {},
     onOpenProjectSwitcherPalette: () => {},
     onConfirmCloseActiveProject: () => {},
     onOpenShortcuts: () => {},

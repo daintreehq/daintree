@@ -12,6 +12,7 @@ import { useRecipeStore } from "@/store/recipeStore";
 import { formatPath, middleTruncate } from "@/utils/textParsing";
 import { RotatingTip } from "./contentGridTips";
 import { RecipeRunner } from "./RecipeRunner/RecipeRunner";
+import { ResumeSessionsCard } from "./ResumeSessionsCard";
 
 const PATH_TRUNCATE_LENGTH = 52;
 
@@ -192,6 +193,8 @@ export function ContentGridEmptyState({
             <ProjectPulseCard worktreeId={activeWorktreeId} />
           </div>
         )}
+
+        {hasActiveWorktree && <ResumeSessionsCard activeWorktreeId={activeWorktreeId} />}
 
         {hasActiveWorktree && hasEverLaunchedAgent && (
           <div className="flex flex-col items-center gap-4 mt-4">
