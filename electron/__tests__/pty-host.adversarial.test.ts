@@ -235,7 +235,11 @@ vi.mock("../services/PtyManager.js", () => {
     trimScrollback = vi.fn();
     getAllTerminalSnapshots = vi.fn(() => []);
     transitionState = vi.fn(() => false);
-    getTerminalsForProject = vi.fn(() => []);
+    getTerminalsForProject = vi.fn((projectId: string) =>
+      Array.from(hostState.terminals.values())
+        .filter((t) => t.projectId === projectId)
+        .map((t) => t.id)
+    );
     getProjectStats = vi.fn(() => ({ terminalCount: 0, processIds: [], terminalTypes: {} }));
     getAvailableTerminals = vi.fn(() => []);
     getTerminalInfo = vi.fn(() => null);
@@ -1170,27 +1174,28 @@ describe("pty-host adversarial", () => {
     ).toBe(false);
   });
 
-  it("ALL_TERMINALS_STAY_ACTIVE_REGARDLESS_OF_ACTIVE_PROJECT", async () => {
-    // EXPERIMENT (hibernation teardown step 1): recomputeActivityTiers pins every
-    // terminal to "active" — both a global/shared terminal (undefined projectId)
-    // and a terminal belonging to a switched-away project. The old #9778 rule
-    // demoted the foreign-project terminal to "background"; that demotion was the
-    // stale-buffer spine the teardown removes, so it must no longer happen.
+  it("RECOMPUTE_ONLY_TOUCHES_THE_NEWLY_FOREGROUND_PROJECT (#10857)", async () => {
+    // recomputeActivityTiers is scoped to the project that just became
+    // foreground for some window — it must NOT force-activate a global/shared
+    // terminal (undefined projectId) or a terminal belonging to a different
+    // project. Those terminals are owned exclusively by the renderer's own
+    // "set-activity-tier" IPC and must be left exactly as they were; bouncing
+    // them to "active" on every unrelated project switch is the #10857 bug.
     const parentPort = await loadHost();
     const backpressure = hostState.backpressureManagers[0];
     hostState.terminals.set("t-global", createTerminal("t-global")); // undefined projectId
     hostState.terminals.set("t-other", createTerminal("t-other", "project-2"));
 
-    // Seed the opposite tier so a green assertion proves recompute genuinely
-    // wrote "active" rather than reading back a default.
+    // Seed "background" so a green assertion proves recompute genuinely left
+    // these terminals alone rather than reading back a coincidental default.
     backpressure.setActivityTier("t-global", "background");
     backpressure.setActivityTier("t-other", "background");
 
     parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
     await flushMicrotasks();
 
-    expect(backpressure.getActivityTier("t-global")).toBe("active");
-    expect(backpressure.getActivityTier("t-other")).toBe("active");
+    expect(backpressure.getActivityTier("t-global")).toBe("background");
+    expect(backpressure.getActivityTier("t-other")).toBe("background");
   });
 
   it("TIER_CHANGED_BROADCAST_TOLERATES_A_CLOSING_PORT", async () => {
@@ -1262,61 +1267,73 @@ describe("pty-host adversarial", () => {
     expect(backpressure.getActivityTier("t1")).toBe("active");
   });
 
-  // EXPERIMENT (hibernation teardown step 1): recomputeActivityTiers pins EVERY
-  // terminal to "active" regardless of the active-project union. The OLD rule
-  // (active ⇔ activeProjects.size === 0 OR projectId === undefined OR
-  // activeProjects.has(projectId)) demoted foreign-project terminals to
-  // "background"; that demotion was the stale-buffer spine the teardown removes.
-  // Each row covers a distinct project relationship the old rule branched on
-  // (none / global / matching / foreign) and seeds the OPPOSITE ("background")
-  // tier first, so a green assertion proves recompute performed a genuine write
-  // to "active" — no project configuration may re-background a terminal.
+  // recomputeActivityTiers (#10857) is scoped to exactly the project that just
+  // became foreground (`nextProjectId`) — it force-activates terminals in that
+  // project and leaves every other terminal untouched, including a global/
+  // shared terminal (undefined projectId) and a "no active project" event
+  // (`null`, a pure no-op). Each row covers a distinct project relationship and
+  // seeds "background" first, so a green assertion proves recompute either
+  // performed a genuine write to "active" (matching row) or genuinely left the
+  // terminal alone (every other row) — not a coincidental default.
   const TIER_MATRIX: ReadonlyArray<
-    readonly [label: string, activeProjectId: string | null, termProjectId: string | undefined]
+    readonly [
+      label: string,
+      activeProjectId: string | null,
+      termProjectId: string | undefined,
+      expectedTier: "active" | "background",
+    ]
   > = [
-    ["no_active_project__global_terminal", null, undefined],
-    ["no_active_project__owned_terminal", null, "project-1"],
-    ["active_project__global_terminal", "project-1", undefined],
-    ["active_project__matching_terminal", "project-1", "project-1"],
-    ["active_project__foreign_terminal", "project-1", "project-2"],
+    ["no_active_project__global_terminal", null, undefined, "background"],
+    ["no_active_project__owned_terminal", null, "project-1", "background"],
+    ["active_project__global_terminal", "project-1", undefined, "background"],
+    ["active_project__matching_terminal", "project-1", "project-1", "active"],
+    ["active_project__foreign_terminal", "project-1", "project-2", "background"],
   ];
 
-  it.each(TIER_MATRIX)("TIER_MATRIX[%s]", async (_label, activeProjectId, termProjectId) => {
-    const parentPort = await loadHost();
-    const backpressure = hostState.backpressureManagers[0];
-    hostState.terminals.set("t1", createTerminal("t1", termProjectId));
+  it.each(TIER_MATRIX)(
+    "TIER_MATRIX[%s]",
+    async (_label, activeProjectId, termProjectId, expectedTier) => {
+      const parentPort = await loadHost();
+      const backpressure = hostState.backpressureManagers[0];
+      hostState.terminals.set("t1", createTerminal("t1", termProjectId));
 
-    // Exactly one connected window so the recompute has a real broadcast target
-    // (rendererConnections.size = 1).
-    parentPort.emit("message", {
-      data: { type: "connect-port", windowId: 1 },
-      ports: [createRendererPort()],
-    });
-    await flushMicrotasks();
+      // Exactly one connected window so the recompute has a real broadcast target
+      // (rendererConnections.size = 1).
+      parentPort.emit("message", {
+        data: { type: "connect-port", windowId: 1 },
+        ports: [createRendererPort()],
+      });
+      await flushMicrotasks();
 
-    // Seed the opposite tier so the final assertion can only pass if recompute
-    // performed a genuine write to this terminal's tier.
-    backpressure.setActivityTier("t1", "background");
+      // Seed "background" so the final assertion can only pass if recompute
+      // performed the row's expected (write-or-leave-alone) behavior.
+      backpressure.setActivityTier("t1", "background");
 
-    // projectId:null is a real window with no active project; a project id makes
-    // the terminal either owned or foreign — every variant must still resolve to
-    // "active" (connect-port alone does not drive a recompute).
-    parentPort.emit("message", {
-      type: "set-active-project",
-      windowId: 1,
-      projectId: activeProjectId,
-    });
-    await flushMicrotasks();
+      parentPort.emit("message", {
+        type: "set-active-project",
+        windowId: 1,
+        projectId: activeProjectId,
+      });
+      await flushMicrotasks();
 
-    expect(backpressure.getActivityTier("t1")).toBe("active");
+      expect(backpressure.getActivityTier("t1")).toBe(expectedTier);
 
-    // The ActivityMonitor polling cadence is pinned to the active 50ms cadence in
-    // lockstep with the always-active tier.
-    const ptyManager = hostState.currentPtyManager as MiniEmitter & {
-      setActivityMonitorTier: TestMock;
-    };
-    expect(ptyManager.setActivityMonitorTier).toHaveBeenCalledWith("t1", "active", 50);
-  });
+      // The ActivityMonitor polling cadence is only pinned to 50ms when the
+      // terminal was genuinely in scope for this recompute.
+      const ptyManager = hostState.currentPtyManager as MiniEmitter & {
+        setActivityMonitorTier: TestMock;
+      };
+      if (expectedTier === "active") {
+        expect(ptyManager.setActivityMonitorTier).toHaveBeenCalledWith("t1", "active", 50);
+      } else {
+        expect(ptyManager.setActivityMonitorTier).not.toHaveBeenCalledWith(
+          "t1",
+          "active",
+          expect.anything()
+        );
+      }
+    }
+  );
 
   it("TIER_CHANGED_STREAM_IS_FIFO_ORDERED_ON_A_SINGLE_PORT", async () => {
     // The reconciliation push is posted on the SAME per-window MessagePort as
@@ -1324,31 +1341,33 @@ describe("pty-host adversarial", () => {
     // batcher's `receivedPort.postMessage` for data), so a tier-changed lands
     // FIFO-ordered ahead of any chunk on that port. This test pins the ordering
     // guarantee for the tier stream itself: a viewer window that owns no project
-    // (windowProject === null) receives a reconciliation for t1 on EVERY recompute
-    // and they must arrive in exactly the order they happened — no reordering,
-    // dropping, or collapsing. If recompute ever moved the post behind an
-    // async/batched path the stream would scramble and the renderer's dedupe
-    // baseline would desync (the #9778 failure class). EXPERIMENT (hibernation
-    // teardown step 1): tiers are pinned "active", so every reconciliation now
-    // carries "active" — the invariant under test is the per-recompute push count
-    // and ordering, not the (now constant) tier value.
+    // (windowProject === null) receives a reconciliation for t1 only on a
+    // recompute that is actually scoped to t1's project (#10857) — a switch to
+    // an unrelated project must produce NO reconciliation for t1 at all, and the
+    // ones that do fire must arrive in exactly the order they happened, none
+    // dropped, reordered, or collapsed. If recompute ever moved the post behind
+    // an async/batched path, or scoped incorrectly, the stream would scramble
+    // and the renderer's dedupe baseline would desync (the #9778 failure class).
     const parentPort = await loadHost();
     hostState.terminals.set("t1", createTerminal("t1", "project-1"));
 
     const viewer = createRendererPort();
     parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [viewer] });
-    // Viewer owns no project → it is a consumer of every terminal's tier-changed.
+    // Viewer owns no project → it is a consumer of t1's tier-changed whenever
+    // t1's project is actually recomputed.
     parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: null });
     await flushMicrotasks();
     viewer.postMessage.mockClear();
 
-    // Window 2 (no port needed — it only drives recomputes) switches its active
-    // project three times; each switch triggers one recompute → one reconciliation.
-    parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-2" });
-    await flushMicrotasks();
+    // Window 2 (no port needed — it only drives recomputes) switches between
+    // t1's project and an unrelated one, twice each: only the project-1
+    // switches are in scope for t1 and should produce a reconciliation; the
+    // project-2 switches must be silent for t1.
     parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-1" });
     await flushMicrotasks();
     parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-2" });
+    await flushMicrotasks();
+    parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-1" });
     await flushMicrotasks();
 
     const tierSequence = viewer.postMessage.mock.calls
@@ -1362,26 +1381,28 @@ describe("pty-host adversarial", () => {
       )
       .map((m) => m.tier);
 
-    // One reconciliation per recompute (three switches above), none dropped or
-    // collapsed; all carry the pinned "active" tier.
-    expect(tierSequence).toEqual(["active", "active", "active"]);
+    // Only the two project-1 (in-scope) switches reconcile t1 — the project-2
+    // switch in between is correctly silent, none dropped, reordered, or
+    // collapsed.
+    expect(tierSequence).toEqual(["active", "active"]);
   });
 
-  it("MULTI_WINDOW_CONNECT_DISCONNECT_KEEPS_ALL_TERMINALS_ACTIVE", async () => {
-    // EXPERIMENT (hibernation teardown step 1): recomputeActivityTiers no longer
-    // tiers terminals against the active-project union — it pins every terminal to
-    // "active". So two windows owning two different projects keep ALL three
-    // terminals active (including the third-project one that the old union rule
-    // would have backgrounded), and disconnecting a window never re-backgrounds
-    // its now-"inactive" terminal. The recompute still runs on connect/disconnect;
-    // it just always resolves to "active".
+  it("MULTI_WINDOW_CONNECT_DISCONNECT_SCOPES_ACTIVATION_TO_OWN_PROJECT (#10857)", async () => {
+    // recomputeActivityTiers is scoped per-event to the project that just
+    // became foreground. Two windows owning two different projects each
+    // activate only their own project's terminal — the third-project terminal
+    // (t-c), which no connected window owns, is never touched and stays at
+    // whatever tier it already had. Disconnecting a window passes `null`
+    // (a no-op, per the hard "never demote" constraint), so it never
+    // re-backgrounds anything either.
     const parentPort = await loadHost();
     const backpressure = hostState.backpressureManagers[0];
     hostState.terminals.set("t-a", createTerminal("t-a", "project-a"));
     hostState.terminals.set("t-b", createTerminal("t-b", "project-b"));
     hostState.terminals.set("t-c", createTerminal("t-c", "project-c"));
 
-    // Seed the opposite tier so green assertions prove a genuine recompute write.
+    // Seed "background" so green assertions prove a genuine recompute write
+    // (t-a, t-b) vs a genuine leave-alone (t-c).
     backpressure.setActivityTier("t-a", "background");
     backpressure.setActivityTier("t-b", "background");
     backpressure.setActivityTier("t-c", "background");
@@ -1398,31 +1419,34 @@ describe("pty-host adversarial", () => {
     parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-b" });
     await flushMicrotasks();
 
-    // Every terminal active — the foreign-project one (t-c) included.
+    // Only the two owned terminals activate — the unowned third project (t-c)
+    // is left untouched.
     expect(backpressure.getActivityTier("t-a")).toBe("active");
     expect(backpressure.getActivityTier("t-b")).toBe("active");
-    expect(backpressure.getActivityTier("t-c")).toBe("active");
+    expect(backpressure.getActivityTier("t-c")).toBe("background");
 
-    // Drop window 1 → recompute re-runs, but nothing re-backgrounds.
+    // Drop window 1 → recompute re-runs scoped to `null`, a no-op; nothing
+    // changes for any terminal.
     parentPort.emit("message", { type: "disconnect-port", windowId: 1 });
     await flushMicrotasks();
 
     expect(backpressure.getActivityTier("t-a")).toBe("active");
     expect(backpressure.getActivityTier("t-b")).toBe("active");
-    expect(backpressure.getActivityTier("t-c")).toBe("active");
+    expect(backpressure.getActivityTier("t-c")).toBe("background");
   });
 
   it("RACE_FUZZER_TIER_QUIESCENCE_INVARIANT", async () => {
     // Fuzz the interleaving of connect-port and set-active-project across
     // macrotasks. connect-port never triggers a recompute while set-active-project
     // always does, so the two orders exercise different paths. Each iteration
-    // drives a single window (set, assert, disconnect). EXPERIMENT (hibernation
-    // teardown step 1): recomputeActivityTiers pins every terminal to "active", so
-    // the quiescence invariant is now order-independent AND project-independent —
-    // after any interleaving settles, every terminal is "active" regardless of the
-    // active project. A regression that resurrected the union-demotion (or left a
-    // tier stranded at "background" when the port arrived after the project
-    // switch) breaks this for some interleaving.
+    // drives a single window (set, assert, disconnect). recomputeActivityTiers
+    // (#10857) is scoped to exactly the project that just became foreground: the
+    // quiescence invariant is order-independent (connect-before-project and
+    // project-before-connect settle to the same state) but project-DEPENDENT —
+    // only the terminal matching the iteration's active project (if any) ends up
+    // "active"; the other terminal is left at its seeded "background" tier. A
+    // regression that resurrected the old global force-active (or scoped to the
+    // wrong project) breaks this for some interleaving.
     const parentPort = await loadHost();
     const backpressure = hostState.backpressureManagers[0];
     hostState.terminals.set("t-a", createTerminal("t-a", "project-a"));
@@ -1430,15 +1454,18 @@ describe("pty-host adversarial", () => {
 
     const PROJECTS: Array<string | null> = ["project-a", "project-b", null];
     const ITERATIONS = 200;
+    let lastActiveProject: string | null = null;
 
     for (let i = 0; i < ITERATIONS; i++) {
       const windowId = (i % 4) + 1;
       const activeProject = PROJECTS[i % PROJECTS.length];
+      lastActiveProject = activeProject;
       const connectFirst = i % 2 === 0;
       const port = createRendererPort();
 
-      // Seed the opposite tier each iteration so a green assertion proves the
-      // recompute genuinely wrote "active" rather than reading back a stale value.
+      // Seed "background" each iteration so a green assertion proves the
+      // recompute genuinely wrote (matching terminal) or genuinely left alone
+      // (non-matching terminal) rather than reading back a stale value.
       backpressure.setActivityTier("t-a", "background");
       backpressure.setActivityTier("t-b", "background");
 
@@ -1459,10 +1486,14 @@ describe("pty-host adversarial", () => {
       await vi.advanceTimersByTimeAsync(1);
       await flushMicrotasks();
 
-      // Quiescence invariant: every terminal stays "active" no matter which
-      // project (if any) is active for this window.
-      expect(backpressure.getActivityTier("t-a")).toBe("active");
-      expect(backpressure.getActivityTier("t-b")).toBe("active");
+      // Quiescence invariant: only the terminal matching this iteration's active
+      // project (if any) is "active"; the other stays at its seeded tier.
+      expect(backpressure.getActivityTier("t-a")).toBe(
+        activeProject === "project-a" ? "active" : "background"
+      );
+      expect(backpressure.getActivityTier("t-b")).toBe(
+        activeProject === "project-b" ? "active" : "background"
+      );
 
       // Explicit disconnect forgets this window's project + connection before the
       // next interleaving.
@@ -1471,9 +1502,14 @@ describe("pty-host adversarial", () => {
       await flushMicrotasks();
     }
 
-    // With every window disconnected both terminals remain active.
-    expect(backpressure.getActivityTier("t-a")).toBe("active");
-    expect(backpressure.getActivityTier("t-b")).toBe("active");
+    // With every window disconnected, the tiers reflect only the last
+    // iteration's recompute — disconnect itself never changes anything.
+    expect(backpressure.getActivityTier("t-a")).toBe(
+      lastActiveProject === "project-a" ? "active" : "background"
+    );
+    expect(backpressure.getActivityTier("t-b")).toBe(
+      lastActiveProject === "project-b" ? "active" : "background"
+    );
   });
 
   // Helper: terminal-status messages posted directly on a renderer MessagePort.

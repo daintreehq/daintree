@@ -55,7 +55,7 @@ export interface HostContext {
   getPauseCoordinator: (id: string) => PtyPauseCoordinator | undefined;
   getOrCreatePauseCoordinator: (id: string) => PtyPauseCoordinator | undefined;
   disconnectWindow: (windowId: number, reason: string) => void;
-  recomputeActivityTiers: () => void;
+  recomputeActivityTiers: (nextProjectId: string | null) => void;
   tryReplayAndResume: (id: string) => void;
   resumePausedTerminal: (id: string) => void;
   createPortQueueManager: (windowId: number) => PortQueueManager;

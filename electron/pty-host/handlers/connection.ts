@@ -188,7 +188,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
 
     "set-active-project": (msg) => {
       windowProjectMap.set(msg.windowId, msg.projectId);
-      recomputeActivityTiers();
+      recomputeActivityTiers(msg.projectId);
       const pool = ctx.ptyPool;
       if (!msg.projectPath && pool && ctx.initialPoolWarmDeferred) {
         // The boot-time homedir warm was deferred for a project restore that
@@ -242,7 +242,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
 
     "project-switch": (msg) => {
       windowProjectMap.set(msg.windowId, msg.projectId);
-      recomputeActivityTiers();
+      recomputeActivityTiers(msg.projectId);
       const pool = ctx.ptyPool;
       if (!msg.projectPath && pool && ctx.initialPoolWarmDeferred) {
         // Restart replay can carry a switch context with no recorded path —
