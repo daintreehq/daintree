@@ -215,6 +215,17 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
           store.set("terminalConfig.memoryLeakAutoRestartThresholdMb", thresholdMb);
         }
       ),
+      setExitSnapshot: op(
+        TERMINAL_CONFIG_METHOD_CHANNELS.setExitSnapshot,
+        async (enabled: boolean) => {
+          if (typeof enabled !== "boolean") {
+            console.warn("Invalid terminal exitSnapshotEnabled:", enabled);
+            return;
+          }
+          store.set("terminalConfig.exitSnapshotEnabled", enabled);
+          deps?.ptyClient?.setExitSnapshotEnabled(enabled);
+        }
+      ),
       setCachedProjectViews: op(
         TERMINAL_CONFIG_METHOD_CHANNELS.setCachedProjectViews,
         async (cachedProjectViews: number) => {

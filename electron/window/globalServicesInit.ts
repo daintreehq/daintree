@@ -885,6 +885,32 @@ export async function initGlobalServices(
     run: () => evictStaleSessionFiles(),
   });
 
+  // Push the persisted opt-in exit-snapshot config into the pty-host once at
+  // boot (#10850). The toggle defaults OFF, so this only matters when the user
+  // previously enabled it or excluded projects; PtyClient re-syncs the cached
+  // state on every host-ready, so seeding the cache here is sufficient.
+  registerDeferredTask({
+    name: "exit-snapshot-config",
+    run: async () => {
+      try {
+        const ptyClient = getPtyClient();
+        if (!ptyClient) return;
+        const enabled = store.get("terminalConfig")?.exitSnapshotEnabled === true;
+        ptyClient.setExitSnapshotEnabled(enabled);
+        if (enabled) {
+          const { computeExitSnapshotExcludedProjectIds } =
+            await import("../services/exitSnapshotExclusions.js");
+          const excluded = await computeExitSnapshotExcludedProjectIds();
+          if (excluded.length > 0) {
+            ptyClient.setExitSnapshotExcludedProjects(excluded);
+          }
+        }
+      } catch (err) {
+        console.warn("[MAIN] Failed to push initial exit-snapshot config to pty-host:", err);
+      }
+    },
+  });
+
   registerDeferredTask({
     name: "prune-old-logs",
     run: async () => {

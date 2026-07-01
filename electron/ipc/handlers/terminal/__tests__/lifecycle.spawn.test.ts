@@ -2079,6 +2079,7 @@ describe("terminal close handlers - resume journaling", () => {
   let ptyClient: {
     getTerminalAsync: ReturnType<typeof vi.fn>;
     gracefulKill: ReturnType<typeof vi.fn>;
+    gracefulKillWithSnapshot: ReturnType<typeof vi.fn>;
     kill: ReturnType<typeof vi.fn>;
   };
   let worktreeService: { getMonitorAsync: ReturnType<typeof vi.fn> };
@@ -2100,6 +2101,7 @@ describe("terminal close handlers - resume journaling", () => {
     ptyClient = {
       getTerminalAsync: vi.fn(),
       gracefulKill: vi.fn(),
+      gracefulKillWithSnapshot: vi.fn(),
       kill: vi.fn(),
     };
     worktreeService = { getMonitorAsync: vi.fn().mockResolvedValue({ branch: "feature/foo" }) };
@@ -2112,12 +2114,12 @@ describe("terminal close handlers - resume journaling", () => {
 
   it("routes an agent terminal kill through gracefulKill and journals a record", async () => {
     ptyClient.getTerminalAsync.mockResolvedValue(agentInfo);
-    ptyClient.gracefulKill.mockResolvedValue("sess-abc");
+    ptyClient.gracefulKillWithSnapshot.mockResolvedValue({ sessionId: "sess-abc" });
     register();
 
     await getKillHandler()({}, "term-1");
 
-    expect(ptyClient.gracefulKill).toHaveBeenCalledWith("term-1");
+    expect(ptyClient.gracefulKillWithSnapshot).toHaveBeenCalledWith("term-1");
     expect(ptyClient.kill).not.toHaveBeenCalled();
     expect(persistAgentSessionMock).toHaveBeenCalledTimes(1);
     const [record] = persistAgentSessionMock.mock.calls[0];
@@ -2127,6 +2129,20 @@ describe("terminal close handlers - resume journaling", () => {
     expect(record.branch).toBe("feature/foo");
   });
 
+  it("attaches the exit snapshot to the journaled record when present (#10850)", async () => {
+    ptyClient.getTerminalAsync.mockResolvedValue(agentInfo);
+    ptyClient.gracefulKillWithSnapshot.mockResolvedValue({
+      sessionId: "sess-abc",
+      exitSnapshot: "tail of scrubbed output",
+    });
+    register();
+
+    await getKillHandler()({}, "term-1");
+
+    expect(persistAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(persistAgentSessionMock.mock.calls[0][0].snapshot).toBe("tail of scrubbed output");
+  });
+
   it("hard-kills a non-agent terminal without journaling", async () => {
     ptyClient.getTerminalAsync.mockResolvedValue({ id: "term-2", cwd: "/repo" });
     register();
@@ -2134,24 +2150,24 @@ describe("terminal close handlers - resume journaling", () => {
     await getKillHandler()({}, "term-2");
 
     expect(ptyClient.kill).toHaveBeenCalledWith("term-2");
-    expect(ptyClient.gracefulKill).not.toHaveBeenCalled();
+    expect(ptyClient.gracefulKillWithSnapshot).not.toHaveBeenCalled();
     expect(persistAgentSessionMock).not.toHaveBeenCalled();
   });
 
   it("does not journal when gracefulKill yields no session id", async () => {
     ptyClient.getTerminalAsync.mockResolvedValue(agentInfo);
-    ptyClient.gracefulKill.mockResolvedValue(null);
+    ptyClient.gracefulKillWithSnapshot.mockResolvedValue({ sessionId: null });
     register();
 
     await getKillHandler()({}, "term-1");
 
-    expect(ptyClient.gracefulKill).toHaveBeenCalledWith("term-1");
+    expect(ptyClient.gracefulKillWithSnapshot).toHaveBeenCalledWith("term-1");
     expect(persistAgentSessionMock).not.toHaveBeenCalled();
   });
 
   it("journals on the gracefulKill handler and returns the session id", async () => {
     ptyClient.getTerminalAsync.mockResolvedValue(agentInfo);
-    ptyClient.gracefulKill.mockResolvedValue("sess-xyz");
+    ptyClient.gracefulKillWithSnapshot.mockResolvedValue({ sessionId: "sess-xyz" });
     register();
 
     const result = await getGracefulKillHandler()({}, "term-1");
@@ -2163,7 +2179,7 @@ describe("terminal close handlers - resume journaling", () => {
 
   it("still journals (branch undefined) when the branch lookup fails", async () => {
     ptyClient.getTerminalAsync.mockResolvedValue(agentInfo);
-    ptyClient.gracefulKill.mockResolvedValue("sess-abc");
+    ptyClient.gracefulKillWithSnapshot.mockResolvedValue({ sessionId: "sess-abc" });
     worktreeService.getMonitorAsync.mockRejectedValue(new Error("workspace host gone"));
     register();
 
@@ -2175,7 +2191,7 @@ describe("terminal close handlers - resume journaling", () => {
 
   it("treats a detached HEAD as no branch", async () => {
     ptyClient.getTerminalAsync.mockResolvedValue(agentInfo);
-    ptyClient.gracefulKill.mockResolvedValue("sess-abc");
+    ptyClient.gracefulKillWithSnapshot.mockResolvedValue({ sessionId: "sess-abc" });
     worktreeService.getMonitorAsync.mockResolvedValue({ branch: "HEAD" });
     register();
 

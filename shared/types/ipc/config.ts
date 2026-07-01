@@ -39,4 +39,6 @@ export interface TerminalConfig {
   memoryLeakAutoRestartThresholdMb?: number;
   /** Number of project views to keep cached in memory (1–5, default: 1) */
   cachedProjectViews?: number;
+  /** Capture an opt-in exit snapshot of closed agent sessions (#10850, default: false) */
+  exitSnapshotEnabled?: boolean;
 }

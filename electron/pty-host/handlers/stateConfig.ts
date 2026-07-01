@@ -1,5 +1,9 @@
 import { normalizeScrollbackLines } from "../../../shared/config/scrollback.js";
 import { setSessionPersistSuppressed } from "../../services/pty/terminalSessionPersistence.js";
+import {
+  setExitSnapshotEnabled,
+  setExitSnapshotExcludedProjects,
+} from "../../services/pty/exitSnapshotConfig.js";
 import type { MemoryRollupProject } from "../../../shared/types/pty-host.js";
 import type { HandlerMap, HostContext } from "./types.js";
 
@@ -35,6 +39,14 @@ export function createStateConfigHandlers(ctx: HostContext): HandlerMap {
 
     "set-session-persist-suppressed": (msg) => {
       setSessionPersistSuppressed(msg.suppressed);
+    },
+
+    "set-exit-snapshot-enabled": (msg) => {
+      setExitSnapshotEnabled(msg.enabled);
+    },
+
+    "set-exit-snapshot-excluded-projects": (msg) => {
+      setExitSnapshotExcludedProjects(msg.projectIds);
     },
 
     "get-project-stats": (msg) => {
