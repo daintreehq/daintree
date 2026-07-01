@@ -9,6 +9,7 @@ import { getDefaultTitle } from "@/store/slices/panelRegistry/helpers";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
 import type { PtyPanelData, TerminalSpawnSource } from "@shared/types/panel";
+import { isPtyPanel } from "@shared/types/panel";
 
 // Guards the async journal-resume fallback of `terminal.reopenLast` against a
 // second dispatch racing the first's pending `list`/`addPanel` — two rapid
@@ -196,7 +197,7 @@ export function registerTerminalSpawnActions(
           const panel = state.panelsById[id];
           return (
             panel &&
-            panel.kind === "terminal" &&
+            isPtyPanel(panel) &&
             panel.location !== "trash" &&
             panel.agentSessionId === session.sessionId &&
             panel.worktreeId === activeWorktreeId
