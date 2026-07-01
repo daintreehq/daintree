@@ -340,6 +340,7 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "agent.terminal",
   "agent.getState",
   "agent.listToolbar",
+  "agentSessionHistory.list",
 
   "git.getProjectPulse",
   "git.getFileDiff",
