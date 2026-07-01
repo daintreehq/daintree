@@ -3,12 +3,6 @@ import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MORE_AGENTS_PANEL_ID } from "../usePanelPalette";
 
-interface MockWorktree {
-  id: string;
-  name: string;
-  branch?: string;
-}
-
 const {
   getPanelKindIdsMock,
   getPanelKindConfigMock,
