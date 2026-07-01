@@ -98,6 +98,7 @@ export interface WorktreeHeaderProps {
     onMaximizeAll: () => void;
     onCloseAll: () => void;
     onTerminateAll: () => void;
+    onClearHistory: () => void;
     onResetRenderers: () => void;
     onSelectAllAgents: () => void;
     onSelectWaitingAgents: () => void;

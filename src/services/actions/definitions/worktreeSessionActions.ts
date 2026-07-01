@@ -6,6 +6,10 @@ import { usePanelStore } from "@/store/panelStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
 import { collectRunningAgentTerminals } from "@/utils/destructiveSessionConfirm";
 
+// Shared by argsSchema + run() so the worktree id is extracted via a validated
+// parse rather than an unchecked `as` cast (keeps the lint ratchet green).
+const clearHistoryArgsSchema = z.object({ worktreeId: z.string().optional() });
+
 export function registerWorktreeSessionActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
@@ -211,6 +215,35 @@ export function registerWorktreeSessionActions(
       const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
       usePanelStore.getState().bulkCloseByWorktree(targetWorktreeId);
+    },
+  }));
+
+  actions.set("worktree.sessions.clearHistory", () => ({
+    id: "worktree.sessions.clearHistory",
+    title: "Clear Session History",
+    description:
+      "Permanently delete this worktree's recorded resumable-session history so those sessions no longer appear when resuming agents. Open sessions are unaffected.",
+    category: "worktree",
+    kind: "command",
+    danger: "confirm",
+    // danger:"confirm" with the confirm wired at the WorktreeCard call site
+    // (useWorktreeActions), NOT in run() — run() clears the journal immediately.
+    // ActionService doesn't gate user-source dispatch, so a palette pick would
+    // bypass the D1 confirm. Hide from the palette; it stays reachable from the
+    // worktree card menu (with confirm). Mirrors `endAll`, not `trashAll`'s
+    // pending-store double-guard — that guard warns about *running* agent
+    // terminals being lost; this clears the historical journal, not live panels.
+    palette: { mode: "hidden" },
+    scope: "renderer",
+    dangerRationale:
+      "Permanently deletes this worktree's recorded resumable-session history. Records can't be recovered.",
+    argsSchema: clearHistoryArgsSchema,
+    run: async (args: unknown, ctx: ActionContext) => {
+      const parsed = clearHistoryArgsSchema.safeParse(args ?? {});
+      const worktreeId = parsed.success ? parsed.data.worktreeId : undefined;
+      const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
+      if (!targetWorktreeId) return;
+      await window.electron.agentSessionHistory.clear(targetWorktreeId);
     },
   }));
 }

@@ -41,6 +41,14 @@ vi.mock("../../../../services/pty/agentSessionHistory.js", () => ({
   persistAgentSession: persistAgentSessionMock,
   listAgentSessions: vi.fn(() => []),
   clearAgentSessions: vi.fn().mockResolvedValue(undefined),
+  pruneAgentSessions: vi.fn().mockResolvedValue(undefined),
+  DEFAULT_RETENTION_DAYS: 30,
+}));
+
+// Retention is read from the electron-store singleton, which isn't wired in
+// this unit test; stub the accessor so the journaling paths get a plain value.
+vi.mock("../../../../services/pty/agentSessionRetention.js", () => ({
+  getAgentSessionRetentionDays: vi.fn(() => 30),
 }));
 
 type SafeParseable = {

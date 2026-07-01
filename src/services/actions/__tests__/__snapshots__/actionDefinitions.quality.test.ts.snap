@@ -5922,6 +5922,18 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   },
   {
     "category": "worktree",
+    "danger": "confirm",
+    "dangerRationale": "Permanently deletes this worktree's recorded resumable-session history. Records can't be recovered.",
+    "description": "Permanently delete this worktree's recorded resumable-session history so those sessions no longer appear when resuming agents. Open sessions are unaffected.",
+    "examples": undefined,
+    "id": "worktree.sessions.clearHistory",
+    "keywords": undefined,
+    "kind": "command",
+    "requiresArgs": false,
+    "title": "Clear Session History",
+  },
+  {
+    "category": "worktree",
     "danger": "safe",
     "dangerRationale": undefined,
     "description": "Close completed sessions for a worktree",

@@ -230,6 +230,15 @@ export interface StoreSchema {
     hasSeenPrompt: boolean;
     logRetentionDays: 7 | 30 | 90 | 0;
   };
+  /**
+   * Agent resume journal (`agent-session-history.json`) settings. Kept as its
+   * own slice rather than folded into `privacy` — it governs a distinct record
+   * type (resumable agent sessions), not telemetry/log retention.
+   */
+  agentSessionHistory: {
+    /** Retention window in days; `0` = keep forever. */
+    retentionDays: 7 | 30 | 90 | 0;
+  };
   voiceInput: {
     enabled: boolean;
     openaiApiKey: string;
@@ -571,6 +580,9 @@ const storeOptions = {
       telemetryLevel: "off" as const,
       hasSeenPrompt: false,
       logRetentionDays: 30 as const,
+    },
+    agentSessionHistory: {
+      retentionDays: 30 as const,
     },
     voiceInput: {
       enabled: false,

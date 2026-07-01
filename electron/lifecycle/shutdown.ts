@@ -4,6 +4,7 @@ import type { PtyClient } from "../services/PtyClient.js";
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { persistAgentSession } from "../services/pty/agentSessionHistory.js";
+import { getAgentSessionRetentionDays } from "../services/pty/agentSessionRetention.js";
 import { getActiveAgentCount, showQuitWarning } from "../utils/quitWarning.js";
 import {
   disposeAgentAvailabilityStore,
@@ -274,7 +275,8 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
                   branch: info.worktreeId ? branchByWorktree.get(info.worktreeId) : undefined,
                   snapshot: result.exitSnapshot,
                 },
-                userData
+                userData,
+                getAgentSessionRetentionDays()
               );
             } catch (err) {
               console.warn("[MAIN] Failed to journal agent session on shutdown:", err);

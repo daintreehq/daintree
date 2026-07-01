@@ -7,10 +7,33 @@ import {
   readSessionHistory,
   listAgentSessions,
   clearAgentSessions,
+  pruneAgentSessions,
   getSessionHistoryPath,
   MAX_RECORDS_PER_WORKTREE,
   SESSION_HISTORY_TTL_MS,
 } from "../agentSessionHistory.js";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+async function seedRecordAged(
+  userDataDir: string,
+  sessionId: string,
+  ageMs: number
+): Promise<void> {
+  const filePath = getSessionHistoryPath(userDataDir)!;
+  const existing = await readSessionHistory(userDataDir);
+  const record = {
+    sessionId,
+    agentId: "claude",
+    worktreeId: "wt-1",
+    title: null,
+    projectId: null,
+    savedAt: Date.now() - ageMs,
+  };
+  await import("node:fs/promises").then((fsp) =>
+    fsp.writeFile(filePath, JSON.stringify([record, ...existing]))
+  );
+}
 
 describe("agentSessionHistory", () => {
   let userDataDir: string;
@@ -310,6 +333,105 @@ describe("agentSessionHistory", () => {
     expect(legacy).toBeDefined();
     expect(legacy?.cwd).toBeUndefined();
     expect(legacy?.branch).toBeUndefined();
+  });
+
+  describe("configurable retention", () => {
+    it("persist evicts records older than the given retention window", async () => {
+      // 20-day-old record; a 7-day retention window on the next persist drops it.
+      await seedRecordAged(userDataDir, "aged-20d", 20 * DAY_MS);
+      await persistAgentSession(
+        { sessionId: "fresh", agentId: "claude", worktreeId: "wt-1", title: null, projectId: null },
+        userDataDir,
+        7
+      );
+
+      const records = await readSessionHistory(userDataDir);
+      expect(records.map((r) => r.sessionId)).toEqual(["fresh"]);
+    });
+
+    it("persist with a longer window keeps records the default would evict", async () => {
+      // 45-day-old record survives a 90-day window (would be dropped by the 30-day default).
+      await seedRecordAged(userDataDir, "aged-45d", 45 * DAY_MS);
+      await persistAgentSession(
+        { sessionId: "fresh", agentId: "claude", worktreeId: "wt-1", title: null, projectId: null },
+        userDataDir,
+        90
+      );
+
+      const ids = new Set((await readSessionHistory(userDataDir)).map((r) => r.sessionId));
+      expect(ids.has("aged-45d")).toBe(true);
+      expect(ids.has("fresh")).toBe(true);
+    });
+
+    it("retention 0 (keep forever) never evicts by age", async () => {
+      await seedRecordAged(userDataDir, "ancient", 500 * DAY_MS);
+      await persistAgentSession(
+        { sessionId: "fresh", agentId: "claude", worktreeId: "wt-1", title: null, projectId: null },
+        userDataDir,
+        0
+      );
+
+      const ids = new Set((await readSessionHistory(userDataDir)).map((r) => r.sessionId));
+      expect(ids.has("ancient")).toBe(true);
+    });
+
+    it("listAgentSessions honors the retention window", async () => {
+      await seedRecordAged(userDataDir, "aged-20d", 20 * DAY_MS);
+      await persistAgentSession(
+        { sessionId: "fresh", agentId: "claude", worktreeId: "wt-1", title: null, projectId: null },
+        userDataDir,
+        0 // keep-forever on write so the read path is what does the filtering
+      );
+
+      expect(listAgentSessions(undefined, userDataDir, 7).map((r) => r.sessionId)).toEqual([
+        "fresh",
+      ]);
+      expect(
+        new Set(listAgentSessions(undefined, userDataDir, 90).map((r) => r.sessionId))
+      ).toEqual(new Set(["fresh", "aged-20d"]));
+    });
+
+    it("pruneAgentSessions immediately drops records past the window", async () => {
+      await seedRecordAged(userDataDir, "aged-20d", 20 * DAY_MS);
+      await seedRecordAged(userDataDir, "aged-3d", 3 * DAY_MS);
+
+      await pruneAgentSessions(7, userDataDir);
+
+      const records = await readSessionHistory(userDataDir);
+      expect(records.map((r) => r.sessionId)).toEqual(["aged-3d"]);
+    });
+
+    it("pruneAgentSessions with 0 keeps everything", async () => {
+      await seedRecordAged(userDataDir, "ancient", 500 * DAY_MS);
+      await pruneAgentSessions(0, userDataDir);
+      const records = await readSessionHistory(userDataDir);
+      expect(records.map((r) => r.sessionId)).toEqual(["ancient"]);
+    });
+
+    it("keep-forever (0) still enforces the per-worktree cap", async () => {
+      // The pty-host trash-expiry path persists with retentionDays=0 (no store
+      // access). This proves that even without age-eviction, growth is bounded
+      // at MAX_RECORDS_PER_WORKTREE — the guarantee that makes that safe.
+      for (let i = 0; i < MAX_RECORDS_PER_WORKTREE + 10; i++) {
+        await persistAgentSession(
+          {
+            sessionId: `session-${i}`,
+            agentId: "claude",
+            worktreeId: "wt-1",
+            title: null,
+            projectId: null,
+          },
+          userDataDir,
+          0
+        );
+      }
+      const records = await readSessionHistory(userDataDir);
+      expect(records).toHaveLength(MAX_RECORDS_PER_WORKTREE);
+      // Newest survive: the last-written session must be present.
+      expect(records.some((r) => r.sessionId === `session-${MAX_RECORDS_PER_WORKTREE + 9}`)).toBe(
+        true
+      );
+    });
   });
 
   it("handles corrupt JSON gracefully", async () => {

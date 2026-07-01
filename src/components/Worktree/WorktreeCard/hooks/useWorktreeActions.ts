@@ -42,6 +42,7 @@ export interface UseWorktreeActionsResult {
   handleSelectWorkingAgents: () => void;
   handleCloseAll: () => void;
   handleTerminateAll: () => void;
+  handleClearHistory: () => void;
   handleResourceTeardown: () => void;
 
   hasSnapshot: boolean;
@@ -288,6 +289,26 @@ export function useWorktreeActions({
     });
   }, [worktree.id, worktree.issueTitle, worktree.branch]);
 
+  const handleClearHistory = useCallback(() => {
+    const label = worktree.issueTitle ?? worktree.branch;
+    setConfirmDialog({
+      isOpen: true,
+      title: `Clear session history for '${label}'?`,
+      description:
+        "This permanently deletes this worktree's recorded resumable-session history. Open sessions aren't affected; the records can't be recovered.",
+      confirmLabel: "Clear history",
+      variant: "destructive",
+      onConfirm: () => {
+        void actionService.dispatch(
+          "worktree.sessions.clearHistory",
+          { worktreeId: worktree.id },
+          { source: "user" }
+        );
+        closeAndAnnounce(() => setConfirmDialog({ isOpen: false }), "Cleared session history");
+      },
+    });
+  }, [worktree.id, worktree.issueTitle, worktree.branch]);
+
   const handleResourceTeardown = useCallback(() => {
     const label = worktree.issueTitle ?? worktree.branch ?? worktree.name;
     const hasCommands = teardownCommands.length > 0;
@@ -346,6 +367,7 @@ export function useWorktreeActions({
     handleMaximizeAll,
     handleCloseAll,
     handleTerminateAll,
+    handleClearHistory,
     handleResourceTeardown,
     handleSelectAllAgents,
     handleSelectWaitingAgents,

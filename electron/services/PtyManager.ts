@@ -473,18 +473,26 @@ export class PtyManager extends EventEmitter {
             // has FS access but no WorkspaceClient, so resolve directly from
             // git with a short timeout; never let it block or fail the close.
             const branch = info.cwd ? getGitBranch(info.cwd) : null;
-            await persistAgentSession({
-              sessionId,
-              agentId: info.launchAgentId,
-              worktreeId: info.worktreeId ?? null,
-              title: info.lastObservedTitle ?? info.title ?? null,
-              projectId: info.projectId ?? null,
-              agentLaunchFlags: info.agentLaunchFlags,
-              agentModelId: info.agentModelId,
-              cwd: info.cwd ?? undefined,
-              branch: branch ?? undefined,
-              snapshot: exitSnapshot,
-            });
+            await persistAgentSession(
+              {
+                sessionId,
+                agentId: info.launchAgentId,
+                worktreeId: info.worktreeId ?? null,
+                title: info.lastObservedTitle ?? info.title ?? null,
+                projectId: info.projectId ?? null,
+                agentLaunchFlags: info.agentLaunchFlags,
+                agentModelId: info.agentModelId,
+                cwd: info.cwd ?? undefined,
+                branch: branch ?? undefined,
+                snapshot: exitSnapshot,
+              },
+              undefined,
+              // Defer age-eviction (0 = keep forever) — the pty-host has no store
+              // access to read the retention setting, so evicting here with the
+              // 30-day default would drop records a longer retention window wants
+              // to keep. The main-process list/prune paths enforce the real window.
+              0
+            );
           }
         } catch (err) {
           logError("[PtyManager] Failed to persist agent session on trash expiry", err);

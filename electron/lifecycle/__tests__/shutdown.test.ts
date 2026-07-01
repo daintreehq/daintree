@@ -14,6 +14,13 @@ vi.mock("../../services/pty/agentSessionHistory.js", () => ({
   persistAgentSession: persistAgentSessionMock,
 }));
 
+// Retention is read from the electron-store singleton, which isn't wired in
+// this unit test; stub the accessor so the shutdown journaling path gets a
+// plain value instead of touching the real store.
+vi.mock("../../services/pty/agentSessionRetention.js", () => ({
+  getAgentSessionRetentionDays: vi.fn(() => 30),
+}));
+
 const dialogMock = vi.hoisted(() => ({
   showMessageBox: vi.fn(),
 }));

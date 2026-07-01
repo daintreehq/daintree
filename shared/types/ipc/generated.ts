@@ -36,9 +36,17 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { worktreeId?: string | undefined }];
     result: void;
   };
+  "agent-session:get-retention": {
+    args: [];
+    result: import("./agentSessionHistory.js").AgentSessionRetentionDays;
+  };
   "agent-session:list": {
     args: [payload: { worktreeId?: string | undefined }];
     result: import("./agentSessionHistory.js").AgentSessionRecord[];
+  };
+  "agent-session:set-retention": {
+    args: [days: import("./agentSessionHistory.js").AgentSessionRetentionDays];
+    result: void;
   };
   "agent-settings:set-global": {
     args: [value: boolean];

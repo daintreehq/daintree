@@ -387,6 +387,7 @@ export function WorktreeCard({
     handleSelectWorkingAgents,
     handleCloseAll,
     handleTerminateAll,
+    handleClearHistory,
     handleResourceTeardown,
     hasSnapshot,
     handleRevertAgentChanges,
@@ -1060,6 +1061,7 @@ export function WorktreeCard({
                   onMaximizeAll: handleMaximizeAll,
                   onCloseAll: handleCloseAll,
                   onTerminateAll: handleTerminateAll,
+                  onClearHistory: handleClearHistory,
                   onResetRenderers: handleResetRenderers,
                   onSelectAllAgents: handleSelectAllAgents,
                   onSelectWaitingAgents: handleSelectWaitingAgents,
@@ -1230,6 +1232,7 @@ export function WorktreeCard({
           onMaximizeAll={handleMaximizeAll}
           onCloseAll={handleCloseAll}
           onTerminateAll={handleTerminateAll}
+          onClearHistory={handleClearHistory}
           onResetRenderers={handleResetRenderers}
           onSelectAllAgents={handleSelectAllAgents}
           onSelectWaitingAgents={handleSelectWaitingAgents}

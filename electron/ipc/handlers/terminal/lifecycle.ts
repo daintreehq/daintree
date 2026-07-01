@@ -13,7 +13,12 @@ import type * as McpServerServiceModule from "../../../services/McpServerService
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
 import { helpSessionService } from "../../../services/HelpSessionService.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
-import { TerminalSpawnOptionsSchema } from "../../../schemas/ipc.js";
+import {
+  TerminalSpawnOptionsSchema,
+  AgentSessionRetentionDaysSchema,
+} from "../../../schemas/ipc.js";
+import { store } from "../../../store.js";
+import type { AgentSessionRetentionDays } from "../../../../shared/types/ipc/agentSessionHistory.js";
 import { resolveDaintreeMcpTier } from "../../../../shared/types/project.js";
 import { DEFAULT_DANGEROUS_ARGS } from "../../../../shared/types/agentSettings.js";
 import {
@@ -78,7 +83,9 @@ import {
   listAgentSessions,
   clearAgentSessions,
   persistAgentSession,
+  pruneAgentSessions,
 } from "../../../services/pty/agentSessionHistory.js";
+import { getAgentSessionRetentionDays } from "../../../services/pty/agentSessionRetention.js";
 import type { WorkspaceClient } from "../../../services/WorkspaceClient.js";
 import { getDefaultShell } from "../../../services/pty/terminalShell.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
@@ -630,7 +637,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           branch,
           snapshot,
         },
-        app.getPath("userData")
+        app.getPath("userData"),
+        getAgentSessionRetentionDays()
       );
     } catch (err) {
       console.warn("[TerminalLifecycle] Failed to persist agent session on close:", err);
@@ -701,12 +709,35 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
 
   const handleAgentSessionList = async (payload: { worktreeId?: string }) => {
     const { app } = await import("electron");
-    return listAgentSessions(payload?.worktreeId, app.getPath("userData"));
+    return listAgentSessions(
+      payload?.worktreeId,
+      app.getPath("userData"),
+      getAgentSessionRetentionDays()
+    );
   };
 
   const handleAgentSessionClear = async (payload: { worktreeId?: string }): Promise<void> => {
     const { app } = await import("electron");
     await clearAgentSessions(payload?.worktreeId, app.getPath("userData"));
+  };
+
+  const handleAgentSessionGetRetention = async (): Promise<AgentSessionRetentionDays> =>
+    getAgentSessionRetentionDays();
+
+  const handleAgentSessionSetRetention = async (days: AgentSessionRetentionDays): Promise<void> => {
+    // Dot-path write — never spread-write the slice, which would bake current
+    // defaults to disk and freeze future default changes for existing users (#6106).
+    store.set("agentSessionHistory.retentionDays", days);
+    // Apply the (possibly tighter) window immediately rather than lazily on the
+    // next persist/list — mirrors helpAssistant's prune-on-write. Fire-and-forget:
+    // the write is best-effort and must not block the settings-save round-trip.
+    const { app } = await import("electron");
+    void pruneAgentSessions(days, app.getPath("userData")).catch((err) => {
+      console.warn(
+        "[TerminalLifecycle] Failed to prune agent sessions after retention change:",
+        err
+      );
+    });
   };
 
   const namespace = defineIpcNamespace({
@@ -722,6 +753,15 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       restartService: op(CHANNELS.TERMINAL_RESTART_SERVICE, handleTerminalRestartService),
       agentSessionList: op(CHANNELS.AGENT_SESSION_LIST, handleAgentSessionList),
       agentSessionClear: op(CHANNELS.AGENT_SESSION_CLEAR, handleAgentSessionClear),
+      agentSessionGetRetention: op(
+        CHANNELS.AGENT_SESSION_GET_RETENTION,
+        handleAgentSessionGetRetention
+      ),
+      agentSessionSetRetention: opValidated(
+        CHANNELS.AGENT_SESSION_SET_RETENTION,
+        AgentSessionRetentionDaysSchema,
+        handleAgentSessionSetRetention
+      ),
     },
   });
 
