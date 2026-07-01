@@ -38,7 +38,7 @@ import type { PanelInstance, TabGroup, TabGroupLocation } from "@shared/types/pa
 import {
   computeGridColumns,
   computeScrollRowHeight,
-  gridRowsOverflow,
+  gridRowsOverflowWithHysteresis,
   GRID_TRANSITION_DURATION_MS,
 } from "@/lib/terminalLayout";
 import {
@@ -580,7 +580,15 @@ export function useContentGridContext({
         // restored (#10827).
         if (isSidebarMeasurementLocked()) return;
         if (entry) {
-          const { width, height } = entry.contentRect;
+          // Read the same `clientWidth`/`clientHeight` (content-box + padding)
+          // the initial-mount and post-unlock paths use, rather than
+          // `entry.contentRect` (content-box, excludes padding). The gutter
+          // padding is now constant, but the three paths must still agree on
+          // box model so a re-subscription never jumps the measured size — the
+          // downstream `maxFeasibleCols`/`gridRowsOverflow` math subtracts
+          // `GRID_PADDING_PX` and expects the padding-inclusive dimension.
+          const width = container.clientWidth;
+          const height = container.clientHeight;
           setGridWidth((prev) => (prev === width ? prev : width));
           setGridHeight((prev) => (prev === height ? prev : height));
           setGridDimensions({ width, height });
@@ -672,6 +680,13 @@ export function useContentGridContext({
   // column change.
   const [hysteresisGridCols, setHysteresisGridCols] = useState<number | undefined>(undefined);
 
+  // Previous committed scroll-mode boolean, fed back into the row-overflow
+  // Schmitt trigger below. Held as state (not a ref) for the same reason as
+  // `hysteresisGridCols`: it is read during render (in the `isScrollMode`
+  // derivation) and the React Compiler disallows ref reads there. Settled in
+  // the same `useLayoutEffect` that settles `hysteresisGridCols`.
+  const [hysteresisScrollMode, setHysteresisScrollMode] = useState<boolean | undefined>(undefined);
+
   const gridCols = useMemo(() => {
     if (
       !maximizedId &&
@@ -710,7 +725,11 @@ export function useContentGridContext({
   // layout settles once the canonical commit clears `closingIds`.
   const scrollModeCount = tabGroups.length + closingIds.size;
   const scrollModeRows = gridCols > 0 ? Math.ceil(scrollModeCount / gridCols) : scrollModeCount;
-  const isScrollMode = gridRowsOverflow(scrollModeRows, gridHeight);
+  const isScrollMode = gridRowsOverflowWithHysteresis(
+    scrollModeRows,
+    gridHeight,
+    hysteresisScrollMode
+  );
   const scrollRowHeight = useMemo(() => computeScrollRowHeight(gridHeight), [gridHeight]);
 
   const layoutTransition: Transition = useMemo(
@@ -909,6 +928,12 @@ export function useContentGridContext({
     setHysteresisGridCols(
       layoutConfig.strategy === "automatic" && !showPlaceholder ? gridCols : undefined
     );
+
+    // Settle the scroll-mode Schmitt trigger unconditionally: unlike column
+    // hysteresis (automatic-strategy only), `isScrollMode` is computed for every
+    // layout strategy, so gating this on strategy would silently re-disable the
+    // row-overflow dead band for fixed-rows / fixed-columns layouts (#10871).
+    setHysteresisScrollMode(isScrollMode);
 
     if (isProjectSwitching || isDraggingRef.current) return;
 

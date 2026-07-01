@@ -119,7 +119,14 @@ export function ContentGridDefault({
                   // Reserve a real gutter on the right for the custom
                   // GridScrollbar so panels never sit under the handle. The
                   // native scrollbar is hidden in CSS; this is the only gutter.
-                  paddingRight: ctx.isScrollMode ? GRID_SCROLLBAR_GUTTER_PX : undefined,
+                  // Reserved unconditionally (not gated on `isScrollMode`):
+                  // toggling this padding mutated the content-box of the exact
+                  // `#panel-grid` div the ResizeObserver measures, so entering
+                  // scroll mode shrank the measured width, which could flip the
+                  // mode back — the self-referential oscillation in #10871.
+                  // GridScrollbar renders nothing when content doesn't overflow,
+                  // so in non-scroll mode this is just an inert blank strip.
+                  paddingRight: GRID_SCROLLBAR_GUTTER_PX,
                 }}
                 id="panel-grid"
                 data-grid-container="true"
