@@ -4,10 +4,12 @@ import { usePanelStore } from "@/store/panelStore";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { flushOptimisticCloses } from "@/services/terminal/optimisticPanelClose";
+import { buildResumePanelOptions } from "@/services/agentResume";
 import { getDefaultTitle } from "@/store/slices/panelRegistry/helpers";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
 import type { PtyPanelData, TerminalSpawnSource } from "@shared/types/panel";
+import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 export function registerTerminalSpawnActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -139,7 +141,8 @@ export function registerTerminalSpawnActions(
   actions.set("terminal.reopenLast", () => ({
     id: "terminal.reopenLast",
     title: "Reopen Last Closed",
-    description: "Restore the most recently trashed terminal",
+    description:
+      "Restore the most recently trashed terminal, or resume the most recent journaled agent session once the trash window has lapsed",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -148,7 +151,43 @@ export function registerTerminalSpawnActions(
       // Commit any in-flight optimistic close first — until it flushes the
       // panel isn't in `trashedTerminals` yet and restore would no-op.
       flushOptimisticCloses();
-      usePanelStore.getState().restoreLastTrashed();
+      // Fast path: restore from the in-memory trash while its window is open.
+      if (usePanelStore.getState().restoreLastTrashed()) return;
+
+      // Fallback: the trash window has lapsed. Resume the most recent journaled
+      // session for the active worktree. Scope to the active worktree so the
+      // resumed record's cwd matches the directory we launch into — session
+      // resume is directory-scoped (#4781); a globally-newest record could be
+      // relaunched into the wrong worktree.
+      const activeWorktreeId = callbacks.getActiveWorktreeId();
+      if (!activeWorktreeId) return;
+
+      const sessions = await (window.electron?.agentSessionHistory
+        ?.list(activeWorktreeId)
+        .catch(() => [] as AgentSessionRecord[]) ?? Promise.resolve([]));
+      const session = sessions[0];
+      if (!session) return;
+
+      const options = buildResumePanelOptions(session, {
+        cwd: callbacks.getDefaultCwd(),
+        worktreeId: activeWorktreeId,
+      });
+      if (!options) return;
+
+      // Records are non-destructive/unconsumed, so a repeat press would try to
+      // resume the same session again — concurrent transcript access. If a live
+      // panel already carries this session, focus it instead of respawning.
+      const state = usePanelStore.getState();
+      const existingId = state.panelIds.find((id) => {
+        const panel = state.panelsById[id];
+        return panel && panel.location !== "trash" && panel.agentSessionId === session.sessionId;
+      });
+      if (existingId) {
+        state.activateTerminal(existingId);
+        return;
+      }
+
+      await state.addPanel(options);
     },
   }));
 

@@ -4572,7 +4572,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Restore the most recently trashed terminal",
+    "description": "Restore the most recently trashed terminal, or resume the most recent journaled agent session once the trash window has lapsed",
     "examples": undefined,
     "id": "terminal.reopenLast",
     "keywords": undefined,

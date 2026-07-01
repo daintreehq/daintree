@@ -232,7 +232,10 @@ export interface PanelGridState
   detachTerminalsForProjectSwitch: () => void;
   clearTerminalStoreForSwitch: () => void;
   lastClosedConfig: AddPanelOptions | null;
-  restoreLastTrashed: () => void;
+  /** Restores the most recently trashed terminal. Returns `false` when the
+   * trash is empty (nothing restored) so callers can fall back to another
+   * source (e.g. the resume journal). */
+  restoreLastTrashed: () => boolean;
 }
 
 /**
@@ -830,7 +833,7 @@ export const usePanelStore = create<PanelGridState>()(
       restoreLastTrashed: () => {
         const trashedTerminals = get().trashedTerminals;
         const trashedIds = Array.from(trashedTerminals.keys());
-        if (trashedIds.length === 0) return;
+        if (trashedIds.length === 0) return false;
 
         const lastId = trashedIds[trashedIds.length - 1]!;
         const lastTrashed = trashedTerminals.get(lastId);
@@ -840,6 +843,7 @@ export const usePanelStore = create<PanelGridState>()(
         } else {
           get().restoreTerminal(lastId);
         }
+        return true;
       },
 
       moveTerminalToPosition: (

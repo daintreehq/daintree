@@ -7,11 +7,20 @@ const layoutUndoMock = vi.hoisted(() => ({
   getState: vi.fn(() => ({ pushLayoutSnapshot: vi.fn() })),
 }));
 const buildPanelDuplicateOptionsMock = vi.hoisted(() => vi.fn());
+const flushOptimisticClosesMock = vi.hoisted(() => vi.fn());
+const buildResumePanelOptionsMock = vi.hoisted(() => vi.fn());
+const listAgentSessionsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
 vi.mock("@/store/layoutUndoStore", () => ({ useLayoutUndoStore: layoutUndoMock }));
 vi.mock("@/services/terminal/panelDuplicationService", () => ({
   buildPanelDuplicateOptions: buildPanelDuplicateOptionsMock,
+}));
+vi.mock("@/services/terminal/optimisticPanelClose", () => ({
+  flushOptimisticCloses: flushOptimisticClosesMock,
+}));
+vi.mock("@/services/agentResume", () => ({
+  buildResumePanelOptions: buildResumePanelOptionsMock,
 }));
 
 vi.mock("@shared/config/panelKindRegistry", () => ({
@@ -44,11 +53,12 @@ vi.mock("@shared/config/panelKindRegistry", () => ({
 
 import { registerTerminalSpawnActions } from "../terminalSpawnActions";
 
-function setupActions() {
+function setupActions(overrides?: { activeWorktreeId?: string | undefined }) {
   const actions: ActionRegistry = new Map();
   const callbacks: ActionCallbacks = {
     getDefaultCwd: () => "/cwd",
-    getActiveWorktreeId: () => "wt-1",
+    getActiveWorktreeId: () =>
+      "activeWorktreeId" in (overrides ?? {}) ? overrides!.activeWorktreeId : "wt-1",
   } as unknown as ActionCallbacks;
   registerTerminalSpawnActions(actions, callbacks);
   return async (id: string, args?: unknown): Promise<unknown> => {
@@ -66,6 +76,7 @@ type MockPanel = {
   launchAgentId?: string;
   detectedAgentId?: string;
   title?: string;
+  agentSessionId?: string;
 };
 
 function setPanelState(options: {
@@ -73,6 +84,8 @@ function setPanelState(options: {
   panels?: MockPanel[];
   addPanel?: ReturnType<typeof vi.fn>;
   lastClosedConfig?: AddPanelOptions | null;
+  restoreLastTrashed?: ReturnType<typeof vi.fn>;
+  activateTerminal?: ReturnType<typeof vi.fn>;
 }) {
   const panels = options.panels ?? [];
   const panelsById: Record<string, MockPanel> = {};
@@ -83,11 +96,18 @@ function setPanelState(options: {
     panelsById,
     addPanel: options.addPanel ?? vi.fn().mockResolvedValue(undefined),
     lastClosedConfig: options.lastClosedConfig ?? null,
+    restoreLastTrashed: options.restoreLastTrashed ?? vi.fn().mockReturnValue(false),
+    activateTerminal: options.activateTerminal ?? vi.fn(),
   });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  listAgentSessionsMock.mockResolvedValue([]);
+  (globalThis as unknown as { window: { electron: unknown } }).window = {
+    ...(globalThis as unknown as { window?: object }).window,
+    electron: { agentSessionHistory: { list: listAgentSessionsMock } },
+  };
   // Mirror the real buildPanelDuplicateOptions: browser panels don't carry a title
   // into the returned options (see panelDuplicationService.ts). All other kinds
   // seed options.title from the source panel.
@@ -350,5 +370,162 @@ describe("terminal.duplicate (copy) suffix", () => {
     await run("terminal.duplicate");
 
     expect(addPanel.mock.calls[0]![0].title).toBe("My App (copy)");
+  });
+});
+
+describe("terminal.reopenLast journal fallback", () => {
+  const resumeOptions = {
+    kind: "terminal" as const,
+    launchAgentId: "claude",
+    title: "Claude",
+    cwd: "/cwd",
+    worktreeId: "wt-1",
+    command: "claude --resume s-1",
+    location: "grid" as const,
+    agentSessionId: "s-1",
+  };
+  const session = {
+    sessionId: "s-1",
+    agentId: "claude",
+    worktreeId: "wt-1",
+    title: "Claude",
+    projectId: null,
+    savedAt: 1000,
+  };
+
+  it("flushes optimistic closes then restores from trash without touching the journal", async () => {
+    const addPanel = vi.fn().mockResolvedValue(undefined);
+    const restoreLastTrashed = vi.fn().mockReturnValue(true);
+    setPanelState({ panels: [], addPanel, restoreLastTrashed });
+    const run = setupActions();
+
+    await run("terminal.reopenLast");
+
+    expect(flushOptimisticClosesMock).toHaveBeenCalledTimes(1);
+    expect(restoreLastTrashed).toHaveBeenCalledTimes(1);
+    expect(listAgentSessionsMock).not.toHaveBeenCalled();
+    expect(buildResumePanelOptionsMock).not.toHaveBeenCalled();
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("resumes the most recent journaled session (scoped to active worktree) when trash is empty", async () => {
+    const addPanel = vi.fn().mockResolvedValue(undefined);
+    setPanelState({
+      panels: [],
+      addPanel,
+      restoreLastTrashed: vi.fn().mockReturnValue(false),
+    });
+    // Newest-first: only the first record should be resumed.
+    listAgentSessionsMock.mockResolvedValue([session, { ...session, sessionId: "s-old" }]);
+    buildResumePanelOptionsMock.mockReturnValue(resumeOptions);
+    const run = setupActions();
+
+    await run("terminal.reopenLast");
+
+    expect(listAgentSessionsMock).toHaveBeenCalledWith("wt-1");
+    expect(buildResumePanelOptionsMock).toHaveBeenCalledWith(session, {
+      cwd: "/cwd",
+      worktreeId: "wt-1",
+    });
+    expect(addPanel).toHaveBeenCalledWith(resumeOptions);
+  });
+
+  it("no-ops when there is no active worktree (never picks a global record)", async () => {
+    const addPanel = vi.fn().mockResolvedValue(undefined);
+    setPanelState({
+      panels: [],
+      addPanel,
+      restoreLastTrashed: vi.fn().mockReturnValue(false),
+    });
+    const run = setupActions({ activeWorktreeId: undefined });
+
+    await run("terminal.reopenLast");
+
+    expect(listAgentSessionsMock).not.toHaveBeenCalled();
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("no-ops when the journal is empty", async () => {
+    const addPanel = vi.fn().mockResolvedValue(undefined);
+    setPanelState({
+      panels: [],
+      addPanel,
+      restoreLastTrashed: vi.fn().mockReturnValue(false),
+    });
+    listAgentSessionsMock.mockResolvedValue([]);
+    const run = setupActions();
+
+    await run("terminal.reopenLast");
+
+    expect(buildResumePanelOptionsMock).not.toHaveBeenCalled();
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("swallows a journal list rejection without spawning", async () => {
+    const addPanel = vi.fn().mockResolvedValue(undefined);
+    setPanelState({
+      panels: [],
+      addPanel,
+      restoreLastTrashed: vi.fn().mockReturnValue(false),
+    });
+    listAgentSessionsMock.mockRejectedValue(new Error("ipc down"));
+    const run = setupActions();
+
+    await expect(run("terminal.reopenLast")).resolves.toBeUndefined();
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("no-ops when the record can't build resume options", async () => {
+    const addPanel = vi.fn().mockResolvedValue(undefined);
+    setPanelState({
+      panels: [],
+      addPanel,
+      restoreLastTrashed: vi.fn().mockReturnValue(false),
+    });
+    listAgentSessionsMock.mockResolvedValue([session]);
+    buildResumePanelOptionsMock.mockReturnValue(null);
+    const run = setupActions();
+
+    await run("terminal.reopenLast");
+
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("focuses an already-open panel with the same session instead of spawning a duplicate", async () => {
+    const addPanel = vi.fn().mockResolvedValue(undefined);
+    const activateTerminal = vi.fn();
+    setPanelState({
+      panels: [{ id: "p-live", location: "grid", kind: "terminal", agentSessionId: "s-1" }],
+      addPanel,
+      activateTerminal,
+      restoreLastTrashed: vi.fn().mockReturnValue(false),
+    });
+    listAgentSessionsMock.mockResolvedValue([session]);
+    buildResumePanelOptionsMock.mockReturnValue(resumeOptions);
+    const run = setupActions();
+
+    await run("terminal.reopenLast");
+
+    expect(activateTerminal).toHaveBeenCalledWith("p-live");
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("ignores a trashed panel with the same session and spawns a fresh resume", async () => {
+    const addPanel = vi.fn().mockResolvedValue(undefined);
+    const activateTerminal = vi.fn();
+    setPanelState({
+      panels: [{ id: "p-trash", location: "trash", kind: "terminal", agentSessionId: "s-1" }],
+      addPanel,
+      activateTerminal,
+      restoreLastTrashed: vi.fn().mockReturnValue(false),
+    });
+    listAgentSessionsMock.mockResolvedValue([session]);
+    buildResumePanelOptionsMock.mockReturnValue(resumeOptions);
+    const run = setupActions();
+
+    await run("terminal.reopenLast");
+
+    expect(activateTerminal).not.toHaveBeenCalled();
+    expect(addPanel).toHaveBeenCalledWith(resumeOptions);
   });
 });
