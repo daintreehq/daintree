@@ -9,7 +9,6 @@ import { getDefaultTitle } from "@/store/slices/panelRegistry/helpers";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
 import type { PtyPanelData, TerminalSpawnSource } from "@shared/types/panel";
-import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 
 // Guards the async journal-resume fallback of `terminal.reopenLast` against a
 // second dispatch racing the first's pending `list`/`addPanel` — two rapid
@@ -180,7 +179,7 @@ export function registerTerminalSpawnActions(
       try {
         const sessions = await (window.electron?.agentSessionHistory
           ?.list(activeWorktreeId)
-          .catch(() => [] as AgentSessionRecord[]) ?? Promise.resolve([]));
+          .catch(() => []) ?? Promise.resolve([]));
         const session = sessions[0];
         if (!session) return;
 
