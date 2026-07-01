@@ -12,33 +12,18 @@ import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 
 interface ResumeSessionRowProps {
   item: ResumeSessionItem;
-  index: number;
   isSelected: boolean;
   matches: readonly FuseResultMatch[] | undefined;
   onSelect: (item: ResumeSessionItem) => void;
-  onHoverIndex: (index: number) => void;
   itemRef: (el: HTMLElement | null) => void;
 }
 
-function ResumeSessionRow({
-  item,
-  index,
-  isSelected,
-  matches,
-  onSelect,
-  onHoverIndex,
-  itemRef,
-}: ResumeSessionRowProps) {
+function ResumeSessionRow({ item, isSelected, matches, onSelect, itemRef }: ResumeSessionRowProps) {
   return (
     <button
       id={`resume-session-option-${item.id}`}
       tabIndex={-1}
       onPointerDown={(e) => e.preventDefault()}
-      onPointerMove={() => {
-        // Stale rows aren't launchable — don't let hover move selection onto
-        // them (it would paint the accent bar on an aria-disabled option).
-        if (!item.isStale) onHoverIndex(index);
-      }}
       role="option"
       aria-selected={isSelected}
       aria-disabled={item.isStale || undefined}
@@ -86,7 +71,6 @@ export function ResumeSessionsPalette() {
     selectedIndex,
     matchesById,
     setQuery,
-    setSelectedIndex,
     selectPrevious,
     selectNext,
     close,
@@ -173,11 +157,9 @@ export function ResumeSessionsPalette() {
       <ResumeSessionRow
         key={item.id}
         item={item}
-        index={index}
         isSelected={index === selectedIndex}
         matches={matchesById.get(item.id)}
         onSelect={launch}
-        onHoverIndex={setSelectedIndex}
         itemRef={setItemRef(item.id)}
       />
     );
