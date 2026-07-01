@@ -10,7 +10,6 @@ import {
   Palette,
   AlertTriangle,
   WandSparkles,
-  Camera,
 } from "lucide-react";
 import { FolderGit2, McpServerIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
@@ -94,8 +93,6 @@ interface GeneralTabProps {
   onTurbopackEnabledChange: (value: boolean) => void;
   daintreeMcpTier: DaintreeMcpTier;
   onDaintreeMcpTierChange: (value: DaintreeMcpTier) => void;
-  exitSnapshotExcluded: boolean;
-  onExitSnapshotExcludedChange: (value: boolean) => void;
   projectIconSvg: string | undefined;
   onProjectIconSvgChange: (value: string | undefined) => void;
   enableInRepoSettings: (projectId: string) => Promise<Project>;
@@ -120,8 +117,6 @@ export function GeneralTab({
   onTurbopackEnabledChange,
   daintreeMcpTier,
   onDaintreeMcpTierChange,
-  exitSnapshotExcluded,
-  onExitSnapshotExcludedChange,
   projectIconSvg,
   onProjectIconSvgChange,
   enableInRepoSettings,
@@ -571,35 +566,6 @@ export function GeneralTab({
               </div>
             </div>
           )}
-        </div>
-      </div>
-
-      <div className="mb-6 pb-6 border-b border-daintree-border">
-        <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
-          <Camera className="h-4 w-4" />
-          Exit snapshots
-        </h3>
-        <p className="text-xs text-daintree-text/60 mb-4">
-          When exit snapshots are enabled globally (Settings → Privacy &amp; data), a short
-          secret-scrubbed tail of agent output is saved on close. Exclude this project to keep its
-          sessions out of that capture.
-        </p>
-
-        <div className="flex items-center gap-2">
-          <input
-            id="exit-snapshot-excluded"
-            type="checkbox"
-            checked={exitSnapshotExcluded}
-            onChange={(e) => onExitSnapshotExcludedChange(e.target.checked)}
-            className="h-4 w-4 rounded border-daintree-border accent-daintree-accent cursor-pointer"
-            aria-label="Exclude this project from exit snapshots"
-          />
-          <label
-            htmlFor="exit-snapshot-excluded"
-            className="text-xs text-daintree-text/60 cursor-pointer select-none"
-          >
-            Exclude this project from exit snapshots
-          </label>
         </div>
       </div>
 

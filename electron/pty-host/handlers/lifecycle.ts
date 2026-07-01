@@ -144,7 +144,7 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
 
     "graceful-kill": async (msg) => {
       const killedPid = ptyManager.getTerminal(msg.id)?.ptyProcess.pid;
-      const { sessionId, exitSnapshot } = await ptyManager.gracefulKill(msg.id);
+      const { sessionId } = await ptyManager.gracefulKill(msg.id);
       if (isValidPid(killedPid)) {
         resourceGovernor.trackKilledPid(killedPid);
       }
@@ -153,7 +153,6 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
         requestId: msg.requestId,
         id: msg.id,
         agentSessionId: sessionId,
-        exitSnapshot,
       });
     },
 

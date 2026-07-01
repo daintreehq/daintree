@@ -101,14 +101,32 @@ function evictRecords(
   return result;
 }
 
+/**
+ * Normalize parsed journal JSON into records, dropping the legacy `snapshot`
+ * key. The exit-snapshot feature (#10850/#10855) was removed; journals written
+ * while it was enabled still carry a `snapshot` tail on disk. Stripping it on
+ * read means no consumer can resurface removed data — notably the MCP
+ * `agentSessionHistory.list` action, whose raw result is serialized without
+ * `resultSchema` parsing — and the next `persistAgentSession`/`pruneAgentSessions`
+ * rewrite purges it from disk, so the file self-heals without a versioned migration.
+ */
+function normalizeRecords(parsed: unknown): AgentSessionRecord[] {
+  if (!Array.isArray(parsed)) return [];
+  return parsed.map((raw) => {
+    if (raw && typeof raw === "object" && "snapshot" in raw) {
+      const { snapshot: _snapshot, ...rest } = raw as Record<string, unknown>;
+      return rest as unknown as AgentSessionRecord;
+    }
+    return raw as AgentSessionRecord;
+  });
+}
+
 export function readSessionHistorySync(userData?: string): AgentSessionRecord[] {
   const filePath = getSessionHistoryPath(userData);
   if (!filePath) return [];
   try {
     const content = readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(content);
-    if (!Array.isArray(parsed)) return [];
-    return parsed as AgentSessionRecord[];
+    return normalizeRecords(JSON.parse(content));
   } catch {
     return [];
   }
@@ -119,9 +137,7 @@ export async function readSessionHistory(userData?: string): Promise<AgentSessio
   if (!filePath) return [];
   try {
     const content = await readFile(filePath, "utf8");
-    const parsed = JSON.parse(content);
-    if (!Array.isArray(parsed)) return [];
-    return parsed as AgentSessionRecord[];
+    return normalizeRecords(JSON.parse(content));
   } catch {
     return [];
   }
@@ -160,29 +176,6 @@ export function listAgentSessions(
 
   if (!worktreeId) return fresh;
   return fresh.filter((r) => r.worktreeId === worktreeId);
-}
-
-/**
- * Look up a single closed session by `sessionId` and return its captured
- * scrollback snapshot (#10855). Reuses `listAgentSessions` — not raw
- * `readSessionHistory` — so retention-eviction and per-worktree-cap semantics
- * stay identical to the `list` action: a record aged past the user's retention
- * window (but not yet physically pruned from disk) must not leak its snapshot
- * here. `found` distinguishes "no such session" from "session exists but has no
- * snapshot" (opt-out, excluded project, or a pre-#10850 record). An empty-string
- * snapshot is preserved as-is; only a truly-absent (`undefined`) snapshot maps
- * to `null`.
- */
-export function getAgentSessionSnapshot(
-  sessionId: string,
-  userData?: string,
-  retentionDays?: AgentSessionRetentionDays
-): { found: boolean; snapshot: string | null } {
-  const record = listAgentSessions(undefined, userData, retentionDays).find(
-    (r) => r.sessionId === sessionId
-  );
-  if (!record) return { found: false, snapshot: null };
-  return { found: true, snapshot: record.snapshot ?? null };
 }
 
 /**

@@ -58,7 +58,6 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   const [devServerLoadTimeout, setDevServerLoadTimeout] = useState<number | undefined>(undefined);
   const [turbopackEnabled, setTurbopackEnabled] = useState<boolean>(true);
   const [daintreeMcpTier, setDaintreeMcpTier] = useState<DaintreeMcpTier>("off");
-  const [exitSnapshotExcluded, setExitSnapshotExcluded] = useState<boolean>(false);
   const [commandOverrides, setCommandOverrides] = useState<CommandOverride[]>([]);
   const [copyTreeSettings, setCopyTreeSettings] = useState<CopyTreeSettings>({});
   const [branchPrefixMode, setBranchPrefixMode] = useState<"none" | "username" | "custom">("none");
@@ -151,8 +150,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       defaultWorktreeMode,
       turbopackEnabled,
       daintreeMcpTier,
-      forgeProviderOverride,
-      exitSnapshotExcluded
+      forgeProviderOverride
     );
   }, [
     projectName,
@@ -180,7 +178,6 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     turbopackEnabled,
     daintreeMcpTier,
     forgeProviderOverride,
-    exitSnapshotExcluded,
   ]);
   useEffect(() => {
     currentProjectSnapshotRef.current = currentProjectSnapshot;
@@ -204,7 +201,6 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       setDevServerLoadTimeout(undefined);
       setTurbopackEnabled(true);
       setDaintreeMcpTier("off");
-      setExitSnapshotExcluded(false);
       setCommandOverrides([]);
       setCopyTreeSettings({});
       setProjectAutoSaveError(null);
@@ -243,7 +239,6 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     const initialDevServerLoadTimeout = projectSettings.devServerLoadTimeout;
     const initialTurbopackEnabled = projectSettings.turbopackEnabled ?? true;
     const initialDaintreeMcpTier = resolveDaintreeMcpTier(projectSettings);
-    const initialExitSnapshotExcluded = projectSettings.exitSnapshotExcluded === true;
     const initialCommandOverrides = projectSettings.commandOverrides || [];
     const initialCopyTreeSettings = projectSettings.copyTreeSettings || {};
     const initialBranchPrefixMode = projectSettings.branchPrefixMode ?? "none";
@@ -282,7 +277,6 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     setDevServerLoadTimeout(initialDevServerLoadTimeout);
     setTurbopackEnabled(initialTurbopackEnabled);
     setDaintreeMcpTier(initialDaintreeMcpTier);
-    setExitSnapshotExcluded(initialExitSnapshotExcluded);
     setCommandOverrides(initialCommandOverrides);
     setCopyTreeSettings(initialCopyTreeSettings);
     setBranchPrefixMode(initialBranchPrefixMode);
@@ -329,8 +323,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       initialDefaultWorktreeMode,
       initialTurbopackEnabled,
       initialDaintreeMcpTier,
-      initialForgeProviderOverride,
-      initialExitSnapshotExcluded
+      initialForgeProviderOverride
     );
     setProjectIsInitialized(true);
   }, [projectSettings, isOpen, projectIsInitialized, currentProject, projectIsLoading, projectId]);
@@ -419,7 +412,6 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
         turbopackEnabled: turbopackEnabled === true ? undefined : false,
         daintreeMcpTier: daintreeMcpTier !== "off" ? daintreeMcpTier : undefined,
         exposeDaintreeMcpToAgents: undefined,
-        exitSnapshotExcluded: exitSnapshotExcluded ? true : undefined,
         commandOverrides: commandOverrides.length > 0 ? commandOverrides : undefined,
         copyTreeSettings: hasCopyTreeSettings ? sanitizedCopyTreeSettings : undefined,
         branchPrefixMode: effectivePrefixMode !== "none" ? effectivePrefixMode : undefined,
@@ -500,8 +492,6 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     setTurbopackEnabled,
     daintreeMcpTier,
     setDaintreeMcpTier,
-    exitSnapshotExcluded,
-    setExitSnapshotExcluded,
     commandOverrides,
     setCommandOverrides,
     copyTreeSettings,

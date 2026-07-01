@@ -486,51 +486,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     run: async (args: unknown) => {
       const { worktreeId } = (args ?? {}) as { worktreeId?: string };
       const sessions = await window.electron.agentSessionHistory.list(worktreeId);
-      // Strip the raw `snapshot` from the bulk listing so the runtime output
-      // matches the declared resultSchema (AgentSessionRecordSchema omits it)
-      // and the list stays a lean index for choosing a session to resume. The
-      // full scrollback is fetched deliberately, one record at a time, via
-      // `agentSessionHistory.getSnapshot` (#10855) — returning it here would
-      // dump every session's captured scrollback (up to 32KB each) in a single
-      // call, defeating the scoped accessor and flooding the caller.
-      const lean = sessions.map(({ snapshot: _snapshot, ...rest }) => rest);
-      return { sessions: lean };
-    },
-  }));
-
-  actions.set("agentSessionHistory.getSnapshot", () => ({
-    id: "agentSessionHistory.getSnapshot",
-    title: "Get Closed Session Snapshot",
-    description:
-      'Fetch the captured terminal snapshot for one closed agent session, identified by `sessionId` (from `agentSessionHistory.list`). The snapshot is a faithful, verbatim slice of the session\'s final scrollback captured at close time — NOT a summary or interpretation of what happened. Use it to preview a closed session before deciding whether to relaunch it. Args: `sessionId` (required) — the id of the closed session. Returns { sessionId, found, snapshot }: `found` is false when no session matches the id; `found` is true with `snapshot: null` when the session exists but has no captured snapshot (snapshot capture disabled, project excluded, or a record predating the feature); `found` is true with `snapshot: "…"` (verbatim text) on success. Never errors — returns { found: false, snapshot: null } for an unknown id.',
-    category: "agent",
-    kind: "query",
-    danger: "safe",
-    scope: "renderer",
-    argsSchema: z.object({
-      sessionId: z
-        .string()
-        .min(1)
-        .describe(
-          "The id of the closed session to fetch the snapshot for (from agentSessionHistory.list)."
-        ),
-    }),
-    examples: [
-      {
-        args: { sessionId: "abc-123" },
-        description: "Preview the captured snapshot of a closed session before relaunching it",
-      },
-    ],
-    resultSchema: z.object({
-      sessionId: z.string(),
-      found: z.boolean(),
-      snapshot: z.string().nullable(),
-    }),
-    mcpOutputSchema: true,
-    run: async (args: unknown) => {
-      const { sessionId } = args as { sessionId: string };
-      const result = await window.electron.agentSessionHistory.getSnapshot(sessionId);
-      return { sessionId, ...result };
+      return { sessions };
     },
   }));
 

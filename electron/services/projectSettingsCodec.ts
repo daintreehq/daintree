@@ -443,10 +443,6 @@ export function decode(raw: unknown): ProjectSettingsDecodeResult {
       typeof migrated.cloudSyncWarningDismissed === "boolean"
         ? migrated.cloudSyncWarningDismissed
         : undefined,
-    exitSnapshotExcluded:
-      typeof migrated.exitSnapshotExcluded === "boolean"
-        ? migrated.exitSnapshotExcluded
-        : undefined,
     devServerLoadTimeout: decodeDevServerLoadTimeout(migrated.devServerLoadTimeout),
     turbopackEnabled:
       typeof migrated.turbopackEnabled === "boolean" ? migrated.turbopackEnabled : undefined,
@@ -528,6 +524,9 @@ export function encodeEnvelope(settings: ProjectSettings): Record<string, unknow
   delete persistable.exposeDaintreeMcpToAgents;
   delete persistable.githubRemote;
   delete persistable.agentInstructions;
+  // Removed exit-snapshot feature (#10850/#10855): drop any stale opt-out flag a
+  // passthrough save payload might still carry so it never re-lands on disk.
+  delete persistable.exitSnapshotExcluded;
   delete persistable._schemaVersion;
 
   return {
@@ -561,7 +560,6 @@ export const ProjectSettingsSaveSchema = z
     devServerDismissed: z.boolean().optional(),
     devServerAutoDetected: z.boolean().optional(),
     cloudSyncWarningDismissed: z.boolean().optional(),
-    exitSnapshotExcluded: z.boolean().optional(),
     devServerLoadTimeout: z.number().optional(),
     turbopackEnabled: z.boolean().optional(),
     copyTreeSettings: z.unknown().optional(),

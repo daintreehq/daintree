@@ -210,7 +210,6 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
     case "graceful-kill-result":
       broker.resolve(event.requestId, {
         sessionId: event.agentSessionId ?? null,
-        exitSnapshot: event.exitSnapshot,
       });
       return true;
 

@@ -454,25 +454,6 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "agent",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Fetch the captured terminal snapshot for one closed agent session, identified by \`sessionId\` (from \`agentSessionHistory.list\`). The snapshot is a faithful, verbatim slice of the session's final scrollback captured at close time — NOT a summary or interpretation of what happened. Use it to preview a closed session before deciding whether to relaunch it. Args: \`sessionId\` (required) — the id of the closed session. Returns { sessionId, found, snapshot }: \`found\` is false when no session matches the id; \`found\` is true with \`snapshot: null\` when the session exists but has no captured snapshot (snapshot capture disabled, project excluded, or a record predating the feature); \`found\` is true with \`snapshot: "…"\` (verbatim text) on success. Never errors — returns { found: false, snapshot: null } for an unknown id.",
-    "examples": [
-      {
-        "args": {
-          "sessionId": "abc-123",
-        },
-        "description": "Preview the captured snapshot of a closed session before relaunching it",
-      },
-    ],
-    "id": "agentSessionHistory.getSnapshot",
-    "keywords": undefined,
-    "kind": "query",
-    "requiresArgs": true,
-    "title": "Get Closed Session Snapshot",
-  },
-  {
-    "category": "agent",
-    "danger": "safe",
-    "dangerRationale": undefined,
     "description": "List resumable agent sessions from the on-disk journal — the closed sessions the user can relaunch. This is a faithful record listing, NOT a summary of what happened in each session. Args: \`worktreeId\` (optional) — restrict to one worktree; omit to list every resumable session across all worktrees and projects (the default). Returns { sessions: [{ sessionId, agentId, worktreeId, title, projectId, savedAt (epoch ms; the list is newest-first), agentLaunchFlags?, agentModelId?, cwd?, branch? }] }, capped and pruned by the journal's retention policy. Never errors — returns { sessions: [] } when the journal is empty or unreadable. To relaunch a listed session, feed its \`agentId\`/\`cwd\`/\`worktreeId\`/\`agentLaunchFlags\`/\`agentModelId\` into \`agent.launch\`.",
     "examples": [
       {
@@ -4880,18 +4861,6 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "kind": "command",
     "requiresArgs": true,
     "title": "Set Cached Project Views",
-  },
-  {
-    "category": "settings",
-    "danger": "safe",
-    "dangerRationale": undefined,
-    "description": "Capture an opt-in exit snapshot of closed agent sessions — a bounded, secret-scrubbed tail of the terminal output",
-    "examples": undefined,
-    "id": "terminalConfig.setExitSnapshot",
-    "keywords": undefined,
-    "kind": "command",
-    "requiresArgs": true,
-    "title": "Set Exit Snapshot Capture",
   },
   {
     "category": "settings",

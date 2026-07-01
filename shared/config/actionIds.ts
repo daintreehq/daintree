@@ -134,7 +134,6 @@ export const BUILT_IN_ACTION_IDS = [
   "terminalConfig.setHybridInputAutoFocus",
   "terminalConfig.setScreenReaderMode",
   "terminalConfig.setCachedProjectViews",
-  "terminalConfig.setExitSnapshot",
 
   // -- worktreeConfigActions --
   "worktreeConfig.get",
@@ -314,7 +313,6 @@ export const BUILT_IN_ACTION_IDS = [
   "agent.getState",
   "agent.listToolbar",
   "agentSessionHistory.list",
-  "agentSessionHistory.getSnapshot",
 
   // -- app settings (other) --
   "app.settings.openTab",

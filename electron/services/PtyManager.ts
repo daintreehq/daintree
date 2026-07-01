@@ -33,8 +33,6 @@ import { computeSpawnContext, acquirePtyProcess } from "./pty/terminalSpawn.js";
 import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
 import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
 import { persistAgentSession } from "./pty/agentSessionHistory.js";
-import { shouldCaptureExitSnapshot } from "./pty/exitSnapshotConfig.js";
-import { prepareExitSnapshot } from "./pty/exitSnapshot.js";
 import { getGitBranch } from "../utils/gitUtils.js";
 import type { GracefulKillResult } from "../../shared/types/pty-host.js";
 
@@ -467,7 +465,7 @@ export class PtyManager extends EventEmitter {
 
       void (async () => {
         try {
-          const { sessionId, exitSnapshot } = await this.gracefulKill(termId);
+          const { sessionId } = await this.gracefulKill(termId);
           if (sessionId && info?.launchAgentId) {
             // Best-effort branch stamp for resume sanity checks. The pty-host
             // has FS access but no WorkspaceClient, so resolve directly from
@@ -484,7 +482,6 @@ export class PtyManager extends EventEmitter {
                 agentModelId: info.agentModelId,
                 cwd: info.cwd ?? undefined,
                 branch: branch ?? undefined,
-                snapshot: exitSnapshot,
               },
               undefined,
               // Defer age-eviction (0 = keep forever) — the pty-host has no store
@@ -813,11 +810,6 @@ export class PtyManager extends EventEmitter {
     const terminal = this.registry.get(id);
     if (!terminal) return { sessionId: null };
 
-    // Capture the opt-in exit snapshot BEFORE gracefulShutdown() — it kills the
-    // terminal internally, which disposes the headless buffer we read from
-    // (#10850). Cheap in-memory scan; gated so it only runs when enabled.
-    const exitSnapshot = this.captureExitSnapshotIfEnabled(terminal);
-
     const sessionId = await terminal.gracefulShutdown();
 
     // gracefulShutdown() calls kill() internally when it has a shutdown config.
@@ -827,32 +819,7 @@ export class PtyManager extends EventEmitter {
       this.kill(id, "graceful-kill-fallback", options);
     }
 
-    return { sessionId, exitSnapshot };
-  }
-
-  /**
-   * Capture and prepare an exit snapshot for a closing terminal when the opt-in
-   * toggle is on and the project isn't excluded (#10850). Best-effort: any
-   * failure returns undefined and never blocks the close.
-   */
-  private captureExitSnapshotIfEnabled(terminal: TerminalProcess): string | undefined {
-    const info = terminal.getInfo();
-    if (
-      !shouldCaptureExitSnapshot({ launchAgentId: info.launchAgentId, projectId: info.projectId })
-    ) {
-      return undefined;
-    }
-    try {
-      const raw = terminal.captureExitSnapshotText();
-      if (!raw) return undefined;
-      const prepared = prepareExitSnapshot(raw);
-      return prepared || undefined;
-    } catch (err) {
-      logWarn(`Failed to capture exit snapshot for terminal ${terminal.id}`, {
-        error: String(err),
-      });
-      return undefined;
-    }
+    return { sessionId };
   }
 
   /**
@@ -861,7 +828,7 @@ export class PtyManager extends EventEmitter {
   async gracefulKillByProject(
     projectId: string,
     options?: { preserveSession?: boolean }
-  ): Promise<Array<{ id: string; agentSessionId: string | null; exitSnapshot?: string }>> {
+  ): Promise<Array<{ id: string; agentSessionId: string | null }>> {
     const terminalIds = this.registry.getForProject(projectId);
     if (terminalIds.length === 0) return [];
 
@@ -870,8 +837,8 @@ export class PtyManager extends EventEmitter {
     const results = await Promise.all(
       terminalIds.map(async (terminalId) => {
         try {
-          const { sessionId, exitSnapshot } = await this.gracefulKill(terminalId, options);
-          return { id: terminalId, agentSessionId: sessionId, exitSnapshot };
+          const { sessionId } = await this.gracefulKill(terminalId, options);
+          return { id: terminalId, agentSessionId: sessionId };
         } catch (error) {
           logError(`Failed to graceful-kill terminal ${terminalId}`, error);
           try {

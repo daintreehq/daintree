@@ -205,12 +205,6 @@ export class PtyClient extends EventEmitter {
   private terminalPids: Map<string, number> = new Map();
   private resourceMonitoringEnabled = false;
   private sessionPersistSuppressed = false;
-  // Opt-in exit-snapshot config (#10850), cached so a (re)started host re-syncs
-  // on ready — sends before ready are dropped, and the default is OFF, so
-  // without replay an enabled toggle would silently stop capturing after a
-  // host restart. `excluded` is the full set of opted-out project ids.
-  private exitSnapshotEnabled = false;
-  private exitSnapshotExcludedProjectIds: string[] = [];
   // Cached for replay in respawnPending(): both sends are fire-and-forget, so
   // a restarted host would otherwise boot on balanced governor thresholds and
   // the ProcessTreeCache constructor default until the next profile change.
@@ -405,17 +399,6 @@ export class PtyClient extends EventEmitter {
     // main-process snapshot directly — no cache needed, and a host restart
     // re-syncs whatever plugins are loaded now.
     this.send({ type: "set-plugin-agent-registry", registry: getPluginAgentRegistry() });
-    // Re-sync opt-in exit-snapshot config (#10850) on every ready — initial boot
-    // and every restart. Default is OFF and pre-ready sends are dropped, so
-    // pushing the cached state here (like the plugin-agent-registry above) is
-    // what keeps an enabled toggle / excluded set alive across a host restart.
-    this.send({ type: "set-exit-snapshot-enabled", enabled: this.exitSnapshotEnabled });
-    if (this.exitSnapshotExcludedProjectIds.length > 0) {
-      this.send({
-        type: "set-exit-snapshot-excluded-projects",
-        projectIds: this.exitSnapshotExcludedProjectIds,
-      });
-    }
     // Re-arm the watchdog on every successful ready — covers both the initial
     // boot and every auto-restart cycle. The original code armed it inside
     // startHost() before ready arrived, but the tick was a no-op until
@@ -969,23 +952,13 @@ export class PtyClient extends EventEmitter {
   }
 
   async gracefulKill(id: string): Promise<string | null> {
-    return (await this.gracefulKillWithSnapshot(id)).sessionId;
-  }
-
-  /**
-   * Graceful-kill variant that also returns the opt-in exit snapshot (#10850).
-   * Used by the close paths that journal a resume record (terminal-kill IPC,
-   * app-quit) so they can attach the captured tail. `gracefulKill()` wraps this
-   * and returns just the session id for callers that don't persist a record.
-   */
-  async gracefulKillWithSnapshot(id: string): Promise<GracefulKillResult> {
     const requestId = this.broker.generateId(`graceful-kill-${id}`);
     const promise = this.broker.register<GracefulKillResult>(requestId, {
       method: "graceful-kill",
       timeoutMs: PTY_TIMEOUTS["graceful-kill"],
     });
     this.send({ type: "graceful-kill", id, requestId });
-    return promise.catch((error: unknown) => {
+    const result = await promise.catch((error: unknown) => {
       // Sending a kill to a host that isn't there only mutates local bookkeeping.
       // Skip whenever the host is known to be gone — either because the broker
       // clear told us via a typed BrokerError (HOST_EXITED / APP_SHUTDOWN), or
@@ -1000,19 +973,21 @@ export class PtyClient extends EventEmitter {
       this.kill(id, "graceful-kill-timeout");
       return { sessionId: null };
     });
+    return result.sessionId;
   }
 
   async gracefulKillByProject(
     projectId: string,
     options?: { preserveSession?: boolean }
-  ): Promise<Array<{ id: string; agentSessionId: string | null; exitSnapshot?: string }>> {
+  ): Promise<Array<{ id: string; agentSessionId: string | null }>> {
     const requestId = this.broker.generateId(`graceful-kill-by-project-${projectId}`);
-    const promise = this.broker.register<
-      Array<{ id: string; agentSessionId: string | null; exitSnapshot?: string }>
-    >(requestId, {
-      method: "graceful-kill-by-project",
-      timeoutMs: PTY_TIMEOUTS["graceful-kill-by-project"],
-    });
+    const promise = this.broker.register<Array<{ id: string; agentSessionId: string | null }>>(
+      requestId,
+      {
+        method: "graceful-kill-by-project",
+        timeoutMs: PTY_TIMEOUTS["graceful-kill-by-project"],
+      }
+    );
     this.send({
       type: "graceful-kill-by-project",
       projectId,
@@ -1278,21 +1253,6 @@ export class PtyClient extends EventEmitter {
   suppressSessionPersistence(suppressed: boolean): void {
     this.sessionPersistSuppressed = suppressed;
     this.send({ type: "set-session-persist-suppressed", suppressed });
-  }
-
-  /** Enable/disable opt-in exit-snapshot capture in the PtyHost (#10850). */
-  setExitSnapshotEnabled(enabled: boolean): void {
-    this.exitSnapshotEnabled = enabled;
-    this.send({ type: "set-exit-snapshot-enabled", enabled });
-  }
-
-  /**
-   * Replace the full set of project ids excluded from exit-snapshot capture
-   * (#10850). Full-set replace, not deltas — main recomputes on every save.
-   */
-  setExitSnapshotExcludedProjects(projectIds: string[]): void {
-    this.exitSnapshotExcludedProjectIds = [...projectIds];
-    this.send({ type: "set-exit-snapshot-excluded-projects", projectIds });
   }
 
   /** Pause all PTY processes during system sleep to prevent buffer overflow */

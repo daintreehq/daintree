@@ -22,7 +22,6 @@ import { z } from "zod";
 import { typedHandle, typedHandleValidated, checkRateLimit } from "../../utils.js";
 import { validateFolderName } from "../../../../shared/utils/folderName.js";
 import { ProjectSettingsSaveSchema } from "../../../services/projectSettingsCodec.js";
-import { computeExitSnapshotExcludedProjectIds } from "../../../services/exitSnapshotExclusions.js";
 import type { ProjectSettings } from "../../../types/index.js";
 import type { HandlerDependencies } from "../../types.js";
 
@@ -67,22 +66,6 @@ export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}):
         void deps.worktreeService?.updateForgeSettings(projectPath).catch((error) => {
           console.warn("[IPC] Failed to push forge settings to workspace host:", error);
         });
-      }
-    }
-
-    // Re-sync the pty-host's exit-snapshot exclusion set when this project's
-    // opt-out flipped (#10850). Full-set replace, so recompute across all
-    // projects (the just-saved value is already persisted). No-op when no host.
-    const exclusionChanged =
-      (settings.exitSnapshotExcluded ?? false) !== (previousSettings.exitSnapshotExcluded ?? false);
-    if (exclusionChanged) {
-      const ptyClient = deps.ptyClient;
-      if (ptyClient) {
-        void computeExitSnapshotExcludedProjectIds()
-          .then((ids) => ptyClient.setExitSnapshotExcludedProjects(ids))
-          .catch((error) => {
-            console.warn("[IPC] Failed to push exit-snapshot exclusions to pty-host:", error);
-          });
       }
     }
   };

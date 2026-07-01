@@ -47,11 +47,6 @@ function ResumeSessionRow({ item, isSelected, matches, onSelect, itemRef }: Resu
         {item.description && (
           <div className="text-xs text-daintree-text/50 truncate">{item.description}</div>
         )}
-        {item.teaser && (
-          <div className="mt-1 text-[11px] font-mono text-daintree-text/40 line-clamp-2 break-all">
-            {item.teaser}
-          </div>
-        )}
       </div>
       {item.isStale && (
         <span className="shrink-0 mt-0.5 text-[10px] font-medium text-daintree-text/40">
@@ -75,8 +70,6 @@ export function ResumeSessionsPalette() {
     selectNext,
     close,
     isLoading,
-    hasSessions,
-    hasAnySnapshot,
   } = useResumeSessionsPalette();
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -235,12 +228,6 @@ export function ResumeSessionsPalette() {
             </div>
             {totalResults != null && (
               <PaletteOverflowNotice shown={results.length} total={totalResults} />
-            )}
-            {hasSessions && !hasAnySnapshot && (
-              <p className="px-3 pt-3 text-[11px] text-daintree-text/40">
-                Turn on session previews in Settings › Privacy &amp; Data to see what each session
-                was doing.
-              </p>
             )}
           </>
         )}

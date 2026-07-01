@@ -24,8 +24,6 @@ export interface ResumeSessionItem {
   color: string;
   /** Second metadata line: model · agent · location · time-ago. */
   description: string;
-  /** One-line summary of the captured exit snapshot, or null when none. */
-  teaser: string | null;
   /** Extra fuzzy-search haystack (agent, model, branch, worktree, cwd). */
   searchAliases: string[];
   /**
@@ -70,27 +68,6 @@ export function prettifyModelId(modelId: string): string {
     .replace(/-/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
   return name;
-}
-
-/**
- * Condense a captured exit snapshot into a single-line teaser of what the
- * terminal was last doing. The snapshot is a scrubbed, ANSI-stripped tail
- * (#10850); the most recent non-blank lines are the most informative, so we
- * take the tail, collapse whitespace and cap the length.
- */
-export function snapshotTeaser(
-  snapshot: string | null | undefined,
-  { maxLines = 2, maxLen = 140 }: { maxLines?: number; maxLen?: number } = {}
-): string | null {
-  if (!snapshot) return null;
-  const lines = snapshot
-    .split("\n")
-    .map((line) => line.replace(/\s+$/, ""))
-    .filter((line) => line.trim().length > 0);
-  if (lines.length === 0) return null;
-  const joined = lines.slice(-maxLines).join("  ").replace(/\s+/g, " ").trim();
-  if (!joined) return null;
-  return joined.length > maxLen ? `${joined.slice(0, maxLen)}…` : joined;
 }
 
 /**
@@ -155,7 +132,6 @@ export function buildResumeSessionItems(
         iconId: agentConfig?.iconId ?? "terminal",
         color: agentConfig?.color ?? "var(--color-daintree-text)",
         description,
-        teaser: snapshotTeaser(session.snapshot),
         searchAliases,
         isStale,
         worktreeName,

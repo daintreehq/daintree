@@ -220,15 +220,6 @@ export type PtyHostRequest =
   | { type: "trim-state"; targetLines: number }
   | { type: "set-resource-monitoring"; enabled: boolean }
   | { type: "set-session-persist-suppressed"; suppressed: boolean }
-  /**
-   * Opt-in exit-snapshot config (#10850). `set-exit-snapshot-enabled` mirrors
-   * the global `terminalConfig.exitSnapshotEnabled` toggle;
-   * `set-exit-snapshot-excluded-projects` carries the full set of project ids
-   * the user has opted out (full-set replace, not deltas). Both replay on
-   * host-ready so a restarted host re-syncs before any close path fires.
-   */
-  | { type: "set-exit-snapshot-enabled"; enabled: boolean }
-  | { type: "set-exit-snapshot-excluded-projects"; projectIds: string[] }
   | { type: "set-resource-profile"; profile: ResourceProfile }
   | { type: "set-process-tree-poll-interval"; ms: number }
   /**
@@ -496,13 +487,11 @@ export type PtyHostEvent =
       requestId: string;
       id: string;
       agentSessionId: string | null;
-      /** Opt-in exit snapshot captured at close, when enabled (#10850). */
-      exitSnapshot?: string;
     }
   | {
       type: "graceful-kill-by-project-result";
       requestId: string;
-      results: Array<{ id: string; agentSessionId: string | null; exitSnapshot?: string }>;
+      results: Array<{ id: string; agentSessionId: string | null }>;
     }
   | {
       type: "fd-leak-warning";
@@ -549,12 +538,10 @@ export type PtyHostResponseEvent = Extract<PtyHostEvent, { requestId: string }>;
 
 /**
  * Result of a graceful kill: the captured resume `sessionId` (null when there is
- * no resumable session) plus an optional opt-in `exitSnapshot` tail (#10850),
- * present only when the snapshot toggle is on for the closed terminal.
+ * no resumable session).
  */
 export interface GracefulKillResult {
   sessionId: string | null;
-  exitSnapshot?: string;
 }
 
 export function isPtyHostResponseEvent(event: PtyHostEvent): event is PtyHostResponseEvent {

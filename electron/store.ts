@@ -83,12 +83,6 @@ export interface StoreSchema {
     memoryLeakDetectionEnabled?: boolean;
     memoryLeakAutoRestartThresholdMb?: number;
     cachedProjectViews?: number;
-    /**
-     * Opt-in exit-snapshot capture (#10850). When on, a bounded, ANSI-stripped,
-     * secret-scrubbed tail of an agent terminal's output is captured at close
-     * and attached to its resume record. Off by default — privacy-sensitive.
-     */
-    exitSnapshotEnabled?: boolean;
   };
   hibernation: {
     enabled: boolean;
@@ -512,7 +506,6 @@ const storeOptions = {
       hybridInputEnabled: true,
       hybridInputAutoFocus: true,
       screenReaderMode: "auto" as const,
-      exitSnapshotEnabled: false,
     },
     hibernation: {
       enabled: false,

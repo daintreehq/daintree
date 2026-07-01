@@ -16,7 +16,6 @@ import type { HandlerDependencies, IpcContext } from "../../types.js";
 import {
   TerminalSpawnOptionsSchema,
   AgentSessionRetentionDaysSchema,
-  AgentSessionGetSnapshotPayloadSchema,
 } from "../../../schemas/ipc.js";
 import { store } from "../../../store.js";
 import type { AgentSessionRetentionDays } from "../../../../shared/types/ipc/agentSessionHistory.js";
@@ -85,7 +84,6 @@ import {
   clearAgentSessions,
   persistAgentSession,
   pruneAgentSessions,
-  getAgentSessionSnapshot,
 } from "../../../services/pty/agentSessionHistory.js";
 import { getAgentSessionRetentionDays } from "../../../services/pty/agentSessionRetention.js";
 import type { WorkspaceClient } from "../../../services/WorkspaceClient.js";
@@ -619,8 +617,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
   // expiry capture, the fourth close path that already journals.
   const persistCloseRecord = async (
     info: Awaited<ReturnType<typeof ptyClient.getTerminalAsync>>,
-    sessionId: string | null,
-    snapshot?: string
+    sessionId: string | null
   ): Promise<void> => {
     if (!sessionId || !info?.launchAgentId) return;
     try {
@@ -637,7 +634,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           agentModelId: info.agentModelId,
           cwd: info.cwd ?? undefined,
           branch,
-          snapshot,
         },
         app.getPath("userData"),
         getAgentSessionRetentionDays()
@@ -655,13 +651,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // Capture a resume record before tearing down an agent terminal. The info
       // snapshot must precede the kill (it's gone afterward), and gracefulKill —
       // not a bare kill — is what extracts the session id, so route agent
-      // terminals through it. Plain terminals keep the original hard kill. A
-      // failed snapshot (host gone) falls back to a plain kill — never block the
-      // close on the resume-capture path.
+      // terminals through it. Plain terminals keep the original hard kill.
       const info = await ptyClient.getTerminalAsync(id).catch(() => null);
       if (info?.launchAgentId) {
-        const { sessionId, exitSnapshot } = await ptyClient.gracefulKillWithSnapshot(id);
-        await persistCloseRecord(info, sessionId, exitSnapshot);
+        const sessionId = await ptyClient.gracefulKill(id);
+        await persistCloseRecord(info, sessionId);
       } else {
         ptyClient.kill(id);
       }
@@ -676,8 +670,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       throw new Error("Invalid terminal ID: must be a string");
     }
     const info = await ptyClient.getTerminalAsync(id).catch(() => null);
-    const { sessionId, exitSnapshot } = await ptyClient.gracefulKillWithSnapshot(id);
-    await persistCloseRecord(info, sessionId, exitSnapshot);
+    const sessionId = await ptyClient.gracefulKill(id);
+    await persistCloseRecord(info, sessionId);
     return sessionId;
   };
 
@@ -723,17 +717,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     await clearAgentSessions(payload?.worktreeId, app.getPath("userData"));
   };
 
-  const handleAgentSessionGetSnapshot = async (payload: {
-    sessionId: string;
-  }): Promise<{ found: boolean; snapshot: string | null }> => {
-    const { app } = await import("electron");
-    return getAgentSessionSnapshot(
-      payload.sessionId,
-      app.getPath("userData"),
-      getAgentSessionRetentionDays()
-    );
-  };
-
   const handleAgentSessionGetRetention = async (): Promise<AgentSessionRetentionDays> =>
     getAgentSessionRetentionDays();
 
@@ -766,11 +749,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       restartService: op(CHANNELS.TERMINAL_RESTART_SERVICE, handleTerminalRestartService),
       agentSessionList: op(CHANNELS.AGENT_SESSION_LIST, handleAgentSessionList),
       agentSessionClear: op(CHANNELS.AGENT_SESSION_CLEAR, handleAgentSessionClear),
-      agentSessionGetSnapshot: opValidated(
-        CHANNELS.AGENT_SESSION_GET_SNAPSHOT,
-        AgentSessionGetSnapshotPayloadSchema,
-        handleAgentSessionGetSnapshot
-      ),
       agentSessionGetRetention: op(
         CHANNELS.AGENT_SESSION_GET_RETENTION,
         handleAgentSessionGetRetention

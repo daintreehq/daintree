@@ -9,8 +9,6 @@ const { SerializeAddon } = serialize;
 import unicode11 from "@xterm/addon-unicode11";
 const { Unicode11Addon } = unicode11;
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
-import { stripAnsiAndOscCodes } from "../../../shared/utils/urlUtils.js";
-import { EXIT_SNAPSHOT_CAPTURE_CHARS } from "./exitSnapshot.js";
 import { ProcessDetector, type DetectionResult } from "../ProcessDetector.js";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
 import type { ImagePathProbe } from "./ImagePathProbe.js";
@@ -1218,45 +1216,6 @@ export class TerminalProcess {
       }
     }
     return lines.slice(-n);
-  }
-
-  /**
-   * Capture a plain-text tail of the terminal's scrollback for the opt-in exit
-   * snapshot (#10850). Mirrors the renderer's `TerminalInstanceService
-   * .captureBufferText` doubling-window tail-scan, but reads the pty-host's own
-   * `@xterm/headless` buffer (the renderer instance isn't reachable here). The
-   * result is ANSI/OSC-stripped but NOT secret-scrubbed or byte-capped — the
-   * caller runs it through `prepareExitSnapshot()` before persistence. Returns
-   * "" when the headless buffer is unavailable (already disposed / killed).
-   */
-  captureExitSnapshotText(maxChars: number = EXIT_SNAPSHOT_CAPTURE_CHARS): string {
-    const terminal = this.terminalInfo.headlessTerminal;
-    if (!terminal) return "";
-    const buf = terminal.buffer.active;
-    if (!buf || buf.length === 0) return "";
-
-    // Collect lines bottom-up, widening the window in doubling rounds until the
-    // *stripped* (visible) length reaches maxChars or the buffer is exhausted.
-    // Keying the stop on stripped length keeps the tail intact on escape-dense
-    // agent output; typical output settles in one round.
-    const tail: string[] = [];
-    let rawLen = 0;
-    let i = buf.length - 1;
-    let budget = maxChars * 2;
-    for (;;) {
-      while (i >= 0 && rawLen < budget) {
-        const line = buf.getLine(i);
-        i--;
-        if (!line) continue;
-        const s = line.translateToString(true);
-        tail.push(s);
-        rawLen += s.length + 1; // +1 for the "\n" separator
-      }
-      const text = stripAnsiAndOscCodes([...tail].reverse().join("\n"));
-      if (text.length >= maxChars) return text.slice(-maxChars);
-      if (i < 0) return text; // whole buffer consumed, still under budget
-      budget *= 2;
-    }
   }
 
   getVisibleActivityLines(n: number): string[] {

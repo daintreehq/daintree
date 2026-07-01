@@ -267,7 +267,6 @@ describe("createPtyHostMessageDispatcher", () => {
       requestId: 7,
       id: "term-1",
       agentSessionId: "session-42",
-      exitSnapshot: undefined,
     });
   });
 });

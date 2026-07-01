@@ -53,8 +53,4 @@ export const terminalConfigClient = {
   setCachedProjectViews: (cachedProjectViews: number): Promise<void> => {
     return window.electron.terminalConfig.setCachedProjectViews(cachedProjectViews);
   },
-
-  setExitSnapshot: (enabled: boolean): Promise<void> => {
-    return window.electron.terminalConfig.setExitSnapshot(enabled);
-  },
 } as const;

@@ -8,7 +8,6 @@ import {
   listAgentSessions,
   clearAgentSessions,
   pruneAgentSessions,
-  getAgentSessionSnapshot,
   getSessionHistoryPath,
   MAX_RECORDS_PER_WORKTREE,
   SESSION_HISTORY_TTL_MS,
@@ -178,6 +177,39 @@ describe("agentSessionHistory", () => {
     const records = await readSessionHistory(userDataDir);
     expect(records).toHaveLength(1);
     expect(records[0].sessionId).toBe("new");
+  });
+
+  it("strips a legacy snapshot key on read and purges it on the next rewrite", async () => {
+    // A journal written while the removed exit-snapshot feature was enabled
+    // still carries a `snapshot` tail on disk (#10850/#10855). It must never
+    // reach a consumer, and must self-heal off disk on the next write.
+    const filePath = getSessionHistoryPath(userDataDir)!;
+    const legacy = {
+      sessionId: "legacy",
+      agentId: "claude",
+      worktreeId: "wt-1",
+      title: null,
+      projectId: null,
+      savedAt: Date.now(),
+      snapshot: "verbatim scrollback that must not resurface",
+    };
+    await fsp.writeFile(filePath, JSON.stringify([legacy]));
+
+    // Read strips it (guards the MCP list bulk-leak path)...
+    const afterRead = await readSessionHistory(userDataDir);
+    expect(afterRead).toHaveLength(1);
+    expect(afterRead[0]).not.toHaveProperty("snapshot");
+    expect(afterRead[0].sessionId).toBe("legacy");
+
+    // ...and a subsequent persist rewrites the file without the key.
+    await persistAgentSession(
+      { sessionId: "fresh", agentId: "claude", worktreeId: "wt-1", title: null, projectId: null },
+      userDataDir
+    );
+    const onDisk = JSON.parse(await fsp.readFile(filePath, "utf8")) as Array<
+      Record<string, unknown>
+    >;
+    expect(onDisk.some((r) => "snapshot" in r)).toBe(false);
   });
 
   it("listAgentSessions filters by worktreeId", async () => {
@@ -432,98 +464,6 @@ describe("agentSessionHistory", () => {
       expect(records.some((r) => r.sessionId === `session-${MAX_RECORDS_PER_WORKTREE + 9}`)).toBe(
         true
       );
-    });
-  });
-
-  describe("getAgentSessionSnapshot (#10855)", () => {
-    it("returns found:true with the verbatim snapshot for a matching session", async () => {
-      await persistAgentSession(
-        {
-          sessionId: "with-snap",
-          agentId: "claude",
-          worktreeId: "wt-1",
-          title: null,
-          projectId: null,
-          snapshot: "line one\nline two\n[31mred[0m",
-        },
-        userDataDir
-      );
-
-      expect(getAgentSessionSnapshot("with-snap", userDataDir)).toEqual({
-        found: true,
-        snapshot: "line one\nline two\n[31mred[0m",
-      });
-    });
-
-    it("returns found:false with null snapshot for an unknown sessionId", () => {
-      expect(getAgentSessionSnapshot("does-not-exist", userDataDir)).toEqual({
-        found: false,
-        snapshot: null,
-      });
-    });
-
-    it("returns found:true with null snapshot when the record has no snapshot", async () => {
-      await persistAgentSession(
-        {
-          sessionId: "no-snap",
-          agentId: "claude",
-          worktreeId: "wt-1",
-          title: null,
-          projectId: null,
-        },
-        userDataDir
-      );
-
-      expect(getAgentSessionSnapshot("no-snap", userDataDir)).toEqual({
-        found: true,
-        snapshot: null,
-      });
-    });
-
-    it("preserves an empty-string snapshot rather than coercing it to null", async () => {
-      await persistAgentSession(
-        {
-          sessionId: "empty-snap",
-          agentId: "claude",
-          worktreeId: "wt-1",
-          title: null,
-          projectId: null,
-          snapshot: "",
-        },
-        userDataDir
-      );
-
-      expect(getAgentSessionSnapshot("empty-snap", userDataDir)).toEqual({
-        found: true,
-        snapshot: "",
-      });
-    });
-
-    it("honors the retention window — an aged-out session is not found", async () => {
-      // Seed a 20-day-old record carrying a snapshot, keep-forever on write so
-      // the read path does the filtering, then query with a 7-day window.
-      const filePath = getSessionHistoryPath(userDataDir)!;
-      const agedRecord = {
-        sessionId: "aged-snap",
-        agentId: "claude",
-        worktreeId: "wt-1",
-        title: null,
-        projectId: null,
-        savedAt: Date.now() - 20 * DAY_MS,
-        snapshot: "secret scrollback",
-      };
-      await fsp.writeFile(filePath, JSON.stringify([agedRecord]));
-
-      // Within a 90-day window the snapshot is reachable...
-      expect(getAgentSessionSnapshot("aged-snap", userDataDir, 90)).toEqual({
-        found: true,
-        snapshot: "secret scrollback",
-      });
-      // ...but a 7-day window evicts it, so it must not leak.
-      expect(getAgentSessionSnapshot("aged-snap", userDataDir, 7)).toEqual({
-        found: false,
-        snapshot: null,
-      });
     });
   });
 

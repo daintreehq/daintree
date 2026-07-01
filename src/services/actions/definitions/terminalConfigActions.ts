@@ -208,23 +208,6 @@ export function registerTerminalConfigActions(
     },
   }));
 
-  actions.set("terminalConfig.setExitSnapshot", () => ({
-    id: "terminalConfig.setExitSnapshot",
-    title: "Set Exit Snapshot Capture",
-    description:
-      "Capture an opt-in exit snapshot of closed agent sessions — a bounded, secret-scrubbed tail of the terminal output",
-    category: "settings",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    argsSchema: z.object({ enabled: z.boolean() }),
-    run: async (args: unknown) => {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- validated by argsSchema
-      const { enabled } = args as { enabled: boolean };
-      await terminalConfigClient.setExitSnapshot(enabled);
-    },
-  }));
-
   actions.set("terminalConfig.setCachedProjectViews", () => ({
     id: "terminalConfig.setCachedProjectViews",
     title: "Set Cached Project Views",

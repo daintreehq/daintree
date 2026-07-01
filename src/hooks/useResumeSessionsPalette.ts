@@ -11,7 +11,6 @@ const RESUME_FUSE_OPTIONS: IFuseOptions<ResumeSessionItem> = {
     { name: "name", weight: 2 },
     { name: "searchAliases", weight: 1.5 },
     { name: "description", weight: 1 },
-    { name: "teaser", weight: 0.5 },
   ],
   threshold: 0.4,
   includeScore: true,
@@ -34,10 +33,6 @@ export function useResumeSessionsPalette() {
     () => buildResumeSessionItems(sessions, { currentProjectId, worktrees }),
     [sessions, currentProjectId, worktrees]
   );
-
-  // When there are sessions but none carry a captured snapshot, exit-snapshot
-  // capture is almost certainly off — surface the enable hint.
-  const hasAnySnapshot = useMemo(() => items.some((item) => item.teaser !== null), [items]);
 
   const palette = useSearchablePalette<ResumeSessionItem>({
     items,
@@ -85,6 +80,5 @@ export function useResumeSessionsPalette() {
     ...palette,
     isLoading,
     hasSessions: items.length > 0,
-    hasAnySnapshot,
   };
 }

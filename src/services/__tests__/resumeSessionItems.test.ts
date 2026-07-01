@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   buildResumeSessionItems,
-  snapshotTeaser,
   pathBasename,
   prettifyModelId,
   NO_WORKTREE_GROUP_KEY,
@@ -80,36 +79,6 @@ describe("buildResumeSessionItems", () => {
     });
     expect(withTitle?.name).toBe("Resume: Fix the auth bug");
     expect(noTitle?.name).toBe("Resume test-agent");
-  });
-
-  it("derives a teaser from a captured snapshot and null when none", () => {
-    const [withSnap] = buildResumeSessionItems([rec({ snapshot: "building…\nDone in 2s" })], {
-      currentProjectId: "p1",
-      worktrees,
-    });
-    const [noSnap] = buildResumeSessionItems([rec({ snapshot: undefined })], {
-      currentProjectId: "p1",
-      worktrees,
-    });
-    expect(withSnap?.teaser).toContain("Done in 2s");
-    expect(noSnap?.teaser).toBeNull();
-  });
-});
-
-describe("snapshotTeaser", () => {
-  it("returns null for empty or missing input", () => {
-    expect(snapshotTeaser(undefined)).toBeNull();
-    expect(snapshotTeaser(null)).toBeNull();
-    expect(snapshotTeaser("   \n  ")).toBeNull();
-  });
-
-  it("takes the last non-blank lines and collapses whitespace", () => {
-    expect(snapshotTeaser("first\n\nsecond\nthird", { maxLines: 2 })).toBe("second third");
-  });
-
-  it("caps the length with an ellipsis", () => {
-    const teaser = snapshotTeaser("x".repeat(500), { maxLen: 10 });
-    expect(teaser).toBe(`${"x".repeat(10)}…`);
   });
 });
 

@@ -37,13 +37,6 @@ function createPrivacyApi(overrides: Partial<typeof window.electron.privacy> = {
   };
 }
 
-function createTerminalConfigApi() {
-  return {
-    get: vi.fn().mockResolvedValue({ exitSnapshotEnabled: false }),
-    setExitSnapshot: vi.fn().mockResolvedValue(undefined),
-  };
-}
-
 function createAgentSessionHistoryApi(
   overrides: Partial<typeof window.electron.agentSessionHistory> = {}
 ) {
@@ -60,7 +53,6 @@ describe("PrivacyDataTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.electron = {
-      terminalConfig: createTerminalConfigApi(),
       privacy: createPrivacyApi(),
       agentSessionHistory: createAgentSessionHistoryApi(),
     } as unknown as typeof window.electron;
@@ -68,7 +60,6 @@ describe("PrivacyDataTab", () => {
 
   it("hydrates telemetry level from getSettings", async () => {
     window.electron = {
-      terminalConfig: createTerminalConfigApi(),
       privacy: createPrivacyApi({
         getSettings: vi.fn().mockResolvedValue({
           telemetryLevel: "errors",
@@ -89,7 +80,6 @@ describe("PrivacyDataTab", () => {
 
   it("reverts telemetry level and shows error toast on IPC failure", async () => {
     window.electron = {
-      terminalConfig: createTerminalConfigApi(),
       privacy: createPrivacyApi({
         getSettings: vi.fn().mockResolvedValue({
           telemetryLevel: "off",
@@ -134,7 +124,6 @@ describe("PrivacyDataTab", () => {
       .mockRejectedValueOnce(new Error("IPC fail")); // second call fails
 
     window.electron = {
-      terminalConfig: createTerminalConfigApi(),
       privacy: createPrivacyApi({
         getSettings: vi.fn().mockResolvedValue({
           telemetryLevel: "off",
@@ -200,7 +189,6 @@ describe("PrivacyDataTab", () => {
 
   it("reverts log retention and shows error toast on IPC failure", async () => {
     window.electron = {
-      terminalConfig: createTerminalConfigApi(),
       privacy: createPrivacyApi({
         getSettings: vi.fn().mockResolvedValue({
           telemetryLevel: "off",

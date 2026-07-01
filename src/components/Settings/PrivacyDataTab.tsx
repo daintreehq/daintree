@@ -8,7 +8,6 @@ import {
   AlertTriangle,
   Eye,
   EyeOff,
-  Camera,
   History,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -16,7 +15,6 @@ import { notify } from "@/lib/notify";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
-import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSubtabBar } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { ANALYTICS_EVENTS } from "@shared/config/telemetry";
@@ -117,7 +115,6 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
   const [cacheClearing, setCacheClearing] = useState(false);
   const [cacheCleared, setCacheCleared] = useState(false);
   const [resetState, setResetState] = useState<"idle" | "confirming">("idle");
-  const [exitSnapshotEnabled, setExitSnapshotEnabled] = useState(false);
   const [sessionRetentionDays, setSessionRetentionDays] = useState<LogRetention>(30);
   const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false);
   const [historyCleared, setHistoryCleared] = useState(false);
@@ -160,46 +157,12 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
       });
   }, []);
 
-  useEffect(() => {
-    window.electron.terminalConfig
-      .get()
-      .then((config) => setExitSnapshotEnabled(config.exitSnapshotEnabled === true))
-      .catch((err) => logError("Failed to load exit-snapshot setting", err));
-  }, []);
-
   // Reset confirmation state when leaving tab
   useEffect(() => {
     if (currentSubtab !== "storage") {
       setResetState("idle");
     }
   }, [currentSubtab]);
-
-  const handleExitSnapshotToggle = async () => {
-    const next = !exitSnapshotEnabled;
-    setExitSnapshotEnabled(next);
-    const result = await actionService.dispatch(
-      "terminalConfig.setExitSnapshot",
-      { enabled: next },
-      { source: "user" }
-    );
-    if (!result.ok) {
-      setExitSnapshotEnabled(!next);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Exit snapshot capture couldn't be updated.",
-        context: { eventKind: "settings" },
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleExitSnapshotToggle(),
-          },
-        ],
-      });
-      logError("Failed to set exit snapshot capture", result.error);
-    }
-  };
 
   const handleTelemetryChange = async (level: TelemetryLevel) => {
     const prev = telemetryLevel;
@@ -548,21 +511,6 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
             <p className="text-xs text-daintree-text/40 mt-2 select-text">
               Log pruning happens at startup. Changing this setting takes effect on next launch.
             </p>
-          </SettingsSection>
-
-          <SettingsSection
-            icon={Camera}
-            title="Exit snapshots"
-            description="Capture a short, secret-scrubbed tail of a closed agent's terminal output so you can recall what a past session was doing. Off by default; a per-project opt-out lives in each project's settings."
-          >
-            <SettingsSwitchCard
-              icon={Camera}
-              title="Capture exit snapshots"
-              subtitle="Save a bounded, ANSI-stripped tail of agent output when a session closes"
-              isEnabled={exitSnapshotEnabled}
-              onChange={() => void handleExitSnapshotToggle()}
-              ariaLabel="Exit Snapshot Capture Toggle"
-            />
           </SettingsSection>
 
           <SettingsSection

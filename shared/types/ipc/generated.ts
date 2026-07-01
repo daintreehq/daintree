@@ -40,10 +40,6 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./agentSessionHistory.js").AgentSessionRetentionDays;
   };
-  "agent-session:get-snapshot": {
-    args: [payload: { sessionId: string }];
-    result: { found: boolean; snapshot: string | null };
-  };
   "agent-session:list": {
     args: [payload: { worktreeId?: string | undefined }];
     result: import("./agentSessionHistory.js").AgentSessionRecord[];
@@ -1307,10 +1303,6 @@ export interface GeneratedIpcInvokeMap {
   };
   "terminal-config:set-custom-schemes": {
     args: [schemes: unknown];
-    result: void;
-  };
-  "terminal-config:set-exit-snapshot": {
-    args: [enabled: boolean];
     result: void;
   };
   "terminal-config:set-font-family": {

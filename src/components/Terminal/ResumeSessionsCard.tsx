@@ -9,7 +9,7 @@ import { buildResumeSessionItems, type ResumeSessionItem } from "@/services/resu
 import { useResumeAgentSession } from "@/hooks/useResumeAgentSession";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 
-const SHOWN_COUNT = 4;
+const SHOWN_COUNT = 3;
 
 /**
  * First-run-quiet discovery card for the empty grid. Fetches the project's
@@ -68,7 +68,7 @@ export function ResumeSessionsCard({ activeWorktreeId }: { activeWorktreeId?: st
     <div className="mb-6 w-full max-w-md rounded-[var(--radius-lg)] border border-daintree-border/40 bg-surface p-3">
       <div className="flex items-center gap-2 px-1 pb-2 text-[11px] font-medium uppercase tracking-wider text-daintree-text/40">
         <History className="h-3.5 w-3.5" aria-hidden="true" />
-        Pick up where you left off
+        Resume sessions
       </div>
       <div className="flex flex-col gap-0.5">
         {shown.map((item) => (
@@ -100,7 +100,7 @@ export function ResumeSessionsCard({ activeWorktreeId }: { activeWorktreeId?: st
           onClick={openLauncher}
           className="mt-1 flex w-full items-center justify-center gap-1.5 rounded-[var(--radius-md)] px-2 py-1.5 text-xs text-daintree-text/50 transition-colors hover:bg-overlay-subtle hover:text-daintree-text/80"
         >
-          Browse all {resumable.length} sessions
+          Browse more sessions
           <ArrowRight className="h-3 w-3" aria-hidden="true" />
         </button>
       )}

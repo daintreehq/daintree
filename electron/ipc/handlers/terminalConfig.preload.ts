@@ -23,7 +23,6 @@ export const TERMINAL_CONFIG_METHOD_CHANNELS = {
   setMemoryLeakDetection: "terminal-config:set-memory-leak-detection",
   setMemoryLeakAutoRestartThresholdMb: "terminal-config:set-memory-leak-auto-restart",
   setCachedProjectViews: "terminal-config:set-cached-project-views",
-  setExitSnapshot: "terminal-config:set-exit-snapshot",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof TERMINAL_CONFIG_METHOD_CHANNELS;

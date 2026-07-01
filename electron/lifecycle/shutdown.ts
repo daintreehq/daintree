@@ -189,9 +189,7 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
             let timer: ReturnType<typeof setTimeout> | undefined;
             return Promise.race([
               ptyClient.gracefulKillByProject(pid),
-              new Promise<
-                Array<{ id: string; agentSessionId: string | null; exitSnapshot?: string }>
-              >((resolve) => {
+              new Promise<Array<{ id: string; agentSessionId: string | null }>>((resolve) => {
                 timer = setTimeout(() => resolve([]), 4000);
               }),
             ]).finally(() => {
@@ -273,7 +271,6 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
                   agentModelId: info.agentModelId,
                   cwd: info.cwd ?? undefined,
                   branch: info.worktreeId ? branchByWorktree.get(info.worktreeId) : undefined,
-                  snapshot: result.exitSnapshot,
                 },
                 userData,
                 getAgentSessionRetentionDays()

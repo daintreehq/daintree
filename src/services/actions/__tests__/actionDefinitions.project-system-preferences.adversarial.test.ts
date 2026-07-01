@@ -732,7 +732,6 @@ describe("preferences action hardening", () => {
       "terminalConfig.setHybridInputAutoFocus",
       "terminalConfig.setScreenReaderMode",
       "terminalConfig.setCachedProjectViews",
-      "terminalConfig.setExitSnapshot",
       "worktreeConfig.get",
       "worktreeConfig.setPattern",
       "help.shortcuts",
