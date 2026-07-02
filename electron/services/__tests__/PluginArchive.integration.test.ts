@@ -364,7 +364,6 @@ describe("verifyPluginArchive", () => {
             views: [
               {
                 id: "panel-view",
-                name: "Panel View",
                 componentPath: "dist/PanelView.js",
                 location: "panel",
               },
@@ -398,7 +397,6 @@ describe("verifyPluginArchive", () => {
             views: [
               {
                 id: "panel-view",
-                name: "Panel View",
                 componentPath: "./dist/PanelView.js",
                 location: "panel",
               },

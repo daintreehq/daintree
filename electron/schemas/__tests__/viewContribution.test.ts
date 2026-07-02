@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { ViewContributionSchema } from "../plugin.js";
 
-const base = { id: "main", name: "Main", componentPath: "./dist/view.js", location: "panel" };
+const base = { id: "main", componentPath: "./dist/view.js", location: "panel" };
 
 describe("ViewContributionSchema (issue #10464)", () => {
   it("accepts a minimal panel view contribution", () => {
@@ -14,13 +14,16 @@ describe("ViewContributionSchema (issue #10464)", () => {
     );
   });
 
-  it("accepts optional iconId and description", () => {
-    const result = ViewContributionSchema.safeParse({
-      ...base,
-      iconId: "Plug",
-      description: "A view",
-    });
+  it("accepts an optional iconId", () => {
+    const result = ViewContributionSchema.safeParse({ ...base, iconId: "Plug" });
     expect(result.success).toBe(true);
+  });
+
+  // `name` and `description` were removed (#10888): the matching panel owns a
+  // view's display metadata, so nothing at runtime read them. Strict validation
+  // now rejects them, keeping the frozen contract honest.
+  it.each(["name", "description"])("rejects the removed view field %s (strict)", (field) => {
+    expect(ViewContributionSchema.safeParse({ ...base, [field]: "x" }).success).toBe(false);
   });
 
   it("rejects location 'sidebar' at the schema boundary (no sidebar host yet)", () => {

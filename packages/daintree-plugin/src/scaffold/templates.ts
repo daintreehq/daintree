@@ -321,7 +321,6 @@ export function buildTemplateFiles(ctx: ScaffoldContext): Record<string, string>
           views: [
             {
               id: "main",
-              name: ctx.displayName,
               componentPath: "dist/panel.js",
               location: "panel",
             },
@@ -374,7 +373,6 @@ export function buildTemplateFiles(ctx: ScaffoldContext): Record<string, string>
           views: [
             {
               id: "main",
-              name: ctx.displayName,
               componentPath: "dist/panel.js",
               location: "panel",
             },

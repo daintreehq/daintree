@@ -756,8 +756,8 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
         ],
         settings: [{ id: "github", type: "string", label: "GitHub" }],
         views: [
-          { id: "github-issues", name: "Issues", componentPath: "./issues.js", location: "panel" },
-          { id: "github-prs", name: "PRs", componentPath: "./prs.js", location: "panel" },
+          { id: "github-issues", componentPath: "./issues.js", location: "panel" },
+          { id: "github-prs", componentPath: "./prs.js", location: "panel" },
         ],
         forgeProviders: [
           {
@@ -917,7 +917,7 @@ describe("PluginManifestSchema contributes strict validation", () => {
       contributes: {
         // A view needs a matching panel id (view_panel_ref_unknown, #10620).
         panels: [{ id: "v", name: "V", iconId: "eye", color: "#abc" }],
-        views: [{ id: "v", name: "V", componentPath: "./v.js", location: "panel" }],
+        views: [{ id: "v", componentPath: "./v.js", location: "panel" }],
       },
     });
     expect(result.success).toBe(true);
@@ -943,7 +943,7 @@ describe("PluginManifestSchema contributes strict validation", () => {
       contributes: {
         // A view needs a matching panel id (view_panel_ref_unknown, #10620).
         panels: [{ id: "v", name: "V", iconId: "eye", color: "#abc" }],
-        experimental_views: [{ id: "v", name: "V", componentPath: "./v.js", location: "panel" }],
+        experimental_views: [{ id: "v", componentPath: "./v.js", location: "panel" }],
       },
     });
     expect(result.success).toBe(true);
@@ -975,10 +975,8 @@ describe("PluginManifestSchema contributes strict validation", () => {
       contributes: {
         // The surviving canonical view needs a matching panel id (#10620).
         panels: [{ id: "canonical", name: "Canonical", iconId: "eye", color: "#abc" }],
-        views: [{ id: "canonical", name: "Canonical", componentPath: "./c.js", location: "panel" }],
-        experimental_views: [
-          { id: "legacy", name: "Legacy", componentPath: "./l.js", location: "panel" },
-        ],
+        views: [{ id: "canonical", componentPath: "./c.js", location: "panel" }],
+        experimental_views: [{ id: "legacy", componentPath: "./l.js", location: "panel" }],
       },
     });
     expect(result.success).toBe(true);
@@ -994,9 +992,7 @@ describe("PluginManifestSchema contributes strict validation", () => {
       ...validBase,
       contributes: {
         views: [],
-        experimental_views: [
-          { id: "legacy", name: "Legacy", componentPath: "./l.js", location: "panel" },
-        ],
+        experimental_views: [{ id: "legacy", componentPath: "./l.js", location: "panel" }],
       },
     });
     expect(result.success).toBe(true);
@@ -7395,7 +7391,6 @@ describe("reserved contribution point warnings", () => {
         views: [
           {
             id: "main",
-            name: "Main",
             componentPath: "./dist/view.js",
             location: "panel",
           },
@@ -7430,7 +7425,6 @@ describe("reserved contribution point warnings", () => {
         views: [
           {
             id: "ghost",
-            name: "Ghost",
             componentPath: "./dist/view.js",
             location: "panel",
           },
@@ -7462,7 +7456,6 @@ describe("reserved contribution point warnings", () => {
         views: [
           {
             id: "main",
-            name: "Main",
             componentPath: "./dist/view.js",
             location: "sidebar",
           },
@@ -7494,7 +7487,6 @@ describe("reserved contribution point warnings", () => {
         views: [
           {
             id: "main",
-            name: "Main",
             componentPath: "./dist/view.js",
             location: "panel",
           },
@@ -7526,7 +7518,6 @@ describe("reserved contribution point warnings", () => {
         views: [
           {
             id: "main",
-            name: "Main",
             componentPath: "../escape.js",
             location: "panel",
           },
@@ -7557,7 +7548,6 @@ describe("reserved contribution point warnings", () => {
         views: [
           {
             id: "main",
-            name: "Main",
             componentPath: "https://evil.example/view.js",
             location: "panel",
           },
@@ -7584,8 +7574,8 @@ describe("reserved contribution point warnings", () => {
       contributes: {
         panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
         views: [
-          { id: "main", name: "First", componentPath: "./first.js", location: "panel" },
-          { id: "main", name: "Second", componentPath: "./second.js", location: "panel" },
+          { id: "main", componentPath: "./first.js", location: "panel" },
+          { id: "main", componentPath: "./second.js", location: "panel" },
         ],
       },
     });
@@ -7656,7 +7646,6 @@ describe("reserved contribution point warnings", () => {
         views: [
           {
             id: "github-issues",
-            name: "Issues",
             componentPath: "./issues.js",
             location: "panel",
           },
@@ -7758,9 +7747,7 @@ describe("reserved contribution point warnings", () => {
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
-        experimental_views: [
-          { id: "viewer", name: "Viewer", componentPath: "./v.js", location: "panel" },
-        ],
+        experimental_views: [{ id: "viewer", componentPath: "./v.js", location: "panel" }],
         experimental_mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
       },
     });
@@ -7807,7 +7794,7 @@ describe("reserved contribution point warnings", () => {
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
-        views: [{ id: "viewer", name: "Viewer", componentPath: "./v.js", location: "panel" }],
+        views: [{ id: "viewer", componentPath: "./v.js", location: "panel" }],
         mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
       },
     });
@@ -7834,8 +7821,8 @@ describe("reserved contribution point warnings", () => {
         // (view_panel_ref_unknown superRefine) rather than logging a warning.
         panels: [{ id: "a", name: "A", iconId: "eye", color: "#000" }],
         views: [
-          { id: "a", name: "A", componentPath: "./a.js", location: "panel" },
-          { id: "c", name: "C", componentPath: "./c.js", location: "panel" },
+          { id: "a", componentPath: "./a.js", location: "panel" },
+          { id: "c", componentPath: "./c.js", location: "panel" },
         ],
       },
     });
@@ -7860,7 +7847,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.bad-location",
       version: "1.0.0",
       contributes: {
-        views: [{ id: "main", name: "Main", componentPath: "./v.js", location: "floating" }],
+        views: [{ id: "main", componentPath: "./v.js", location: "floating" }],
       },
     });
     expect(result.success).toBe(false);
@@ -7871,7 +7858,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.no-path",
       version: "1.0.0",
       contributes: {
-        views: [{ id: "main", name: "Main", location: "panel" }],
+        views: [{ id: "main", location: "panel" }],
       },
     });
     expect(result.success).toBe(false);
@@ -8832,7 +8819,7 @@ describe("Deferred activation — activatePlugin", () => {
               showInPalette: true,
             },
           ],
-          views: [{ id: "viewer", name: "Viewer", componentPath: "view.mjs", location: "panel" }],
+          views: [{ id: "viewer", componentPath: "view.mjs", location: "panel" }],
         },
       })
     );
@@ -8881,7 +8868,7 @@ describe("Deferred activation — activatePlugin", () => {
               showInPalette: true,
             },
           ],
-          views: [{ id: "viewer", name: "Viewer", componentPath: "view.mjs", location: "panel" }],
+          views: [{ id: "viewer", componentPath: "view.mjs", location: "panel" }],
         },
       })
     );
@@ -8929,7 +8916,7 @@ describe("Deferred activation — activatePlugin", () => {
               showInPalette: true,
             },
           ],
-          views: [{ id: "viewer", name: "Viewer", componentPath: "view.mjs", location: "panel" }],
+          views: [{ id: "viewer", componentPath: "view.mjs", location: "panel" }],
         },
       })
     );

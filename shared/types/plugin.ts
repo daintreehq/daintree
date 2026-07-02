@@ -132,11 +132,12 @@ export type ViewLocation = "panel";
 
 export interface ViewContribution {
   id: string;
-  name: string;
   componentPath: string;
   location: ViewLocation;
+  // Advisory only — the matching `contributes.panels` entry owns the rendered
+  // icon/name at runtime. `name`/`description` were removed (#10888) because no
+  // runtime path consumed them.
   iconId?: string;
-  description?: string;
 }
 
 /**
