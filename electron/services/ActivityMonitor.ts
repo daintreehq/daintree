@@ -618,6 +618,11 @@ export class ActivityMonitor {
           }
         }
       }
+      // Re-arm the idle-backoff settle timer on every idle byte so it debounces
+      // on the *last* output: a still-idle agent that emits an occasional
+      // cosmetic byte then falls silent still backs off (#10906). armFsmIdle-
+      // Backoff no-ops when the byte promoted the agent to busy (state !== idle).
+      this.armFsmIdleBackoff();
       return;
     }
 

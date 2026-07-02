@@ -144,19 +144,28 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
-    it("does not back off while data keeps arriving within the settle window", () => {
+    it("debounces on the last idle byte: keeps resetting while data trickles in, backs off after silence", () => {
       const setIntervalSpy = vi.spyOn(global, "setInterval");
       const { monitor } = createIdleAgent(50);
 
       monitor.startPolling();
       setIntervalSpy.mockClear();
 
-      // Data before the settle timer fires cancels it — no backoff.
-      vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS - 500);
-      monitor.onData("x");
-      vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS * 2);
-
+      // A byte every 1500ms (< the 3000ms settle) keeps re-arming the timer, so
+      // it never fires while the agent stays idle-but-trickling.
+      for (let i = 0; i < 4; i++) {
+        vi.advanceTimersByTime(1500);
+        monitor.onData("x");
+      }
+      expect(monitor.getState()).toBe("idle");
       expect(setIntervalSpy).not.toHaveBeenCalledWith(
+        expect.any(Function),
+        FSM_IDLE_BACKOFF_POLLING_INTERVAL_MS
+      );
+
+      // Silence past the settle window after the last byte → backoff engages.
+      vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS);
+      expect(setIntervalSpy).toHaveBeenCalledWith(
         expect.any(Function),
         FSM_IDLE_BACKOFF_POLLING_INTERVAL_MS
       );

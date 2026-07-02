@@ -393,12 +393,21 @@ describe("SessionSnapshotter", () => {
     it("drops a re-entrant flush while one is already in flight", async () => {
       const host = createHost();
       host.asyncResolved = false;
+      const serializeSpy = vi.spyOn(host, "getSerializedStateAsync");
       const snap = new SessionSnapshotter(host);
 
       snap.flushEventDriven();
-      // Second call before the first resolves — must not start a second serialize.
+      await Promise.resolve(); // let the first flush reach its stalled serialize
+
+      // Advance past the throttle window and change content so the second call
+      // clears the epoch + throttle gates and actually reaches the in-flight
+      // guard — which must drop it (no second serialize starts).
+      vi.advanceTimersByTime(2001);
       host.contentEpoch = 2;
       snap.flushEventDriven();
+      await Promise.resolve();
+
+      expect(serializeSpy).toHaveBeenCalledTimes(1);
 
       host.asyncResolve();
       await flushMicrotasks();
