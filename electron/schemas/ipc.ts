@@ -151,6 +151,10 @@ export const TerminalSnapshotSchema = z
     agentPresetId: z.string().optional(),
     agentPresetColor: z.string().optional(),
     originalPresetId: z.string().optional(),
+    // Captured launch env replayed on restore so a session keeps its provider
+    // environment (#10922). Re-sanitized on the renderer serialize/respawn
+    // boundary; validated here only as a string map.
+    env: z.record(z.string(), z.string()).optional(),
     isUsingFallback: z.boolean().optional(),
     fallbackChainIndex: z.number().int().nonnegative().optional(),
     pluginId: z.string().optional(),

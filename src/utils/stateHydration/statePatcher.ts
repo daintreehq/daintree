@@ -303,6 +303,11 @@ export function buildArgsForBackendTerminal(
       backendTerminal.originalAgentPresetId ??
       readPresetId(saved) ??
       backendTerminal.agentPresetId,
+    // Carry the captured launch env forward so a reconnect (project switch /
+    // renderer reload to a still-live PTY) re-serializes the snapshot WITH env,
+    // instead of dropping it and reintroducing the provider swap on the next
+    // full restart (#10922). Not used to spawn here — the PTY already has it.
+    env: sanitizeAgentEnv(saved.env),
     isUsingFallback: saved.isUsingFallback,
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
@@ -370,6 +375,10 @@ export function buildArgsForReconnectedFallback(
       reconnectedTerminal.originalAgentPresetId ??
       readPresetId(saved) ??
       reconnectedTerminal.agentPresetId,
+    // Carry the captured launch env forward so a reconnect re-serializes the
+    // snapshot WITH env rather than dropping it and reintroducing the provider
+    // swap on the next full restart (#10922). Not used to spawn — PTY has it.
+    env: sanitizeAgentEnv(saved.env),
     isUsingFallback: saved.isUsingFallback,
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
@@ -523,8 +532,10 @@ export function buildArgsForRespawn(
   // Stale-preset split-brain: when saved.agentPresetId was set but the preset
   // no longer resolves (deleted custom preset, CCR route removed from config),
   // clear agentPresetId/agentPresetColor and strip the preset suffix from the
-  // title so the respawned panel doesn't lie about its identity — it's now
-  // running default env/command, so it should look like default.
+  // title so the respawned panel doesn't lie about its preset identity. Note the
+  // captured launch env (`env` below) is still replayed independently (#10922) —
+  // a deleted preset shouldn't silently swap a live session's provider — so the
+  // command/env are not necessarily "default" here, only the preset badge is.
   presetWasStale = isAgentPanel && presetWasStale;
   const respawnAgentPresetId = presetWasStale ? undefined : savedPresetIdForRespawn;
   const respawnAgentPresetColor = presetWasStale

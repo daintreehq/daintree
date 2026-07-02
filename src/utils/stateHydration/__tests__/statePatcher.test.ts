@@ -1756,6 +1756,135 @@ describe("buildArgsForRespawn — persisted launch env (#10922)", () => {
     );
     expect(result.env).toEqual({ A: "live" });
   });
+
+  it("falls back to live preset env when saved env is an empty object", () => {
+    getMergedPresetMock.mockReturnValue({ id: "user-aaa", name: "Preset", env: { A: "live" } });
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal",
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentPresetId: "user-aaa",
+        env: {},
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined
+    );
+    expect(result.env).toEqual({ A: "live" });
+  });
+
+  it("replays saved env for a recipe-launched agent with no preset id", () => {
+    // Recipe inline env has no preset identity to re-resolve — the persisted
+    // snapshot env is the only way to recover it.
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal",
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentSessionId: "sess-1",
+        env: { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" },
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined
+    );
+    expect(result.env).toEqual({ ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" });
+    // No preset was consulted (no agentPresetId on the saved snapshot).
+    expect(getMergedPresetMock).not.toHaveBeenCalled();
+  });
+
+  it("replays saved env for a non-agent terminal", () => {
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal",
+        cwd: "/p",
+        location: "grid",
+        env: { MY_VAR: "value" },
+      },
+      "terminal",
+      "/p",
+      { agents: {} },
+      false,
+      undefined
+    );
+    expect(result.env).toEqual({ MY_VAR: "value" });
+  });
+
+  it("keeps the saved env alongside the sessionLostOnRestore signal", () => {
+    // Session can't be resumed → fresh launch + signal, but the provider env
+    // must still replay so the fresh session lands on the right provider.
+    buildResumeCommandMock.mockReturnValue(undefined);
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal",
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentSessionId: "sess-expired",
+        agentLaunchFlags: ["--flag"],
+        env: { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" },
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      "/tmp"
+    );
+    expect(result.sessionLostOnRestore).toBe(true);
+    expect(result.env).toEqual({ ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" });
+  });
+});
+
+// Reconnect paths attach UI state to a still-live PTY (whose process env is
+// already fixed), but they must still carry the captured env forward so the
+// re-serialized snapshot keeps it — otherwise a project switch / renderer reload
+// silently drops env and reintroduces the provider swap on the next full restart.
+describe("reconnect builders forward the captured launch env (#10922)", () => {
+  it("buildArgsForBackendTerminal forwards sanitized saved.env", () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", kind: "terminal", launchAgentId: "claude" },
+      {
+        id: "t1",
+        location: "grid",
+        env: { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic", BAD: 1 as unknown as string },
+      },
+      "/p"
+    );
+    expect(result.env).toEqual({ ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" });
+  });
+
+  it("buildArgsForReconnectedFallback forwards sanitized saved.env", () => {
+    const result = buildArgsForReconnectedFallback(
+      { id: "t1", cwd: "/p" },
+      {
+        id: "t1",
+        location: "grid",
+        env: { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" },
+      },
+      "/p"
+    );
+    expect(result.env).toEqual({ ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" });
+  });
+
+  it("buildArgsForBackendTerminal omits env when the snapshot has none", () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", kind: "terminal", launchAgentId: "claude" },
+      { id: "t1", location: "grid" },
+      "/p"
+    );
+    expect(result.env).toBeUndefined();
+  });
 });
 
 // ── preset override path ──────────────────────────────────────────────────────
