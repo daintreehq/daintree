@@ -1,6 +1,6 @@
 // eager-import-allow: reads/writes agent session history via sync fs
-import { readFileSync } from "fs";
-import { mkdir, readFile } from "node:fs/promises";
+import { readFileSync, statSync } from "fs";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { resilientAtomicWriteFile } from "../../utils/fs.js";
 import type {
@@ -121,13 +121,72 @@ function normalizeRecords(parsed: unknown): AgentSessionRecord[] {
   });
 }
 
+// In-memory cache of the parsed journal, keyed by resolved file path. The resume
+// palette calls listAgentSessions() -> readSessionHistorySync() on every open,
+// which otherwise re-reads and re-parses the whole journal (up to 50 records per
+// worktree) each time. The cache is gated on the file's stat (size + mtimeMs) so
+// a direct on-disk change (or a write from any other path) is still picked up on
+// the next read; every writer refreshes it with the array it just persisted.
+// Memory-only — rebuilt from disk on first read after boot, no cross-process
+// coordination needed (all journal I/O runs on the single main-process loop).
+interface HistoryCacheEntry {
+  records: AgentSessionRecord[];
+  size: number;
+  mtimeMs: number;
+}
+const historyCache = new Map<string, HistoryCacheEntry>();
+
+function readCache(
+  filePath: string,
+  size: number,
+  mtimeMs: number
+): AgentSessionRecord[] | undefined {
+  const entry = historyCache.get(filePath);
+  if (entry && entry.size === size && entry.mtimeMs === mtimeMs) {
+    return entry.records;
+  }
+  return undefined;
+}
+
+function writeCache(
+  filePath: string,
+  records: AgentSessionRecord[],
+  size: number,
+  mtimeMs: number
+): void {
+  historyCache.set(filePath, { records, size, mtimeMs });
+}
+
+// Refresh the cache after a write with the exact array just persisted, keyed to
+// the freshly-written file's stat so the next read is a cache hit. If the stat
+// fails, drop the entry so the next read falls back to a disk re-read.
+function refreshCacheAfterWrite(filePath: string, records: AgentSessionRecord[]): void {
+  try {
+    const s = statSync(filePath);
+    writeCache(filePath, records, s.size, s.mtimeMs);
+  } catch {
+    historyCache.delete(filePath);
+  }
+}
+
+// NOTE: on a cache hit these readers return the cached array BY REFERENCE (that
+// shared-instance reuse is the whole point — a copy on every read would defeat
+// the cache). Callers MUST treat the result as read-only; never sort/push/splice
+// it in place. The production caller, listAgentSessions(), is safe: evictRecords()
+// only reads the input and returns freshly-built arrays.
 export function readSessionHistorySync(userData?: string): AgentSessionRecord[] {
   const filePath = getSessionHistoryPath(userData);
   if (!filePath) return [];
   try {
+    const s = statSync(filePath);
+    const cached = readCache(filePath, s.size, s.mtimeMs);
+    if (cached) return cached;
     const content = readFileSync(filePath, "utf8");
-    return normalizeRecords(JSON.parse(content));
+    const records = normalizeRecords(JSON.parse(content));
+    writeCache(filePath, records, s.size, s.mtimeMs);
+    return records;
   } catch {
+    historyCache.delete(filePath);
     return [];
   }
 }
@@ -136,9 +195,15 @@ export async function readSessionHistory(userData?: string): Promise<AgentSessio
   const filePath = getSessionHistoryPath(userData);
   if (!filePath) return [];
   try {
+    const s = await stat(filePath);
+    const cached = readCache(filePath, s.size, s.mtimeMs);
+    if (cached) return cached;
     const content = await readFile(filePath, "utf8");
-    return normalizeRecords(JSON.parse(content));
+    const records = normalizeRecords(JSON.parse(content));
+    writeCache(filePath, records, s.size, s.mtimeMs);
+    return records;
   } catch {
+    historyCache.delete(filePath);
     return [];
   }
 }
@@ -162,6 +227,7 @@ export async function persistAgentSession(
     const updated = evictRecords([fullRecord, ...existing], now, retentionDaysToMs(retentionDays));
 
     await resilientAtomicWriteFile(filePath, JSON.stringify(updated, null, 2));
+    refreshCacheAfterWrite(filePath, updated);
   });
 }
 
@@ -196,6 +262,7 @@ export async function pruneAgentSessions(
     const existing = await readSessionHistory(userData);
     const pruned = evictRecords(existing, Date.now(), retentionDaysToMs(retentionDays));
     await resilientAtomicWriteFile(filePath, JSON.stringify(pruned, null, 2));
+    refreshCacheAfterWrite(filePath, pruned);
   });
 }
 
@@ -209,11 +276,13 @@ export async function clearAgentSessions(worktreeId?: string, userData?: string)
     if (!worktreeId) {
       // Clear all
       await resilientAtomicWriteFile(filePath, "[]");
+      refreshCacheAfterWrite(filePath, []);
       return;
     }
 
     const existing = await readSessionHistory(userData);
     const filtered = existing.filter((r) => r.worktreeId !== worktreeId);
     await resilientAtomicWriteFile(filePath, JSON.stringify(filtered, null, 2));
+    refreshCacheAfterWrite(filePath, filtered);
   });
 }

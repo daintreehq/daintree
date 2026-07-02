@@ -316,7 +316,6 @@ describe("openDb (integration)", () => {
     ).entries as Array<{ when: number; tag: string }>;
     // Everything except the most recent migration is "already applied".
     const applied = journal.slice(0, -1);
-    const latest = journal[journal.length - 1];
 
     const Database = (await import("better-sqlite3")).default;
     const seed = new Database(dbPath);
@@ -342,18 +341,23 @@ describe("openDb (integration)", () => {
     for (const entry of applied) ins.run(entry.tag, entry.when);
     seed.close();
 
-    // The last migration's effect must be absent before the upgrade for the test
-    // to mean anything — the seed `projects` table above omits `auto_parked_at`,
-    // which the final migration (0005) adds.
-    expect(latest.tag).toContain("auto_parked_at");
+    // The final migration's effect must be absent before the upgrade for the test
+    // to mean anything — the seed `projects` table was created without indexes, and
+    // the final migration (0006) adds projects_path_idx + projects_frecency_last_opened_idx.
+    const preCheck = new Database(dbPath, { readonly: true });
+    const seededIndexes = (
+      preCheck.prepare("PRAGMA index_list(projects)").all() as Array<{ name: string }>
+    ).map((i) => i.name);
+    preCheck.close();
+    expect(seededIndexes).not.toContain("projects_frecency_last_opened_idx");
 
     const { sqlite } = openDb(dbPath, migrationsFolder);
     try {
-      const projectColumns = sqlite.prepare("PRAGMA table_info(projects)").all() as Array<{
-        name: string;
-      }>;
-      const hasAutoParkedAt = projectColumns.some((c) => c.name === "auto_parked_at");
-      expect(hasAutoParkedAt).toBe(true);
+      const projectIndexes = (
+        sqlite.prepare("PRAGMA index_list(projects)").all() as Array<{ name: string }>
+      ).map((i) => i.name);
+      expect(projectIndexes).toContain("projects_path_idx");
+      expect(projectIndexes).toContain("projects_frecency_last_opened_idx");
 
       // The skipped migration is now recorded — total equals the full journal.
       const migrations = sqlite.prepare("SELECT id FROM __drizzle_migrations").all();
