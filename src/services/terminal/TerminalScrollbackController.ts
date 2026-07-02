@@ -70,6 +70,8 @@ export function restoreScrollback(managed: ManagedTerminal): void {
   const { performanceMode } = usePerformanceModeStore.getState();
 
   if (performanceMode) {
+    // Deliberate memory downshift — apply it unconditionally, matching the
+    // `force` path of reduceScrollback used by bulk memory-pressure actions.
     writeScrollback(managed, PERFORMANCE_MODE_SCROLLBACK);
     return;
   }
@@ -81,6 +83,38 @@ export function restoreScrollback(managed: ManagedTerminal): void {
       )
     : undefined;
   const globalScrollback = getValidScrollbackBase(scrollbackLines) ?? 0;
+  const targetLines = getScrollbackForType(isAgent, projectScrollback ?? globalScrollback);
 
-  writeScrollback(managed, getScrollbackForType(isAgent, projectScrollback ?? globalScrollback));
+  // Growth (agent promotion, resource-tier upgrade) is non-destructive — always
+  // apply it. A shrink, though, synchronously and irreversibly evicts the
+  // oldest buffer lines in xterm (same primitive as reduceScrollback). When
+  // this "restore" would actually drop history — e.g. an agent→plain demotion
+  // during a detection flap where the plain target is smaller than the agent
+  // ceiling — apply the same protections as reduceScrollback so a focused,
+  // selecting, or scrolled-back user doesn't lose scrollback to transient
+  // flapping. #10911
+  const currentScrollback = readScrollback(managed);
+  if (targetLines < currentScrollback) {
+    const scrollbackUsed = managed.terminal.buffer.active.length - managed.terminal.rows;
+    const wouldEvict = scrollbackUsed > targetLines;
+    if (wouldEvict) {
+      if (managed.isFocused) return;
+      if (managed.isUserScrolledBack) return;
+      if (managed.isAltBuffer) return;
+      if (managed.terminal.hasSelection()) return;
+
+      const lastReduceAt = managed.lastScrollbackReduceAt;
+      if (lastReduceAt !== undefined && Date.now() - lastReduceAt < SCROLLBACK_REDUCE_COOLDOWN_MS) {
+        return;
+      }
+    }
+
+    writeScrollback(managed, targetLines);
+    if (wouldEvict) {
+      managed.lastScrollbackReduceAt = Date.now();
+    }
+    return;
+  }
+
+  writeScrollback(managed, targetLines);
 }
