@@ -100,7 +100,7 @@ vi.mock("../../utils/gitFileWatcher.js", () => {
   return {
     GitFileWatcher: class {
       start() {
-        return false;
+        return Promise.resolve(false);
       }
       dispose() {}
     },

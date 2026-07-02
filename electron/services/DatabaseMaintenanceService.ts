@@ -8,6 +8,7 @@ import {
   probeDb,
   attemptRecovery,
 } from "./persistence/db.js";
+import { runDbWork } from "./persistence/dbWorkerClient.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 
 const TICK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -19,6 +20,7 @@ class DatabaseMaintenanceService {
   private backupPromise: Promise<void> | null = null;
   private disposed = false;
   private initialized = false;
+  private deferredQuickCheckPending = false;
 
   initialize(wasCleanExit = false): void {
     if (this.initialized) return;
@@ -38,6 +40,10 @@ class DatabaseMaintenanceService {
       } else {
         console.warn("[DatabaseMaintenance] No backup to restore — fresh database will be created");
       }
+    } else if (wasCleanExit) {
+      // Clean-exit boots skip the O(size) quick_check; run it once from the
+      // first idle tick on the DB worker thread instead.
+      this.deferredQuickCheckPending = true;
     }
 
     console.log("[DatabaseMaintenance] Initialized (probe complete)");
@@ -54,7 +60,7 @@ class DatabaseMaintenanceService {
 
     try {
       this.removeSuspendListener = getSystemSleepService().onSuspend(() => {
-        this.checkpoint("PASSIVE");
+        void runDbWork({ op: "checkpoint", mode: "PASSIVE" }, () => this.checkpoint("PASSIVE"));
       });
     } catch {
       // SystemSleepService may not be initialized yet at early startup.
@@ -107,8 +113,30 @@ class DatabaseMaintenanceService {
     const sqlite = getSharedSqlite();
     if (!sqlite) return;
 
-    this.checkpoint("TRUNCATE");
+    // PASSIVE at runtime: a TRUNCATE/RESTART checkpoint from the worker
+    // connection blocks concurrent writers while it waits out readers, which
+    // would spin a main-thread write on its busy_timeout. The full TRUNCATE
+    // runs once, on main, from dispose() at shutdown.
+    void runDbWork({ op: "checkpoint", mode: "PASSIVE" }, () => this.checkpoint("PASSIVE"));
+    this.runDeferredQuickCheck();
     this.backupPromise = this.runBackup();
+  }
+
+  private runDeferredQuickCheck(): void {
+    if (!this.deferredQuickCheckPending) return;
+    this.deferredQuickCheckPending = false;
+    // Advisory only, and never on main — when the worker is unavailable the
+    // fallback skips the scan rather than stalling the event loop for it.
+    void runDbWork<string | null>({ op: "quickCheck" }, () => null).then((result) => {
+      if (result === null) {
+        console.warn("[DatabaseMaintenance] Deferred quick_check skipped — DB worker unavailable");
+      } else if (result !== "ok") {
+        console.error(
+          `[DatabaseMaintenance] Deferred quick_check reported corruption in ${getDbPath()}:`,
+          result
+        );
+      }
+    });
   }
 
   private checkpoint(mode: "PASSIVE" | "TRUNCATE"): void {

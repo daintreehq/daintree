@@ -53,6 +53,16 @@ export interface WatcherControllerHost {
 export class WatcherController {
   private gitWatcher = new MutableDisposable<IDisposable>();
   private gitWatcherMode: WatcherMode = "none";
+  /**
+   * In-flight `GitFileWatcher.start()` (the git-dir resolution is async).
+   * While set, the controller reports the arm's target mode optimistically —
+   * poll-cadence and focus-rotation decisions made during the short arming
+   * window then match what a synchronous arm would have produced. Any
+   * teardown/rotation cancels the arm via `cancelPendingArm()`; the arm's
+   * completion handler recognizes the cancellation by identity and discards
+   * itself.
+   */
+  private pendingArm: { watcher: GitFileWatcher; mode: WatcherMode } | null = null;
   private gitWatchDebounceTimer: NodeJS.Timeout | null = null;
   private gitWatchRefreshPending = false;
   private watcherRetryTimer: NodeJS.Timeout | null = null;
@@ -71,7 +81,7 @@ export class WatcherController {
   constructor(private readonly host: WatcherControllerHost) {}
 
   get hasWatcher(): boolean {
-    return this.gitWatcher.value !== undefined;
+    return this.gitWatcher.value !== undefined || this.pendingArm !== null;
   }
 
   get currentMode(): WatcherMode {
@@ -114,7 +124,7 @@ export class WatcherController {
    */
   start(mode: "git-only" | "recursive" = this.desiredMode()): void {
     if (this.disposed) return;
-    if (!this.host.isRunning || !this.host.gitWatchEnabled || this.gitWatcher.value) {
+    if (!this.host.isRunning || !this.host.gitWatchEnabled || this.hasWatcher) {
       return;
     }
 
@@ -132,44 +142,71 @@ export class WatcherController {
       onEmfileLimitReached: () => this.host.onEmfileLimitReached(this.host.worktreeId),
     });
 
-    const started = watcher.start();
-    if (started) {
-      this.gitWatcher.value = toDisposable(() => watcher.dispose());
-      this.gitWatcherMode = mode;
-      if (mode === "recursive" && this.wasDegraded) {
-        // Recursive coverage restored after a degradation. Signal recovery
-        // exactly once per degradation episode so the host can reset its
-        // one-shot guards and clear the persistent degraded indicator.
-        this.wasDegraded = false;
-        this.host.onWatcherRecovered?.();
+    const arm = { watcher, mode };
+    this.pendingArm = arm;
+    // Optimistic: the mode reflects the arm's target while it's in flight so
+    // pollIntervalMs()/desiredMode() comparisons behave as if the arm were
+    // synchronous. The completion handler corrects it on failure.
+    this.gitWatcherMode = mode;
+
+    void watcher.start().then((started) => {
+      if (this.pendingArm !== arm) {
+        // Superseded by stop()/update()/handleWatcherFailed() during the arm.
+        watcher.dispose();
+        return;
       }
-      // Retry budget is managed by stop(true) (reset) and scheduleRetry()
-      // (increment). Resetting it here would defeat exhaustion — a failing
-      // git-only fallback path would keep getting fresh budget every cycle.
-    } else {
-      watcher.dispose();
-      if (mode === "recursive") {
-        // Recursive arm failed — mark degraded so the eventual successful
-        // re-arm signals recovery, even if the watcher returned false without
-        // routing through `onWatcherFailed`.
-        this.wasDegraded = true;
-        // The recursive watcher fires `onWatcherFailed` synchronously on
-        // startup ENOSPC/EMFILE before returning false, so handleWatcherFailed
-        // may have already installed a git-only fallback by this point. Only
-        // attempt the downgrade ourselves when no degraded watcher exists.
-        if (!this.gitWatcher.value) {
-          this.start("git-only");
+      this.pendingArm = null;
+      if (this.disposed) {
+        watcher.dispose();
+        return;
+      }
+      if (started) {
+        this.gitWatcher.value = toDisposable(() => watcher.dispose());
+        if (mode === "recursive" && this.wasDegraded) {
+          // Recursive coverage restored after a degradation. Signal recovery
+          // exactly once per degradation episode so the host can reset its
+          // one-shot guards and clear the persistent degraded indicator.
+          this.wasDegraded = false;
+          this.host.onWatcherRecovered?.();
         }
-        // Background worktrees don't want recursive at all, so don't keep
-        // poking at it; the next focus flip re-arms via the focus change.
-        if (this.host.isCurrent) {
-          this.scheduleRetry();
-        }
+        // Retry budget is managed by stop(true) (reset) and scheduleRetry()
+        // (increment). Resetting it here would defeat exhaustion — a failing
+        // git-only fallback path would keep getting fresh budget every cycle.
       } else {
-        // git-only itself failed (e.g. getGitDir returned null). Stay dark
-        // and let the polling fallback cover it; no retry loop.
+        watcher.dispose();
         this.gitWatcherMode = "none";
+        if (mode === "recursive") {
+          // Recursive arm failed — mark degraded so the eventual successful
+          // re-arm signals recovery, even if the watcher returned false without
+          // routing through `onWatcherFailed`.
+          this.wasDegraded = true;
+          // `onWatcherFailed` may already have fired during the arm and
+          // installed a git-only fallback via handleWatcherFailed. Only
+          // attempt the downgrade ourselves when no degraded watcher exists.
+          if (!this.hasWatcher) {
+            this.start("git-only");
+          }
+          // Background worktrees don't want recursive at all, so don't keep
+          // poking at it; the next focus flip re-arms via the focus change.
+          if (this.host.isCurrent) {
+            this.scheduleRetry();
+          }
+        }
+        // git-only itself failed (e.g. getGitDir returned null): stay dark
+        // and let the polling fallback cover it; no retry loop.
       }
+    });
+  }
+
+  /**
+   * Abandon an in-flight arm. The arm's completion handler detects the
+   * identity mismatch and self-discards; disposing here additionally stops
+   * `GitFileWatcher.start()` from arming any watchers after its await points.
+   */
+  private cancelPendingArm(): void {
+    if (this.pendingArm) {
+      this.pendingArm.watcher.dispose();
+      this.pendingArm = null;
     }
   }
 
@@ -180,6 +217,7 @@ export class WatcherController {
    * (`stop(true)`) or a feature disable should reset it.
    */
   stop(resetRetryBudget: boolean = true): void {
+    this.cancelPendingArm();
     this.gitWatcher.clear();
     this.gitWatcherMode = "none";
     if (this.gitWatchDebounceTimer) {
@@ -227,14 +265,14 @@ export class WatcherController {
    * defeat the hysteresis the moment a focused worktree turns background.
    */
   ensureState(): void {
-    if (!this.host.gitWatchEnabled && this.gitWatcher.value) {
+    if (!this.host.gitWatchEnabled && this.hasWatcher) {
       this.stop();
-    } else if (this.host.gitWatchEnabled && this.host.isRunning && !this.gitWatcher.value) {
+    } else if (this.host.gitWatchEnabled && this.host.isRunning && !this.hasWatcher) {
       this.start();
     } else if (
       this.host.gitWatchEnabled &&
       this.host.isRunning &&
-      this.gitWatcher.value &&
+      this.hasWatcher &&
       this.gitWatcherMode !== this.desiredMode() &&
       this.downgradeTimer === null
     ) {
@@ -246,7 +284,7 @@ export class WatcherController {
   }
 
   restartIfRunning(): void {
-    if (this.gitWatcher.value) {
+    if (this.hasWatcher) {
       this.update();
     }
   }
@@ -273,7 +311,7 @@ export class WatcherController {
         clearTimeout(this.downgradeTimer);
         this.downgradeTimer = null;
       }
-      if (!this.gitWatcher.value) {
+      if (!this.hasWatcher) {
         // Recovery path: a previous start failed and left us with no
         // watcher. Focusing should attempt to arm the recursive variant.
         this.start();
@@ -286,7 +324,7 @@ export class WatcherController {
       return false;
     }
 
-    if (!this.gitWatcher.value || this.gitWatcherMode !== "recursive") {
+    if (!this.hasWatcher || this.gitWatcherMode !== "recursive") {
       return false;
     }
     if (this.downgradeTimer) {
@@ -417,6 +455,7 @@ export class WatcherController {
     // other runtime failure. Arm the recovery signal for the next successful
     // recursive re-arm.
     this.wasDegraded = true;
+    this.cancelPendingArm();
     this.gitWatcher.clear();
     this.gitWatcherMode = "none";
     this.start("git-only");
@@ -452,6 +491,7 @@ export class WatcherController {
       ) {
         // Drop any current git-only instance so start()'s idempotent
         // guard doesn't bail; reconstruction installs the recursive variant.
+        this.cancelPendingArm();
         this.gitWatcher.clear();
         this.gitWatcherMode = "none";
         this.start("recursive");

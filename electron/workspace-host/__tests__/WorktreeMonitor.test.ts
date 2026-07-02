@@ -122,7 +122,7 @@ vi.mock("../../utils/gitFileWatcher.js", () => {
         if (this.watchWorktree && mockWatcherStartFiresFailure && !result) {
           this.onWatcherFailed?.();
         }
-        return result;
+        return Promise.resolve(result);
       }
       dispose() {}
     },
@@ -212,7 +212,7 @@ describe("WorktreeMonitor", () => {
     capturedWatcherOptions = undefined;
     capturedWatcherOptionsHistory.length = 0;
     mockGetRepoOperationStateSync.mockReturnValue(undefined);
-    vi.mocked(getGitDir).mockReturnValue(null);
+    vi.mocked(getGitDir).mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -912,7 +912,7 @@ describe("WorktreeMonitor", () => {
     });
 
     it("reuses cached divergence on forced passes until a tracked ref's stat changes", async () => {
-      vi.mocked(getGitDir).mockReturnValue("/test/worktree/.git");
+      vi.mocked(getGitDir).mockResolvedValue("/test/worktree/.git");
       vi.mocked(readFile).mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
       vi.mocked(stat).mockResolvedValue({ mtimeMs: 1_000 } as unknown as Awaited<
         ReturnType<typeof stat>
@@ -1591,7 +1591,7 @@ describe("WorktreeMonitor", () => {
     });
 
     it("deduplicates rapid poll calls — only one executePoll per cycle", async () => {
-      let resolveGit!: () => void;
+      let resolveGit: (() => void) | undefined;
       mockGetWorktreeChangesWithStats.mockImplementation(
         () =>
           new Promise<{
@@ -1621,10 +1621,51 @@ describe("WorktreeMonitor", () => {
       const p1 = (monitor as unknown as { poll: () => Promise<void> }).poll();
       const p2 = (monitor as unknown as { poll: () => Promise<void> }).poll();
 
+      // The poll path resolves the git dir asynchronously before reaching
+      // getWorktreeChangesWithStats — flush microtasks until the mock arms.
+      for (let i = 0; i < 50 && resolveGit === undefined; i++) {
+        await Promise.resolve();
+      }
       // Resolve the single git call
-      resolveGit();
+      resolveGit!();
       await p1;
       await p2;
+
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+      monitor.stop();
+    });
+
+    it("single-flights forced refreshes across the async git-dir resolution", async () => {
+      // Both forced refreshes arrive while the FIRST getGitDir is still
+      // pending (later calls inside the status pass resolve immediately). The
+      // second refresh must be rejected by the single-flight claim —
+      // forceRefresh bypasses getWorktreeChangesWithStats' in-flight cache,
+      // so without the early claim both would run duplicate status passes.
+      let resolveFirstGitDir: ((value: string | null) => void) | undefined;
+      vi.mocked(getGitDir).mockImplementationOnce(
+        () =>
+          new Promise<string | null>((resolve) => {
+            resolveFirstGitDir = resolve;
+          })
+      );
+      vi.mocked(getGitDir).mockResolvedValue(null);
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      monitor.startWithoutGitStatus();
+
+      const first = monitor.updateGitStatus(true);
+      const second = monitor.updateGitStatus(true);
+      expect(resolveFirstGitDir).toBeDefined();
+      resolveFirstGitDir?.(null);
+      await Promise.all([first, second]);
 
       expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
       monitor.stop();
@@ -2637,7 +2678,7 @@ describe("WorktreeMonitor", () => {
 
   describe("git operation skip (rebase / merge / cherry-pick)", () => {
     it("skips getWorktreeChangesWithStats while a git operation is in progress", async () => {
-      vi.mocked(getGitDir).mockReturnValue("/test/worktree/.git");
+      vi.mocked(getGitDir).mockResolvedValue("/test/worktree/.git");
       mockGetRepoOperationStateSync.mockReturnValue("REBASING");
 
       const callbacks = makeCallbacks();
@@ -2653,7 +2694,7 @@ describe("WorktreeMonitor", () => {
     });
 
     it("runs git status normally once the operation finishes", async () => {
-      vi.mocked(getGitDir).mockReturnValue("/test/worktree/.git");
+      vi.mocked(getGitDir).mockResolvedValue("/test/worktree/.git");
       mockGetRepoOperationStateSync.mockReturnValue("MERGING");
       mockGetWorktreeChangesWithStats.mockResolvedValue({
         worktreeId: "/test/worktree",
@@ -2687,7 +2728,7 @@ describe("WorktreeMonitor", () => {
     });
 
     it("emits an initial snapshot when start() is skipped mid-operation", async () => {
-      vi.mocked(getGitDir).mockReturnValue("/test/worktree/.git");
+      vi.mocked(getGitDir).mockResolvedValue("/test/worktree/.git");
       mockGetRepoOperationStateSync.mockReturnValue("REBASING");
 
       const callbacks = makeCallbacks();
@@ -2706,7 +2747,7 @@ describe("WorktreeMonitor", () => {
     });
 
     it("forced refresh during a blocking operation stamps freshness and re-emits (#10715)", async () => {
-      vi.mocked(getGitDir).mockReturnValue("/test/worktree/.git");
+      vi.mocked(getGitDir).mockResolvedValue("/test/worktree/.git");
       mockGetRepoOperationStateSync.mockReturnValue("REVERTING");
 
       const callbacks = makeCallbacks();
@@ -2734,7 +2775,7 @@ describe("WorktreeMonitor", () => {
     });
 
     it("background poll during a blocking operation stamps silently without re-emitting", async () => {
-      vi.mocked(getGitDir).mockReturnValue("/test/worktree/.git");
+      vi.mocked(getGitDir).mockResolvedValue("/test/worktree/.git");
       mockGetRepoOperationStateSync.mockReturnValue("REBASING");
 
       const callbacks = makeCallbacks();
@@ -2754,7 +2795,7 @@ describe("WorktreeMonitor", () => {
     });
 
     it("does not check operation sentinels when getGitDir returns null", async () => {
-      vi.mocked(getGitDir).mockReturnValue(null);
+      vi.mocked(getGitDir).mockResolvedValue(null);
       mockGetWorktreeChangesWithStats.mockResolvedValue({
         worktreeId: "/test/worktree",
         rootPath: "/test",
@@ -3086,7 +3127,7 @@ describe("WorktreeMonitor", () => {
     };
 
     beforeEach(() => {
-      vi.mocked(getGitDir).mockReturnValue("/test/worktree/.git");
+      vi.mocked(getGitDir).mockResolvedValue("/test/worktree/.git");
       // No commondir file → commondir defaults to gitDir for the test worktree
       vi.mocked(readFile).mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
       mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);

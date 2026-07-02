@@ -231,7 +231,7 @@ describe("WorktreeListService", () => {
   });
 
   describe("mapToWorktrees", () => {
-    it("uses directory name for main worktree display name", () => {
+    it("uses directory name for main worktree display name", async () => {
       const raw = [
         {
           path: "/projects/my-repo",
@@ -247,13 +247,13 @@ describe("WorktreeListService", () => {
         },
       ];
 
-      const worktrees = service.mapToWorktrees(raw);
+      const worktrees = await service.mapToWorktrees(raw);
 
       expect(worktrees[0].name).toBe("my-repo");
       expect(worktrees[1].name).toBe("feature/cool");
     });
 
-    it("normalizes listed paths before using them as worktree IDs", () => {
+    it("normalizes listed paths before using them as worktree IDs", async () => {
       const basePath = path.resolve("/projects/my-repo");
       const rawPath = `${basePath}${path.sep}..${path.sep}my-repo-feature`;
       const expectedPath = path.resolve(basePath, "..", "my-repo-feature");
@@ -266,14 +266,14 @@ describe("WorktreeListService", () => {
         },
       ];
 
-      const worktrees = service.mapToWorktrees(raw);
+      const worktrees = await service.mapToWorktrees(raw);
 
       expect(worktrees[0].id).toBe(expectedPath);
       expect(worktrees[0].path).toBe(expectedPath);
       expect(worktrees[0].gitDir).toBe(`${expectedPath}/.git`);
     });
 
-    it("propagates locked/prunable fields to the mapped Worktree", () => {
+    it("propagates locked/prunable fields to the mapped Worktree", async () => {
       const raw = [
         {
           path: "/projects/my-repo",
@@ -293,7 +293,7 @@ describe("WorktreeListService", () => {
         },
       ];
 
-      const worktrees = service.mapToWorktrees(raw);
+      const worktrees = await service.mapToWorktrees(raw);
 
       expect(worktrees[0].isLocked).toBeUndefined();
       expect(worktrees[1].isLocked).toBe(true);

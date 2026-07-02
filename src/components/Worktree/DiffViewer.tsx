@@ -4,6 +4,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -14,9 +15,6 @@ import {
   Diff,
   Hunk,
   Decoration,
-  tokenize,
-  markEdits,
-  pickRanges,
   getChangeKey,
   expandFromRawCode,
   getCollapsedLinesCountBetween,
@@ -29,19 +27,8 @@ import type {
   RenderGutter,
   RenderToken,
   TokenNode,
-  TokenizeOptions,
   ViewType,
 } from "react-diff-view";
-import { refractor } from "refractor/core";
-import type { Syntax } from "refractor/core";
-import bash from "refractor/bash";
-import css from "refractor/css";
-import javascript from "refractor/javascript";
-import jsx from "refractor/jsx";
-import json from "refractor/json";
-import markdown from "refractor/markdown";
-import tsx from "refractor/tsx";
-import typescript from "refractor/typescript";
 import "react-diff-view/style/index.css";
 // Our overrides — must come after the library stylesheet it overrides.
 import "./DiffViewer.css";
@@ -70,78 +57,13 @@ import {
   estimateFileDiffBytes,
 } from "./diffCollapseUtils";
 import { detectMovedLines } from "./diffMovedUtils";
-import { suppressFullLineEdits } from "./diffEditSuppression";
 import { computeSearchRanges, computeTrailingWsRanges } from "./diffTokenRanges";
 import type { SideRanges } from "./diffTokenRanges";
+import { isLanguageFailed } from "./diffRefractor";
+import { diffTokenizeClient } from "@/services/DiffTokenizeService";
 import { formatBytes } from "@/lib/formatBytes";
 
-for (const lang of [bash, css, javascript, jsx, json, markdown, tsx, typescript]) {
-  refractor.register(lang);
-}
-
-/**
- * react-diff-view's tokenize expects refractor v3's highlight() contract — a
- * plain array of nodes. refractor v4+ returns a hast Root object, whose
- * non-iterable shape makes the token tree walk throw, which the catch in
- * useTokens silently turns into tokens = null: no syntax highlighting, no
- * word-level edit pills, no search marks. Unwrapping .children restores the
- * v3 shape the library walks correctly.
- */
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- structurally satisfies the lib's { highlight } contract; the v5 Root type can't
-const refractorAdapter = {
-  highlight: (code: string, language: string) => refractor.highlight(code, language).children,
-} as unknown as typeof refractor;
-
-const LANG_LOADERS: Record<string, () => Promise<{ default: Syntax }>> = {
-  c: () => import("refractor/c"),
-  cpp: () => import("refractor/cpp"),
-  csharp: () => import("refractor/csharp"),
-  docker: () => import("refractor/docker"),
-  go: () => import("refractor/go"),
-  graphql: () => import("refractor/graphql"),
-  java: () => import("refractor/java"),
-  kotlin: () => import("refractor/kotlin"),
-  less: () => import("refractor/less"),
-  makefile: () => import("refractor/makefile"),
-  markup: () => import("refractor/markup"),
-  php: () => import("refractor/php"),
-  python: () => import("refractor/python"),
-  ruby: () => import("refractor/ruby"),
-  rust: () => import("refractor/rust"),
-  sass: () => import("refractor/sass"),
-  scss: () => import("refractor/scss"),
-  sql: () => import("refractor/sql"),
-  swift: () => import("refractor/swift"),
-  toml: () => import("refractor/toml"),
-  yaml: () => import("refractor/yaml"),
-};
-
-const langLoadPromises = new Map<string, Promise<void>>();
-const FAILED_LANGS = new Set<string>();
-
-export function _resetLangStateForTests(): void {
-  FAILED_LANGS.clear();
-  langLoadPromises.clear();
-}
-
-function ensureLanguage(language: string): Promise<void> {
-  if (refractor.registered(language)) return Promise.resolve();
-  const loader = LANG_LOADERS[language];
-  if (!loader) return Promise.resolve();
-  let pending = langLoadPromises.get(language);
-  if (!pending) {
-    pending = loader()
-      .then((mod) => {
-        refractor.register(mod.default);
-      })
-      .catch((err: unknown) => {
-        console.warn(`Failed to load refractor grammar for "${language}"`, err);
-        FAILED_LANGS.add(language);
-      });
-    langLoadPromises.set(language, pending);
-  }
-  return pending;
-}
+export { _resetLangStateForTests } from "./diffRefractor";
 
 export interface DiffViewerProps {
   diff: string;
@@ -252,8 +174,13 @@ export const renderTokenWithInvisibles: RenderToken = (token, renderDefault, ind
   );
 };
 
-/** Changed-line budget above which word-level edit marking is skipped. */
-const MAX_INTRALINE_CHANGES = 3000;
+interface TokenizePass {
+  hunks: HunkData[];
+  language: string;
+  highlight: boolean;
+  tokens: HunkTokens | null;
+  langLoadFailed: boolean;
+}
 
 function useTokens(
   hunks: HunkData[],
@@ -265,79 +192,49 @@ function useTokens(
   tokens: HunkTokens | null;
   langLoadFailed: boolean;
 } {
-  const needsGrammar = enabled && highlight;
-  const [langReady, setLangReady] = useState(() => refractor.registered(language));
-  const [langLoadFailed, setLangLoadFailed] = useState(() => FAILED_LANGS.has(language));
-
-  useEffect(() => {
-    if (!needsGrammar) return;
-    if (refractor.registered(language)) {
-      setLangReady(true);
-      setLangLoadFailed(false);
-      return;
-    }
-    setLangReady(false);
-    let cancelled = false;
-    void ensureLanguage(language).then(() => {
-      if (!cancelled) {
-        setLangReady(refractor.registered(language));
-        setLangLoadFailed(FAILED_LANGS.has(language));
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [language, needsGrammar]);
-
-  const [tokens, setTokens] = useState<HunkTokens | null>(null);
+  const requestKey = useId();
+  const [pass, setPass] = useState<TokenizePass | null>(null);
 
   // Two-pass paint: the unhighlighted table commits first, then tokenization
-  // runs post-paint and lands as a low-priority update. Collapsed files skip
-  // the work entirely until expanded; size-gated files keep markEdits
-  // word-level marks but skip the grammar walk (highlight: false).
+  // runs in the diff-tokenize worker and lands as a low-priority update.
+  // Collapsed files skip the work entirely until expanded; size-gated files
+  // keep markEdits word-level marks but skip the grammar walk (highlight:
+  // false). While a request is in flight the previous pass keeps rendering —
+  // tokens are dropped at derivation when the hunks, language, or highlight
+  // mode they were built from change, so a stale tree never mismatches the
+  // rendered rows or the active grammar. extraRanges is deliberately not
+  // gated: keeping the previous search marks visible until the new pass lands
+  // mirrors the old useDeferredValue semantics.
   useEffect(() => {
-    if (!enabled || !hunks.length || (highlight && !langReady)) {
-      setTokens(null);
+    if (!enabled || !hunks.length) {
+      setPass(null);
       return;
     }
     let cancelled = false;
-    // Past the budget, intra-line diffing (diff-match-patch per change block)
-    // is churn-on-churn: the marks stop being review signal and the per-block
-    // diffs get slow. Whole-line fills only — the same large-hunk fallback
-    // git diff-highlight and VS Code apply.
-    let changedLines = 0;
-    for (const hunk of hunks) {
-      for (const change of hunk.changes) {
-        if (change.type !== "normal") changedLines++;
-      }
-    }
-    const intraLineEdits = changedLines <= MAX_INTRALINE_CHANGES;
-    const options: TokenizeOptions = {
-      highlight,
-      refractor: refractorAdapter,
-      language,
-      enhancers: [
-        ...(intraLineEdits ? [markEdits(hunks, { type: "block" }), suppressFullLineEdits()] : []),
-        ...(extraRanges ? [pickRanges(extraRanges.old, extraRanges.new)] : []),
-      ],
-    };
-    startTransition(() => {
-      if (cancelled) return;
-      try {
-        setTokens(tokenize(hunks, options) ?? null);
-      } catch (err) {
-        // A null token pass silently degrades highlighting, edit pills, and
-        // search marks to plain text — keep the failure observable.
-        console.warn("Diff tokenization failed", err);
-        setTokens(null);
-      }
-    });
+    void diffTokenizeClient
+      .tokenize(requestKey, { hunks, language, highlight, extraRanges })
+      .then((result) => {
+        if (cancelled || !result) return;
+        startTransition(() => {
+          setPass({
+            hunks,
+            language,
+            highlight,
+            tokens: result.tokens,
+            langLoadFailed: result.langLoadFailed,
+          });
+        });
+      });
     return () => {
       cancelled = true;
     };
-  }, [hunks, language, langReady, enabled, highlight, extraRanges]);
+  }, [hunks, language, enabled, highlight, extraRanges, requestKey]);
 
-  return { tokens, langLoadFailed };
+  const passCurrent = pass !== null && pass.hunks === hunks && pass.language === language;
+  return {
+    tokens: passCurrent && pass.highlight === highlight ? pass.tokens : null,
+    langLoadFailed: passCurrent ? pass.langLoadFailed : isLanguageFailed(language),
+  };
 }
 
 /**
@@ -685,7 +582,7 @@ function FileDiff({
   const relPath = getFilePath(file);
   const language = useMemo(() => {
     const derived = getLanguageForFile(relPath);
-    return FAILED_LANGS.has(derived) ? "plaintext" : derived;
+    return isLanguageFailed(derived) ? "plaintext" : derived;
   }, [relPath]);
   const diffType: DiffType = file.type as DiffType;
 

@@ -29,11 +29,12 @@ export function getPluginMcpAuditService(): PluginMcpAuditService {
       () => (store.get("pluginMcpAudit") ?? {}) as Record<string, unknown>,
       {
         read: () => auditRingStore.readAll("pluginMcpAuditLog"),
-        write: (records) =>
+        write: (records, options) =>
           auditRingStore.writeAll(
             "pluginMcpAuditLog",
             records,
-            PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS
+            PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS,
+            options
           ),
       }
     );

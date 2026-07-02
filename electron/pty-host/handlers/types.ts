@@ -1,6 +1,7 @@
 import type { MessagePort } from "node:worker_threads";
 import type { PtyManager } from "../../services/PtyManager.js";
 import type { PtyPool } from "../../services/PtyPool.js";
+import type { AnalysisWorkerPool } from "../../services/pty/analysis/AnalysisWorkerPool.js";
 import type { ProcessTreeCache } from "../../services/ProcessTreeCache.js";
 import type { TerminalResourceMonitor } from "../../services/pty/TerminalResourceMonitor.js";
 import type { PtyHostEvent } from "../../../shared/types/pty-host.js";
@@ -43,6 +44,8 @@ export interface HostContext {
    */
   windowFocusedTerminalMap: Map<number, string | null>;
   ipcDataMirrorTerminals: Set<string>;
+  /** Analysis worker pool (null when DAINTREE_DISABLE_ANALYSIS_WORKERS=1). */
+  analysisWorkerPool: AnalysisWorkerPool | null;
 
   // Reassignable — backed by getter/setter pairs in the construction site
   // so handlers always see the current value after init-buffers reassigns.

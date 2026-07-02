@@ -15,6 +15,7 @@ function makeCtx(stateRef: {
   } as unknown as HostContext["ptyManager"];
 
   return {
+    analysisWorkerPool: null,
     ptyManager,
     processTreeCache: {} as HostContext["processTreeCache"],
     terminalResourceMonitor: {} as HostContext["terminalResourceMonitor"],

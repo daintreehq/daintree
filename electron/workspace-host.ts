@@ -23,7 +23,7 @@ nodeV8.setHeapSnapshotNearHeapLimit(2);
 
 import { MessagePort } from "node:worker_threads";
 import { initializeLogger, setLogLevelOverrides } from "./utils/logger.js";
-import { copyTreeService } from "./services/CopyTreeService.js";
+import { copytreeWorkerClient } from "./workspace-host/CopytreeWorkerClient.js";
 import { fileTreeService } from "./services/FileTreeService.js";
 import { projectPulseService } from "./services/ProjectPulseService.js";
 import type { CopyTreeProgress } from "../shared/types/ipc.js";
@@ -592,7 +592,7 @@ port.on("message", async (rawMsg: any) => {
         };
 
         try {
-          const result = await copyTreeService.generate(
+          const result = await copytreeWorkerClient.generate(
             rootPath,
             options || {},
             onProgress,
@@ -616,7 +616,7 @@ port.on("message", async (rawMsg: any) => {
       }
 
       case "copytree:cancel":
-        copyTreeService.cancel(request.operationId);
+        copytreeWorkerClient.cancel(request.operationId);
         break;
 
       case "copytree:test-config": {
@@ -624,7 +624,11 @@ port.on("message", async (rawMsg: any) => {
         console.log(`[WorkspaceHost] CopyTree test-config started`);
 
         try {
-          const result = await copyTreeService.testConfig(rootPath, options || {}, operationId);
+          const result = await copytreeWorkerClient.testConfig(
+            rootPath,
+            options || {},
+            operationId
+          );
           sendEvent({
             type: "copytree:test-config-result",
             requestId,

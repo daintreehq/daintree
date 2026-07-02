@@ -9,6 +9,7 @@ function createCtx(overrides: Partial<HostContext> = {}): HostContext {
   } as unknown as HostContext["ptyManager"];
 
   return {
+    analysisWorkerPool: null,
     ptyManager,
     // The mapper only touches `ptyManager`; the rest of the surface is irrelevant
     // for these tests but must satisfy the structural type.

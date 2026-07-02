@@ -63,7 +63,7 @@ export class NoteFileReader {
       return undefined;
     }
 
-    const gitDir = getGitDir(this.worktreePath, { logErrors: true });
+    const gitDir = await getGitDir(this.worktreePath, { logErrors: true });
     if (!gitDir) {
       return undefined;
     }

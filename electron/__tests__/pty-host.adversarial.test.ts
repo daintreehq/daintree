@@ -219,6 +219,7 @@ vi.mock("../services/PtyManager.js", () => {
     setProcessTreeCache = vi.fn();
     setImagePathProbe = vi.fn();
     setPtyPool = vi.fn();
+    setAnalysisWorkerPool = vi.fn();
     setActivityMonitorTier = vi.fn();
     spawn = vi.fn((id: string, options: { projectId?: string }) => {
       if (!hostState.terminals.has(id)) {

@@ -7,6 +7,7 @@ import type { PtyPool } from "./PtyPool.js";
 import type { ProcessTreeCache } from "./ProcessTreeCache.js";
 import type { DetectionResult } from "./ProcessDetector.js";
 import type { ImagePathProbe } from "./pty/ImagePathProbe.js";
+import type { AnalysisWorkerPool } from "./pty/analysis/AnalysisWorkerPool.js";
 import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("pty-host:PtyManager");
@@ -64,6 +65,7 @@ export class PtyManager extends EventEmitter {
   private ptyPool: PtyPool | null = null;
   private processTreeCache: ProcessTreeCache | null = null;
   private imagePathProbe: ImagePathProbe | null = null;
+  private analysisWorkerPool: AnalysisWorkerPool | null = null;
   private activeProjectId: string | null = null;
   private sabModeEnabled = false;
   // Resize requests that arrived before the terminal was registered.
@@ -84,6 +86,16 @@ export class PtyManager extends EventEmitter {
 
   setImagePathProbe(probe: ImagePathProbe): void {
     this.imagePathProbe = probe;
+  }
+
+  /**
+   * Route per-terminal analysis (headless mirror + ActivityMonitor) into the
+   * worker pool. Terminals spawned before this is set — and all terminals when
+   * it never is (tests, DAINTREE_DISABLE_ANALYSIS_WORKERS=1) — use the legacy
+   * in-thread path.
+   */
+  setAnalysisWorkerPool(pool: AnalysisWorkerPool | null): void {
+    this.analysisWorkerPool = pool;
   }
 
   /**
@@ -311,6 +323,7 @@ export class PtyManager extends EventEmitter {
           sabModeEnabled: this.sabModeEnabled,
           processTreeCache: this.processTreeCache,
           imagePathProbe: this.imagePathProbe,
+          analysisWorkerPool: this.analysisWorkerPool,
         },
         spawnContext,
         ptyProcess,
@@ -439,7 +452,9 @@ export class PtyManager extends EventEmitter {
     const terminal = this.registry.get(id);
     if (terminal) {
       const wasExited = terminal.getInfo().isExited;
-      terminal.kill(reason, options?.escalationDelayMs);
+      terminal.kill(reason, options?.escalationDelayMs, {
+        skipFinalSessionPersist: !options?.preserveSession,
+      });
       // Note: deletion handled in onExit callback
       if (wasExited) {
         this.registry.delete(id);
@@ -470,7 +485,7 @@ export class PtyManager extends EventEmitter {
             // Best-effort branch stamp for resume sanity checks. The pty-host
             // has FS access but no WorkspaceClient, so resolve directly from
             // git with a short timeout; never let it block or fail the close.
-            const branch = info.cwd ? getGitBranch(info.cwd) : null;
+            const branch = info.cwd ? await getGitBranch(info.cwd) : null;
             // Ship the captured record to Main rather than writing the journal
             // here — Main is the journal's single writer (two processes with
             // separate write queues doing read-modify-write on one file can

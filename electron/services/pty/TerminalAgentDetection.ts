@@ -2,7 +2,7 @@ import { isBuiltInAgentId, type BuiltInAgentId } from "../../../shared/config/ag
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import type { DetectionResult, DetectionState } from "../ProcessDetector.js";
 import { events } from "../events.js";
-import type { ActivityMonitor } from "../ActivityMonitor.js";
+import type { PatternDetectionConfig } from "./AgentPatternDetector.js";
 import type { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
 import type { AgentStateService } from "./AgentStateService.js";
 import type { SemanticBufferManager } from "./SemanticBufferManager.js";
@@ -17,8 +17,9 @@ export interface TerminalAgentDetectionHost {
   readonly agentStateService: AgentStateService;
   readonly headlineGenerator: ActivityHeadlineGenerator;
   readonly semanticBufferManager: SemanticBufferManager;
-  readonly activityMonitor: ActivityMonitor | null;
+  readonly hasActivityMonitor: boolean;
   lastDetectedProcessIconId: string | undefined;
+  reconfigureActivityMonitor(agentId: string, patternConfig?: PatternDetectionConfig): void;
   startActivityMonitor(): void;
   stopActivityMonitor(): void;
 }
@@ -89,8 +90,8 @@ export function handleAgentDetection(
 
       const detection = getEffectiveAgentConfig(detectedAgentId)?.detection;
       const patternConfig = buildPatternConfig(detection, detectedAgentId);
-      if (host.activityMonitor) {
-        host.activityMonitor.reconfigure(detectedAgentId, patternConfig);
+      if (host.hasActivityMonitor) {
+        host.reconfigureActivityMonitor(detectedAgentId, patternConfig);
       } else {
         // Runtime promotion: plain terminal now hosts an agent. Start the
         // activity monitor immediately so the renderer sees state

@@ -44,7 +44,7 @@ function summarizePlaintext(args: unknown): string | undefined {
 
 export interface PluginAuditLogStore {
   read(): unknown;
-  write(records: PluginActionAuditRecord[]): void;
+  write(records: PluginActionAuditRecord[], options?: { sync?: boolean }): void;
 }
 
 // Persists the ring in the dedicated audit-logs store (migration023) so
@@ -53,8 +53,8 @@ export interface PluginAuditLogStore {
 // the injected config closures.
 const defaultLogStore: PluginAuditLogStore = {
   read: () => auditRingStore.readAll("pluginAuditLog"),
-  write: (records) =>
-    auditRingStore.writeAll("pluginAuditLog", records, PLUGIN_AUDIT_DEFAULT_MAX_RECORDS),
+  write: (records, options) =>
+    auditRingStore.writeAll("pluginAuditLog", records, PLUGIN_AUDIT_DEFAULT_MAX_RECORDS, options),
 };
 
 /**
@@ -215,21 +215,24 @@ export class PluginActionAuditService {
     this.flushTimer.unref?.();
   }
 
-  private flush(): void {
+  private flush(sync = false): void {
     if (!this.hydrated) return;
     try {
-      this.logStore.write([...this.records]);
+      this.logStore.write([...this.records], { sync });
     } catch (err) {
       console.error("[PluginAudit] Failed to flush audit log:", err);
     }
   }
 
+  // Critical-moment flush (clear, dispose, shutdown): persists synchronously
+  // on the main connection instead of the fire-and-forget worker path, so the
+  // snapshot is durable when this returns.
   flushNow(): void {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
-    this.flush();
+    this.flush(true);
   }
 
   /** Newest-first view of all persisted records. */

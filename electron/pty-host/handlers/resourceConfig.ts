@@ -56,6 +56,9 @@ export function createResourceConfigHandlers(ctx: HostContext): HandlerMap {
           ? msg.registry
           : {};
       setPluginAgentRegistry(registry);
+      // Analysis workers resolve detection patterns on their own thread —
+      // mirror the registry there too (new workers receive it at spawn).
+      ctx.analysisWorkerPool?.setPluginAgentRegistry(registry);
     },
   };
 }

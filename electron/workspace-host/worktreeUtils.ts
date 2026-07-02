@@ -108,7 +108,7 @@ export function nextAvailableBranchName(baseName: string, existing: Set<string>)
 }
 
 export async function ensureNoteFile(worktreePath: string): Promise<void> {
-  const gitDir = getGitDir(worktreePath);
+  const gitDir = await getGitDir(worktreePath);
   if (!gitDir) {
     return;
   }

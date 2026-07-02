@@ -18,7 +18,10 @@ export interface SessionSnapshotterHost {
   hasBannerMarkers(): boolean;
   getSerializedState(): string | null;
   getSerializedStateAsync(): Promise<string | null>;
-  serializeForPersistence(): string | null;
+  // Sync string in-thread; a Promise when the buffer lives in an analysis
+  // worker. The sync flush paths degrade to best-effort async persistence for
+  // Promise-returning hosts.
+  serializeForPersistence(): string | null | Promise<string | null>;
 }
 
 export class SessionSnapshotter {
@@ -60,9 +63,9 @@ export class SessionSnapshotter {
     this.inFlight = true;
     try {
       this.dirty = false;
-      const state = this.host.hasBannerMarkers()
+      const state = await (this.host.hasBannerMarkers()
         ? this.host.serializeForPersistence()
-        : await this.host.getSerializedStateAsync();
+        : this.host.getSerializedStateAsync());
       // Re-check lifecycle after the await — a kill or dispose during async
       // serialize would otherwise stomp the sync snapshot written from kill().
       if (this.disposed || this.host.wasKilled) return;
@@ -108,9 +111,9 @@ export class SessionSnapshotter {
     this.eventDrivenInFlight = true;
     this.lastEventDrivenFlushAt = now;
     try {
-      const state = this.host.hasBannerMarkers()
+      const state = await (this.host.hasBannerMarkers()
         ? this.host.serializeForPersistence()
-        : await this.host.getSerializedStateAsync();
+        : this.host.getSerializedStateAsync());
       // Re-check lifecycle after the await — a kill or dispose during async
       // serialize would otherwise stomp the sync snapshot written from kill().
       if (this.disposed || this.host.wasKilled) return;
@@ -137,12 +140,31 @@ export class SessionSnapshotter {
 
     try {
       const state = this.host.serializeForPersistence();
-      if (state) {
+      if (typeof state === "string") {
         persistSessionSnapshotSync(this.host.id, state);
+      } else if (state) {
+        // Worker-backed host: the buffer serializes off-thread, so a sync
+        // flush is impossible. The serialize request is already in the
+        // worker's queue ahead of the free message, so this best-effort async
+        // persist still captures the pre-kill buffer.
+        this.persistDeferred(state);
       }
     } catch {
       // best-effort only
     }
+  }
+
+  private persistDeferred(state: Promise<string | null>): void {
+    void state
+      .then((s) => {
+        if (!s) return;
+        if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
+        if (isSessionPersistSuppressed()) return;
+        return persistSessionSnapshotAsync(this.host.id, s);
+      })
+      .catch(() => {
+        // best-effort only
+      });
   }
 
   // Sync flush invoked from dispose() when the debounced timer never fired.
@@ -155,7 +177,13 @@ export class SessionSnapshotter {
     if (this.host.wasKilled) return;
 
     try {
-      const state = this.host.serializeForPersistence() ?? this.host.getSerializedState();
+      const raw = this.host.serializeForPersistence();
+      if (raw !== null && typeof raw === "object") {
+        this.persistDeferred(raw);
+        this.dirty = false;
+        return;
+      }
+      const state = raw ?? this.host.getSerializedState();
       if (state) {
         persistSessionSnapshotSync(this.host.id, state);
         this.dirty = false;
