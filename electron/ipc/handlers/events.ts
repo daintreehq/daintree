@@ -53,6 +53,10 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "terminal:reliability-metric": "bus",
   "terminal:status": "bus",
 
+  // Agent session journaled (relayed from TypedEventBus; emitted by the main
+  // close paths and bridged from the pty-host's trash-expiry capture)
+  "agent-session:recorded": "bus",
+
   // Global broadcasts emitted externally (no TypedEventBus counterpart).
   "resource:profile-changed": "external",
   "sound:cancel": "external",

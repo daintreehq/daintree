@@ -70,6 +70,10 @@ export function ResumeSessionsPalette() {
     selectNext,
     close,
     isLoading,
+    isSearching,
+    visibleResults,
+    hiddenCount,
+    showMore,
   } = useResumeSessionsPalette();
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -83,12 +87,14 @@ export function ResumeSessionsPalette() {
     }
   }, [isOpen]);
 
+  // Depends on visibleResults (not results) so arrowing past the visible end —
+  // which lazily reveals the next page — re-runs once the row actually exists.
   useEffect(() => {
     if (selectedIndex >= 0 && results[selectedIndex]) {
       const node = itemsRef.current.get(results[selectedIndex]!.id);
       node?.scrollIntoView({ block: "nearest" });
     }
-  }, [selectedIndex, results]);
+  }, [selectedIndex, results, visibleResults]);
 
   const launch = useCallback(
     (item: ResumeSessionItem) => {
@@ -142,8 +148,6 @@ export function ResumeSessionsPalette() {
     []
   );
 
-  const isSearching = query.trim().length > 0;
-
   const renderRow = (item: ResumeSessionItem) => {
     const index = results.indexOf(item);
     return (
@@ -156,36 +160,6 @@ export function ResumeSessionsPalette() {
         itemRef={setItemRef(item.id)}
       />
     );
-  };
-
-  // Grouped by worktree when browsing; flat, relevance-ordered while searching.
-  // Items arrive newest-first, so a keyed Map yields correct group order and
-  // intra-group recency for free. Sub-headers stay aria-hidden (never
-  // role="group", #9006) and are excluded from the selection-driving results.
-  const renderGrouped = () => {
-    const groups = new Map<string, ResumeSessionItem[]>();
-    for (const item of results) {
-      const bucket = groups.get(item.groupKey);
-      if (bucket) bucket.push(item);
-      else groups.set(item.groupKey, [item]);
-    }
-    const elements: React.ReactNode[] = [];
-    for (const [groupKey, groupItems] of groups) {
-      const label = groupItems[0]?.groupLabel;
-      if (label) {
-        elements.push(
-          <div
-            key={`resume-group-${groupKey}`}
-            className="px-3 pt-3 pb-1 text-[10px] font-medium text-daintree-text/40 select-none truncate"
-            aria-hidden="true"
-          >
-            {label}
-          </div>
-        );
-      }
-      for (const item of groupItems) elements.push(renderRow(item));
-    }
-    return elements;
   };
 
   const selected = selectedIndex >= 0 ? results[selectedIndex] : undefined;
@@ -224,9 +198,23 @@ export function ResumeSessionsPalette() {
         ) : (
           <>
             <div id="resume-session-list" role="listbox" aria-label="Closed sessions">
-              {isSearching ? results.map(renderRow) : renderGrouped()}
+              {visibleResults.map(renderRow)}
             </div>
-            {totalResults != null && (
+            {!isSearching && hiddenCount > 0 && (
+              <button
+                type="button"
+                tabIndex={-1}
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={showMore}
+                className="w-full px-3 py-2 rounded-[var(--radius-md)] text-xs text-daintree-text/50 transition-colors hover:bg-overlay-subtle hover:text-daintree-text/80"
+              >
+                Load more ({hiddenCount})
+              </button>
+            )}
+            {/* Fully-paged browse and search both surface records beyond the
+                result cap — search is the only way to reach them. The notice
+                self-hides when nothing overflows. */}
+            {hiddenCount === 0 && totalResults != null && (
               <PaletteOverflowNotice shown={results.length} total={totalResults} />
             )}
           </>

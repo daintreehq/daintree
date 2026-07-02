@@ -3,7 +3,6 @@ import {
   buildResumeSessionItems,
   pathBasename,
   prettifyModelId,
-  NO_WORKTREE_GROUP_KEY,
   type ResumeWorktreeLike,
 } from "../resumeSessionItems";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
@@ -21,8 +20,8 @@ function rec(over: Partial<AgentSessionRecord> = {}): AgentSessionRecord {
 }
 
 const worktrees = new Map<string, ResumeWorktreeLike>([
-  ["wt1", { name: "feature-a", branch: "feat/a" }],
-  ["wt2", { name: "feature-b", branch: "feat/b" }],
+  ["wt1", { name: "feature-a", branch: "feat/a", path: "/repo/wt-a" }],
+  ["wt2", { name: "feature-b", branch: "feat/b", path: "/repo/wt-b" }],
 ]);
 
 describe("buildResumeSessionItems", () => {
@@ -45,27 +44,64 @@ describe("buildResumeSessionItems", () => {
     expect(items.map((i) => i.session.sessionId)).toEqual(["keep"]);
   });
 
+  it("keeps a legacy null-project, null-worktree record when its cwd resolves to a live worktree", () => {
+    const items = buildResumeSessionItems(
+      [
+        rec({ sessionId: "keep", projectId: null, worktreeId: null, cwd: "/repo/wt-a/src" }),
+        rec({ sessionId: "drop", projectId: null, worktreeId: null, cwd: "/somewhere/else" }),
+        rec({ sessionId: "drop2", projectId: null, worktreeId: null }),
+      ],
+      { currentProjectId: "p1", worktrees }
+    );
+    expect(items.map((i) => i.session.sessionId)).toEqual(["keep"]);
+  });
+
   it("flags a same-project record whose worktree no longer resolves as stale", () => {
     const [item] = buildResumeSessionItems([rec({ worktreeId: "gone", branch: "old/branch" })], {
       currentProjectId: "p1",
       worktrees,
     });
     expect(item?.isStale).toBe(true);
-    // Stale rows fall back to a recorded-branch label so they stay identifiable.
-    expect(item?.groupLabel).toBe("old/branch");
+    expect(item?.description).toContain("Worktree removed");
   });
 
-  it("groups by live worktree with its display name, and non-worktree records under a sentinel", () => {
-    const items = buildResumeSessionItems(
-      [rec({ sessionId: "a", worktreeId: "wt1" }), rec({ sessionId: "b", worktreeId: null })],
+  it("keeps a stale entry findable by its cwd basename when it has no branch", () => {
+    const [item] = buildResumeSessionItems(
+      [rec({ worktreeId: "gone", branch: undefined, cwd: "/repo/feature-auth" })],
       { currentProjectId: "p1", worktrees }
     );
-    const byId = new Map(items.map((i) => [i.session.sessionId, i]));
-    expect(byId.get("a")?.groupKey).toBe("wt1");
-    expect(byId.get("a")?.groupLabel).toBe("feature-a");
-    expect(byId.get("a")?.isStale).toBe(false);
-    expect(byId.get("b")?.groupKey).toBe(NO_WORKTREE_GROUP_KEY);
-    expect(byId.get("b")?.groupLabel).toBe("No worktree");
+    expect(item?.isStale).toBe(true);
+    expect(item?.searchAliases).toContain("feature-auth");
+  });
+
+  it("re-homes a null-worktree record onto the live worktree containing its cwd", () => {
+    const [item] = buildResumeSessionItems(
+      [rec({ worktreeId: null, cwd: "/repo/wt-a/packages/core" })],
+      { currentProjectId: "p1", worktrees }
+    );
+    expect(item?.isStale).toBe(false);
+    expect(item?.worktreeName).toBe("feature-a");
+    expect(item?.branchName).toBe("feat/a");
+    expect(item?.description).toContain("feature-a");
+  });
+
+  it("never marks a null-worktree record stale, even when its cwd resolves nowhere", () => {
+    const [item] = buildResumeSessionItems([rec({ worktreeId: null, cwd: "/tmp/elsewhere" })], {
+      currentProjectId: "p1",
+      worktrees,
+    });
+    expect(item?.isStale).toBe(false);
+    expect(item?.worktreeName).toBeUndefined();
+  });
+
+  it("resolves the live worktree's display name and branch for recorded worktrees", () => {
+    const [item] = buildResumeSessionItems([rec({ worktreeId: "wt1" })], {
+      currentProjectId: "p1",
+      worktrees,
+    });
+    expect(item?.isStale).toBe(false);
+    expect(item?.worktreeName).toBe("feature-a");
+    expect(item?.branchName).toBe("feat/a");
   });
 
   it("titles the row from a meaningful title, else falls back to the agent name", () => {

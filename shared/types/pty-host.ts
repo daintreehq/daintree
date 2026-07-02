@@ -12,6 +12,7 @@ import type { PanelKind, TerminalFlowStatus, PanelTitleMode } from "./panel.js";
 import type { ResourceProfile } from "./resourceProfile.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { AgentConfig } from "../config/agentRegistry.js";
+import type { AgentSessionRecord } from "./ipc/agentSessionHistory.js";
 import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js";
 
 export type { TerminalFlowStatus };
@@ -424,6 +425,16 @@ export type PtyHostEvent =
   | { type: "agent-killed"; payload: AgentKilledPayload }
   | { type: "terminal-trashed"; id: string; expiresAt: number }
   | { type: "terminal-restored"; id: string }
+  | {
+      /**
+       * Trash expiry captured a resumable session in the pty-host. The record
+       * is shipped to Main for persistence — Main is the journal's single
+       * writer, so cross-process read-modify-write races on the file can't
+       * drop records, and the real retention setting applies.
+       */
+      type: "agent-session-captured";
+      record: Omit<AgentSessionRecord, "savedAt">;
+    }
   | { type: "terminal-pid"; id: string; pid: number }
   | { type: "snapshot"; id: string; requestId: string; snapshot: PtyHostTerminalSnapshot | null }
   | { type: "all-snapshots"; requestId: string; snapshots: PtyHostTerminalSnapshot[] }

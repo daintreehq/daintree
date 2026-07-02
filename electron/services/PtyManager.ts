@@ -32,7 +32,7 @@ import {
 import { computeSpawnContext, acquirePtyProcess } from "./pty/terminalSpawn.js";
 import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
 import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
-import { persistAgentSession } from "./pty/agentSessionHistory.js";
+import { events } from "./events.js";
 import { getGitBranch } from "../utils/gitUtils.js";
 import type { GracefulKillResult } from "../../shared/types/pty-host.js";
 
@@ -471,8 +471,14 @@ export class PtyManager extends EventEmitter {
             // has FS access but no WorkspaceClient, so resolve directly from
             // git with a short timeout; never let it block or fail the close.
             const branch = info.cwd ? getGitBranch(info.cwd) : null;
-            await persistAgentSession(
-              {
+            // Ship the captured record to Main rather than writing the journal
+            // here — Main is the journal's single writer (two processes with
+            // separate write queues doing read-modify-write on one file can
+            // silently drop each other's records), and only Main can read the
+            // real retention setting. Forwarded by the pty-host entry, bridged
+            // onto the main bus, persisted in the terminal event handlers.
+            events.emit("agent-session:captured", {
+              record: {
                 sessionId,
                 agentId: info.launchAgentId,
                 worktreeId: info.worktreeId ?? null,
@@ -483,16 +489,10 @@ export class PtyManager extends EventEmitter {
                 cwd: info.cwd ?? undefined,
                 branch: branch ?? undefined,
               },
-              undefined,
-              // Defer age-eviction (0 = keep forever) — the pty-host has no store
-              // access to read the retention setting, so evicting here with the
-              // 30-day default would drop records a longer retention window wants
-              // to keep. The main-process list/prune paths enforce the real window.
-              0
-            );
+            });
           }
         } catch (err) {
-          logError("[PtyManager] Failed to persist agent session on trash expiry", err);
+          logError("[PtyManager] Failed to capture agent session on trash expiry", err);
           // Ensure the terminal is killed even if gracefulKill failed
           try {
             this.kill(termId, "trash-expired");
