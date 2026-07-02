@@ -710,9 +710,9 @@ describe("TerminalReconciliationWatchdog", () => {
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
       const repaired = panes[0];
       const deferred = panes[WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK];
-      expect(repaired.geometryRepairAttempts).toBe(1);
+      expect(repaired?.geometryRepairAttempts).toBe(1);
       // The pane skipped purely for heavy budget was never tried — no attempt spent.
-      expect(deferred.geometryRepairAttempts).toBe(0);
+      expect(deferred?.geometryRepairAttempts).toBe(0);
     });
 
     it("neither advances nor resets the breaker while a synchronized-output block stays open", () => {
