@@ -19,6 +19,8 @@ vi.mock("@/services/ActionService", () => ({
   },
 }));
 
+vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
+
 function makePlugin(name: string): LoadedPluginInfo {
   return {
     manifest: {
@@ -63,6 +65,8 @@ beforeEach(() => {
     plugin: {
       list: vi.fn().mockResolvedValue([]),
       onProvenanceChanged: vi.fn().mockReturnValue(() => {}),
+      getBackgroundUpdateCheckSettings: vi.fn().mockResolvedValue({ enabled: false }),
+      setBackgroundUpdateCheckSettings: vi.fn().mockResolvedValue({ enabled: true }),
     },
   } as unknown as typeof window.electron;
 });
@@ -118,5 +122,45 @@ describe("PluginsTab (settings entry point)", () => {
 
     fireProvenance?.();
     await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("loads the background update check toggle as off by default", async () => {
+    render(<PluginsTab />);
+    const toggle = await screen.findByRole("switch", {
+      name: "Background plugin update checks",
+    });
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
+  });
+
+  it("optimistically enables background checks and persists via IPC", async () => {
+    render(<PluginsTab />);
+    const toggle = await screen.findByRole("switch", {
+      name: "Background plugin update checks",
+    });
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
+
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(window.electron.plugin.setBackgroundUpdateCheckSettings).toHaveBeenCalledWith(true)
+    );
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("true"));
+  });
+
+  it("reverts the toggle when the save fails", async () => {
+    (
+      window.electron.plugin.setBackgroundUpdateCheckSettings as ReturnType<typeof vi.fn>
+    ).mockRejectedValue(new Error("boom"));
+    render(<PluginsTab />);
+    const toggle = await screen.findByRole("switch", {
+      name: "Background plugin update checks",
+    });
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
+
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(window.electron.plugin.setBackgroundUpdateCheckSettings).toHaveBeenCalledWith(true)
+    );
+    // Optimistic flip, then revert on the rejected save.
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
   });
 });

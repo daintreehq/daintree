@@ -1914,6 +1914,11 @@ export interface IpcEventMap {
   // renderer re-pulls via `plugin:list` for the full data.
   "plugin:provenance-changed": Record<string, never>;
 
+  // Background plugin update check found available updates (main → renderer,
+  // #10893). Carries the batched set so the renderer can raise one low-priority
+  // inbox notification. Broadcast only when at least one update is available.
+  "plugin:bg-update-available": import("../plugin.js").PluginBackgroundUpdateCheckResult;
+
   // Run history changed (main → renderer, #9949). Carries the full newest-first
   // snapshot so every live window updates without a reload after a recipe/fleet
   // run is recorded or the log is cleared.
@@ -2035,6 +2040,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:panel-badges-cleared"
   // Plugin provenance record changed (global broadcast)
   | "plugin:provenance-changed"
+  // Background plugin update check found updates (global broadcast)
+  | "plugin:bg-update-available"
   // Run history changed (global broadcast)
   | "run-history:update"
   // Plugin deep-link intent (targeted at the primary window)

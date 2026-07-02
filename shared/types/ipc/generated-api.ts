@@ -403,6 +403,9 @@ export interface GeneratedElectronAPI {
     getAuditRecords(
       ...args: IpcInvokeMap["plugin:get-audit-records"]["args"]
     ): Promise<IpcInvokeMap["plugin:get-audit-records"]["result"]>;
+    getBackgroundUpdateCheckSettings(
+      ...args: IpcInvokeMap["plugin:bg-update-check-settings-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:bg-update-check-settings-get"]["result"]>;
     getDecorations(
       ...args: IpcInvokeMap["plugin:file-decorations-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:file-decorations-get"]["result"]>;
@@ -412,6 +415,9 @@ export interface GeneratedElectronAPI {
     getForgeProviders(
       ...args: IpcInvokeMap["plugin:forge-providers-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:forge-providers-get"]["result"]>;
+    getLatestBackgroundUpdateCheck(
+      ...args: IpcInvokeMap["plugin:bg-update-check-latest"]["args"]
+    ): Promise<IpcInvokeMap["plugin:bg-update-check-latest"]["result"]>;
     getPanelKinds(
       ...args: IpcInvokeMap["plugin:panel-kinds-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:panel-kinds-get"]["result"]>;
@@ -457,6 +463,9 @@ export interface GeneratedElectronAPI {
     setAuditMaxRecords(
       ...args: IpcInvokeMap["plugin:set-audit-max-records"]["args"]
     ): Promise<IpcInvokeMap["plugin:set-audit-max-records"]["result"]>;
+    setBackgroundUpdateCheckSettings(
+      ...args: IpcInvokeMap["plugin:bg-update-check-settings-set"]["args"]
+    ): Promise<IpcInvokeMap["plugin:bg-update-check-settings-set"]["result"]>;
     setEnabled(
       ...args: IpcInvokeMap["plugin:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["plugin:set-enabled"]["result"]>;

@@ -7,6 +7,7 @@ import {
   AlertCircle,
   AlertTriangle,
   ChevronLeft,
+  RefreshCw,
   X,
 } from "lucide-react";
 import { useState, useEffect, useRef, useMemo, useDeferredValue } from "react";
@@ -560,6 +561,17 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                 <Link2 />
                 Install from URL
               </Button>
+              {pm.hasUpdatablePlugins && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void pm.checkAllForUpdates()}
+                  loading={pm.isCheckingAllUpdates}
+                >
+                  <RefreshCw />
+                  Update all
+                </Button>
+              )}
             </div>
             <div className="space-y-2">
               <input
@@ -803,7 +815,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
 
       <ConfirmDialog
         isOpen={pm.pendingUpdate !== null}
-        onClose={pm.isReinstalling ? undefined : () => pm.setPendingUpdate(null)}
+        onClose={pm.isReinstalling ? undefined : () => pm.dismissPendingUpdate()}
         title={pm.pendingUpdate ? `Update '${pluginLabel(pm.pendingUpdate.plugin)}'?` : ""}
         description="Downloads the latest archive and reinstalls over the current version. Your settings are kept."
         confirmLabel="Reinstall plugin"

@@ -40,6 +40,9 @@ export const PLUGIN_METHOD_CHANNELS = {
   revealSecretSetting: "plugin:settings-reveal-secret",
   pickPath: "plugin:pick-path",
   pathExists: "plugin:path-exists",
+  getBackgroundUpdateCheckSettings: "plugin:bg-update-check-settings-get",
+  setBackgroundUpdateCheckSettings: "plugin:bg-update-check-settings-set",
+  getLatestBackgroundUpdateCheck: "plugin:bg-update-check-latest",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof PLUGIN_METHOD_CHANNELS;

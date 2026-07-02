@@ -716,6 +716,37 @@ export type PluginCheckUpdateResult =
   | { status: "invalid-id" }
   | { status: "fetch-failed"; message: string };
 
+/**
+ * One URL-installed plugin found to have an update available by the opt-in
+ * background check (#10893). A trimmed projection of the `available` variant of
+ * {@link PluginCheckUpdateResult} — enough for the inbox notification copy and
+ * the manager's "Update all" queue without re-querying.
+ */
+export interface PluginBackgroundUpdateEntry {
+  pluginId: string;
+  displayName: string;
+  version: string;
+  capabilities: PluginCapability[];
+}
+
+/**
+ * Result of a background update-check pass across all URL-installed plugins
+ * (#10893). Broadcast to renderers (and cached in main for late-subscriber
+ * hydration) only when `updates` is non-empty. `signature` is a deterministic
+ * digest of the update set so the renderer can dedupe repeated passes that
+ * surface the same set into a single inbox row.
+ */
+export interface PluginBackgroundUpdateCheckResult {
+  checkedAt: number;
+  updates: PluginBackgroundUpdateEntry[];
+  signature: string;
+}
+
+/** Opt-in state for the background update check (#10893). OFF by default. */
+export interface PluginBackgroundUpdateCheckSettings {
+  enabled: boolean;
+}
+
 export interface PluginLoadError {
   message: string;
   stack?: string;
