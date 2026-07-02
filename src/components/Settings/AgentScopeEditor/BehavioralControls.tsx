@@ -19,7 +19,7 @@ interface BehavioralControlsProps {
   inlineMode: InlineMode;
   /** Whether the inline "Default" (inherit) option resolves to inline (vs alt screen). */
   inlineInheritResolvesToInline: boolean;
-  /** Where the inline "Default" inherits from — "global setting" or "agent default". */
+  /** Where the inline "Default" inherits from — "global setting", "agent default", or "the agent's built-in default" (a curated registry default that shadows the global switch, #10894). */
   inlineInheritOriginLabel: string;
   customArgsValue: string;
   customArgsPlaceholder: string;

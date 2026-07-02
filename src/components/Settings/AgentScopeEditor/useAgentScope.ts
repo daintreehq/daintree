@@ -125,7 +125,19 @@ export function useAgentScope({
   // What the inline "Default" (inherit) segment resolves to and where from.
   const inlineInheritResolvesToInline =
     scopeKind === "custom" ? agentResolvedInline : resolveInline("inherit");
-  const inlineInheritOriginLabel = scopeKind === "custom" ? "agent default" : "global setting";
+  // Mirror the three-tier precedence in `resolveEffectiveInlineMode`: a preset
+  // inherits from the agent Default scope; the agent Default scope inherits from
+  // the curated registry default (`capabilities.defaultInlineMode`, currently
+  // only Grok) when one exists, and only otherwise from the global switch.
+  // Attributing a registry-shadowed value to the global setting (#10894) is wrong
+  // — the global toggle has no effect while the built-in default decides.
+  const hasRegistryInlineDefault = typeof agentCfg?.capabilities?.defaultInlineMode === "boolean";
+  const inlineInheritOriginLabel =
+    scopeKind === "custom"
+      ? "agent default"
+      : hasRegistryInlineDefault
+        ? "the agent's built-in default"
+        : "global setting";
 
   const effectiveInlineMode =
     scopeKind === "custom"
