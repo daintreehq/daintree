@@ -124,10 +124,16 @@ export async function registerPluginSkills(
     try {
       const requested = path.resolve(pluginDir, contribution.path);
       const contained = await resolveContainedPath(pluginId, requested, [pluginDir]);
-      const { size } = await stat(contained);
-      if (size > MAX_SKILL_FILE_BYTES) {
+      const stats = await stat(contained);
+      // Reject anything that isn't a regular file: a directory, device, or FIFO
+      // reports a small/zero `size` here but could block or stream unbounded
+      // bytes through `readFile`, defeating the size cap.
+      if (!stats.isFile()) {
+        throw new Error("skill path is not a regular file — skipped");
+      }
+      if (stats.size > MAX_SKILL_FILE_BYTES) {
         throw new Error(
-          `skill file exceeds ${MAX_SKILL_FILE_BYTES} bytes (${size}) — skipped to bound memory`
+          `skill file exceeds ${MAX_SKILL_FILE_BYTES} bytes (${stats.size}) — skipped to bound memory`
         );
       }
       const raw = await readFile(contained, "utf8");

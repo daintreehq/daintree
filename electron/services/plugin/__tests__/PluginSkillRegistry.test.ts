@@ -142,6 +142,14 @@ describe("PluginSkillRegistry", () => {
     await fs.rm(outside, { recursive: true, force: true });
   });
 
+  it("skips a skill whose path is not a regular file", async () => {
+    // Point the skill at the skills/ directory itself — stat reports a non-file.
+    await registerPluginSkills("acme.plugin", dir, [
+      { id: "notfile", name: "Not A File", path: "./skills" },
+    ]);
+    expect(loadPluginSkill("acme.plugin.notfile")).toBeNull();
+  });
+
   it("skips a skill whose file exceeds the size cap without throwing", async () => {
     // 600KB > the 512KB cap.
     await fs.writeFile(path.join(dir, "skills", "huge.md"), "x".repeat(600 * 1024), "utf8");
