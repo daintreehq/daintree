@@ -98,6 +98,7 @@ import { PluginDevWorkerHost } from "./plugin/PluginDevWorkerHost.js";
 import { PluginDevWorkerMainBridge } from "./plugin/PluginDevWorkerMainBridge.js";
 import {
   buildPluginPermissionExecArgv,
+  classifyPluginPermissionPaths,
   derivePluginPermissionCapabilities,
   isPluginPermissionModelSpikeEnabled,
 } from "./plugin/pluginPermissionFlags.js";
@@ -1730,8 +1731,27 @@ export class PluginService {
     // this, but guard defensively against the unload-race re-entry path.
     if (this.pluginWorkers.has(pluginId)) return;
 
+    // Spike #10890 (opt-in): compute the permission-model execArgv flags BEFORE
+    // creating the host, so the default (env-off) path never awaits and stays
+    // byte-for-byte the current fork behavior. Only the opt-in path yields — and
+    // it fails open (fork without flags) and re-checks liveness after the await,
+    // since a prototype/measurement must never break activation or fork a worker
+    // for a plugin that unloaded mid-computation (#9533).
+    let permissionExecArgv: string[] | undefined;
+    if (isPluginPermissionModelSpikeEnabled()) {
+      try {
+        permissionExecArgv = await this.buildWorkerPermissionExecArgv(pluginId, plugin);
+      } catch (err) {
+        console.warn(
+          `[PluginService] permission-model flag computation failed for ${pluginId}; forking without flags:`,
+          err
+        );
+        permissionExecArgv = undefined;
+      }
+      if (!this.plugins.has(pluginId)) return;
+    }
+
     const { host, revoke } = this.createHost(pluginId);
-    const permissionExecArgv = await this.buildWorkerPermissionExecArgv(pluginId, plugin);
     const workerHost = new PluginDevWorkerHost({
       pluginId,
       pluginDir: plugin.dir,
@@ -3374,17 +3394,11 @@ export class PluginService {
 
   /**
    * Spike #10890: compute the Node permission-model `execArgv` flags for a
-   * plugin worker, or `undefined` when the spike env flag is off (preserving the
-   * exact current fork behavior). Maps the plugin's resolved `allowedPaths` +
-   * capabilities onto `--permission --allow-fs-read/-write` (plus
-   * `--allow-child-process` for `shell:exec` and `--allow-addons`).
-   *
-   * Read/write split: every resolved root is readable; a root is writable only
-   * when its class has the matching write capability (`fs:project-write` /
-   * `fs:user-data-write`), and the implicit per-plugin data dir is always
-   * writable (it is the plugin's private scratch space). The plugin's own bundle
-   * dir is added as a read root so the worker can import its code if a future
-   * Electron ever honors the flags.
+   * plugin worker from its resolved `allowedPaths` + capabilities —
+   * `--permission --allow-fs-read/-write` (per-root-class capability gated,
+   * mirroring the sanctioned host.fs surface) plus `--allow-child-process` for
+   * `shell:exec` and `--allow-addons`. The env gate lives in the caller
+   * (`activateViaWorker`), so this always computes when called.
    *
    * Fork-time `${worktree}` limitation: the flags are fixed at fork and the
    * `${worktree}` token resolves against whichever worktree is current now — so a
@@ -3395,27 +3409,17 @@ export class PluginService {
   private async buildWorkerPermissionExecArgv(
     pluginId: string,
     plugin: LoadedPlugin
-  ): Promise<string[] | undefined> {
-    if (!isPluginPermissionModelSpikeEnabled()) return undefined;
-
+  ): Promise<string[]> {
     const capabilities = plugin.manifest.capabilities ?? [];
     const { allowChildProcess, allowNativeAddons } =
       derivePluginPermissionCapabilities(capabilities);
-    const hasProjectWrite = capabilities.includes("fs:project-write");
-    const hasUserDataWrite = capabilities.includes("fs:user-data-write");
-    const dataDir = this.pluginDataDir(pluginId);
 
     const entries = await this.expandAllowedPathEntries(pluginId, { includeDataDir: true });
-    const readPaths: string[] = [plugin.dir];
-    const writePaths: string[] = [];
-    for (const entry of entries) {
-      readPaths.push(entry.path);
-      const writable =
-        entry.path === dataDir ||
-        (entry.rootClass === "project" && hasProjectWrite) ||
-        (entry.rootClass === "user-data" && hasUserDataWrite);
-      if (writable) writePaths.push(entry.path);
-    }
+    const { readPaths, writePaths } = classifyPluginPermissionPaths(
+      entries,
+      capabilities,
+      plugin.dir
+    );
 
     return buildPluginPermissionExecArgv({
       readPaths,

@@ -36,6 +36,47 @@ export interface PluginPermissionExecArgvInput {
   allowNativeAddons: boolean;
 }
 
+/** Root class of a resolved allowed-path, mirroring the sanctioned host.fs surface. */
+export type PluginPermissionRootClass = "project" | "user-data";
+
+/** A resolved allowed-path root and the capability class that gates it. */
+export interface PluginPermissionRoot {
+  path: string;
+  rootClass: PluginPermissionRootClass;
+}
+
+/**
+ * Split resolved allowed-path roots into read/write path sets, gated per root
+ * class exactly like the sanctioned `host.fs` surface: a `project` root needs
+ * `fs:project-read` / `fs:project-write`, a `user-data` root (including the
+ * implicit per-plugin data dir) needs `fs:user-data-read` / `fs:user-data-write`.
+ * Read and write are independent — a write-only plugin gets no read grant — so
+ * the flag mapping never over-grants relative to the host-mediated boundary.
+ *
+ * `bundleDir` (the plugin's own code dir) is always added as a read root,
+ * independent of declared capabilities: a permission-honoring runtime must be
+ * able to read the plugin's bundle to import it at all, so withholding it would
+ * make every plugin unloadable rather than merely scope-limited.
+ */
+export function classifyPluginPermissionPaths(
+  roots: readonly PluginPermissionRoot[],
+  capabilities: readonly PluginCapability[],
+  bundleDir: string
+): { readPaths: string[]; writePaths: string[] } {
+  const caps = new Set<PluginCapability>(capabilities);
+  const readPaths: string[] = [bundleDir];
+  const writePaths: string[] = [];
+  for (const root of roots) {
+    const readCap: PluginCapability =
+      root.rootClass === "project" ? "fs:project-read" : "fs:user-data-read";
+    const writeCap: PluginCapability =
+      root.rootClass === "project" ? "fs:project-write" : "fs:user-data-write";
+    if (caps.has(readCap)) readPaths.push(root.path);
+    if (caps.has(writeCap)) writePaths.push(root.path);
+  }
+  return { readPaths, writePaths };
+}
+
 /**
  * Classify a plugin's declared capabilities into permission-model gates.
  *
@@ -62,24 +103,25 @@ function normalizePaths(paths: readonly string[]): string[] {
 }
 
 /**
- * Build the ordered `execArgv` permission flags for a plugin worker. Returns
- * `[]` (no flags — current behavior preserved) is NOT this function's job; the
- * caller decides whether to invoke it at all (env-gated spike opt-in). When
+ * Build the ordered `execArgv` permission flags for a plugin worker. Whether to
+ * call this at all is the caller's decision (env-gated spike opt-in); when
  * called it always emits `--permission` so the model is actually engaged.
  *
- * Node's permission model treats read and write independently — a writable path
- * is not implicitly readable — so every write path is also emitted as a read
- * path. Paths are comma-joined into a single `--allow-fs-*` argument (Node
- * accepts comma-separated lists), deduped and sorted so tests are stable and the
- * same inputs never produce differently-ordered flag strings.
+ * Read and write path sets are emitted independently — the caller has already
+ * gated them per capability, so no read is implied from a write here. Each path
+ * becomes its OWN `--allow-fs-read` / `--allow-fs-write` flag rather than a
+ * comma-joined list: Node treats a comma-joined value as a single literal path
+ * (so `/a,/b` would grant neither `/a` nor `/b`), and repeated flags also sidestep
+ * any comma-in-path ambiguity. Paths are deduped and sorted so the same inputs
+ * never produce differently-ordered flags, keeping tests deterministic.
  */
 export function buildPluginPermissionExecArgv(input: PluginPermissionExecArgvInput): string[] {
-  const readPaths = normalizePaths([...input.readPaths, ...input.writePaths]);
+  const readPaths = normalizePaths(input.readPaths);
   const writePaths = normalizePaths(input.writePaths);
 
   const flags: string[] = ["--permission"];
-  if (readPaths.length > 0) flags.push(`--allow-fs-read=${readPaths.join(",")}`);
-  if (writePaths.length > 0) flags.push(`--allow-fs-write=${writePaths.join(",")}`);
+  for (const p of readPaths) flags.push(`--allow-fs-read=${p}`);
+  for (const p of writePaths) flags.push(`--allow-fs-write=${p}`);
   if (input.allowChildProcess) flags.push("--allow-child-process");
   if (input.allowNativeAddons) flags.push("--allow-addons");
   return flags;

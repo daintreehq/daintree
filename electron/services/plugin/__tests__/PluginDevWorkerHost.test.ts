@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "events";
 import { Readable } from "node:stream";
 
-const { forkMock, mockChildren, appMock, watchMock, watchCalls } = vi.hoisted(() => {
+const { forkMock, mockChildren, appMock, watchMock, watchCalls, loggerMock } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter } = require("events") as typeof import("events");
   const forkMock = vi.fn();
@@ -16,7 +16,8 @@ const { forkMock, mockChildren, appMock, watchMock, watchCalls } = vi.hoisted(()
     watchCalls.push({ dir, cb });
     return watcher;
   });
-  return { forkMock, mockChildren, appMock, watchMock, watchCalls };
+  const loggerMock = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  return { forkMock, mockChildren, appMock, watchMock, watchCalls, loggerMock };
 });
 
 class MockUtilityChild extends EventEmitter {
@@ -54,7 +55,7 @@ vi.mock("fs", async (importOriginal) => {
 });
 
 vi.mock("../../../utils/logger.js", () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  createLogger: () => loggerMock,
 }));
 
 async function loadModule(): Promise<typeof import("../PluginDevWorkerHost.js")> {
@@ -81,6 +82,10 @@ describe("PluginDevWorkerHost", () => {
     watchCalls.length = 0;
     watchMock.mockClear();
     appMock.removeAllListeners();
+    loggerMock.debug.mockClear();
+    loggerMock.info.mockClear();
+    loggerMock.warn.mockClear();
+    loggerMock.error.mockClear();
     forkMock.mockImplementation(() => new MockUtilityChild());
   });
 
@@ -127,19 +132,52 @@ describe("PluginDevWorkerHost", () => {
     host.dispose();
   });
 
-  it("appends permissionExecArgv after the heap cap when provided (spike #10890)", async () => {
+  it("appends permissionExecArgv directly after the heap cap, in order (spike #10890)", async () => {
     const { PluginDevWorkerHost } = await loadModule();
-    const host = new PluginDevWorkerHost({
-      ...OPTS,
-      permissionExecArgv: ["--permission", "--allow-fs-read=/plugins/acme.demo"],
-    });
+    const permissionExecArgv = ["--permission", "--allow-fs-read=/plugins/acme.demo"];
+    const host = new PluginDevWorkerHost({ ...OPTS, permissionExecArgv });
     host.waitForReady().catch(() => {});
     void host.start();
 
     const execArgv: string[] = forkMock.mock.calls[0][2].execArgv;
     expect(execArgv[0]).toMatch(/^--max-old-space-size=\d+$/);
-    expect(execArgv).toContain("--permission");
-    expect(execArgv).toContain("--allow-fs-read=/plugins/acme.demo");
+    expect(execArgv.slice(1)).toEqual(permissionExecArgv);
+    host.dispose();
+  });
+
+  it("logs the permission-model honored verdict from ready when flags were requested (spike #10890)", async () => {
+    const { PluginDevWorkerHost } = await loadModule();
+    const permissionExecArgv = ["--permission", "--allow-fs-read=/plugins/acme.demo"];
+    const host = new PluginDevWorkerHost({ ...OPTS, permissionExecArgv });
+    const ready = host.start();
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", { type: "ready", permission: { present: false } });
+    await ready;
+
+    const spikeLog = loggerMock.info.mock.calls.find(
+      ([, fields]) => fields && typeof fields === "object" && "honored" in fields
+    );
+    expect(spikeLog).toBeDefined();
+    expect(spikeLog?.[1]).toMatchObject({
+      requested: true,
+      honored: false,
+      flags: permissionExecArgv,
+    });
+    host.dispose();
+  });
+
+  it("stays quiet on ready when no permission flags were requested (spike #10890)", async () => {
+    const { PluginDevWorkerHost } = await loadModule();
+    const host = new PluginDevWorkerHost(OPTS);
+    const ready = host.start();
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", { type: "ready" });
+    await ready;
+
+    const spikeLog = loggerMock.info.mock.calls.find(
+      ([, fields]) => fields && typeof fields === "object" && "honored" in fields
+    );
+    expect(spikeLog).toBeUndefined();
     host.dispose();
   });
 
