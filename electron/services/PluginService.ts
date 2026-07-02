@@ -93,6 +93,11 @@ import { PluginSettingsManager, assertSettingsKey } from "./plugin/PluginSetting
 import { PluginStorageManager, assertStorageKey } from "./plugin/PluginStorageManager.js";
 import { createListenerFailureState, invokeTrackedListener } from "./plugin/pluginCallbackUtils.js";
 import { PluginChannelRegistry, isChannelSchema } from "./plugin/PluginChannelRegistry.js";
+import {
+  PluginBlocklistService,
+  findPluginBlocklistMatch,
+  type ParsedPluginBlocklist,
+} from "./plugin/PluginBlocklistService.js";
 import { PluginInstaller } from "./plugin/PluginInstaller.js";
 import { PluginDevWorkerHost } from "./plugin/PluginDevWorkerHost.js";
 import { PluginDevWorkerMainBridge } from "./plugin/PluginDevWorkerMainBridge.js";
@@ -718,6 +723,27 @@ export class PluginService {
     { manifest: PluginManifest; dir: string; isBuiltin: boolean }
   >();
   /**
+   * Manifest metadata for plugins refused at load time by the remote blocklist
+   * / kill-switch (#10891), keyed by `manifest.name`. Populated at `loadPlugin()`
+   * skip time so `listPlugins()` can surface the block (with `blocklisted: true`
+   * and the reason) without re-scanning. Parallel to `disabledPlugins` but a
+   * distinct, host-decided state the user cannot toggle off. `reason` is the
+   * human-facing explanation for the UI/notification.
+   */
+  private blockedPlugins = new Map<
+    string,
+    { manifest: PluginManifest; dir: string; isBuiltin: boolean; reason: string }
+  >();
+  /**
+   * The blocklist resolved once at `initialize()` and enforced for the whole
+   * session (including later install-time loads). `null` when no validated list
+   * is available (offline first run, fetch failure) — the fail-open state.
+   * Resolved once up front rather than per-plugin so the `Promise.allSettled`
+   * load fan-out never awaits a network call (#9428).
+   */
+  private startupBlocklist: ParsedPluginBlocklist | null = null;
+  private readonly blocklistService: PluginBlocklistService;
+  /**
    * Per-plugin transition chain for live built-in enable/disable (#9304). A
    * rapid disable→enable→disable on the same id must not interleave the
    * unload/load mutations to `plugins`/`disabledPlugins`/`reservedNames`, so
@@ -840,12 +866,17 @@ export class PluginService {
   constructor(
     pluginsRoot?: string,
     appVersion?: string,
-    options?: { builtinPluginsRoot?: string; sideloadPluginsRoot?: string }
+    options?: {
+      builtinPluginsRoot?: string;
+      sideloadPluginsRoot?: string;
+      blocklistService?: PluginBlocklistService;
+    }
   ) {
     this.pluginsRoot = pluginsRoot ?? path.join(os.homedir(), ".daintree", "plugins");
     this.appVersion = appVersion ?? app.getVersion();
     this.builtinPluginsRoot = options?.builtinPluginsRoot;
     this.sideloadPluginsRoot = options?.sideloadPluginsRoot;
+    this.blocklistService = options?.blocklistService ?? new PluginBlocklistService();
 
     this.initPromise = new Promise<void>((resolve) => {
       this.resolveInit = resolve;
@@ -905,6 +936,7 @@ export class PluginService {
       getPlugin: (pluginId) => this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId),
       reservedNames: this.reservedNames,
       disabledPlugins: this.disabledPlugins,
+      blockedPlugins: this.blockedPlugins,
     });
 
     const offRegister = onPanelKindRegistered(() => this.broadcaster.schedulePanelKindsBroadcast());
@@ -1013,6 +1045,13 @@ export class PluginService {
     // session, so this can't race a live temp dir; it only touches the user
     // root, never the built-in or sideload roots.
     await this.installer.sweepStalePluginTempDirs();
+
+    // Resolve the kill-switch blocklist once, before any scan, so the
+    // per-plugin load gate below reads a single immutable snapshot and the
+    // Promise.allSettled fan-out never awaits a network call (#9428). Fails
+    // open: getBlocklist() returns null on any fetch/parse failure with no
+    // cached list, and plugins then load normally.
+    this.startupBlocklist = await this.blocklistService.getBlocklist();
 
     // Built-ins load first so user plugins with a colliding manifest.name are
     // rejected by the duplicate guard in loadPlugin() — built-in wins.
@@ -1186,6 +1225,39 @@ export class PluginService {
           );
         }
       }
+    }
+
+    // Kill-switch: refuse to load any plugin whose name + version matches the
+    // remote blocklist (#10891). Checked before the disabled gate so a plugin
+    // that is both disabled and blocklisted still surfaces as blocked (the
+    // security signal wins). The name is reserved so a later dir scan can't
+    // hijack the namespace, and the manifest is tracked so listPlugins() can
+    // surface the block. No `activate` runs — it never enters `this.plugins`.
+    const blockMatch = findPluginBlocklistMatch(this.startupBlocklist, {
+      name: manifest.name,
+      version: manifest.version,
+    });
+    if (blockMatch) {
+      console.warn(
+        `[PluginService] Plugin "${manifest.name}" v${manifest.version} is blocklisted (${blockMatch.reason}) — refusing to load`
+      );
+      this.reservedNames.add(manifest.name);
+      if (!this.blockedPlugins.has(manifest.name)) {
+        this.blockedPlugins.set(manifest.name, {
+          manifest,
+          dir: pluginDir,
+          isBuiltin: opts.isBuiltin,
+          reason: blockMatch.message,
+        });
+        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+          type: "warning",
+          priority: "low",
+          title: "Plugin blocked",
+          message: `"${manifest.displayName ?? manifest.name}" was blocked from loading: ${blockMatch.message}`,
+          rateLimitKey: `plugin-blocklist:${manifest.name}`,
+        });
+      }
+      return null;
     }
 
     // Plugins disabled in Preferences are skipped entirely — neither
@@ -4689,12 +4761,15 @@ export class PluginService {
     const toInfo = (
       p: { manifest: PluginManifest; dir: string; isBuiltin: boolean },
       loadedAt: number,
-      isRunning: boolean
+      isRunning: boolean,
+      blocklistReason?: string
     ): LoadedPluginInfo => {
       const disabled = desiredDisabled.has(p.manifest.name);
       // pendingRestart: desired state diverges from running state.
       // Running + now-disabled → unload pending; skipped + now-enabled → load pending.
-      const pendingRestart = isRunning ? disabled : !disabled;
+      // Blocklisted plugins are host-refused, not user-toggled — no pending cue.
+      const blocklisted = blocklistReason !== undefined;
+      const pendingRestart = blocklisted ? false : isRunning ? disabled : !disabled;
       const pluginDanger = computePluginDanger(p.manifest);
       if (p.isBuiltin) {
         return {
@@ -4712,6 +4787,8 @@ export class PluginService {
           devMode: false,
           pendingRestart,
           pluginDanger,
+          blocklisted,
+          blocklistReason,
         };
       }
       const record = installed[p.manifest.name];
@@ -4731,6 +4808,8 @@ export class PluginService {
         devMode: record?.devMode ?? false,
         pendingRestart,
         pluginDanger,
+        blocklisted,
+        blocklistReason,
       };
     };
 
@@ -4741,7 +4820,13 @@ export class PluginService {
     // `loadedAt` — the main module never ran — so it's reported as 0.
     const skipped = Array.from(this.disabledPlugins.values()).map((p) => toInfo(p, 0, false));
 
-    return [...running, ...skipped];
+    // Plugins refused at launch by the blocklist / kill-switch (#10891). Also
+    // never ran (`loadedAt: 0`); the reason drives the "Blocked" badge/banner.
+    const blocked = Array.from(this.blockedPlugins.values()).map((p) =>
+      toInfo(p, 0, false, p.reason)
+    );
+
+    return [...running, ...skipped, ...blocked];
   }
 
   /**

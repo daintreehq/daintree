@@ -48,6 +48,7 @@ function makePlugin(overrides: {
     updateAvailable: null,
     devMode: false,
     pluginDanger: "safe",
+    blocklisted: false,
   };
 }
 

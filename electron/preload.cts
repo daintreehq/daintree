@@ -2219,6 +2219,7 @@ function buildElectronApi(): ElectronAPI {
           message: string;
           duration?: number;
           rateLimitKey?: string;
+          priority?: "high" | "low" | "watch";
           action?: { label: string; ipcChannel: string; data?: string };
         }) => void
       ) => _typedOn(CHANNELS.NOTIFICATION_SHOW_TOAST, callback),

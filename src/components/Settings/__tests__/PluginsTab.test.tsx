@@ -53,6 +53,7 @@ function makePlugin(name: string): LoadedPluginInfo {
     updateAvailable: null,
     devMode: false,
     pluginDanger: "safe",
+    blocklisted: false,
   };
 }
 

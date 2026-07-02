@@ -207,6 +207,14 @@ export interface MainProcessToastPayload {
    * critical notification into a generic overflow row.
    */
   rateLimitKey?: string;
+  /**
+   * Routing priority threaded through to `notify({ priority })`. Omit for the
+   * default `"high"` (toast when focused). `"low"` routes to the history inbox
+   * only — never a toast or OS notification — for signals the user can act on
+   * later (e.g. a plugin refused by the blocklist / kill-switch, #10891).
+   * `"watch"` always shows both an in-app toast and an OS native notification.
+   */
+  priority?: "high" | "low" | "watch";
   action?: {
     label: string;
     /** IPC channel to invoke when the action button is clicked */

@@ -92,6 +92,8 @@ interface PluginInstallerDeps {
   reservedNames: Set<string>;
   /** Shared skipped-at-launch manifest map — stays PluginService-owned. */
   disabledPlugins: Map<string, unknown>;
+  /** Shared blocklisted-at-launch manifest map (#10891) — stays PluginService-owned. */
+  blockedPlugins: Map<string, unknown>;
 }
 
 /**
@@ -1041,6 +1043,10 @@ export class PluginInstaller {
       // throws, the record stays so the row remains and the user can retry,
       // rather than seeing a "gone" plugin whose files are still on disk.
       this.deps.disabledPlugins.delete(pluginId);
+      // Clear any blocklist-skipped row (#10891) so uninstalling a blocked
+      // plugin removes its "Blocked" entry from the manager rather than
+      // stranding a row whose files are already gone.
+      this.deps.blockedPlugins.delete(pluginId);
       // Release the launch-time name reservation (set when a disabled plugin is
       // skipped at startup) so a same-session reinstall isn't rejected as a
       // duplicate name.

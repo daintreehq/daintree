@@ -17,6 +17,7 @@ type ToastCallback = (payload: {
   message: string;
   duration?: number;
   rateLimitKey?: string;
+  priority?: "high" | "low" | "watch";
   action?: { label: string; ipcChannel: string };
 }) => void;
 
@@ -96,6 +97,21 @@ describe("useMainProcessToastListener", () => {
     expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({ rateLimitKey: "cloud-teardown-failure" })
     );
+  });
+
+  it("threads priority through to notify (low → inbox-only)", () => {
+    renderHook(() => useMainProcessToastListener());
+
+    act(() => {
+      capturedCallback!({
+        type: "warning",
+        title: "Plugin blocked",
+        message: "acme.bad was blocked from loading",
+        priority: "low",
+      });
+    });
+
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ priority: "low" }));
   });
 
   it("threads duration through to notify when provided", () => {
