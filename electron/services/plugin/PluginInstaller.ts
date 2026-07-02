@@ -472,6 +472,20 @@ export class PluginInstaller {
           : { installedAt: Date.now() }),
       });
 
+      // Installing this id authoritatively replaces whatever startup state it
+      // had. If it was refused by the blocklist at launch (#10891) its name is
+      // still reserved and a blocked row is tracked — clear both so a fixed,
+      // no-longer-blocklisted version can load instead of tripping the
+      // duplicate-name guard, and so no stale "Blocked" row lingers. Cleared
+      // BEFORE the disabled early-return below so it also applies to a plugin
+      // that was both disabled and blocklisted. Scoped to the block state (only
+      // touch the reservation when we actually held a block) so disabled-plugin
+      // reinstall behavior is otherwise unchanged. loadPlugin re-adds the block
+      // if the new version still matches.
+      if (this.deps.blockedPlugins.delete(pluginId)) {
+        this.deps.reservedNames.delete(pluginId);
+      }
+
       // A plugin disabled in Preferences installs to disk but is intentionally
       // not loaded this session (`loadPlugin` would return null for it). The
       // files and provenance are committed, so this is a successful install.
@@ -488,18 +502,6 @@ export class PluginInstaller {
         }
         this.deps.broadcastProvenanceChanged();
         return { status: "installed", pluginId };
-      }
-
-      // Installing this id authoritatively replaces whatever startup state it
-      // had. If it was refused by the blocklist at launch (#10891) its name is
-      // still reserved and a blocked row is tracked — clear both so a fixed,
-      // no-longer-blocklisted version can load instead of tripping the
-      // duplicate-name guard. Scoped to the block state (only touch the
-      // reservation when we actually held a block) so disabled-plugin reinstall
-      // behavior is unchanged. loadPlugin re-adds the block if the new version
-      // still matches.
-      if (this.deps.blockedPlugins.delete(pluginId)) {
-        this.deps.reservedNames.delete(pluginId);
       }
 
       let loaded: unknown;
