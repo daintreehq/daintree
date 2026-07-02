@@ -640,6 +640,14 @@ describe("TerminalReconciliationWatchdog", () => {
       );
       expect(managed.geometryRepairGaveUp).toBe(true);
       expect(giveUpLogCount()).toBe(1);
+      // The logged attempt count must equal the repairs actually issued — proving
+      // the counter tracks issued repairs, not divergence detections or budget skips.
+      const giveUpLog = vi
+        .mocked(logWarn)
+        .mock.calls.find((c) => String(c[0]).includes("giving up"));
+      expect(giveUpLog?.[1]).toMatchObject({
+        attempts: vi.mocked(deps.reconcileRevealGeometry).mock.calls.length,
+      });
 
       // Further ticks neither repair again nor re-log the give-up.
       for (let i = 0; i < 6; i++) vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
@@ -705,12 +713,17 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(deferred.geometryRepairAttempts).toBe(0);
     });
 
-    it("never trips the breaker while a synchronized-output block stays open", () => {
+    it("neither advances nor resets the breaker while a synchronized-output block stays open", () => {
       const managed = makeManaged({ isAltBuffer: true });
       (
         managed.terminal as unknown as { modes: { synchronizedOutputMode: boolean } }
       ).modes.synchronizedOutputMode = true;
       setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+      // Seed a partial count so the assertion is breaker-specific: a synchronized
+      // block skips the whole geometry branch, so it must neither increment the
+      // count (repair path) nor clear it (convergence-reset path).
+      managed.geometryRepairAttempts = 1;
+      managed.geometryRepairGeneration = managed.attachGeneration;
       instances.set("t1", managed);
       const deps = makeDeps(instances);
       watchdog = new TerminalReconciliationWatchdog(deps);
@@ -718,7 +731,7 @@ describe("TerminalReconciliationWatchdog", () => {
       for (let i = 0; i < 12; i++) vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
       expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
       expect(managed.geometryRepairGaveUp).toBeFalsy();
-      expect(managed.geometryRepairAttempts ?? 0).toBe(0);
+      expect(managed.geometryRepairAttempts).toBe(1);
     });
   });
 
