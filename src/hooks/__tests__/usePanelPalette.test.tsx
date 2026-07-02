@@ -304,7 +304,7 @@ describe("usePanelPalette", () => {
       ...overrides,
     });
 
-    it("surfaces more than 5 sessions (no hardcoded cap)", async () => {
+    it("caps the resume shelf at the 5 most recent sessions", async () => {
       (window.electron!.agentSessionHistory!.list as ReturnType<typeof vi.fn>).mockResolvedValue(
         Array.from({ length: 8 }, (_, i) =>
           makeSession({ sessionId: `s-${i}`, savedAt: Date.now() - i * 1000 })
@@ -315,7 +315,15 @@ describe("usePanelPalette", () => {
       await vi.waitFor(() => {
         rerender();
         const resume = result.current.results.filter((item) => item.id.startsWith("resume:"));
-        expect(resume).toHaveLength(8);
+        expect(resume).toHaveLength(5);
+        // Records arrive newest-first; the shelf keeps the head of the list.
+        expect(resume.map((item) => item.id)).toEqual([
+          "resume:s-0",
+          "resume:s-1",
+          "resume:s-2",
+          "resume:s-3",
+          "resume:s-4",
+        ]);
       });
     });
 
@@ -362,22 +370,24 @@ describe("usePanelPalette", () => {
       });
     });
 
-    it("marks a record whose worktree was removed as stale", async () => {
+    it("excludes a record whose worktree was removed from the shelf", async () => {
       (window.electron!.agentSessionHistory!.list as ReturnType<typeof vi.fn>).mockResolvedValue([
         makeSession({ sessionId: "orphan", worktreeId: "wt-removed", branch: "old-branch" }),
+        makeSession({ sessionId: "fresh", projectId: "proj-1" }),
       ]);
 
       const { result, rerender } = renderHook(() => usePanelPalette());
       await vi.waitFor(() => {
         rerender();
-        const resume = result.current.results.find((item) => item.id === "resume:orphan");
-        expect(resume).toBeDefined();
-        expect(resume!.isStale).toBe(true);
-        expect(resume!.description).toContain("Worktree removed");
+        const ids = result.current.results.map((item) => item.id);
+        // Stale entries can't launch, so the short shelf drops them; the
+        // dedicated resume palette is where they remain visible (greyed).
+        expect(ids).toContain("resume:fresh");
+        expect(ids).not.toContain("resume:orphan");
       });
     });
 
-    it("resolves live worktree name, branch, and group label", async () => {
+    it("resolves live worktree name and branch", async () => {
       worktreeState.worktrees = new Map([
         ["wt-1", { id: "wt-1", name: "Feature X", branch: "feature/x" }],
       ]);
@@ -393,8 +403,6 @@ describe("usePanelPalette", () => {
         expect(resume!.isStale).toBe(false);
         expect(resume!.worktreeName).toBe("Feature X");
         expect(resume!.branchName).toBe("feature/x");
-        expect(resume!.groupKey).toBe("wt-1");
-        expect(resume!.groupLabel).toBe("Feature X");
       });
     });
 
@@ -415,41 +423,6 @@ describe("usePanelPalette", () => {
           expect.arrayContaining(["claude", "Claude", "Feature X", "feature/x"])
         );
       });
-    });
-
-    it("makes a stale entry findable by its cwd basename when it has no branch", async () => {
-      (window.electron!.agentSessionHistory!.list as ReturnType<typeof vi.fn>).mockResolvedValue([
-        makeSession({
-          sessionId: "orphan",
-          worktreeId: "wt-removed",
-          branch: undefined,
-          cwd: "/repo/feature-auth",
-        }),
-      ]);
-
-      const { result, rerender } = renderHook(() => usePanelPalette());
-      await vi.waitFor(() => {
-        rerender();
-        const resume = result.current.results.find((item) => item.id === "resume:orphan");
-        expect(resume).toBeDefined();
-        expect(resume!.groupLabel).toBe("feature-auth");
-        expect(resume!.searchAliases).toContain("feature-auth");
-      });
-    });
-
-    it("does not launch a stale entry via handleSelect", async () => {
-      (window.electron!.agentSessionHistory!.list as ReturnType<typeof vi.fn>).mockResolvedValue([
-        makeSession({ sessionId: "orphan", worktreeId: "wt-removed" }),
-      ]);
-
-      const { result, rerender } = renderHook(() => usePanelPalette());
-      await vi.waitFor(() => {
-        rerender();
-        expect(result.current.results.some((item) => item.id === "resume:orphan")).toBe(true);
-      });
-      const stale = result.current.results.find((item) => item.id === "resume:orphan");
-      expect(stale!.isStale).toBe(true);
-      expect(result.current.handleSelect(stale!)).toBeNull();
     });
   });
 

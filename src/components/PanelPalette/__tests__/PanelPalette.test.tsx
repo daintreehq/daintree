@@ -52,8 +52,7 @@ const resumeResults: PanelKindOption[] = [
     iconId: "terminal",
     color: "#fff",
     category: "resume",
-    groupKey: "wt-1",
-    groupLabel: "Feature X",
+    worktreeName: "Feature X",
     isStale: false,
   },
   {
@@ -62,18 +61,18 @@ const resumeResults: PanelKindOption[] = [
     iconId: "terminal",
     color: "#fff",
     category: "resume",
-    groupKey: "wt-removed",
-    groupLabel: "old-branch",
     isStale: true,
   },
 ];
 
-describe("PanelPalette browsable resume list (#10851)", () => {
-  it("renders worktree group sub-headers under the resume section when browsing", () => {
+describe("PanelPalette resume section", () => {
+  it("renders a flat resume section (no per-worktree sub-headers) when browsing", () => {
     render(<PanelPalette {...baseProps} query="" results={resumeResults} />);
     expect(screen.getByText("Resume Sessions")).toBeTruthy();
-    expect(screen.getByText("Feature X")).toBeTruthy();
-    expect(screen.getByText("old-branch")).toBeTruthy();
+    // Rows render in journal order with no location headers between them.
+    expect(screen.getByText("Resume: Fixing auth")).toBeTruthy();
+    expect(screen.getByText("Resume: Old work")).toBeTruthy();
+    expect(screen.queryByText("Feature X")).toBeNull();
   });
 
   it("shows a 'Worktree removed' badge on stale entries", () => {
@@ -88,41 +87,13 @@ describe("PanelPalette browsable resume list (#10851)", () => {
     const listbox = document.body.querySelector('[role="listbox"]')!;
     expect(listbox).toBeTruthy();
     expect(listbox.querySelectorAll('[role="group"]').length).toBe(0);
-    // Section + group headers stay aria-hidden so they don't enter the option index.
+    // Section headers stay aria-hidden so they don't enter the option index.
     expect(listbox.querySelectorAll('[aria-hidden="true"]').length).toBeGreaterThan(0);
   });
 
-  it("keys groups off groupKey, not the display label (same label, distinct keys → two headers)", () => {
-    const sameLabel: PanelKindOption[] = [
-      {
-        id: "resume:x",
-        name: "Resume: X",
-        iconId: "terminal",
-        color: "#fff",
-        category: "resume",
-        groupKey: "wt-1",
-        groupLabel: "main",
-      },
-      {
-        id: "resume:y",
-        name: "Resume: Y",
-        iconId: "terminal",
-        color: "#fff",
-        category: "resume",
-        groupKey: "wt-2",
-        groupLabel: "main",
-      },
-    ];
-    render(<PanelPalette {...baseProps} query="" results={sameLabel} />);
-    // Two worktrees that happen to share a branch name "main" must render as two
-    // separate group headers, not merge into one.
-    expect(screen.getAllByText("main")).toHaveLength(2);
-  });
-
-  it("flattens the list (no section or group headers) while searching", () => {
+  it("flattens the list (no section headers) while searching", () => {
     render(<PanelPalette {...baseProps} query="fix" results={resumeResults} />);
     expect(screen.queryByText("Resume Sessions")).toBeNull();
-    expect(screen.queryByText("Feature X")).toBeNull();
     // The options themselves still render.
     expect(screen.getByText("Resume: Fixing auth")).toBeTruthy();
   });

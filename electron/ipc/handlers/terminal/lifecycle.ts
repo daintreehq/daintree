@@ -30,6 +30,7 @@ import {
   SettingTemplateError,
   substituteSettingsTemplates,
 } from "../../../services/settingsTemplateResolver.js";
+import { events } from "../../../services/events.js";
 import type * as PluginServiceModule from "../../../services/PluginService.js";
 
 type ValidatedTerminalSpawnOptions = z.output<typeof TerminalSpawnOptionsSchema>;
@@ -638,6 +639,14 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         app.getPath("userData"),
         getAgentSessionRetentionDays()
       );
+      // Signal AFTER the write lands so a refetch it triggers sees the record.
+      // Bridged to every renderer for live resume-list refresh.
+      events.emit("agent-session:recorded", {
+        sessionId,
+        worktreeId: info.worktreeId ?? null,
+        projectId: info.projectId ?? null,
+        timestamp: Date.now(),
+      });
     } catch (err) {
       console.warn("[TerminalLifecycle] Failed to persist agent session on close:", err);
     }

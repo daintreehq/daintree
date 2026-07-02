@@ -1,14 +1,15 @@
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { isUselessTitle } from "@shared/utils/isUselessTitle";
 import { formatTimeAgo } from "@/utils/timeAgo";
+import { inferWorktreeIdFromCwd } from "@/utils/worktreePaths";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 
 /**
  * Shared model for a browsable "resume closed session" entry. Built from a
  * journaled {@link AgentSessionRecord} plus the live worktree map so the resume
  * launcher (`ResumeSessionsPalette`), the empty-grid card (`ResumeSessionsCard`)
- * and the panel palette all render the same metadata, grouping and stale flags
- * without duplicating the mapping. Kept renderer-pure (no store reads) so it is
+ * and the panel palette all render the same metadata and stale flags without
+ * duplicating the mapping. Kept renderer-pure (no store reads) so it is
  * trivially unit-testable.
  */
 export interface ResumeSessionItem {
@@ -36,19 +37,14 @@ export interface ResumeSessionItem {
   worktreeName?: string;
   /** Branch the session was captured on (live value preferred over recorded). */
   branchName?: string;
-  /** Grouping key for the browse view: worktree id, or a no-worktree sentinel. */
-  groupKey: string;
-  /** Human label for the worktree group header. */
-  groupLabel: string;
 }
-
-/** Group key for resume records that were never tied to a worktree. */
-export const NO_WORKTREE_GROUP_KEY = "__no-worktree__";
 
 /** Minimal shape of a live worktree needed for labelling/stale detection. */
 export interface ResumeWorktreeLike {
   name: string;
   branch?: string | null;
+  /** Absolute worktree root path — enables cwd-based worktree inference. */
+  path?: string;
 }
 
 /** Last path segment of a POSIX or Windows path (for cwd-derived labels). */
@@ -72,10 +68,15 @@ export function prettifyModelId(modelId: string): string {
 
 /**
  * Filter the (unscoped, newest-first) journal to the current project and map
- * each record to a rich, groupable {@link ResumeSessionItem}. Legacy records
- * with a null projectId (pre-scoping) are kept only when their worktree still
- * resolves in the live map — otherwise there's no reliable way to know they
- * belong to this project.
+ * each record to a rich {@link ResumeSessionItem}. Legacy records with a null
+ * projectId (pre-scoping) are kept only when their worktree still resolves in
+ * the live map — otherwise there's no reliable way to know they belong to this
+ * project.
+ *
+ * Records journaled without a worktreeId (terminals spawned before worktree
+ * selection settled, "global" terminals) are re-homed by cwd: longest-prefix
+ * matching against live worktree paths. That keeps the row's location line and
+ * the launch target accurate instead of pretending the session ran nowhere.
  */
 export function buildResumeSessionItems(
   sessions: AgentSessionRecord[],
@@ -85,13 +86,21 @@ export function buildResumeSessionItems(
   }
 ): ResumeSessionItem[] {
   const { currentProjectId, worktrees } = opts;
+  const worktreePaths = [...worktrees].flatMap(([id, wt]) =>
+    wt.path ? [{ id, path: wt.path }] : []
+  );
   return sessions
     .filter((session) => !!session.sessionId)
-    .filter((session) => {
+    .map((session) => ({
+      session,
+      resolvedWorktreeId:
+        session.worktreeId ?? inferWorktreeIdFromCwd(session.cwd, worktreePaths) ?? null,
+    }))
+    .filter(({ session, resolvedWorktreeId }) => {
       if (session.projectId) return session.projectId === currentProjectId;
-      return !!session.worktreeId && worktrees.has(session.worktreeId);
+      return !!resolvedWorktreeId && worktrees.has(resolvedWorktreeId);
     })
-    .map((session) => {
+    .map(({ session, resolvedWorktreeId }) => {
       const agentConfig = getEffectiveAgentConfig(session.agentId);
       const timeAgo = formatTimeAgo(session.savedAt);
       const modelPart = session.agentModelId ? prettifyModelId(session.agentModelId) : null;
@@ -99,17 +108,13 @@ export function buildResumeSessionItems(
       const hasMeaningfulTitle = !!session.title && !isUselessTitle(session.title);
       const name = hasMeaningfulTitle ? `Resume: ${session.title}` : `Resume ${agentName}`;
 
-      const liveWorktree = session.worktreeId ? worktrees.get(session.worktreeId) : undefined;
+      const liveWorktree = resolvedWorktreeId ? worktrees.get(resolvedWorktreeId) : undefined;
+      // Stale means the RECORDED worktree no longer resolves — an inferred id
+      // always resolves (it came from the live map), so inference never
+      // produces a stale row.
       const isStale = !!session.worktreeId && !liveWorktree;
       const worktreeName = liveWorktree?.name;
       const branchName = liveWorktree?.branch ?? session.branch;
-
-      const groupKey = session.worktreeId ?? NO_WORKTREE_GROUP_KEY;
-      const groupLabel = liveWorktree
-        ? liveWorktree.name
-        : isStale
-          ? session.branch || pathBasename(session.cwd) || "Removed worktree"
-          : "No worktree";
 
       const locationPart = isStale ? "Worktree removed" : (worktreeName ?? branchName ?? null);
       const description = [modelPart, hasMeaningfulTitle ? agentName : null, locationPart, timeAgo]
@@ -136,8 +141,6 @@ export function buildResumeSessionItems(
         isStale,
         worktreeName,
         branchName,
-        groupKey,
-        groupLabel,
       };
     });
 }

@@ -51,7 +51,13 @@ export function useResumeAgentSession() {
       const activeWorktree = activeWorktreeId ? worktrees.get(activeWorktreeId) : undefined;
       const defaultTerminalCwd = activeWorktree?.path ?? currentProject?.path ?? "";
 
-      const target = resolveResumeLaunchTarget(session, { defaultTerminalCwd, activeWorktreeId });
+      // Live worktree paths let a null-worktree record re-home by cwd, keeping
+      // the launch target consistent with the group the row was shown under.
+      const target = resolveResumeLaunchTarget(
+        session,
+        { defaultTerminalCwd, activeWorktreeId },
+        [...worktrees.values()].map((wt) => ({ id: wt.id, path: wt.path }))
+      );
 
       // A record whose recorded worktree no longer resolves can't be resumed —
       // it would spawn into a dead worktree. Callers already filter stale rows,

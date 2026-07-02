@@ -42,4 +42,37 @@ describe("resolveResumeLaunchTarget", () => {
     expect(target.worktreeId).toBeUndefined();
     expect(target.cwd).toBe("/active/cwd");
   });
+
+  it("re-homes a null-worktree record onto the live worktree containing its cwd", () => {
+    // The record was journaled before worktree selection settled, but its cwd
+    // pins it to worktree A — launch there, not into the active worktree.
+    const target = resolveResumeLaunchTarget(
+      { cwd: "/repo/wt-a/src", worktreeId: null },
+      fallback,
+      [
+        { id: "wt-a", path: "/repo/wt-a" },
+        { id: "wt-b", path: "/repo/wt-b" },
+      ]
+    );
+    expect(target.cwd).toBe("/repo/wt-a/src");
+    expect(target.worktreeId).toBe("wt-a");
+  });
+
+  it("prefers the recorded worktree over cwd inference", () => {
+    const target = resolveResumeLaunchTarget(
+      { cwd: "/repo/wt-a", worktreeId: "wt-recorded" },
+      fallback,
+      [{ id: "wt-a", path: "/repo/wt-a" }]
+    );
+    expect(target.worktreeId).toBe("wt-recorded");
+  });
+
+  it("falls back to the active worktree when cwd resolves to no live worktree", () => {
+    const target = resolveResumeLaunchTarget(
+      { cwd: "/tmp/elsewhere", worktreeId: null },
+      fallback,
+      [{ id: "wt-a", path: "/repo/wt-a" }]
+    );
+    expect(target.worktreeId).toBe("wt-active");
+  });
 });

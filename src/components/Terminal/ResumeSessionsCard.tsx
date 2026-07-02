@@ -1,49 +1,30 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { ArrowRight } from "lucide-react";
 import { History } from "@/components/icons";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
 import { actionService } from "@/services/ActionService";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useAgentSessionRecords } from "@/hooks/useAgentSessionRecords";
 import { buildResumeSessionItems, type ResumeSessionItem } from "@/services/resumeSessionItems";
 import { useResumeAgentSession } from "@/hooks/useResumeAgentSession";
-import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 
 const SHOWN_COUNT = 3;
 
 /**
  * First-run-quiet discovery card for the empty grid. Fetches the project's
- * closed-session journal and, when there is something to resume, offers the
- * most recent few as one-click launches plus a "browse all" entry into the
- * searchable resume launcher. Renders nothing when the project has no
+ * closed-session journal (kept live — a session that leaves the trash appears
+ * here the moment it's journaled) and, when there is something to resume,
+ * offers the most recent few as one-click launches plus a "browse all" entry
+ * into the searchable resume launcher. Renders nothing when the project has no
  * resumable sessions, so genuine first-run stays quiet and doesn't compete
  * with the RecipeRunner / welcome CTA (empty-state rules).
  */
-export function ResumeSessionsCard({ activeWorktreeId }: { activeWorktreeId?: string | null }) {
-  const [sessions, setSessions] = useState<AgentSessionRecord[]>([]);
-  const [loaded, setLoaded] = useState(false);
+export function ResumeSessionsCard() {
   const worktrees = useWorktreeStore((state) => state.worktrees);
   const currentProjectId = useProjectStore((state) => state.currentProject?.id ?? null);
   const resume = useResumeAgentSession();
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const list = (await window.electron?.agentSessionHistory?.list()) ?? [];
-        if (!cancelled) setSessions(list);
-      } catch {
-        if (!cancelled) setSessions([]);
-      } finally {
-        if (!cancelled) setLoaded(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // Refetch when the project/worktree context changes so a switch surfaces
-    // the right project's history.
-  }, [activeWorktreeId, currentProjectId]);
+  const { sessions, hasLoaded } = useAgentSessionRecords(true);
 
   const items = useMemo(
     () => buildResumeSessionItems(sessions, { currentProjectId, worktrees }),
@@ -54,7 +35,7 @@ export function ResumeSessionsCard({ activeWorktreeId }: { activeWorktreeId?: st
 
   // Render nothing until loaded (avoids a flash of empty card) or when the
   // project has nothing to resume.
-  if (!loaded || resumable.length === 0) return null;
+  if (!hasLoaded || resumable.length === 0) return null;
 
   const openLauncher = () => {
     void actionService.dispatch("terminal.resumeSessions", undefined, { source: "user" });

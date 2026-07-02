@@ -1377,6 +1377,14 @@ export interface IpcEventMap {
   "terminal:error": [id: string, error: string];
   "terminal:trashed": { id: string; expiresAt: number };
   "terminal:restored": { id: string };
+  // A close path journaled a resumable agent session (trash expiry, kill,
+  // gracefulKill). Signal-only for resume surfaces to refetch the journal.
+  "agent-session:recorded": {
+    sessionId: string;
+    worktreeId: string | null;
+    projectId: string | null;
+    timestamp: number;
+  };
   "terminal:status": TerminalStatusPayload;
   "terminal:reliability-metric": TerminalReliabilityMetricPayload;
   "terminal:fd-leak-warning": FdLeakWarningPayload;
@@ -2032,6 +2040,8 @@ export type IpcEventBusMap = Pick<
   // Terminal observability
   | "terminal:reliability-metric"
   | "terminal:status"
+  // Agent session journaled — resume surfaces refetch (global broadcast)
+  | "agent-session:recorded"
   // Watchdog deadlock detector — emitted once on cap-hit; global broadcast.
   | "watchdog:disabled"
   | "watchdog:active"

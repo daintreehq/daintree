@@ -1198,6 +1198,13 @@ events.on("terminal:restored", (payload) => {
   });
 });
 
+events.on("agent-session:captured", (payload) => {
+  sendEvent({
+    type: "agent-session-captured",
+    record: payload.record,
+  });
+});
+
 // Ack-driven backpressure helpers for SAB path
 function tryReplayAndResume(id: string): void {
   const segments = backpressureManager.getPendingSegments(id);

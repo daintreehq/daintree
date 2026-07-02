@@ -194,7 +194,7 @@ export function ContentGridEmptyState({
           </div>
         )}
 
-        {hasActiveWorktree && <ResumeSessionsCard activeWorktreeId={activeWorktreeId} />}
+        {hasActiveWorktree && <ResumeSessionsCard />}
 
         {hasActiveWorktree && hasEverLaunchedAgent && (
           <div className="flex flex-col items-center gap-4 mt-4">

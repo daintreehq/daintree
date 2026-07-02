@@ -11,15 +11,11 @@ import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useProjectStore } from "@/store/projectStore";
+import { usePaletteStore } from "@/store/paletteStore";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { keybindingService } from "@/services/KeybindingService";
-import { formatTimeAgo } from "@/utils/timeAgo";
-import {
-  NO_WORKTREE_GROUP_KEY,
-  pathBasename,
-  prettifyModelId,
-} from "@/services/resumeSessionItems";
-import { isUselessTitle } from "@shared/utils/isUselessTitle";
+import { buildResumeSessionItems } from "@/services/resumeSessionItems";
+import { useAgentSessionRecords } from "@/hooks/useAgentSessionRecords";
 import type { KeyAction } from "@shared/types/keymap";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 
@@ -43,10 +39,6 @@ export interface PanelKindOption {
   worktreeName?: string;
   /** Branch a resume entry was captured on (live value preferred over recorded). */
   branchName?: string;
-  /** Grouping key for the browse view: worktree id, or a no-worktree sentinel. */
-  groupKey?: string;
-  /** Human label for the resume entry's worktree group header. */
-  groupLabel?: string;
 }
 
 export type UsePanelPaletteReturn = UseSearchablePaletteReturn<PanelKindOption> & {
@@ -62,6 +54,13 @@ import {
 import { isAgentInstalled } from "../../shared/utils/agentAvailability";
 
 const STALE_THRESHOLD_MS = 5 * 60 * 1000;
+
+/**
+ * Resume entries shown in the panel palette — a short "most recent" shelf.
+ * The dedicated resume launcher (`terminal.resumeSessions`) is the browse and
+ * search surface for the full journal.
+ */
+const RECENT_RESUME_COUNT = 5;
 
 const AGENT_LAUNCH_ACTIONS: Record<string, KeyAction> = Object.fromEntries(
   LAUNCHABLE_AGENT_IDS.map((id) => [id, `agent.${id}` as KeyAction])
@@ -84,8 +83,14 @@ export function usePanelPalette(): UsePanelPaletteReturn {
   const availability = useCliAvailabilityStore((state) => state.availability);
   const isAvailabilityInitialized = useCliAvailabilityStore((state) => state.isInitialized);
   const [keybindingVersion, setKeybindingVersion] = useState(0);
-  const [resumeSessions, setResumeSessions] = useState<AgentSessionRecord[]>([]);
-  // Live per-view worktree map: drives stale-entry detection and group labels.
+  // Open state read straight from the palette store (the same source
+  // useSearchablePalette derives isOpen from) so the journal fetch can be
+  // gated on it before the palette hook runs.
+  const paletteIsOpen = usePaletteStore((state) => state.activePaletteId === "panel");
+  // Journal fetch gated on open; refreshed live when a close path journals a
+  // new record, so a just-expired session appears without reopening.
+  const { sessions: resumeSessions } = useAgentSessionRecords(paletteIsOpen);
+  // Live per-view worktree map: drives stale-entry detection and location labels.
   const worktrees = useWorktreeStore((state) => state.worktrees);
   // Scope the browsable resume list to the current project's own history.
   const currentProjectId = useProjectStore((state) => state.currentProject?.id ?? null);
@@ -176,75 +181,27 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     }
 
     // The journal is fetched unscoped (all worktrees/projects, newest-first).
-    // Keep this project's records, then map each to a rich, groupable option.
-    // Legacy records with a null projectId (pre-scoping) are kept only when
-    // their worktree still resolves in the live map — otherwise there's no
-    // reliable way to know they belong here.
-    const resumeOptions: PanelKindOption[] = resumeSessions
-      .filter((session) => !!session.sessionId)
-      .filter((session) => {
-        if (session.projectId) return session.projectId === currentProjectId;
-        return !!session.worktreeId && worktrees.has(session.worktreeId);
-      })
-      .map((session) => {
-        const agentConfig = getEffectiveAgentConfig(session.agentId);
-        const timeAgo = formatTimeAgo(session.savedAt);
-        const modelPart = session.agentModelId ? prettifyModelId(session.agentModelId) : null;
-        const agentName = agentConfig?.name ?? session.agentId;
-        const hasMeaningfulTitle = !!session.title && !isUselessTitle(session.title);
-        const name = hasMeaningfulTitle ? `Resume: ${session.title}` : `Resume ${agentName}`;
-
-        const liveWorktree = session.worktreeId ? worktrees.get(session.worktreeId) : undefined;
-        const isStale = !!session.worktreeId && !liveWorktree;
-        const worktreeName = liveWorktree?.name;
-        const branchName = liveWorktree?.branch ?? session.branch;
-
-        const groupKey = session.worktreeId ?? NO_WORKTREE_GROUP_KEY;
-        const groupLabel = liveWorktree
-          ? liveWorktree.name
-          : isStale
-            ? session.branch || pathBasename(session.cwd) || "Removed worktree"
-            : "No worktree";
-
-        // Second metadata line: agent/model, where it ran, and how long ago.
-        const locationPart = isStale ? "Worktree removed" : (worktreeName ?? branchName ?? null);
-        const descriptionParts = [
-          modelPart,
-          hasMeaningfulTitle ? agentName : null,
-          locationPart,
-          timeAgo,
-        ].filter((part): part is string => !!part);
-        const description = descriptionParts.join(" · ");
-
-        // Broaden search beyond the title so an agent, branch, model, or
-        // worktree name matches even when it never appears in the title. The
-        // cwd basename is included so a stale entry whose group label falls
-        // back to it (no branch, no live worktree) stays findable.
-        const searchAliases = [
-          session.agentId,
-          agentName,
-          modelPart,
-          worktreeName,
-          branchName,
-          pathBasename(session.cwd),
-        ].filter((alias): alias is string => !!alias);
-
-        return {
-          id: `resume:${session.sessionId}`,
-          name,
-          iconId: agentConfig?.iconId ?? "terminal",
-          color: agentConfig?.color ?? "var(--color-daintree-text)",
-          description,
-          searchAliases,
-          category: "resume" as const,
-          resumeSession: session,
-          isStale,
-          worktreeName,
-          branchName,
-          groupKey,
-          groupLabel,
-        };
-      });
+    // The shared builder scopes it to this project and maps each record to
+    // rich metadata; the palette keeps only a launchable most-recent shelf.
+    const resumeOptions: PanelKindOption[] = buildResumeSessionItems(resumeSessions, {
+      currentProjectId,
+      worktrees,
+    })
+      .filter((item) => !item.isStale)
+      .slice(0, RECENT_RESUME_COUNT)
+      .map((item) => ({
+        id: item.id,
+        name: item.name,
+        iconId: item.iconId,
+        color: item.color,
+        description: item.description,
+        searchAliases: item.searchAliases,
+        category: "resume" as const,
+        resumeSession: item.session,
+        isStale: item.isStale,
+        worktreeName: item.worktreeName,
+        branchName: item.branchName,
+      }));
 
     return [
       ...agentDedup.values(),
@@ -293,23 +250,6 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     }
     const isStale = !lastCheckedAt || Date.now() - lastCheckedAt > STALE_THRESHOLD_MS;
     if (isStale) void refresh().catch(() => {});
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    let cancelled = false;
-    // Fetch unscoped (all worktrees) so the list is browsable; the memo above
-    // filters to the current project and flags stale entries (#10851). Gated on
-    // open so closing the palette doesn't re-read the whole journal.
-    window.electron?.agentSessionHistory
-      ?.list()
-      .then((sessions) => {
-        if (!cancelled) setResumeSessions(sessions);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
   }, [isOpen]);
 
   const handleSelect = useCallback(
