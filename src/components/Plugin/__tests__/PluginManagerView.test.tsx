@@ -517,7 +517,8 @@ describe("PluginManagerView", () => {
     fireEvent.click(toggle());
     await waitFor(() => expect(toggle().getAttribute("aria-checked")).toBe("true"));
     expect(screen.queryByText("Restart required")).toBeNull();
-    expect(window.electron.plugin.setEnabled).toHaveBeenLastCalledWith("acme.demo", true);
+    expect(window.electron.plugin.setEnabled).toHaveBeenNthCalledWith(1, "acme.demo", false);
+    expect(window.electron.plugin.setEnabled).toHaveBeenNthCalledWith(2, "acme.demo", true);
   });
 
   it("renders the install buttons immediately, before the list resolves", () => {

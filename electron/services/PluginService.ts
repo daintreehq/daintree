@@ -2010,18 +2010,25 @@ export class PluginService {
 
     const promise = this._doActivate(pluginId).then(
       () => {
-        // Guard against an unload that ran while activation was in flight:
-        // unload clears `activatedPlugins` and `plugins` synchronously, but a
-        // late-resolving activation would otherwise re-insert a tombstoned id.
-        if (this.plugins.has(pluginId)) {
+        // Guard against an unload — or a disable→re-enable that reloaded the id
+        // as a fresh generation — while activation was in flight. unload clears
+        // `activatedPlugins`/`plugins` synchronously, so a late-resolving stale
+        // activation must not re-insert a tombstoned id, nor mark the NEW
+        // generation activated (which would fast-path past its own worker fork,
+        // #10887). Identity-compare the loaded object, not just presence.
+        if (this.plugins.get(pluginId) === plugin) {
           this.activatedPlugins.add(pluginId);
         }
       },
       () => {
         // Error is already persisted to the provenance record inside
         // `_doActivate`. Drop the in-flight entry so a subsequent
-        // `activatePlugin(pluginId)` re-runs activation (Settings → Retry).
-        this.activationPromises.delete(pluginId);
+        // `activatePlugin(pluginId)` re-runs activation (Settings → Retry) — but
+        // only if it's still ours, so a stale generation's late rejection can't
+        // evict the new generation's in-flight promise.
+        if (this.activationPromises.get(pluginId) === promise) {
+          this.activationPromises.delete(pluginId);
+        }
       }
     );
     this.activationPromises.set(pluginId, promise);
