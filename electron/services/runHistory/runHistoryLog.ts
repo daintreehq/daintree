@@ -75,7 +75,10 @@ export class RunHistoryLog {
   private hydrated = false;
 
   constructor(
-    private readonly saveRecords: (records: RunHistoryRecord[]) => void,
+    private readonly saveRecords: (
+      records: RunHistoryRecord[],
+      options?: { sync?: boolean }
+    ) => void,
     private readonly readRecords: () => unknown,
     private readonly maxRecords: number = RUN_HISTORY_DEFAULT_MAX_RECORDS
   ) {}
@@ -191,20 +194,23 @@ export class RunHistoryLog {
     this.flushTimer.unref?.();
   }
 
-  private flush(): void {
+  private flush(sync = false): void {
     if (!this.hydrated) return;
     try {
-      this.saveRecords([...this.records]);
+      this.saveRecords([...this.records], { sync });
     } catch (err) {
       console.error("[RunHistory] Failed to flush run history:", err);
     }
   }
 
+  // Critical-moment flush (clear, shutdown): persists synchronously on the
+  // main connection instead of the fire-and-forget worker path, so the
+  // snapshot is durable when this returns.
   flushNow(): void {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
-    this.flush();
+    this.flush(true);
   }
 }

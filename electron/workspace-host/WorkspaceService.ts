@@ -609,11 +609,11 @@ export class WorkspaceService {
       }
 
       const rawWorktrees = await this.listService.list();
-      const worktrees = this.listService.mapToWorktrees(rawWorktrees);
+      const worktrees = await this.listService.mapToWorktrees(rawWorktrees);
 
       await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
 
-      this.startTopologyWatcher();
+      await this.startTopologyWatcher();
       // Started independently of startTopologyWatcher() — that method no-ops
       // when `.git/worktrees/` is absent (the exact "all worktrees removed"
       // case), so gating the safety net on it would defeat its purpose (#8510).
@@ -1200,7 +1200,7 @@ export class WorkspaceService {
           ) {
             return;
           }
-          this.applyFetchResultToSiblings(target, {
+          await this.applyFetchResultToSiblings(target, {
             lastFetchedAt: result.lastFetchedAt ?? null,
             authFailed: result.authFailed ?? false,
             networkFailed: result.networkFailed ?? false,
@@ -1419,7 +1419,7 @@ export class WorkspaceService {
    * the fetch would surface "Last fetched X ago"; sibling cards would still
    * show stale (or absent) timestamps.
    *
-   * `getGitCommonDir` is synchronous and cached, so the O(n) scan is cheap
+   * `getGitCommonDir` resolutions are cached, so the O(n) scan is cheap
    * after the first call per worktree.
    *
    * Note: `isFetchInFlight` is intentionally excluded from this fan-out —
@@ -1428,11 +1428,11 @@ export class WorkspaceService {
    * fatigue pattern that drove removal of the `panel-state-working` breathe
    * loop. Only the row that triggered the fetch shows the in-flight pulse.
    */
-  private applyFetchResultToSiblings(
+  private async applyFetchResultToSiblings(
     triggering: WorktreeMonitor,
     result: { lastFetchedAt: number | null; authFailed: boolean; networkFailed: boolean }
-  ): void {
-    const triggeringCommonDir = getGitCommonDir(triggering.path, { logErrors: false });
+  ): Promise<void> {
+    const triggeringCommonDir = await getGitCommonDir(triggering.path, { logErrors: false });
     if (!triggeringCommonDir) {
       // Without a commondir we can't identify siblings. Apply to the
       // triggering monitor only — its own card still benefits.
@@ -1441,7 +1441,7 @@ export class WorkspaceService {
     }
     for (const monitor of this.monitors.values()) {
       if (!monitor.isRunning) continue;
-      const monitorCommonDir = getGitCommonDir(monitor.path, { logErrors: false });
+      const monitorCommonDir = await getGitCommonDir(monitor.path, { logErrors: false });
       if (monitorCommonDir === triggeringCommonDir) {
         monitor.setFetchState(result.lastFetchedAt, result.authFailed, result.networkFailed);
       }
@@ -1590,9 +1590,9 @@ export class WorkspaceService {
     }
   }
 
-  private worktreeMetadataDirPath(): string | null {
+  private async worktreeMetadataDirPath(): Promise<string | null> {
     if (!this.projectRootPath) return null;
-    const commonDir = getGitCommonDir(this.projectRootPath);
+    const commonDir = await getGitCommonDir(this.projectRootPath);
     if (!commonDir) return null;
     return `${commonDir}/worktrees`;
   }
@@ -1610,13 +1610,25 @@ export class WorkspaceService {
     this.periodicSafetyTimer = timer;
   }
 
-  private startTopologyWatcher(): void {
+  private async startTopologyWatcher(): Promise<void> {
     if (!this.topologyWatcherEnabled) return;
     if (this.topologyWatcherSubscription.value) return;
 
-    const metadataDir = this.worktreeMetadataDirPath();
+    const generationAtStart = this.topologyWatcherGeneration;
+    const metadataDir = await this.worktreeMetadataDirPath();
     if (!metadataDir) return;
     if (!existsSync(metadataDir)) return;
+    // Re-validate after the async commondir resolution: a stop (pause,
+    // project switch, dispose) bumps the generation, and a concurrent start
+    // that won the race either holds the subscription already or bumped the
+    // generation itself below.
+    if (
+      generationAtStart !== this.topologyWatcherGeneration ||
+      !this.topologyWatcherEnabled ||
+      this.topologyWatcherSubscription.value
+    ) {
+      return;
+    }
 
     const generation = ++this.topologyWatcherGeneration;
     const drain = () => this.drainTopologyEventBuffer();
@@ -2157,7 +2169,7 @@ export class WorkspaceService {
       }
     }
 
-    const worktrees = this.listService.mapToWorktrees(rawWorktrees);
+    const worktrees = await this.listService.mapToWorktrees(rawWorktrees);
 
     await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
   }
@@ -2411,7 +2423,7 @@ export class WorkspaceService {
         isDetached: false,
         isCurrent: false,
         isMainWorktree: false,
-        gitDir: getGitDir(absolutePath) || undefined,
+        gitDir: (await getGitDir(absolutePath)) || undefined,
       };
       const canonicalWorktreeId = createdWorktree.id;
       const isActive = canonicalWorktreeId === this.activeWorktreeId;
@@ -3186,7 +3198,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       for (const monitor of this.monitors.values()) {
         monitor.resumePolling();
       }
-      this.startTopologyWatcher();
+      void this.startTopologyWatcher();
       // stopTopologyWatcher() (run on the !enabled branch) cleared the safety
       // timer, so resume must restart it symmetrically (#8510).
       this.startPeriodicSafetyTimer();

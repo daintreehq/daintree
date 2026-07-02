@@ -1005,6 +1005,14 @@ export default defineConfig(({ command, mode }) => {
       alias: {
         "@": path.resolve(__dirname, "./src"),
         "@shared": path.resolve(__dirname, "./shared"),
+        // refractor/core eagerly imports parse-entities, whose browser-condition
+        // decode-named-character-reference touches `document` at module scope —
+        // that crashes the diff-tokenize Web Worker at startup. Pin the package's
+        // worker-safe default build (character-entities map, no DOM) everywhere.
+        "decode-named-character-reference": path.resolve(
+          __dirname,
+          "node_modules/decode-named-character-reference/index.js"
+        ),
       },
     },
     server: {

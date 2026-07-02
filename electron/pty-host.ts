@@ -33,6 +33,11 @@ nodeV8.setHeapSnapshotNearHeapLimit(2);
 import { MessagePort } from "node:worker_threads";
 import os from "node:os";
 import { PtyManager } from "./services/PtyManager.js";
+import {
+  AnalysisWorkerPool,
+  analysisWorkersDisabled,
+  defaultAnalysisPoolSize,
+} from "./services/pty/analysis/AnalysisWorkerPool.js";
 import { PtyPool, getPtyPool, shouldEnablePtyPool } from "./services/PtyPool.js";
 import { ProcessTreeCache } from "./services/ProcessTreeCache.js";
 import { ImagePathProbe } from "./services/pty/ImagePathProbe.js";
@@ -119,6 +124,21 @@ process.on("unhandledRejection", (reason) => {
 });
 
 const ptyManager = new PtyManager();
+
+// Analysis worker pool: moves the per-chunk analysis stack (headless xterm
+// mirror + ActivityMonitor) off this thread so the pty-host event loop only
+// does I/O (node-pty reads, batching/backpressure, forwarding). Kill switch:
+// DAINTREE_DISABLE_ANALYSIS_WORKERS=1 restores the legacy in-thread path.
+let analysisWorkerPool: AnalysisWorkerPool | null = null;
+if (!analysisWorkersDisabled()) {
+  const analysisPoolSize = defaultAnalysisPoolSize();
+  analysisWorkerPool = new AnalysisWorkerPool(analysisPoolSize);
+  ptyManager.setAnalysisWorkerPool(analysisWorkerPool);
+  console.log(`[PtyHost] Analysis worker pool enabled (max ${analysisPoolSize} workers)`);
+} else {
+  console.log("[PtyHost] Analysis workers disabled; running analysis in-thread");
+}
+
 // 1.5s base poll interval. With 2-poll hysteresis in ProcessDetector, that's
 // ~3s to commit an agent/process change. Short enough for "I just ran claude
 // and want to see the chrome flip" to feel responsive, long enough to filter
@@ -1320,6 +1340,7 @@ const hostContext: HostContext = {
   windowProjectMap,
   windowFocusedTerminalMap,
   ipcDataMirrorTerminals,
+  analysisWorkerPool,
   get visualBuffers() {
     return visualBuffers;
   },
@@ -1408,6 +1429,11 @@ function cleanup(): void {
   }
 
   ptyManager.dispose();
+
+  // Workers are persistent by design (never terminated — Electron 37+
+  // flush_tasks_ assertion); dispose only drops bookkeeping. The unref'd
+  // threads die with the process.
+  analysisWorkerPool?.dispose();
 
   // Release SharedArrayBuffer references so V8 can GC shared memory regions
   visualBuffers = [];

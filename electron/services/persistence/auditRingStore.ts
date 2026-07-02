@@ -1,6 +1,7 @@
 // eager-import-allow: reads/writes audit ring records via the shared SQLite DB
 import type Database from "better-sqlite3";
 import { getSharedSqlite } from "./db.js";
+import { fenceDbWorkerWrites, runDbWork } from "./dbWorkerClient.js";
 
 export type AuditRingName =
   | "mcpAuditLog"
@@ -69,8 +70,42 @@ class AuditRingStore {
   /**
    * Overwrite the ring with a new array, trimming to `maxRecords`. Runs inside
    * an immediate transaction so readers always see a consistent snapshot.
+   *
+   * The write is a full-snapshot rewrite (last write wins) whose result no
+   * caller consumes, so it runs on the DB worker thread; when the worker is
+   * unavailable it falls back to the synchronous main-thread path. Safe because
+   * every ring's owner hydrates via readAll BEFORE its first write and treats
+   * its in-memory array as the source of truth afterwards.
+   *
+   * `options.sync` is for flushNow()-style critical moments (clear, dispose,
+   * session teardown) that need the snapshot durable on return: the write runs
+   * synchronously on the main connection, after advancing the write fence so a
+   * snapshot still queued on the worker can never land on top of it.
    */
-  writeAll<T>(ring: AuditRingName, records: T[], maxRecords: number): void {
+  writeAll<T>(
+    ring: AuditRingName,
+    records: T[],
+    maxRecords: number,
+    options?: { sync?: boolean }
+  ): void {
+    let serialized: string[];
+    try {
+      serialized = records.map((record) => JSON.stringify(record));
+    } catch (error) {
+      console.warn(`[AuditRingStore] writeAll failed for "${ring}":`, error);
+      return;
+    }
+    if (options?.sync) {
+      fenceDbWorkerWrites();
+      this.writeAllSerialized(ring, serialized, maxRecords);
+      return;
+    }
+    void runDbWork({ op: "ringWriteAll", ring, records: serialized, maxRecords }, () =>
+      this.writeAllSerialized(ring, serialized, maxRecords)
+    );
+  }
+
+  private writeAllSerialized(ring: AuditRingName, records: string[], maxRecords: number): void {
     const sqlite = this.db();
     if (!sqlite) return;
     try {
@@ -84,7 +119,7 @@ class AuditRingStore {
         .transaction(() => {
           clear.run(ring);
           for (const record of records) {
-            insert.run(ring, JSON.stringify(record), now);
+            insert.run(ring, record, now);
           }
           if (maxRecords > 0) {
             trim.run(ring, ring, maxRecords);

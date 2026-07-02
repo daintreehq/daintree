@@ -311,6 +311,19 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
         // Module load errors during teardown are non-fatal (PluginService may
         // never have been loaded if shutdown fired before first-interactive).
       }
+      // Stop the DB maintenance worker BEFORE the audit flushNow() calls
+      // below. The drain wait is capped (a wedged worker must not eat the
+      // shutdown budget), so it is best-effort — shutdownDbWorker() advances
+      // the write fence afterwards, making any ring write a slow worker
+      // commits later in the shutdown window a no-op. Post-shutdown, every
+      // ring write executes synchronously on main, so the final flushNow()
+      // snapshots are durable and cannot be clobbered.
+      try {
+        const { shutdownDbWorker } = await import("../services/persistence/dbWorkerClient.js");
+        await shutdownDbWorker();
+      } catch (err) {
+        console.warn("[MAIN] DB worker shutdown failed:", err);
+      }
     });
 
     const cleanupPromise = preDisposePromise

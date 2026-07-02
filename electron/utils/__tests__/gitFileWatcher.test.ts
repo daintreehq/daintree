@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { readFileSync, watch, type FSWatcher } from "fs";
+import { watch, type FSWatcher } from "fs";
+import { readFile } from "fs/promises";
 import { join as pathJoin } from "path";
 import parcelWatcher from "@parcel/watcher";
 import { getGitDir } from "../gitUtils.js";
@@ -13,7 +14,10 @@ vi.mock("@parcel/watcher", () => ({
 
 vi.mock("fs", () => ({
   watch: vi.fn(),
-  readFileSync: vi.fn(),
+}));
+
+vi.mock("fs/promises", () => ({
+  readFile: vi.fn(),
 }));
 
 vi.mock("../gitUtils.js", () => ({
@@ -101,10 +105,8 @@ describe("GitFileWatcher", () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
 
-    vi.mocked(getGitDir).mockReturnValue(pathJoin("/repo", ".git"));
-    vi.mocked(readFileSync).mockImplementation(() => {
-      throw new Error("commondir missing");
-    });
+    vi.mocked(getGitDir).mockResolvedValue(pathJoin("/repo", ".git"));
+    vi.mocked(readFile).mockRejectedValue(new Error("commondir missing"));
     vi.mocked(watch).mockImplementation(() => createMockWatcher());
     // Default subscribe: resolve immediately so non-worktree tests don't hang
     subscribeMock.mockResolvedValue(createMockSubscription());
@@ -116,7 +118,7 @@ describe("GitFileWatcher", () => {
 
   // ---- Per-file .git/ arm tests (unchanged semantics) ----
 
-  it("watches correct directories and de-duplicates shared paths", () => {
+  it("watches correct directories and de-duplicates shared paths", async () => {
     const gitDir = pathJoin("/repo", ".git");
     const gitWatcher = new GitFileWatcher({
       worktreePath: "/repo",
@@ -125,7 +127,7 @@ describe("GitFileWatcher", () => {
       onChange: vi.fn(),
     });
 
-    expect(gitWatcher.start()).toBe(true);
+    await expect(gitWatcher.start()).resolves.toBe(true);
 
     const watchedPaths = vi.mocked(watch).mock.calls.map(([path]) => path);
     expect(watchedPaths).toContain(gitDir);
@@ -149,7 +151,7 @@ describe("GitFileWatcher", () => {
       onChange,
     });
 
-    expect(gitWatcher.start()).toBe(true);
+    await expect(gitWatcher.start()).resolves.toBe(true);
 
     const dotGitCall = vi.mocked(watch).mock.calls.find(([path]) => path === gitDir) as
       | [unknown, unknown, unknown]
@@ -182,7 +184,7 @@ describe("GitFileWatcher", () => {
       onChange,
     });
 
-    expect(gitWatcher.start()).toBe(true);
+    await expect(gitWatcher.start()).resolves.toBe(true);
 
     const dotGitCall = vi.mocked(watch).mock.calls.find(([path]) => path === gitDir) as
       | [unknown, unknown, unknown]
@@ -219,7 +221,7 @@ describe("GitFileWatcher", () => {
       onChange,
     });
 
-    expect(gitWatcher.start()).toBe(true);
+    await expect(gitWatcher.start()).resolves.toBe(true);
 
     const dotGitCall = vi.mocked(watch).mock.calls.find(([path]) => path === gitDir) as
       | [unknown, unknown, unknown]
@@ -244,7 +246,7 @@ describe("GitFileWatcher", () => {
       onChange,
     });
 
-    expect(gitWatcher.start()).toBe(true);
+    await expect(gitWatcher.start()).resolves.toBe(true);
 
     const logsCall = vi
       .mocked(watch)
@@ -279,7 +281,7 @@ describe("GitFileWatcher", () => {
       worktreeMaxWaitMs: 2000,
     });
 
-    expect(gitWatcher.start()).toBe(true);
+    await expect(gitWatcher.start()).resolves.toBe(true);
 
     mock.resolve();
     const cb = mock.getCallback();
@@ -306,7 +308,7 @@ describe("GitFileWatcher", () => {
       worktreeMaxWaitMs: 2000,
     });
 
-    expect(gitWatcher.start()).toBe(true);
+    await expect(gitWatcher.start()).resolves.toBe(true);
     mock.resolve();
     const cb = mock.getCallback();
     expect(cb).toBeDefined();
@@ -338,7 +340,7 @@ describe("GitFileWatcher", () => {
       worktreeMaxWaitMs: 2000,
     });
 
-    expect(gitWatcher.start()).toBe(true);
+    await expect(gitWatcher.start()).resolves.toBe(true);
     mock.resolve();
     const cb = mock.getCallback();
 
@@ -364,7 +366,7 @@ describe("GitFileWatcher", () => {
       worktreeMaxWaitMs: 2000,
     });
 
-    expect(gitWatcher.start()).toBe(true);
+    await expect(gitWatcher.start()).resolves.toBe(true);
 
     const dotGitCall = vi.mocked(watch).mock.calls.find(([path]) => path === gitDir) as
       | [unknown, unknown, unknown]
@@ -394,7 +396,7 @@ describe("GitFileWatcher", () => {
       worktreeMaxWaitMs: 1500,
     });
 
-    expect(gitWatcher.start()).toBe(true);
+    await expect(gitWatcher.start()).resolves.toBe(true);
     mock.resolve();
     const cb = mock.getCallback();
 
@@ -422,7 +424,7 @@ describe("GitFileWatcher", () => {
       worktreeMaxWaitMs: 1500,
     });
 
-    expect(gitWatcher.start()).toBe(true);
+    await expect(gitWatcher.start()).resolves.toBe(true);
     mock.resolve();
     const cb = mock.getCallback();
 
@@ -456,7 +458,7 @@ describe("GitFileWatcher", () => {
       worktreeMaxDebounceMs: 800,
     });
 
-    expect(gitWatcher.start()).toBe(true);
+    await expect(gitWatcher.start()).resolves.toBe(true);
     mock.resolve();
     const cb = mock.getCallback();
 
@@ -485,7 +487,7 @@ describe("GitFileWatcher", () => {
       worktreeMaxWaitMs: 1500,
     });
 
-    expect(gitWatcher.start()).toBe(true);
+    await expect(gitWatcher.start()).resolves.toBe(true);
     mock.resolve();
     const cb = mock.getCallback();
 
@@ -521,7 +523,7 @@ describe("GitFileWatcher", () => {
       worktreeMaxWaitMs: 1500,
     });
 
-    expect(gitWatcher.start()).toBe(true);
+    await expect(gitWatcher.start()).resolves.toBe(true);
     mock.resolve();
     const cb = mock.getCallback();
 
@@ -546,7 +548,7 @@ describe("GitFileWatcher", () => {
       worktreeMaxWaitMs: 1500,
     });
 
-    expect(gitWatcher.start()).toBe(true);
+    await expect(gitWatcher.start()).resolves.toBe(true);
     mock.resolve();
     const cb = mock.getCallback();
 
@@ -575,7 +577,7 @@ describe("GitFileWatcher", () => {
       worktreeMaxWaitMs: 1500,
     });
 
-    expect(gitWatcher.start()).toBe(true);
+    await expect(gitWatcher.start()).resolves.toBe(true);
     mock.resolve();
     const cb = mock.getCallback();
 
@@ -608,7 +610,7 @@ describe("GitFileWatcher", () => {
           onWatcherFailed,
         });
 
-        gitWatcher.start();
+        await gitWatcher.start();
 
         const enospcError = new Error("ENOSPC") as NodeJS.ErrnoException;
         enospcError.code = "ENOSPC";
@@ -643,7 +645,7 @@ describe("GitFileWatcher", () => {
           onInotifyLimitReached,
         });
 
-        gitWatcher.start();
+        await gitWatcher.start();
 
         const enospcError = new Error("ENOSPC") as NodeJS.ErrnoException;
         enospcError.code = "ENOSPC";
@@ -679,7 +681,7 @@ describe("GitFileWatcher", () => {
           onInotifyLimitReached,
         });
 
-        gitWatcher.start();
+        await gitWatcher.start();
 
         const otherError = new Error("permission denied") as NodeJS.ErrnoException;
         otherError.code = "EACCES";
@@ -715,7 +717,7 @@ describe("GitFileWatcher", () => {
           onInotifyLimitReached,
         });
 
-        expect(gitWatcher.start()).toBe(true);
+        await expect(gitWatcher.start()).resolves.toBe(true);
 
         const enospcError = new Error("ENOSPC") as NodeJS.ErrnoException;
         enospcError.code = "ENOSPC";
@@ -754,7 +756,7 @@ describe("GitFileWatcher", () => {
           onEmfileLimitReached,
         });
 
-        gitWatcher.start();
+        await gitWatcher.start();
 
         const emfileError = new Error("EMFILE") as NodeJS.ErrnoException;
         emfileError.code = "EMFILE";
@@ -790,7 +792,7 @@ describe("GitFileWatcher", () => {
           onEmfileLimitReached,
         });
 
-        gitWatcher.start();
+        await gitWatcher.start();
 
         const fseventError = new Error("file descriptor limit reached") as NodeJS.ErrnoException;
         mock.reject(fseventError);
@@ -825,7 +827,7 @@ describe("GitFileWatcher", () => {
           onEmfileLimitReached,
         });
 
-        gitWatcher.start();
+        await gitWatcher.start();
 
         const otherError = new Error("permission denied") as NodeJS.ErrnoException;
         otherError.code = "EACCES";
@@ -861,7 +863,7 @@ describe("GitFileWatcher", () => {
           onEmfileLimitReached,
         });
 
-        expect(gitWatcher.start()).toBe(true);
+        await expect(gitWatcher.start()).resolves.toBe(true);
 
         const emfileError = new Error("EMFILE") as NodeJS.ErrnoException;
         emfileError.code = "EMFILE";
@@ -902,7 +904,7 @@ describe("GitFileWatcher", () => {
           onInotifyLimitReached,
         });
 
-        expect(gitWatcher.start()).toBe(true);
+        await expect(gitWatcher.start()).resolves.toBe(true);
         mock.resolve();
         const cb = mock.getCallback();
 
@@ -937,7 +939,7 @@ describe("GitFileWatcher", () => {
           onEmfileLimitReached,
         });
 
-        expect(gitWatcher.start()).toBe(true);
+        await expect(gitWatcher.start()).resolves.toBe(true);
         mock.resolve();
         const cb = mock.getCallback();
 
@@ -952,7 +954,7 @@ describe("GitFileWatcher", () => {
       }
     });
 
-    it("does not signal emfile-limit on non-Darwin platforms for EMFILE runtime error", () => {
+    it("does not signal emfile-limit on non-Darwin platforms for EMFILE runtime error", async () => {
       const onChange = vi.fn();
       const onWatcherFailed = vi.fn();
       const onEmfileLimitReached = vi.fn();
@@ -972,7 +974,7 @@ describe("GitFileWatcher", () => {
           onEmfileLimitReached,
         });
 
-        expect(gitWatcher.start()).toBe(true);
+        await expect(gitWatcher.start()).resolves.toBe(true);
         mock.resolve();
         const cb = mock.getCallback();
 
@@ -986,7 +988,7 @@ describe("GitFileWatcher", () => {
       }
     });
 
-    it("does not signal inotify-limit on non-Linux platforms for ENOSPC runtime error", () => {
+    it("does not signal inotify-limit on non-Linux platforms for ENOSPC runtime error", async () => {
       const onChange = vi.fn();
       const onWatcherFailed = vi.fn();
       const onInotifyLimitReached = vi.fn();
@@ -1006,7 +1008,7 @@ describe("GitFileWatcher", () => {
           onInotifyLimitReached,
         });
 
-        expect(gitWatcher.start()).toBe(true);
+        await expect(gitWatcher.start()).resolves.toBe(true);
         mock.resolve();
         const cb = mock.getCallback();
 
@@ -1020,7 +1022,7 @@ describe("GitFileWatcher", () => {
       }
     });
 
-    it("unknown runtime errors do not fire platform-specific callbacks", () => {
+    it("unknown runtime errors do not fire platform-specific callbacks", async () => {
       const onChange = vi.fn();
       const onWatcherFailed = vi.fn();
       const onInotifyLimitReached = vi.fn();
@@ -1038,7 +1040,7 @@ describe("GitFileWatcher", () => {
         onEmfileLimitReached,
       });
 
-      expect(gitWatcher.start()).toBe(true);
+      await expect(gitWatcher.start()).resolves.toBe(true);
       mock.resolve();
       const cb = mock.getCallback();
 
@@ -1064,7 +1066,7 @@ describe("GitFileWatcher", () => {
       onChange,
     });
 
-    expect(gitWatcher.start()).toBe(true);
+    await expect(gitWatcher.start()).resolves.toBe(true);
 
     const dotGitCalls = vi
       .mocked(watch)
@@ -1101,7 +1103,7 @@ describe("GitFileWatcher", () => {
       onChange,
     });
 
-    expect(gitWatcher.start()).toBe(true);
+    await expect(gitWatcher.start()).resolves.toBe(true);
 
     const refsCall = vi
       .mocked(watch)
@@ -1126,7 +1128,7 @@ describe("GitFileWatcher", () => {
   // ---- Ignore filter tests ----
 
   describe("worktree ignore filter", () => {
-    it("passes WORKTREE_IGNORE_GLOBS to subscribe as native ignore option", () => {
+    it("passes WORKTREE_IGNORE_GLOBS to subscribe as native ignore option", async () => {
       const mock = setupSubscribeMock();
 
       const gitWatcher = new GitFileWatcher({
@@ -1139,7 +1141,7 @@ describe("GitFileWatcher", () => {
         worktreeMaxDebounceMs: 100,
       });
 
-      gitWatcher.start();
+      await gitWatcher.start();
 
       const options = mock.getOptions();
       expect(options).toBeDefined();
@@ -1187,7 +1189,7 @@ describe("GitFileWatcher", () => {
         worktreeMaxDebounceMs: 100,
       });
 
-      expect(gitWatcher.start()).toBe(true);
+      await expect(gitWatcher.start()).resolves.toBe(true);
       mock.resolve();
       const cb = mock.getCallback();
 
@@ -1210,7 +1212,7 @@ describe("GitFileWatcher", () => {
         worktreeMaxDebounceMs: 800,
       });
 
-      expect(gitWatcher.start()).toBe(true);
+      await expect(gitWatcher.start()).resolves.toBe(true);
       mock.resolve();
       const cb = mock.getCallback();
 
@@ -1239,7 +1241,7 @@ describe("GitFileWatcher", () => {
         worktreeMaxDebounceMs: 100,
       });
 
-      expect(gitWatcher.start()).toBe(true);
+      await expect(gitWatcher.start()).resolves.toBe(true);
       mock.resolve();
       const cb = mock.getCallback();
 
@@ -1263,7 +1265,7 @@ describe("GitFileWatcher", () => {
       watchWorktree: true,
     });
 
-    gitWatcher.start();
+    await gitWatcher.start();
 
     const sub = mock.resolveSub();
     // Flush microtasks so the .then() callback stores worktreeSubscription
@@ -1285,7 +1287,7 @@ describe("GitFileWatcher", () => {
       watchWorktree: true,
     });
 
-    gitWatcher.start();
+    await gitWatcher.start();
     gitWatcher.dispose();
 
     const sub = createMockSubscription();
@@ -1311,7 +1313,7 @@ describe("GitFileWatcher", () => {
       worktreeMaxDebounceMs: 100,
     });
 
-    expect(gitWatcher.start()).toBe(true);
+    await expect(gitWatcher.start()).resolves.toBe(true);
     mock.resolve();
     const cb = mock.getCallback();
 
@@ -1341,7 +1343,7 @@ describe("GitFileWatcher", () => {
         onInotifyLimitReached,
       });
 
-      gitWatcher.start();
+      await gitWatcher.start();
       gitWatcher.dispose();
 
       const enospcError = new Error("ENOSPC") as NodeJS.ErrnoException;
@@ -1380,7 +1382,7 @@ describe("GitFileWatcher", () => {
         onInotifyLimitReached,
       });
 
-      expect(gitWatcher.start()).toBe(true);
+      await expect(gitWatcher.start()).resolves.toBe(true);
       mock.resolve();
       const cb = mock.getCallback();
 
@@ -1419,7 +1421,7 @@ describe("GitFileWatcher", () => {
         onEmfileLimitReached,
       });
 
-      gitWatcher.start();
+      await gitWatcher.start();
 
       const enoentError = new Error("file not found") as NodeJS.ErrnoException;
       enoentError.code = "ENOENT";
@@ -1449,7 +1451,7 @@ describe("GitFileWatcher", () => {
       watchWorktree: true,
     });
 
-    gitWatcher.start();
+    await gitWatcher.start();
 
     const sub = {
       unsubscribe: vi.fn().mockRejectedValue(new Error("native teardown failed")),

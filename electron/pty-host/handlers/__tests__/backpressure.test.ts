@@ -27,6 +27,7 @@ function makeRendererConnection(): RendererConnection {
 
 function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
   return {
+    analysisWorkerPool: null,
     ptyManager: {
       getTerminal: vi.fn(() => undefined),
       getAll: vi.fn(() => []),

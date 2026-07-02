@@ -19,7 +19,7 @@ vi.mock("../../utils/gitFileWatcher.js", () => ({
       this.armed = true;
       watcherLive.current++;
       watcherLive.peak = Math.max(watcherLive.peak, watcherLive.current);
-      return true;
+      return Promise.resolve(true);
     }
     dispose() {
       if (this.armed) {

@@ -746,7 +746,8 @@ export default tseslint.config(
   },
 
   // Allowlist — react-diff-view file viewer and worktree diff (DiffViewer's
-  // helper modules live in the same lazy chunk).
+  // helper modules live in the same lazy chunk; diffTokenizer is also the
+  // diff-tokenize worker's entrypoint into react-diff-view, bundled separately).
   {
     files: [
       "src/components/FileViewer/FileViewerModal.tsx",
@@ -754,6 +755,7 @@ export default tseslint.config(
       "src/components/Worktree/diffEditSuppression.ts",
       "src/components/Worktree/diffMovedUtils.ts",
       "src/components/Worktree/diffTokenRanges.ts",
+      "src/components/Worktree/diffTokenizer.ts",
     ],
     rules: { "no-restricted-imports": "off" },
   },

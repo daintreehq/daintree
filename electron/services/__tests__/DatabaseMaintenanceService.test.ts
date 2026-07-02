@@ -24,6 +24,12 @@ const mockDbModule = vi.hoisted(() => ({
   closeSharedDb: vi.fn(),
 }));
 
+// Worker unavailable in unit tests — runDbWork executes the fallback
+// synchronously, matching the client's disabled/degraded behavior.
+const mockRunDbWork = vi.hoisted(() =>
+  vi.fn((_op: unknown, fallback: () => unknown) => Promise.resolve(fallback()))
+);
+
 vi.mock("electron", () => ({
   powerMonitor: mockPowerMonitor,
 }));
@@ -33,6 +39,10 @@ vi.mock("../SystemSleepService.js", () => ({
 }));
 
 vi.mock("../persistence/db.js", () => mockDbModule);
+
+vi.mock("../persistence/dbWorkerClient.js", () => ({
+  runDbWork: mockRunDbWork,
+}));
 
 // Must mock fs.existsSync / renameSync for backup cleanup
 vi.mock("node:fs", async () => {
@@ -144,7 +154,7 @@ describe("DatabaseMaintenanceService", () => {
     // Advance past tick interval (5 minutes)
     vi.advanceTimersByTime(5 * 60 * 1000 + 100);
 
-    expect(mockSqlite.pragma).toHaveBeenCalledWith("wal_checkpoint(TRUNCATE)");
+    expect(mockSqlite.pragma).toHaveBeenCalledWith("wal_checkpoint(PASSIVE)");
     expect(mockSqlite.backup).toHaveBeenCalled();
     void service.dispose();
   });
@@ -246,6 +256,52 @@ describe("DatabaseMaintenanceService", () => {
 
     // onSuspend should only register once even if called twice
     expect(mockSystemSleepService.onSuspend).toHaveBeenCalledTimes(1);
+    void service.dispose();
+  });
+
+  it("routes the idle-tick checkpoint through the worker client", () => {
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+    service.startMaintenance();
+
+    vi.advanceTimersByTime(5 * 60 * 1000 + 100);
+
+    expect(mockRunDbWork).toHaveBeenCalledWith(
+      { op: "checkpoint", mode: "PASSIVE" },
+      expect.any(Function)
+    );
+    void service.dispose();
+  });
+
+  it("defers the full quick_check to a single idle tick after a clean-exit boot", () => {
+    const service = new DatabaseMaintenanceService();
+    service.initialize(true);
+    service.startMaintenance();
+
+    const quickCheckOps = () =>
+      mockRunDbWork.mock.calls.filter(([op]) => (op as { op: string }).op === "quickCheck");
+
+    vi.advanceTimersByTime(5 * 60 * 1000 + 100);
+    expect(quickCheckOps()).toHaveLength(1);
+
+    vi.advanceTimersByTime(5 * 60 * 1000 + 100);
+    expect(quickCheckOps()).toHaveLength(1);
+
+    // The deferred scan must never run on the main connection.
+    expect(mockSqlite.pragma).not.toHaveBeenCalledWith("quick_check", { simple: true });
+    void service.dispose();
+  });
+
+  it("does not schedule a deferred quick_check when the boot probe already ran the full scan", () => {
+    const service = new DatabaseMaintenanceService();
+    service.initialize(false);
+    service.startMaintenance();
+
+    vi.advanceTimersByTime(5 * 60 * 1000 + 100);
+
+    expect(
+      mockRunDbWork.mock.calls.filter(([op]) => (op as { op: string }).op === "quickCheck")
+    ).toHaveLength(0);
     void service.dispose();
   });
 });

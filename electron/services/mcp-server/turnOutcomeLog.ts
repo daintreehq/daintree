@@ -15,15 +15,15 @@ import { AUDIT_FLUSH_DEBOUNCE_MS, TIER_NOT_PERMITTED_CODE } from "./shared.js";
 
 export interface TurnOutcomeLogStore {
   read(): unknown;
-  write(records: AssistantTurnRecord[]): void;
+  write(records: AssistantTurnRecord[], options?: { sync?: boolean }): void;
 }
 
 // Persists the ring in the dedicated audit-logs store; see the matching note
 // in auditLog.ts. Config flags stay in config.json.
 const defaultLogStore: TurnOutcomeLogStore = {
   read: () => auditRingStore.readAll("mcpTurnOutcomeLog"),
-  write: (records) =>
-    auditRingStore.writeAll("mcpTurnOutcomeLog", records, MCP_AUDIT_DEFAULT_MAX_RECORDS),
+  write: (records, options) =>
+    auditRingStore.writeAll("mcpTurnOutcomeLog", records, MCP_AUDIT_DEFAULT_MAX_RECORDS, options),
 };
 
 /**
@@ -506,21 +506,24 @@ export class TurnOutcomeService {
     this.flushTimer.unref?.();
   }
 
-  private flush(): void {
+  private flush(sync = false): void {
     if (!this.hydrated) return;
     try {
-      this.logStore.write([...this.records]);
+      this.logStore.write([...this.records], { sync });
     } catch (err) {
       console.error("[MCP] Failed to flush turn outcome log:", err);
     }
   }
 
+  // Critical-moment flush (clear, session teardown, shutdown): persists
+  // synchronously on the main connection instead of the fire-and-forget
+  // worker path, so the snapshot is durable when this returns.
   flushNow(): void {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
-    this.flush();
+    this.flush(true);
   }
 
   getRecords(): AssistantTurnRecord[] {

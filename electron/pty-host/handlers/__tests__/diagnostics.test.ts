@@ -24,6 +24,7 @@ function makePortConnection(
 
 function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
   return {
+    analysisWorkerPool: null,
     ptyManager: {} as HostContext["ptyManager"],
     processTreeCache: {} as HostContext["processTreeCache"],
     terminalResourceMonitor: {} as HostContext["terminalResourceMonitor"],

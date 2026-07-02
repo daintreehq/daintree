@@ -1,6 +1,5 @@
-// eager-import-allow: performs sync fs checks while resolving git metadata
 import { dirname, resolve } from "path";
-import { realpathSync, promises as fs } from "fs";
+import { promises as fs } from "fs";
 import type { SimpleGit, StatusResult } from "simple-git";
 import type { FileChangeDetail, GitStatus, WorktreeChanges } from "../types/index.js";
 import { WorktreeRemovedError, toGitOperationError } from "./errorTypes.js";
@@ -151,9 +150,9 @@ export async function getPerFileDiffStats(
     const toplevel = (await git.revparse(["--show-toplevel"])).trim();
     if (!toplevel) return new Map();
     // Normalize to forward slashes on both sides so the absolute-to-relative
-    // re-keying works on Windows, where `realpathSync` returns backslashes
+    // re-keying works on Windows, where `realpath` returns backslashes
     // but `status.files[].path` uses forward slashes.
-    const gitRoot = realpathSync(toplevel).replace(/\\/g, "/");
+    const gitRoot = (await fs.realpath(toplevel)).replace(/\\/g, "/");
     const diffOutput = await git.diff(args);
     const byAbsolutePath = parseNumstat(diffOutput, gitRoot);
 
@@ -448,7 +447,7 @@ export async function getWorktreeChangesWithStats(
         LAST_COMMIT_LOG_CACHE.set(headOid, logOutput);
       }
 
-      const gitRoot = realpathSync(toplevelRaw.trim());
+      const gitRoot = await fs.realpath(toplevelRaw.trim());
 
       let lastCommitMessage: string | undefined;
       let lastCommitTimestampMs: number | undefined;
@@ -747,7 +746,7 @@ export async function getWorktreeChangesWithStats(
 
       const tracking = status.tracking && status.tracking.length > 0 ? status.tracking : null;
       const result: WorktreeChanges = {
-        worktreeId: realpathSync(cwd),
+        worktreeId: await fs.realpath(cwd),
         rootPath: gitRoot,
         changes,
         changedFileCount: changes.length,

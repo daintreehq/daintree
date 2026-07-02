@@ -70,7 +70,7 @@ export interface PluginMcpAuditInput {
  */
 export interface PluginMcpAuditLogStore {
   read(): unknown;
-  write(records: PluginMcpAuditRecord[]): void;
+  write(records: PluginMcpAuditRecord[], options?: { sync?: boolean }): void;
 }
 
 export class PluginMcpAuditService {
@@ -159,21 +159,24 @@ export class PluginMcpAuditService {
     this.flushTimer.unref?.();
   }
 
-  private flush(): void {
+  private flush(sync = false): void {
     if (!this.hydrated) return;
     try {
-      this.logStore.write([...this.records]);
+      this.logStore.write([...this.records], { sync });
     } catch (err) {
       console.error("[PluginMcpAudit] Failed to flush audit log:", err);
     }
   }
 
+  // Critical-moment flush (clear, shutdown): persists synchronously on the
+  // main connection instead of the fire-and-forget worker path, so the
+  // snapshot is durable when this returns.
   flushNow(): void {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
-    this.flush();
+    this.flush(true);
   }
 
   /** Newest-first view of all persisted records. */
