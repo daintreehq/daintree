@@ -419,6 +419,9 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
 
   "slashCommands.list",
 
+  "skills.search",
+  "skills.load",
+
   "project.getAll",
   "project.getCurrent",
   "project.getSettings",

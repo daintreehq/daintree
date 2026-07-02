@@ -125,6 +125,8 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
     requestManifest: vi.fn().mockResolvedValue([]),
     dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result: null } }),
     handleWaitUntilIdle: vi.fn(),
+    handleSkillsSearch: vi.fn(() => ({ skills: [] })),
+    handleSkillsLoad: vi.fn(),
     getCachedManifest: vi.fn(() => null),
     clearCachedManifest: vi.fn(),
     cleanupListeners: [],

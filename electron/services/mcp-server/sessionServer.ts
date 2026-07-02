@@ -78,6 +78,8 @@ const TERMINAL_WAIT_UNTIL_IDLE_TOOL = "terminal.waitUntilIdle";
 const TERMINAL_WAIT_UNTIL_IDLE_BATCH_TOOL = "terminal.waitUntilIdleBatch";
 const HELP_DISPLAY_IMAGE_TOOL = "help.displayImage";
 const BROWSER_CAPTURE_SCREENSHOT_TOOL = "browser.captureScreenshot";
+const SKILLS_SEARCH_TOOL = "skills.search";
+const SKILLS_LOAD_TOOL = "skills.load";
 
 /**
  * Narrow a `browser.captureScreenshot` result to its base64-PNG payload so the
@@ -167,6 +169,20 @@ export interface SessionServerDeps {
     signal: AbortSignal,
     options?: { maxTimeoutMs?: number }
   ) => Promise<import("../../../shared/types/terminalWaitUntilIdle.js").WaitUntilIdleBatchResult>;
+  /**
+   * Execute `skills.search` in the main process (#10892). The renderer holds no
+   * skill data (parsed plugin markdown lives in the main-process registry), so
+   * this tool short-circuits renderer dispatch — same rationale as
+   * `handleWaitUntilIdle`. Throws {@link McpError} on invalid args.
+   */
+  handleSkillsSearch: (
+    rawArgs: unknown
+  ) => import("../../../shared/types/skills.js").SkillSearchResult;
+  /**
+   * Execute `skills.load` in the main process (#10892). Throws {@link McpError}
+   * on invalid args or an unknown skill id.
+   */
+  handleSkillsLoad: (rawArgs: unknown) => import("../../../shared/types/skills.js").SkillLoadResult;
   appendAuditRecord: (input: {
     toolId: string;
     sessionId: string;
@@ -297,6 +313,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     dispatchAction,
     handleWaitUntilIdle: waitUntilIdle,
     handleWaitUntilIdleBatch: waitUntilIdleBatch,
+    handleSkillsSearch,
+    handleSkillsLoad,
     appendAuditRecord,
     getCachedManifest,
     getFullToolSurface,
@@ -724,6 +742,35 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({
               code: EXECUTION_ERROR_CODE,
               message: formatErrorMessage(err, "waitUntilIdleBatch failed"),
+            });
+          }
+        }
+
+        // Short-circuit: skills.search / skills.load run entirely in the main
+        // process (#10892). The action manifest entries (renderer) carry
+        // schema/tier/audit, but the skill registry — parsed plugin markdown —
+        // only exists in main, so execution stays here rather than
+        // round-tripping to a renderer that has no skill data. Synchronous
+        // in-memory reads; never `danger: "confirm"`. Audit + strip-settle
+        // unify via the shared `finally`.
+        if (actionId === SKILLS_SEARCH_TOOL || actionId === SKILLS_LOAD_TOOL) {
+          emitToolCallStarted(false);
+          try {
+            const result =
+              actionId === SKILLS_SEARCH_TOOL ? handleSkillsSearch(args) : handleSkillsLoad(args);
+            outcome = { kind: "result", value: { ok: true, result } };
+            return {
+              content: [{ type: "text" as const, text: safeSerializeToolResult(result) }],
+              structuredContent: result as unknown as Record<string, unknown>,
+            };
+          } catch (err) {
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) {
+              throw err;
+            }
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, `${actionId} failed`),
             });
           }
         }

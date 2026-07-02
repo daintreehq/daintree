@@ -150,6 +150,10 @@ export const BUILT_IN_ACTION_IDS = [
   // -- slashCommandsActions --
   "slashCommands.list",
 
+  // -- skillActions --
+  "skills.search",
+  "skills.load",
+
   // -- artifactActions --
   "artifact.saveToFile",
   "artifact.applyPatch",

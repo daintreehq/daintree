@@ -49,6 +49,7 @@ function makePlugin(settings: SettingDefinition[]): LoadedPluginInfo {
         commands: [],
         views: [],
         mcpServers: [],
+        skills: [],
         forgeProviders: [],
         fileDecorationProviders: [],
         agents: [],

@@ -32,6 +32,7 @@ function makePlugin(name: string): LoadedPluginInfo {
         commands: [],
         views: [],
         mcpServers: [],
+        skills: [],
         keybindings: [],
         contextMenus: [],
         forgeProviders: [],

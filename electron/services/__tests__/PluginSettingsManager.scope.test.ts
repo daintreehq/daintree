@@ -28,6 +28,7 @@ function manifestWith(settings: SettingDefinition[]): PluginManifest {
       commands: [],
       views: [],
       mcpServers: [],
+      skills: [],
       forgeProviders: [],
       fileDecorationProviders: [],
       agents: [],

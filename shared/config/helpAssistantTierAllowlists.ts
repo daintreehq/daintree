@@ -45,6 +45,9 @@ export const WORKBENCH_TIER_TOOLS = [
 
   "slashCommands.list",
 
+  "skills.search",
+  "skills.load",
+
   "git.getProjectPulse",
   "git.getFileDiff",
   "git.listCommits",
