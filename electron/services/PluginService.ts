@@ -96,6 +96,11 @@ import { PluginChannelRegistry, isChannelSchema } from "./plugin/PluginChannelRe
 import { PluginInstaller } from "./plugin/PluginInstaller.js";
 import { PluginDevWorkerHost } from "./plugin/PluginDevWorkerHost.js";
 import { PluginDevWorkerMainBridge } from "./plugin/PluginDevWorkerMainBridge.js";
+import {
+  buildPluginPermissionExecArgv,
+  derivePluginPermissionCapabilities,
+  isPluginPermissionModelSpikeEnabled,
+} from "./plugin/pluginPermissionFlags.js";
 import { PluginInvokeOwnershipError } from "./plugin/PluginInvokeErrors.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import {
@@ -1726,11 +1731,13 @@ export class PluginService {
     if (this.pluginWorkers.has(pluginId)) return;
 
     const { host, revoke } = this.createHost(pluginId);
+    const permissionExecArgv = await this.buildWorkerPermissionExecArgv(pluginId, plugin);
     const workerHost = new PluginDevWorkerHost({
       pluginId,
       pluginDir: plugin.dir,
       bundlePath: plugin.resolvedMain,
       mode: plugin.devMode ? "dev" : "prod",
+      permissionExecArgv,
     });
     const bridge = new PluginDevWorkerMainBridge({
       pluginId,
@@ -3363,6 +3370,59 @@ export class PluginService {
     return (
       rel === "" || (rel !== ".." && !rel.startsWith(".." + path.sep) && !path.isAbsolute(rel))
     );
+  }
+
+  /**
+   * Spike #10890: compute the Node permission-model `execArgv` flags for a
+   * plugin worker, or `undefined` when the spike env flag is off (preserving the
+   * exact current fork behavior). Maps the plugin's resolved `allowedPaths` +
+   * capabilities onto `--permission --allow-fs-read/-write` (plus
+   * `--allow-child-process` for `shell:exec` and `--allow-addons`).
+   *
+   * Read/write split: every resolved root is readable; a root is writable only
+   * when its class has the matching write capability (`fs:project-write` /
+   * `fs:user-data-write`), and the implicit per-plugin data dir is always
+   * writable (it is the plugin's private scratch space). The plugin's own bundle
+   * dir is added as a read root so the worker can import its code if a future
+   * Electron ever honors the flags.
+   *
+   * Fork-time `${worktree}` limitation: the flags are fixed at fork and the
+   * `${worktree}` token resolves against whichever worktree is current now — so a
+   * static flag set reflects only the fork-time worktree and would go stale on a
+   * worktree switch (no worker restart). `${project}` (main worktree) is stable.
+   * Documented as a known limitation of the prototype, not solved here.
+   */
+  private async buildWorkerPermissionExecArgv(
+    pluginId: string,
+    plugin: LoadedPlugin
+  ): Promise<string[] | undefined> {
+    if (!isPluginPermissionModelSpikeEnabled()) return undefined;
+
+    const capabilities = plugin.manifest.capabilities ?? [];
+    const { allowChildProcess, allowNativeAddons } =
+      derivePluginPermissionCapabilities(capabilities);
+    const hasProjectWrite = capabilities.includes("fs:project-write");
+    const hasUserDataWrite = capabilities.includes("fs:user-data-write");
+    const dataDir = this.pluginDataDir(pluginId);
+
+    const entries = await this.expandAllowedPathEntries(pluginId, { includeDataDir: true });
+    const readPaths: string[] = [plugin.dir];
+    const writePaths: string[] = [];
+    for (const entry of entries) {
+      readPaths.push(entry.path);
+      const writable =
+        entry.path === dataDir ||
+        (entry.rootClass === "project" && hasProjectWrite) ||
+        (entry.rootClass === "user-data" && hasUserDataWrite);
+      if (writable) writePaths.push(entry.path);
+    }
+
+    return buildPluginPermissionExecArgv({
+      readPaths,
+      writePaths,
+      allowChildProcess,
+      allowNativeAddons,
+    });
   }
 
   /**

@@ -55,6 +55,14 @@ export interface PluginDevWorkerHostOptions {
    * fork lifecycle, and graceful dispose are identical in both modes.
    */
   mode?: "dev" | "prod";
+  /**
+   * Permission-model spike (#10890): extra `execArgv` flags (`--permission`,
+   * `--allow-fs-*`, …) appended after the V8 heap cap. Empty/absent (the
+   * default) preserves the exact current fork behavior. When present, the worker
+   * reports back whether Electron actually honored them (`ready.permission`),
+   * which this host logs — the flags are a prototype/measurement, not a boundary.
+   */
+  permissionExecArgv?: readonly string[];
 }
 
 /**
@@ -81,6 +89,8 @@ export class PluginDevWorkerHost extends EventEmitter {
   private readonly serviceName: string;
   private readonly mode: "dev" | "prod";
   private readonly workerKind: string;
+  /** Spike #10890: permission-model execArgv flags appended at fork time. */
+  private readonly permissionExecArgv: readonly string[];
 
   private watcher: fs.FSWatcher | null = null;
   private reloadTimer: NodeJS.Timeout | null = null;
@@ -111,6 +121,7 @@ export class PluginDevWorkerHost extends EventEmitter {
     this.bundlePath = options.bundlePath;
     this.mode = options.mode ?? "dev";
     this.workerKind = this.mode === "prod" ? PLUGIN_PROD_WORKER_KIND : PLUGIN_DEV_WORKER_KIND;
+    this.permissionExecArgv = options.permissionExecArgv ?? [];
 
     const safeName = options.pluginId.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 40);
     // Hash the plugin dir so two plugins sharing a sanitized name still get
@@ -390,7 +401,7 @@ export class PluginDevWorkerHost extends EventEmitter {
         serviceName: this.serviceName,
         stdio: "pipe",
         cwd: this.pluginDir || os.homedir(),
-        execArgv: ["--max-old-space-size=256"],
+        execArgv: ["--max-old-space-size=256", ...this.permissionExecArgv],
         env: {
           // env REPLACES process.env in a utility process (#6081) — spread first.
           ...(process.env as Record<string, string>),
@@ -431,6 +442,19 @@ export class PluginDevWorkerHost extends EventEmitter {
   private handleWorkerMessage(msg: PluginWorkerToHostMessage): void {
     if (this.isDisposed) return;
     if (msg.type === "ready") {
+      // Spike #10890: record whether Electron honored the permission-model
+      // execArgv flags. Only logged when we actually requested them, so a
+      // normal fork stays quiet. `honored=false` on Electron 42 is the expected
+      // finding — the utility-process bootstrap never runs Node's `--permission`
+      // parsing, so the flags are inert (the real boundary stays host.fs realpath
+      // containment). This log is the measurement surface the spike asks for.
+      if (this.permissionExecArgv.length > 0) {
+        logger.info(`[${this.serviceName}] plugin permission model spike`, {
+          requested: true,
+          honored: msg.permission?.present ?? false,
+          flags: this.permissionExecArgv,
+        });
+      }
       // Re-import the bundle and re-run activate on every (re)start.
       this.send({
         type: "start",

@@ -116,6 +116,33 @@ describe("PluginDevWorkerHost", () => {
     host.dispose();
   });
 
+  it("omits permission-model flags by default (spike #10890)", async () => {
+    const { PluginDevWorkerHost } = await loadModule();
+    const host = new PluginDevWorkerHost(OPTS);
+    host.waitForReady().catch(() => {});
+    void host.start();
+
+    const execArgv: string[] = forkMock.mock.calls[0][2].execArgv;
+    expect(execArgv.some((arg) => arg.startsWith("--permission"))).toBe(false);
+    host.dispose();
+  });
+
+  it("appends permissionExecArgv after the heap cap when provided (spike #10890)", async () => {
+    const { PluginDevWorkerHost } = await loadModule();
+    const host = new PluginDevWorkerHost({
+      ...OPTS,
+      permissionExecArgv: ["--permission", "--allow-fs-read=/plugins/acme.demo"],
+    });
+    host.waitForReady().catch(() => {});
+    void host.start();
+
+    const execArgv: string[] = forkMock.mock.calls[0][2].execArgv;
+    expect(execArgv[0]).toMatch(/^--max-old-space-size=\d+$/);
+    expect(execArgv).toContain("--permission");
+    expect(execArgv).toContain("--allow-fs-read=/plugins/acme.demo");
+    host.dispose();
+  });
+
   it("exports CRASH_WINDOW_MS aligned with the other guards (30 minutes)", async () => {
     const mod = await loadModule();
     expect(mod.CRASH_WINDOW_MS).toBe(30 * 60 * 1000);
