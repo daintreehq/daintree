@@ -719,6 +719,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * dot-path leaf so per-agent records aren't rewritten with defaults.
      */
     setGlobal(value: boolean): Promise<AgentSettings>;
+    /**
+     * Set the global "use alt-screen mode by default" override (#10876).
+     * Persisted as a dot-path leaf so per-agent records aren't rewritten with
+     * defaults.
+     */
+    setGlobalInline(value: boolean): Promise<AgentSettings>;
     reset(agentId?: AgentId): Promise<AgentSettings>;
     /**
      * Mark the persisted store with the given schema version. Only called by
@@ -1217,7 +1223,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
           color?: string;
           dangerousEnabled?: boolean;
           customFlags?: string;
-          inlineMode?: boolean;
+          inlineMode?: boolean | "inherit" | "on" | "off";
         }>;
       }) => void
     ): () => void;

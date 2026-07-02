@@ -54,6 +54,7 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
         });
         const { preset, presetWasStale, effectiveEntry } = runtimeSettings;
         const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
+        const globalUseAltScreen = agentSettings?.globalUseAltScreen ?? false;
         const clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
         const command = generateAgentCommand(
           agentConfig.command,
@@ -65,13 +66,14 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
             modelId: panel.agentModelId,
             presetArgs: preset?.args?.join(" "),
             globalSkipPermissions,
+            globalUseAltScreen,
           }
         );
         const agentLaunchFlags = buildAgentLaunchFlagsForRuntimeSettings(
           effectiveEntry,
           panel.launchAgentId,
           preset,
-          { modelId: panel.agentModelId, globalSkipPermissions }
+          { modelId: panel.agentModelId, globalSkipPermissions, globalUseAltScreen }
         );
         return { command, env: runtimeSettings.env, agentLaunchFlags, preset, presetWasStale };
       } catch (error) {

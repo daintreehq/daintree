@@ -138,6 +138,7 @@ describe("spawnPanelsFromRecipe", () => {
         clipboardDirectory: "/tmp/daintree/daintree-clipboard",
         modelId: "sonnet",
         globalSkipPermissions: false,
+        globalUseAltScreen: false,
       }
     );
     expect(mockAddPanel).toHaveBeenCalledWith(

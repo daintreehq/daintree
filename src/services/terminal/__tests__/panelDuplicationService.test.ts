@@ -581,7 +581,9 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
     await buildPanelDuplicateOptions(panel, "grid");
 
     const entry = spy.mock.calls[0]![1] as Record<string, unknown>;
-    expect(entry.inlineMode).toBe(false);
+    // Baked as the tri-state "off" (alt-screen) now (#10876): the preset's
+    // alt-screen choice still vetoes the base's inline (true → "on").
+    expect(entry.inlineMode).toBe("off");
   });
 
   it("preset.dangerousEnabled=undefined does NOT clobber base true (undefined guard)", async () => {

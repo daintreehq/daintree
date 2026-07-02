@@ -182,7 +182,13 @@ export function getMergedPresets(
         typeof preset.customFlags === "string" && !hasShellMetachar(preset.customFlags)
           ? preset.customFlags.slice(0, 10000)
           : undefined,
-      inlineMode: typeof preset.inlineMode === "boolean" ? preset.inlineMode : undefined,
+      inlineMode:
+        preset.inlineMode === "inherit" ||
+        preset.inlineMode === "on" ||
+        preset.inlineMode === "off" ||
+        typeof preset.inlineMode === "boolean"
+          ? preset.inlineMode
+          : undefined,
       color:
         typeof preset.color === "string" &&
         /^#[0-9a-fA-F]{3,4}$|^#[0-9a-fA-F]{6}$|^#[0-9a-fA-F]{8}$/.test(preset.color)

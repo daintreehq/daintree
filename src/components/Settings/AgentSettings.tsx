@@ -170,6 +170,7 @@ export function AgentSettings({
     updateAgent,
     setAgentPinned,
     setGlobalSkipPermissions,
+    setGlobalUseAltScreen,
     reset,
   } = useAgentSettingsStore();
 
@@ -427,6 +428,21 @@ export function AgentSettings({
                 onChange={() => {
                   void (async () => {
                     await setGlobalSkipPermissions(!(settings?.globalSkipPermissions ?? false));
+                    onSettingsChange?.();
+                  })();
+                }}
+              />
+            </div>
+            <div id="agents-alt-screen">
+              <SettingsSwitchCard
+                variant="compact"
+                title="Use alt-screen mode by default"
+                subtitle="Render supported agents on the full-screen alternate buffer instead of inline. Inline is smoother (WebGL scrollback, clean resize); alt-screen matches the CLI's native full-screen TUI. Sets the default for every agent; override per agent below"
+                ariaLabel="Use alt-screen mode by default"
+                isEnabled={settings?.globalUseAltScreen ?? false}
+                onChange={() => {
+                  void (async () => {
+                    await setGlobalUseAltScreen(!(settings?.globalUseAltScreen ?? false));
                     onSettingsChange?.();
                   })();
                 }}

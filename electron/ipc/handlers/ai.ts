@@ -136,6 +136,26 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
           } as AgentSettings;
         }
       ),
+      // Sets the global "use alt-screen mode by default" override (#10876). Same
+      // dot-path leaf write as setGlobal so the rest of the agentSettings slice
+      // (per-agent records, version) isn't rewritten with first-launch defaults.
+      setGlobalInline: op(
+        CHANNELS.AGENT_SETTINGS_SET_GLOBAL_INLINE,
+        async (value: boolean): Promise<AgentSettings> => {
+          if (typeof value !== "boolean") {
+            throw new Error("Invalid globalUseAltScreen");
+          }
+          const currentSettings = normalizeAgentSettings(
+            store.get("agentSettings", DEFAULT_AGENT_SETTINGS)
+          );
+          store.set("agentSettings.globalUseAltScreen", value);
+          return {
+            ...currentSettings.root,
+            globalUseAltScreen: value,
+            agents: currentSettings.agents,
+          } as AgentSettings;
+        }
+      ),
     },
   });
   handlers.push(agentSettingsGlobalNamespace.register());

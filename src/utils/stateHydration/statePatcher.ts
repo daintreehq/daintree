@@ -12,7 +12,9 @@ import {
   buildResumeLatestCommand,
   buildLaunchCommandFromFlags,
   reconcileBypassFlags,
+  reconcileInlineModeFlag,
   resolveEffectiveBypass,
+  resolveEffectiveInlineMode,
 } from "@shared/types";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
 import { isAbsolute } from "@shared/utils/path";
@@ -163,6 +165,7 @@ interface ReconnectedTerminalData {
 interface AgentSettingsData {
   agents?: Record<string, Record<string, unknown>>;
   globalSkipPermissions?: boolean;
+  globalUseAltScreen?: boolean;
 }
 
 export function inferAgentIdFromTitle(
@@ -428,25 +431,36 @@ export function buildArgsForRespawn(
     // once it's toggled off, and vice-versa. Strip-and-re-add against the
     // current resolution so every restart/restore replays clean flags.
     const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
+    const globalUseAltScreen = agentSettings?.globalUseAltScreen ?? false;
     const effectiveBypass = resolveEffectiveBypass(effectiveEntry, agentId, globalSkipPermissions);
+    const effectiveInline = resolveEffectiveInlineMode(effectiveEntry, agentId, globalUseAltScreen);
     const dangerousArgs = effectiveEntry.dangerousArgs as string | undefined;
     const rawPersistedFlags = presetWasStale ? undefined : saved.agentLaunchFlags;
     const hasPersistedFlags = Boolean(rawPersistedFlags && rawPersistedFlags.length > 0);
+    // Reconcile the persisted snapshot against both live resolutions (#10432 the
+    // bypass token, #10876 the `--no-alt-screen` inline flag): a snapshot must
+    // not carry a stale flag forward once the global switch or per-agent choice
+    // is flipped. Applied together so restart/restore/resume replay clean flags.
+    const reconcileFlags = (base: string[]): string[] =>
+      reconcileInlineModeFlag(
+        reconcileBypassFlags(base, agentId, effectiveBypass, dangerousArgs),
+        agentId,
+        effectiveInline
+      );
     // Reconcile only the flags actually captured: this drives the stored
     // snapshot and the from-flags rebuild, so it must NOT synthesize a flag set
     // out of nothing (that would mask the fresh-launch fallback).
     const persistedFlags = hasPersistedFlags
-      ? reconcileBypassFlags(rawPersistedFlags as string[], agentId, effectiveBypass, dangerousArgs)
+      ? reconcileFlags(rawPersistedFlags as string[])
       : rawPersistedFlags;
     reconciledLaunchFlags = persistedFlags;
-    // Resume commands prepend launch flags, so the bypass token must be injected
-    // even when no flags were captured — a session launched before bypass
-    // existed should honour global-on (#10432). Only diverges from persistedFlags
-    // in that inject-from-empty case.
+    // Resume commands prepend launch flags, so the bypass / inline tokens must be
+    // injected even when no flags were captured — a session launched before
+    // either feature existed should honour the current resolution (#10432, #10876).
+    // Only diverges from persistedFlags in that inject-from-empty case.
+    const injectedFromEmpty = reconcileFlags([]);
     const resumeFlags =
-      effectiveBypass && !hasPersistedFlags
-        ? reconcileBypassFlags([], agentId, effectiveBypass, dangerousArgs)
-        : persistedFlags;
+      !hasPersistedFlags && injectedFromEmpty.length > 0 ? injectedFromEmpty : persistedFlags;
 
     const buildFromPersistedFlags = () =>
       buildLaunchCommandFromFlags(baseCommand, agentId, persistedFlags as string[], {
@@ -467,6 +481,7 @@ export function buildArgsForRespawn(
           modelId: saved.agentModelId,
           presetArgs: preset?.args?.join(" "),
           globalSkipPermissions,
+          globalUseAltScreen,
         });
         sessionLostOnRestore = true;
       }
@@ -486,6 +501,7 @@ export function buildArgsForRespawn(
           modelId: saved.agentModelId,
           presetArgs: preset?.args?.join(" "),
           globalSkipPermissions,
+          globalUseAltScreen,
         });
         sessionLostOnRestore = true;
       }

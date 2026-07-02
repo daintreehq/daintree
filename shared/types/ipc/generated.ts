@@ -52,6 +52,10 @@ export interface GeneratedIpcInvokeMap {
     args: [value: boolean];
     result: import("../agentSettings.js").AgentSettings;
   };
+  "agent-settings:set-global-inline": {
+    args: [value: boolean];
+    result: import("../agentSettings.js").AgentSettings;
+  };
   "app:clear-quarantined-panel": {
     args: [panelId: string];
     result: { cleared: boolean };
