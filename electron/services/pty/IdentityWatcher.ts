@@ -20,6 +20,14 @@ const SHELL_ONLY_SINGLE_CHAR_PROMPT_PATTERN = /^\s*[$#%]\s*$/;
 const AGENT_ONLY_SINGLE_CHAR_PROMPT_PATTERN = /^\s*[>❯›]\s*$/;
 const POSIX_USER_HOST_PROMPT_PATTERN = /^\s*[A-Za-z0-9_.-]+@\S+(?:\s+[^\r\n]*)?\s*[#$%>]\s*$/;
 const DECORATED_SHELL_PROMPT_PATTERN = /^\s*[➜➤➟➔❯›]\s+.*$/;
+// Same as above but without the `❯`/`›` glyphs. While an agent owns the
+// terminal those glyphs are the agent's own composer/input prompt (Codex uses
+// `›`, Claude uses `❯`), not a returned shell prompt — matching them there let
+// agent echo lines masquerade as a prompt return and demote a live agent
+// (#10911). Real oh-my-zsh prompts (`➜` etc.) still count. The process-group
+// probe and process-tree evidence are the authoritative demotion signals while
+// an agent is committed.
+const DECORATED_SHELL_PROMPT_PATTERN_NO_AGENT_GLYPHS = /^\s*[➜➤➟➔]\s+.*$/;
 const MAC_BASH_PROMPT_PATTERN = /^\s*\S+:\S+\s+\S+\s*[#$%>]\s*$/;
 const POWERSHELL_PROMPT_PATTERN = /^\s*PS\s+\S.*>\s*$/i;
 
@@ -37,6 +45,16 @@ const SHELL_PROMPT_PATTERNS = [
   POWERSHELL_PROMPT_PATTERN,
 ] as const;
 
+// Same as SHELL_PROMPT_PATTERNS but with the decorated pattern swapped for the
+// variant that ignores the `❯`/`›` agent-composer glyphs. Used by the poll's
+// prompt scan while an agent is committed so a Codex/Claude composer line can't
+// register as a returned shell prompt. #10911
+const SHELL_PROMPT_PATTERNS_NO_AGENT_GLYPHS = SHELL_PROMPT_PATTERNS.map((pattern) =>
+  pattern === DECORATED_SHELL_PROMPT_PATTERN
+    ? DECORATED_SHELL_PROMPT_PATTERN_NO_AGENT_GLYPHS
+    : pattern
+);
+
 const UNAMBIGUOUS_SHELL_PROMPT_PATTERNS = [
   SHELL_ONLY_SINGLE_CHAR_PROMPT_PATTERN,
   POSIX_USER_HOST_PROMPT_PATTERN,
@@ -47,12 +65,18 @@ const UNAMBIGUOUS_SHELL_PROMPT_PATTERNS = [
 const ACTIVE_AGENT_PROMPT_PATTERN =
   /(?:welcome to claude code|claude code v\d|tips for getting started|\?\s+for\s+shortcuts|welcome\s+back!)/i;
 
-function isUnambiguousShellPromptLine(line: string | undefined): boolean {
+function isUnambiguousShellPromptLine(line: string | undefined, agentCommitted = false): boolean {
   if (line === undefined) return false;
   if (UNAMBIGUOUS_SHELL_PROMPT_PATTERNS.some((pattern) => pattern.test(line))) {
     return true;
   }
-  return DECORATED_SHELL_PROMPT_PATTERN.test(line) && !/^\s*[>❯›]\s+\d+\./.test(line);
+  // While an agent is committed, `❯`/`›` are agent chrome rather than a shell
+  // prompt — exclude them so an agent composer line can't trigger a false
+  // prompt-return demotion. #10911
+  const decorated = agentCommitted
+    ? DECORATED_SHELL_PROMPT_PATTERN_NO_AGENT_GLYPHS
+    : DECORATED_SHELL_PROMPT_PATTERN;
+  return decorated.test(line) && !/^\s*[>❯›]\s+\d+\./.test(line);
 }
 
 // Locale-independent fallback signals for "command not found" detection. POSIX
@@ -129,6 +153,12 @@ export class IdentityWatcher {
   private committed = false;
   private promptStreak = 0;
   private sawPtyDescendant = false;
+  // Latched once the foreground-PGID probe returns a usable reading on this
+  // terminal, so a later null read is treated as a transient failure (fail
+  // closed while an agent is committed) rather than an unsupported platform.
+  // Persists across stop()/re-arm — the probe's availability is a property of
+  // the terminal, not of a single command. #10911
+  private sawForegroundSnapshot = false;
   private suppressNext = false;
   private inputBuffer = "";
   // ESC parser state, persisted across captureInput calls so a VT sequence
@@ -376,9 +406,11 @@ export class IdentityWatcher {
       return;
     }
 
+    // We only reach here past the guard above, so an agent identity is
+    // committed — exclude the agent's own `❯`/`›` glyphs from prompt matching.
     if (
       !this.hasRecentCommandFailureOutput() &&
-      this.hasUnambiguousShellPromptInText(data) &&
+      this.hasUnambiguousShellPromptInText(data, true) &&
       !this.hasAgentUiPromptFalsePositive(false)
     ) {
       this.clearShellCommandEvidenceAfterPromptReturn();
@@ -430,7 +462,7 @@ export class IdentityWatcher {
     return COMMAND_NOT_FOUND_REGEX.test(recent);
   }
 
-  private hasUnambiguousShellPromptVisible(): boolean {
+  private hasUnambiguousShellPromptVisible(agentCommitted = false): boolean {
     const lines = this.delegate.getLastNLines(SHELL_IDENTITY_FALLBACK_SCAN_LINES);
     const lastVisibleLine = [...lines]
       .reverse()
@@ -440,9 +472,9 @@ export class IdentityWatcher {
       .reverse()
       .find((line) => line.trim().length > 0);
     return (
-      isUnambiguousShellPromptLine(cursorLine ?? undefined) ||
-      isUnambiguousShellPromptLine(lastVisibleLine) ||
-      isUnambiguousShellPromptLine(recentOutputLine)
+      isUnambiguousShellPromptLine(cursorLine ?? undefined, agentCommitted) ||
+      isUnambiguousShellPromptLine(lastVisibleLine, agentCommitted) ||
+      isUnambiguousShellPromptLine(recentOutputLine, agentCommitted)
     );
   }
 
@@ -452,8 +484,10 @@ export class IdentityWatcher {
     return this.getOutputTailLines(recentOutput);
   }
 
-  private hasUnambiguousShellPromptInText(text: string): boolean {
-    return this.getOutputTailLines(text).some((line) => isUnambiguousShellPromptLine(line));
+  private hasUnambiguousShellPromptInText(text: string, agentCommitted = false): boolean {
+    return this.getOutputTailLines(text).some((line) =>
+      isUnambiguousShellPromptLine(line, agentCommitted)
+    );
   }
 
   private getOutputTailLines(text: string): string[] {
@@ -493,20 +527,33 @@ export class IdentityWatcher {
     readonly supported: boolean;
   } {
     const snapshot = this.delegate.readForegroundProcessGroupSnapshot();
-    if (!snapshot) {
-      // Non-POSIX and unsupported environments fall back to the legacy prompt
-      // path. On macOS/Linux this snapshot is the authoritative demotion gate.
-      return { shellIdle: true, supported: false };
+    if (snapshot && snapshot.shellPgid > 0 && snapshot.foregroundPgid > 0) {
+      // A usable reading exists. Record that the probe works on this terminal so
+      // a later null read is recognized as a transient failure rather than an
+      // unsupported platform (see fail-closed branch below).
+      this.sawForegroundSnapshot = true;
+      return {
+        shellIdle: snapshot.shellPgid === snapshot.foregroundPgid,
+        supported: true,
+      };
     }
 
-    if (snapshot.shellPgid <= 0 || snapshot.foregroundPgid <= 0) {
-      return { shellIdle: true, supported: false };
+    // No usable snapshot. Two distinct cases:
+    //  - The probe never produced a reading (Windows, or non-positive pgids):
+    //    it is unsupported here, so fall back to the legacy prompt / child-exit
+    //    path (supported:false) — matches prior behavior.
+    //  - The probe has worked before and just returned null (ps timeout, exit
+    //    race): a transient stale window. While an agent is committed, FAIL
+    //    CLOSED — treat the unknown foreground state as "child still active" so
+    //    a stale-probe window can't let a false prompt match demote a live
+    //    agent (#10911). PTY exit and a fresh idle snapshot remain the
+    //    authoritative demotion signals.
+    const agentCommitted =
+      Boolean(this.identity?.agentType) || Boolean(this.delegate.detectedAgentId);
+    if (this.sawForegroundSnapshot && agentCommitted) {
+      return { shellIdle: false, supported: true };
     }
-
-    return {
-      shellIdle: snapshot.shellPgid === snapshot.foregroundPgid,
-      supported: true,
-    };
+    return { shellIdle: true, supported: false };
   }
 
   private poll(): void {
@@ -539,13 +586,17 @@ export class IdentityWatcher {
       this.sawPtyDescendant = true;
     }
 
-    const unambiguousShellPromptVisible = this.hasUnambiguousShellPromptVisible();
+    const agentCommitted =
+      Boolean(this.identity?.agentType) || Boolean(this.delegate.detectedAgentId);
+    const unambiguousShellPromptVisible = this.hasUnambiguousShellPromptVisible(agentCommitted);
     const promptVisible =
       unambiguousShellPromptVisible ||
       detectPrompt(
         this.delegate.getLastNLines(SHELL_IDENTITY_FALLBACK_SCAN_LINES),
         {
-          promptPatterns: [...SHELL_PROMPT_PATTERNS],
+          promptPatterns: agentCommitted
+            ? [...SHELL_PROMPT_PATTERNS_NO_AGENT_GLYPHS]
+            : [...SHELL_PROMPT_PATTERNS],
           promptHintPatterns: [],
           promptScanLineCount: SHELL_IDENTITY_FALLBACK_SCAN_LINES,
           promptConfidence: 0.85,
