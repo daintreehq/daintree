@@ -264,6 +264,7 @@ describe("TerminalProcess.submit", () => {
       isAgentLive: boolean;
       terminalInfo: { agentState: string };
       activityMonitor: { onInput: (data: string) => void };
+      agentOutputTemperature: { observeDelta: (...args: unknown[]) => unknown };
       agentOutputContentSnapshot: unknown;
       noteAgentOutputActivity: (before: unknown) => void;
       getAgentOutputContentSnapshot: () => unknown;
@@ -275,11 +276,23 @@ describe("TerminalProcess.submit", () => {
     internals.terminalInfo.agentState = "idle";
     internals.agentOutputContentSnapshot = { lines: ["before"] };
     internals.getAgentOutputContentSnapshot = () => ({ lines: ["after redraw with lots of new"] });
+    // Force the temperature to hint busy so the test actually reaches the
+    // promotion branch — otherwise a single delta never hints busy and the
+    // test would pass even with the input gate removed (mirrors #9875).
+    vi.spyOn(internals.agentOutputTemperature, "observeDelta").mockReturnValue({
+      stateHint: "busy",
+      changed: true,
+      changedChars: 64,
+      heatAdded: 50,
+      temperature: 80,
+      suppressed: false,
+      seeded: false,
+    });
 
     // A wheel tick sends an SGR mouse-report sequence, which stamps
     // lastUserInputAt (mouse bytes aren't diverted to focus handling). The
     // direct promotion path must not flip the idle agent to busy while that
-    // input-echo window is open.
+    // input-echo window is open — even though the temperature hints busy.
     internals.activityMonitor.onInput("\x1b[<64;10;5M");
     handleActivityState.mockClear();
     internals.noteAgentOutputActivity({ lines: ["before"] });
