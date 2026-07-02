@@ -27,7 +27,7 @@ function command(id: string): Record<string, unknown> {
   };
 }
 function view(id: string): Record<string, unknown> {
-  return { id, name: "View", componentPath: "./view/index.js", location: "panel" };
+  return { id, componentPath: "./view/index.js", location: "panel" };
 }
 function setting(id: string): Record<string, unknown> {
   return { id, type: "string" };
