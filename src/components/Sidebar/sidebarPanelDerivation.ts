@@ -1,0 +1,133 @@
+import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import type { AgentState } from "@shared/types/agent";
+import { isAgentTerminal } from "@/utils/terminalType";
+import { isTerminalVisible } from "@/lib/terminalVisibility";
+import { isFleetArmEligible } from "@/store/fleetArmingStore";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+
+// Per-worktree rollups consumed by the sidebar (terminal counts + agent-state
+// flags). These live outside the component so their churn-safety and reactivity
+// invariants are unit-testable (#10908): subscribing to the whole `panelsById`
+// map re-ran every rollup on each rAF status-buffer flush, because the buffer
+// replaces the map reference every flush. The three selectors below read ONLY
+// fields the rollups depend on — none of which the buffer writes (it touches
+// activity/flow/held/runtimeStatus) — and return flat primitive maps so
+// `useShallow` bails on buffer flushes yet still fires on real structural,
+// agent-state, or fleet-eligibility changes.
+
+// Orphaning is worktree-scoped, so the intrinsic visibility pass disables
+// `isTerminalVisible`'s orphan check with an empty set; `computePanelStateByWorktree`
+// re-applies it once per worktree using the live worktree id set.
+const EMPTY_WORKTREE_IDS: ReadonlySet<string> = new Set();
+
+/** Minimal panel-store shape the sidebar derivations read. */
+export interface SidebarPanelDerivationState {
+  panelIds: readonly string[];
+  panelsById: Record<string, PanelInstance>;
+  isInTrash: (id: string) => boolean;
+}
+
+export interface WorktreePanelSummary {
+  terminalCount: number;
+  waitingTerminalCount: number;
+  hasWorkingAgent: boolean;
+  hasWaitingAgent: boolean;
+  hasCompletedAgent: boolean;
+  hasExitedAgent: boolean;
+}
+
+/** Panels passing intrinsic visibility (trash/location/persistence), sans orphan. */
+export function selectSidebarVisiblePanelIds(
+  state: SidebarPanelDerivationState
+): Record<string, 1> {
+  const result: Record<string, 1> = {};
+  for (const id of state.panelIds) {
+    const panel = state.panelsById[id];
+    if (panel && isTerminalVisible(panel, state.isInTrash, EMPTY_WORKTREE_IDS)) {
+      result[id] = 1;
+    }
+  }
+  return result;
+}
+
+/** Agent-state per PTY agent panel (absent when there is no live agent state). */
+export function selectSidebarAgentStateByPanelId(
+  state: SidebarPanelDerivationState
+): Record<string, AgentState> {
+  const result: Record<string, AgentState> = {};
+  for (const id of state.panelIds) {
+    const panel = state.panelsById[id];
+    if (!panel || !isPtyPanel(panel)) continue;
+    const agentState = panel.agentState;
+    if (!agentState) continue;
+    if (!isAgentTerminal(panel)) continue;
+    result[id] = agentState;
+  }
+  return result;
+}
+
+/**
+ * Fleet-arm-eligible panels → their worktree id. `isFleetArmEligible` reads
+ * `runtimeStatus`, which the buffer writes, but only its exited/error transition
+ * flips eligibility and the buffer never sets those on the flow path
+ * (`panelStatusBuffer.ts`) — so the eligible set is stable across flushes.
+ */
+export function selectSidebarFleetEligibleWorktreeById(
+  state: SidebarPanelDerivationState
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const id of state.panelIds) {
+    const panel = getNarrowPanel(state.panelsById, id);
+    if (!isFleetArmEligible(panel)) continue;
+    result[id] = panel.worktreeId ?? "";
+  }
+  return result;
+}
+
+function emptySummary(): WorktreePanelSummary {
+  return {
+    terminalCount: 0,
+    waitingTerminalCount: 0,
+    hasWorkingAgent: false,
+    hasWaitingAgent: false,
+    hasCompletedAgent: false,
+    hasExitedAgent: false,
+  };
+}
+
+/** Roll the flat maps up into per-worktree terminal counts + agent-state flags. */
+export function computePanelStateByWorktree(
+  worktreeIdList: readonly string[],
+  panelIdsByWorktreeId: Record<string, string[]>,
+  visiblePanelIds: Record<string, 1>,
+  agentStateByPanelId: Record<string, AgentState>,
+  worktreeIds: ReadonlySet<string>
+): Record<string, WorktreePanelSummary> {
+  const result: Record<string, WorktreePanelSummary> = {};
+  for (const worktreeId of worktreeIdList) {
+    const ids = panelIdsByWorktreeId[worktreeId];
+    // Every panel indexed under `worktreeId` carries that worktreeId, so the
+    // orphan check is constant across the group and evaluated once here.
+    const worktreeOrphaned = worktreeIds.size > 0 && !worktreeIds.has(worktreeId);
+    if (!ids || ids.length === 0 || worktreeOrphaned) {
+      result[worktreeId] = emptySummary();
+      continue;
+    }
+    const summary = emptySummary();
+    for (const id of ids) {
+      if (!visiblePanelIds[id]) continue;
+      summary.terminalCount++;
+      const agentState = agentStateByPanelId[id];
+      if (!agentState) continue;
+      if (agentState === "working") summary.hasWorkingAgent = true;
+      if (agentState === "waiting") {
+        summary.hasWaitingAgent = true;
+        summary.waitingTerminalCount++;
+      }
+      if (agentState === "completed") summary.hasCompletedAgent = true;
+      if (agentState === "exited") summary.hasExitedAgent = true;
+    }
+    result[worktreeId] = summary;
+  }
+  return result;
+}
