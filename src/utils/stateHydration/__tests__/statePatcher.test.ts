@@ -1638,6 +1638,126 @@ describe("buildArgsForReconnectedFallback — agent launch flags", () => {
   });
 });
 
+// ── persisted launch env replay (#10922) ─────────────────────────────────────
+// A session launched via a preset/recipe pointing Claude Code at an alternate
+// provider (Z.AI/GLM) must replay the SAME provider env on restore, even when
+// that preset/recipe no longer resolves in the current store. The snapshot env
+// is preferred over live preset re-resolution.
+describe("buildArgsForRespawn — persisted launch env (#10922)", () => {
+  beforeEach(() => {
+    getMergedPresetMock.mockReset();
+  });
+
+  it("prefers the saved snapshot env over live preset re-resolution", () => {
+    // Live resolution would yield {A: "live", B: "liveB"}; the persisted launch
+    // env must win wholesale (it already captured every launch layer).
+    getMergedPresetMock.mockReturnValue({
+      id: "user-aaa",
+      name: "Preset",
+      env: { A: "live", B: "liveB" },
+    });
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal",
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentPresetId: "user-aaa",
+        agentSessionId: "sess-1",
+        env: { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic", A: "saved" },
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined
+    );
+    expect(result.env).toEqual({
+      ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic",
+      A: "saved",
+    });
+    // The live-only key must NOT leak in — saved env replaces, not merges.
+    expect(result.env).not.toHaveProperty("B");
+  });
+
+  it("replays the saved env even when the originating preset is now stale", () => {
+    // The exact recipe/deleted-preset failure mode from the issue: no preset
+    // resolves, so live re-resolution is empty, but the launch env survives.
+    getMergedPresetMock.mockReturnValue(undefined);
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal",
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentPresetId: "user-deleted",
+        agentSessionId: "sess-1",
+        env: { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" },
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined
+    );
+    expect(result.env).toEqual({ ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" });
+    // Stale-preset split-brain guard still clears the visual preset identity.
+    expect(result.agentPresetId).toBeUndefined();
+  });
+
+  it("falls back to live preset env for legacy snapshots without saved env", () => {
+    getMergedPresetMock.mockReturnValue({
+      id: "user-aaa",
+      name: "Preset",
+      env: { A: "live" },
+    });
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal",
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentPresetId: "user-aaa",
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined
+    );
+    expect(result.env).toEqual({ A: "live" });
+  });
+
+  it("falls back to live preset env when saved env sanitizes to nothing safe", () => {
+    getMergedPresetMock.mockReturnValue({
+      id: "user-aaa",
+      name: "Preset",
+      env: { A: "live" },
+    });
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal",
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentPresetId: "user-aaa",
+        // Non-string values are dropped by sanitizeAgentEnv → no safe entries.
+        env: { ANTHROPIC_BASE_URL: 123 as unknown as string },
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined
+    );
+    expect(result.env).toEqual({ A: "live" });
+  });
+});
+
 // ── preset override path ──────────────────────────────────────────────────────
 
 describe("buildArgsForRespawn — preset overrides", () => {

@@ -116,6 +116,13 @@ export interface PanelSnapshot {
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */
   agentLaunchFlags?: string[];
+  /**
+   * Caller-resolved launch env (preset/recipe/caller layers) captured at launch,
+   * persisted so a restored session replays the same provider environment it
+   * launched with rather than re-deriving it from a preset that may no longer
+   * resolve (#10922). Sanitized via `sanitizeAgentEnv` on write and read.
+   */
+  env?: Record<string, string>;
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
   /** Preset ID active at launch time, used to restore colored icon on reload */

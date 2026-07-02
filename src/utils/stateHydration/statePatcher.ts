@@ -4,7 +4,7 @@ import type { BrowserHistory } from "@shared/types/browser";
 import type { PanelExitBehavior } from "@shared/types/panel";
 import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
-import { getAgentConfig } from "@/config/agents";
+import { getAgentConfig, sanitizeAgentEnv } from "@/config/agents";
 import type { AgentPreset } from "@/config/agents";
 import {
   generateAgentCommand,
@@ -94,6 +94,14 @@ export interface SavedTerminalData {
   agentPresetId?: string;
   agentPresetColor?: string;
   originalPresetId?: string;
+  /**
+   * Caller-resolved launch env captured at launch time (#10922). Preferred over
+   * live preset re-resolution on respawn so a restored session replays the same
+   * provider environment it launched with. Typed as `unknown`-valued because it
+   * is untrusted on-disk JSON — sanitized via `sanitizeAgentEnv` at the read
+   * boundary before use.
+   */
+  env?: Record<string, unknown>;
   isUsingFallback?: boolean;
   fallbackChainIndex?: number;
   /** @deprecated pre-#5459 legacy key; read-only fallback, never written. */
@@ -555,7 +563,12 @@ export function buildArgsForRespawn(
     isUsingFallback: presetWasStale ? undefined : saved.isUsingFallback,
     fallbackChainIndex: presetWasStale ? undefined : saved.fallbackChainIndex,
     sessionLostOnRestore: sessionLostOnRestore || undefined,
-    env: presetEnv,
+    // Prefer the launch env captured in the snapshot (#10922) so the restored
+    // session replays the same provider environment (e.g. a Z.AI/GLM preset or a
+    // recipe's inline env) even when that preset/recipe no longer resolves in the
+    // current store. Falls back to live re-resolution for legacy snapshots saved
+    // before env was persisted, or when the saved env sanitizes to nothing safe.
+    env: sanitizeAgentEnv(saved.env) ?? presetEnv,
     extensionState: saved.extensionState,
     pluginId: saved.pluginId,
     restore: true,

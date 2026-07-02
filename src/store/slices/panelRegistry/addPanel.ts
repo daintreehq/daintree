@@ -360,6 +360,11 @@ export const createAddPanelActions = (
       agentPresetId: options.agentPresetId,
       agentPresetColor: options.agentPresetColor,
       originalPresetId: options.originalPresetId ?? options.agentPresetId,
+      // Caller-resolved launch env (preset/recipe/caller layers) captured so a
+      // restored session replays the SAME provider environment it launched with
+      // (#10922). The live global/project env re-merge happens fresh at spawn
+      // time below, so only this non-live layer is preserved on the panel.
+      ...(options.env && { env: options.env }),
       isUsingFallback: options.isUsingFallback,
       fallbackChainIndex: options.fallbackChainIndex,
       sessionLostOnRestore: options.sessionLostOnRestore,

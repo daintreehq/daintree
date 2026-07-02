@@ -1,9 +1,14 @@
+import { sanitizeAgentEnv } from "@/config/agents";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { PanelSnapshot } from "@shared/types/project";
 
 export type PtySerializeInput = PtyPanelData;
 
 export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> {
+  // Sanitize the captured launch env on write so a compromised/edited on-disk
+  // snapshot can't smuggle PATH/LD_PRELOAD or shell-injection values back in on
+  // the next restore (#10922). Omitted entirely when nothing safe remains.
+  const env = sanitizeAgentEnv(t.env);
   return {
     launchAgentId: t.launchAgentId,
     cwd: t.cwd,
@@ -11,6 +16,7 @@ export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> 
     ...(t.exitBehavior !== undefined && { exitBehavior: t.exitBehavior }),
     ...(t.agentSessionId && { agentSessionId: t.agentSessionId }),
     ...(t.agentLaunchFlags?.length && { agentLaunchFlags: t.agentLaunchFlags }),
+    ...(env && { env }),
     ...(t.agentModelId && { agentModelId: t.agentModelId }),
     ...(t.agentPresetId && { agentPresetId: t.agentPresetId }),
     ...(t.agentPresetColor && { agentPresetColor: t.agentPresetColor }),
