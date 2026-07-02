@@ -39,6 +39,11 @@ import {
  * for shape without runtime authority (documented in the schema). The runtime
  * sweep below is the regression guard; the `satisfies`/assignment check adds a
  * compile-time break when a field is added to a schema without a map entry.
+ *
+ * Scope note: this is a curated map, not a static usage analysis — it proves a
+ * consumer file EXISTS and is documented for every accepted field, and that the
+ * schema's field set can't drift from the map. It does not statically prove the
+ * cited symbol still reads the field; that stays a human-reviewed claim.
  */
 
 type ConsumerMode = "verbatim" | "derived-input" | "cross-reference" | "intentional-metadata";
@@ -470,9 +475,9 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       note: "Switches local vs network provider presentation.",
     },
     capabilities: {
-      mode: "intentional-metadata",
-      consumers: [{ file: FORGE_REGISTRY, symbol: "freezeContribution" }],
-      note: "Frozen into the descriptor as informational metadata; behavior gates on the runtime ForgeProviderImpl, never on these strings (schema doc, frozen at 1.0).",
+      mode: "verbatim",
+      consumers: [{ file: CODE_FORGE_TAB, symbol: "ProviderSettingsBody (capabilities list)" }],
+      note: "Rendered as the provider's capability list in settings; informational only — behavior gates on the runtime ForgeProviderImpl, never on these strings (schema doc).",
     },
     credentialFields: {
       mode: "verbatim",
@@ -799,11 +804,14 @@ describe("manifest contribution field → consumer contract (#10888)", () => {
       expect(SWEPT_SCHEMAS).toHaveProperty(key);
       expect(MANIFEST_CONTRIBUTION_FIELD_CONSUMERS).toHaveProperty(key);
     }
-    // ...and every declared top-level group must be a real contributes key, so
-    // a removed contribution kind can't leave a stale consumer group behind.
-    for (const group of TOP_LEVEL_GROUPS) {
-      expect(parsed.data.contributes).toHaveProperty(group);
-    }
+    // Exact set match against the parsed empty manifest: a new contribution kind
+    // shows up here (every contributes.* array is `.default([])`, so an empty
+    // manifest materializes them all) and forces a swept-schema + consumer entry;
+    // a removed kind can't leave a stale group behind. Caveat: a future kind
+    // declared `.optional()` WITHOUT a default would not appear on the empty
+    // parse and would slip this guard — the `.default([])` convention on every
+    // array kind (see MANIFEST_CONTRIBUTION_CAPS) is what keeps that watertight.
+    expect(Object.keys(parsed.data.contributes).sort()).toEqual([...TOP_LEVEL_GROUPS].sort());
   });
 
   it.each(Object.keys(SWEPT_SCHEMAS) as SweptGroup[])(

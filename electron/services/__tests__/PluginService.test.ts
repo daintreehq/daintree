@@ -7858,7 +7858,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.no-path",
       version: "1.0.0",
       contributes: {
-        views: [{ id: "main", name: "Main", location: "panel" }],
+        views: [{ id: "main", location: "panel" }],
       },
     });
     expect(result.success).toBe(false);
