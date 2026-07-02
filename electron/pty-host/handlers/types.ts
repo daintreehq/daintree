@@ -35,6 +35,13 @@ export interface HostContext {
   pauseCoordinators: Map<string, PtyPauseCoordinator>;
   rendererConnections: Map<number, RendererConnection>;
   windowProjectMap: Map<number, string | null>;
+  /**
+   * Per-window UI-focused terminal id, pushed from the renderer's
+   * `focusedId` (terminalFocusSlice). Read by each window's PortQueueManager
+   * and PortBatcher to prioritize the focused terminal under backpressure and
+   * batching. `null` (or absent) means no terminal is focused in that window.
+   */
+  windowFocusedTerminalMap: Map<number, string | null>;
   ipcDataMirrorTerminals: Set<string>;
 
   // Reassignable — backed by getter/setter pairs in the construction site

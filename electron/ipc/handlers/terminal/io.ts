@@ -190,6 +190,30 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     ipcMain.removeListener(CHANNELS.TERMINAL_SET_ACTIVITY_TIER, handleTerminalSetActivityTier)
   );
 
+  const handleTerminalSetFocused = (
+    event: Electron.IpcMainEvent,
+    payload: { id: string | null }
+  ) => {
+    try {
+      if (!payload || typeof payload !== "object") return;
+      const { id } = payload;
+      if (id !== null && (typeof id !== "string" || !id)) return;
+      // Focus is inherently per-window: resolve the owning window from the
+      // sender's webContents (works for WebContentsView project views, not just
+      // the top-level BrowserWindow). Without a resolvable window the signal is
+      // dropped — it's a soft prioritization hint, so the host behaves as before.
+      const windowId = deps.windowRegistry?.getByWebContentsId(event.sender.id)?.windowId;
+      if (typeof windowId !== "number") return;
+      ptyClient.setFocusedTerminal(windowId, id);
+    } catch (error) {
+      console.error("[IPC] Failed to set focused terminal:", error);
+    }
+  };
+  ipcMain.on(CHANNELS.TERMINAL_SET_FOCUSED, handleTerminalSetFocused);
+  handlers.push(() =>
+    ipcMain.removeListener(CHANNELS.TERMINAL_SET_FOCUSED, handleTerminalSetFocused)
+  );
+
   const handleTerminalAcknowledgeData = (
     _event: Electron.IpcMainEvent,
     payload: { id: string; length: number }

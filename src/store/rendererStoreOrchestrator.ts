@@ -33,6 +33,7 @@ import { setActiveContextAccessors } from "@/lib/notify";
 import { debounce } from "@/utils/debounce";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
 import { isPtyPanel } from "@shared/types/panel";
+import { terminalClient } from "@/clients";
 
 // Thunk form: read the live mruList at fire time, not at schedule time. A
 // snapshot captured at schedule time could be stale by the time the debounce
@@ -162,6 +163,29 @@ export function initStoreOrchestrator(): () => void {
           if (panel.hasPty === false) return;
           usePanelStore.getState().recordMru(`terminal:${focusedId}`);
           debouncedPersistMruList();
+        }
+      )
+    )
+  );
+
+  // 1d. Focused-terminal signal to pty-host: report which terminal is focused
+  //     so the backend can prioritize it in per-window backpressure and output
+  //     batching (#10878). Only a PTY panel with a live PTY qualifies; focusing
+  //     a browser/dev-preview/review panel, or clearing focus, sends null so the
+  //     host stops prioritizing. Fire-and-forget; Zustand dedupes no-op fires.
+  disposables.add(
+    toDisposable(
+      usePanelStore.subscribe(
+        (state) => state.focusedId,
+        (focusedId) => {
+          let terminalId: string | null = null;
+          if (focusedId) {
+            const panel = usePanelStore.getState().panelsById[focusedId];
+            if (panel && isPtyPanel(panel) && panel.hasPty !== false) {
+              terminalId = focusedId;
+            }
+          }
+          terminalClient.setFocusedTerminal(terminalId);
         }
       )
     )

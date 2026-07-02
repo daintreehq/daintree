@@ -28,6 +28,14 @@ export interface PortQueueDeps {
   ) => void;
   emitReliabilityMetric: (payload: TerminalReliabilityMetricPayload) => void;
   pauseToken?: PauseToken;
+  /**
+   * The UI-focused terminal id for this window, or null when none is focused.
+   * The focused terminal is exempt from the aggregate (window-level) pause
+   * trigger — its own per-terminal watermark still applies unconditionally —
+   * and is resumed first when the aggregate drains. Optional: when absent the
+   * manager behaves exactly as before (no terminal is treated as focused).
+   */
+  getFocusedTerminalId?: () => string | null;
 }
 
 export class PortQueueManager {
@@ -76,7 +84,18 @@ export class PortQueueManager {
       previousTotal >= IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES &&
       this.totalQueuedBytes < IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES
     ) {
+      // Resume the focused terminal first so the pane the user is watching
+      // recovers ahead of its siblings. tryResume reads only totalQueuedBytes
+      // and per-terminal bytes (neither mutated by a resume), so visiting the
+      // focused id first is order-independent for correctness — it only changes
+      // which coordinator.resume() fires first. Every other paused terminal is
+      // still swept, so no producer is starved (#7030).
+      const focusedId = this.deps.getFocusedTerminalId?.() ?? null;
+      if (focusedId !== null && this.pausedTerminals.has(focusedId)) {
+        this.tryResume(focusedId);
+      }
       for (const pausedId of [...this.pausedTerminals.keys()]) {
+        if (pausedId === focusedId) continue;
         this.tryResume(pausedId);
       }
     }
@@ -133,8 +152,16 @@ export class PortQueueManager {
     // aggregate trigger pauses the currently producing terminal — under a
     // fleet burst every active producer reaches here within one batch flush.
     const overOwnWatermark = currentBytes >= highWatermarkBytes;
+    // The focused terminal is exempt from the aggregate trigger: it is paused
+    // LAST under a fleet burst, staying live while its siblings absorb the
+    // window-level backpressure. Its OWN watermark still applies (above), so
+    // its queue can never grow unbounded — a runaway focused terminal still
+    // pauses on its own gate and the saturated/data-loss fallback is unchanged.
+    const focusedId = this.deps.getFocusedTerminalId?.() ?? null;
     const overAggregateWatermark =
-      currentBytes > 0 && this.totalQueuedBytes >= IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES;
+      currentBytes > 0 &&
+      id !== focusedId &&
+      this.totalQueuedBytes >= IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES;
     if ((!overOwnWatermark && !overAggregateWatermark) || this.pausedTerminals.has(id)) {
       return false;
     }

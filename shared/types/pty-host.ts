@@ -163,6 +163,7 @@ export type PtyHostRequest =
       /** Filesystem path of the project; used to warm the PTY pool at the project root. */
       projectPath?: string;
     }
+  | { type: "set-focused-terminal"; windowId: number; id: string | null }
   | { type: "disconnect-port"; windowId: number }
   | { type: "kill-by-project"; projectId: string; requestId: string }
   | { type: "get-project-stats"; projectId: string; requestId: string }

@@ -1100,6 +1100,8 @@ function buildElectronApi(): ElectronAPI {
       setActivityTier: (id: string, tier: "active" | "background", pollingIntervalMs?: number) =>
         ipcRenderer.send(CHANNELS.TERMINAL_SET_ACTIVITY_TIER, { id, tier, pollingIntervalMs }),
 
+      setFocused: (id: string | null) => ipcRenderer.send(CHANNELS.TERMINAL_SET_FOCUSED, { id }),
+
       acknowledgeData: (id: string, length: number) =>
         ipcRenderer.send(CHANNELS.TERMINAL_ACKNOWLEDGE_DATA, { id, length }),
 
