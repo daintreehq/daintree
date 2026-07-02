@@ -228,4 +228,67 @@ describe("PluginUpdateCheckService", () => {
     await svc._checkNowForTest();
     expect(pluginServiceMock.checkForUpdate).not.toHaveBeenCalled();
   });
+
+  it("clears a stale cache on a clean no-update pass", async () => {
+    storeState.value = { enabled: true, lastCheckedAt: null };
+    pluginServiceMock.listPlugins.mockReturnValue([urlPlugin("pub.a")]);
+    pluginServiceMock.checkForUpdate.mockResolvedValue(available("pub.a", "2.0.0"));
+    const svc = new PluginUpdateCheckService();
+    await svc._checkNowForTest();
+    expect(svc.getLatest()).not.toBeNull();
+
+    // A later pass finds nothing available (e.g. the user updated manually) —
+    // the obsolete cache must not hydrate a fresh renderer.
+    pluginServiceMock.checkForUpdate.mockResolvedValue({ status: "up-to-date" });
+    await svc._checkNowForTest();
+    expect(svc.getLatest()).toBeNull();
+  });
+
+  it("keeps the cache when a no-update pass is inconclusive (fetch failure)", async () => {
+    storeState.value = { enabled: true, lastCheckedAt: null };
+    pluginServiceMock.listPlugins.mockReturnValue([urlPlugin("pub.a"), urlPlugin("pub.b")]);
+    pluginServiceMock.checkForUpdate.mockImplementation(async (id: string) =>
+      id === "pub.a" ? available("pub.a", "2.0.0") : { status: "up-to-date" }
+    );
+    const svc = new PluginUpdateCheckService();
+    await svc._checkNowForTest();
+    expect(svc.getLatest()).not.toBeNull();
+
+    // Now 0 available but one plugin couldn't be checked → don't clear the cache.
+    pluginServiceMock.checkForUpdate.mockImplementation(async (id: string) =>
+      id === "pub.a" ? { status: "fetch-failed", message: "net" } : { status: "up-to-date" }
+    );
+    await svc._checkNowForTest();
+    expect(svc.getLatest()).not.toBeNull();
+  });
+
+  it("does not broadcast or cache when disabled mid-pass", async () => {
+    storeState.value = { enabled: true, lastCheckedAt: null };
+    pluginServiceMock.listPlugins.mockReturnValue([urlPlugin("pub.a")]);
+    let resolveCheck: ((v: unknown) => void) | undefined;
+    pluginServiceMock.checkForUpdate.mockImplementation(
+      () =>
+        new Promise((res) => {
+          resolveCheck = res;
+        })
+    );
+    const svc = new PluginUpdateCheckService();
+    const pass = svc._checkNowForTest();
+    await Promise.resolve();
+    // User flips the toggle off while the network check is in flight.
+    storeState.value = { enabled: false, lastCheckedAt: storeState.value.lastCheckedAt };
+    resolveCheck?.(available("pub.a", "2.0.0"));
+    await pass;
+
+    expect(broadcastMock).not.toHaveBeenCalled();
+    expect(svc.getLatest()).toBeNull();
+  });
+
+  it("start() is idempotent and registers the wake listener only once", () => {
+    storeState.value = { enabled: true, lastCheckedAt: Date.now() };
+    const svc = new PluginUpdateCheckService();
+    svc.start();
+    svc.start();
+    expect(systemSleepMock.onWake).toHaveBeenCalledTimes(1);
+  });
 });

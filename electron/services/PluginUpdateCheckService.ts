@@ -229,34 +229,39 @@ export class PluginUpdateCheckService {
   }
 
   private async runPass(context: "Initial" | "Periodic" | "Resume"): Promise<void> {
-    let updates: PluginBackgroundUpdateEntry[] = [];
+    // `null` means the pass aborted before checking (disabled/disposed mid-init)
+    // — don't touch lastCheckedAt or the cache. `inconclusive` is true when the
+    // pass couldn't fully determine status (import/list threw, or a per-plugin
+    // fetch failed), so a partial-failure pass doesn't clear a valid cache.
+    let outcome: { updates: PluginBackgroundUpdateEntry[]; inconclusive: boolean } | null;
     try {
-      const { pluginService } = await import("./PluginService.js");
-      try {
-        await pluginService.waitForInit();
-      } catch {
-        // If init never settled the list read below simply returns what's loaded.
-      }
-      // Re-check enabled after the async init — a toggle-off mid-wait aborts.
-      if (this.disposed || !this.getSettings().enabled) return;
-
-      const targets = pluginService
-        .listPlugins()
-        .filter((p) => !p.isBuiltin && !!p.originalUrl && !!p.archiveHash)
-        .map((p) => p.manifest.name);
-
-      updates = await this.checkAll(pluginService, targets);
+      outcome = await this.collectUpdates();
     } catch (err) {
       logError("plugin-update-check-pass-failed", err);
-      // Fall through: still persist lastCheckedAt so a hard failure doesn't
-      // retry-storm on every tick.
+      // A hard failure still persists lastCheckedAt (below) so it doesn't
+      // retry-storm on every tick, but is inconclusive so the cache survives.
+      outcome = { updates: [], inconclusive: true };
     }
+
+    if (outcome === null) return;
 
     // Persist the pass timestamp even on partial fetch failures — the next pass
     // is a day out regardless, matching the daily cadence.
     this.setLastCheckedAt(Date.now());
 
-    if (this.disposed || updates.length === 0) return;
+    // Re-check after the awaited checks: a toggle-off (updateSettings) or dispose
+    // during the network round-trip must not resurrect a broadcast or a cache
+    // entry it already cleared.
+    if (this.disposed || !this.getSettings().enabled) return;
+
+    const { updates, inconclusive } = outcome;
+    if (updates.length === 0) {
+      // A conclusive empty pass supersedes any cached detection so a
+      // late-mounting renderer doesn't hydrate an already-resolved update. Keep
+      // the cache when the pass was inconclusive — we genuinely don't know.
+      if (!inconclusive) this.lastDetected = null;
+      return;
+    }
 
     const result: PluginBackgroundUpdateCheckResult = {
       checkedAt: Date.now(),
@@ -275,12 +280,48 @@ export class PluginUpdateCheckService {
     }
   }
 
-  /** Bounded worker-pool over the plugin ids; collects only `available` results. */
+  /**
+   * Resolve the plugin service, gather URL-installed targets, and check them.
+   * Returns `null` when the pass should abort without touching state (disabled
+   * or disposed mid-init); otherwise the available updates + whether the pass
+   * was inconclusive (any per-plugin fetch failure).
+   */
+  private async collectUpdates(): Promise<{
+    updates: PluginBackgroundUpdateEntry[];
+    inconclusive: boolean;
+  } | null> {
+    const { pluginService } = await import("./PluginService.js");
+    try {
+      await pluginService.waitForInit();
+    } catch {
+      // If init never settled the list read below simply returns what's loaded.
+    }
+    // Re-check enabled after the async init — a toggle-off mid-wait aborts.
+    if (this.disposed || !this.getSettings().enabled) return null;
+
+    const targets = pluginService
+      .listPlugins()
+      .filter((p) => !p.isBuiltin && !!p.originalUrl && !!p.archiveHash)
+      .map((p) => p.manifest.name);
+
+    const { found, hadError } = await this.checkAll(pluginService, targets);
+    return { updates: found, inconclusive: hadError };
+  }
+
+  /**
+   * Bounded worker-pool over the plugin ids; collects only `available` results.
+   * `hadError` is true if any per-plugin check threw, so the caller can tell a
+   * clean "nothing available" pass from one that couldn't determine status.
+   */
   private async checkAll(
     pluginService: typeof import("./PluginService.js").pluginService,
     ids: string[]
-  ): Promise<PluginBackgroundUpdateEntry[]> {
+  ): Promise<{ found: PluginBackgroundUpdateEntry[]; hadError: boolean }> {
     const found: PluginBackgroundUpdateEntry[] = [];
+    // Ids we couldn't determine this pass (fetch-failed or threw). Collected as
+    // a pushed-to array (like `found`) so the caller can tell a clean "nothing
+    // available" pass from an inconclusive one.
+    const failedIds: string[] = [];
     let cursor = 0;
 
     const worker = async (): Promise<void> => {
@@ -296,9 +337,12 @@ export class PluginUpdateCheckService {
               version: result.version,
               capabilities: result.capabilities,
             });
+          } else if (result.status === "fetch-failed") {
+            failedIds.push(id);
           }
         } catch (err) {
           // Isolate per plugin — one failed fetch never aborts the batch.
+          failedIds.push(id);
           logError("plugin-update-check-single-failed", err, { pluginId: id });
         }
       }
@@ -306,7 +350,7 @@ export class PluginUpdateCheckService {
 
     const pool = Math.min(CONCURRENCY, Math.max(ids.length, 1));
     await Promise.all(Array.from({ length: pool }, () => worker()));
-    return found;
+    return { found, hadError: failedIds.length > 0 };
   }
 }
 

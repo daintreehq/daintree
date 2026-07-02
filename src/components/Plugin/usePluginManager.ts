@@ -129,7 +129,15 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   const upToDateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pendingUpdate, setPendingUpdate] = useState<PendingUpdate | null>(null);
   const [isReinstalling, setIsReinstalling] = useState(false);
+  // Synchronous reentrancy guard for the reinstall — `isReinstalling` state lags
+  // a render, leaving a double-click window that would fire two installs and
+  // double-advance the batch queue (same class as the #4703 check guard).
+  const reinstallingRef = useRef(false);
   const [pendingHttpUrl, setPendingHttpUrl] = useState<string | null>(null);
+  // Synchronous mirror of `pendingHttpUrl` so confirm/cancel are one-shot even
+  // if the dialog fires a re-entrant close before the state flush — otherwise a
+  // second cancel could re-read stale state and reopen the manual URL dialog.
+  const pendingHttpUrlRef = useRef<string | null>(null);
   // "Update all" (#10893) drains available updates through the SAME per-plugin
   // capability-diff confirm as a single check: the queue holds the not-yet-shown
   // updates, `pendingUpdate` shows the head, and each confirm/skip/HTTP-gate
@@ -204,6 +212,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     setDeleteSettings(false);
     setPendingUpdate(null);
     setPendingHttpUrl(null);
+    pendingHttpUrlRef.current = null;
     // Abandon any in-flight "Update all" batch — the fresh list supersedes it.
     isBatchActiveRef.current = false;
     pendingQueueRef.current = [];
@@ -401,6 +410,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       // own. Cancelling reopens the input with the URL intact so the user can
       // switch to https; confirming proceeds with the install.
       setShowUrlDialog(false);
+      pendingHttpUrlRef.current = url;
       setPendingHttpUrl(url);
       return;
     }
@@ -408,8 +418,10 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   };
 
   const confirmHttpInstall = async () => {
-    if (!pendingHttpUrl) return;
-    const url = pendingHttpUrl;
+    // Read+clear the ref synchronously so a re-entrant confirm is a one-shot.
+    const url = pendingHttpUrlRef.current;
+    if (!url) return;
+    pendingHttpUrlRef.current = null;
     const fromReinstall = httpFromReinstallRef.current;
     httpFromReinstallRef.current = false;
     setPendingHttpUrl(null);
@@ -420,12 +432,17 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   };
 
   const cancelHttpInstall = () => {
+    // Read+clear the ref synchronously so a re-entrant close can't reclassify a
+    // reinstall cancel as a manual one (or double-advance the batch).
+    if (!pendingHttpUrlRef.current) return;
+    pendingHttpUrlRef.current = null;
+    const fromReinstall = httpFromReinstallRef.current;
+    httpFromReinstallRef.current = false;
     setPendingHttpUrl(null);
     // A reinstall-over-http cancel must NOT reopen the manual install dialog
     // (that URL was never user-entered); during a batch it just skips to the
     // next queued update (#10893). Manual installs keep the reopen-to-edit UX.
-    if (httpFromReinstallRef.current) {
-      httpFromReinstallRef.current = false;
+    if (fromReinstall) {
       if (isBatchActiveRef.current) advanceUpdateQueue();
       return;
     }
@@ -653,6 +670,18 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
 
   const confirmReinstall = async () => {
     if (!pendingUpdate) return;
+    if (reinstallingRef.current) return;
+    // Guard against a plugin uninstalled in another window mid-batch: never
+    // reinstall a record that's no longer in the authoritative list. Since a
+    // batch suppresses the provenance auto-clear of `pendingUpdate`, this is the
+    // batch's equivalent staleness check (#10893).
+    const stillInstalled = plugins.some(
+      (p) => p.manifest.name === pendingUpdate.plugin.manifest.name
+    );
+    if (!stillInstalled) {
+      advanceUpdateQueue();
+      return;
+    }
     const url = pendingUpdate.plugin.originalUrl;
     if (!url) {
       advanceUpdateQueue();
@@ -673,9 +702,11 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       // Mark the origin so the HTTP confirm's cancel doesn't reopen the manual
       // install dialog and its resolution advances the batch (#10893).
       httpFromReinstallRef.current = true;
+      pendingHttpUrlRef.current = url;
       setPendingHttpUrl(url);
       return;
     }
+    reinstallingRef.current = true;
     setIsReinstalling(true);
     try {
       setError(null);
@@ -689,6 +720,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       // leaves its confirm untouched (advanceUpdateQueue clears it either way).
       if (isBatchActiveRef.current) advanceUpdateQueue();
     } finally {
+      reinstallingRef.current = false;
       setIsReinstalling(false);
     }
   };
