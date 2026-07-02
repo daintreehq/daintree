@@ -29,6 +29,7 @@ import { events } from "../events.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import { destroyPty, type PooledPtyDataHandoff, type PtyPool } from "../PtyPool.js";
 import { installHeadlessResponder } from "./headlessResponder.js";
+import { headlessMirrorScheduler } from "./HeadlessMirrorScheduler.js";
 import { handleOscColorQueries } from "./OscResponder.js";
 import { Osc94Parser } from "./Osc94Parser.js";
 import { SynchronizedFrameDetector } from "./SynchronizedFrameDetector.js";
@@ -571,6 +572,10 @@ export class TerminalProcess {
     if (!terminal.headlessTerminal) {
       return;
     }
+    // Drop any feeds still held for this mirror — queued-slice callbacks are
+    // discarded (matching disposed-xterm write callbacks never firing) and the
+    // scheduler's aggregate in-flight accounting is released.
+    headlessMirrorScheduler.clear(this.id);
     if (this.headlessResponderDisposable) {
       try {
         this.headlessResponderDisposable.dispose();
@@ -614,7 +619,11 @@ export class TerminalProcess {
     if (!headless || !terminal.serializeAddon) {
       return;
     }
-    headless.write("", () => {
+    // Route the drain-sentinel through the scheduler: it fires only after all
+    // feeds held for this terminal have been released AND parsed, preserving
+    // the "tail of the output must land in the buffer" contract now that
+    // chunks can be held outside xterm's own write queue.
+    headlessMirrorScheduler.flush(this.id, headless, () => {
       if (terminal.headlessTerminal !== headless || !terminal.serializeAddon) {
         return;
       }
@@ -1644,7 +1653,7 @@ export class TerminalProcess {
     return this.getVisibleActivitySnapshot(AGENT_OUTPUT_ACTIVITY_LINE_COUNT);
   }
 
-  private noteAgentOutputActivity(beforeSnapshot: VisibleContentSnapshot | undefined): void {
+  private noteAgentOutputActivity(): void {
     if (!this.isAgentLive) {
       this.agentOutputTemperature.reset();
       this.agentOutputContentSnapshot = undefined;
@@ -1657,16 +1666,19 @@ export class TerminalProcess {
     }
 
     // Throttle: viewport extraction + diff at most once per interval. Skipped
-    // chunks aren't lost — the trailing timer re-enters with no beforeSnapshot,
-    // so the diff falls back to the stored baseline and covers everything since
-    // the last accepted comparison.
+    // chunks aren't lost — the diff runs against the stored baseline from the
+    // last accepted comparison, so it covers everything since then. (A per-chunk
+    // "before" viewport walk used to seed a fresher baseline; it was dropped —
+    // a second full rows×cols extraction per note, running precisely in the
+    // settled-agent states where the user scrolls a full-screen TUI, bought
+    // only a marginally tighter diff window.)
     const now = Date.now();
     const sinceLastNote = now - this.lastAgentOutputNoteAt;
     if (sinceLastNote < AGENT_OUTPUT_NOTE_MIN_INTERVAL_MS) {
       if (!this.agentOutputNoteTimer) {
         this.agentOutputNoteTimer = setTimeout(() => {
           this.agentOutputNoteTimer = null;
-          this.noteAgentOutputActivity(undefined);
+          this.noteAgentOutputActivity();
         }, AGENT_OUTPUT_NOTE_MIN_INTERVAL_MS - sinceLastNote);
       }
       return;
@@ -1678,10 +1690,7 @@ export class TerminalProcess {
       return;
     }
 
-    const delta = measureVisibleContentDelta(
-      beforeSnapshot ?? this.agentOutputContentSnapshot,
-      afterSnapshot
-    );
+    const delta = measureVisibleContentDelta(this.agentOutputContentSnapshot, afterSnapshot);
     const hadFallbackBaseline = this.agentOutputContentSnapshot !== undefined;
     this.agentOutputContentSnapshot = afterSnapshot;
     if (!hadFallbackBaseline) {
@@ -1785,7 +1794,7 @@ export class TerminalProcess {
 
     if (terminal.headlessTerminal) {
       terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
-      terminal.headlessTerminal.write(prelude, () => {
+      headlessMirrorScheduler.enqueue(this.id, terminal.headlessTerminal, prelude, () => {
         terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
       });
     }
@@ -1855,21 +1864,6 @@ export class TerminalProcess {
     // added to the visible frame's latency.
     this.emitData(rendererData);
 
-    // noteAgentOutputActivity only acts on waiting/idle/completed — skip the
-    // full-viewport extraction in other states (it would be computed and
-    // discarded on every chunk during "working", the heaviest output phase)
-    // and while the note throttle window is closed (the extraction would be
-    // discarded by the throttle's early return). If the state flips before
-    // the async write callback, the `beforeSnapshot ??
-    // this.agentOutputContentSnapshot` fallback covers it.
-    const agentState = terminal.agentState;
-    const beforeContentSnapshot =
-      this.isAgentLive &&
-      (agentState === "waiting" || agentState === "idle" || agentState === "completed") &&
-      Date.now() - this.lastAgentOutputNoteAt >= AGENT_OUTPUT_NOTE_MIN_INTERVAL_MS
-        ? this.getAgentOutputContentSnapshot()
-        : undefined;
-
     if (this.activityMonitor) {
       this.activityMonitor.onData(data);
     }
@@ -1885,14 +1879,15 @@ export class TerminalProcess {
     if (terminal.headlessTerminal) {
       // Outstanding-parse counter: the wake path only trusts a serialized
       // snapshot to cover the current contentEpoch when no headless writes
-      // are still queued in xterm's async parser.
+      // are still queued (scheduler hold + xterm's async parser both count —
+      // the callback fires only after the chunk has actually parsed).
       terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
-      terminal.headlessTerminal.write(data, () => {
+      headlessMirrorScheduler.enqueue(this.id, terminal.headlessTerminal, data, () => {
         terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
-        this.noteAgentOutputActivity(beforeContentSnapshot);
+        this.noteAgentOutputActivity();
       });
     } else {
-      this.noteAgentOutputActivity(beforeContentSnapshot);
+      this.noteAgentOutputActivity();
     }
     this.sessionSnapshotter.schedule();
 

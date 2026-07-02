@@ -60,6 +60,7 @@ import {
 } from "./pty-host/handlers/index.js";
 import { PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS } from "./services/pty/types.js";
 import { isSmokeTestTerminalId } from "../shared/utils/smokeTestTerminals.js";
+import { startEventLoopMonitor } from "./pty-host/eventLoopMonitor.js";
 import { SCROLLBACK_MIN } from "../shared/config/scrollback.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 import { PERF_MARKS } from "../shared/perf/marks.js";
@@ -80,6 +81,11 @@ if (!process.parentPort) {
 const port = process.parentPort as unknown as MessagePort;
 
 appendEmergencyLog(`[${new Date().toISOString()}] [START] pid=${process.pid}\n`);
+
+// Loop-lag self-measurement for the "why am I slow?" flow-control snapshot —
+// this process is where multi-terminal parse load lands, and the main
+// process's lag monitor can't see it.
+startEventLoopMonitor();
 
 // Global error handlers to prevent silent crashes
 process.on("uncaughtException", (err) => {

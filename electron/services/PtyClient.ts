@@ -1158,6 +1158,7 @@ export class PtyClient extends EventEmitter {
         smoothedUtilizationPercent: null,
         throttleDurationMs: 0,
       },
+      eventLoop: null,
     }));
   }
 

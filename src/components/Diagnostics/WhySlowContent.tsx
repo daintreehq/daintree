@@ -285,6 +285,17 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
                 tone={snapshot.pty && snapshot.pty.pausedCount > 0 ? "warn" : "default"}
               />
               <MetricTile
+                label="PTY host lag p99"
+                value={
+                  snapshot.pty?.eventLoopP99Ms != null ? `${snapshot.pty.eventLoopP99Ms}ms` : "—"
+                }
+                tone={
+                  snapshot.pty?.eventLoopP99Ms != null && snapshot.pty.eventLoopP99Ms > 50
+                    ? "warn"
+                    : "default"
+                }
+              />
+              <MetricTile
                 label="Worktree monitors"
                 value={snapshot.worktrees ? String(snapshot.worktrees.monitorCount) : "—"}
               />

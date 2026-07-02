@@ -303,6 +303,20 @@ export interface FlowControlSnapshot {
   totalPendingBytes: number;
   stats: BackpressureStatsSnapshot;
   resourceGovernor: ResourceGovernorSnapshot;
+  /** Pty-host loop health since the previous pull; null if unmonitored. */
+  eventLoop: PtyHostEventLoopStats | null;
+}
+
+/**
+ * Event-loop health of the pty-host UtilityProcess over the window since the
+ * previous snapshot pull. High p99/max with zero paused terminals is the
+ * CPU-saturation signature (parse load), distinct from queue backpressure.
+ */
+export interface PtyHostEventLoopStats {
+  p99Ms: number;
+  maxMs: number;
+  /** Fraction of the window the loop was busy (perf_hooks ELU), 0-1. */
+  utilization: number;
 }
 
 /**

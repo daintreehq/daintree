@@ -703,4 +703,123 @@ describe("TerminalOutputIngestService", () => {
       expect(writeToTerminal).toHaveBeenCalledTimes(1);
     });
   });
+
+  // During an active wheel gesture, background terminals' drains are HELD on a
+  // bounded recheck timer (not just yielded once) so their parse slices stay
+  // off the main thread mid-scroll. BACKGROUND_HOLD_RECHECK_MS=24,
+  // BACKGROUND_HOLD_MAX_MS=250.
+  describe("wheel-burst background hold", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    });
+
+    function makeService(
+      writeToTerminal: (id: string, data: string | Uint8Array, chunkCount: number) => void,
+      focusedId: string | null,
+      getWheelId: () => string | null
+    ) {
+      return new TerminalOutputIngestService(writeToTerminal, () => focusedId, getWheelId);
+    }
+
+    it("holds a background queue while a wheel burst is active elsewhere", async () => {
+      vi.stubGlobal("scheduler", undefined);
+      vi.useFakeTimers();
+      const writeToTerminal = vi.fn();
+      const service = makeService(writeToTerminal, "term-focused", () => "term-wheel");
+
+      service.bufferData("term-bg", "held");
+
+      // A plain yield tick is NOT enough — the queue is held, not yielded.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(writeToTerminal).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(24);
+      expect(writeToTerminal).not.toHaveBeenCalled();
+      expect(service.getQueuedBytes("term-bg")).toBe(4);
+    });
+
+    it("releases the hold when the wheel burst ends", async () => {
+      vi.stubGlobal("scheduler", undefined);
+      vi.useFakeTimers();
+      const writeToTerminal = vi.fn();
+      let wheelId: string | null = "term-wheel";
+      const service = makeService(writeToTerminal, "term-focused", () => wheelId);
+
+      service.bufferData("term-bg", "held");
+      await vi.advanceTimersByTimeAsync(24);
+      expect(writeToTerminal).not.toHaveBeenCalled();
+
+      wheelId = null;
+      // Next recheck falls through to the normal single-yield defer, then drains.
+      await vi.advanceTimersByTimeAsync(25);
+      expect(writeToTerminal).toHaveBeenCalledTimes(1);
+      expect(writeToTerminal).toHaveBeenCalledWith("term-bg", "held", 1);
+    });
+
+    it("drains anyway once the hold cap elapses during a continuous burst", async () => {
+      vi.stubGlobal("scheduler", undefined);
+      vi.useFakeTimers();
+      const writeToTerminal = vi.fn();
+      const service = makeService(writeToTerminal, "term-focused", () => "term-wheel");
+
+      service.bufferData("term-bg", "capped");
+
+      // Burst never ends; the bounded-fairness cap must force a drain.
+      await vi.advanceTimersByTimeAsync(300);
+      expect(writeToTerminal).toHaveBeenCalledTimes(1);
+      expect(writeToTerminal).toHaveBeenCalledWith("term-bg", "capped", 1);
+    });
+
+    it("never holds the terminal being wheeled (unfocused TUI scroll round-trip)", async () => {
+      vi.stubGlobal("scheduler", undefined);
+      vi.useFakeTimers();
+      const writeToTerminal = vi.fn();
+      const service = makeService(writeToTerminal, "term-focused", () => "term-wheel");
+
+      // The wheeled terminal is background (not focused) but exempt from the
+      // hold — its redraw frames ARE the scroll. Normal one-yield defer only.
+      service.bufferData("term-wheel", "frames");
+      expect(writeToTerminal).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(writeToTerminal).toHaveBeenCalledTimes(1);
+      expect(writeToTerminal).toHaveBeenCalledWith("term-wheel", "frames", 1);
+    });
+
+    it("never holds the focused terminal", async () => {
+      vi.stubGlobal("scheduler", undefined);
+      vi.useFakeTimers();
+      const writeToTerminal = vi.fn();
+      const service = makeService(writeToTerminal, "term-focused", () => "term-wheel");
+
+      service.bufferData("term-focused", "echo");
+      // Inline, same task — no timers needed.
+      expect(writeToTerminal).toHaveBeenCalledTimes(1);
+    });
+
+    it("drains inline when focus moves to a held terminal mid-burst", async () => {
+      vi.stubGlobal("scheduler", undefined);
+      vi.useFakeTimers();
+      const writeToTerminal = vi.fn();
+      let focusedId = "term-focused";
+      const service = new TerminalOutputIngestService(
+        writeToTerminal,
+        () => focusedId,
+        () => "term-wheel"
+      );
+
+      service.bufferData("term-bg", "a");
+      expect(writeToTerminal).not.toHaveBeenCalled();
+
+      // Focus lands on the held terminal while its hold recheck is pending.
+      // The next chunk must not wait out the recheck — echo drains inline.
+      focusedId = "term-bg";
+      service.bufferData("term-bg", "b");
+      expect(writeToTerminal).toHaveBeenCalledTimes(1);
+      expect(writeToTerminal).toHaveBeenCalledWith("term-bg", "ab", 2);
+
+      // The stale recheck continuation is a no-op on the drained queue.
+      await vi.advanceTimersByTimeAsync(30);
+      expect(writeToTerminal).toHaveBeenCalledTimes(1);
+    });
+  });
 });

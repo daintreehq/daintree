@@ -92,6 +92,16 @@ export interface WhySlowPtySummary {
   suspendedCount: number;
   /** Longest current pause duration across terminals, in ms. */
   maxPausedDurationMs: number;
+  /**
+   * Pty-host event-loop p99 delay (ms) since the previous snapshot pull, or
+   * null when unmonitored. High values with pausedCount 0 = the host thread
+   * is CPU-saturated (parse load), not backpressured.
+   */
+  eventLoopP99Ms: number | null;
+  /** Pty-host event-loop max delay (ms) over the same window, or null. */
+  eventLoopMaxMs: number | null;
+  /** Pty-host event-loop utilization (0-1) over the same window, or null. */
+  eventLoopUtilization: number | null;
 }
 
 /** Workspace-host monitoring load: how many worktrees are watched and fetching. */

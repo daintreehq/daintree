@@ -459,4 +459,84 @@ describe("TerminalWriteController.write", () => {
       expect(onWrite).not.toHaveBeenCalled();
     });
   });
+
+  // A single xterm write entry parses atomically (the WriteBuffer's 12ms
+  // budget only applies between entries), so large coalesced batches must be
+  // fed as multiple bounded entries — while acks/bookkeeping stay batch-scoped
+  // on the final entry's callback.
+  describe("write slicing", () => {
+    const WRITE_SLICE_BYTES = 32 * 1024;
+
+    it("feeds a large string batch as bounded entries with one batch-scoped ack", () => {
+      const data = "x".repeat(WRITE_SLICE_BYTES * 2 + 500);
+      controller.write("t1", data, 7);
+
+      const term = managed.terminal as unknown as MockTerminal;
+      const calls = term.write.mock.calls;
+      // Invariants: more than one entry, every entry within the slice bound,
+      // reassembly is byte-identical, callback ONLY on the final entry.
+      expect(calls.length).toBeGreaterThan(1);
+      for (const call of calls) {
+        expect((call[0] as string).length).toBeLessThanOrEqual(WRITE_SLICE_BYTES);
+      }
+      expect(calls.map((c) => c[0]).join("")).toBe(data);
+      for (let i = 0; i < calls.length - 1; i++) {
+        expect(calls[i]![1]).toBeUndefined();
+      }
+      expect(typeof calls[calls.length - 1]![1]).toBe("function");
+      // Acks fire once, for the whole batch, with the original chunkCount.
+      expect(deps.acknowledgePortData).toHaveBeenCalledTimes(1);
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", data.length, 7);
+      expect(deps.notifyWriteComplete).toHaveBeenCalledTimes(1);
+      expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", data.length);
+    });
+
+    it("feeds a large Uint8Array batch as zero-copy subarray entries", () => {
+      const data = new Uint8Array(WRITE_SLICE_BYTES + 10).fill(0x61);
+      controller.write("t1", data);
+
+      const term = managed.terminal as unknown as MockTerminal;
+      expect(term.write).toHaveBeenCalledTimes(2);
+      const first = term.write.mock.calls[0]![0] as Uint8Array;
+      const second = term.write.mock.calls[1]![0] as Uint8Array;
+      expect(first.byteLength).toBe(WRITE_SLICE_BYTES);
+      expect(second.byteLength).toBe(10);
+      expect(first.buffer).toBe(data.buffer);
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", data.byteLength, 1);
+    });
+
+    it("does not split a surrogate pair at a slice boundary", () => {
+      const data = "a".repeat(WRITE_SLICE_BYTES - 1) + "\u{1F600}" + "b".repeat(8);
+      controller.write("t1", data);
+
+      const term = managed.terminal as unknown as MockTerminal;
+      const first = term.write.mock.calls[0]![0] as string;
+      expect(first.length).toBe(WRITE_SLICE_BYTES - 1);
+      const second = term.write.mock.calls[1]![0] as string;
+      expect(second.codePointAt(0)).toBe(0x1f600);
+    });
+
+    it("does not split mid-UTF-8-sequence in a binary batch", () => {
+      // 0xF0 0x9F 0x98 0x80 = 😀; place it straddling the slice boundary.
+      const data = new Uint8Array(WRITE_SLICE_BYTES + 2);
+      data.fill(0x61);
+      data.set([0xf0, 0x9f, 0x98, 0x80], WRITE_SLICE_BYTES - 2);
+
+      controller.write("t1", data);
+
+      const term = managed.terminal as unknown as MockTerminal;
+      const first = term.write.mock.calls[0]![0] as Uint8Array;
+      // Boundary backed off so the 4-byte sequence starts the next slice.
+      expect(first.byteLength).toBe(WRITE_SLICE_BYTES - 2);
+      const second = term.write.mock.calls[1]![0] as Uint8Array;
+      expect(second[0]).toBe(0xf0);
+    });
+
+    it("writes small batches as a single entry (fast path unchanged)", () => {
+      controller.write("t1", "hello");
+      const term = managed.terminal as unknown as MockTerminal;
+      expect(term.write).toHaveBeenCalledTimes(1);
+      expect(typeof term.write.mock.calls[0]![1]).toBe("function");
+    });
+  });
 });

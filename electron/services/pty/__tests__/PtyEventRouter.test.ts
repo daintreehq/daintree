@@ -229,6 +229,7 @@ describe("routeHostEvent", () => {
         smoothedUtilizationPercent: null,
         throttleDurationMs: 0,
       },
+      eventLoop: null,
     };
     routeHostEvent({ type: "flow-control-snapshot", requestId: "req-fc", snapshot }, deps);
     expect(brokerCalls).toEqual([{ requestId: "req-fc", result: snapshot }]);
