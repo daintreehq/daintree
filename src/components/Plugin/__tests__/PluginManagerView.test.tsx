@@ -219,10 +219,10 @@ describe("PluginManagerView", () => {
     expect(screen.queryByText("Restart required")).toBeNull();
   });
 
-  it("flashes 'Restart required' when a session-fixed user plugin is toggled (#10512)", async () => {
-    // Control for the built-in case: user plugins are fixed for the session, so
-    // a toggle genuinely diverges desired vs. running state and must surface the
-    // restart cue.
+  it("does not flash 'Restart required' when a user plugin is toggled (#10887)", async () => {
+    // User plugins now transition live too (#10887): setEnabled unloads/reloads
+    // them without a restart, so their authoritative pendingRestart stays false.
+    // The optimistic update must match — not invert — to avoid a false badge.
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
       makePlugin({ isBuiltin: false, disabled: false, pendingRestart: false }),
     ]);
@@ -230,7 +230,8 @@ describe("PluginManagerView", () => {
     const toggle = await screen.findByRole("switch", { name: "Enable Acme Demo" });
     fireEvent.click(toggle);
 
-    await waitFor(() => expect(screen.getAllByText("Restart required").length).toBeGreaterThan(0));
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
+    expect(screen.queryByText("Restart required")).toBeNull();
   });
 
   it("renders a plugin's settings form in the detail pane once selected", async () => {
@@ -457,7 +458,7 @@ describe("PluginManagerView", () => {
     expect(window.electron.plugin.uninstall).not.toHaveBeenCalled();
   });
 
-  it("calls setEnabled(false) and shows a restart badge when disabling", async () => {
+  it("calls setEnabled(false) when disabling and applies live — no restart badge (#10887)", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
     renderDialog();
     await screen.findAllByText("Acme Demo");
@@ -467,9 +468,10 @@ describe("PluginManagerView", () => {
     await waitFor(() => {
       expect(window.electron.plugin.setEnabled).toHaveBeenCalledWith("acme.demo", false);
     });
-    await waitFor(() => {
-      expect(screen.getByText("Restart required")).toBeTruthy();
-    });
+    // User plugins now toggle live (#10887): no restart badge flashes.
+    const toggle = screen.getByRole("switch", { name: "Enable Acme Demo" });
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
+    expect(screen.queryByText("Restart required")).toBeNull();
   });
 
   it("keeps the restart badge after a remount (pendingRestart comes from listPlugins)", async () => {
@@ -502,17 +504,19 @@ describe("PluginManagerView", () => {
     expect(screen.queryByText("Restart required")).toBeNull();
   });
 
-  it("clears the restart badge when toggled back to the startup state", async () => {
+  it("toggling off then back on calls setEnabled correctly and never flashes a restart badge (#10887)", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
     renderDialog();
     await screen.findAllByText("Acme Demo");
     const toggle = () => screen.getByRole("switch", { name: "Enable Acme Demo" });
 
     fireEvent.click(toggle());
-    await waitFor(() => expect(screen.getByText("Restart required")).toBeTruthy());
+    await waitFor(() => expect(toggle().getAttribute("aria-checked")).toBe("false"));
+    expect(screen.queryByText("Restart required")).toBeNull();
 
     fireEvent.click(toggle());
-    await waitFor(() => expect(screen.queryByText("Restart required")).toBeNull());
+    await waitFor(() => expect(toggle().getAttribute("aria-checked")).toBe("true"));
+    expect(screen.queryByText("Restart required")).toBeNull();
     expect(window.electron.plugin.setEnabled).toHaveBeenLastCalledWith("acme.demo", true);
   });
 
@@ -1065,16 +1069,20 @@ describe("PluginManagerView", () => {
       expect(screen.getByRole("button", { name: "Restart" })).toBeTruthy();
     });
 
-    it("appears after a toggle flips a plugin into the pending-restart state", async () => {
+    it("does not surface the restart bar after toggling a live plugin (#10887)", async () => {
+      // User plugins now apply live (#10887), so setEnabled reconciles state
+      // immediately and the optimistic update holds pendingRestart at false —
+      // toggling must not flash the global restart bar. The bar still appears
+      // when listPlugins() authoritatively reports pendingRestart (covered
+      // above); it just isn't triggered optimistically by a toggle anymore.
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
       renderDialog();
-      await screen.findAllByText("Acme Demo");
+      const toggle = await screen.findByRole("switch", { name: "Enable Acme Demo" });
       expect(screen.queryByText("Restart required to apply plugin changes")).toBeNull();
 
-      fireEvent.click(screen.getByRole("switch", { name: "Enable Acme Demo" }));
-      await waitFor(() =>
-        expect(screen.getByText("Restart required to apply plugin changes")).toBeTruthy()
-      );
+      fireEvent.click(toggle);
+      await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
+      expect(screen.queryByText("Restart required to apply plugin changes")).toBeNull();
     });
 
     it("confirms before relaunching and does not restart until confirmed", async () => {
