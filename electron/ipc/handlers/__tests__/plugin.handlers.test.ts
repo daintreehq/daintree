@@ -116,7 +116,7 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(35);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(38);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:install", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:set-enabled", expect.any(Function));
@@ -195,6 +195,18 @@ describe("registerPluginHandlers", () => {
     );
     expect(mockIpcMainHandle).toHaveBeenCalledWith(
       "plugin:settings-reveal-secret",
+      expect.any(Function)
+    );
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:bg-update-check-settings-get",
+      expect.any(Function)
+    );
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:bg-update-check-settings-set",
+      expect.any(Function)
+    );
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:bg-update-check-latest",
       expect.any(Function)
     );
     // The renderer-side menu-items IPC surface was removed (#10465) — the native

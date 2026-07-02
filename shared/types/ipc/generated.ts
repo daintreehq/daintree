@@ -903,6 +903,18 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: Record<string, import("../../config/agentRegistry.js").AgentConfig>;
   };
+  "plugin:bg-update-check-latest": {
+    args: [];
+    result: import("../plugin.js").PluginBackgroundUpdateCheckResult | null;
+  };
+  "plugin:bg-update-check-settings-get": {
+    args: [];
+    result: import("../plugin.js").PluginBackgroundUpdateCheckSettings;
+  };
+  "plugin:bg-update-check-settings-set": {
+    args: [enabled: boolean];
+    result: import("../plugin.js").PluginBackgroundUpdateCheckSettings;
+  };
   "plugin:check-for-update": {
     args: [pluginId: string];
     result: import("../plugin.js").PluginCheckUpdateResult;

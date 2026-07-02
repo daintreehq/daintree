@@ -1807,6 +1807,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     onProvenanceChanged(callback: (payload: Record<string, never>) => void): () => void;
     /**
+     * Subscribe to background update-check results (#10893). Fires with the
+     * batched set of URL-installed plugins that have updates available. Returns
+     * a cleanup.
+     */
+    onBackgroundUpdateAvailable(
+      callback: (payload: import("../plugin.js").PluginBackgroundUpdateCheckResult) => void
+    ): () => void;
+    /**
      * Subscribe to file-decoration invalidations. The callback fires with the
      * changed scope (and optionally the narrowed paths) — it carries no
      * decoration data; re-pull via {@link getDecorations}. Returns a cleanup.

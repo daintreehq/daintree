@@ -549,6 +549,16 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           console.warn("[MAIN] Periodic cleanup dispose failed:", error);
         }
 
+        // Stop the opt-in plugin update checker and drain any in-flight pass
+        // (#10893) — its timers/wake listeners must not survive teardown.
+        try {
+          const { getPluginUpdateCheckService } =
+            await import("../services/PluginUpdateCheckService.js");
+          await getPluginUpdateCheckService().dispose();
+        } catch (error) {
+          console.warn("[MAIN] Plugin update check dispose failed:", error);
+        }
+
         try {
           await getDatabaseMaintenanceService().dispose();
         } catch (error) {

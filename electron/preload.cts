@@ -2840,6 +2840,11 @@ function buildElectronApi(): ElectronAPI {
         _eventBusOn("plugin:actions-changed", callback),
       onProvenanceChanged: (callback: (payload: Record<string, never>) => void) =>
         _eventBusOn("plugin:provenance-changed", callback),
+      onBackgroundUpdateAvailable: (
+        callback: (
+          payload: import("../shared/types/plugin.js").PluginBackgroundUpdateCheckResult
+        ) => void
+      ) => _eventBusOn("plugin:bg-update-available", callback),
       onPanelKindsChanged: (callback: (payload: { kinds: PanelKindConfig[] }) => void) =>
         _eventBusOn("plugin:panel-kinds-changed", callback),
       onAgentsChanged: (

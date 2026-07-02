@@ -65,6 +65,8 @@ import type {
   PluginInstallError,
   PluginInstallResult,
   PluginCheckUpdateResult,
+  PluginBackgroundUpdateCheckResult,
+  PluginBackgroundUpdateCheckSettings,
   PluginSettingsScope,
   PluginSettingsUiValues,
   PluginPickPathRequest,
@@ -412,6 +414,32 @@ async function handleCheckForUpdate(pluginId: string): Promise<PluginCheckUpdate
   // The service owns the bounded download + hash compare and returns a
   // structured result for every domain outcome (#9297).
   return (await getPluginService()).checkForUpdate(pluginId);
+}
+
+async function handleGetBackgroundUpdateCheckSettings(): Promise<PluginBackgroundUpdateCheckSettings> {
+  const { getPluginUpdateCheckService } =
+    await import("../../services/PluginUpdateCheckService.js");
+  return getPluginUpdateCheckService().getSettings();
+}
+
+async function handleSetBackgroundUpdateCheckSettings(
+  enabled: boolean
+): Promise<PluginBackgroundUpdateCheckSettings> {
+  const { getPluginUpdateCheckService } =
+    await import("../../services/PluginUpdateCheckService.js");
+  const service = getPluginUpdateCheckService();
+  // The IPC boundary is untyped at runtime — reject a malformed write without
+  // mutating state rather than trusting the declared `boolean`.
+  if (typeof enabled !== "boolean") {
+    return service.getSettings();
+  }
+  return service.updateSettings({ enabled });
+}
+
+async function handleGetLatestBackgroundUpdateCheck(): Promise<PluginBackgroundUpdateCheckResult | null> {
+  const { getPluginUpdateCheckService } =
+    await import("../../services/PluginUpdateCheckService.js");
+  return getPluginUpdateCheckService().getLatest();
 }
 
 async function handleToolbarButtons(): Promise<ToolbarButtonConfig[]> {
@@ -973,6 +1001,18 @@ export const pluginNamespace = defineIpcNamespace({
     revealSecretSetting: op(PLUGIN_METHOD_CHANNELS.revealSecretSetting, handleSettingsRevealSecret),
     pickPath: op(PLUGIN_METHOD_CHANNELS.pickPath, handlePickPath, { withContext: true }),
     pathExists: op(PLUGIN_METHOD_CHANNELS.pathExists, handlePathExists),
+    getBackgroundUpdateCheckSettings: op(
+      PLUGIN_METHOD_CHANNELS.getBackgroundUpdateCheckSettings,
+      handleGetBackgroundUpdateCheckSettings
+    ),
+    setBackgroundUpdateCheckSettings: op(
+      PLUGIN_METHOD_CHANNELS.setBackgroundUpdateCheckSettings,
+      handleSetBackgroundUpdateCheckSettings
+    ),
+    getLatestBackgroundUpdateCheck: op(
+      PLUGIN_METHOD_CHANNELS.getLatestBackgroundUpdateCheck,
+      handleGetLatestBackgroundUpdateCheck
+    ),
   },
 });
 

@@ -98,6 +98,11 @@ export interface StoreSchema {
     enabled: boolean;
     thresholdMinutes: number;
   };
+  pluginBackgroundUpdateCheck: {
+    enabled: boolean;
+    /** Wall-clock ms of the last completed pass; null until the first runs. */
+    lastCheckedAt: number | null;
+  };
   appState: {
     activeWorktreeId?: string;
     sidebarWidth: number;
@@ -523,6 +528,12 @@ const storeOptions = {
     idleBackgroundAutoClose: {
       enabled: false,
       thresholdMinutes: 15,
+    },
+    // Background plugin update checks default OFF (#10893): a periodic network
+    // re-fetch of every URL-installed plugin is an opt-in behavior, not a default.
+    pluginBackgroundUpdateCheck: {
+      enabled: false,
+      lastCheckedAt: null,
     },
     appState: {
       sidebarWidth: 350,
