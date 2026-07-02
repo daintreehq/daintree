@@ -946,6 +946,12 @@ export const CHANNELS = {
   PLUGIN_PICK_PATH: "plugin:pick-path",
   /** Existence probe for a stored plugin `mustExist` path setting. */
   PLUGIN_PATH_EXISTS: "plugin:path-exists",
+  /** Opt-in background plugin update check (#10893): read the enabled setting. */
+  PLUGIN_BG_UPDATE_CHECK_SETTINGS_GET: "plugin:bg-update-check-settings-get",
+  /** Opt-in background plugin update check (#10893): set the enabled setting. */
+  PLUGIN_BG_UPDATE_CHECK_SETTINGS_SET: "plugin:bg-update-check-settings-set",
+  /** Opt-in background plugin update check (#10893): hydrate the last cached result. */
+  PLUGIN_BG_UPDATE_CHECK_LATEST: "plugin:bg-update-check-latest",
   /** Bridge: main process dispatches a plugin-sourced action request to the renderer. */
   PLUGIN_DISPATCH_ACTION_REQUEST: "plugin:dispatch-action-request",
   /** Bridge: renderer returns the plugin-sourced action dispatch result to the main process. */
