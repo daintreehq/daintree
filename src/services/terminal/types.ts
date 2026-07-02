@@ -65,6 +65,20 @@ export interface ManagedTerminal {
   // Last time the reconciliation watchdog issued a repair for this terminal —
   // per-terminal cooldown so a persistently-diverging layer never repair-loops.
   lastWatchdogRepairAt?: number;
+  // Circuit breaker for the watchdog's geometry-convergence repair (#10909).
+  // The cooldown only SPACES repairs; it doesn't CAP them, so a pane whose
+  // proposeDimensions() never converges (e.g. a stable off-by-one column) would
+  // re-wrap its full scrollback every cooldown window forever. These fields bound
+  // that: count consecutive issued geometry repairs, trip after
+  // WATCHDOG_MAX_GEOMETRY_REPAIR_ATTEMPTS, and log the give-up exactly once.
+  geometryRepairAttempts?: number;
+  // Once tripped, the geometry branch stops issuing repairs (other repair layers
+  // still run). Cleared when the grid converges again or the terminal re-attaches.
+  geometryRepairGaveUp?: boolean;
+  // The attachGeneration the counter accrued under — a fresh incarnation reusing
+  // the same id must not inherit a prior instance's give-up state (mirrors the
+  // revealPendingGeneration guard).
+  geometryRepairGeneration?: number;
   // Visibility tracking
   isVisible: boolean;
   lastActiveTime: number;
