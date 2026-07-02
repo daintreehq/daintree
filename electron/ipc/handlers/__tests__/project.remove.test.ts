@@ -38,6 +38,12 @@ vi.mock("../../../services/ProjectSwitchService.js", () => ({
   },
 }));
 
+const windowStateMock = vi.hoisted(() => ({
+  pruneWindowStateForPath: vi.fn(),
+}));
+
+vi.mock("../../../windowState.js", () => windowStateMock);
+
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { registerProjectCrudHandlers } from "../projectCrud/index.js";
@@ -124,6 +130,54 @@ describe("project:remove handler", () => {
     await handler(fakeEvent, "proj-4");
 
     expect(projectStoreMock.removeProject).toHaveBeenCalledWith("proj-4");
+  });
+
+  it("resolves the path before removeProject and prunes window state after removal", async () => {
+    projectStoreMock.getProjectById.mockReturnValue({ id: "proj-5", path: "/home/user/proj-5" });
+    projectStoreMock.removeProject.mockResolvedValue(undefined);
+
+    const deps = { mainWindow: {} as unknown } as unknown as HandlerDependencies;
+    registerProjectCrudHandlers(deps);
+    const handler = getHandler(CHANNELS.PROJECT_REMOVE);
+
+    await handler(fakeEvent, "proj-5");
+
+    expect(projectStoreMock.getProjectById).toHaveBeenCalledWith("proj-5");
+    expect(windowStateMock.pruneWindowStateForPath).toHaveBeenCalledWith("/home/user/proj-5");
+
+    // The path must be resolved before removeProject deletes the row...
+    const lookupOrder = projectStoreMock.getProjectById.mock.invocationCallOrder[0];
+    const removeOrder = projectStoreMock.removeProject.mock.invocationCallOrder[0];
+    expect(lookupOrder).toBeLessThan(removeOrder);
+    // ...and the prune must run after removal succeeds.
+    const pruneOrder = windowStateMock.pruneWindowStateForPath.mock.invocationCallOrder[0];
+    expect(removeOrder).toBeLessThan(pruneOrder);
+  });
+
+  it("skips the window-state prune when the project path can't be resolved", async () => {
+    projectStoreMock.getProjectById.mockReturnValue(null);
+    projectStoreMock.removeProject.mockResolvedValue(undefined);
+
+    const deps = { mainWindow: {} as unknown } as unknown as HandlerDependencies;
+    registerProjectCrudHandlers(deps);
+    const handler = getHandler(CHANNELS.PROJECT_REMOVE);
+
+    await handler(fakeEvent, "proj-6");
+
+    expect(projectStoreMock.removeProject).toHaveBeenCalledWith("proj-6");
+    expect(windowStateMock.pruneWindowStateForPath).not.toHaveBeenCalled();
+  });
+
+  it("does not prune window state when removeProject rejects", async () => {
+    projectStoreMock.getProjectById.mockReturnValue({ id: "proj-7", path: "/home/user/proj-7" });
+    projectStoreMock.removeProject.mockRejectedValue(new Error("db locked"));
+
+    const deps = { mainWindow: {} as unknown } as unknown as HandlerDependencies;
+    registerProjectCrudHandlers(deps);
+    const handler = getHandler(CHANNELS.PROJECT_REMOVE);
+
+    await expect(handler(fakeEvent, "proj-7")).rejects.toThrow("db locked");
+    expect(windowStateMock.pruneWindowStateForPath).not.toHaveBeenCalled();
   });
 
   it("throws on invalid projectId without calling cleanup or removal", async () => {

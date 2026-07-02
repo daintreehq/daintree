@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   persistAgentSession,
   readSessionHistory,
+  readSessionHistorySync,
   listAgentSessions,
   clearAgentSessions,
   pruneAgentSessions,
@@ -464,6 +465,71 @@ describe("agentSessionHistory", () => {
       expect(records.some((r) => r.sessionId === `session-${MAX_RECORDS_PER_WORKTREE + 9}`)).toBe(
         true
       );
+    });
+  });
+
+  describe("in-memory cache", () => {
+    it("reflects a direct on-disk change after a prior read cached it", async () => {
+      const filePath = getSessionHistoryPath(userDataDir)!;
+      await persistAgentSession(
+        {
+          sessionId: "cached",
+          agentId: "claude",
+          worktreeId: "wt-1",
+          title: null,
+          projectId: null,
+        },
+        userDataDir
+      );
+      // Prime the cache.
+      expect((await readSessionHistory(userDataDir)).map((r) => r.sessionId)).toEqual(["cached"]);
+
+      // Overwrite the journal directly, bypassing the writers — the stat gate
+      // must notice the size/mtime change and re-read rather than serve stale.
+      await fsp.writeFile(
+        filePath,
+        JSON.stringify([
+          {
+            sessionId: "external",
+            agentId: "claude",
+            worktreeId: "wt-1",
+            title: null,
+            projectId: null,
+            savedAt: Date.now(),
+          },
+        ])
+      );
+
+      expect((await readSessionHistory(userDataDir)).map((r) => r.sessionId)).toEqual(["external"]);
+      expect(listAgentSessions(undefined, userDataDir).map((r) => r.sessionId)).toEqual([
+        "external",
+      ]);
+    });
+
+    it("serves the same parsed array reference on a cache hit (no re-parse)", async () => {
+      await persistAgentSession(
+        { sessionId: "hot", agentId: "claude", worktreeId: "wt-1", title: null, projectId: null },
+        userDataDir
+      );
+      // Two reads with no write between them and an unchanged file: a cache hit
+      // returns the exact same array reference, proving the journal wasn't
+      // re-read and re-parsed (a fresh parse would allocate a new array).
+      const first = readSessionHistorySync(userDataDir);
+      const second = readSessionHistorySync(userDataDir);
+      expect(second).toBe(first);
+      expect(second.map((r) => r.sessionId)).toEqual(["hot"]);
+    });
+
+    it("a writer refreshes the cache so the next sync read sees new data", async () => {
+      // Prime the cache with an empty-journal read.
+      expect(listAgentSessions(undefined, userDataDir)).toEqual([]);
+      await persistAgentSession(
+        { sessionId: "fresh", agentId: "claude", worktreeId: "wt-1", title: null, projectId: null },
+        userDataDir
+      );
+      // No direct read between persist and this list — only the writer's cache
+      // refresh makes the new record visible to the sync path.
+      expect(listAgentSessions(undefined, userDataDir).map((r) => r.sessionId)).toEqual(["fresh"]);
     });
   });
 

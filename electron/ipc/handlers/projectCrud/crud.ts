@@ -9,6 +9,7 @@ import type { HandlerDependencies } from "../../types.js";
 import type { Project } from "../../../types/index.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
+import { pruneWindowStateForPath } from "../../../windowState.js";
 
 /**
  * Validate, register, and broadcast a project for the given absolute path.
@@ -72,6 +73,10 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
       throw new Error("Invalid project ID");
     }
 
+    // Resolve the path before removeProject() deletes the row — the prune below
+    // keys window-states.json by path, which is unrecoverable once the row is gone.
+    const removedPath = projectStore.getProjectById(projectId)?.path ?? null;
+
     if (deps.ptyClient) {
       await deps.ptyClient.killByProject(projectId).catch((err: unknown) => {
         console.error(`[IPC] project:remove: Failed to kill terminals for ${projectId}:`, err);
@@ -79,6 +84,9 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     }
 
     await projectStore.removeProject(projectId);
+    if (removedPath) {
+      pruneWindowStateForPath(removedPath);
+    }
     broadcastToRenderer(CHANNELS.PROJECT_REMOVED, projectId);
   };
   handlers.push(typedHandle(CHANNELS.PROJECT_REMOVE, handleProjectRemove));

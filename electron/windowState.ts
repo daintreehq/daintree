@@ -4,6 +4,13 @@ import { windowStatesStore } from "./store.js";
 const LEGACY_KEY = "__legacy__";
 const MRU_OFFSET_PX = 30;
 
+// Cap on how many per-project window-state entries `window-states.json` retains.
+// Without it the map grows one entry per project ever opened, is never pruned,
+// and electron-store re-serializes the whole file on every window move/resize
+// (500ms debounce) plus a 60s crash-recovery snapshot. The `__legacy__`
+// cold-start fallback is exempt — it never counts toward or is evicted by the cap.
+const WINDOW_STATE_MRU_CAP = 50;
+
 interface DebouncedFunction<T extends (...args: unknown[]) => void> {
   (...args: Parameters<T>): void;
   cancel: () => void;
@@ -162,14 +169,50 @@ function resolveWindowBounds(projectPath: string | null | undefined): WindowStat
   return { width: 1200, height: 800, isMaximized: false, isFullScreen: false };
 }
 
+type WindowStatesMap = Record<string, WindowStateBounds>;
+
+// Single capped writer all mutation paths route through (per lesson #7586), so
+// the MRU cap lives in exactly one place rather than being duplicated across the
+// save and prune paths. Object key order is insertion order for these string
+// keys, so the earliest project keys are the least-recently-touched — evict them
+// first when over the cap. `__legacy__` is never counted or evicted.
+function commitWindowStates(windowStates: WindowStatesMap): void {
+  const projectKeys = Object.keys(windowStates).filter((k) => k !== LEGACY_KEY);
+  const overflow = projectKeys.length - WINDOW_STATE_MRU_CAP;
+  for (let i = 0; i < overflow; i++) {
+    delete windowStates[projectKeys[i]];
+  }
+  windowStatesStore.set("windowStates", windowStates);
+}
+
 function saveWindowStates(projectPath: string | null | undefined, bounds: WindowStateBounds): void {
-  const windowStates = windowStatesStore.get("windowStates") ?? {};
+  const windowStates: WindowStatesMap = windowStatesStore.get("windowStates") ?? {};
   if (projectPath) {
+    // Delete then re-add so a touched path moves to the most-recent slot in
+    // insertion order and can't be picked as the eviction victim below.
+    delete windowStates[projectPath];
     windowStates[projectPath] = bounds;
   }
   windowStates[LEGACY_KEY] = bounds;
-  windowStatesStore.set("windowStates", windowStates);
+  commitWindowStates(windowStates);
   lastSavedProjectPath = projectPath ?? LEGACY_KEY;
+}
+
+/**
+ * Drop a project's saved window state — called when the project is removed so
+ * `window-states.json` doesn't retain bounds for projects that no longer exist.
+ * Routes through the same capped writer as the save path and never writes
+ * `undefined` (electron-store v11 rejects it). No-op if the path isn't present.
+ */
+export function pruneWindowStateForPath(projectPath: string): void {
+  if (!projectPath) return;
+  const windowStates: WindowStatesMap | undefined = windowStatesStore.get("windowStates");
+  if (!windowStates || !(projectPath in windowStates)) return;
+  delete windowStates[projectPath];
+  commitWindowStates(windowStates);
+  if (lastSavedProjectPath === projectPath) {
+    lastSavedProjectPath = null;
+  }
 }
 
 export function createWindowWithState(

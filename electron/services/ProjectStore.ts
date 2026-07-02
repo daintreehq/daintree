@@ -461,44 +461,48 @@ export class ProjectStore {
     const validStatuses: ProjectStatus[] = ["active", "background", "closed", "missing"];
     const currentProjectId = this.getCurrentProjectId();
 
-    db.transaction(
-      (tx) => {
-        for (const row of rows) {
-          if (row.id === currentProjectId) {
-            if (row.status !== "active") {
-              tx.update(projectsTable)
-                .set({ status: "active" })
-                .where(eq(projectsTable.id, row.id))
-                .run();
-              row.status = "active";
-            }
-          } else {
-            if (row.status === "active") {
-              if (process.env.DAINTREE_VERBOSE) {
-                console.warn(
-                  `[ProjectStore] Demoting incorrectly active project ${row.id} to background`
-                );
-              }
-              tx.update(projectsTable)
-                .set({ status: "background" })
-                .where(eq(projectsTable.id, row.id))
-                .run();
-              row.status = "background";
-            } else if (
-              row.status !== null &&
-              !validStatuses.includes(row.status as ProjectStatus)
-            ) {
-              tx.update(projectsTable)
-                .set({ status: "closed" })
-                .where(eq(projectsTable.id, row.id))
-                .run();
-              row.status = "closed";
-            }
-          }
+    // Compute the status repairs first without touching the DB, mutating each
+    // row's in-memory status so the returned projects are always reconciled.
+    // Only open a write-locking IMMEDIATE transaction when at least one row
+    // actually needs repair — the common case (statuses already correct on a
+    // repeat read) skips the transaction entirely, which is the hot-path win as
+    // the projects list grows.
+    const statusUpdates: Array<{ id: string; status: ProjectStatus }> = [];
+    for (const row of rows) {
+      if (row.id === currentProjectId) {
+        if (row.status !== "active") {
+          statusUpdates.push({ id: row.id, status: "active" });
+          row.status = "active";
         }
-      },
-      { behavior: "immediate" }
-    );
+      } else {
+        if (row.status === "active") {
+          if (process.env.DAINTREE_VERBOSE) {
+            console.warn(
+              `[ProjectStore] Demoting incorrectly active project ${row.id} to background`
+            );
+          }
+          statusUpdates.push({ id: row.id, status: "background" });
+          row.status = "background";
+        } else if (row.status !== null && !validStatuses.includes(row.status as ProjectStatus)) {
+          statusUpdates.push({ id: row.id, status: "closed" });
+          row.status = "closed";
+        }
+      }
+    }
+
+    if (statusUpdates.length > 0) {
+      db.transaction(
+        (tx) => {
+          for (const update of statusUpdates) {
+            tx.update(projectsTable)
+              .set({ status: update.status })
+              .where(eq(projectsTable.id, update.id))
+              .run();
+          }
+        },
+        { behavior: "immediate" }
+      );
+    }
 
     if (process.env.DAINTREE_VERBOSE) {
       console.log(

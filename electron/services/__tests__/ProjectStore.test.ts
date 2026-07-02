@@ -795,14 +795,18 @@ describe("ProjectStore.getAllProjects reconciliation", () => {
     warnSpy.mockRestore();
   });
 
-  it("no-ops when all statuses are already correct (empty transaction)", () => {
+  it("no-ops when all statuses are already correct (no transaction opened)", () => {
     // First call reconciles everything
     store.getAllProjects();
 
-    // Second call should be a no-op — no writes needed
+    // Second call should be a no-op — no write-locking transaction is opened
+    // when every row's status is already correct (the hot-path win).
     const updateSpy = vi.spyOn(db, "update");
+    const txSpy = vi.spyOn(db, "transaction");
     store.getAllProjects();
+    expect(txSpy).not.toHaveBeenCalled();
     expect(updateSpy).not.toHaveBeenCalled();
+    txSpy.mockRestore();
     updateSpy.mockRestore();
   });
 });
