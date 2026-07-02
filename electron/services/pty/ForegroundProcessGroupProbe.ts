@@ -15,7 +15,7 @@ const FOREGROUND_SNAPSHOT_PROBE_TIMEOUT_MS = 750;
 // "Windows / unsupported" fallback branch and falsely mark the shell idle for
 // demotion. Any value where shellPgid !== foregroundPgid (and both > 0) keeps
 // the demotion gate closed; the real probe overwrites this within a few ms.
-const INITIAL_FOREGROUND_SENTINEL = Object.freeze({
+export const INITIAL_FOREGROUND_SENTINEL = Object.freeze({
   shellPgid: 1,
   foregroundPgid: 2,
 });

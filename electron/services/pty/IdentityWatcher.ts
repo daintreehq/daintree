@@ -7,6 +7,7 @@ import {
 } from "../ProcessDetector.js";
 import { stripAnsi } from "./AgentPatternDetector.js";
 import { detectPrompt } from "./PromptDetector.js";
+import { INITIAL_FOREGROUND_SENTINEL } from "./ForegroundProcessGroupProbe.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../../utils/lifecycle.js";
 
 export const SHELL_IDENTITY_FALLBACK_COMMIT_MS = 1200;
@@ -528,10 +529,16 @@ export class IdentityWatcher {
   } {
     const snapshot = this.delegate.readForegroundProcessGroupSnapshot();
     if (snapshot && snapshot.shellPgid > 0 && snapshot.foregroundPgid > 0) {
-      // A usable reading exists. Record that the probe works on this terminal so
-      // a later null read is recognized as a transient failure rather than an
-      // unsupported platform (see fail-closed branch below).
-      this.sawForegroundSnapshot = true;
+      // Record that the probe genuinely works on this terminal so a later null
+      // read is recognized as a transient failure rather than an unsupported
+      // platform (see fail-closed branch below). The warm-up sentinel is a
+      // synthetic placeholder, not proof the probe succeeded — latching on it
+      // would fail closed forever on a box where `ps` never resolves, so it is
+      // excluded here (identity compare: the probe returns the frozen singleton
+      // by reference). #10911
+      if (snapshot !== INITIAL_FOREGROUND_SENTINEL) {
+        this.sawForegroundSnapshot = true;
+      }
       return {
         shellIdle: snapshot.shellPgid === snapshot.foregroundPgid,
         supported: true,

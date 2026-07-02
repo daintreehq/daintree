@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { reduceScrollback, restoreScrollback } from "../TerminalScrollbackController";
-import type { ManagedTerminal } from "../types";
+import { type ManagedTerminal, SCROLLBACK_REDUCE_COOLDOWN_MS } from "../types";
+import { getScrollbackForType } from "@/utils/scrollbackConfig";
 import { logInfo } from "@/utils/logger";
 
 const mockScrollbackStore = { scrollbackLines: 5000 };
@@ -275,66 +276,73 @@ describe("TerminalScrollbackController", () => {
     // xterm, so it must respect the same protections as reduceScrollback when
     // history would actually be dropped. Growth must stay unguarded.
     describe("destructive shrink guard (#10911)", () => {
+      // Derived, not copied: the plain-terminal target is whatever the policy
+      // computes for the current global setting. A "large current" above that
+      // target stands in for the pre-demotion agent-era scrollback.
+      const plainTarget = getScrollbackForType(false, 5000);
+      const largeCurrent = plainTarget * 3;
+
       function setBufferLength(managed: ManagedTerminal, length: number): void {
         (managed.terminal.buffer.active as unknown as { length: number }).length = length;
       }
 
       it("skips a demotion shrink for a focused terminal (preserves history)", () => {
         const managed = makeMockManaged({ isFocused: true });
-        managed.terminal.options.scrollback = 5000; // was an agent
-        setBufferLength(managed, 5000);
+        managed.terminal.options.scrollback = largeCurrent; // was an agent
+        setBufferLength(managed, largeCurrent);
 
-        restoreScrollback(managed); // plain target is 1500
-        expect(managed.terminal.options.scrollback).toBe(5000);
+        restoreScrollback(managed);
+        expect(managed.terminal.options.scrollback).toBe(largeCurrent);
         expect(managed.lastScrollbackReduceAt).toBeUndefined();
       });
 
       it("skips a demotion shrink when the user has scrolled back", () => {
         const managed = makeMockManaged({ isUserScrolledBack: true });
-        managed.terminal.options.scrollback = 5000;
-        setBufferLength(managed, 5000);
+        managed.terminal.options.scrollback = largeCurrent;
+        setBufferLength(managed, largeCurrent);
 
         restoreScrollback(managed);
-        expect(managed.terminal.options.scrollback).toBe(5000);
+        expect(managed.terminal.options.scrollback).toBe(largeCurrent);
       });
 
       it("skips a demotion shrink in alt-buffer mode", () => {
         const managed = makeMockManaged({ isAltBuffer: true });
-        managed.terminal.options.scrollback = 5000;
-        setBufferLength(managed, 5000);
+        managed.terminal.options.scrollback = largeCurrent;
+        setBufferLength(managed, largeCurrent);
 
         restoreScrollback(managed);
-        expect(managed.terminal.options.scrollback).toBe(5000);
+        expect(managed.terminal.options.scrollback).toBe(largeCurrent);
       });
 
       it("skips a demotion shrink with an active text selection", () => {
         const managed = makeMockManaged();
         managed.terminal.hasSelection = vi.fn(() => true);
-        managed.terminal.options.scrollback = 5000;
-        setBufferLength(managed, 5000);
+        managed.terminal.options.scrollback = largeCurrent;
+        setBufferLength(managed, largeCurrent);
 
         restoreScrollback(managed);
-        expect(managed.terminal.options.scrollback).toBe(5000);
+        expect(managed.terminal.options.scrollback).toBe(largeCurrent);
       });
 
       it("applies the shrink and stamps the cooldown for an idle background terminal", () => {
         const managed = makeMockManaged();
-        managed.terminal.options.scrollback = 5000;
-        setBufferLength(managed, 5000);
+        managed.terminal.options.scrollback = largeCurrent;
+        setBufferLength(managed, largeCurrent);
         const before = Date.now();
 
         restoreScrollback(managed);
-        expect(managed.terminal.options.scrollback).toBe(1500);
+        expect(managed.terminal.options.scrollback).toBe(plainTarget);
         expect(managed.lastScrollbackReduceAt).toBeGreaterThanOrEqual(before);
       });
 
       it("shrinks even a focused terminal when no lines would be evicted", () => {
         const managed = makeMockManaged({ isFocused: true });
-        managed.terminal.options.scrollback = 5000;
-        setBufferLength(managed, 100); // scrollbackUsed (76) < 1500 target
+        managed.terminal.options.scrollback = largeCurrent;
+        // Used scrollback well below the target ⇒ shrink drops nothing.
+        setBufferLength(managed, managed.terminal.rows + 10);
 
         restoreScrollback(managed);
-        expect(managed.terminal.options.scrollback).toBe(1500);
+        expect(managed.terminal.options.scrollback).toBe(plainTarget);
         // Non-destructive shrink is not a "reduce" — leave the cooldown alone.
         expect(managed.lastScrollbackReduceAt).toBeUndefined();
       });
@@ -344,12 +352,12 @@ describe("TerminalScrollbackController", () => {
         try {
           const managed = makeMockManaged();
           managed.lastScrollbackReduceAt = 10_000;
-          managed.terminal.options.scrollback = 5000;
-          setBufferLength(managed, 5000);
+          managed.terminal.options.scrollback = largeCurrent;
+          setBufferLength(managed, largeCurrent);
 
-          nowSpy.mockReturnValue(11_000); // 1000ms later, inside 2000ms cooldown
+          nowSpy.mockReturnValue(10_000 + SCROLLBACK_REDUCE_COOLDOWN_MS - 1); // still inside cooldown
           restoreScrollback(managed);
-          expect(managed.terminal.options.scrollback).toBe(5000);
+          expect(managed.terminal.options.scrollback).toBe(largeCurrent);
         } finally {
           nowSpy.mockRestore();
         }
@@ -357,11 +365,11 @@ describe("TerminalScrollbackController", () => {
 
       it("never guards a growth restore even when focused", () => {
         const managed = makeMockManaged({ isFocused: true });
-        managed.terminal.options.scrollback = 500; // below plain target 1500
-        setBufferLength(managed, 5000);
+        managed.terminal.options.scrollback = Math.floor(plainTarget / 3); // below target ⇒ grow
+        setBufferLength(managed, largeCurrent);
 
         restoreScrollback(managed);
-        expect(managed.terminal.options.scrollback).toBe(1500);
+        expect(managed.terminal.options.scrollback).toBe(plainTarget);
       });
     });
   });

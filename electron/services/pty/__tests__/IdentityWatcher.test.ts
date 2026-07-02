@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IdentityWatcher, type IdentityWatcherDelegate } from "../IdentityWatcher.js";
 import type { ProcessDetector } from "../../ProcessDetector.js";
+import { INITIAL_FOREGROUND_SENTINEL } from "../ForegroundProcessGroupProbe.js";
 
 interface FakeDelegateState {
   isExited: boolean;
@@ -1506,6 +1507,58 @@ describe("IdentityWatcher", () => {
       state.cursorLine = "user@host daintree % ";
       watcher.observeOutput("user@host daintree % \n");
       await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(clear).not.toHaveBeenCalledWith("prompt-return");
+      expect(watcher.isFallbackCommitted).toBe(true);
+      watcher.dispose();
+    });
+
+    it("falls open (legacy path) when the probe only ever returned the warm-up sentinel", async () => {
+      // Regression guard for the sentinel latch: during warm-up the probe hands
+      // back INITIAL_FOREGROUND_SENTINEL (synthetic, not a real reading). If the
+      // real `ps` probe then never resolves and returns null, the terminal must
+      // fall back to the legacy prompt path — NOT fail closed forever — because
+      // the probe was never actually confirmed to work here. #10911
+      const { delegate, state, clear } = makeCommittedCodexWatcher({
+        foreground: INITIAL_FOREGROUND_SENTINEL,
+      });
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit("codex");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(watcher.isFallbackCommitted).toBe(true);
+
+      state.foreground = null; // real probe died before ever succeeding
+      state.visibleLines = ["Codex exited", "user@host daintree % "];
+      state.cursorLine = "user@host daintree % ";
+      state.ptyDescendantCount = 0;
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(clear).toHaveBeenCalledWith("prompt-return");
+      watcher.dispose();
+    });
+
+    it("does not treat bare or numbered `›`/`❯` agent lines as a prompt while committed", async () => {
+      const { delegate, state, clear } = makeCommittedCodexWatcher();
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit("codex");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(watcher.isFallbackCommitted).toBe(true);
+
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      for (const line of [
+        "›",
+        "❯",
+        "❯ write the tests",
+        "› 1. first option",
+        "> 1. first option",
+      ]) {
+        state.visibleLines = ["Codex ready", line];
+        state.cursorLine = line;
+        watcher.observeOutput(`${line}\n`);
+      }
+      await vi.advanceTimersByTimeAsync(400);
 
       expect(clear).not.toHaveBeenCalledWith("prompt-return");
       expect(watcher.isFallbackCommitted).toBe(true);
