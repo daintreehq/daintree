@@ -4095,6 +4095,104 @@ describe("ActivityMonitor", () => {
     });
   });
 
+  describe("Mouse-report input suppression (Issue #10925)", () => {
+    it("does NOT promote idle→busy from redraws that coincide with recent scroll input", () => {
+      const onStateChange = vi.fn();
+      let visible = "waiting 0";
+      const monitor = new ActivityMonitor("agent-mouse-1", 1000, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => [visible],
+        getCursorLine: () => visible,
+        initialState: "idle",
+        skipInitialStateEmit: true,
+      });
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(100);
+      onStateChange.mockClear();
+
+      // Each wheel tick forwards an SGR mouse-report sequence (stamping
+      // lastUserInputAt via InputTracker) and the mouse-reporting TUI redraws
+      // its alt-screen. This is the exact sustained-tail-change rhythm that
+      // promotes idle→busy in "samples only the visible tail", but every redraw
+      // lands inside the 1s input-echo window, so the agent must stay idle. The
+      // companion recovery test below runs the same rhythm without recent input
+      // and reaches busy, proving this suppression isn't passing trivially.
+      const wheel = "\x1b[<64;10;5M";
+      for (let i = 1; i <= 4; i++) {
+        monitor.onInput(wheel);
+        visible = `redraw ${i}`;
+        monitor.onData(visible);
+        vi.advanceTimersByTime(700);
+      }
+
+      expect(monitor.getState()).toBe("idle");
+      const busyCalls = onStateChange.mock.calls.filter((call) => call[2] === "busy");
+      expect(busyCalls.length).toBe(0);
+
+      monitor.dispose();
+    });
+
+    it("still promotes idle→busy from sustained output once scrolling stops and the echo window expires", () => {
+      const onStateChange = vi.fn();
+      let visible = "waiting 0";
+      const monitor = new ActivityMonitor("agent-mouse-2", 1000, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => [visible],
+        getCursorLine: () => visible,
+        initialState: "idle",
+        skipInitialStateEmit: true,
+      });
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(100);
+      onStateChange.mockClear();
+
+      // User scrolls briefly (two wheel ticks), then stops.
+      const wheel = "\x1b[<64;10;5M";
+      for (let i = 1; i <= 2; i++) {
+        monitor.onInput(wheel);
+        visible = `scroll ${i}`;
+        monitor.onData(visible);
+        vi.advanceTimersByTime(700);
+      }
+      expect(monitor.getState()).toBe("idle");
+
+      // Scrolling stopped: let the input-echo window lapse (>1s since the last
+      // wheel tick, which also resets the temperature change-gap), then genuine
+      // sustained agent output must still recover. The fix suppresses
+      // scroll-driven redraws, not real work that follows a scroll.
+      vi.advanceTimersByTime(1100);
+      for (let i = 1; i <= 4; i++) {
+        visible = `real work ${i}`;
+        monitor.onData(visible);
+        vi.advanceTimersByTime(700);
+      }
+
+      expect(monitor.getState()).toBe("busy");
+      expect(onStateChange).toHaveBeenCalledWith("agent-mouse-2", 1000, "busy", {
+        trigger: "output",
+      });
+
+      monitor.dispose();
+    });
+
+    it("isRecentUserInput() reflects input-echo window state and clears after expiry", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("agent-mouse-3", 1000, onStateChange, {
+        agentId: "claude",
+      });
+
+      expect(monitor.isRecentUserInput()).toBe(false);
+      monitor.onInput("\x1b[<64;10;5M");
+      expect(monitor.isRecentUserInput()).toBe(true);
+      vi.advanceTimersByTime(1100);
+      expect(monitor.isRecentUserInput()).toBe(false);
+
+      monitor.dispose();
+    });
+  });
+
   describe("Working silence timeout", () => {
     it("should transition polling terminal to idle after silence exceeds maxWorkingSilenceMs", () => {
       const onStateChange = vi.fn();

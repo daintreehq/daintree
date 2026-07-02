@@ -238,6 +238,56 @@ describe("TerminalProcess.submit", () => {
     expect(busyCalls.length).toBe(0);
   });
 
+  it("noteAgentOutputActivity respects ActivityMonitor recent-user-input suppression (#10925)", () => {
+    const handleActivityState = vi.fn();
+    const ctx = defaultSpawnContext();
+    const terminal = new TerminalProcess(
+      "t-input-bypass",
+      {
+        cwd: process.cwd(),
+        cols: 80,
+        rows: 24,
+        kind: "terminal",
+        launchAgentId: "claude",
+      },
+      { emitData: () => {}, onExit: () => {} },
+      {
+        agentStateService: { handleActivityState } as any,
+        ptyPool: null,
+        processTreeCache: null,
+      },
+      ctx,
+      createMockPty()
+    );
+
+    const internals = terminal as unknown as {
+      isAgentLive: boolean;
+      terminalInfo: { agentState: string };
+      activityMonitor: { onInput: (data: string) => void };
+      agentOutputContentSnapshot: unknown;
+      noteAgentOutputActivity: (before: unknown) => void;
+      getAgentOutputContentSnapshot: () => unknown;
+    };
+
+    // Force a busy-promoting condition: agent live, state idle, baseline set,
+    // visible delta after a mouse-report-driven redraw is non-trivial.
+    Object.defineProperty(terminal, "isAgentLive", { value: true, configurable: true });
+    internals.terminalInfo.agentState = "idle";
+    internals.agentOutputContentSnapshot = { lines: ["before"] };
+    internals.getAgentOutputContentSnapshot = () => ({ lines: ["after redraw with lots of new"] });
+
+    // A wheel tick sends an SGR mouse-report sequence, which stamps
+    // lastUserInputAt (mouse bytes aren't diverted to focus handling). The
+    // direct promotion path must not flip the idle agent to busy while that
+    // input-echo window is open.
+    internals.activityMonitor.onInput("\x1b[<64;10;5M");
+    handleActivityState.mockClear();
+    internals.noteAgentOutputActivity({ lines: ["before"] });
+
+    const busyCalls = handleActivityState.mock.calls.filter((call) => call[1] === "busy");
+    expect(busyCalls.length).toBe(0);
+  });
+
   it("noteAgentOutputActivity arms ActivityMonitor via notifyExternalPromotion when it promotes (#9875)", () => {
     const handleActivityState = vi.fn();
     const ctx = defaultSpawnContext();
