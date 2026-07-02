@@ -169,6 +169,11 @@ function refreshCacheAfterWrite(filePath: string, records: AgentSessionRecord[])
   }
 }
 
+// NOTE: on a cache hit these readers return the cached array BY REFERENCE (that
+// shared-instance reuse is the whole point — a copy on every read would defeat
+// the cache). Callers MUST treat the result as read-only; never sort/push/splice
+// it in place. The production caller, listAgentSessions(), is safe: evictRecords()
+// only reads the input and returns freshly-built arrays.
 export function readSessionHistorySync(userData?: string): AgentSessionRecord[] {
   const filePath = getSessionHistoryPath(userData);
   if (!filePath) return [];
