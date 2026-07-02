@@ -100,6 +100,17 @@ import {
 // turn-outcome classification still sees the tail in order.
 const AGENT_OUTPUT_FLUSH_INTERVAL_MS = 50;
 
+// Floor between agent-output content comparisons (noteAgentOutputActivity).
+// Each comparison costs two full viewport extractions from the headless mirror
+// plus a char diff, and it runs exactly while an agent is waiting/idle — i.e.
+// while the user may be wheel-scrolling a mouse-reporting TUI whose every
+// redraw chunk lands here. The temperature model needs a sustained-activity
+// signal, not per-chunk granularity, so redraw-rate extraction is pure waste.
+// A trailing timer preserves the final comparison of a burst; the persistent
+// `agentOutputContentSnapshot` baseline makes the skipped chunks' delta
+// accumulate into it rather than being lost.
+const AGENT_OUTPUT_NOTE_MIN_INTERVAL_MS = 50;
+
 type CursorBufferLine = {
   translateToString: (trimRight?: boolean) => string;
   getCell?: (index: number, cell?: IBufferCell) => IBufferCell | undefined;
@@ -170,6 +181,10 @@ export class TerminalProcess {
   private sessionSnapshotter!: SessionSnapshotter;
   private readonly agentOutputTemperature = new AgentActivityTemperature();
   private agentOutputContentSnapshot: VisibleContentSnapshot | undefined;
+  // -Infinity so the first comparison is never throttled regardless of where
+  // the clock starts (fake test clocks sit at 0).
+  private lastAgentOutputNoteAt = Number.NEGATIVE_INFINITY;
+  private agentOutputNoteTimer: NodeJS.Timeout | null = null;
 
   private pendingAgentOutput = "";
   private pendingAgentOutputAgentId: string | null = null;
@@ -671,6 +686,10 @@ export class TerminalProcess {
     this.identityWatcher.stop();
     this.semanticBufferManager.flush();
     this.flushAgentOutput();
+    if (this.agentOutputNoteTimer) {
+      clearTimeout(this.agentOutputNoteTimer);
+      this.agentOutputNoteTimer = null;
+    }
 
     if (this.ptyDataDisposable) {
       try {
@@ -1633,6 +1652,23 @@ export class TerminalProcess {
       return;
     }
 
+    // Throttle: viewport extraction + diff at most once per interval. Skipped
+    // chunks aren't lost — the trailing timer re-enters with no beforeSnapshot,
+    // so the diff falls back to the stored baseline and covers everything since
+    // the last accepted comparison.
+    const now = Date.now();
+    const sinceLastNote = now - this.lastAgentOutputNoteAt;
+    if (sinceLastNote < AGENT_OUTPUT_NOTE_MIN_INTERVAL_MS) {
+      if (!this.agentOutputNoteTimer) {
+        this.agentOutputNoteTimer = setTimeout(() => {
+          this.agentOutputNoteTimer = null;
+          this.noteAgentOutputActivity(undefined);
+        }, AGENT_OUTPUT_NOTE_MIN_INTERVAL_MS - sinceLastNote);
+      }
+      return;
+    }
+    this.lastAgentOutputNoteAt = now;
+
     const afterSnapshot = this.getAgentOutputContentSnapshot();
     if (afterSnapshot === undefined) {
       return;
@@ -1795,15 +1831,38 @@ export class TerminalProcess {
   private _runPtyPipeline(data: string): void {
     const terminal = this.terminalInfo;
 
+    // OSC 10/11 color queries are answered whenever the terminal is agent-owned
+    // (spawn-time agent panel OR runtime-promoted plain terminal). The
+    // call-site gate and quick-test heuristic stay here; the responder logic
+    // lives in OscResponder. See OscResponder.ts for the strip-on-success
+    // contract that keeps the renderer's xterm.js from double-responding.
+    // This is the ONLY stage that must precede the forward — it derives the
+    // renderer-bound copy.
+    let rendererData = data;
+    if (this.shouldHandleOscColorQueries && data.includes("\x1b]1")) {
+      rendererData = handleOscColorQueries(data, (response) => {
+        terminal.ptyProcess.write(response);
+      });
+    }
+
+    // Forward to the renderer before the analysis stages below: they are
+    // bookkeeping the user never sees, and on the batcher's synchronous
+    // threshold-flush path every pre-forward millisecond is a millisecond
+    // added to the visible frame's latency.
+    this.emitData(rendererData);
+
     // noteAgentOutputActivity only acts on waiting/idle/completed — skip the
     // full-viewport extraction in other states (it would be computed and
-    // discarded on every chunk during "working", the heaviest output phase).
-    // If the state flips before the async write callback, the
-    // `beforeSnapshot ?? this.agentOutputContentSnapshot` fallback covers it.
+    // discarded on every chunk during "working", the heaviest output phase)
+    // and while the note throttle window is closed (the extraction would be
+    // discarded by the throttle's early return). If the state flips before
+    // the async write callback, the `beforeSnapshot ??
+    // this.agentOutputContentSnapshot` fallback covers it.
     const agentState = terminal.agentState;
     const beforeContentSnapshot =
       this.isAgentLive &&
-      (agentState === "waiting" || agentState === "idle" || agentState === "completed")
+      (agentState === "waiting" || agentState === "idle" || agentState === "completed") &&
+      Date.now() - this.lastAgentOutputNoteAt >= AGENT_OUTPUT_NOTE_MIN_INTERVAL_MS
         ? this.getAgentOutputContentSnapshot()
         : undefined;
 
@@ -1817,18 +1876,6 @@ export class TerminalProcess {
     // both would double-respond and corrupt TUI parsers), so skip.
     if (!this.isAgentLive && (data.includes("\x1b[6n") || data.includes("\x1b[5n"))) {
       this.ensureHeadlessResponder();
-    }
-
-    // OSC 10/11 color queries are answered whenever the terminal is agent-owned
-    // (spawn-time agent panel OR runtime-promoted plain terminal). The
-    // call-site gate and quick-test heuristic stay here; the responder logic
-    // lives in OscResponder. See OscResponder.ts for the strip-on-success
-    // contract that keeps the renderer's xterm.js from double-responding.
-    let rendererData = data;
-    if (this.shouldHandleOscColorQueries && data.includes("\x1b]1")) {
-      rendererData = handleOscColorQueries(data, (response) => {
-        terminal.ptyProcess.write(response);
-      });
     }
 
     if (terminal.headlessTerminal) {
@@ -1845,7 +1892,6 @@ export class TerminalProcess {
     }
     this.sessionSnapshotter.schedule();
 
-    this.emitData(rendererData);
     this.forensicsBuffer.capture(data);
     this.identityWatcher.observeOutput(data);
     this.semanticBufferManager.onData(data);

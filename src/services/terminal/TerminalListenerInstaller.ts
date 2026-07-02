@@ -79,6 +79,20 @@ const WHEEL_MAX_PENDING_SCREENFULS = 3;
 // slow continuous scrolling still accumulates. Don't drop below ~80ms.
 const WHEEL_STALE_GAP_MS = 120;
 
+// Chromium already rAF-aligns wheel dispatch (MainThreadEventQueue delivers at
+// most ~one coalesced wheel event per BeginMainFrame, deltas summed — Chrome 60+),
+// so a wheel event that arrives with no drain in flight IS this frame's tick.
+// Waiting for our own requestAnimationFrame on top of that alignment adds a full
+// extra frame (~8ms @120Hz / ~16.7ms @60Hz) to every dispatch. When the last
+// flush is at least this many ms old, flush synchronously on the event instead.
+// The same gap gates the rAF drain, closing both double-dispatch holes: an
+// event stream hotter than a display frame (non-coalesced synthetic floods —
+// tests, exotic input sources) falls back to the paced drain, and the rAF a
+// sync flush arms for its backlog re-arms rather than dispatching a second
+// burst in the same frame's animation phase. Keep below ~8ms so 120Hz frames
+// (~8.3ms apart, with jitter) always clear the gate.
+const WHEEL_MIN_DISPATCH_GAP_MS = 6;
+
 /**
  * Resolve the CSS px-per-line basis from the live rendered cell height, falling
  * back to the font-metric estimate and finally a fixed default. This is the
@@ -369,6 +383,15 @@ export function installTerminalBoundListeners(
   // every line at once.
   let pendingWheelLines = 0;
   let wheelFlushRaf: number | undefined;
+  // Wall-clock of the last dispatch, gating both the synchronous on-event
+  // flush and the rAF drain. -Infinity so a fresh pane's very first event
+  // qualifies regardless of where the clock starts (fake test clocks sit at 0).
+  let lastWheelFlushAt = Number.NEGATIVE_INFINITY;
+  // Non-null only while flushWheelLines is dispatching: the onData handler
+  // diverts each synthetic report here so the whole frame's reports leave as
+  // ONE PTY write (one MessagePort post, one pty-host write, one kernel read
+  // the TUI can coalesce into a single redraw) instead of up to cap-many.
+  let wheelReportBatch: string[] | null = null;
   // Coords of the most recent physical wheel — synthetic reports inherit them so
   // xterm encodes the mouse report at the cursor's actual cell.
   let lastWheelClientX = 0;
@@ -397,27 +420,56 @@ export function installTerminalBoundListeners(
     if (pendingWheelLines > maxPending) pendingWheelLines = maxPending;
     else if (pendingWheelLines < -maxPending) pendingWheelLines = -maxPending;
 
+    // A rAF armed by a synchronous on-event flush fires in the SAME frame's
+    // animation phase (input dispatch precedes rAF callbacks in the frame
+    // lifecycle) — dispatching here too would double the per-frame send rate.
+    // Re-arm for the next frame instead; the backlog is not lost.
+    if (performance.now() - lastWheelFlushAt < WHEEL_MIN_DISPATCH_GAP_MS) {
+      wheelFlushRaf = requestAnimationFrame(flushWheelLines);
+      return;
+    }
+
     const step = pendingWheelLines > 0 ? 1 : -1;
     // Fixed per-frame cap (no `elapsed`/timestamp multiply) so a late frame can
     // never "catch up" by dispatching a larger burst — that would reintroduce
     // the flood under main-thread jank. Device-aware: gentler for trackpads.
     const emit = Math.min(Math.abs(pendingWheelLines), wheelMaxLinesPerFrame);
     pendingWheelLines -= step * emit;
-    for (let i = 0; i < emit; i++) {
-      const synthetic = new WheelEvent("wheel", {
-        deltaY: step,
-        deltaMode: 1 /* DOM_DELTA_LINE — one report each, no partial-scroll carry */,
-        clientX: lastWheelClientX,
-        clientY: lastWheelClientY,
-        bubbles: true,
-        cancelable: true,
-      });
-      amplifiedWheelEvents.add(synthetic);
-      target.dispatchEvent(synthetic);
+    lastWheelFlushAt = performance.now();
+    // Collect the reports xterm's encoder emits for each synthetic event (via
+    // the onData handler below) and write them as one concatenated payload.
+    wheelReportBatch = [];
+    try {
+      for (let i = 0; i < emit; i++) {
+        const synthetic = new WheelEvent("wheel", {
+          deltaY: step,
+          deltaMode: 1 /* DOM_DELTA_LINE — one report each, no partial-scroll carry */,
+          clientX: lastWheelClientX,
+          clientY: lastWheelClientY,
+          bubbles: true,
+          cancelable: true,
+        });
+        amplifiedWheelEvents.add(synthetic);
+        target.dispatchEvent(synthetic);
+      }
+    } finally {
+      const batch = wheelReportBatch;
+      wheelReportBatch = null;
+      if (batch.length > 0) {
+        // Contain a write failure: before batching, a throwing write lost one
+        // report from inside xterm's event path; the batched equivalent must
+        // not also skip the backlog re-arm below, or the drain would stall
+        // until the next physical wheel event.
+        try {
+          writeTerminalInputOrFleet(id, batch.join(""));
+        } catch (err) {
+          logError("Wheel report batch write failed", err);
+        }
+      }
     }
     // Drain the remaining backlog on the next frame so a large gesture keeps
     // moving without dispatching it all in one burst.
-    if (pendingWheelLines !== 0) {
+    if (pendingWheelLines !== 0 && wheelFlushRaf === undefined) {
       wheelFlushRaf = requestAnimationFrame(flushWheelLines);
     }
   };
@@ -506,7 +558,16 @@ export function installTerminalBoundListeners(
     lastWheelClientY = ev.clientY;
 
     if (wheelFlushRaf === undefined) {
-      wheelFlushRaf = requestAnimationFrame(flushWheelLines);
+      // No drain in flight: Chromium's rAF-aligned wheel dispatch means this
+      // event IS the frame tick, so flush now instead of paying one extra frame
+      // of latency waiting for our own rAF. The min-gap guard keeps the
+      // per-frame send cap honest against event streams hotter than a display
+      // frame (which real coalesced input never produces).
+      if (performance.now() - lastWheelFlushAt >= WHEEL_MIN_DISPATCH_GAP_MS) {
+        flushWheelLines();
+      } else {
+        wheelFlushRaf = requestAnimationFrame(flushWheelLines);
+      }
     }
   };
   hostElement.addEventListener("wheel", onWheelNormalize, { capture: true, passive: false });
@@ -753,14 +814,24 @@ export function installTerminalBoundListeners(
 
   const inputDisposable = terminal.onData((data) => {
     if (managed.isInputLocked) return;
-    if (isNonKeyboardInput(data)) {
+    const nonKeyboard = isNonKeyboardInput(data);
+    if (nonKeyboard) {
       if (data === "\x1b") {
         deps.clearDirectingState(id, "escape-key");
       }
     } else {
       deps.onUserInput(id, data);
     }
-    writeTerminalInputOrFleet(id, data);
+    if (wheelReportBatch !== null && nonKeyboard) {
+      // Mid-flush synthetic wheel report: divert into the frame batch (written
+      // once, concatenated, when the dispatch loop ends) instead of a write per
+      // report. Only flushWheelLines' own synchronous dispatch sets the batch;
+      // the nonKeyboard guard keeps anything else xterm might ever emit
+      // synchronously during that dispatch on the ordinary per-write path.
+      wheelReportBatch.push(data);
+    } else {
+      writeTerminalInputOrFleet(id, data);
+    }
     if (managed.onInput) {
       managed.onInput(data);
     }

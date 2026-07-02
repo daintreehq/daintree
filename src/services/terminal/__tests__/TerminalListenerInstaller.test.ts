@@ -756,6 +756,7 @@ describe("installTerminalBoundListeners", () => {
         managed,
         terminal,
         deps,
+        captured,
         xtermEl,
         dispatch: (init: WheelEventInit, target: HTMLElement = managed.hostElement) => {
           const ev = new WheelEvent("wheel", { bubbles: true, cancelable: true, ...init });
@@ -806,15 +807,96 @@ describe("installTerminalBoundListeners", () => {
       }
     });
 
-    it("dispatches nothing synchronously — reports are paced onto a later frame", () => {
-      // The whole fix: a physical wheel must NOT fan out its lines inline (that
-      // round-trips every line at once and floods the PTY). Before any frame
-      // runs, zero synthetic reports have been sent.
+    it("dispatches a fresh gesture's first burst synchronously (no frame of added latency)", () => {
+      // Chromium rAF-aligns wheel delivery, so the event IS the frame tick:
+      // waiting for our own rAF would add a full frame before the first report.
+      // A single notch (≤ the per-frame cap) lands whole, inline, and the next
+      // frame has nothing left to drain.
       const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
       h.dispatch({ deltaY: 120, deltaMode: 0 });
-      expect(h.getReports()).toBe(0);
+      expect(h.getReports()).toBe(NOTCH_REPORTS); // inline, before any frame
       h.flushFrames();
+      expect(h.getReports()).toBe(NOTCH_REPORTS); // nothing queued behind it
+    });
+
+    it("caps the synchronous burst — a large fling still paces its tail across frames", () => {
+      // The flood guard survives the sync flush: only one frame-cap's worth may
+      // dispatch inline; the rest of the gesture drains on later frames.
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      h.dispatch({ deltaY: 1, deltaMode: 2 }); // one screenful (24 lines)
+      const syncBurst = h.getReports();
+      expect(syncBurst).toBeGreaterThan(0);
+      expect(syncBurst).toBeLessThan(24); // capped, not the whole gesture
+      h.flushFrames();
+      expect(h.getReports()).toBe(24); // every line still delivered
+    });
+
+    it("writes a flush's reports as one concatenated PTY payload (not one write per line)", () => {
+      // Each synthetic event produces one mouse report via xterm's encoder
+      // (simulated here by feeding onData per synthetic wheel). The flush must
+      // coalesce the frame's reports into a single write — one MessagePort post,
+      // one pty write, one kernel read the TUI can redraw once for.
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      h.xtermEl.addEventListener("wheel", (e) => {
+        const report = (e as WheelEvent).deltaY > 0 ? "\x1b[<65;1;1M" : "\x1b[<64;1;1M";
+        h.captured.onData!(report);
+      });
+      h.dispatch({ deltaY: 120, deltaMode: 0 });
       expect(h.getReports()).toBe(NOTCH_REPORTS);
+      expect(writeTerminalInputOrFleetMock).toHaveBeenCalledTimes(1);
+      expect(writeTerminalInputOrFleetMock).toHaveBeenCalledWith(
+        "t1",
+        "\x1b[<65;1;1M".repeat(NOTCH_REPORTS)
+      );
+    });
+
+    it("re-arms instead of double-dispatching when the rAF lands in the same frame as a sync flush", () => {
+      // The sync flush arms a rAF for its backlog; that callback fires in the
+      // SAME frame's animation phase (input dispatch precedes rAF callbacks).
+      // Dispatching there too would send 2× the per-frame cap — the min-gap
+      // guard must push the drain to the next frame instead.
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      const nowSpy = vi.spyOn(performance, "now").mockReturnValue(1000);
+      h.dispatch({ deltaY: 1, deltaMode: 2 }); // screenful: sync burst + backlog
+      const syncBurst = h.getReports();
+      expect(syncBurst).toBeGreaterThan(0);
+      expect(syncBurst).toBeLessThan(24);
+      nowSpy.mockReturnValue(1004); // the armed rAF fires <6ms later — same frame
+      h.flushFrame();
+      expect(h.getReports()).toBe(syncBurst); // guard re-armed, no double burst
+      nowSpy.mockReturnValue(1020); // next real frame
+      h.flushFrame();
+      expect(h.getReports()).toBeGreaterThan(syncBurst); // drain resumed
+      nowSpy.mockRestore();
+    });
+
+    it("suppresses the batch write entirely while input is locked", () => {
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      h.xtermEl.addEventListener("wheel", () => {
+        h.captured.onData!("\x1b[<65;1;1M");
+      });
+      h.managed.isInputLocked = true;
+      h.dispatch({ deltaY: 120, deltaMode: 0 });
+      expect(h.getReports()).toBe(NOTCH_REPORTS); // reports still dispatched…
+      expect(writeTerminalInputOrFleetMock).not.toHaveBeenCalled(); // …never written
+    });
+
+    it("recovers the paced drain when a batch write throws", () => {
+      // A failed write is contained: the error must not skip the backlog
+      // re-arm, or the drain would stall until the next physical wheel event.
+      const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
+      h.xtermEl.addEventListener("wheel", () => {
+        h.captured.onData!("\x1b[<65;1;1M");
+      });
+      writeTerminalInputOrFleetMock.mockImplementationOnce(() => {
+        throw new Error("port gone");
+      });
+      h.dispatch({ deltaY: 1, deltaMode: 2 }); // screenful: burst + queued tail
+      const afterThrow = h.getReports();
+      expect(afterThrow).toBeGreaterThan(0);
+      h.flushFrames();
+      expect(h.getReports()).toBe(24); // full gesture still delivered
+      expect(writeTerminalInputOrFleetMock.mock.calls.length).toBeGreaterThan(1);
     });
 
     it("emits single-line synthetic events in the scroll direction (downward)", () => {
@@ -890,17 +972,18 @@ describe("installTerminalBoundListeners", () => {
     });
 
     it("coalesces several wheel events arriving before a frame into one paced drain", () => {
-      // Many physical events in a single frame (a momentum stream) accumulate
-      // into one backlog and drain at the per-frame cap — not one synchronous
-      // burst per event. Three notches (18 lines) queue with zero sync dispatch,
-      // the first frame stays capped below the total, and all 18 still arrive.
+      // Many physical events in a single frame (a momentum stream) must not each
+      // fan out inline: the gesture's first event may flush synchronously, but
+      // events hotter than a display frame accumulate into one backlog and drain
+      // at the per-frame cap. Three same-tick notches (18 lines) dispatch only
+      // the first burst inline, the next frame stays capped, and all 18 arrive.
       const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
       h.dispatch({ deltaY: 120, deltaMode: 0 });
       h.dispatch({ deltaY: 120, deltaMode: 0 });
       h.dispatch({ deltaY: 120, deltaMode: 0 });
-      expect(h.getReports()).toBe(0); // nothing dispatched synchronously
+      expect(h.getReports()).toBe(NOTCH_REPORTS); // only the fresh gesture's burst
       h.flushFrame();
-      expect(h.getReports()).toBeLessThan(3 * NOTCH_REPORTS); // first frame is capped
+      expect(h.getReports()).toBeLessThan(3 * NOTCH_REPORTS); // next frame is capped
       h.flushFrames();
       expect(h.getReports()).toBe(3 * NOTCH_REPORTS); // every line still delivered
     });
@@ -1033,40 +1116,42 @@ describe("installTerminalBoundListeners", () => {
     });
 
     it("cancels a pending frame on cleanup so a queued drain never dispatches late", () => {
-      // A wheel arrives (arming a frame), then the pane is torn down before the
-      // frame runs. The cancelled frame must not fire stray reports at a
-      // disposed terminal.
+      // A large gesture leaves a backlog behind its sync burst (arming a frame),
+      // then the pane is torn down before the frame runs. The cancelled frame
+      // must not fire stray reports at a disposed terminal.
       const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
-      h.dispatch({ deltaY: 120, deltaMode: 0 });
-      expect(h.getReports()).toBe(0); // still queued, not yet flushed
+      h.dispatch({ deltaY: 1, deltaMode: 2 }); // one screenful — tail stays queued
+      const afterDispatch = h.getReports();
+      expect(afterDispatch).toBeGreaterThan(0);
+      expect(afterDispatch).toBeLessThan(24); // backlog remains behind the burst
       h.runCleanups();
       h.flushFrames();
-      expect(h.getReports()).toBe(0); // queued drain was cancelled
+      expect(h.getReports()).toBe(afterDispatch); // queued drain was cancelled
     });
 
     it("paces a trackpad fling more gently per frame than an equivalent wheel fling", () => {
       // The device-aware send-rate cap: a trackpad's momentum stream (the gesture
-      // that actually floods the PTY round-trip) drains fewer lines per frame than
-      // a physical wheel's discrete detents, even for the same total distance.
+      // that actually floods the PTY round-trip) dispatches fewer lines per burst
+      // than a physical wheel's discrete detents, even for the same total
+      // distance. Measured at the synchronous first burst, where the fresh
+      // classifier verdict picks the cap.
       const wheel = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
       wheel.dispatch({ deltaX: 0, deltaY: 240, deltaMode: 0 }); // integer single-axis → wheel
-      wheel.flushFrame();
-      const wheelFirstFrame = wheel.getReports();
+      const wheelFirstBurst = wheel.getReports();
 
       const trackpad = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
       trackpad.dispatch({ deltaX: 6, deltaY: 240.5, deltaMode: 0 }); // dual-axis fractional → trackpad
-      trackpad.flushFrame();
-      const trackpadFirstFrame = trackpad.getReports();
+      const trackpadFirstBurst = trackpad.getReports();
 
-      expect(trackpadFirstFrame).toBeGreaterThan(0);
-      expect(trackpadFirstFrame).toBeLessThan(wheelFirstFrame);
-      // Pacing changes the per-frame rate, not the total: both devices deliver the
+      expect(trackpadFirstBurst).toBeGreaterThan(0);
+      expect(trackpadFirstBurst).toBeLessThan(wheelFirstBurst);
+      // Pacing changes the per-burst rate, not the total: both devices deliver the
       // same gesture in full (same distance ⇒ same line count), just spread
       // differently across frames.
       wheel.flushFrames();
       trackpad.flushFrames();
       expect(trackpad.getReports()).toBe(wheel.getReports());
-      expect(wheel.getReports()).toBeGreaterThan(wheelFirstFrame);
+      expect(wheel.getReports()).toBeGreaterThan(wheelFirstBurst);
     });
 
     it("re-detects the device after an idle gap (stale wheel history doesn't pin the cap)", () => {
@@ -1075,20 +1160,22 @@ describe("installTerminalBoundListeners", () => {
       // its very first frame — not the leftover physical-wheel verdict. Compared
       // against the same sequence with no gap, where the rolling history still
       // reads as a wheel.
-      function trackpadFirstFrameAfterWheel(gapMs: number): number {
+      function trackpadFirstBurstAfterWheel(gapMs: number): number {
         const h = setupAmplifier({ mouseTrackingMode: "any", isAltBuffer: true });
         // Fill the classifier with a physical-wheel streak and let it drain.
         for (let i = 0; i < 5; i++) h.dispatch({ deltaX: 0, deltaY: 120, deltaMode: 0 });
         h.flushFrames();
         const drained = h.getReports();
         vi.advanceTimersByTime(gapMs);
-        // Now a trackpad fling (dual-axis fractional).
+        // Now a trackpad fling (dual-axis fractional). After a real gap it
+        // flushes synchronously (fresh gesture); with no gap the min-dispatch
+        // guard defers it one frame — measure the first burst either way.
         h.dispatch({ deltaX: 6, deltaY: 240.5, deltaMode: 0 });
-        h.flushFrame();
+        if (h.getReports() === drained) h.flushFrame();
         return h.getReports() - drained;
       }
-      const afterGap = trackpadFirstFrameAfterWheel(1000); // gesture boundary → reset
-      const noGap = trackpadFirstFrameAfterWheel(0); // continuous → wheel history persists
+      const afterGap = trackpadFirstBurstAfterWheel(1000); // gesture boundary → reset
+      const noGap = trackpadFirstBurstAfterWheel(0); // continuous → wheel history persists
       expect(afterGap).toBeLessThan(noGap);
     });
 
