@@ -13,6 +13,7 @@ vi.mock("@/clients", () => ({
     onExit: vi.fn(),
     onAgentStateChanged: vi.fn(),
     onBroadcastResult: vi.fn().mockReturnValue(() => {}),
+    setFocusedTerminal: vi.fn(),
   },
   appClient: {
     setState: vi.fn().mockResolvedValue(undefined),
