@@ -43,7 +43,7 @@ export function registerDiagnosticsActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    run: () => {
+    run: async () => {
       useDiagnosticsStore.getState().openDock("whySlow");
     },
   }));
