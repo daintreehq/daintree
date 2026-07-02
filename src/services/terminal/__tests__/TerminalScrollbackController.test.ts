@@ -283,7 +283,10 @@ describe("TerminalScrollbackController", () => {
       const largeCurrent = plainTarget * 3;
 
       function setBufferLength(managed: ManagedTerminal, length: number): void {
-        (managed.terminal.buffer.active as unknown as { length: number }).length = length;
+        Object.defineProperty(managed.terminal.buffer.active, "length", {
+          value: length,
+          writable: true,
+        });
       }
 
       it("skips a demotion shrink for a focused terminal (preserves history)", () => {
