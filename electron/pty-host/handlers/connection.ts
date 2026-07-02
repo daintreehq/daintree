@@ -13,6 +13,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
     ptyManager,
     rendererConnections,
     windowProjectMap,
+    windowFocusedTerminalMap,
     disconnectWindow,
     recomputeActivityTiers,
     createPortQueueManager,
@@ -56,6 +57,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
       const perWindowQueueManager = createPortQueueManager(windowId);
       const perWindowBatcher = new PortBatcher({
         portQueueManager: perWindowQueueManager,
+        getFocusedTerminalId: () => windowFocusedTerminalMap.get(windowId) ?? null,
         postMessage: (id, data, bytes) => {
           // Structured-clone the chunk — no transfer list. This port is
           // Electron's utility-process MessagePortMain, whose postMessage
@@ -139,6 +141,14 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
         batcher: perWindowBatcher,
       });
       console.log(`[PtyHost] MessagePort listener installed for window ${windowId}`);
+    },
+
+    "set-focused-terminal": (msg) => {
+      // Per-window focused terminal id from the renderer. Read by this window's
+      // PortQueueManager (aggregate-pause exemption + resume-first) and
+      // PortBatcher (flush-first). Keyed by windowId — never global — so each
+      // WebContentsView/project view keeps its own focus.
+      windowFocusedTerminalMap.set(msg.windowId, msg.id);
     },
 
     "disconnect-port": (msg) => {

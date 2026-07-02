@@ -440,6 +440,15 @@ export const terminalClient = {
   },
 
   /**
+   * Report the UI-focused terminal (or null) to the backend so the pty-host
+   * can prioritize it in per-window backpressure and output batching. A soft
+   * hint — fire-and-forget, deduped upstream by the focus subscription.
+   */
+  setFocusedTerminal: (id: string | null): void => {
+    window.electron.terminal.setFocused(id);
+  },
+
+  /**
    * Acknowledge processed data bytes to the backend (Flow Control — IPC path).
    */
   acknowledgeData: (id: string, length: number): void => {

@@ -34,6 +34,7 @@ export const CHANNELS = {
   TERMINAL_TRASHED: "terminal:trashed",
   TERMINAL_RESTORED: "terminal:restored",
   TERMINAL_SET_ACTIVITY_TIER: "terminal:set-activity-tier",
+  TERMINAL_SET_FOCUSED: "terminal:set-focused",
   TERMINAL_GET_FOR_PROJECT: "terminal:get-for-project",
   TERMINAL_GET_AVAILABLE: "terminal:get-available",
   TERMINAL_GET_BY_STATE: "terminal:get-by-state",

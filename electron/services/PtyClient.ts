@@ -199,6 +199,12 @@ export class PtyClient extends EventEmitter {
     { projectId: string | null; projectPath?: string; mode: "active" | "switch" }
   >();
   private shouldResyncProjectContext = false;
+  // Per-window UI-focused terminal id. Cached so it can be replayed to the host
+  // on port reconnect (page reload clears the host's map on port-replace) and on
+  // host restart (#5534) — the renderer only re-sends on an actual focus change,
+  // so without replay a restart would strip focus prioritization until the next
+  // click. `null` means the window has no focused terminal.
+  private windowFocusedTerminals = new Map<number, string | null>();
   private deferInitialPoolWarm = false;
   private hostStartRequested = false;
   private pendingMessagePorts = new Map<number, MessagePortMain>();
@@ -625,6 +631,12 @@ export class PtyClient extends EventEmitter {
           });
         }
       }
+      // Re-send the focused terminal too: the host clears windowFocusedTerminalMap
+      // on port-replace, and the renderer won't re-fire without a focus change.
+      const focusedId = this.windowFocusedTerminals.get(windowId);
+      if (focusedId !== undefined) {
+        this.send({ type: "set-focused-terminal", windowId, id: focusedId });
+      }
     } catch (error) {
       console.error("[PtyClient] Failed to forward MessagePort to Pty Host:", error);
       this.pendingMessagePorts.set(windowId, port);
@@ -635,6 +647,7 @@ export class PtyClient extends EventEmitter {
   disconnectMessagePort(windowId: number): void {
     this.pendingMessagePorts.delete(windowId);
     this.windowProjectContexts.delete(windowId);
+    this.windowFocusedTerminals.delete(windowId);
     this.send({ type: "disconnect-port", windowId });
   }
 
@@ -835,6 +848,17 @@ export class PtyClient extends EventEmitter {
     this.send({ type: "set-activity-tier", id, tier, pollingIntervalMs });
   }
 
+  /**
+   * Report the UI-focused terminal for a window so the host's per-window
+   * PortQueueManager/PortBatcher can prioritize it. Cached per window for replay
+   * on port reconnect and host restart. Fire-and-forget — a dropped send only
+   * loses prioritization until the next focus change or replay.
+   */
+  setFocusedTerminal(windowId: number, id: string | null): void {
+    this.windowFocusedTerminals.set(windowId, id);
+    this.send({ type: "set-focused-terminal", windowId, id });
+  }
+
   setResourceMonitoring(enabled: boolean): void {
     this.resourceMonitoringEnabled = enabled;
     this.send({ type: "set-resource-monitoring", enabled });
@@ -892,6 +916,14 @@ export class PtyClient extends EventEmitter {
           ...(ctx.projectPath ? { projectPath: ctx.projectPath } : {}),
         });
       }
+    }
+
+    // Replay per-window focused terminals on host restart. Windows with a
+    // pending port replay via connectMessagePort instead, so skip them here to
+    // avoid a duplicate send.
+    for (const [windowId, focusedId] of this.windowFocusedTerminals) {
+      if (skipWindowIds?.has(windowId)) continue;
+      this.send({ type: "set-focused-terminal", windowId, id: focusedId });
     }
   }
 
@@ -1307,6 +1339,7 @@ export class PtyClient extends EventEmitter {
     this.pendingSpawns.clear();
     this.pendingKillCount.clear();
     this.windowProjectContexts.clear();
+    this.windowFocusedTerminals.clear();
     this.ipcDataMirrorIds.clear();
     this.terminalPids.clear();
     this.removeAllListeners();

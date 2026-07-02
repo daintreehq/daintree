@@ -130,6 +130,7 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   "terminal:input",
   "terminal:resize",
   "terminal:set-activity-tier",
+  "terminal:set-focused",
   "terminal:update-observed-title",
 
   // fire-and-forget — high-frequency renderer→main streaming audio chunks

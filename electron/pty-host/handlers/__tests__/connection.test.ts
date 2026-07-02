@@ -25,6 +25,7 @@ function makeCtx(stateRef: {
     pauseCoordinators: new Map(),
     rendererConnections: new Map(),
     windowProjectMap: new Map(),
+    windowFocusedTerminalMap: new Map(),
     ipcDataMirrorTerminals: new Set(),
     // Mirror the production wiring: getter/setter pairs read & write the
     // outer module-level state. Handlers must see the *current* value, not

@@ -246,6 +246,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     trash(id: string): Promise<void>;
     restore(id: string): Promise<boolean>;
     setActivityTier(id: string, tier: PtyHostActivityTier, pollingIntervalMs?: number): void;
+    /** Report the UI-focused terminal (or null) so the pty-host can prioritize it under backpressure/batching. */
+    setFocused(id: string | null): void;
     acknowledgeData(id: string, length: number): void;
     getForProject(projectId: string): Promise<BackendTerminalInfo[]>;
     getAvailableTerminals(): Promise<BackendTerminalInfo[]>;

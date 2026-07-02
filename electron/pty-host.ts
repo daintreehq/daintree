@@ -355,6 +355,9 @@ function getOrCreatePauseCoordinator(id: string): PtyPauseCoordinator | undefine
 // Per-window MessagePort connections for direct Renderer ↔ Pty Host communication
 const rendererConnections = new Map<number, RendererConnection>();
 const windowProjectMap = new Map<number, string | null>();
+// Per-window UI-focused terminal id (from the renderer's focusedId). Read by
+// each window's PortQueueManager/PortBatcher to prioritize the focused pane.
+const windowFocusedTerminalMap = new Map<number, string | null>();
 
 // Helper to send events to Main process
 function sendEvent(event: PtyHostEvent): void {
@@ -399,6 +402,7 @@ function createPortQueueManager(windowId: number): PortQueueManager {
     emitReliabilityMetric: (payload) =>
       emitReliabilityMetricWithTracking(payload, `port-${windowId}` as PauseSource),
     pauseToken: `port-queue-${windowId}`,
+    getFocusedTerminalId: () => windowFocusedTerminalMap.get(windowId) ?? null,
   });
 }
 
@@ -483,6 +487,7 @@ function disconnectWindow(windowId: number, reason: string): void {
   // that should forget the project context.
   if (reason === "explicit-disconnect") {
     windowProjectMap.delete(windowId);
+    windowFocusedTerminalMap.delete(windowId);
   }
   // A disconnect never grows scope (no project gains a viewer), so this is
   // intentionally a no-op today — kept as the single chokepoint all 3
@@ -1300,6 +1305,7 @@ const hostContext: HostContext = {
   pauseCoordinators,
   rendererConnections,
   windowProjectMap,
+  windowFocusedTerminalMap,
   ipcDataMirrorTerminals,
   get visualBuffers() {
     return visualBuffers;

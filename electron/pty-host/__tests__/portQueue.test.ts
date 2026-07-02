@@ -575,6 +575,111 @@ describe("PortQueueManager", () => {
     });
   });
 
+  describe("focused-terminal prioritization (#10878)", () => {
+    function fillBelowPerTerminalWatermark(mgr: PortQueueManager, count: number, bytes: number) {
+      for (let i = 0; i < count; i++) {
+        mgr.addBytes(`t${i}`, bytes);
+      }
+    }
+
+    it("exempts the focused terminal from the aggregate high-watermark pause", () => {
+      const deps = createMockDeps();
+      deps.getFocusedTerminalId = () => "t0";
+      const mgr = new PortQueueManager(deps);
+
+      // 16 × 1MB = aggregate high watermark; every terminal is below its own gate.
+      fillBelowPerTerminalWatermark(mgr, 16, 1024 * 1024);
+      expect(mgr.getTotalQueuedBytes()).toBe(IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES);
+
+      // Focused terminal is NOT paused by the aggregate trigger...
+      expect(mgr.applyBackpressure("t0", mgr.getUtilization("t0"))).toBe(false);
+      expect(mgr.isPaused("t0")).toBe(false);
+      // ...while a non-focused sibling in the same window still is.
+      expect(mgr.applyBackpressure("t1", mgr.getUtilization("t1"))).toBe(true);
+      expect(mgr.isPaused("t1")).toBe(true);
+    });
+
+    it("still pauses the focused terminal at its OWN high watermark", () => {
+      const deps = createMockDeps();
+      deps.getFocusedTerminalId = () => "t1";
+      const mgr = new PortQueueManager(deps);
+
+      // Aggregate exemption must never let the focused terminal grow unbounded:
+      // its own per-terminal watermark applies unconditionally.
+      const highWatermark = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
+      mgr.addBytes("t1", highWatermark + 1);
+
+      expect(mgr.applyBackpressure("t1", mgr.getUtilization("t1"))).toBe(true);
+      expect(mgr.isPaused("t1")).toBe(true);
+    });
+
+    it("resumes the focused terminal first when the aggregate drains", () => {
+      const deps = createMockDeps();
+      let focused: string | null = null;
+      deps.getFocusedTerminalId = () => focused;
+      const mgr = new PortQueueManager(deps);
+
+      // Everything floods; t0 and t1 both pause on the aggregate while unfocused.
+      fillBelowPerTerminalWatermark(mgr, 16, 1024 * 1024);
+      mgr.applyBackpressure("t0", mgr.getUtilization("t0"));
+      mgr.applyBackpressure("t1", mgr.getUtilization("t1"));
+      expect(mgr.isPaused("t0")).toBe(true);
+      expect(mgr.isPaused("t1")).toBe(true);
+
+      // The user focuses t1, then everyone's queue drains. Drain t0/t1's own
+      // bytes to 0 first (aggregate still high, so no resume yet).
+      focused = "t1";
+      mgr.removeBytes("t0", 1024 * 1024);
+      mgr.removeBytes("t1", 1024 * 1024);
+      expect(mgr.isPaused("t0")).toBe(true);
+      expect(mgr.isPaused("t1")).toBe(true);
+
+      // Sibling acks drain the aggregate below the low watermark, triggering the
+      // resume sweep. Capture the order terminals are resumed in via the
+      // "running" status emissions.
+      const emit = deps.emitTerminalStatus as ReturnType<typeof vi.fn>;
+      emit.mockClear();
+      for (let i = 2; i < 10; i++) {
+        mgr.removeBytes(`t${i}`, 1024 * 1024);
+      }
+
+      expect(mgr.isPaused("t0")).toBe(false);
+      expect(mgr.isPaused("t1")).toBe(false);
+      const resumeOrder = emit.mock.calls
+        .filter((c) => c[1] === "running")
+        .map((c) => c[0] as string);
+      expect(resumeOrder).toEqual(["t1", "t0"]);
+    });
+
+    it("sweeps every paused terminal even when the focused id is not paused", () => {
+      const deps = createMockDeps();
+      // Focused terminal has no in-flight bytes of its own, so it never entered
+      // pausedTerminals — the sweep must still resume the paused siblings.
+      deps.getFocusedTerminalId = () => "focused-idle";
+      const mgr = new PortQueueManager(deps);
+
+      fillBelowPerTerminalWatermark(mgr, 16, 1024 * 1024);
+      mgr.applyBackpressure("t0", mgr.getUtilization("t0"));
+      mgr.removeBytes("t0", 1024 * 1024);
+      expect(mgr.isPaused("t0")).toBe(true);
+
+      for (let i = 1; i < 9; i++) {
+        mgr.removeBytes(`t${i}`, 1024 * 1024);
+      }
+      expect(mgr.isPaused("t0")).toBe(false);
+    });
+
+    it("with no focused id the aggregate trigger applies to every terminal", () => {
+      const deps = createMockDeps();
+      // getFocusedTerminalId omitted → behaves exactly as before.
+      const mgr = new PortQueueManager(deps);
+
+      fillBelowPerTerminalWatermark(mgr, 16, 1024 * 1024);
+      expect(mgr.applyBackpressure("t0", mgr.getUtilization("t0"))).toBe(true);
+      expect(mgr.isPaused("t0")).toBe(true);
+    });
+  });
+
   describe("constants alignment — Claude burst headroom", () => {
     it("max queue is 3MB to absorb low-single-digit-MB bursts", () => {
       expect(IPC_MAX_QUEUE_BYTES).toBe(3 * 1024 * 1024);
