@@ -1843,6 +1843,44 @@ describe("ResourceProfileService", () => {
       expect(snap.interactiveOverrideActive).toBe(false);
     });
 
+    it("maps a single low-memory signal (score 1) to a balanced target", () => {
+      const service = new ResourceProfileService(createDeps());
+      // Between LOW (~655MB) and HIGH (~1229MB) at 8GB → memoryScore 1.
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 800)]);
+      resetAppMetricsSnapshotForTesting();
+
+      const snap = service.getWhySlowResourceSnapshot();
+
+      expect(snap.pressureScore).toBe(1);
+      expect(snap.targetProfile).toBe("balanced");
+      expect(snap.reasons).toEqual([
+        { signal: "memory", contribution: 1, detail: expect.stringContaining("app memory") },
+      ]);
+    });
+
+    it("keeps pressureScore equal to the summed reason contributions (drift guard)", () => {
+      const service = new ResourceProfileService(createDeps());
+      mockIsOnBatteryPower.mockReturnValue(true);
+      service.start();
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
+      resetAppMetricsSnapshotForTesting();
+
+      const snap = service.getWhySlowResourceSnapshot();
+
+      const summed = snap.reasons.reduce((total, r) => total + r.contribution, 0);
+      expect(summed).toBe(snap.pressureScore);
+      // And the target bucket is derived purely from that score.
+      const expectedTarget =
+        snap.pressureScore >= 3
+          ? "efficiency"
+          : snap.pressureScore === 0
+            ? "performance"
+            : "balanced";
+      expect(snap.targetProfile).toBe(expectedTarget);
+
+      service.stop();
+    });
+
     it("surfaces the memory pressure signal with its contribution", () => {
       const service = new ResourceProfileService(createDeps());
       // > HIGH threshold (~1229MB at 8GB) → memory contributes +2.

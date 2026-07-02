@@ -24,6 +24,9 @@ const execFileAsync = promisify(execFile);
 
 const SECTION_TIMEOUT_MS = 5_000;
 const GPU_TIMEOUT_MS = 2_000;
+// Per-collector bound for the live why-slow pull; below SECTION_TIMEOUT_MS so it
+// also resolves within the full-export section timeout.
+const WHY_SLOW_ASYNC_TIMEOUT_MS = 4_000;
 const MAX_DIAGNOSTIC_STRING_LENGTH = 16_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
@@ -726,10 +729,14 @@ async function collectWhySlowWorktrees(): Promise<WhySlowWorktreeSummary | null>
  * Backing both the diagnostics `whySlow` section and the live dock IPC pull.
  */
 export async function collectWhySlowSnapshot(deps: HandlerDependencies): Promise<WhySlowSnapshot> {
+  // Bound the cross-process awaits: the full diagnostics export wraps each
+  // section in withTimeout, but the live dock pull calls this directly. A hung
+  // pty-host or workspace-host must not wedge the very snapshot meant to explain
+  // a slowdown — degrade the stuck section to null instead.
   const [resource, pty, worktrees] = await Promise.all([
-    collectWhySlowResource(),
-    collectWhySlowPty(deps.ptyClient),
-    collectWhySlowWorktrees(),
+    withTimeout(collectWhySlowResource(), WHY_SLOW_ASYNC_TIMEOUT_MS, null),
+    withTimeout(collectWhySlowPty(deps.ptyClient), WHY_SLOW_ASYNC_TIMEOUT_MS, null),
+    withTimeout(collectWhySlowWorktrees(), WHY_SLOW_ASYNC_TIMEOUT_MS, null),
   ]);
   return {
     timestamp: Date.now(),

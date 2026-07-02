@@ -121,4 +121,15 @@ describe("registerWhySlowHandlers — reportTerminalRendererDiagnostics", () => 
     expect(() => handler(eventFrom(77), { ...VALID_REPORT, terminalCount: -1 })).toThrow();
     expect(cacheMock.recordRendererTerminalDiagnostics).not.toHaveBeenCalled();
   });
+
+  it("rejects an oversized tier map so a buggy renderer can't balloon the cache", async () => {
+    registerWhySlowHandlers({} as never);
+    const handler = getRegistered("system:report-terminal-renderer-diagnostics");
+
+    const countsByTier: Record<string, number> = {};
+    for (let i = 0; i < 64; i++) countsByTier[`tier-${i}`] = 1;
+
+    expect(() => handler(eventFrom(77), { ...VALID_REPORT, countsByTier })).toThrow();
+    expect(cacheMock.recordRendererTerminalDiagnostics).not.toHaveBeenCalled();
+  });
 });

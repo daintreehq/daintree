@@ -9,11 +9,19 @@ import { recordRendererTerminalDiagnostics } from "../../services/RendererTermin
 // Renderer-pushed terminal-rendering state (#10910). Bounded so a compromised
 // or buggy renderer can't grow the tier map without limit; the webContents id is
 // taken from the IPC context, never from the renderer-supplied payload.
+// The renderer buckets by a fixed TerminalRefreshTier enum (4 tiers today); cap
+// generously so a buggy/hostile renderer can't balloon the cached map.
+const MAX_TIER_KEYS = 32;
+
 const REPORT_SCHEMA = z.object({
   webglMode: z.enum(["webgl", "dom"]),
   wantsWebgl: z.number().int().nonnegative().max(100_000),
   terminalCount: z.number().int().nonnegative().max(100_000),
-  countsByTier: z.record(z.string().max(64), z.number().int().nonnegative().max(100_000)),
+  countsByTier: z
+    .record(z.string().max(64), z.number().int().nonnegative().max(100_000))
+    .refine((m) => Object.keys(m).length <= MAX_TIER_KEYS, {
+      message: `countsByTier exceeds ${MAX_TIER_KEYS} keys`,
+    }),
 });
 
 export function registerWhySlowHandlers(deps: HandlerDependencies): () => void {

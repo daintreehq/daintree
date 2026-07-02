@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Gauge, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { systemClient } from "@/clients/systemClient";
@@ -10,8 +10,10 @@ export interface WhySlowContentProps {
 }
 
 // Keep the dock live without a live-pull into the renderer: the snapshot IPC
-// reads a passively-maintained main-process cache, so a light poll is cheap.
-const REFRESH_INTERVAL_MS = 2_000;
+// reads a passively-maintained main-process cache. Aligned with the main-process
+// app-metrics cache TTL (~5s) so polling doesn't force redundant metric scans —
+// avoiding adding the very overhead this panel exists to diagnose.
+const REFRESH_INTERVAL_MS = 5_000;
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -95,27 +97,40 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
   const [snapshot, setSnapshot] = useState<WhySlowSnapshot | null>(null);
   const [error, setError] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const mountedRef = useRef(true);
+  const inFlightRef = useRef(false);
 
   const refresh = useCallback(async () => {
+    // Skip if a fetch is already in flight so the poll interval can't stack
+    // overlapping requests when a snapshot is slow to return.
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setIsRefreshing(true);
     try {
       const next = await systemClient.getWhySlowSnapshot();
+      if (!mountedRef.current) return;
       setSnapshot(next);
       setError(false);
     } catch (err) {
+      if (!mountedRef.current) return;
       logError("Failed to load why-slow snapshot", err);
       setError(true);
     } finally {
-      setIsRefreshing(false);
+      inFlightRef.current = false;
+      if (mountedRef.current) setIsRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
     void refresh();
     const timer = setInterval(() => {
       void refresh();
     }, REFRESH_INTERVAL_MS);
-    return () => clearInterval(timer);
+    return () => {
+      mountedRef.current = false;
+      clearInterval(timer);
+    };
   }, [refresh]);
 
   const renderer = snapshot ? aggregateRenderer(snapshot) : null;
@@ -243,9 +258,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
             {renderer && Object.keys(renderer.countsByTier).length > 0 ? (
               <div className="flex flex-wrap gap-1.5 mt-2">
                 {Object.entries(renderer.countsByTier).map(([tier, count]) => (
-                  <Badge key={tier}>
-                    {tier}: {count}
-                  </Badge>
+                  <Badge key={tier}>{`${tier}: ${count}`}</Badge>
                 ))}
               </div>
             ) : (

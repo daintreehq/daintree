@@ -708,6 +708,27 @@ describe("DiagnosticsCollector adversarial", () => {
     expect(payload.whySlow.worktrees).toBeNull();
   });
 
+  it("WHY_SLOW_LIVE_SNAPSHOT_TIMES_OUT_HUNG_SECTION (#10910)", async () => {
+    // The live dock pull calls collectWhySlowSnapshot directly (no outer section
+    // timeout). A hung pty-host must degrade to pty:null, not wedge the snapshot.
+    const deps = {
+      ptyClient: {
+        getAllTerminalsAsync: async () => [],
+        getFlowControlSnapshotAsync: () => new Promise(() => {}),
+      },
+    } as unknown as import("../../ipc/types.js").HandlerDependencies;
+
+    const pending = diagnostics.collectWhySlowSnapshot(deps);
+    await vi.advanceTimersByTimeAsync(4_000);
+    const snap = (await pending) as {
+      pty: unknown;
+      focusThrottle: { throttled: boolean; pollMultiplier: number };
+    };
+
+    expect(snap.pty).toBeNull();
+    expect(snap.focusThrottle).toEqual({ throttled: false, pollMultiplier: 1 });
+  });
+
   it("PROJECT_VIEWS_ISOLATE_PER_WINDOW_FAILURE (#10500)", async () => {
     const goodPvm = {
       getViewInventory: () => [

@@ -51,7 +51,8 @@ export function getRendererTerminalDiagnosticsSamples(
       webglMode: stored.report.webglMode,
       wantsWebgl: stored.report.wantsWebgl,
       terminalCount: stored.report.terminalCount,
-      countsByTier: stored.report.countsByTier,
+      // Copy the nested map so callers can't mutate the cached sample.
+      countsByTier: { ...stored.report.countsByTier },
       timestamp: stored.timestamp,
       ageMs,
       stale: ageMs > RENDERER_TERMINAL_STALE_MS,

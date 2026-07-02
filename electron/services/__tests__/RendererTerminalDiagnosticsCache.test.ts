@@ -80,4 +80,14 @@ describe("RendererTerminalDiagnosticsCache", () => {
     expect(first).toHaveLength(1);
     expect(getRendererTerminalDiagnosticsSamples()).toHaveLength(0);
   });
+
+  it("does not let a caller mutate the cached countsByTier map", () => {
+    recordRendererTerminalDiagnostics(1, REPORT);
+
+    const projection = getRendererTerminalDiagnosticsSamples();
+    projection[0].countsByTier.FOCUSED = 999;
+
+    // A fresh read must reflect the original recorded value, not the mutation.
+    expect(getRendererTerminalDiagnosticsSamples()[0].countsByTier.FOCUSED).toBe(1);
+  });
 });
