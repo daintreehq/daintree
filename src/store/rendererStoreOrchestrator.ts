@@ -14,6 +14,7 @@ import { semanticAnalysisService } from "@/services/SemanticAnalysisService";
 import { useConsoleCaptureStore } from "./consoleCaptureStore";
 import { useResourceMonitoringStore } from "./resourceMonitoringStore";
 import { useVoiceRecordingStore } from "./voiceRecordingStore";
+import { usePluginPanelBadgeStore } from "./pluginPanelBadgeStore";
 import { useLayoutUndoStore } from "./layoutUndoStore";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { useAgentSettingsStore } from "./agentSettingsStore";
@@ -244,6 +245,10 @@ export function initStoreOrchestrator(): () => void {
             // would otherwise leak the `metrics` Map entry. `removePanel` is a
             // no-op when the id is absent, so the double-call is safe (#9536).
             useResourceMonitoringStore.getState().removePanel(removedId);
+            // Prune the panel's plugin badge entries (#10908). Like the
+            // resource-metrics store above this leaks otherwise: badges are
+            // keyed by panelId and nothing else drops them when a panel closes.
+            usePluginPanelBadgeStore.getState().removePanel(removedId);
             useVoiceRecordingStore.getState().clearPanelBuffer(removedId);
             // Drop the dictation lock if it was pinned to this panel — panelIds
             // are ephemeral and a stale lock would silently break routing.

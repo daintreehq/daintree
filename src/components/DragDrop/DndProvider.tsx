@@ -649,7 +649,6 @@ export function DndProvider({ children }: DndProviderProps) {
     [prefersReducedMotion]
   );
 
-  const panelsById = usePanelStore((state) => state.panelsById);
   const reorderTerminals = usePanelStore((s) => s.reorderTerminals);
   const reorderTabGroups = usePanelStore((s) => s.reorderTabGroups);
   const moveTerminalToPosition = usePanelStore((s) => s.moveTerminalToPosition);
@@ -661,10 +660,15 @@ export function DndProvider({ children }: DndProviderProps) {
   const activeTerminal = useMemo((): PanelInstance | null => {
     if (!activeId && !activeData) return null;
     if (activeData?.terminal) return activeData.terminal;
-    // Parse accordion IDs to get actual terminal ID
+    // Parse accordion IDs to get actual terminal ID. Read the panel map
+    // non-reactively (drag start/end already re-key this memo via activeId /
+    // activeData) rather than subscribing to the whole `panelsById` map, which
+    // re-rendered the entire DnD tree on every status-buffer flush (#10908).
     const terminalId = parseAccordionDragId(activeId!) ?? activeId;
-    return (terminalId ? getNarrowPanel(panelsById, terminalId) : null) ?? null;
-  }, [activeId, activeData, panelsById]);
+    return (
+      (terminalId ? getNarrowPanel(usePanelStore.getState().panelsById, terminalId) : null) ?? null
+    );
+  }, [activeId, activeData]);
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
     setIsCancelDrop(false);

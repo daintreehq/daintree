@@ -52,7 +52,13 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore, useWorktreeSelectionStore, useProjectStore } from "@/store";
 import type { PendingCreation } from "@/store/worktreeStore";
-import { useFleetArmingStore, collectFilterArmEligibleIds } from "@/store/fleetArmingStore";
+import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import {
+  selectSidebarVisiblePanelIds,
+  selectSidebarAgentStateByPanelId,
+  selectSidebarFleetEligibleWorktreeById,
+  computePanelStateByWorktree,
+} from "./sidebarPanelDerivation";
 import { useShallow } from "zustand/react/shallow";
 import { systemClient } from "@/clients";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
@@ -83,9 +89,6 @@ import { useScrollIndicator } from "./useScrollIndicator";
 import { useRecipeDialogState } from "./useRecipeDialogState";
 import { RecipeEditor } from "@/components/TerminalRecipe/RecipeEditor";
 import { RecipeManager } from "@/components/TerminalRecipe/RecipeManager";
-import { isAgentTerminal } from "@/utils/terminalType";
-import { isPtyPanel } from "@shared/types/panel";
-import { isTerminalVisible } from "@/lib/terminalVisibility";
 import { useWorktreeIds } from "@/hooks/useTerminalSelectors";
 import { logError } from "@/utils/logger";
 import { useWorktreeSidebarKeyboard, type SidebarKeyboardItem } from "./useWorktreeSidebarKeyboard";
@@ -112,6 +115,10 @@ const QUICK_STATE_LABELS: Record<"working" | "waiting" | "finished", string> = {
 };
 
 const KEYBOARD_REORDER_ANNOUNCEMENT_DEBOUNCE_MS = 150;
+
+// Stable empty ref so `filterArmEligibleIds` can bail to a constant when no
+// worktrees are in scope instead of yielding a fresh `[]`.
+const EMPTY_ELIGIBLE_IDS: readonly string[] = [];
 
 // Virtuoso overscan in pixels — covers ~2–5 rows at the 120–260px height range,
 // keeping useSortable hooks alive in a small window beyond the viewport so a
@@ -631,64 +638,29 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const worktreeIdList = useMemo(() => deferredWorktrees.map((w) => w.id), [deferredWorktrees]);
   const panelIds = usePanelStore((state) => state.panelIds);
   const panelIdsByWorktreeId = usePanelStore((state) => state.panelIdsByWorktreeId);
-  const panelsById = usePanelStore((state) => state.panelsById);
-  const isInTrash = usePanelStore((state) => state.isInTrash);
-  const panelStateByWorktree = useMemo(() => {
-    const result: Record<
-      string,
-      {
-        terminalCount: number;
-        waitingTerminalCount: number;
-        hasWorkingAgent: boolean;
-        hasWaitingAgent: boolean;
-        hasCompletedAgent: boolean;
-        hasExitedAgent: boolean;
-      }
-    > = {};
-    for (const worktreeId of worktreeIdList) {
-      const ids = panelIdsByWorktreeId[worktreeId];
-      if (!ids || ids.length === 0) {
-        result[worktreeId] = {
-          terminalCount: 0,
-          waitingTerminalCount: 0,
-          hasWorkingAgent: false,
-          hasWaitingAgent: false,
-          hasCompletedAgent: false,
-          hasExitedAgent: false,
-        };
-        continue;
-      }
-      let terminalCount = 0;
-      let waitingTerminalCount = 0;
-      let hasWorkingAgent = false;
-      let hasWaitingAgent = false;
-      let hasCompletedAgent = false;
-      let hasExitedAgent = false;
-      for (const id of ids) {
-        const t = panelsById[id];
-        if (!t) continue;
-        if (!isTerminalVisible(t, isInTrash, worktreeIds)) continue;
-        terminalCount++;
-        if (!isAgentTerminal(t) || !isPtyPanel(t)) continue;
-        if (t.agentState === "working") hasWorkingAgent = true;
-        if (t.agentState === "waiting") {
-          hasWaitingAgent = true;
-          waitingTerminalCount++;
-        }
-        if (t.agentState === "completed") hasCompletedAgent = true;
-        if (t.agentState === "exited") hasExitedAgent = true;
-      }
-      result[worktreeId] = {
-        terminalCount,
-        waitingTerminalCount,
-        hasWorkingAgent,
-        hasWaitingAgent,
-        hasCompletedAgent,
-        hasExitedAgent,
-      };
-    }
-    return result;
-  }, [worktreeIdList, panelIdsByWorktreeId, panelsById, isInTrash, worktreeIds]);
+  // Subscribing to the whole `panelsById` map re-ran every rollup below on each
+  // rAF status-buffer flush (up to 60×/sec while an agent streams), because the
+  // buffer replaces the map reference every flush (#10908). Instead subscribe to
+  // flat primitive maps of ONLY the fields these rollups read (see
+  // `sidebarPanelDerivation.ts`) — none of which the buffer writes — so
+  // `useShallow` bails on buffer flushes and re-renders fire only on real
+  // structural, agent-state, or fleet-eligibility changes.
+  const visiblePanelIds = usePanelStore(useShallow(selectSidebarVisiblePanelIds));
+  const agentStateByPanelId = usePanelStore(useShallow(selectSidebarAgentStateByPanelId));
+  const fleetEligibleWorktreeById = usePanelStore(
+    useShallow(selectSidebarFleetEligibleWorktreeById)
+  );
+  const panelStateByWorktree = useMemo(
+    () =>
+      computePanelStateByWorktree(
+        worktreeIdList,
+        panelIdsByWorktreeId,
+        visiblePanelIds,
+        agentStateByPanelId,
+        worktreeIds
+      ),
+    [worktreeIdList, panelIdsByWorktreeId, visiblePanelIds, agentStateByPanelId, worktreeIds]
+  );
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -1045,15 +1017,18 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // Fleet-eligible terminals inside the currently visible worktrees, split so an
   // arm/disarm elsewhere only re-walks the unarmed tally rather than re-scanning
   // every panel. Drives the QuickStateFilterBar arm affordance.
-  const filterArmEligibleIds = useMemo(
-    () =>
-      collectFilterArmEligibleIds(
-        filteredWorktrees.map((w) => w.id),
-        panelIds,
-        panelsById
-      ),
-    [filteredWorktrees, panelIds, panelsById]
-  );
+  const filterArmEligibleIds = useMemo(() => {
+    const worktreeIdSet = new Set(filteredWorktrees.map((w) => w.id));
+    if (worktreeIdSet.size === 0) return EMPTY_ELIGIBLE_IDS;
+    const ids: string[] = [];
+    for (const id of panelIds) {
+      const worktreeId = fleetEligibleWorktreeById[id];
+      if (worktreeId === undefined) continue; // not eligible
+      if (!worktreeId || !worktreeIdSet.has(worktreeId)) continue;
+      ids.push(id);
+    }
+    return ids;
+  }, [filteredWorktrees, panelIds, fleetEligibleWorktreeById]);
   const filterArmUnarmedCount = useMemo(() => {
     let unarmed = 0;
     for (const id of filterArmEligibleIds) {

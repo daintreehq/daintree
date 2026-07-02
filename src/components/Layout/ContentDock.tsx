@@ -72,6 +72,11 @@ const CONTEXT_MENU_COMPONENTS: DockLaunchMenuComponents = {
 
 export type { DockDensity } from "@/store/preferencesStore";
 
+// Stable empty refs so the narrowed dock subscriptions below can bail under
+// `useShallow` when the dock is empty instead of yielding a fresh `[]`.
+const EMPTY_DOCK_SIGNATURE: readonly string[] = [];
+const EMPTY_DOCK_TERMINALS: readonly PtyPanelData[] = [];
+
 interface ContentDockProps {
   density?: DockDensity;
 }
@@ -80,8 +85,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
 
   const trashedTerminals = usePanelStore((state) => state.trashedTerminals);
-  const panelsById = usePanelStore((state) => state.panelsById);
-  const storeTerminalIds = usePanelStore((state) => state.panelIds);
+  const storeTabGroups = usePanelStore((state) => state.tabGroups);
   const getTabGroups = usePanelStore((state) => state.getTabGroups);
   const getTabGroupPanels = usePanelStore((state) => state.getTabGroupPanels);
   const currentProject = useProjectStore((s) => s.currentProject);
@@ -93,10 +97,64 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   const { settings: projectSettings } = useProjectSettings();
   const hasDevPreview = Boolean(projectSettings?.devServerCommand?.trim());
 
+  // Narrow dock subscriptions (#10908). Subscribing to the whole `panelsById`
+  // re-rendered the dock on every panel's rAF status-buffer flush — including
+  // grid agents that never appear here. Both selectors below react only to dock
+  // panels. The dock is intentionally PTY-only: its chrome (output preview,
+  // restart, agent state) is built on terminal affordances, so `getNarrowPanel`
+  // + `isPtyPanel` is the correct gate (NOT the #10512 grid render-eligibility
+  // predicate, which deliberately does not apply to the dock).
+  //
+  // `dockPanelSignature` is a structural `${id}:${worktreeId}` list that stays
+  // referentially stable across status-buffer flushes, so the (activity-agnostic)
+  // `tabGroups` derivation recomputes only on real dock membership/scope changes.
+  // It iterates `panelsById` (not `panelIds`) so a batched dock panel — committed
+  // to `panelsById` before `panelIds` is revealed at flush — still invalidates
+  // `tabGroups`, matching the old whole-map subscription's recompute and letting
+  // `getTabGroups` surface the index-only panel (#9649).
+  const dockPanelSignature = usePanelStore(
+    useShallow((state) => {
+      const result: string[] = [];
+      for (const id of Object.keys(state.panelsById)) {
+        const terminal = getNarrowPanel(state.panelsById, id);
+        if (
+          terminal &&
+          isPtyPanel(terminal) &&
+          terminal.location === "dock" &&
+          !state.trashedTerminals.has(terminal.id)
+        ) {
+          result.push(`${terminal.id}:${terminal.worktreeId ?? ""}`);
+        }
+      }
+      return result.length === 0 ? EMPTY_DOCK_SIGNATURE : result;
+    })
+  );
+
+  // Live dock panel objects. The dock renders live activity/agent state from
+  // these, so unlike the grid this stays object-valued — but `useShallow` only
+  // fires when a *dock* panel's reference changes, not on grid-agent churn.
+  const dockTerminalsRaw = usePanelStore(
+    useShallow((state) => {
+      const result: PtyPanelData[] = [];
+      for (const id of state.panelIds) {
+        const terminal = getNarrowPanel(state.panelsById, id);
+        if (
+          terminal &&
+          isPtyPanel(terminal) &&
+          terminal.location === "dock" &&
+          !state.trashedTerminals.has(terminal.id)
+        ) {
+          result.push(terminal);
+        }
+      }
+      return result.length === 0 ? EMPTY_DOCK_TERMINALS : result;
+    })
+  );
+
   // Get tab groups for the dock, excluding the help panel terminal
   const tabGroups = useMemo(() => {
-    void storeTerminalIds;
-    void panelsById;
+    void dockPanelSignature;
+    void storeTabGroups;
     void trashedTerminals;
     const groups = getTabGroups("dock", activeWorktreeId ?? undefined);
     if (!helpTerminalId) return groups;
@@ -104,27 +162,19 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   }, [
     getTabGroups,
     activeWorktreeId,
-    storeTerminalIds,
-    panelsById,
+    dockPanelSignature,
+    storeTabGroups,
     trashedTerminals,
     helpTerminalId,
   ]);
 
   const dockTerminals = useMemo<PtyPanelData[]>(() => {
-    // The dock is intentionally PTY-only: its chrome (output preview, restart,
-    // agent state) is built on terminal affordances. Non-PTY panels — browser,
-    // dev-preview, review, AND plugin-contributed kinds — are grid-only here,
-    // so `getNarrowPanel` + `isPtyPanel` is the correct gate (NOT the #10512
-    // grid render-eligibility predicate, which deliberately does not apply to
-    // the dock).
+    // `dockTerminalsRaw` already narrows to dock/pty/non-trashed panels; apply
+    // the help-panel and active-worktree filters here (external stores the
+    // store selector can't read).
     const result: PtyPanelData[] = [];
-    for (const id of storeTerminalIds) {
-      const terminal = getNarrowPanel(panelsById, id);
+    for (const terminal of dockTerminalsRaw) {
       if (
-        terminal &&
-        isPtyPanel(terminal) &&
-        terminal.location === "dock" &&
-        !trashedTerminals.has(terminal.id) &&
         terminal.id !== helpTerminalId &&
         (terminal.worktreeId == null || terminal.worktreeId === activeWorktreeId)
       ) {
@@ -132,7 +182,22 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
       }
     }
     return result;
-  }, [storeTerminalIds, panelsById, trashedTerminals, helpTerminalId, activeWorktreeId]);
+  }, [dockTerminalsRaw, helpTerminalId, activeWorktreeId]);
+
+  // Trashed panels resolved from the store, keyed by id. Values are the actual
+  // store panel references (not freshly constructed), so `useShallow` bails
+  // unless the trashed set — or a trashed panel's reference — actually changes,
+  // rather than on every unrelated status-buffer flush (#10908).
+  const trashedPanelsById = usePanelStore(
+    useShallow((state) => {
+      const result: Record<string, PanelInstance> = {};
+      for (const trashed of state.trashedTerminals.values()) {
+        const panel = state.panelsById[trashed.id];
+        if (panel) result[trashed.id] = panel;
+      }
+      return result;
+    })
+  );
 
   const { worktrees } = useWorktrees();
 
@@ -322,7 +387,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
 
   const trashedItems = Array.from(trashedTerminals.values())
     .map((trashed) => ({
-      terminal: panelsById[trashed.id] as PanelInstance | undefined,
+      terminal: trashedPanelsById[trashed.id] as PanelInstance | undefined,
       trashedInfo: trashed,
     }))
     .filter(
