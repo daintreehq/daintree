@@ -184,7 +184,7 @@ function isSafePluginAssetPath(componentPath: string): boolean {
 export const ViewContributionSchema = z
   .object({
     id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
-    componentPath: z.string().min(1).refine(isSafePluginViewComponentPath, {
+    componentPath: z.string().min(1).refine(isSafePluginAssetPath, {
       message:
         "componentPath must be a relative plugin asset path (no leading /, backslash, URL scheme, NUL, or .. segments)",
     }),
