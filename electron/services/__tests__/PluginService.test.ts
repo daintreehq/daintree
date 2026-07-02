@@ -9614,7 +9614,17 @@ describe("PluginService blocklist / kill-switch (#10891)", () => {
   }
 
   it("refuses to load a blocklisted plugin and surfaces it in listPlugins", async () => {
-    await writePlugin("bad", { name: "acme.bad", version: "1.2.3" });
+    // Declare a panel so the "no registration" assertion is meaningful: a
+    // manifest that *has* a contribution yet registers nothing proves the gate
+    // runs before contribution registration, not merely that there was nothing
+    // to register.
+    await writePlugin("bad", {
+      name: "acme.bad",
+      version: "1.2.3",
+      contributes: {
+        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#ff0000" }],
+      },
+    });
     const { svc } = blocklistService([
       { name: "acme.bad", ranges: ["<2.0.0"], reason: "malware", message: "Steals tokens" },
     ]);
@@ -9632,7 +9642,7 @@ describe("PluginService blocklist / kill-switch (#10891)", () => {
     expect(info.loadedAt).toBe(0);
     expect(info.pendingRestart).toBe(false);
     expect(info.loadError).toBeNull();
-    // Not registered as a running panel-contributing plugin.
+    // The declared panel must NOT register — the gate precedes contribution wiring.
     expect(registerPanelKind).not.toHaveBeenCalled();
   });
 

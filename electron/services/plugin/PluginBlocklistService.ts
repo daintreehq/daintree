@@ -118,7 +118,11 @@ export class PluginBlocklistService {
       return disk.data;
     }
 
-    return null;
+    // Disk is also gone/corrupt. If we ever validated a list this session,
+    // keep enforcing it (stale) rather than dropping to no-blocklist — a
+    // kill-switch should not forget a known-bad plugin just because the TTL
+    // lapsed and the network is down.
+    return this.memCache?.data ?? null;
   }
 
   private async refresh(): Promise<ParsedPluginBlocklist | null> {

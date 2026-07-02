@@ -4802,7 +4802,9 @@ export class PluginService {
         updatedAt: record?.updatedAt,
         archiveHash: record?.archiveHash ?? null,
         originalUrl: record?.originalUrl ?? null,
-        loadError: record?.loadError ?? null,
+        // A blocklisted plugin is a policy refusal, not a technical failure —
+        // suppress any stale activation error so the UI shows only "Blocked".
+        loadError: blocklisted ? null : (record?.loadError ?? null),
         disabled,
         updateAvailable: record?.updateAvailable ?? null,
         devMode: record?.devMode ?? false,

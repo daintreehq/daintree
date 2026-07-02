@@ -490,6 +490,18 @@ export class PluginInstaller {
         return { status: "installed", pluginId };
       }
 
+      // Installing this id authoritatively replaces whatever startup state it
+      // had. If it was refused by the blocklist at launch (#10891) its name is
+      // still reserved and a blocked row is tracked — clear both so a fixed,
+      // no-longer-blocklisted version can load instead of tripping the
+      // duplicate-name guard. Scoped to the block state (only touch the
+      // reservation when we actually held a block) so disabled-plugin reinstall
+      // behavior is unchanged. loadPlugin re-adds the block if the new version
+      // still matches.
+      if (this.deps.blockedPlugins.delete(pluginId)) {
+        this.deps.reservedNames.delete(pluginId);
+      }
+
       let loaded: unknown;
       try {
         loaded = await this.deps.loadPlugin(this.pluginsRoot, pluginId, {
@@ -621,6 +633,16 @@ export class PluginInstaller {
       const records = this.records.getInstalledRecords();
       records[pluginId] = previousRecord;
       this.records.writeInstalledRecords(records);
+    }
+
+    // The failed new version may have been refused by the blocklist, which
+    // reserved its name and recorded a blocked row (#10891). Clear that
+    // transient state before reloading the old version — otherwise the restored
+    // (good) version is rejected by the duplicate-name guard and a stale
+    // "Blocked" row lingers for the rolled-back plugin. If the old version is
+    // itself blocklisted, loadPlugin re-establishes the block below.
+    if (this.deps.blockedPlugins.delete(pluginId)) {
+      this.deps.reservedNames.delete(pluginId);
     }
 
     try {
