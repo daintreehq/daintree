@@ -18,7 +18,7 @@ import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 // Orphaning is worktree-scoped, so the intrinsic visibility pass disables
 // `isTerminalVisible`'s orphan check with an empty set; `computePanelStateByWorktree`
 // re-applies it once per worktree using the live worktree id set.
-const EMPTY_WORKTREE_IDS: ReadonlySet<string> = new Set();
+const EMPTY_WORKTREE_IDS: Set<string> = new Set();
 
 /** Minimal panel-store shape the sidebar derivations read. */
 export interface SidebarPanelDerivationState {
@@ -26,6 +26,14 @@ export interface SidebarPanelDerivationState {
   panelsById: Record<string, PanelInstance>;
   isInTrash: (id: string) => boolean;
 }
+
+// The per-worktree rollups iterate `panelsById` rather than `panelIds`: during
+// a spawn/hydration batch a panel is committed to `panelsById` and the worktree
+// index immediately, but `panelIds` is deferred until the batch flush
+// (panelRegistry/core.ts). The old inline rollup walked the worktree index and
+// read `panelsById`, so it counted batched panels before flush; keying the flat
+// maps off `panelsById` preserves that (#9649). `computePanelStateByWorktree`
+// still gates on the worktree index, so extra entries here are simply ignored.
 
 export interface WorktreePanelSummary {
   terminalCount: number;
@@ -41,7 +49,7 @@ export function selectSidebarVisiblePanelIds(
   state: SidebarPanelDerivationState
 ): Record<string, 1> {
   const result: Record<string, 1> = {};
-  for (const id of state.panelIds) {
+  for (const id of Object.keys(state.panelsById)) {
     const panel = state.panelsById[id];
     if (panel && isTerminalVisible(panel, state.isInTrash, EMPTY_WORKTREE_IDS)) {
       result[id] = 1;
@@ -55,7 +63,7 @@ export function selectSidebarAgentStateByPanelId(
   state: SidebarPanelDerivationState
 ): Record<string, AgentState> {
   const result: Record<string, AgentState> = {};
-  for (const id of state.panelIds) {
+  for (const id of Object.keys(state.panelsById)) {
     const panel = state.panelsById[id];
     if (!panel || !isPtyPanel(panel)) continue;
     const agentState = panel.agentState;

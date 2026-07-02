@@ -108,10 +108,14 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   // `dockPanelSignature` is a structural `${id}:${worktreeId}` list that stays
   // referentially stable across status-buffer flushes, so the (activity-agnostic)
   // `tabGroups` derivation recomputes only on real dock membership/scope changes.
+  // It iterates `panelsById` (not `panelIds`) so a batched dock panel — committed
+  // to `panelsById` before `panelIds` is revealed at flush — still invalidates
+  // `tabGroups`, matching the old whole-map subscription's recompute and letting
+  // `getTabGroups` surface the index-only panel (#9649).
   const dockPanelSignature = usePanelStore(
     useShallow((state) => {
       const result: string[] = [];
-      for (const id of state.panelIds) {
+      for (const id of Object.keys(state.panelsById)) {
         const terminal = getNarrowPanel(state.panelsById, id);
         if (
           terminal &&

@@ -72,6 +72,29 @@ describe("sidebarPanelDerivation selectors", () => {
     expect(selectSidebarVisiblePanelIds(state)).toEqual({ a: 1 });
   });
 
+  it("counts panels committed to panelsById before panelIds is revealed (spawn batch)", () => {
+    // During a spawn/hydration batch the panel lands in panelsById immediately
+    // but panelIds is deferred until flush (#9649). The selectors iterate
+    // panelsById so the sidebar still counts it before the batch flush.
+    const state: SidebarPanelDerivationState = {
+      panelIds: [], // not yet revealed
+      panelsById: { batched: agentPanel({ id: "batched", agentState: "working" }) },
+      isInTrash: () => false,
+    };
+
+    expect(selectSidebarVisiblePanelIds(state)).toEqual({ batched: 1 });
+
+    const rollup = computePanelStateByWorktree(
+      ["wt-1"],
+      { "wt-1": ["batched"] },
+      selectSidebarVisiblePanelIds(state),
+      selectSidebarAgentStateByPanelId(state),
+      new Set(["wt-1"])
+    );
+    expect(rollup["wt-1"]?.terminalCount).toBe(1);
+    expect(rollup["wt-1"]?.hasWorkingAgent).toBe(true);
+  });
+
   it("fleet eligibility maps live PTY panels to their worktree id", () => {
     const state = makeState({
       a: agentPanel({ id: "a", worktreeId: "wt-1", runtimeStatus: "running" }),
@@ -106,6 +129,21 @@ describe("computePanelStateByWorktree", () => {
       hasCompletedAgent: false,
       hasExitedAgent: false,
     });
+  });
+
+  it("sets completed and exited flags from agent state", () => {
+    const result = computePanelStateByWorktree(
+      ["wt-1"],
+      { "wt-1": ["a", "b"] },
+      { a: 1, b: 1 },
+      { a: "completed", b: "exited" },
+      new Set(["wt-1"])
+    );
+
+    expect(result["wt-1"]?.hasCompletedAgent).toBe(true);
+    expect(result["wt-1"]?.hasExitedAgent).toBe(true);
+    expect(result["wt-1"]?.hasWorkingAgent).toBe(false);
+    expect(result["wt-1"]?.waitingTerminalCount).toBe(0);
   });
 
   it("does not count panels absent from the visible map", () => {

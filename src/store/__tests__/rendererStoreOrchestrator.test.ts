@@ -265,8 +265,24 @@ describe("rendererStoreOrchestrator", () => {
   it("prunes plugin panel badges for every terminal removed in one batch", () => {
     usePanelStore.setState({
       panelsById: {
-        a: { id: "a", title: "A", kind: "terminal" as const, cwd: "/", cols: 80, rows: 24 },
-        b: { id: "b", title: "B", kind: "terminal" as const, cwd: "/", cols: 80, rows: 24 },
+        a: {
+          id: "a",
+          title: "A",
+          kind: "terminal" as const,
+          cwd: "/",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+        b: {
+          id: "b",
+          title: "B",
+          kind: "terminal" as const,
+          cwd: "/",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
       },
       panelIds: ["a", "b"],
     });
