@@ -136,6 +136,9 @@ class TerminalInstanceService {
   private resizeController: TerminalResizeController;
   private rendererPolicy: TerminalRendererPolicy;
   private webGLManager = new TerminalWebGLManager();
+  // Coalesces "why am I slow?" diagnostics pushes (#10910): multiple tier/create/
+  // destroy events in one turn collapse to a single main-process report.
+  private whySlowReportScheduled = false;
   private agentStateController: TerminalAgentStateController;
   private restoreController: TerminalRestoreController;
   private reflowController: TerminalReflowController;
@@ -241,6 +244,10 @@ class TerminalInstanceService {
         // service helper so updateOptions/applyAgentPromotion/getOrCreate all
         // reach the same answer.
         this.applyCursorBlinkPolicy(managed);
+
+        // Tier changes shift the counts-by-tier distribution (and can flip WebGL
+        // mode via the release path above) — push a fresh diagnostics sample.
+        this.scheduleWhySlowReport();
       },
     });
 
@@ -1640,11 +1647,57 @@ class TerminalInstanceService {
 
     this.notifyReadinessWaiters(id);
 
+    this.scheduleWhySlowReport();
+
     return managed;
   }
 
   get(id: string): ManagedTerminal | null {
     return this.instances.get(id) ?? null;
+  }
+
+  /**
+   * Coalesce a "why am I slow?" diagnostics push (#10910). Terminal create,
+   * destroy, and tier changes each nudge this; the actual report is deferred to a
+   * microtask so a burst (e.g. a fleet broadcast opening many panes) sends one
+   * sample, not one per pane.
+   */
+  private scheduleWhySlowReport(): void {
+    if (this.whySlowReportScheduled) return;
+    this.whySlowReportScheduled = true;
+    queueMicrotask(() => {
+      this.whySlowReportScheduled = false;
+      this.reportWhySlowDiagnostics();
+    });
+  }
+
+  /**
+   * Push this renderer's terminal WebGL mode + counts-by-refresh-tier to the
+   * main-process diagnostics cache. Best-effort: never throw into terminal
+   * lifecycle, and no-op when the preload binding is unavailable (tests).
+   */
+  private reportWhySlowDiagnostics(): void {
+    try {
+      const report = window.electron?.system?.reportTerminalRendererDiagnostics;
+      if (typeof report !== "function") return;
+      const countsByTier: Record<string, number> = {};
+      for (const managed of this.instances.values()) {
+        const tier =
+          managed.lastAppliedTier ?? managed.getRefreshTier?.() ?? TerminalRefreshTier.BACKGROUND;
+        const key = TerminalRefreshTier[tier] ?? String(tier);
+        countsByTier[key] = (countsByTier[key] ?? 0) + 1;
+      }
+      void report({
+        webglMode: this.webGLManager.getMode(),
+        wantsWebgl: this.webGLManager.getWantsSize(),
+        terminalCount: this.instances.size,
+        countsByTier,
+      }).catch(() => {
+        // Diagnostics push is fire-and-forget; a dropped sample is harmless.
+      });
+    } catch {
+      // Never let best-effort diagnostics disrupt terminal lifecycle.
+    }
   }
 
   /**
@@ -3377,6 +3430,7 @@ class TerminalInstanceService {
     managed.scrollbackRestoreState = "none";
 
     this.instances.delete(id);
+    this.scheduleWhySlowReport();
     // Keep the batch aggregate honest when a terminal is torn down mid-restore
     // (e.g. the user closes a pane while it is still pending/in-progress).
     this.notifyScrollbackRestoreListeners();

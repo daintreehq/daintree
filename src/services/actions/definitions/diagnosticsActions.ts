@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { useDiagnosticsReviewStore } from "@/store/diagnosticsReviewStore";
+import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 
 const scopeSchema = z.object({
   timeWindowMs: z.number().int().positive().optional(),
@@ -30,6 +31,20 @@ export function registerDiagnosticsActions(
       // via argsSchema, so this is effectively a typed re-derive.
       const parsed = argsSchema.parse(args);
       await useDiagnosticsReviewStore.getState().openReview(parsed?.scope);
+    },
+  }));
+
+  actions.set("diagnostics.openWhySlow", () => ({
+    id: "diagnostics.openWhySlow",
+    title: "Why am I slow?",
+    description:
+      "Open the diagnostics dock to the performance snapshot: current resource profile and why it triggered, event-loop lag latch, focus throttle, terminal WebGL mode, PTY backpressure, and worktree monitor load.",
+    category: "diagnostics",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      useDiagnosticsStore.getState().openDock("whySlow");
     },
   }));
 }

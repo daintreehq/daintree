@@ -1826,4 +1826,93 @@ describe("ResourceProfileService", () => {
 
     service.stop();
   });
+
+  describe("getWhySlowResourceSnapshot", () => {
+    it("reports no reasons and a performance target under no pressure", () => {
+      const service = new ResourceProfileService(createDeps());
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+      resetAppMetricsSnapshotForTesting();
+
+      const snap = service.getWhySlowResourceSnapshot();
+
+      expect(snap.pressureScore).toBe(0);
+      expect(snap.reasons).toEqual([]);
+      expect(snap.targetProfile).toBe("performance");
+      expect(snap.currentProfile).toBe("balanced");
+      expect(snap.lagPressureActive).toBe(false);
+      expect(snap.interactiveOverrideActive).toBe(false);
+    });
+
+    it("maps a single low-memory signal (score 1) to a balanced target", () => {
+      const service = new ResourceProfileService(createDeps());
+      // Between LOW (~655MB) and HIGH (~1229MB) at 8GB → memoryScore 1.
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 800)]);
+      resetAppMetricsSnapshotForTesting();
+
+      const snap = service.getWhySlowResourceSnapshot();
+
+      expect(snap.pressureScore).toBe(1);
+      expect(snap.targetProfile).toBe("balanced");
+      expect(snap.reasons).toEqual([
+        { signal: "memory", contribution: 1, detail: expect.stringContaining("app memory") },
+      ]);
+    });
+
+    it("keeps pressureScore equal to the summed reason contributions (drift guard)", () => {
+      const service = new ResourceProfileService(createDeps());
+      mockIsOnBatteryPower.mockReturnValue(true);
+      service.start();
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
+      resetAppMetricsSnapshotForTesting();
+
+      const snap = service.getWhySlowResourceSnapshot();
+
+      const summed = snap.reasons.reduce((total, r) => total + r.contribution, 0);
+      expect(summed).toBe(snap.pressureScore);
+      // And the target bucket is derived purely from that score.
+      const expectedTarget =
+        snap.pressureScore >= 3
+          ? "efficiency"
+          : snap.pressureScore === 0
+            ? "performance"
+            : "balanced";
+      expect(snap.targetProfile).toBe(expectedTarget);
+
+      service.stop();
+    });
+
+    it("surfaces the memory pressure signal with its contribution", () => {
+      const service = new ResourceProfileService(createDeps());
+      // > HIGH threshold (~1229MB at 8GB) → memory contributes +2.
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
+      resetAppMetricsSnapshotForTesting();
+
+      const snap = service.getWhySlowResourceSnapshot();
+
+      const memory = snap.reasons.find((r) => r.signal === "memory");
+      expect(memory).toBeDefined();
+      expect(memory?.contribution).toBe(2);
+      // Memory alone (2) stays under the efficiency latch (>=3) → balanced.
+      expect(snap.pressureScore).toBe(2);
+      expect(snap.targetProfile).toBe("balanced");
+    });
+
+    it("targetProfile never drifts from the pressure score → efficiency at ≥3", () => {
+      const service = new ResourceProfileService(createDeps());
+      mockIsOnBatteryPower.mockReturnValue(true);
+      service.start();
+      // Memory +2 and battery +1 = 3 → efficiency.
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
+      resetAppMetricsSnapshotForTesting();
+
+      const snap = service.getWhySlowResourceSnapshot();
+
+      expect(snap.reasons.map((r) => r.signal).sort()).toEqual(["battery", "memory"]);
+      expect(snap.pressureScore).toBe(3);
+      expect(snap.targetProfile).toBe("efficiency");
+      expect(snap.isOnBattery).toBe(true);
+
+      service.stop();
+    });
+  });
 });

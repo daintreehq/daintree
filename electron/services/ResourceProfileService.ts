@@ -23,7 +23,18 @@ import {
   type ResourceProfilePayload,
   type ResourceProfileSnapshot,
 } from "../../shared/types/resourceProfile.js";
+import type { WhySlowResourceReason, WhySlowResourceSnapshot } from "../../shared/types/whySlow.js";
 import { ACTIVE_AGENT_STATES, type AgentState } from "../../shared/types/agent.js";
+
+/** Map an additive pressure score to a profile. Efficiency latches at ≥ 3; a
+ *  zero score (no pressure signals) unlocks performance; anything else is
+ *  balanced. Shared by the scoring path and the why-slow snapshot so the
+ *  reported target never drifts from the applied decision. */
+function profileForScore(pressureScore: number): ResourceProfile {
+  if (pressureScore >= 3) return "efficiency";
+  if (pressureScore === 0) return "performance";
+  return "balanced";
+}
 
 /**
  * Subset of PtyClient's TerminalInfoResponse used by the active-agent filter.
@@ -733,8 +744,22 @@ export class ResourceProfileService {
   }
 
   private computeTargetProfile(): ResourceProfile {
+    return profileForScore(this.computePressureBreakdown().pressureScore);
+  }
+
+  /**
+   * Additive pressure scoring plus a per-signal breakdown for the "why am I
+   * slow?" snapshot (#10910). `computeTargetProfile` reads only the score; the
+   * `reasons` are the same signals expressed for humans. Keeping both on one
+   * code path guarantees the reported reasons never drift from the decision.
+   */
+  private computePressureBreakdown(): {
+    pressureScore: number;
+    reasons: WhySlowResourceReason[];
+  } {
     let pressureScore = 0;
     let memoryScore = 0;
+    const reasons: WhySlowResourceReason[] = [];
 
     // Memory signal. Read through the shared snapshot: ProcessMemoryMonitor's
     // poll runs on the same aligned 30s tick (registered earlier) and primes
@@ -755,6 +780,13 @@ export class ResourceProfileService {
       } else if (totalPrivateMb > this.memoryThresholdLowMb) {
         memoryScore = 1;
       }
+      if (memoryScore > 0) {
+        reasons.push({
+          signal: "memory",
+          contribution: memoryScore,
+          detail: `app memory ${Math.round(totalPrivateMb)}MB`,
+        });
+      }
     } catch {
       // Skip memory signal on error — memoryScore stays 0 (correct: no measurement, no clamp)
     }
@@ -763,15 +795,34 @@ export class ResourceProfileService {
     // Battery signal (cached from startup + transition events)
     if (this.isOnBattery) {
       pressureScore += 1;
+      reasons.push({ signal: "battery", contribution: 1, detail: "on battery" });
     }
 
     // Thermal signal (macOS only)
-    if (this.thermalState === "critical") pressureScore += 2;
-    else if (this.thermalState === "serious") pressureScore += 1;
+    if (this.thermalState === "critical") {
+      pressureScore += 2;
+      reasons.push({ signal: "thermal", contribution: 2, detail: "thermal critical" });
+    } else if (this.thermalState === "serious") {
+      pressureScore += 1;
+      reasons.push({ signal: "thermal", contribution: 1, detail: "thermal serious" });
+    }
 
     // CPU speed-limit signal (macOS & Windows)
-    if (this.speedLimit < 50) pressureScore += 2;
-    else if (this.speedLimit < 100) pressureScore += 1;
+    if (this.speedLimit < 50) {
+      pressureScore += 2;
+      reasons.push({
+        signal: "cpuSpeedLimit",
+        contribution: 2,
+        detail: `cpu speed limit ${this.speedLimit}%`,
+      });
+    } else if (this.speedLimit < 100) {
+      pressureScore += 1;
+      reasons.push({
+        signal: "cpuSpeedLimit",
+        contribution: 1,
+        detail: `cpu speed limit ${this.speedLimit}%`,
+      });
+    }
 
     // Fleet-size signal (graduated). Counts live agent terminals filtered
     // through ACTIVE_AGENT_STATES rather than worktrees: an idle worktree
@@ -780,12 +831,21 @@ export class ResourceProfileService {
     // agent fleet scored identically to an 8-worktree project and could
     // never reach `efficiency` from fleet size alone.
     const agentCount = this.cachedActiveAgentCount;
+    let fleetScore = 0;
     if (agentCount >= this.fleetCountCritical) {
-      pressureScore += 3;
+      fleetScore = 3;
     } else if (agentCount >= this.fleetCountVeryHigh) {
-      pressureScore += 2;
+      fleetScore = 2;
     } else if (agentCount >= this.fleetCountHigh) {
-      pressureScore += 1;
+      fleetScore = 1;
+    }
+    if (fleetScore > 0) {
+      pressureScore += fleetScore;
+      reasons.push({
+        signal: "fleetSize",
+        contribution: fleetScore,
+        detail: `${agentCount} active agents`,
+      });
     }
 
     // Renderer-saturation signal. The lag monitor watches only the MAIN
@@ -795,6 +855,11 @@ export class ResourceProfileService {
     try {
       if (this.deps.hasSustainedRendererSaturation?.()) {
         pressureScore += 1;
+        reasons.push({
+          signal: "rendererSaturation",
+          contribution: 1,
+          detail: "sustained renderer saturation",
+        });
       }
     } catch {
       // Signal unavailable — score stays unchanged.
@@ -807,16 +872,44 @@ export class ResourceProfileService {
     // already uses for cached-view eviction.
     const sysAvailMb = this.getAvailableSystemMemoryMb();
     if (sysAvailMb !== null) {
+      let sysScore = 0;
       if (sysAvailMb < this.sysMemThresholdLowMb) {
-        pressureScore += 2;
+        sysScore = 2;
       } else if (sysAvailMb < this.sysMemThresholdHighMb) {
-        pressureScore += 1;
+        sysScore = 1;
+      }
+      if (sysScore > 0) {
+        pressureScore += sysScore;
+        reasons.push({
+          signal: "systemMemory",
+          contribution: sysScore,
+          detail: `system available ${Math.round(sysAvailMb)}MB`,
+        });
       }
     }
 
-    if (pressureScore >= 3) return "efficiency";
-    if (pressureScore === 0) return "performance";
-    return "balanced";
+    return { pressureScore, reasons };
+  }
+
+  /**
+   * Read-only "why am I slow?" projection (#10910): the active profile, the
+   * profile the current pressure would target, the per-signal reasons, and the
+   * event-loop-lag latch / interactive-override state that can override scoring.
+   */
+  getWhySlowResourceSnapshot(): WhySlowResourceSnapshot {
+    const { pressureScore, reasons } = this.computePressureBreakdown();
+    return {
+      currentProfile: this.currentProfile,
+      targetProfile: profileForScore(pressureScore),
+      pressureScore,
+      reasons,
+      lagPressureActive: this.lagPressureActive,
+      lagEscalatedActive: this.lagEscalatedActive,
+      interactiveOverrideActive: this.isInteractiveOverrideActive(),
+      thermalState: this.thermalState,
+      isOnBattery: this.isOnBattery,
+      speedLimit: this.speedLimit,
+    };
   }
 
   private isUpgrade(target: ResourceProfile): boolean {
