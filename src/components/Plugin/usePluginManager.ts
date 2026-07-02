@@ -655,13 +655,14 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
         }
       }
       if (refreshKeyRef.current !== startKey) return;
-      if (available.length === 0) {
+      const [first, ...rest] = available;
+      if (!first) {
         setNotice("All plugins are up to date.");
         return;
       }
-      pendingQueueRef.current = available.slice(1);
+      pendingQueueRef.current = rest;
       isBatchActiveRef.current = true;
-      setPendingUpdate(available[0]);
+      setPendingUpdate(first);
     } finally {
       isCheckingAllUpdatesRef.current = false;
       setIsCheckingAllUpdates(false);

@@ -72,7 +72,7 @@ describe("usePluginUpdateCheckListener", () => {
     render(<Harness />);
 
     await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
-    const payload = notifyMock.mock.calls[0][0];
+    const payload = notifyMock.mock.calls[0]![0];
     expect(payload.priority).toBe("low");
     expect(payload.supersedeKey).toBe("plugin-updates-available");
     expect(payload.action.actionId).toBe("app.pluginManager");
@@ -92,7 +92,7 @@ describe("usePluginUpdateCheckListener", () => {
     render(<Harness />);
 
     await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
-    expect(notifyMock.mock.calls[0][0].message).toContain("2 plugin updates");
+    expect(notifyMock.mock.calls[0]![0].message).toContain("2 plugin updates");
   });
 
   it("surfaces live events and dedupes a repeated signature in-session", async () => {
@@ -124,7 +124,7 @@ describe("usePluginUpdateCheckListener", () => {
     installElectron({ latest: result([{ pluginId: "pub.a", version: "2.0.0" }], "pub.a@2.0.0") });
     render(<Harness />);
     await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
-    notifyMock.mock.calls[0][0].action.onClick();
+    notifyMock.mock.calls[0]![0].action.onClick();
     expect(dispatchMock).toHaveBeenCalledWith("app.pluginManager", undefined, { source: "user" });
   });
 });
