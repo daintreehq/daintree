@@ -689,7 +689,7 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(managed.geometryRepairGaveUp).toBe(true);
 
       // A fresh incarnation reusing the id must not inherit the give-up state.
-      (managed as unknown as { attachGeneration: number }).attachGeneration += 1;
+      managed.attachGeneration += 1;
       vi.mocked(deps.reconcileRevealGeometry).mockClear();
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
       expect(managed.geometryRepairGaveUp).toBe(false);
@@ -697,17 +697,19 @@ describe("TerminalReconciliationWatchdog", () => {
     });
 
     it("does not count a budget-deferred tick as a repair attempt", () => {
+      const panes: ManagedTerminal[] = [];
       for (let i = 0; i < WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK + 1; i++) {
         const managed = makeManaged({ isAltBuffer: true });
         setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
         instances.set(`t${i}`, managed);
+        panes.push(managed);
       }
       const deps = makeDeps(instances);
       watchdog = new TerminalReconciliationWatchdog(deps);
 
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
-      const repaired = instances.get("t0") as ManagedTerminal;
-      const deferred = instances.get(`t${WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK}`) as ManagedTerminal;
+      const repaired = panes[0];
+      const deferred = panes[WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK];
       expect(repaired.geometryRepairAttempts).toBe(1);
       // The pane skipped purely for heavy budget was never tried — no attempt spent.
       expect(deferred.geometryRepairAttempts).toBe(0);
