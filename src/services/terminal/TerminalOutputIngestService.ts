@@ -2,6 +2,7 @@ import type { TerminalOutputWorkerInboundMessage } from "@shared/types/terminal-
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { logDebug } from "@/utils/logger";
+import { yieldToScheduler } from "@/lib/schedulerYield";
 
 // Renderer-side backpressure layer that throttles xterm consumption. The
 // IPC-layer counterparts (the burst absorber between PTY host and renderer) live
@@ -14,6 +15,15 @@ const RENDERER_LOW_WATERMARK_BYTES = 32 * 1024;
 const COALESCE_BATCH_CAP_BYTES = 256 * 1024;
 const IPC_LOOKBACK_CHARS = 32;
 const INK_ERASE_LINE_PATTERN = "\x1b[2K\x1b[1A";
+
+// Default-on, opt-out build-time flag (mirrors DAINTREE_DISABLE_WEBGL in
+// TerminalWebGLManager). When enabled, a background (non-focused) terminal's
+// drain yields to the scheduler so a queued wheel/scroll/keystroke event on the
+// focused terminal dispatches first, instead of running every terminal's write
+// batch back-to-back in one task (#10881). Set DAINTREE_DISABLE_FOCUSED_DRAIN_PRIORITY=1
+// to fall back to the legacy fully-synchronous drain.
+const FOCUSED_DRAIN_PRIORITY_ENABLED =
+  import.meta.env.DAINTREE_DISABLE_FOCUSED_DRAIN_PRIORITY !== "1";
 
 type TerminalIngestQueue = {
   chunks: Array<string | Uint8Array>;
@@ -46,7 +56,12 @@ export class TerminalOutputIngestService {
       id: string,
       data: string | Uint8Array,
       chunkCount: number
-    ) => void
+    ) => void,
+    // Which terminal is currently focused, or null when focus is unknown.
+    // Defaults to () => null so a bare `new TerminalOutputIngestService(write)`
+    // keeps the legacy fully-synchronous drain — null focus means "drain
+    // synchronously for everyone", never "defer everyone".
+    private readonly getFocusedId: () => string | null = () => null
   ) {}
 
   public async initialize(): Promise<void> {
@@ -89,14 +104,14 @@ export class TerminalOutputIngestService {
     if (!queue) return;
     queue.inFlightBytes = Math.max(0, queue.inFlightBytes - bytes);
     if (queue.inFlightBytes <= RENDERER_LOW_WATERMARK_BYTES && queue.chunks.length > 0) {
-      this.tryDrain(id, queue);
+      this.scheduleOrDrain(id, queue);
     }
   }
 
   public notifyParsed(id: string): void {
     const queue = this.queues.get(id);
     if (!queue || queue.chunks.length === 0 || queue.drainScheduled) return;
-    this.tryDrain(id, queue);
+    this.scheduleOrDrain(id, queue);
   }
 
   /**
@@ -107,7 +122,7 @@ export class TerminalOutputIngestService {
   public resumeFlush(id: string): void {
     const queue = this.queues.get(id);
     if (!queue || queue.chunks.length === 0) return;
-    this.tryDrain(id, queue);
+    this.scheduleOrDrain(id, queue);
   }
 
   /** Held ingest bytes for a terminal — diagnostic accessor for the watchdog. */
@@ -222,15 +237,52 @@ export class TerminalOutputIngestService {
         globalThis.setTimeout(() => {
           if (this.queues.get(id) !== queue) return;
           queue.drainScheduled = false;
-          this.tryDrain(id, queue);
+          this.scheduleOrDrain(id, queue);
         }, 0);
         return;
       }
     }
 
     if (!queue.drainScheduled) {
-      this.tryDrain(id, queue);
+      this.scheduleOrDrain(id, queue);
     }
+  }
+
+  /**
+   * Drain the queue, but let a background (non-focused) terminal yield to the
+   * scheduler first so a queued wheel/scroll/keystroke event on the focused
+   * terminal dispatches ahead of this write batch (#10881). The focused
+   * terminal (and the unknown-focus / flag-disabled cases) drains inline, so
+   * keystroke-echo latency on the pane the user is watching is unchanged.
+   *
+   * A single yield is enough: it hands one task back to input dispatch, then we
+   * drain. We deliberately do NOT re-defer while still background — that would
+   * starve steady background output. Repeat triggers coalesce via
+   * queue.drainScheduled into one pending continuation (no per-chunk timer
+   * churn, #8150); the deferred drain still routes through tryDrain, so the
+   * COALESCE_BATCH_CAP_BYTES cap is respected (#4853).
+   */
+  private scheduleOrDrain(id: string, queue: TerminalIngestQueue): void {
+    if (!this.shouldDeferDrain(id)) {
+      this.tryDrain(id, queue);
+      return;
+    }
+    if (queue.drainScheduled) return;
+    queue.drainScheduled = true;
+    void yieldToScheduler().then(() => {
+      // The queue may have been cleared/replaced (resetForTerminal,
+      // forceDrain) while we were yielding — bail on a stale identity.
+      if (this.queues.get(id) !== queue) return;
+      queue.drainScheduled = false;
+      if (queue.chunks.length === 0) return;
+      this.tryDrain(id, queue);
+    });
+  }
+
+  private shouldDeferDrain(id: string): boolean {
+    if (!FOCUSED_DRAIN_PRIORITY_ENABLED) return false;
+    const focusedId = this.getFocusedId();
+    return focusedId !== null && focusedId !== id;
   }
 
   private tryDrain(id: string, queue: TerminalIngestQueue): void {
