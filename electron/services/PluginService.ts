@@ -4755,14 +4755,14 @@ export class PluginService {
   }
 
   listPlugins(): LoadedPluginInfo[] {
-    // Desired state is the live persisted list; the running state is
-    // `this.plugins` (loaded) vs `this.disabledPlugins` (skipped). For user
-    // plugins these are fixed for the session, so a toggle diverges them and
-    // raises a "restart required" cue (#9284). Built-ins transition live
-    // (#9304): `setEnabled` moves the entry between the two maps immediately, so
-    // the running state already matches the desired state and pendingRestart is
-    // false. Reporting both keeps the switch position and the cue correct across
-    // a tab remount.
+    // Desired state is the persisted list; the running state is `this.plugins`
+    // (loaded) vs `this.disabledPlugins` (skipped). Both built-ins (#9304) and
+    // user plugins (#10887) transition live via `_applyEnabledToggle`, which
+    // moves the entry between the maps (and re-forks the worker for user
+    // plugins). `pendingRestart` can only read true transiently — during the
+    // brief in-flight window between the persist landing and the live transition
+    // settling — after which the maps match again and it clears. Reporting both
+    // keeps the switch position and the cue correct across a tab remount.
     const desiredDisabled = this.records.getDisabledIds();
     const installed = this.records.getInstalledRecords();
 
