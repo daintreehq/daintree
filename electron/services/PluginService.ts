@@ -96,6 +96,12 @@ import { PluginChannelRegistry, isChannelSchema } from "./plugin/PluginChannelRe
 import { PluginInstaller } from "./plugin/PluginInstaller.js";
 import { PluginDevWorkerHost } from "./plugin/PluginDevWorkerHost.js";
 import { PluginDevWorkerMainBridge } from "./plugin/PluginDevWorkerMainBridge.js";
+import {
+  buildPluginPermissionExecArgv,
+  classifyPluginPermissionPaths,
+  derivePluginPermissionCapabilities,
+  isPluginPermissionModelSpikeEnabled,
+} from "./plugin/pluginPermissionFlags.js";
 import { PluginInvokeOwnershipError } from "./plugin/PluginInvokeErrors.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import {
@@ -1725,12 +1731,33 @@ export class PluginService {
     // this, but guard defensively against the unload-race re-entry path.
     if (this.pluginWorkers.has(pluginId)) return;
 
+    // Spike #10890 (opt-in): compute the permission-model execArgv flags BEFORE
+    // creating the host, so the default (env-off) path never awaits and stays
+    // byte-for-byte the current fork behavior. Only the opt-in path yields — and
+    // it fails open (fork without flags) and re-checks liveness after the await,
+    // since a prototype/measurement must never break activation or fork a worker
+    // for a plugin that unloaded mid-computation (#9533).
+    let permissionExecArgv: string[] | undefined;
+    if (isPluginPermissionModelSpikeEnabled()) {
+      try {
+        permissionExecArgv = await this.buildWorkerPermissionExecArgv(pluginId, plugin);
+      } catch (err) {
+        console.warn(
+          `[PluginService] permission-model flag computation failed for ${pluginId}; forking without flags:`,
+          err
+        );
+        permissionExecArgv = undefined;
+      }
+      if (!this.plugins.has(pluginId)) return;
+    }
+
     const { host, revoke } = this.createHost(pluginId);
     const workerHost = new PluginDevWorkerHost({
       pluginId,
       pluginDir: plugin.dir,
       bundlePath: plugin.resolvedMain,
       mode: plugin.devMode ? "dev" : "prod",
+      permissionExecArgv,
     });
     const bridge = new PluginDevWorkerMainBridge({
       pluginId,
@@ -3363,6 +3390,43 @@ export class PluginService {
     return (
       rel === "" || (rel !== ".." && !rel.startsWith(".." + path.sep) && !path.isAbsolute(rel))
     );
+  }
+
+  /**
+   * Spike #10890: compute the Node permission-model `execArgv` flags for a
+   * plugin worker from its resolved `allowedPaths` + capabilities —
+   * `--permission --allow-fs-read/-write` (per-root-class capability gated,
+   * mirroring the sanctioned host.fs surface) plus `--allow-child-process` for
+   * `shell:exec` and `--allow-addons`. The env gate lives in the caller
+   * (`activateViaWorker`), so this always computes when called.
+   *
+   * Fork-time `${worktree}` limitation: the flags are fixed at fork and the
+   * `${worktree}` token resolves against whichever worktree is current now — so a
+   * static flag set reflects only the fork-time worktree and would go stale on a
+   * worktree switch (no worker restart). `${project}` (main worktree) is stable.
+   * Documented as a known limitation of the prototype, not solved here.
+   */
+  private async buildWorkerPermissionExecArgv(
+    pluginId: string,
+    plugin: LoadedPlugin
+  ): Promise<string[]> {
+    const capabilities = plugin.manifest.capabilities ?? [];
+    const { allowChildProcess, allowNativeAddons } =
+      derivePluginPermissionCapabilities(capabilities);
+
+    const entries = await this.expandAllowedPathEntries(pluginId, { includeDataDir: true });
+    const { readPaths, writePaths } = classifyPluginPermissionPaths(
+      entries,
+      capabilities,
+      plugin.dir
+    );
+
+    return buildPluginPermissionExecArgv({
+      readPaths,
+      writePaths,
+      allowChildProcess,
+      allowNativeAddons,
+    });
   }
 
   /**
