@@ -12,6 +12,9 @@ export interface SessionSnapshotterHost {
   readonly id: string;
   readonly wasKilled: boolean;
   readonly launchAgentId: string | undefined;
+  // Monotonic buffer-mutation counter (bumped per PTY chunk / resize / snapshot
+  // capture). Read as a dirty check so an unchanged buffer is not re-serialized.
+  readonly contentEpoch: number;
   hasBannerMarkers(): boolean;
   getSerializedState(): string | null;
   getSerializedStateAsync(): Promise<string | null>;
@@ -23,6 +26,8 @@ export class SessionSnapshotter {
   private dirty = false;
   private inFlight = false;
   private lastEventDrivenFlushAt = -Infinity;
+  private eventDrivenInFlight = false;
+  private lastFlushedEpoch = -1;
   private disposed = false;
 
   constructor(private readonly host: SessionSnapshotterHost) {}
@@ -74,21 +79,52 @@ export class SessionSnapshotter {
   }
 
   flushEventDriven(): void {
+    void this.flushEventDrivenAsync();
+  }
+
+  // Async event-driven flush fired on agent state settles (waiting/completed/
+  // exited). Mirrors persistAsync()'s banner-branch + post-await lifecycle
+  // re-check so serializing up to 10k lines no longer blocks the pty-host event
+  // loop on every transition. Two short-circuits keep it cheap: an unchanged
+  // contentEpoch skips serialization entirely, and a 2s throttle caps churn from
+  // rapid changed-content transitions.
+  private async flushEventDrivenAsync(): Promise<void> {
     if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
     if (isSessionPersistSuppressed()) return;
     if (this.host.wasKilled) return;
     if (this.disposed) return;
 
+    // Buffer unchanged since the last persisted snapshot — nothing to write.
+    // Checked before the throttle so an unchanged flush never consumes the
+    // throttle window a later changed-content flush needs.
+    const epoch = this.host.contentEpoch;
+    if (epoch === this.lastFlushedEpoch) return;
+
     const now = performance.now();
     if (now - this.lastEventDrivenFlushAt < EVENT_DRIVEN_SNAPSHOT_THROTTLE_MS) return;
+
+    // Drop overlapping flushes: the in-flight one already covers this settle.
+    if (this.eventDrivenInFlight) return;
+    this.eventDrivenInFlight = true;
     this.lastEventDrivenFlushAt = now;
-
-    const state = this.host.serializeForPersistence();
-    if (!state) return;
-
-    persistSessionSnapshotAsync(this.host.id, state).catch((error) => {
+    try {
+      const state = this.host.hasBannerMarkers()
+        ? this.host.serializeForPersistence()
+        : await this.host.getSerializedStateAsync();
+      // Re-check lifecycle after the await — a kill or dispose during async
+      // serialize would otherwise stomp the sync snapshot written from kill().
+      if (this.disposed || this.host.wasKilled) return;
+      if (!state) return;
+      await persistSessionSnapshotAsync(this.host.id, state);
+      // Mark coverage only after a successful persist. Uses the entry epoch, so
+      // content that changed mid-serialize (epoch > entry) still triggers a
+      // later flush.
+      this.lastFlushedEpoch = epoch;
+    } catch (error) {
       console.warn(`[TerminalProcess] Event-driven snapshot failed for ${this.host.id}:`, error);
-    });
+    } finally {
+      this.eventDrivenInFlight = false;
+    }
   }
 
   // Last-chance unconditional flush invoked by kill() before wasKilled is set.

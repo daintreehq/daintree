@@ -122,44 +122,57 @@ describe("TerminalProcess.flushEventDrivenSnapshot", () => {
     persistSyncMock.mockReset();
   });
 
-  it("calls persistSessionSnapshotAsync for agent terminals", () => {
+  // Event-driven flush is fire-and-forget and now serializes off the event loop
+  // via getSerializedStateAsync — drain its microtask chain before asserting.
+  async function flushMicrotasks(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it("persists for agent terminals via async serialization (non-banner path)", async () => {
     const terminal = createTerminal();
-    vi.spyOn(terminal, "serializeForPersistence").mockReturnValue("agent-scrollback");
+    vi.spyOn(terminal, "getSerializedStateAsync").mockResolvedValue("agent-scrollback");
 
     terminal.flushEventDrivenSnapshot();
+    await flushMicrotasks();
 
     expect(persistAsyncMock).toHaveBeenCalledWith("t1", "agent-scrollback");
   });
 
-  it("throttles rapid calls within 2 seconds", () => {
+  it("suppresses an immediate repeat with unchanged content", async () => {
     const terminal = createTerminal();
-    vi.spyOn(terminal, "serializeForPersistence").mockReturnValue("data");
+    vi.spyOn(terminal, "getSerializedStateAsync").mockResolvedValue("data");
 
     terminal.flushEventDrivenSnapshot();
+    await flushMicrotasks();
     expect(persistAsyncMock).toHaveBeenCalledTimes(1);
 
-    // Second call within 2s should be suppressed
+    // Second call within 2s / unchanged buffer should be suppressed
     terminal.flushEventDrivenSnapshot();
+    await flushMicrotasks();
     expect(persistAsyncMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not flush when serialized state is null", () => {
+  it("does not flush when serialized state is null", async () => {
     const terminal = createTerminal();
-    vi.spyOn(terminal, "serializeForPersistence").mockReturnValue(null);
+    vi.spyOn(terminal, "getSerializedStateAsync").mockResolvedValue(null);
 
     terminal.flushEventDrivenSnapshot();
+    await flushMicrotasks();
 
     expect(persistAsyncMock).not.toHaveBeenCalled();
   });
 
-  it("does not flush when terminal is killed", () => {
+  it("does not flush when terminal is killed", async () => {
     const terminal = createTerminal();
-    vi.spyOn(terminal, "serializeForPersistence").mockReturnValue("data");
+    vi.spyOn(terminal, "getSerializedStateAsync").mockResolvedValue("data");
 
     terminal.kill("test");
 
     persistAsyncMock.mockReset();
     terminal.flushEventDrivenSnapshot();
+    await flushMicrotasks();
 
     expect(persistAsyncMock).not.toHaveBeenCalled();
   });

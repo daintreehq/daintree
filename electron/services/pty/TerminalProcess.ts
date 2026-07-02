@@ -252,6 +252,10 @@ export class TerminalProcess {
         return this.parent.terminalInfo.launchAgentId;
       }
 
+      get contentEpoch(): number {
+        return this.parent.terminalInfo.contentEpoch;
+      }
+
       hasBannerMarkers(): boolean {
         return !!(this.parent._restoreBannerStart || this.parent._restoreBannerEnd);
       }
