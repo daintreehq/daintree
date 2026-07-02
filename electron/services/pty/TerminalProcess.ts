@@ -639,7 +639,17 @@ export class TerminalProcess {
         this.flushAgentOutput();
         this.deps.agentStateService.handleActivityState(this.terminalInfo, state, metadata);
       },
-      onWaitingTimeout: (_spawnedAt) => {
+      onWaitingTimeout: (spawnedAt) => {
+        // Same session guard as onActivityState: after a worker respawn or
+        // slot re-registration a late timeout from an old monitor generation
+        // must not fire a watchdog transition against the current terminal.
+        if (this.terminalInfo.spawnedAt !== spawnedAt) {
+          console.warn(
+            `[TerminalProcess] Rejected stale waiting-timeout from old monitor ${this.id} ` +
+              `(session ${spawnedAt} vs current ${this.terminalInfo.spawnedAt})`
+          );
+          return;
+        }
         this.flushAgentOutput();
         this.deps.agentStateService.updateAgentState(
           this.terminalInfo,
@@ -704,7 +714,18 @@ export class TerminalProcess {
         processStateValidator,
         initialState: opts.initialState,
         skipInitialStateEmit: opts.skipInitialStateEmit,
-        onWaitingTimeout: (_id, _spawnedAt) => {
+        onWaitingTimeout: (_id, cbSpawnedAt) => {
+          // Structurally the in-thread monitor can't outlive its session
+          // (stopMonitorInThread disposes it synchronously and spawnedAt is
+          // immutable per TerminalProcess), but keep the same guard the
+          // worker delegate and both activity-state paths use.
+          if (this.terminalInfo.spawnedAt !== cbSpawnedAt) {
+            console.warn(
+              `[TerminalProcess] Rejected stale waiting-timeout from old monitor ${this.id} ` +
+                `(session ${cbSpawnedAt} vs current ${this.terminalInfo.spawnedAt})`
+            );
+            return;
+          }
           this.flushAgentOutput();
           this.deps.agentStateService.updateAgentState(
             this.terminalInfo,

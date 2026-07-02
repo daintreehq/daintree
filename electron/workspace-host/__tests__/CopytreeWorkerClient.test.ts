@@ -192,7 +192,7 @@ describe("CopytreeWorkerClient", () => {
 
       const promise = client.generate("/root", {}, undefined, "op-1");
       const rejection = expect(promise).rejects.toThrow("did not respond");
-      await vi.advanceTimersByTimeAsync(180_000);
+      await vi.advanceTimersByTimeAsync(125_000);
       await rejection;
 
       const cancelMessage = worker.postMessage.mock.calls

@@ -83,7 +83,7 @@ export class AnalysisWorkerRuntime {
         return;
       }
       case "data":
-        this.sessions.get(msg.terminalId)?.feedChunk(msg.data, msg.flags);
+        this.sessions.get(msg.terminalId)?.feedChunk(msg.data, msg.flags, msg.epoch);
         return;
       case "prelude":
         this.sessions.get(msg.terminalId)?.feedPrelude(msg.data);

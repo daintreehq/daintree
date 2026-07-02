@@ -41,7 +41,15 @@ export function defaultAnalysisPoolSize(): number {
   }
   const parallelism =
     typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length;
-  return Math.max(2, Math.min(6, Math.floor(parallelism / 4)));
+  const cpuDerived = Math.max(2, Math.min(6, Math.floor(parallelism / 4)));
+  // Boot-time memory cap: worker isolates aren't free, so a full CPU-derived
+  // pool is unjustified on low-RAM machines. Runtime resizing (e.g. via
+  // ResourceProfileService) is a documented follow-up — downsizing can't
+  // terminate workers under the Electron flush_tasks_ crash constraint.
+  const GIB = 1024 * 1024 * 1024;
+  const totalMem = os.totalmem();
+  const memCap = totalMem < 8 * GIB ? 2 : totalMem < 16 * GIB ? 4 : Number.POSITIVE_INFINITY;
+  return Math.min(cpuDerived, memCap);
 }
 
 export function analysisWorkersDisabled(): boolean {
@@ -106,14 +114,16 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
     return backend;
   }
 
-  post(terminalId: string, msg: HostToWorkerMessage): void {
-    if (this.disposed) return;
+  post(terminalId: string, msg: HostToWorkerMessage): boolean {
+    if (this.disposed) return false;
     const slot = this.assignments.get(terminalId);
-    if (!slot?.alive || !slot.worker) return;
+    if (!slot?.alive || !slot.worker) return false;
     try {
       slot.worker.postMessage(msg);
+      return true;
     } catch (error) {
       console.error(`[AnalysisWorkerPool] postMessage failed for ${terminalId}:`, error);
+      return false;
     }
   }
 

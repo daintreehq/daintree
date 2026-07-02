@@ -21,8 +21,18 @@ const { dbPath } = workerData as DbWorkerData;
 // spawns once the shared handle exists) — never create or migrate from here.
 const sqlite = new Database(dbPath, { fileMustExist: true });
 sqlite.pragma("journal_mode = WAL");
+// Intentionally above main's 3000ms: under write contention the worker must
+// out-wait main rather than throw SQLITE_BUSY at it.
 sqlite.pragma("busy_timeout = 5000");
 sqlite.pragma("synchronous = NORMAL");
+// Mirror openDb's per-connection perf pragmas (db.ts) — without them
+// quick_check and the ring-write transactions run on SQLite defaults
+// (mmap_size especially matters for quick_check on a large DB).
+sqlite.pragma("temp_store = MEMORY");
+sqlite.pragma("mmap_size = 10737418240");
+sqlite.pragma("cache_size = -65536");
+sqlite.pragma("journal_size_limit = 5242880");
+sqlite.pragma("foreign_keys = ON");
 
 interface RingStatements {
   insert: Database.Statement;

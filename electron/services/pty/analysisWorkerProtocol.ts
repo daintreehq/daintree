@@ -13,6 +13,12 @@ export interface AnalysisCreateSpec {
   /** Replay the persisted session snapshot into the fresh headless buffer. */
   restore: boolean;
   spawnedAt: number;
+  /**
+   * Monotonic slot generation. Bumped by the host on every fresh-slot rebuild
+   * (worker loss, feed overflow). The worker stamps it onto `data-ack` so the
+   * host can discard acks from a superseded generation.
+   */
+  epoch: number;
 }
 
 export interface AnalysisMonitorStartSpec {
@@ -33,7 +39,7 @@ export type AnalysisRequestOp = "serialize" | "serialize-persistence" | "final-s
 
 export type HostToWorkerMessage =
   | ({ type: "create" } & AnalysisCreateSpec)
-  | { type: "data"; terminalId: string; data: string; flags: AnalysisChunkFlags }
+  | { type: "data"; terminalId: string; data: string; flags: AnalysisChunkFlags; epoch: number }
   | { type: "prelude"; terminalId: string; data: string }
   | { type: "resize"; terminalId: string; cols: number; rows: number }
   | { type: "input"; terminalId: string; data: string }
@@ -66,6 +72,21 @@ export type AnalysisRequestResult = string | null | AnalysisFinalSnapshot;
 
 export type WorkerToHostMessage =
   | { type: "ready" }
+  | {
+      /**
+       * Batched flow-control ack: `bytes` of data-message payload (string
+       * length, the same unit the host counts) have been fully parsed by this
+       * terminal's mirror. The host decrements its outstanding-unacked counter
+       * and releases held feeds once below the low watermark. `epoch` echoes
+       * the slot generation the acked data belonged to — the host ignores acks
+       * from a superseded generation so a late pre-reset ack can't debit the
+       * fresh slot's ledger.
+       */
+      type: "data-ack";
+      terminalId: string;
+      bytes: number;
+      epoch: number;
+    }
   | {
       type: "activity-state";
       terminalId: string;

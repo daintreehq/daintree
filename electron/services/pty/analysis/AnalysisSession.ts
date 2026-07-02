@@ -41,6 +41,11 @@ const AGENT_OUTPUT_NOTE_MIN_INTERVAL_MS = 50;
 // Trailing-edge throttle on the viewport digest pushed to the host (serves
 // IdentityWatcher's sync reads; its own poll cadence is 200ms).
 const VIEWPORT_DIGEST_THROTTLE_MS = 200;
+// Flow-control ack batching: a `data-ack` is emitted once this much data-
+// message payload has parsed, or on a trailing timer so a quiet tail still
+// drains the host's outstanding counter. Exported for tests.
+export const ANALYSIS_ACK_FLUSH_BYTES = 256 * 1024;
+export const ANALYSIS_ACK_FLUSH_INTERVAL_MS = 100;
 
 type Emit = (msg: WorkerToHostMessage) => void;
 
@@ -53,6 +58,9 @@ type Emit = (msg: WorkerToHostMessage) => void;
 export class AnalysisSession {
   private readonly terminalId: string;
   private readonly spawnedAt: number;
+  // Slot generation this session belongs to; stamped onto every data-ack so
+  // the host can discard acks from a superseded generation.
+  private epoch: number;
   private readonly emit: Emit;
 
   private headlessTerminal: HeadlessTerminalType | null;
@@ -78,11 +86,14 @@ export class AnalysisSession {
   private agentOutputNoteTimer: NodeJS.Timeout | null = null;
 
   private digestTimer: NodeJS.Timeout | null = null;
+  private pendingAckBytes = 0;
+  private ackTimer: NodeJS.Timeout | null = null;
   private disposed = false;
 
   constructor(spec: AnalysisCreateSpec, emit: Emit) {
     this.terminalId = spec.terminalId;
     this.spawnedAt = spec.spawnedAt;
+    this.epoch = spec.epoch;
     this.emit = emit;
 
     const terminal = new HeadlessTerminal({
@@ -116,8 +127,15 @@ export class AnalysisSession {
     }
   }
 
-  feedChunk(data: string, flags: { agentLive: boolean; agentState?: AgentState }): void {
+  feedChunk(
+    data: string,
+    flags: { agentLive: boolean; agentState?: AgentState },
+    epoch?: number
+  ): void {
     if (this.disposed || !this.headlessTerminal) return;
+    // Data always belongs to this session's create-generation, but track the
+    // per-message epoch defensively so acks always echo the live generation.
+    if (epoch !== undefined) this.epoch = epoch;
     const now = Date.now();
     this.agentLive = flags.agentLive;
     this.agentState = flags.agentState;
@@ -131,6 +149,7 @@ export class AnalysisSession {
     }
 
     this.headlessTerminal.write(data, () => {
+      this.noteProcessed(data.length);
       this.noteAgentOutputActivity();
       this.scheduleDigest();
     });
@@ -281,6 +300,10 @@ export class AnalysisSession {
 
   free(): void {
     if (this.disposed) return;
+    // Final ack flush BEFORE marking disposed: parsed-but-unflushed bytes must
+    // still drain the host's outstanding counter (an overflow-reset `create`
+    // frees this session while its backend stays registered).
+    this.flushAck();
     this.disposed = true;
     this.stopMonitor();
     if (this.agentOutputNoteTimer) {
@@ -316,6 +339,33 @@ export class AnalysisSession {
       this.headlessTerminal = null;
       this.serializeAddon = null;
     }
+  }
+
+  private noteProcessed(bytes: number): void {
+    if (this.disposed || bytes <= 0) return;
+    this.pendingAckBytes += bytes;
+    if (this.pendingAckBytes >= ANALYSIS_ACK_FLUSH_BYTES) {
+      this.flushAck();
+      return;
+    }
+    if (!this.ackTimer) {
+      this.ackTimer = setTimeout(() => {
+        this.ackTimer = null;
+        this.flushAck();
+      }, ANALYSIS_ACK_FLUSH_INTERVAL_MS);
+      this.ackTimer.unref?.();
+    }
+  }
+
+  private flushAck(): void {
+    if (this.ackTimer) {
+      clearTimeout(this.ackTimer);
+      this.ackTimer = null;
+    }
+    if (this.pendingAckBytes === 0) return;
+    const bytes = this.pendingAckBytes;
+    this.pendingAckBytes = 0;
+    this.emit({ type: "data-ack", terminalId: this.terminalId, bytes, epoch: this.epoch });
   }
 
   // Runs `fn` after xterm's async parse queue has drained, so the tail of the

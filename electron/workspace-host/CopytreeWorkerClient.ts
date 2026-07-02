@@ -27,10 +27,12 @@ function resolveCopytreeWorkerPath(): string {
  * `sendWithResponse` gives up at 120s, so past this point the request is
  * already lost main-side — reject, drop the pending entry (it would
  * otherwise leak forever), and ask the worker to abort the op so its CPU is
- * reclaimed. Deliberately above the main-side timeout so the in-band result
- * always wins while the worker is healthy.
+ * reclaimed. The 5s margin over the main-side timeout exists only so the
+ * main-side timeout surfaces first (the in-band result always wins while the
+ * worker is healthy); keeping it tight stops the worker grinding on an op the
+ * caller has already abandoned — and possibly already retried.
  */
-const WORKER_OP_TIMEOUT_MS = 180_000;
+const WORKER_OP_TIMEOUT_MS = 125_000;
 
 interface PendingGenerate {
   resolve: (result: CopyTreeResult) => void;

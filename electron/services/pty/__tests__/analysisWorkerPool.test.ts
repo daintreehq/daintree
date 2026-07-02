@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { AnalysisWorkerPool, type WorkerLike } from "../analysis/AnalysisWorkerPool.js";
-import type { WorkerAnalysisDelegate } from "../analysis/WorkerAnalysisBackend.js";
+import {
+  WorkerAnalysisBackend,
+  type AnalysisPoolHost,
+  type WorkerAnalysisDelegate,
+} from "../analysis/WorkerAnalysisBackend.js";
+import { AnalysisWorkerRuntime } from "../analysis/AnalysisWorkerRuntime.js";
 import type { HostToWorkerMessage, WorkerToHostMessage } from "../analysisWorkerProtocol.js";
 
 class FakeWorker implements WorkerLike {
@@ -35,6 +40,32 @@ class FakeWorker implements WorkerLike {
       { type: T }
     >[];
   }
+}
+
+// A WorkerLike backed by a real in-process AnalysisWorkerRuntime — lets a test
+// drive the full host→worker→host path (real headless serialize) without a
+// worker_threads thread.
+class RuntimeBackedWorker implements WorkerLike {
+  private readonly runtime: AnalysisWorkerRuntime;
+  private readonly msgListeners: Array<(msg: WorkerToHostMessage) => void> = [];
+
+  constructor() {
+    this.runtime = new AnalysisWorkerRuntime((msg) => {
+      for (const cb of this.msgListeners) cb(msg);
+    });
+  }
+
+  postMessage(msg: unknown): void {
+    this.runtime.handleMessage(msg as HostToWorkerMessage);
+  }
+
+  on(event: string, cb: (arg: never) => void): void {
+    if (event === "message") {
+      this.msgListeners.push(cb as (msg: WorkerToHostMessage) => void);
+    }
+  }
+
+  unref(): void {}
 }
 
 function makeDelegate(): WorkerAnalysisDelegate {
@@ -241,5 +272,170 @@ describe("AnalysisWorkerPool", () => {
 
     pool.createBackend(makeSpec("t2"), makeDelegate());
     expect(workers[1].messagesOfType("plugin-agent-registry")).toHaveLength(1);
+  });
+
+  it("holds feeds above the high watermark and flushes them coalesced once acks drop below low", () => {
+    const backend = pool.createBackend(
+      {
+        ...makeSpec("t1"),
+        flowControl: { highWatermark: 100, lowWatermark: 40, holdHardCap: 500 },
+      },
+      makeDelegate()
+    )!;
+    const worker = workers[0];
+
+    backend.feedChunk("a".repeat(60), { agentLive: false });
+    backend.feedChunk("b".repeat(60), { agentLive: false });
+    expect(worker.messagesOfType("data")).toHaveLength(2);
+
+    // Outstanding (120) is above the high watermark — further chunks coalesce
+    // host-side instead of being posted.
+    backend.feedChunk("c".repeat(30), { agentLive: false });
+    backend.feedChunk("d".repeat(30), { agentLive: true, agentState: "working" });
+    expect(worker.messagesOfType("data")).toHaveLength(2);
+
+    // First ack leaves outstanding (70) above the low watermark — still held.
+    worker.emit("message", { type: "data-ack", terminalId: "t1", bytes: 50, epoch: 0 });
+    expect(worker.messagesOfType("data")).toHaveLength(2);
+
+    // Second ack drops outstanding (20) below low — the hold flushes as ONE
+    // data message carrying the concatenated payload and the latest flags.
+    worker.emit("message", { type: "data-ack", terminalId: "t1", bytes: 50, epoch: 0 });
+    const dataMessages = worker.messagesOfType("data");
+    expect(dataMessages).toHaveLength(3);
+    expect(dataMessages[2].data).toBe("c".repeat(30) + "d".repeat(30));
+    expect(dataMessages[2].flags).toEqual({ agentLive: true, agentState: "working" });
+  });
+
+  it("drops the hold and rebuilds the slot fresh once the hard cap is exceeded", async () => {
+    const backend = pool.createBackend(
+      {
+        ...makeSpec("t1"),
+        flowControl: { highWatermark: 10, lowWatermark: 5, holdHardCap: 50 },
+      },
+      makeDelegate()
+    )!;
+    const worker = workers[0];
+
+    backend.feedChunk("x".repeat(20), { agentLive: false }); // posted
+    backend.feedChunk("y".repeat(30), { agentLive: false }); // held (30)
+    expect(worker.messagesOfType("create")).toHaveLength(1);
+
+    backend.feedChunk("z".repeat(30), { agentLive: false }); // held 60 > cap 50
+    const creates = worker.messagesOfType("create");
+    expect(creates).toHaveLength(2);
+    expect(creates[1]).toMatchObject({ terminalId: "t1", restore: false });
+    // The held data was dropped, never posted.
+    expect(worker.messagesOfType("data")).toHaveLength(1);
+
+    // Persistence suppressed until real output dirties the fresh buffer.
+    await expect(backend.serializeForPersistence()).resolves.toBeNull();
+    expect(worker.messagesOfType("request")).toHaveLength(0);
+
+    // Ledger reset: the next chunk posts normally and clears suppression.
+    backend.feedChunk("w", { agentLive: false });
+    expect(worker.messagesOfType("data")).toHaveLength(2);
+  });
+
+  it("flushes the coalesced host-side hold before a serialize request reaches the worker", async () => {
+    // End-to-end via a real runtime: data held above the high watermark must be
+    // posted BEFORE the request, or the serialize would miss it (the runtime
+    // barrier only orders already-posted messages — an unflushed hold is
+    // invisible to it). This is the SessionSnapshotter pre-kill guarantee.
+    const e2ePool = new AnalysisWorkerPool(1, () => new RuntimeBackedWorker());
+    const backend = e2ePool.createBackend(
+      {
+        ...makeSpec("t1"),
+        flowControl: { highWatermark: 10, lowWatermark: 5, holdHardCap: 100_000 },
+      },
+      makeDelegate()
+    )!;
+
+    backend.feedChunk("X".repeat(20), { agentLive: false }); // crosses high watermark
+    backend.feedChunk("MARKER-held-bytes\r\n", { agentLive: false }); // held host-side
+
+    const result = await backend.serializeForPersistence();
+    expect(result).toContain("MARKER-held-bytes");
+
+    e2ePool.dispose();
+  });
+
+  it("ignores a data-ack from a superseded generation after a fresh-slot rebuild", async () => {
+    vi.useFakeTimers();
+    const backend = pool.createBackend(
+      {
+        ...makeSpec("t1"),
+        flowControl: { highWatermark: 100, lowWatermark: 40, holdHardCap: 100_000 },
+      },
+      makeDelegate()
+    )!;
+
+    // Worker loss → respawn bumps the feed epoch to 1 and rebuilds the slot.
+    workers[0].emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(600);
+    const worker = workers[1];
+
+    backend.feedChunk("a".repeat(60), { agentLive: false }); // posted, outstanding 60
+    backend.feedChunk("b".repeat(60), { agentLive: false }); // posted, outstanding 120
+    backend.feedChunk("HELD", { agentLive: false }); // held (120 >= 100)
+    const dataBefore = worker.messagesOfType("data").length;
+
+    // A late ack from the OLD generation (epoch 0) must be discarded — it must
+    // not debit the fresh ledger or release the hold.
+    worker.emit("message", { type: "data-ack", terminalId: "t1", bytes: 100, epoch: 0 });
+    expect(worker.messagesOfType("data")).toHaveLength(dataBefore);
+
+    // The current-generation ack (epoch 1) drops outstanding below low and
+    // flushes the hold.
+    worker.emit("message", { type: "data-ack", terminalId: "t1", bytes: 100, epoch: 1 });
+    const dataMsgs = worker.messagesOfType("data");
+    expect(dataMsgs).toHaveLength(dataBefore + 1);
+    expect(dataMsgs[dataMsgs.length - 1].data).toBe("HELD");
+    vi.useRealTimers();
+  });
+});
+
+describe("WorkerAnalysisBackend feed accounting", () => {
+  function stubBackend() {
+    const posted: HostToWorkerMessage[] = [];
+    const control = { sendSucceeds: true };
+    const pool: AnalysisPoolHost = {
+      post: (_id, msg) => {
+        posted.push(msg);
+        return control.sendSucceeds;
+      },
+      request: () => Promise.resolve(null),
+      unregister: () => {},
+    };
+    const backend = new WorkerAnalysisBackend(
+      {
+        terminalId: "t1",
+        cols: 80,
+        rows: 24,
+        scrollback: 1000,
+        restore: false,
+        spawnedAt: 1,
+        flowControl: { highWatermark: 100, lowWatermark: 40, holdHardCap: 100_000 },
+      },
+      makeDelegate(),
+      pool
+    );
+    backend.init();
+    const dataMessages = () => posted.filter((m) => m.type === "data") as Array<{ data: string }>;
+    return { backend, control, dataMessages };
+  }
+
+  it("credits outstanding bytes only when the post was actually sent", () => {
+    const { backend, control, dataMessages } = stubBackend();
+
+    // A failed post must not credit outstanding — phantom bytes would push the
+    // ledger over the high watermark and wrongly start holding real output.
+    control.sendSucceeds = false;
+    backend.feedChunk("X".repeat(200), { agentLive: false });
+    control.sendSucceeds = true;
+
+    // Outstanding is still 0, so this posts rather than coalescing into a hold.
+    backend.feedChunk("Y".repeat(10), { agentLive: false });
+    expect(dataMessages().some((m) => m.data.startsWith("Y"))).toBe(true);
   });
 });

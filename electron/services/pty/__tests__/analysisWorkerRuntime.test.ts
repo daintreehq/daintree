@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { AnalysisWorkerRuntime } from "../analysis/AnalysisWorkerRuntime.js";
+import { ANALYSIS_ACK_FLUSH_BYTES } from "../analysis/AnalysisSession.js";
 import type { WorkerToHostMessage } from "../analysisWorkerProtocol.js";
 
 // Exercises the worker-side protocol end-to-end without spawning a real
@@ -29,6 +30,16 @@ describe("AnalysisWorkerRuntime", () => {
   let emitted: WorkerToHostMessage[];
   let runtime: AnalysisWorkerRuntime;
 
+  function sendData(data: string, agentLive = false, epoch = 0): void {
+    runtime.handleMessage({
+      type: "data",
+      terminalId: "t1",
+      data,
+      flags: { agentLive },
+      epoch,
+    });
+  }
+
   beforeEach(() => {
     emitted = [];
     runtime = new AnalysisWorkerRuntime((msg) => emitted.push(msg));
@@ -40,6 +51,7 @@ describe("AnalysisWorkerRuntime", () => {
       scrollback: 1000,
       restore: false,
       spawnedAt: 4242,
+      epoch: 0,
     });
   });
 
@@ -48,12 +60,7 @@ describe("AnalysisWorkerRuntime", () => {
   });
 
   it("serializes buffer content written via data messages", async () => {
-    runtime.handleMessage({
-      type: "data",
-      terminalId: "t1",
-      data: "hello from the worker\r\n",
-      flags: { agentLive: false },
-    });
+    sendData("hello from the worker\r\n");
     runtime.handleMessage({ type: "request", requestId: 1, terminalId: "t1", op: "serialize" });
 
     const response = await waitFor(() =>
@@ -88,12 +95,7 @@ describe("AnalysisWorkerRuntime", () => {
   });
 
   it("pushes a throttled viewport digest after output lands", async () => {
-    runtime.handleMessage({
-      type: "data",
-      terminalId: "t1",
-      data: "prompt-line-content\r\n",
-      flags: { agentLive: false },
-    });
+    sendData("prompt-line-content\r\n");
 
     const digest = await waitFor(() => emitted.find((m) => m.type === "viewport"));
     if (digest.type === "viewport") {
@@ -101,13 +103,51 @@ describe("AnalysisWorkerRuntime", () => {
     }
   });
 
-  it("serves a pending serialize before a free that arrives behind it", async () => {
+  it("acks parsed data bytes on the trailing batch timer, echoing the create epoch", async () => {
+    const payload = "hello flow control\r\n";
+    sendData(payload, false, 0);
+
+    const ack = await waitFor(() => emitted.find((m) => m.type === "data-ack"));
+    if (ack.type === "data-ack") {
+      expect(ack.terminalId).toBe("t1");
+      expect(ack.bytes).toBe(payload.length);
+      expect(ack.epoch).toBe(0);
+    }
+  });
+
+  it("stamps acks with the latest data epoch after a slot recreate", async () => {
+    // A fresh-slot rebuild recreates the session with a bumped epoch; acks for
+    // its data must carry the new epoch so the host doesn't discard them.
     runtime.handleMessage({
-      type: "data",
+      type: "create",
       terminalId: "t1",
-      data: "pre-kill content\r\n",
-      flags: { agentLive: false },
+      cols: 80,
+      rows: 24,
+      scrollback: 1000,
+      restore: false,
+      spawnedAt: 4242,
+      epoch: 7,
     });
+    sendData("post-rebuild output\r\n", false, 7);
+
+    const ack = await waitFor(() => emitted.find((m) => m.type === "data-ack"));
+    if (ack.type === "data-ack") {
+      expect(ack.epoch).toBe(7);
+    }
+  });
+
+  it("flushes the ack batch once the byte threshold is crossed", async () => {
+    const payload = "x".repeat(ANALYSIS_ACK_FLUSH_BYTES + 1024);
+    sendData(payload);
+
+    const ack = await waitFor(() => emitted.find((m) => m.type === "data-ack"));
+    if (ack.type === "data-ack") {
+      expect(ack.bytes).toBe(payload.length);
+    }
+  });
+
+  it("serves a pending serialize before a free that arrives behind it", async () => {
+    sendData("pre-kill content\r\n");
     // The kill path posts serialize-persistence then free back-to-back; the
     // request's async drain must act as an ordering barrier — the session may
     // only be disposed after the response has been produced.
@@ -133,12 +173,7 @@ describe("AnalysisWorkerRuntime", () => {
   });
 
   it("keeps a chained request behind an earlier one on the same terminal", async () => {
-    runtime.handleMessage({
-      type: "data",
-      terminalId: "t1",
-      data: "ordered content\r\n",
-      flags: { agentLive: false },
-    });
+    sendData("ordered content\r\n");
     runtime.handleMessage({ type: "request", requestId: 11, terminalId: "t1", op: "serialize" });
     runtime.handleMessage({ type: "request", requestId: 12, terminalId: "t1", op: "serialize" });
     runtime.handleMessage({ type: "free", terminalId: "t1" });
@@ -162,12 +197,7 @@ describe("AnalysisWorkerRuntime", () => {
   });
 
   it("captures a final snapshot and frees the slot", async () => {
-    runtime.handleMessage({
-      type: "data",
-      terminalId: "t1",
-      data: "final content\r\n",
-      flags: { agentLive: false },
-    });
+    sendData("final content\r\n");
     runtime.handleMessage({
       type: "request",
       requestId: 2,
