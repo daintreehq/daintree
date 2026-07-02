@@ -1494,42 +1494,12 @@ describe("WorktreeHeader upstream sync indicator", () => {
   });
 });
 
-describe("WorktreeHeader blocking-op recovery row (#10715)", () => {
-  // The row mounts off worktree.repoState (the raw in-progress operation), NOT
-  // gitStateIndicator — so it surfaces even when conflicts make the badge read
-  // "conflicted". gitStateIndicator only drives the inert badge label.
-  function conflictedChanges(): WorktreeState["worktreeChanges"] {
-    return {
-      worktreeId: "test-wt",
-      rootPath: "/tmp/test-wt",
-      changedFileCount: 1,
-      changes: [{ path: "a.ts", status: "conflicted", insertions: null, deletions: null }],
-    };
-  }
-
-  function blockingHeader(
-    repoState: WorktreeState["repoState"],
-    overrides: Partial<Omit<WorktreeHeaderProps, "worktree">> & {
-      worktree?: Partial<WorktreeState>;
-    } = {}
-  ) {
-    const { worktree: worktreeOverride, ...rest } = overrides;
-    return renderHeader({
-      worktree: { ...baseWorktree, repoState, ...(worktreeOverride ?? {}) },
-      onAbortRepositoryOperation: vi.fn().mockResolvedValue(undefined),
-      onContinueRepositoryOperation: vi.fn().mockResolvedValue(undefined),
-      ...rest,
-    });
-  }
-
-  // getAllByRole(...)[i] is `HTMLElement | undefined` under noUncheckedIndexedAccess.
-  function nthButton(name: string, index: number): HTMLElement {
-    const els = screen.getAllByRole("button", { name });
-    const el = index < 0 ? els[els.length + index] : els[index];
-    if (!el) throw new Error(`button "${name}" at index ${index} not found`);
-    return el;
-  }
-
+describe("WorktreeHeader blocking-op passive indicator (#10921)", () => {
+  // The interactive Continue/Abort recovery row (#10715) was removed: agents run
+  // rebases/merges in their own PTY, so a second git process from the card either
+  // collides with the live operation or gates on stale (frozen-during-op) status.
+  // The card now only surfaces the passive gitStateIndicator badge; the deliberate
+  // takeover surface lives in the Review Hub's ConflictPanel.
   const BLOCKING = [
     { repoState: "REVERTING", label: "revert" },
     { repoState: "REBASING", label: "rebase" },
@@ -1537,86 +1507,39 @@ describe("WorktreeHeader blocking-op recovery row (#10715)", () => {
     { repoState: "CHERRY_PICKING", label: "cherry-pick" },
   ] as const;
 
-  it.each(BLOCKING)("renders Continue + Abort for $repoState", ({ repoState, label }) => {
-    blockingHeader(repoState);
-    expect(screen.getByRole("button", { name: `Continue ${label}` })).toBeTruthy();
-    expect(screen.getByRole("button", { name: `Abort ${label}` })).toBeTruthy();
-  });
-
-  it("renders the row for an in-progress operation that has conflicts (the canonical stuck case)", () => {
-    blockingHeader("REVERTING", { worktree: { worktreeChanges: conflictedChanges() } });
-    // Row still mounts even though the badge would read "conflicted"...
-    expect(screen.getByRole("button", { name: "Abort revert" })).toBeTruthy();
-    // ...and Continue is disabled until the conflicts are resolved.
-    const cont = screen.getByRole("button", { name: "Continue revert" });
-    expect(cont.hasAttribute("disabled")).toBe(true);
-  });
-
-  it("does not render the row when no operation is in progress", () => {
-    renderHeader({
-      worktree: { ...baseWorktree, repoState: undefined, isDetached: true },
-      onAbortRepositoryOperation: vi.fn(),
-      onContinueRepositoryOperation: vi.fn(),
-    });
+  it.each(BLOCKING)("renders no Continue/Abort buttons for $repoState", ({ repoState }) => {
+    renderHeader({ worktree: { ...baseWorktree, repoState } });
     expect(screen.queryByRole("button", { name: /^Continue / })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Abort / })).toBeNull();
   });
 
-  it("does not render the row when collapsed", () => {
-    blockingHeader("REVERTING", { isCollapsed: true });
-    expect(screen.queryByRole("button", { name: "Continue revert" })).toBeNull();
-  });
-
-  it("does not render the row when callbacks are absent", () => {
-    renderHeader({ worktree: { ...baseWorktree, repoState: "REVERTING" } });
-    expect(screen.queryByRole("button", { name: "Continue revert" })).toBeNull();
-  });
-
-  it("Abort opens a destructive ConfirmDialog and confirming invokes onAbort", async () => {
-    const onAbort = vi.fn().mockResolvedValue(undefined);
-    blockingHeader("REVERTING", { onAbortRepositoryOperation: onAbort });
-    // The inline Abort button only opens the dialog — it must not call IPC directly.
-    fireEvent.click(nthButton("Abort revert", 0));
-    expect(onAbort).not.toHaveBeenCalled();
-
-    // The dialog's confirm button carries the same verb-noun label; it's the
-    // last "Abort revert" button now that the dialog has opened.
-    fireEvent.click(nthButton("Abort revert", -1));
-    await Promise.resolve();
-    expect(onAbort).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps the abort dialog open when the abort fails so the user can retry", async () => {
-    const onAbort = vi.fn().mockRejectedValue(new Error("nope"));
-    blockingHeader("REVERTING", { onAbortRepositoryOperation: onAbort });
-    fireEvent.click(nthButton("Abort revert", 0));
-    fireEvent.click(nthButton("Abort revert", -1));
-    await Promise.resolve();
-    await Promise.resolve();
-    // Dialog still mounted (both trigger + confirm present) and not stuck loading.
-    expect(screen.getAllByRole("button", { name: "Abort revert" }).length).toBeGreaterThan(1);
-    expect(onAbort).toHaveBeenCalledTimes(1);
-  });
-
-  it("Continue invokes onContinue when there are no unresolved conflicts", async () => {
-    const onContinue = vi.fn().mockResolvedValue(undefined);
-    blockingHeader("REBASING", { onContinueRepositoryOperation: onContinue });
-    const btn = screen.getByRole("button", { name: "Continue rebase" });
-    expect(btn.hasAttribute("disabled")).toBe(false);
-    fireEvent.click(btn);
-    await Promise.resolve();
-    expect(onContinue).toHaveBeenCalledTimes(1);
-  });
-
-  it("Continue is disabled while unresolved conflicts remain", () => {
-    const onContinue = vi.fn();
-    blockingHeader("REBASING", {
-      worktree: { worktreeChanges: conflictedChanges() },
-      onContinueRepositoryOperation: onContinue,
+  it("still renders the passive gitStateIndicator badge for an in-progress operation", () => {
+    renderHeader({
+      worktree: { ...baseWorktree, repoState: "REBASING" },
+      gitStateIndicator: { kind: "rebasing", label: "rebasing", tone: "warning" },
     });
-    const btn = screen.getByRole("button", { name: "Continue rebase" });
-    expect(btn.hasAttribute("disabled")).toBe(true);
-    fireEvent.click(btn);
-    expect(onContinue).not.toHaveBeenCalled();
+    expect(screen.getByText("rebasing")).toBeDefined();
+    // ...and no interactive recovery buttons alongside it.
+    expect(screen.queryByRole("button", { name: /^Continue / })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Abort / })).toBeNull();
+  });
+
+  it("renders no recovery buttons even when the operation has conflicts", () => {
+    renderHeader({
+      worktree: {
+        ...baseWorktree,
+        repoState: "REVERTING",
+        worktreeChanges: {
+          worktreeId: "test-wt",
+          rootPath: "/tmp/test-wt",
+          changedFileCount: 1,
+          changes: [{ path: "a.ts", status: "conflicted", insertions: null, deletions: null }],
+        },
+      },
+      gitStateIndicator: { kind: "conflicted", label: "conflicted", tone: "error" },
+    });
+    expect(screen.getByText("conflicted")).toBeDefined();
+    expect(screen.queryByRole("button", { name: /^Continue / })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Abort / })).toBeNull();
   });
 });
