@@ -191,6 +191,24 @@ export interface McpServerContribution {
 }
 
 /**
+ * One `contributes.skills` entry (#10892). A skill is a markdown file the plugin
+ * ships — instructions/knowledge (not executable code) that Daintree's built-in
+ * MCP server surfaces to agents through the `skills.search` / `skills.load`
+ * tools. `id` is namespaced at runtime as `{pluginId}.{id}`. `path` is a
+ * plugin-relative markdown file, validated with the same traversal guard as a
+ * view's `componentPath` and realpath-contained to the plugin dir when read.
+ * Skills carry no capability requirement — they are inert declarative content.
+ */
+export interface SkillContribution {
+  id: string;
+  name: string;
+  /** Plugin-relative path to the skill's markdown file (e.g. `./skills/tdd.md`). */
+  path: string;
+  /** Optional phrase fragments that help agents discover the skill via `skills.search`. */
+  triggers?: string[];
+}
+
+/**
  * Per-capability scope binding that attenuates the compound-capability lattice
  * elevation in `PluginService.validateAndBuildActionDescriptor`. The lattice
  * elevates `effectiveDanger` to `"confirm"` when a plugin pairs a sensitive
@@ -352,6 +370,13 @@ export interface PluginManifest {
     commands: PluginActionContribution[];
     views: ViewContribution[];
     mcpServers: McpServerContribution[];
+    /**
+     * Plugin-contributed skills (#10892) — markdown knowledge/instruction files
+     * surfaced to agents via the built-in MCP server's `skills.search` /
+     * `skills.load` tools. Inert declarative content; no capability required.
+     * Empty unless the plugin ships skills.
+     */
+    skills: SkillContribution[];
     forgeProviders: ForgeProviderContribution[];
     fileDecorationProviders: FileDecorationContribution[];
     /**

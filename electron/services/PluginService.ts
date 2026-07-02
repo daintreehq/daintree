@@ -160,6 +160,7 @@ import {
   registerPluginAgents,
   unregisterPluginAgents,
 } from "../../shared/config/pluginAgentRegistry.js";
+import { registerPluginSkills, unregisterPluginSkills } from "./plugin/PluginSkillRegistry.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { deepFreeze } from "../utils/deepFreeze.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -1412,6 +1413,14 @@ export class PluginService {
 
     if (manifest.contributes.fileDecorationProviders.length > 0) {
       registerFileDecorationProviders(manifest.name, manifest.contributes.fileDecorationProviders);
+    }
+
+    // Skills (#10892) are read and parsed eagerly here so the built-in MCP
+    // server's `skills.search`/`skills.load` tools query an in-memory registry.
+    // A malformed/unreadable skill file is skipped (with a warning) rather than
+    // failing the plugin load. Torn down per-plugin in unloadPlugin.
+    if (manifest.contributes.skills.length > 0) {
+      await registerPluginSkills(manifest.name, pluginDir, manifest.contributes.skills);
     }
 
     if (manifest.contributes.agents.length > 0) {
@@ -4480,6 +4489,7 @@ export class PluginService {
     runUnloadStep(pluginId, "unregisterFileDecorationProviderImpls", () =>
       unregisterFileDecorationProviderImpls(pluginId)
     );
+    runUnloadStep(pluginId, "unregisterPluginSkills", () => unregisterPluginSkills(pluginId));
     runUnloadStep(pluginId, "unregisterPluginAgents", () => unregisterPluginAgents(pluginId));
     runUnloadStep(pluginId, "scheduleAgentsBroadcast", () =>
       this.broadcaster.scheduleAgentsBroadcast(true)

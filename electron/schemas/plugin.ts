@@ -20,6 +20,7 @@ import type {
   MenuItemContribution,
   ViewContribution,
   McpServerContribution,
+  SkillContribution,
   PluginCapability,
 } from "../../shared/types/plugin.js";
 import type {
@@ -141,17 +142,16 @@ export const CommandContributionSchema = z
   .strict();
 
 /**
- * Validate a `componentPath` before it is resolved to a `plugin://` URL and
- * handed to the renderer host's `import()` (#9229). The `plugin://` protocol
- * handler at `electron/setup/protocols.ts` is the security boundary — it
- * rejects traversal at request time via realpath containment. This check is
- * the manifest gate: it rejects an absolute path, a Windows separator, an
- * embedded URL scheme/query/fragment, a NUL, or a `..` segment at parse time
- * so the failure is a loud manifest-validation error, not a silent 404 from
- * `import('plugin://...')` later. Accepts relative POSIX paths only — a
- * leading `./` is preserved (the URL builder normalizes it).
+ * Validate a plugin-relative asset path (a view's `componentPath` #9229, or a
+ * skill's markdown `path` #10892) at the manifest gate. Realpath containment at
+ * read/request time is the security boundary (the `plugin://` protocol handler
+ * for views; `resolveContainedPath` for skills); this check rejects an absolute
+ * path, a Windows separator, an embedded URL scheme/query/fragment, a NUL, or a
+ * `..` segment at parse time so the failure is a loud manifest-validation error,
+ * not a silent 404 / read failure later. Accepts relative POSIX paths only — a
+ * leading `./` is preserved.
  */
-function isSafePluginViewComponentPath(componentPath: string): boolean {
+function isSafePluginAssetPath(componentPath: string): boolean {
   if (componentPath.startsWith("/")) return false;
   if (componentPath.includes("\\")) return false;
   if (componentPath.includes("\0")) return false;
@@ -216,6 +216,28 @@ export const McpServerContributionSchema = z
     command: z.string().min(1),
     args: z.array(z.string()).optional(),
     env: z.record(z.string(), z.string()).optional(),
+  })
+  .strict();
+
+/**
+ * `contributes.skills` manifest entry (#10892). A skill is a plugin-shipped
+ * markdown file surfaced to agents via the built-in MCP server's
+ * `skills.search` / `skills.load` tools. `path` reuses the shared asset-path
+ * grammar guard ({@link isSafePluginAssetPath}) — the file is realpath-contained
+ * to the plugin dir at read time (`resolveContainedPath` in the skill registry),
+ * so this parse-time check only rejects the obviously-malformed shapes. Skills
+ * are inert declarative content and carry no capability requirement. Strict so
+ * unknown fields from plugin authors are rejected loudly.
+ */
+export const SkillContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    name: z.string().min(1),
+    path: z.string().min(1).refine(isSafePluginAssetPath, {
+      message:
+        "path must be a relative plugin asset path (no leading /, backslash, URL scheme, NUL, or .. segments)",
+    }),
+    triggers: z.array(z.string().min(1)).max(50).optional(),
   })
   .strict();
 
@@ -830,6 +852,7 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   commands: 200,
   views: 50,
   mcpServers: 20,
+  skills: 50,
   forgeProviders: 20,
   fileDecorationProviders: 50,
   agents: 50,
@@ -954,6 +977,10 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
               .array(McpServerContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.mcpServers)
               .default([]),
+            skills: z
+              .array(SkillContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.skills)
+              .default([]),
             forgeProviders: z
               .array(ForgeProviderContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.forgeProviders)
@@ -980,6 +1007,7 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
             commands: [],
             views: [],
             mcpServers: [],
+            skills: [],
             forgeProviders: [],
             fileDecorationProviders: [],
             agents: [],
@@ -1121,6 +1149,7 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
       reportDuplicateIds("commands", manifest.contributes.commands);
       reportDuplicateIds("views", manifest.contributes.views);
       reportDuplicateIds("mcpServers", manifest.contributes.mcpServers);
+      reportDuplicateIds("skills", manifest.contributes.skills);
       reportDuplicateIds("forgeProviders", manifest.contributes.forgeProviders);
       reportDuplicateIds("fileDecorationProviders", manifest.contributes.fileDecorationProviders);
       reportDuplicateIds("agents", manifest.contributes.agents);
@@ -1235,6 +1264,7 @@ export type {
   MenuItemContribution,
   ViewContribution,
   McpServerContribution,
+  SkillContribution,
   PluginCapability,
 };
 export type { ForgeProviderContribution, FileDecorationContribution };

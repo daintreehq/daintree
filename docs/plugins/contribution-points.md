@@ -434,11 +434,9 @@ Tool use is gated by a consent/permission/audit subsystem (`electron/services/pl
 
 **Intentionally excluded:** remote MCP transports (`url`), explicit transport types, per-server working directories, restart policies. These are deferred until use cases concretely require them.
 
-## Skills — _Planned_
+## Skills — _Shipped_
 
-> Not yet present in the manifest schema. Documented here as a design preview; the shape is not yet locked.
-
-Markdown-defined capability snippets that extend Daintree's built-in MCP server. Agents running in Daintree gain access to them through Daintree's MCP connection.
+Markdown-defined instruction/knowledge snippets that extend Daintree's built-in MCP server. Agents running in Daintree discover and load them through the `skills.search` / `skills.load` tools on Daintree's MCP connection.
 
 ```json
 {
@@ -464,7 +462,7 @@ Markdown-defined capability snippets that extend Daintree's built-in MCP server.
 | `path`     | yes      | Markdown file relative to the plugin directory.     |
 | `triggers` | no       | Search terms the agent uses to discover this skill. |
 
-The markdown file content is injected into the agent's context when the skill is invoked. See [Agent extensions → Skills](./agent-extensions.md#skills) for the full file format and invocation mechanics.
+The markdown file content is returned to the agent when it calls `skills.load`, so it can be incorporated into the current task. See [Agent extensions → Skills](./agent-extensions.md#skills) for the full file format and invocation mechanics.
 
 ## Themes — _Future_
 

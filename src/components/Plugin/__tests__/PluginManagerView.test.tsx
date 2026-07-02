@@ -57,6 +57,7 @@ function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo
         commands: [],
         views: [],
         mcpServers: [],
+        skills: [],
         keybindings: [],
         contextMenus: [],
         forgeProviders: [],
