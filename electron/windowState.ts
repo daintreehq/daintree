@@ -1,5 +1,5 @@
 import { BrowserWindow, screen } from "electron";
-import { windowStatesStore } from "./store.js";
+import { windowStatesStore, type WindowStateEntry } from "./store.js";
 
 const LEGACY_KEY = "__legacy__";
 const MRU_OFFSET_PX = 30;
@@ -169,7 +169,10 @@ function resolveWindowBounds(projectPath: string | null | undefined): WindowStat
   return { width: 1200, height: 800, isMaximized: false, isFullScreen: false };
 }
 
-type WindowStatesMap = Record<string, WindowStateBounds>;
+// Mirror the store's own entry type (isFullScreen optional) so the map read back
+// from windowStatesStore is assignable here; WindowStateBounds (stricter, with a
+// required isFullScreen) is still assignable INTO these slots on write.
+type WindowStatesMap = Record<string, WindowStateEntry>;
 
 // Single capped writer all mutation paths route through (per lesson #7586), so
 // the MRU cap lives in exactly one place rather than being duplicated across the
