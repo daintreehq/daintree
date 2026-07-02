@@ -126,8 +126,9 @@ export function compareEntry(entry) {
   if (committed === null) {
     return { name: entry.name, status: "missing", diff: "" };
   }
-  if (normalizeLineEndings(committed) !== expected) {
-    return { name: entry.name, status: "stale", diff: compactDiff(committed, expected) };
+  const normalizedCommitted = normalizeLineEndings(committed);
+  if (normalizedCommitted !== expected) {
+    return { name: entry.name, status: "stale", diff: compactDiff(normalizedCommitted, expected) };
   }
   return { name: entry.name, status: "ok", diff: "" };
 }
@@ -211,7 +212,7 @@ export function main(argv = process.argv.slice(2), { logger = console } = {}) {
     logger.error("Usage: node scripts/ci/check-api-surface.mjs [--check]");
     return 2;
   }
-  return argv.includes("--check") ? runCheck() : runUpdate();
+  return argv.includes("--check") ? runCheck(ENTRIES, { logger }) : runUpdate(ENTRIES, { logger });
 }
 
 const isMain =

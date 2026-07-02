@@ -69,8 +69,10 @@ describe("renderSnapshot", () => {
     expect(rendered.endsWith("export {};\n")).toBe(true);
   });
 
-  it("is deterministic for identical input", () => {
-    expect(renderSnapshot("interface A {}\n")).toBe(renderSnapshot("interface A {}\n"));
+  it("renders identical output regardless of the input's line endings (no OS churn)", () => {
+    const lf = renderSnapshot("interface A {}\nexport { A };\n");
+    const crlf = renderSnapshot("interface A {}\r\nexport { A };\r\n");
+    expect(crlf).toBe(lf);
   });
 });
 
