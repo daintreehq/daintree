@@ -582,11 +582,15 @@ export function useContentGridContext({
         if (entry) {
           // Read the same `clientWidth`/`clientHeight` (content-box + padding)
           // the initial-mount and post-unlock paths use, rather than
-          // `entry.contentRect` (content-box, excludes padding). The gutter
-          // padding is now constant, but the three paths must still agree on
-          // box model so a re-subscription never jumps the measured size — the
-          // downstream `maxFeasibleCols`/`gridRowsOverflow` math subtracts
-          // `GRID_PADDING_PX` and expects the padding-inclusive dimension.
+          // `entry.contentRect` (content-box, excludes padding). The scroll
+          // gutter toggles with scroll mode, but because this measurement is
+          // padding-inclusive (and `#panel-grid` hides its native scrollbar in
+          // CSS), that toggle doesn't move the measured size — it's what lets
+          // the gutter be conditional without re-opening #10871's feedback. The
+          // three paths must still agree on box model so a re-subscription never
+          // jumps the measured size — the downstream
+          // `maxFeasibleCols`/`gridRowsOverflow` math subtracts `GRID_PADDING_PX`
+          // and expects the padding-inclusive dimension.
           const width = container.clientWidth;
           const height = container.clientHeight;
           setGridWidth((prev) => (prev === width ? prev : width));
