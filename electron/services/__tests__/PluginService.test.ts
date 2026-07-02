@@ -251,6 +251,10 @@ import {
   unregisterFileDecorationProviderImpls,
 } from "../fileDecorationRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import {
+  PluginBlocklistService,
+  type ParsedPluginBlocklist,
+} from "../plugin/PluginBlocklistService.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
   return {
@@ -9589,5 +9593,140 @@ describe("dev-mode hot reload (#9304)", () => {
     clearPriorRegistrations();
 
     expect(service.listPluginActions().some((a) => a.id === "acme.dev.do-thing")).toBe(true);
+  });
+});
+
+describe("PluginService blocklist / kill-switch (#10891)", () => {
+  function blocklistService(
+    entries: ParsedPluginBlocklist["entries"],
+    fetchImpl = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ entries }),
+    }))
+  ) {
+    // Route disk cache into the test tmpDir so a real userData path is never touched.
+    const svc = new PluginBlocklistService({
+      fetchImpl,
+      cachePath: path.join(tmpDir, "blocklist-cache.json"),
+    });
+    return { svc, fetchImpl };
+  }
+
+  it("refuses to load a blocklisted plugin and surfaces it in listPlugins", async () => {
+    // Declare a panel so the "no registration" assertion is meaningful: a
+    // manifest that *has* a contribution yet registers nothing proves the gate
+    // runs before contribution registration, not merely that there was nothing
+    // to register.
+    await writePlugin("bad", {
+      name: "acme.bad",
+      version: "1.2.3",
+      contributes: {
+        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#ff0000" }],
+      },
+    });
+    const { svc } = blocklistService([
+      { name: "acme.bad", ranges: ["<2.0.0"], reason: "malware", message: "Steals tokens" },
+    ]);
+
+    const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    const info = plugins[0];
+    expect(info.manifest.name).toBe("acme.bad");
+    expect(info.blocklisted).toBe(true);
+    expect(info.blocklistReason).toBe("Steals tokens");
+    // Never ran — no activation, no pending-restart cue, no load error.
+    expect(info.loadedAt).toBe(0);
+    expect(info.pendingRestart).toBe(false);
+    expect(info.loadError).toBeNull();
+    // The declared panel must NOT register — the gate precedes contribution wiring.
+    expect(registerPanelKind).not.toHaveBeenCalled();
+  });
+
+  it("emits a low-priority inbox notification for a blocked plugin", async () => {
+    await writePlugin("bad", {
+      name: "acme.bad",
+      version: "1.0.0",
+      displayName: "Bad Plugin",
+    });
+    const { svc } = blocklistService([
+      { name: "acme.bad", ranges: ["*"], reason: "malware", message: "Known-bad build" },
+    ]);
+
+    const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+    await service.initialize();
+
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(
+      CHANNELS.NOTIFICATION_SHOW_TOAST,
+      expect.objectContaining({
+        type: "warning",
+        priority: "low",
+        title: "Plugin blocked",
+        message: expect.stringContaining("Bad Plugin"),
+      })
+    );
+  });
+
+  it("loads a plugin whose version is outside every blocklisted range", async () => {
+    await writePlugin("ok", { name: "acme.ok", version: "3.0.0" });
+    const { svc } = blocklistService([{ name: "acme.ok", ranges: ["<2.0.0"], reason: "old-cve" }]);
+
+    const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].blocklisted).toBe(false);
+    expect(plugins[0].loadedAt).toBeGreaterThan(0);
+  });
+
+  it("reports a disabled-and-blocklisted plugin as blocklisted (block gate wins)", async () => {
+    storeMock._state.set("plugins", { disabled: ["acme.bad"] });
+    await writePlugin("bad", { name: "acme.bad", version: "1.0.0" });
+    const { svc } = blocklistService([
+      { name: "acme.bad", ranges: ["*"], reason: "revoked", message: "Publisher revoked" },
+    ]);
+
+    const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].blocklisted).toBe(true);
+    expect(plugins[0].blocklistReason).toBe("Publisher revoked");
+  });
+
+  it("fails open — a fetch failure loads plugins normally", async () => {
+    await writePlugin("ok", { name: "acme.ok", version: "1.0.0" });
+    const failing = vi.fn(async () => {
+      throw new Error("network down");
+    });
+    const { svc } = blocklistService([], failing);
+
+    const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].blocklisted).toBe(false);
+    expect(plugins[0].loadedAt).toBeGreaterThan(0);
+  });
+
+  it("resolves the blocklist once at initialize, not once per plugin", async () => {
+    await writePlugin("a", { name: "acme.a", version: "1.0.0" });
+    await writePlugin("b", { name: "acme.b", version: "1.0.0" });
+    await writePlugin("c", { name: "acme.c", version: "1.0.0" });
+    const { svc, fetchImpl } = blocklistService([
+      { name: "acme.a", ranges: ["<0.0.1"], reason: "n/a" },
+    ]);
+
+    const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+    await service.initialize();
+
+    // A single fetch backs the whole multi-plugin scan.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });

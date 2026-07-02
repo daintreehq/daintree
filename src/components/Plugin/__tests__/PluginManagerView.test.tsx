@@ -78,6 +78,7 @@ function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo
     updateAvailable: null,
     devMode: false,
     pluginDanger: "safe",
+    blocklisted: false,
     ...overrides,
   };
 }
@@ -184,6 +185,21 @@ describe("PluginManagerView", () => {
     await screen.findAllByText("Acme Demo");
     const toggle = screen.getByRole("switch", { name: "Enable Acme Demo" });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("shows a 'Blocked' badge and disables the toggle for a blocklisted plugin (#10891)", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePlugin({ disabled: false, blocklisted: true, blocklistReason: "Steals tokens" }),
+    ]);
+    renderDialog();
+    await screen.findAllByText("Acme Demo");
+
+    expect(screen.getAllByText("Blocked").length).toBeGreaterThan(0);
+    // A blocklisted plugin's user-disabled state is false, but it must not read
+    // as enabled and the toggle must be inert — the block is host-decided.
+    const toggle = screen.getByRole("switch", { name: "Enable Acme Demo" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect((toggle as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("does not flash 'Restart required' when a built-in plugin is toggled (#10512)", async () => {

@@ -100,7 +100,10 @@ function PluginRow({
   highlighted,
 }: PluginRowProps) {
   const label = pluginLabel(plugin);
-  const enabled = plugin.disabled !== true;
+  const blocklisted = plugin.blocklisted === true;
+  // Blocklisted plugins render as not-enabled (dimmed, switch off) even though
+  // their user `disabled` state is false — the block is host-decided.
+  const enabled = plugin.disabled !== true && !blocklisted;
   const restartRequired = plugin.pendingRestart === true;
   const sourceLabel = SOURCE_BADGE_LABELS[plugin.source] ?? plugin.source;
   const tagline = plugin.manifest.tagline;
@@ -151,9 +154,18 @@ function PluginRow({
             !plugin.isBuiltin ||
             plugin.devMode ||
             restartRequired ||
-            plugin.loadError) && (
+            plugin.loadError ||
+            blocklisted) && (
             <span className="mt-1 flex items-center gap-1 flex-wrap">
-              {!enabled && <span className={ROW_BADGE_CLASS}>Disabled</span>}
+              {blocklisted && (
+                <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-status-danger uppercase tracking-wide">
+                  <AlertCircle className="w-3 h-3" aria-hidden="true" />
+                  Blocked
+                </span>
+              )}
+              {!blocklisted && plugin.disabled === true && (
+                <span className={ROW_BADGE_CLASS}>Disabled</span>
+              )}
               {!plugin.isBuiltin && <span className={ROW_BADGE_CLASS}>{sourceLabel}</span>}
               {plugin.devMode && <span className={ROW_BADGE_CLASS}>Dev</span>}
               {restartRequired && (
@@ -174,7 +186,7 @@ function PluginRow({
         <SettingsSwitch
           checked={enabled}
           onCheckedChange={onToggle}
-          disabled={toggling}
+          disabled={toggling || blocklisted}
           aria-label={`Enable ${label}`}
         />
       </span>

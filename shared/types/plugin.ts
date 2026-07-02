@@ -919,6 +919,23 @@ export interface LoadedPluginInfo {
    * `PluginMcpTierAuth`; do not re-declare it anywhere else.
    */
   pluginDanger: "safe" | "confirm";
+  /**
+   * True when the plugin was refused at load time by the remote blocklist /
+   * kill-switch (#10891) — its `manifest.name` matched a blocklist entry whose
+   * version range covers `manifest.version`. Distinct from `disabled` (a
+   * user-togglable Preferences state) and `loadError` (a technical activation
+   * failure): this is a host-decided policy refusal the user cannot toggle off.
+   * A blocklisted plugin is never registered in the running set — no `activate`
+   * runs and it contributes no panels/actions — but it is still surfaced in the
+   * Plugin Manager so the block is visible.
+   */
+  blocklisted: boolean;
+  /**
+   * Human-readable explanation for the block (from the matched entry's
+   * `message`, falling back to its machine `reason`). `undefined` unless
+   * `blocklisted` is true.
+   */
+  blocklistReason?: string;
 }
 
 export interface PluginIpcContext {

@@ -112,6 +112,15 @@ vi.mock("../plugin-capability/instances.js", () => ({
 import { PluginService } from "../PluginService.js";
 import { packPluginArchive } from "../PluginArchive.js";
 import { resilientRename } from "../../utils/fs.js";
+import { PluginBlocklistService } from "../plugin/PluginBlocklistService.js";
+
+/** A PluginBlocklistService backed by an in-memory list (no network/disk). */
+function fakeBlocklist(entries: Array<Record<string, unknown>>): PluginBlocklistService {
+  return new PluginBlocklistService({
+    cachePath: path.join(tmpDir, "no-such-blocklist-cache.json"),
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ entries }) }),
+  });
+}
 
 const storeState = storeMock._state;
 
@@ -782,6 +791,63 @@ describe("loadDevPlugin — trust gates (#10518)", () => {
     ).records.setEnabled("acme.dev-honor", false);
 
     await expect(service.loadDevPlugin("acme.dev-honor")).rejects.toThrow(/disabled|Couldn't load/);
+
+    service.dispose();
+  });
+});
+
+describe("installPlugin — blocklist interaction (#10891)", () => {
+  it("installs a fixed version over a plugin that was blocklisted at startup", async () => {
+    // A blocked v1 is on disk at launch: reserves its name + records a blocked row.
+    await fs.mkdir(path.join(pluginsRoot, "acme.bad"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginsRoot, "acme.bad", "plugin.json"),
+      JSON.stringify({ name: "acme.bad", version: "1.0.0" })
+    );
+    const service = new PluginService(pluginsRoot, "0.0.0", {
+      blocklistService: fakeBlocklist([{ name: "acme.bad", ranges: ["<2.0.0"], reason: "cve" }]),
+    });
+    await service.initialize();
+    expect(service.listPlugins().find((p) => p.manifest.name === "acme.bad")?.blocklisted).toBe(
+      true
+    );
+
+    // Installing a no-longer-blocklisted v2 must clear the stale reservation and load.
+    const archive = await makeArchive({ name: "acme.bad", version: "2.0.0" });
+    const result = await service.installPlugin(archive);
+
+    expect(result).toEqual({ status: "installed", pluginId: "acme.bad" });
+    const info = service.listPlugins().find((p) => p.manifest.name === "acme.bad");
+    expect(info?.blocklisted).toBe(false);
+    expect(info?.loadedAt).toBeGreaterThan(0);
+
+    service.dispose();
+  });
+
+  it("restores the previous good version when an upgrade to a blocklisted version fails", async () => {
+    // Good v1 installed and running.
+    const v1 = await makeArchive({ name: "acme.up", version: "1.0.0" });
+    const service = new PluginService(pluginsRoot, "0.0.0", {
+      blocklistService: fakeBlocklist([
+        { name: "acme.up", ranges: [">=2.0.0"], reason: "revoked" },
+      ]),
+    });
+    await service.initialize();
+    await service.installPlugin(v1);
+    expect(
+      service.listPlugins().find((p) => p.manifest.name === "acme.up")?.loadedAt
+    ).toBeGreaterThan(0);
+
+    // Upgrading to a blocklisted v2 fails to load; rollback must restore v1 live,
+    // not strand it behind the stale reservation the blocked v2 left behind.
+    const v2 = await makeArchive({ name: "acme.up", version: "2.0.0" });
+    const result = await service.installPlugin(v2);
+
+    expect(result.status).toBe("failed");
+    const info = service.listPlugins().find((p) => p.manifest.name === "acme.up");
+    expect(info?.blocklisted).toBe(false);
+    expect(info?.manifest.version).toBe("1.0.0");
+    expect(info?.loadedAt).toBeGreaterThan(0);
 
     service.dispose();
   });
