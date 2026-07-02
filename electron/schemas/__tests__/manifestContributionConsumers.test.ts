@@ -17,6 +17,7 @@ import {
   MenuItemContributionSchema,
   PanelContributionSchema,
   SettingDefinitionObjectSchema,
+  SkillContributionSchema,
   ToolbarButtonContributionSchema,
   ViewContributionSchema,
 } from "../plugin.js";
@@ -77,9 +78,10 @@ const FORGE_REGISTRY = "electron/services/forgeProviderRegistry.ts";
 const AGENT_REGISTRY = "shared/config/pluginAgentRegistry.ts";
 const MCP_SUPERVISOR = "electron/services/PluginMcpSupervisor.ts";
 const PLUGIN_SCHEMA = "electron/schemas/plugin.ts";
+const SKILL_REGISTRY = "electron/services/plugin/PluginSkillRegistry.ts";
 
 /**
- * The schemas swept for field coverage. The first block matches the twelve
+ * The schemas swept for field coverage. The first block matches the thirteen
  * `contributes.*` array kinds one-to-one; the second block covers the
  * high-fanout nested object schemas (a new detection tuning field or credential
  * field would otherwise be able to drift silently under a top-level kind).
@@ -93,6 +95,7 @@ const SWEPT_SCHEMAS = {
   commands: CommandContributionSchema,
   views: ViewContributionSchema,
   mcpServers: McpServerContributionSchema,
+  skills: SkillContributionSchema,
   forgeProviders: ForgeProviderContributionSchema,
   fileDecorationProviders: FileDecorationContributionSchema,
   agents: AgentContributionSchema,
@@ -105,7 +108,7 @@ const SWEPT_SCHEMAS = {
 type SweptGroup = keyof typeof SWEPT_SCHEMAS;
 
 /**
- * The twelve keys that must line up one-to-one with `contributes.*`. Kept
+ * The thirteen keys that must line up one-to-one with `contributes.*`. Kept
  * separate from the nested-group keys so the "no unknown contribution kind"
  * guard can compare against exactly the parsed `contributes` shape.
  */
@@ -118,6 +121,7 @@ const TOP_LEVEL_GROUPS = [
   "commands",
   "views",
   "mcpServers",
+  "skills",
   "forgeProviders",
   "fileDecorationProviders",
   "agents",
@@ -153,6 +157,7 @@ type FieldConsumerCoverage = {
   commands: Record<keyof z.infer<typeof CommandContributionSchema>, ConsumerDescriptor>;
   views: Record<keyof z.infer<typeof ViewContributionSchema>, ConsumerDescriptor>;
   mcpServers: Record<keyof z.infer<typeof McpServerContributionSchema>, ConsumerDescriptor>;
+  skills: Record<keyof z.infer<typeof SkillContributionSchema>, ConsumerDescriptor>;
   forgeProviders: Record<keyof z.infer<typeof ForgeProviderContributionSchema>, ConsumerDescriptor>;
   fileDecorationProviders: Record<
     keyof z.infer<typeof FileDecorationContributionSchema>,
@@ -446,6 +451,32 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [{ file: MCP_SUPERVISOR, symbol: "resolveContribution → spawn" }],
       note: "Substituted for ${settings:*} and folded into the subprocess env.",
+    },
+  },
+  skills: {
+    id: {
+      mode: "verbatim",
+      consumers: [
+        { file: SKILL_REGISTRY, symbol: "registerPluginSkills (qualifiedId `${pluginId}.${id}`)" },
+      ],
+      note: "Namespaced into the registered skill's qualified id.",
+    },
+    name: {
+      mode: "verbatim",
+      consumers: [{ file: SKILL_REGISTRY, symbol: "registerPluginSkills → indexSkill" }],
+      note: "Copied into the registered skill and returned by skills.search / skills.load.",
+    },
+    path: {
+      mode: "verbatim",
+      consumers: [
+        { file: SKILL_REGISTRY, symbol: "registerPluginSkills (resolveContainedPath → readFile)" },
+      ],
+      note: "Resolved against the plugin dir, realpath-contained, and read as the skill markdown.",
+    },
+    triggers: {
+      mode: "verbatim",
+      consumers: [{ file: SKILL_REGISTRY, symbol: "searchPluginSkills (trigger tokens)" }],
+      note: "Tokenized into the skills.search keyword haystack.",
     },
   },
   forgeProviders: {
