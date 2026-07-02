@@ -76,7 +76,7 @@ test.describe.serial("Panels: Forge stats pill lifecycle", () => {
   test("pill disappears and reappears across a live plugin disable/enable", async () => {
     // Built-ins transition LIVE (#9304) — drive the real Settings toggle, not
     // bare IPC, so the whole user path is covered: switch → plugin:set-enabled
-    // → _applyBuiltinToggle (unload/re-register + activate) → provenance
+    // → _applyEnabledToggle (unload/re-register + activate) → provenance
     // broadcast → every mounted useResolvedForgeProvider instance re-resolves.
     const window = ctx!.window;
     const pill = window.locator(SEL.github.statPillIssues);

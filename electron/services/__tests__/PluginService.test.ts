@@ -2117,33 +2117,58 @@ describe("PluginService built-in plugin loading", () => {
       await expect(service.setEnabled("   ", false)).rejects.toThrow(/non-empty string/);
     });
 
-    it("user plugin disable diverges desired/running state and raises pendingRestart", async () => {
+    it("user plugin disable unloads live — disabled, not pending, no longer running (#10887)", async () => {
       storeMock._state.set("plugins", { disabled: [] });
       await writePlugin("acme.runtime", { name: "acme.runtime", version: "1.0.0" });
       const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
       await service.initialize();
 
-      expect(service.listPlugins()[0]).toMatchObject({ disabled: false, pendingRestart: false });
+      expect(service.listPlugins()[0]).toMatchObject({
+        disabled: false,
+        pendingRestart: false,
+        isBuiltin: false,
+      });
+      broadcastToRendererMock.mockClear();
 
       await service.setEnabled("acme.runtime", false);
 
-      // User plugin stays loaded this session (no live unload); the desired
-      // state is now off, so the restart-required cue is raised.
-      expect(service.listPlugins()[0]).toMatchObject({ disabled: true, pendingRestart: true });
+      // Applied immediately: the user plugin is unloaded live (its worker torn
+      // down via the unload cascade) and surfaced from the skipped map, so
+      // loadedAt resets to 0 and no restart is required — isBuiltin stays false.
+      const row = service.listPlugins()[0];
+      expect(row).toMatchObject({ disabled: true, pendingRestart: false, isBuiltin: false });
+      expect(row.loadedAt).toBe(0);
+      expect(broadcastToRendererMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ name: "plugin:provenance-changed" })
+      );
     });
 
-    it("user plugin re-enable of a launch-disabled plugin stays pendingRestart", async () => {
+    it("user plugin re-enable of a launch-disabled plugin loads live — enabled, not pending (#10887)", async () => {
       storeMock._state.set("plugins", { disabled: ["acme.off"] });
       await writePlugin("acme.off", { name: "acme.off", version: "1.0.0" });
       const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
       await service.initialize();
 
-      expect(service.listPlugins()[0]).toMatchObject({ disabled: true, pendingRestart: false });
+      expect(service.listPlugins()[0]).toMatchObject({
+        disabled: true,
+        pendingRestart: false,
+        isBuiltin: false,
+      });
+      broadcastToRendererMock.mockClear();
 
       await service.setEnabled("acme.off", true);
 
-      // User plugin is not loaded live; desired state is on, so it's pending.
-      expect(service.listPlugins()[0]).toMatchObject({ disabled: false, pendingRestart: true });
+      // Applied immediately: re-registered with the real isBuiltin (false) and
+      // re-activated via a freshly forked worker, so it's running (loadedAt set)
+      // with no restart cue.
+      const row = service.listPlugins()[0];
+      expect(row).toMatchObject({ disabled: false, pendingRestart: false, isBuiltin: false });
+      expect(row.loadedAt).toBeGreaterThan(0);
+      expect(broadcastToRendererMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ name: "plugin:provenance-changed" })
+      );
     });
 
     it("built-in disable unloads live — disabled, not pending, no longer running", async () => {
