@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { ActivityMonitor } from "../ActivityMonitor.js";
+import {
+  ActivityMonitor,
+  FSM_IDLE_BACKOFF_SETTLE_MS,
+  FSM_IDLE_BACKOFF_POLLING_INTERVAL_MS,
+} from "../ActivityMonitor.js";
 import { AGENT_OUTPUT_ACTIVITY_LINE_COUNT } from "../pty/AgentActivityTemperature.js";
 import { buildActivityMonitorOptions } from "../pty/terminalActivityPatterns.js";
 import {
@@ -103,6 +107,163 @@ describe("ActivityMonitor", () => {
       // Verify new interval takes effect
       vi.advanceTimersByTime(500);
       expect(getVisibleLines).toHaveBeenCalled();
+    });
+  });
+
+  describe("idle-agent polling backoff (#10906)", () => {
+    // Builds a simple-output agent monitor that starts already idle (the
+    // restored-session shape), so startPolling() arms the settle timer.
+    function createIdleAgent(pollingIntervalMs = 50) {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("agent-1", 1000, onStateChange, {
+        simpleOutputState: true,
+        getVisibleLines: () => ["> "],
+        getCursorLine: () => "> ",
+        initialState: "idle",
+        skipInitialStateEmit: true,
+        pollingIntervalMs,
+      });
+      return { monitor, onStateChange };
+    }
+
+    it("drops to the backoff cadence after a settled idle agent stays silent", () => {
+      const setIntervalSpy = vi.spyOn(global, "setInterval");
+      const { monitor } = createIdleAgent(50);
+
+      monitor.startPolling();
+      setIntervalSpy.mockClear();
+
+      // Still silent through the settle window → swap to the backoff cadence.
+      vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS);
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(
+        expect.any(Function),
+        FSM_IDLE_BACKOFF_POLLING_INTERVAL_MS
+      );
+
+      monitor.dispose();
+    });
+
+    it("does not back off while data keeps arriving within the settle window", () => {
+      const setIntervalSpy = vi.spyOn(global, "setInterval");
+      const { monitor } = createIdleAgent(50);
+
+      monitor.startPolling();
+      setIntervalSpy.mockClear();
+
+      // Data before the settle timer fires cancels it — no backoff.
+      vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS - 500);
+      monitor.onData("x");
+      vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS * 2);
+
+      expect(setIntervalSpy).not.toHaveBeenCalledWith(
+        expect.any(Function),
+        FSM_IDLE_BACKOFF_POLLING_INTERVAL_MS
+      );
+
+      monitor.dispose();
+    });
+
+    it("restores the requested cadence on wake, not a hardcoded 50ms", () => {
+      const setIntervalSpy = vi.spyOn(global, "setInterval");
+      const { monitor } = createIdleAgent(50);
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS); // backoff engages
+
+      // A visibility change arrives while backed off — recorded, not applied live.
+      monitor.setPollingInterval(500);
+      setIntervalSpy.mockClear();
+
+      // Wake on data → restore the latest requested interval (500), never 50.
+      monitor.onData("x");
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 500);
+      expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 50);
+
+      monitor.dispose();
+    });
+
+    it("does not apply a visibility change live while backed off", () => {
+      const setIntervalSpy = vi.spyOn(global, "setInterval");
+      const { monitor } = createIdleAgent(50);
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS); // backoff engages (2000ms live)
+      setIntervalSpy.mockClear();
+
+      // While backed off, a background-tier request must not swap the live timer.
+      monitor.setPollingInterval(500);
+
+      expect(setIntervalSpy).not.toHaveBeenCalled();
+
+      monitor.dispose();
+    });
+
+    it("restarts at the requested cadence after stop, not the stale backoff value", () => {
+      const setIntervalSpy = vi.spyOn(global, "setInterval");
+      const { monitor } = createIdleAgent(50);
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS); // backoff engages
+
+      monitor.stopPolling();
+      setIntervalSpy.mockClear();
+      monitor.startPolling();
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 50);
+      expect(setIntervalSpy).not.toHaveBeenCalledWith(
+        expect.any(Function),
+        FSM_IDLE_BACKOFF_POLLING_INTERVAL_MS
+      );
+
+      monitor.dispose();
+    });
+
+    it("clears the pending settle timer on dispose", () => {
+      const setIntervalSpy = vi.spyOn(global, "setInterval");
+      const { monitor } = createIdleAgent(50);
+
+      monitor.startPolling();
+      // Dispose before the settle timer fires.
+      vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS - 500);
+      monitor.dispose();
+      setIntervalSpy.mockClear();
+
+      vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS * 2);
+
+      expect(setIntervalSpy).not.toHaveBeenCalledWith(
+        expect.any(Function),
+        FSM_IDLE_BACKOFF_POLLING_INTERVAL_MS
+      );
+    });
+
+    it("backs off again after a busy→idle round trip", () => {
+      const setIntervalSpy = vi.spyOn(global, "setInterval");
+      const { monitor } = createIdleAgent(50);
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS); // backoff engages
+
+      // Wake, go busy, then settle back to idle — a fresh backoff must arm.
+      monitor.onData("x");
+      monitor.notifyExternalPromotion();
+      expect(monitor.getState()).toBe("busy");
+      setIntervalSpy.mockClear();
+
+      // Return to idle via the simple-output idle gate: quiet past IDLE_DEBOUNCE_MS.
+      vi.advanceTimersByTime(9000);
+      expect(monitor.getState()).toBe("idle");
+
+      // Then silent through another settle window → backoff re-engages.
+      setIntervalSpy.mockClear();
+      vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS);
+      expect(setIntervalSpy).toHaveBeenCalledWith(
+        expect.any(Function),
+        FSM_IDLE_BACKOFF_POLLING_INTERVAL_MS
+      );
+
+      monitor.dispose();
     });
   });
 

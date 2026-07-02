@@ -19,12 +19,22 @@ vi.mock("../terminalSessionPersistence.js", async (importOriginal) => {
 interface MutableHost extends SessionSnapshotterHost {
   wasKilled: boolean;
   launchAgentId: string | undefined;
+  contentEpoch: number;
   bannerMarkers: boolean;
   serializedState: string | null;
   serializedStateAsync: string | null;
   serializedForPersistence: string | null;
   asyncResolve: () => void;
   asyncResolved: boolean;
+}
+
+// Event-driven flush is fire-and-forget; drain its microtask chain
+// (getSerializedStateAsync → persistSessionSnapshotAsync) so assertions see the
+// completed persist.
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 function createHost(overrides: Partial<MutableHost> = {}): MutableHost {
@@ -37,6 +47,7 @@ function createHost(overrides: Partial<MutableHost> = {}): MutableHost {
     id: "t-test",
     wasKilled: false,
     launchAgentId: undefined,
+    contentEpoch: 1,
     bannerMarkers: false,
     serializedState: "sync-state",
     serializedStateAsync: "async-state",
@@ -235,83 +246,181 @@ describe("SessionSnapshotter", () => {
   });
 
   describe("flushEventDriven", () => {
-    it("persists using banner-aware serialization", () => {
+    it("uses async serialization for the non-banner path", async () => {
       const host = createHost();
       const snap = new SessionSnapshotter(host);
 
       snap.flushEventDriven();
+      await flushMicrotasks();
 
       expect(persistAsyncMock).toHaveBeenCalledTimes(1);
-      expect(persistAsyncMock).toHaveBeenCalledWith("t-test", "banner-state");
+      expect(persistAsyncMock).toHaveBeenCalledWith("t-test", "async-state");
     });
 
-    it("strips restore banner via serializeForPersistence when banner markers are present", () => {
+    it("strips restore banner via sync serializeForPersistence when banner markers are present", async () => {
       const host = createHost({ bannerMarkers: true });
       const snap = new SessionSnapshotter(host);
 
       snap.flushEventDriven();
+      await flushMicrotasks();
 
       expect(persistAsyncMock).toHaveBeenCalledTimes(1);
       expect(persistAsyncMock).toHaveBeenCalledWith("t-test", "banner-state");
     });
 
-    it("throttles repeated calls within 2s", () => {
+    it("throttles repeated calls within 2s", async () => {
       const host = createHost();
       const snap = new SessionSnapshotter(host);
 
       snap.flushEventDriven();
+      await flushMicrotasks();
+      // Content changed but the throttle window has not elapsed → suppressed.
+      host.contentEpoch = 2;
       snap.flushEventDriven();
+      host.contentEpoch = 3;
       snap.flushEventDriven();
+      await flushMicrotasks();
 
       expect(persistAsyncMock).toHaveBeenCalledTimes(1);
     });
 
-    it("allows another flush after throttle window elapses", () => {
+    it("allows another flush after throttle window elapses when content changed", async () => {
       const host = createHost();
       const snap = new SessionSnapshotter(host);
 
       snap.flushEventDriven();
+      await flushMicrotasks();
+
       vi.advanceTimersByTime(2001);
+      host.contentEpoch = 2;
       snap.flushEventDriven();
+      await flushMicrotasks();
 
       expect(persistAsyncMock).toHaveBeenCalledTimes(2);
     });
 
-    it("does NOT skip for agent terminals (snapshots agents on event)", () => {
-      const host = createHost({ launchAgentId: "claude" });
+    it("skips serialization when contentEpoch is unchanged since the last persist", async () => {
+      const host = createHost();
       const snap = new SessionSnapshotter(host);
 
       snap.flushEventDriven();
+      await flushMicrotasks();
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+
+      // Same epoch, and past the throttle window — still skipped (buffer unchanged).
+      vi.advanceTimersByTime(2001);
+      snap.flushEventDriven();
+      await flushMicrotasks();
 
       expect(persistAsyncMock).toHaveBeenCalledTimes(1);
     });
 
-    it("skips when wasKilled is true", () => {
+    it("checks the epoch before the throttle so an unchanged call never starves a later changed flush", async () => {
+      const host = createHost();
+      const snap = new SessionSnapshotter(host);
+
+      snap.flushEventDriven();
+      await flushMicrotasks(); // persists epoch 1, stamps throttle
+
+      // An unchanged call inside the throttle window must not re-stamp the
+      // throttle clock; a changed flush after the window still goes through.
+      snap.flushEventDriven();
+      await flushMicrotasks();
+
+      vi.advanceTimersByTime(2001);
+      host.contentEpoch = 2;
+      snap.flushEventDriven();
+      await flushMicrotasks();
+
+      expect(persistAsyncMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("does NOT skip for agent terminals (snapshots agents on event)", async () => {
+      const host = createHost({ launchAgentId: "claude" });
+      const snap = new SessionSnapshotter(host);
+
+      snap.flushEventDriven();
+      await flushMicrotasks();
+
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("skips when wasKilled is true", async () => {
       const host = createHost({ wasKilled: true });
       const snap = new SessionSnapshotter(host);
 
       snap.flushEventDriven();
+      await flushMicrotasks();
 
       expect(persistAsyncMock).not.toHaveBeenCalled();
     });
 
-    it("skips when disposed", () => {
+    it("skips when disposed", async () => {
       const host = createHost();
       const snap = new SessionSnapshotter(host);
 
       snap.dispose();
       snap.flushEventDriven();
+      await flushMicrotasks();
 
       expect(persistAsyncMock).not.toHaveBeenCalled();
     });
 
-    it("skips when serialized state is null", () => {
-      const host = createHost({ serializedForPersistence: null });
+    it("skips when serialized state is null", async () => {
+      const host = createHost({ serializedStateAsync: null });
       const snap = new SessionSnapshotter(host);
 
       snap.flushEventDriven();
+      await flushMicrotasks();
 
       expect(persistAsyncMock).not.toHaveBeenCalled();
+    });
+
+    it("re-checks lifecycle after the await and skips persist when killed mid-serialize", async () => {
+      const host = createHost();
+      host.asyncResolved = false;
+      const snap = new SessionSnapshotter(host);
+
+      snap.flushEventDriven();
+      // Kill lands while the async serialize is still pending.
+      host.wasKilled = true;
+      host.asyncResolve();
+      await flushMicrotasks();
+
+      expect(persistAsyncMock).not.toHaveBeenCalled();
+    });
+
+    it("drops a re-entrant flush while one is already in flight", async () => {
+      const host = createHost();
+      host.asyncResolved = false;
+      const snap = new SessionSnapshotter(host);
+
+      snap.flushEventDriven();
+      // Second call before the first resolves — must not start a second serialize.
+      host.contentEpoch = 2;
+      snap.flushEventDriven();
+
+      host.asyncResolve();
+      await flushMicrotasks();
+
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not mark the epoch flushed when persist fails (retries after throttle)", async () => {
+      const host = createHost();
+      const snap = new SessionSnapshotter(host);
+      persistAsyncMock.mockRejectedValueOnce(new Error("disk full"));
+
+      snap.flushEventDriven();
+      await flushMicrotasks();
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+
+      // Same epoch, but the failed persist left it uncovered → a later flush retries.
+      vi.advanceTimersByTime(2001);
+      snap.flushEventDriven();
+      await flushMicrotasks();
+
+      expect(persistAsyncMock).toHaveBeenCalledTimes(2);
     });
   });
 
