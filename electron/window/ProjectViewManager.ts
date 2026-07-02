@@ -25,6 +25,7 @@ import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { forgetBlinkSample, forgetEluSample } from "../services/ProcessMemoryMonitor.js";
+import { forgetRendererTerminalDiagnostics } from "../services/RendererTerminalDiagnosticsCache.js";
 import type { PtyClient } from "../services/PtyClient.js";
 import { events } from "../services/events.js";
 import { notifyError } from "../ipc/errorHandlers.js";
@@ -1597,6 +1598,7 @@ export class ProjectViewManager {
     }
     forgetBlinkSample(wcId);
     forgetEluSample(wcId);
+    forgetRendererTerminalDiagnostics(wcId);
 
     try {
       this.onViewEvicted?.(wcId);
@@ -2138,6 +2140,7 @@ export class ProjectViewManager {
     unregisterProjectView(wcId);
     forgetBlinkSample(wcId);
     forgetEluSample(wcId);
+    forgetRendererTerminalDiagnostics(wcId);
 
     // Notify listeners (e.g. WorkspaceClient) so they can clean up direct ports
     this.onViewEvicted?.(wcId);

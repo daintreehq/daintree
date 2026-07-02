@@ -621,6 +621,12 @@ export interface GeneratedElectronAPI {
     getResourceProfileSnapshot(
       ...args: IpcInvokeMap["system:get-resource-profile-snapshot"]["args"]
     ): Promise<IpcInvokeMap["system:get-resource-profile-snapshot"]["result"]>;
+    getWhySlowSnapshot(
+      ...args: IpcInvokeMap["system:get-why-slow-snapshot"]["args"]
+    ): Promise<IpcInvokeMap["system:get-why-slow-snapshot"]["result"]>;
+    reportTerminalRendererDiagnostics(
+      ...args: IpcInvokeMap["system:report-terminal-renderer-diagnostics"]["args"]
+    ): Promise<IpcInvokeMap["system:report-terminal-renderer-diagnostics"]["result"]>;
     requestInteractiveOverride(
       ...args: IpcInvokeMap["system:request-interactive-override"]["args"]
     ): Promise<IpcInvokeMap["system:request-interactive-override"]["result"]>;

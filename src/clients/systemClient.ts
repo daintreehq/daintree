@@ -53,6 +53,10 @@ export const systemClient = {
     return window.electron.system.getResourceProfileSnapshot();
   },
 
+  getWhySlowSnapshot: (): ReturnType<typeof window.electron.system.getWhySlowSnapshot> => {
+    return window.electron.system.getWhySlowSnapshot();
+  },
+
   getTmpDir: (): Promise<string> => {
     if (cachedTmpDir !== null) return Promise.resolve(cachedTmpDir);
     if (tmpDirInflight) return tmpDirInflight;

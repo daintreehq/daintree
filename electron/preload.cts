@@ -64,6 +64,7 @@ import { buildIdleBackgroundAutoClosePreloadBindings } from "./ipc/handlers/idle
 import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.preload.js";
 import { buildAppVersionInfoPreloadBindings } from "./ipc/handlers/appVersionInfo.preload.js";
 import { buildResourceProfilePreloadBindings } from "./ipc/handlers/resourceProfile.preload.js";
+import { buildWhySlowPreloadBindings } from "./ipc/handlers/whySlow.preload.js";
 import { buildOsDndPreloadBindings } from "./ipc/handlers/osDnd.preload.js";
 import { buildAgentCapabilitiesPreloadBindings } from "./ipc/handlers/agentCapabilities.preload.js";
 import { buildHelpAssistantPreloadBindings } from "./ipc/handlers/helpAssistant.preload.js";
@@ -1397,6 +1398,8 @@ function buildElectronApi(): ElectronAPI {
         _eventBusOn("resource:profile-changed", callback),
 
       ...buildResourceProfilePreloadBindings(_unwrappingInvoke),
+
+      ...buildWhySlowPreloadBindings(_unwrappingInvoke),
     },
 
     // App State API

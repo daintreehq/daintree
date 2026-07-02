@@ -9,7 +9,16 @@ import type { ProjectViewManager } from "../window/ProjectViewManager.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { store, windowStatesStore } from "../store.js";
 import { isRunningUnderRosetta } from "../utils/rosettaDetection.js";
+import { getFocusThrottlePollMultiplier, isFocusThrottled } from "../window/focusThrottleState.js";
+import { getRendererTerminalDiagnosticsSamples } from "./RendererTerminalDiagnosticsCache.js";
 import type { HandlerDependencies } from "../ipc/types.js";
+import type {
+  WhySlowFocusThrottleSnapshot,
+  WhySlowPtySummary,
+  WhySlowResourceSnapshot,
+  WhySlowSnapshot,
+  WhySlowWorktreeSummary,
+} from "../../shared/types/whySlow.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -634,6 +643,104 @@ async function collectCounts(deps: HandlerDependencies) {
   return result;
 }
 
+// ── "Why am I slow?" snapshot (#10910) ──
+// One at-a-glance view of the app's self-throttling governance state. Each
+// section degrades to null on failure rather than failing the whole snapshot;
+// the renderer-terminal section reads a passively-maintained push cache (never a
+// live renderer pull, which would hang under the very slowdown this diagnoses).
+
+async function collectWhySlowResource(): Promise<WhySlowResourceSnapshot | null> {
+  try {
+    const { getResourceProfileService } = await import("../window/serviceRefs.js");
+    const svc = getResourceProfileService();
+    return svc ? svc.getWhySlowResourceSnapshot() : null;
+  } catch {
+    return null;
+  }
+}
+
+function collectWhySlowFocusThrottle(): WhySlowFocusThrottleSnapshot {
+  try {
+    return { throttled: isFocusThrottled(), pollMultiplier: getFocusThrottlePollMultiplier() };
+  } catch {
+    return { throttled: false, pollMultiplier: 1 };
+  }
+}
+
+function collectWhySlowRendererTerminals() {
+  try {
+    return getRendererTerminalDiagnosticsSamples();
+  } catch {
+    return [];
+  }
+}
+
+async function collectWhySlowPty(ptyClient?: PtyClient): Promise<WhySlowPtySummary | null> {
+  try {
+    if (!ptyClient) return null;
+    const snapshot = await ptyClient.getFlowControlSnapshotAsync();
+    let pausedCount = 0;
+    let suspendedCount = 0;
+    let maxPausedDurationMs = 0;
+    for (const t of snapshot.terminals) {
+      if (t.pausedDurationMs !== null) {
+        pausedCount++;
+        if (t.pausedDurationMs > maxPausedDurationMs) maxPausedDurationMs = t.pausedDurationMs;
+      }
+      if (t.isSuspended) suspendedCount++;
+    }
+    return {
+      totalPendingBytes: snapshot.totalPendingBytes,
+      terminalCount: snapshot.terminals.length,
+      pausedCount,
+      suspendedCount,
+      maxPausedDurationMs,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function collectWhySlowWorktrees(): Promise<WhySlowWorktreeSummary | null> {
+  try {
+    const { getWorkspaceClientRef } = await import("../window/serviceRefs.js");
+    const client = getWorkspaceClientRef();
+    if (!client) return null;
+    // Derive counts from the existing all-states fan-out rather than adding a
+    // dedicated workspace-host round-trip: monitors that emit no state are the
+    // rare edge here and acceptable for a diagnostics count.
+    const states = await client.getAllStatesAsync();
+    return {
+      monitorCount: states.length,
+      fetchInFlightCount: states.filter((s) => s.isFetchInFlight).length,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Assemble the "why am I slow?" snapshot (#10910): resource profile + reasons,
+ * event-loop-lag latch, focus throttle, terminal WebGL/tier state (from the
+ * renderer push cache), PTY flow-control summary, and worktree monitor load.
+ * Backing both the diagnostics `whySlow` section and the live dock IPC pull.
+ */
+export async function collectWhySlowSnapshot(deps: HandlerDependencies): Promise<WhySlowSnapshot> {
+  const [resource, pty, worktrees] = await Promise.all([
+    collectWhySlowResource(),
+    collectWhySlowPty(deps.ptyClient),
+    collectWhySlowWorktrees(),
+  ]);
+  return {
+    timestamp: Date.now(),
+    resource,
+    focusThrottle: collectWhySlowFocusThrottle(),
+    rendererTerminals: collectWhySlowRendererTerminals(),
+    pty,
+    worktrees,
+  };
+}
+
 export async function collectDiagnostics(deps: HandlerDependencies): Promise<unknown> {
   const { payload } = await collectDiagnosticsWithKeys(deps);
   return payload;
@@ -658,6 +765,7 @@ export async function collectDiagnosticsWithKeys(
     { key: "rendererMemory", fn: collectRendererMemory },
     { key: "memoryTrends", fn: collectMemoryTrends },
     { key: "resourceState", fn: collectResourceState },
+    { key: "whySlow", fn: () => collectWhySlowSnapshot(deps) },
     { key: "counts", fn: () => collectCounts(deps) },
     { key: "logs", fn: collectLogs },
     { key: "events", fn: () => collectEvents(deps) },

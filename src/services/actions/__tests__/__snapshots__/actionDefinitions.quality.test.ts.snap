@@ -1082,6 +1082,18 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "title": "Send diagnostics",
   },
   {
+    "category": "diagnostics",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Open the diagnostics dock to the performance snapshot: current resource profile and why it triggered, event-loop lag latch, focus throttle, terminal WebGL mode, PTY backpressure, and worktree monitor load.",
+    "examples": undefined,
+    "id": "diagnostics.openWhySlow",
+    "keywords": undefined,
+    "kind": "command",
+    "requiresArgs": false,
+    "title": "Why am I slow?",
+  },
+  {
     "category": "agent",
     "danger": "safe",
     "dangerRationale": undefined,

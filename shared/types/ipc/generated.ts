@@ -1273,6 +1273,21 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../resourceProfile.js").ResourceProfileSnapshot;
   };
+  "system:get-why-slow-snapshot": {
+    args: [];
+    result: import("../whySlow.js").WhySlowSnapshot;
+  };
+  "system:report-terminal-renderer-diagnostics": {
+    args: [
+      payload: {
+        webglMode: "webgl" | "dom";
+        wantsWebgl: number;
+        terminalCount: number;
+        countsByTier: Record<string, number>;
+      },
+    ];
+    result: void;
+  };
   "system:request-interactive-override": {
     args: [durationMs: number];
     result: void;

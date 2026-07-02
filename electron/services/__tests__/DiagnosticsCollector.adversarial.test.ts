@@ -684,6 +684,30 @@ describe("DiagnosticsCollector adversarial", () => {
     expect(payload.counts.terminals.byAgentState).toMatchObject({ working: 2, none: 1 });
   });
 
+  it("WHY_SLOW_SECTION_DEGRADES_GRACEFULLY (#10910)", async () => {
+    // The why-slow section aggregates six cross-process signals; when a source is
+    // unavailable in this harness (no getWhySlowResourceSnapshot / flow-control /
+    // workspace getter) each degrades to null instead of failing the snapshot.
+    const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
+      whySlow: {
+        timestamp: number;
+        resource: unknown;
+        focusThrottle: { throttled: boolean; pollMultiplier: number };
+        rendererTerminals: unknown[];
+        pty: unknown;
+        worktrees: unknown;
+      };
+    };
+
+    expect(payload.whySlow).toBeDefined();
+    // Focus throttle reads a synchronous leaf module — always populated.
+    expect(payload.whySlow.focusThrottle).toEqual({ throttled: false, pollMultiplier: 1 });
+    expect(Array.isArray(payload.whySlow.rendererTerminals)).toBe(true);
+    expect(payload.whySlow.resource).toBeNull();
+    expect(payload.whySlow.pty).toBeNull();
+    expect(payload.whySlow.worktrees).toBeNull();
+  });
+
   it("PROJECT_VIEWS_ISOLATE_PER_WINDOW_FAILURE (#10500)", async () => {
     const goodPvm = {
       getViewInventory: () => [
