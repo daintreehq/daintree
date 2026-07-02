@@ -43,6 +43,29 @@ describe("parseSkillMarkdown", () => {
     expect(description).toBeNull();
   });
 
+  it("treats empty frontmatter as no description and keeps the body clean", () => {
+    const { description, body } = parseSkillMarkdown("---\n---\n\n# Body\n");
+    expect(description).toBeNull();
+    expect(body).toBe("# Body\n");
+    expect(body).not.toContain("---");
+  });
+
+  it("does not treat a --- line inside the body as the closing fence", () => {
+    const raw = "---\ndescription: Real.\n---\n\nIntro.\n\n---\n\nMore.\n";
+    const { description, body } = parseSkillMarkdown(raw);
+    expect(description).toBe("Real.");
+    // The body's own horizontal rule survives — only the first fenced block is frontmatter.
+    expect(body).toBe("Intro.\n\n---\n\nMore.\n");
+  });
+
+  it("degrades to whole-file body when the closing fence is not a full line", () => {
+    // `---notclose` must NOT be accepted as a closing fence.
+    const raw = "---\ndescription: x\n---notclose\nBody.";
+    const { description, body } = parseSkillMarkdown(raw);
+    expect(description).toBeNull();
+    expect(body).toBe(raw);
+  });
+
   it("handles CRLF frontmatter delimiters and a leading BOM", () => {
     const raw = "﻿---\r\ndescription: Windows line endings.\r\n---\r\n\r\nBody line.\r\n";
     const { description, body } = parseSkillMarkdown(raw);
@@ -101,12 +124,33 @@ describe("PluginSkillRegistry", () => {
     await fs.writeFile(path.join(outside, "secret.md"), "leaked", "utf8");
     // A symlink inside the plugin dir pointing outside it — the lexical path
     // grammar passes, but read-time realpath containment must reject it.
-    await fs.symlink(path.join(outside, "secret.md"), path.join(dir, "skills", "link.md"));
+    try {
+      await fs.symlink(path.join(outside, "secret.md"), path.join(dir, "skills", "link.md"));
+    } catch (err) {
+      // Windows CI without symlink privilege (EPERM) — the containment guard is
+      // covered by the realpath logic; skip where symlinks can't be created.
+      if ((err as NodeJS.ErrnoException).code === "EPERM") {
+        await fs.rm(outside, { recursive: true, force: true });
+        return;
+      }
+      throw err;
+    }
     await registerPluginSkills("acme.plugin", dir, [
       { id: "escape", name: "Escape", path: "./skills/link.md" },
     ]);
     expect(loadPluginSkill("acme.plugin.escape")).toBeNull();
     await fs.rm(outside, { recursive: true, force: true });
+  });
+
+  it("skips a skill whose file exceeds the size cap without throwing", async () => {
+    // 600KB > the 512KB cap.
+    await fs.writeFile(path.join(dir, "skills", "huge.md"), "x".repeat(600 * 1024), "utf8");
+    await registerPluginSkills("acme.plugin", dir, [
+      { id: "present", name: "Present", path: "./skills/tdd.md" },
+      { id: "huge", name: "Huge", path: "./skills/huge.md" },
+    ]);
+    expect(loadPluginSkill("acme.plugin.present")).not.toBeNull();
+    expect(loadPluginSkill("acme.plugin.huge")).toBeNull();
   });
 
   describe("search", () => {
@@ -147,6 +191,14 @@ describe("PluginSkillRegistry", () => {
       expect(all.skills.length).toBe(2);
       const limited = searchPluginSkills({ query: "", limit: 1 });
       expect(limited.skills.length).toBe(1);
+    });
+
+    it("clamps the limit into [1, 50] and floors a fractional value", () => {
+      // Fractional floors to 1; a huge value is capped by the registry (2 skills here).
+      expect(searchPluginSkills({ query: "", limit: 1.9 }).skills.length).toBe(1);
+      expect(searchPluginSkills({ query: "", limit: 10_000 }).skills.length).toBe(2);
+      // A below-range value floors up to the minimum of 1.
+      expect(searchPluginSkills({ query: "", limit: 0 }).skills.length).toBe(1);
     });
 
     it("search results carry metadata but never the body", () => {

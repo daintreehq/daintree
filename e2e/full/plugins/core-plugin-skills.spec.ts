@@ -25,6 +25,7 @@ test.describe.serial("Core: Plugin skills (#10892)", () => {
   });
 
   test.afterAll(async () => {
+    if (client) await client.close().catch(() => {});
     if (transport) await transport.close().catch(() => {});
     if (ctx?.window) {
       await ctx.window

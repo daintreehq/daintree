@@ -1,7 +1,8 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { load as parseYaml } from "js-yaml";
 import { resolveContainedPath } from "./pluginFsContainment.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { SkillContribution } from "../../../shared/types/plugin.js";
 import type {
   SkillSearchMatch,
@@ -26,6 +27,15 @@ import type {
  * plugin load.
  */
 
+/**
+ * Cap on a skill markdown file's on-disk size. The whole file is read into
+ * memory, cached, and (for `skills.load`) serialized into an MCP response, so an
+ * unbounded file would let a manifest with up to `MANIFEST_CONTRIBUTION_CAPS.skills`
+ * entries exhaust main-process memory or bloat a tool response. A file over the
+ * cap is skipped with a warning (same policy as an unreadable/malformed file).
+ * Generous for real instruction/rubric markdown.
+ */
+const MAX_SKILL_FILE_BYTES = 512 * 1024;
 /** Cap on the frontmatter block we hand to the YAML parser (defense-in-depth). */
 const FRONTMATTER_MAX_BYTES = 16 * 1024;
 /** Default and maximum number of matches `skills.search` returns. */
@@ -55,10 +65,15 @@ const qualifiedIdsByPlugin = new Map<string, Set<string>>();
  */
 export function parseSkillMarkdown(raw: string): { description: string | null; body: string } {
   const normalized = raw.replace(/^\uFEFF/, "");
-  // Match a leading `---\n ... \n---` block and consume the blank line(s) that
-  // separate it from the body, so the returned body starts at the first content
-  // line (not a stray leading newline).
-  const match = normalized.match(/^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n)*/);
+  // Match a leading `---` fenced block. The closing `---` must be its own full
+  // line (`(?=\r?\n|$)`), so a body line like `---notclose` or a horizontal
+  // rule is NOT mistaken for the fence. The frontmatter content is optional so
+  // an empty block (`---\n---`) parses cleanly. Trailing blank line(s) between
+  // the fence and the body are consumed, so the body starts at its first
+  // content line.
+  const match = normalized.match(
+    /^---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?=\r?\n|$)(?:\r?\n)*/
+  );
   if (!match) {
     return { description: null, body: normalized };
   }
@@ -109,6 +124,12 @@ export async function registerPluginSkills(
     try {
       const requested = path.resolve(pluginDir, contribution.path);
       const contained = await resolveContainedPath(pluginId, requested, [pluginDir]);
+      const { size } = await stat(contained);
+      if (size > MAX_SKILL_FILE_BYTES) {
+        throw new Error(
+          `skill file exceeds ${MAX_SKILL_FILE_BYTES} bytes (${size}) — skipped to bound memory`
+        );
+      }
       const raw = await readFile(contained, "utf8");
       const { description, body } = parseSkillMarkdown(raw);
       indexSkill({
@@ -121,9 +142,10 @@ export async function registerPluginSkills(
       });
     } catch (err) {
       console.warn(
-        `[PluginSkillRegistry] Skipping skill "${qualifiedId}" (${contribution.path}): ${
-          err instanceof Error ? err.message : String(err)
-        }`
+        `[PluginSkillRegistry] Skipping skill "${qualifiedId}" (${contribution.path}): ${formatErrorMessage(
+          err,
+          "could not read skill file"
+        )}`
       );
     }
   }
@@ -164,7 +186,8 @@ export function searchPluginSkills(args: { query?: string; limit?: number }): Sk
     Math.max(Math.floor(args.limit ?? DEFAULT_SEARCH_LIMIT), 1),
     MAX_SEARCH_LIMIT
   );
-  const queryTokens = tokenize(args.query ?? "");
+  // Dedupe so a repeated query term (`"tdd tdd"`) can't overweight a skill.
+  const queryTokens = [...new Set(tokenize(args.query ?? ""))];
   const all = [...skillsByQualifiedId.values()];
 
   const scored = all.map((skill) => {
