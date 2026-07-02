@@ -118,9 +118,19 @@ class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
   // Throttle for the interactive resource-profile override IPC (see onActiveWheel).
   private lastInteractiveOverrideRequestAt = 0;
+  // Which terminal received the most recent alt-buffer wheel event, and when —
+  // drives the ingest service's background-drain hold during a scroll gesture.
+  // Uses the same decay window as the BURST tier so "gesture over" is one
+  // consistent notion across the renderer.
+  private lastActiveWheelId: string | null = null;
+  private lastActiveWheelAt = 0;
   private dataBuffer = new TerminalOutputIngestService(
     (id, data, chunkCount) => this.writeToTerminal(id, data, chunkCount),
-    () => usePanelStore.getState().focusedId
+    () => usePanelStore.getState().focusedId,
+    () =>
+      this.lastActiveWheelId !== null && Date.now() - this.lastActiveWheelAt < WHEEL_BURST_DECAY_MS
+        ? this.lastActiveWheelId
+        : null
   );
   private suppressedExitUntil = new Map<string, number>();
   private unseenTracker = new TerminalUnseenOutputTracker();
@@ -603,6 +613,9 @@ class TerminalInstanceService {
   private onActiveWheel(id: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;
+
+    this.lastActiveWheelId = id;
+    this.lastActiveWheelAt = Date.now();
 
     this.rendererPolicy.applyRendererPolicy(id, TerminalRefreshTier.BURST);
     if (managed.inputBurstTimer !== undefined) {

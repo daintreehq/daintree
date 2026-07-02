@@ -698,6 +698,9 @@ async function collectWhySlowPty(ptyClient?: PtyClient): Promise<WhySlowPtySumma
       pausedCount,
       suspendedCount,
       maxPausedDurationMs,
+      eventLoopP99Ms: snapshot.eventLoop?.p99Ms ?? null,
+      eventLoopMaxMs: snapshot.eventLoop?.maxMs ?? null,
+      eventLoopUtilization: snapshot.eventLoop?.utilization ?? null,
     };
   } catch {
     return null;

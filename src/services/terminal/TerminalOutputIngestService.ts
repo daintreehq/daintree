@@ -25,12 +25,27 @@ const INK_ERASE_LINE_PATTERN = "\x1b[2K\x1b[1A";
 const FOCUSED_DRAIN_PRIORITY_ENABLED =
   import.meta.env.DAINTREE_DISABLE_FOCUSED_DRAIN_PRIORITY !== "1";
 
+// While the user is actively wheel-scrolling a terminal, background terminals'
+// drains are HELD (re-checked on a timer) instead of merely yielded once, so
+// their xterm write-buffer parse slices don't stack up on the main thread
+// mid-gesture. Bounded fairness, not starvation: each queue drains a batch at
+// least every HOLD_MAX_MS even during a continuous scroll, and the hold decays
+// with the wheel burst itself (~1s after the last wheel event).
+const BACKGROUND_HOLD_RECHECK_MS = 24;
+const BACKGROUND_HOLD_MAX_MS = 250;
+
 type TerminalIngestQueue = {
   chunks: Array<string | Uint8Array>;
   queuedBytes: number;
   inFlightBytes: number;
   recentChars: string;
   drainScheduled: boolean;
+  holdStartedAt: number | undefined;
+  // True while the pending drainScheduled continuation is a wheel-burst HOLD
+  // recheck (as opposed to an ink-erase or yield continuation). Lets
+  // enqueueChunk drain inline for a terminal that stopped being deferrable
+  // mid-hold (e.g. focus moved to it) instead of waiting out the recheck.
+  holdScheduled: boolean;
 };
 
 // A drained batch plus how many raw queue chunks it merged. The count must
@@ -61,7 +76,13 @@ export class TerminalOutputIngestService {
     // Defaults to () => null so a bare `new TerminalOutputIngestService(write)`
     // keeps the legacy fully-synchronous drain — null focus means "drain
     // synchronously for everyone", never "defer everyone".
-    private readonly getFocusedId: () => string | null = () => null
+    private readonly getFocusedId: () => string | null = () => null,
+    // The terminal the user is actively wheel-scrolling (null when no wheel
+    // burst is live). While non-null, other non-focused terminals' drains are
+    // held on a recheck timer instead of draining after one yield. The wheeled
+    // terminal itself is exempt — scrolling an unfocused full-screen TUI is a
+    // PTY round-trip and holding its own output would stall the gesture.
+    private readonly getActiveWheelId: () => string | null = () => null
   ) {}
 
   public async initialize(): Promise<void> {
@@ -202,6 +223,8 @@ export class TerminalOutputIngestService {
         inFlightBytes: 0,
         recentChars: "",
         drainScheduled: false,
+        holdStartedAt: undefined,
+        holdScheduled: false,
       };
       this.queues.set(id, queue);
     }
@@ -245,6 +268,13 @@ export class TerminalOutputIngestService {
 
     if (!queue.drainScheduled) {
       this.scheduleOrDrain(id, queue);
+    } else if (queue.holdScheduled && !this.shouldDeferDrain(id)) {
+      // A wheel-burst hold recheck is pending, but this terminal is no longer
+      // deferrable (focus moved to it mid-gesture). Drain inline now — echo
+      // latency must not wait out the hold. The pending recheck no-ops on an
+      // empty queue. Scoped to holdScheduled: an ink-erase continuation must
+      // keep its coalescing window.
+      this.tryDrain(id, queue);
     }
   }
 
@@ -261,13 +291,47 @@ export class TerminalOutputIngestService {
    * queue.drainScheduled into one pending continuation (no per-chunk timer
    * churn, #8150); the deferred drain still routes through tryDrain, so the
    * COALESCE_BATCH_CAP_BYTES cap is respected (#4853).
+   *
+   * Exception: during an ACTIVE wheel gesture (getActiveWheelId non-null),
+   * background queues are additionally held on a bounded recheck timer — see
+   * BACKGROUND_HOLD_MAX_MS — because a scroll is a sustained interaction where
+   * even yielded-once batches stack enough parse slices to jank the gesture.
    */
   private scheduleOrDrain(id: string, queue: TerminalIngestQueue): void {
     if (!this.shouldDeferDrain(id)) {
+      queue.holdStartedAt = undefined;
       this.tryDrain(id, queue);
       return;
     }
     if (queue.drainScheduled) return;
+
+    // Active wheel gesture elsewhere: hold this background queue on a recheck
+    // timer (bounded by BACKGROUND_HOLD_MAX_MS) so its parse work stays off
+    // the thread while the user is scrolling. Not a starvation risk: the hold
+    // cap forces a drain, the wheel burst decays ~1s after the last event,
+    // and getStalledBytes treats drainScheduled=true as healthy so the
+    // watchdog never sees a held queue as stranded.
+    if (this.shouldHoldDrain(id)) {
+      const now = Date.now();
+      queue.holdStartedAt ??= now;
+      if (now - queue.holdStartedAt < BACKGROUND_HOLD_MAX_MS) {
+        queue.drainScheduled = true;
+        queue.holdScheduled = true;
+        globalThis.setTimeout(() => {
+          if (this.queues.get(id) !== queue) return;
+          queue.drainScheduled = false;
+          queue.holdScheduled = false;
+          if (queue.chunks.length === 0) {
+            queue.holdStartedAt = undefined;
+            return;
+          }
+          this.scheduleOrDrain(id, queue);
+        }, BACKGROUND_HOLD_RECHECK_MS);
+        return;
+      }
+    }
+    queue.holdStartedAt = undefined;
+
     queue.drainScheduled = true;
     void yieldToScheduler().then(() => {
       // The queue may have been cleared/replaced (resetForTerminal,
@@ -283,6 +347,11 @@ export class TerminalOutputIngestService {
     if (!FOCUSED_DRAIN_PRIORITY_ENABLED) return false;
     const focusedId = this.getFocusedId();
     return focusedId !== null && focusedId !== id;
+  }
+
+  private shouldHoldDrain(id: string): boolean {
+    const wheelId = this.getActiveWheelId();
+    return wheelId !== null && wheelId !== id;
   }
 
   private tryDrain(id: string, queue: TerminalIngestQueue): void {

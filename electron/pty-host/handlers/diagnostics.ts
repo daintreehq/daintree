@@ -3,6 +3,7 @@ import type {
   FlowControlSnapshot,
   FlowControlTerminalSnapshot,
 } from "../../../shared/types/pty-host.js";
+import { getEventLoopStats } from "../eventLoopMonitor.js";
 import type { HandlerMap, HostContext } from "./types.js";
 
 /**
@@ -92,6 +93,7 @@ export function createDiagnosticsHandlers(ctx: HostContext): HandlerMap {
         // Spread-copy so later mutations don't bleed into the diagnostics object.
         stats: { ...backpressureManager.stats },
         resourceGovernor: resourceGovernor.getSnapshot(),
+        eventLoop: getEventLoopStats(),
       };
 
       sendEvent({ type: "flow-control-snapshot", requestId: msg.requestId, snapshot });
