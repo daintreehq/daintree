@@ -1746,7 +1746,7 @@ describe("buildArgsForRespawn — persisted launch env (#10922)", () => {
         location: "grid",
         agentPresetId: "user-aaa",
         // Non-string values are dropped by sanitizeAgentEnv → no safe entries.
-        env: { ANTHROPIC_BASE_URL: 123 as unknown as string },
+        env: { ANTHROPIC_BASE_URL: 123 },
       },
       "agent",
       "/p",
@@ -1857,7 +1857,7 @@ describe("reconnect builders forward the captured launch env (#10922)", () => {
       {
         id: "t1",
         location: "grid",
-        env: { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic", BAD: 1 as unknown as string },
+        env: { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic", BAD: 1 },
       },
       "/p"
     );
