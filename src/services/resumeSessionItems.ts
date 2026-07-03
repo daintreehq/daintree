@@ -7,7 +7,7 @@ import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 /**
  * Shared model for a browsable "resume closed session" entry. Built from a
  * journaled {@link AgentSessionRecord} plus the live worktree map so the resume
- * launcher (`ResumeSessionsPalette`), the empty-grid card (`ResumeSessionsCard`)
+ * launcher (`ResumeSessionsPalette`), the empty-grid line (`ResumeSessionLine`)
  * and the panel palette all render the same metadata and stale flags without
  * duplicating the mapping. Kept renderer-pure (no store reads) so it is
  * trivially unit-testable.
