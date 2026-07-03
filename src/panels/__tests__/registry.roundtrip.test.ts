@@ -108,9 +108,12 @@ const devPreviewArbSpec = {
   browserHistory: fc.option(browserHistoryArb, { nil: undefined }),
   browserZoom: fc.option(zoomArb, { nil: undefined }),
   devPreviewConsoleOpen: fc.option(fc.boolean(), { nil: undefined }),
-  devPreviewConsoleTab: fc.option(fc.constantFrom("output" as const, "console" as const), {
-    nil: undefined,
-  }),
+  devPreviewConsoleTab: fc.option(
+    fc.constantFrom("output" as const, "console" as const, "diagnostics" as const),
+    {
+      nil: undefined,
+    }
+  ),
   devPreviewScrollPosition: fc.option(scrollPositionArb, { nil: undefined }),
   exitBehavior: fc.option(exitBehaviorArb, { nil: undefined }),
 } satisfies { [K in PersistedDevPreviewFields]-?: fc.Arbitrary<DevPreviewData[K]> };

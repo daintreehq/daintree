@@ -16,13 +16,16 @@ import { TerminalRefreshTier } from "@/types";
 import type { DevPreviewStatus } from "@/hooks/useDevServer";
 import { useConsoleCaptureStore, ZERO_COUNTS } from "@/store/consoleCaptureStore";
 import { ConsolePanel } from "./ConsolePanel";
+import { DiagnosticsPanel } from "./DiagnosticsPanel";
 
-export type ConsoleDrawerTab = "output" | "console";
+export type ConsoleDrawerTab = "output" | "console" | "diagnostics";
 
 interface ConsoleDrawerProps {
   terminalId: string;
   /** Panel ID — keys the guest-page console-capture store. */
   paneId: string;
+  /** Project ID — required by the diagnostics IPC query. */
+  projectId?: string;
   /** webContentsId of the live guest webview, for lazy object inspection. */
   webContentsId?: number;
   status?: DevPreviewStatus;
@@ -130,6 +133,7 @@ function DrawerTabButton({
 export function ConsoleDrawer({
   terminalId,
   paneId,
+  projectId,
   webContentsId,
   status = "stopped",
   isOpen: controlledIsOpen,
@@ -207,7 +211,7 @@ export function ConsoleDrawer({
       if (!nextTab) return;
       nextTab.focus();
       const tabId = nextTab.dataset.tab;
-      if (tabId === "output" || tabId === "console") selectTab(tabId);
+      if (tabId === "output" || tabId === "console" || tabId === "diagnostics") selectTab(tabId);
     },
     [selectTab]
   );
@@ -248,6 +252,7 @@ export function ConsoleDrawer({
   const drawerRegionId = `console-drawer-${terminalId}`;
   const outputPanelId = `dev-preview-output-panel-${terminalId}`;
   const consolePanelId = `dev-preview-console-panel-${terminalId}`;
+  const diagnosticsPanelId = `dev-preview-diagnostics-panel-${terminalId}`;
 
   return (
     <div className="flex flex-col border-t border-overlay bg-surface">
@@ -398,6 +403,13 @@ export function ConsoleDrawer({
               onSelect={() => selectTab("console")}
               badge={errorCount}
             />
+            <DrawerTabButton
+              tab="diagnostics"
+              label="Diagnostics"
+              isActive={activeTab === "diagnostics"}
+              controlsId={diagnosticsPanelId}
+              onSelect={() => selectTab("diagnostics")}
+            />
           </div>
 
           <div className="relative min-h-0 flex-1">
@@ -425,6 +437,16 @@ export function ConsoleDrawer({
                 className="absolute inset-0"
               >
                 <ConsolePanel paneId={paneId} webContentsId={webContentsId} />
+              </div>
+            )}
+            {activeTab === "diagnostics" && (
+              <div
+                id={diagnosticsPanelId}
+                role="tabpanel"
+                aria-labelledby={`${diagnosticsPanelId}-tab`}
+                className="absolute inset-0"
+              >
+                <DiagnosticsPanel paneId={paneId} projectId={projectId} status={status} />
               </div>
             )}
           </div>

@@ -2159,6 +2159,7 @@ export function DevPreviewPane({
           <ConsoleDrawer
             terminalId={consoleTerminalId}
             paneId={id}
+            projectId={currentProjectId}
             webContentsId={guestWebContentsId}
             status={status}
             isOpen={isConsoleOpen}

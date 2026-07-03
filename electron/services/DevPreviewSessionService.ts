@@ -36,6 +36,10 @@ import type {
   DevPreviewStopByPanelRequest,
   DevPreviewSessionState,
   DevPreviewSessionStatus,
+  DevPreviewDiagnosticEvent,
+  DevPreviewDiagnosticsSnapshot,
+  DevPreviewProxyFailureCause,
+  DevPreviewUpstreamResolution,
   DevPreviewDirMeta,
   DevPreviewDestructivePreviewMeta,
   DevPreviewDestructivePreviewSizes,
@@ -78,6 +82,7 @@ interface DevPreviewSession extends DevPreviewSessionState {
   devSpawnedAt: number | null;
   backoffAbort: AbortController | null;
   crashLoopStopped: boolean;
+  restoredFromManifest: boolean;
 }
 
 const RUNNING_STATES: ReadonlySet<DevPreviewSessionStatus> = new Set([
@@ -131,6 +136,30 @@ const CRASH_LOOP_BACKOFF_MULTIPLIER = 1.5;
 const CRASH_LOOP_MAX_DELAY_MS = 3000;
 const CRASH_LOOP_MAX_ATTEMPTS = 5;
 
+// Bounds for the per-session diagnostics timeline. The ring keeps the last
+// DIAGNOSTIC_RING_MAX events per session key; the map keeps rings for the last
+// DIAGNOSTIC_SESSIONS_MAX keys touched so a timeline survives hibernation /
+// panel-close (the session object is deleted but its ring stays inspectable)
+// without growing unbounded across a long app session. Free-text fields are
+// capped so one pathological error line can't bloat a snapshot.
+export const DIAGNOSTIC_RING_MAX = 100;
+const DIAGNOSTIC_SESSIONS_MAX = 50;
+const DIAGNOSTIC_TEXT_MAX = 200;
+// Consecutive identical proxy failures coalesce into one event with a count —
+// a webview retry storm must not evict the lifecycle history it explains.
+const PROXY_EVENT_COALESCE_MS = 10_000;
+
+// A diagnostic event as recorded at a call site: the ring assigns at/seq/
+// generation/count. Distributes over the union so each variant keeps its
+// typed details.
+type DiagnosticInput<T = DevPreviewDiagnosticEvent> = T extends DevPreviewDiagnosticEvent
+  ? Omit<T, "at" | "seq" | "generation" | "count">
+  : never;
+
+function capDiagnosticText(text: string): string {
+  return text.length > DIAGNOSTIC_TEXT_MAX ? text.slice(0, DIAGNOSTIC_TEXT_MAX) : text;
+}
+
 /**
  * Parse both the port AND the transport scheme out of a detected dev-server URL (#9974).
  * Returns null if absent/unparseable. `isHttps` is true only when the URL scheme is
@@ -169,6 +198,17 @@ export class DevPreviewSessionService {
   // session reports status "restored-stopped" so the UI can offer a restart.
   // Entries are dropped the moment a real session is created for that key.
   private readonly restoredEntries = new Map<string, DevPreviewManifestEntry>();
+  // Per-session diagnostics timeline (sessionKey -> bounded ring). Kept in a
+  // separate map (not on the session object) so the timeline outlives session
+  // deletion — a "why did my server stop?" after hibernation or panel-close is
+  // exactly what this exists to answer. LRU-bounded via re-insertion on write.
+  private readonly diagnostics = new Map<
+    string,
+    { events: DevPreviewDiagnosticEvent[]; seq: number }
+  >();
+  // In-flight waitForPortFree aborts, so dispose() doesn't leave locked tasks
+  // polling a busy port for up to PORT_FREE_TIMEOUT_MS after app quit began.
+  private readonly portWaitAborts = new Set<AbortController>();
   private readonly onDataListener: (id: string, data: string | Uint8Array) => void;
   private readonly onExitListener: (id: string, exitCode: number, signal?: number) => void;
 
@@ -320,25 +360,44 @@ export class DevPreviewSessionService {
    * ambiguous split of a label whose sanitized tokens may themselves contain hyphens.
    */
   getUpstreamPortForSubdomain(subdomain: string): { port: number; isHttps: boolean } | null {
+    const resolved = this.resolveUpstream(subdomain);
+    return resolved.kind === "ok" ? { port: resolved.port, isHttps: resolved.isHttps } : null;
+  }
+
+  /**
+   * Classified variant of getUpstreamPortForSubdomain: says WHY there is no
+   * upstream instead of collapsing every miss to null, so the proxy can 502
+   * with an accurate message and the diagnostics timeline can name the cause.
+   */
+  resolveUpstream(subdomain: string): DevPreviewUpstreamResolution {
     for (const session of this.sessions.values()) {
       if (buildDevPreviewSubdomain(session.projectId, session.panelId) !== subdomain) continue;
       // Only forward to a live server. After an explicit stop the registry entry lingers
       // (the success path doesn't release it), so a stale port could otherwise be handed to
       // whatever process later binds it.
-      if (!RUNNING_STATES.has(session.status)) return null;
+      if (!RUNNING_STATES.has(session.status)) {
+        return { kind: "not-running", status: session.status };
+      }
       // Prefer the port AND scheme the dev server actually bound — UrlDetector overwrites
       // session.url when the server lands on a different port than the one allocated (a command
       // that ignores the injected PORT), and the URL carries the scheme (http vs https) so an
       // HTTPS dev server is dialed over TLS instead of getting a 502 (#9974). Fall back to the
       // allocated port (always plain HTTP) while still starting, before any URL has been detected.
       const detected = parseUrlEndpoint(session.url);
-      if (detected !== null) return detected;
+      if (detected !== null) return { kind: "ok", port: detected.port, isHttps: detected.isHttps };
       const fallbackPort = this.portRegistry.get(
         createSessionKey(session.projectId, session.panelId)
       );
-      return fallbackPort !== undefined ? { port: fallbackPort, isHttps: false } : null;
+      return fallbackPort !== undefined
+        ? { kind: "ok", port: fallbackPort, isHttps: false }
+        : { kind: "not-running", status: session.status };
     }
-    return null;
+    for (const entry of this.restoredEntries.values()) {
+      if (buildDevPreviewSubdomain(entry.projectId, entry.panelId) === subdomain) {
+        return { kind: "not-running", status: "restored-stopped" };
+      }
+    }
+    return { kind: "unknown-subdomain" };
   }
 
   dispose(): void {
@@ -346,6 +405,10 @@ export class DevPreviewSessionService {
     this.ptyClient.off("data", this.onDataListener);
     this.ptyClient.off("data-mirror", this.onDataListener);
     this.ptyClient.off("exit", this.onExitListener);
+    for (const abort of this.portWaitAborts) {
+      abort.abort();
+    }
+    this.portWaitAborts.clear();
     for (const session of this.sessions.values()) {
       this.clearStartupReplay(session);
       session.readinessAbort?.abort();
@@ -368,6 +431,7 @@ export class DevPreviewSessionService {
     this.locks.clear();
     this.portRegistry.clear();
     this.worktreeToSession.clear();
+    this.diagnostics.clear();
   }
 
   async ensure(request: DevPreviewEnsureRequest): Promise<DevPreviewSessionState> {
@@ -385,12 +449,18 @@ export class DevPreviewSessionService {
       const session = this.getOrCreateSession(request.projectId, request.panelId);
       const envChanged = !envEquals(session.env, request.env);
       const nextTurbopackEnabled = request.turbopackEnabled ?? true;
-      const configChanged =
-        session.cwd !== request.cwd ||
-        session.worktreeId !== request.worktreeId ||
-        session.devCommand !== request.devCommand ||
-        session.turbopackEnabled !== nextTurbopackEnabled ||
-        envChanged;
+      const changedFields: string[] = [];
+      if (session.cwd !== request.cwd) changedFields.push("cwd");
+      if (session.worktreeId !== request.worktreeId) changedFields.push("worktreeId");
+      if (session.devCommand !== request.devCommand) changedFields.push("devCommand");
+      if (session.turbopackEnabled !== nextTurbopackEnabled) changedFields.push("turbopackEnabled");
+      if (envChanged) changedFields.push("env");
+      const configChanged = changedFields.length > 0;
+
+      this.recordSessionDiagnostic(session, { type: "ensure-requested", configChanged });
+      if (configChanged) {
+        this.recordSessionDiagnostic(session, { type: "config-changed", changed: changedFields });
+      }
 
       session.cwd = request.cwd;
       const prevWorktreeId = session.worktreeId;
@@ -418,6 +488,10 @@ export class DevPreviewSessionService {
 
       const commandError = getInvalidCommandMessage(session.devCommand);
       if (commandError) {
+        this.recordSessionDiagnostic(session, {
+          type: "command-invalid",
+          message: capDiagnosticText(commandError),
+        });
         if (configChanged && session.terminalId) {
           await this.stopSessionTerminal(session, "invalid-command");
         }
@@ -477,6 +551,7 @@ export class DevPreviewSessionService {
           return;
         }
 
+        this.recordSessionDiagnostic(session, { type: "restart-requested", mode: "restart" });
         this.updateSession(session, {
           status: "starting",
           url: null,
@@ -528,6 +603,7 @@ export class DevPreviewSessionService {
         return;
       }
 
+      this.recordSessionDiagnostic(session, { type: "restart-requested", mode: "clear-cache" });
       this.updateSession(session, {
         status: "starting",
         url: null,
@@ -590,6 +666,7 @@ export class DevPreviewSessionService {
         return;
       }
 
+      this.recordSessionDiagnostic(session, { type: "restart-requested", mode: "reinstall" });
       this.updateSession(session, {
         status: "starting",
         url: null,
@@ -662,6 +739,8 @@ export class DevPreviewSessionService {
       // backoff has no live terminal and would otherwise skip the abort.
       this.resetCrashLoopGuard(session);
 
+      this.recordSessionDiagnostic(session, { type: "stop-requested", context: "stop" });
+
       if (session.terminalId) {
         this.updateSession(session, { status: "stopping", isRestarting: false });
         const stopStartedAt = performance.now();
@@ -671,11 +750,15 @@ export class DevPreviewSessionService {
         const port = this.portRegistry.get(key);
         if (port !== undefined) {
           const portAbort = new AbortController();
-          const portFree = await waitForPortFree(port, portAbort.signal);
+          this.portWaitAborts.add(portAbort);
+          const portFree = await waitForPortFree(port, portAbort.signal).finally(() => {
+            this.portWaitAborts.delete(portAbort);
+          });
           if (!portFree) {
             // Release the registry entry so a subsequent ensure() picks a fresh
             // port via allocatePort instead of immediately re-hitting the busy one.
             releasePort(this.portRegistry, key);
+            this.recordSessionDiagnostic(session, { type: "port-conflict", port });
             this.updateSession(session, {
               status: "error",
               url: null,
@@ -733,6 +816,10 @@ export class DevPreviewSessionService {
         const key = createSessionKey(session.projectId, session.panelId);
         await this.runLocked(key, async () => {
           try {
+            this.recordSessionDiagnostic(session, {
+              type: "stop-requested",
+              context: "panel-closed",
+            });
             await this.stopSessionTerminal(session, "panel-closed");
             this.updateSession(session, {
               status: "stopped",
@@ -776,6 +863,10 @@ export class DevPreviewSessionService {
       targets.map(async ([key, session]) => {
         await this.runLocked(key, async () => {
           try {
+            this.recordSessionDiagnostic(session, {
+              type: "stop-requested",
+              context: "project-hibernated",
+            });
             await this.stopSessionTerminal(session, "project-hibernated");
             this.updateSession(session, {
               status: "stopped",
@@ -901,6 +992,10 @@ export class DevPreviewSessionService {
       targets.map(async ([key, session]) => {
         await this.runLocked(key, async () => {
           try {
+            this.recordSessionDiagnostic(session, {
+              type: "stop-requested",
+              context: "worktree-delete",
+            });
             await this.stopSessionTerminal(session, "worktree-delete");
             this.updateSession(session, {
               status: "stopped",
@@ -952,6 +1047,145 @@ export class DevPreviewSessionService {
     return this.getSessionState(request.projectId, request.panelId);
   }
 
+  /**
+   * Append a diagnostic event to a session key's bounded ring. Consecutive
+   * identical proxy failures coalesce into one event with a count so a webview
+   * retry storm can't evict the lifecycle history. Writing touches the key's
+   * LRU position; the oldest untouched key is dropped past DIAGNOSTIC_SESSIONS_MAX.
+   */
+  private recordDiagnostic(key: string, generation: number, input: DiagnosticInput): void {
+    if (this.disposed) return;
+    let ring = this.diagnostics.get(key);
+    if (ring) {
+      this.diagnostics.delete(key);
+    } else {
+      ring = { events: [], seq: 0 };
+    }
+    this.diagnostics.set(key, ring);
+    while (this.diagnostics.size > DIAGNOSTIC_SESSIONS_MAX) {
+      const oldest = this.diagnostics.keys().next().value;
+      if (oldest === undefined) break;
+      this.diagnostics.delete(oldest);
+    }
+
+    // Coalesce only true repeats: same failure, same errno, same generation —
+    // a post-restart failure or a different errno must stay its own event.
+    const last = ring.events[ring.events.length - 1];
+    if (
+      (input.type === "proxy-502" || input.type === "proxy-ws-failed") &&
+      last !== undefined &&
+      last.type === input.type &&
+      last.cause === input.cause &&
+      last.code === input.code &&
+      last.generation === generation &&
+      Date.now() - last.at <= PROXY_EVENT_COALESCE_MS
+    ) {
+      last.count = (last.count ?? 1) + 1;
+      last.at = Date.now();
+      return;
+    }
+
+    ring.events.push({
+      ...input,
+      at: Date.now(),
+      seq: ring.seq++,
+      generation,
+    } as DevPreviewDiagnosticEvent);
+    if (ring.events.length > DIAGNOSTIC_RING_MAX) {
+      ring.events.splice(0, ring.events.length - DIAGNOSTIC_RING_MAX);
+    }
+  }
+
+  private recordSessionDiagnostic(session: DevPreviewSession, input: DiagnosticInput): void {
+    this.recordDiagnostic(
+      createSessionKey(session.projectId, session.panelId),
+      session.generation,
+      input
+    );
+  }
+
+  /**
+   * Entry point for DevPreviewProxyService failure reports. Resolves the
+   * subdomain back to a session key; a report that matches no session (cause
+   * "no-session") has no timeline to land on and is dropped — the proxy's own
+   * 502 body is the receipt for that case.
+   */
+  recordProxyDiagnostic(diagnostic: {
+    subdomain: string;
+    kind: "http" | "ws";
+    cause: DevPreviewProxyFailureCause;
+    code?: string;
+  }): void {
+    if (this.disposed) return;
+    for (const [key, session] of this.sessions) {
+      if (buildDevPreviewSubdomain(session.projectId, session.panelId) !== diagnostic.subdomain) {
+        continue;
+      }
+      this.recordDiagnostic(key, session.generation, {
+        type: diagnostic.kind === "ws" ? "proxy-ws-failed" : "proxy-502",
+        cause: diagnostic.cause,
+        ...(diagnostic.code !== undefined ? { code: diagnostic.code } : {}),
+      });
+      return;
+    }
+  }
+
+  /**
+   * Read snapshot for the diagnostics UI and IPC query. Pure read: never
+   * creates a session, never mutates state. Works for live sessions, restore
+   * placeholders, and already-deleted sessions whose ring is still retained.
+   */
+  getDiagnostics(request: DevPreviewSessionRequest): DevPreviewDiagnosticsSnapshot {
+    validateSessionRequest(request);
+    const key = createSessionKey(request.projectId, request.panelId);
+    // Copy the event objects, not just the array: coalescing mutates the last
+    // ring entry in place (count/at), and a snapshot must not change after it
+    // was taken. `changed` is the only nested field.
+    const events: DevPreviewDiagnosticEvent[] = (this.diagnostics.get(key)?.events ?? []).map(
+      (event) =>
+        event.type === "config-changed" ? { ...event, changed: [...event.changed] } : { ...event }
+    );
+    const upstream = this.resolveUpstream(
+      buildDevPreviewSubdomain(request.projectId, request.panelId)
+    );
+    const session = this.sessions.get(key);
+    if (!session) {
+      const restored = this.restoredEntries.get(key);
+      return {
+        panelId: request.panelId,
+        projectId: request.projectId,
+        worktreeId: restored?.worktreeId,
+        status: restored ? "restored-stopped" : "stopped",
+        generation: 0,
+        updatedAt: restored?.capturedAt ?? Date.now(),
+        allocatedPort: this.portRegistry.get(key) ?? null,
+        detectedUrl: null,
+        upstream,
+        crashLoop: { count: 0, stopped: false, backoffPending: false },
+        restoredFromManifest: restored !== undefined,
+        events,
+      };
+    }
+    return {
+      panelId: session.panelId,
+      projectId: session.projectId,
+      worktreeId: session.worktreeId,
+      status: session.status,
+      generation: session.generation,
+      updatedAt: session.updatedAt,
+      allocatedPort: this.portRegistry.get(key) ?? null,
+      detectedUrl: session.url,
+      upstream,
+      crashLoop: {
+        count: session.crashCount,
+        stopped: session.crashLoopStopped,
+        backoffPending: session.backoffAbort !== null,
+      },
+      restoredFromManifest: session.restoredFromManifest,
+      events,
+    };
+  }
+
   private getOrCreateSession(projectId: string, panelId: string): DevPreviewSession {
     const key = createSessionKey(projectId, panelId);
     let session = this.sessions.get(key);
@@ -960,7 +1194,7 @@ export class DevPreviewSessionService {
     // A real session supersedes any restore placeholder for this key — drop the
     // manifest entry so getSessionState stops reporting "restored-stopped" once
     // the user has restarted (or anything else spawned the server).
-    this.restoredEntries.delete(key);
+    const hadRestoredEntry = this.restoredEntries.delete(key);
 
     session = {
       panelId,
@@ -996,8 +1230,12 @@ export class DevPreviewSessionService {
       devSpawnedAt: null,
       backoffAbort: null,
       crashLoopStopped: false,
+      restoredFromManifest: hadRestoredEntry,
     };
     this.sessions.set(key, session);
+    if (hadRestoredEntry) {
+      this.recordSessionDiagnostic(session, { type: "manifest-restored" });
+    }
     return session;
   }
 
@@ -1232,6 +1470,7 @@ export class DevPreviewSessionService {
     session.crashCount += 1;
 
     if (session.crashCount > CRASH_LOOP_MAX_ATTEMPTS) {
+      this.recordSessionDiagnostic(session, { type: "crash-loop-stopped" });
       this.updateSession(session, {
         status: "stopped",
         url: null,
@@ -1257,6 +1496,11 @@ export class DevPreviewSessionService {
       void this.runInstall(session);
       return;
     }
+    this.recordSessionDiagnostic(session, {
+      type: "crash-loop-backoff",
+      attempt: session.crashCount,
+      delayMs,
+    });
     this.scheduleBackoffRespawn(session, delayMs, () => {
       void this.runInstall(session);
     });
@@ -1298,6 +1542,9 @@ export class DevPreviewSessionService {
       releasePort(this.portRegistry, sessionKey);
       return;
     }
+    // Recorded with the generation this spawn is about to become, so the whole
+    // spawn lifecycle (port-allocated → spawned → …) shares one generation.
+    this.recordDiagnostic(sessionKey, nextGeneration, { type: "port-allocated", port });
     const predictedUrl = `http://localhost:${port}`;
 
     const spawnEnv: Record<string, string> = { ...session.env, PORT: String(port) };
@@ -1339,6 +1586,7 @@ export class DevPreviewSessionService {
         projectId: session.projectId,
         terminalId,
       });
+      this.recordSessionDiagnostic(session, { type: "spawned", terminalId, port });
 
       // predictedUrl is the allocator-derived starting point for the readiness
       // poller — it's accurate for frameworks that honor env.PORT or the
@@ -1356,6 +1604,10 @@ export class DevPreviewSessionService {
       }, 0);
     } catch (error) {
       const message = formatErrorMessage(error, "Failed to start dev server");
+      this.recordSessionDiagnostic(session, {
+        type: "spawn-failed",
+        message: capDiagnosticText(message),
+      });
       this.detachTerminal(session);
       this.updateSession(session, {
         status: "error",
@@ -1520,9 +1772,13 @@ export class DevPreviewSessionService {
     const port = this.portRegistry.get(key);
     if (port === undefined) return true;
     const abort = new AbortController();
-    const free = await waitForPortFree(port, abort.signal);
+    this.portWaitAborts.add(abort);
+    const free = await waitForPortFree(port, abort.signal).finally(() => {
+      this.portWaitAborts.delete(abort);
+    });
     if (free) return true;
     releasePort(this.portRegistry, key);
+    this.recordSessionDiagnostic(session, { type: "port-conflict", port });
     this.updateSession(session, {
       status: "error",
       url: null,
@@ -1600,6 +1856,10 @@ export class DevPreviewSessionService {
         terminalId: id,
         url: result.url,
       });
+      this.recordSessionDiagnostic(session, {
+        type: "url-detected",
+        url: capDiagnosticText(result.url),
+      });
 
       session.readinessAbort?.abort();
       const abort = new AbortController();
@@ -1643,6 +1903,7 @@ export class DevPreviewSessionService {
           clearTimeout(session.compilingClearTimer);
           session.compilingClearTimer = setTimeout(() => {
             session.compilingClearTimer = null;
+            this.recordSessionDiagnostic(session, { type: "compile-cleared" });
             this.clearCompiling(session);
             this.emitStateChanged(session);
           }, COMPILE_CLEAR_MS);
@@ -1660,9 +1921,11 @@ export class DevPreviewSessionService {
             return;
           }
           session.compiling = true;
+          this.recordSessionDiagnostic(session, { type: "compile-started" });
           this.updateSession(session, { phaseLabel: "Compiling" });
           session.compilingClearTimer = setTimeout(() => {
             session.compilingClearTimer = null;
+            this.recordSessionDiagnostic(session, { type: "compile-cleared" });
             this.clearCompiling(session);
             this.emitStateChanged(session);
           }, COMPILE_CLEAR_MS);
@@ -1677,6 +1940,9 @@ export class DevPreviewSessionService {
         clearTimeout(session.compilingTimer);
         session.compilingTimer = null;
       }
+      if (session.compiling) {
+        this.recordSessionDiagnostic(session, { type: "compile-cleared" });
+      }
       this.clearCompiling(session);
       this.emitStateChanged(session);
     }
@@ -1685,6 +1951,11 @@ export class DevPreviewSessionService {
     const errorKey = `${result.error.type}:${result.error.message}`;
     if (errorKey === session.lastErrorKey) return;
     session.lastErrorKey = errorKey;
+    this.recordSessionDiagnostic(session, {
+      type: "output-error",
+      errorType: result.error.type,
+      message: capDiagnosticText(result.error.message),
+    });
 
     // Cancel any in-flight readiness poll: a server that still answers HEAD on
     // a half-started port would otherwise resolve to "running" and clobber the
@@ -1782,9 +2053,14 @@ export class DevPreviewSessionService {
     if (session.isRunningInstall) {
       session.isRunningInstall = false;
       if (exitCode === 0) {
+        this.recordSessionDiagnostic(session, { type: "install-completed" });
         void this.spawnSessionTerminal(session);
         return;
       }
+      this.recordSessionDiagnostic(session, {
+        type: "install-failed",
+        message: `Dependency installation failed (exit code ${exitCode})`,
+      });
       this.updateSession(session, {
         status: "error",
         url: null,
@@ -1799,6 +2075,12 @@ export class DevPreviewSessionService {
       });
       return;
     }
+
+    this.recordSessionDiagnostic(session, {
+      type: "terminal-exited",
+      exitCode,
+      ...(signal !== undefined ? { signal } : {}),
+    });
 
     if (session.needsInstall && session.installAttemptedGeneration !== session.generation) {
       session.needsInstall = false;
@@ -1862,6 +2144,10 @@ export class DevPreviewSessionService {
     session.isRunningInstall = true;
 
     const installCommand = this.detectInstallCommand(session.cwd);
+    this.recordSessionDiagnostic(session, {
+      type: "install-started",
+      command: capDiagnosticText(installCommand),
+    });
 
     const terminalId = this.createTerminalId(session);
     session.buffer = "";
@@ -1890,6 +2176,10 @@ export class DevPreviewSessionService {
     } catch (error) {
       session.isRunningInstall = false;
       const message = formatErrorMessage(error, "Failed to start dependency install");
+      this.recordSessionDiagnostic(session, {
+        type: "install-failed",
+        message: capDiagnosticText(message),
+      });
       this.detachTerminal(session);
       this.updateSession(session, {
         status: "error",
@@ -2101,6 +2391,10 @@ export class DevPreviewSessionService {
         if (ready) {
           session.needsInstall = false;
           this.clearCompiling(session);
+          this.recordSessionDiagnostic(session, {
+            type: "readiness-probe-succeeded",
+            url: capDiagnosticText(url),
+          });
           this.updateSession(session, {
             status: "running",
             url,
@@ -2115,6 +2409,11 @@ export class DevPreviewSessionService {
             url,
           });
         } else {
+          this.recordSessionDiagnostic(session, {
+            type: "readiness-probe-timed-out",
+            url: capDiagnosticText(url),
+            timeoutMs: READINESS_TIMEOUT_MS,
+          });
           this.updateSession(session, {
             status: "error",
             url: null,
@@ -2140,6 +2439,10 @@ export class DevPreviewSessionService {
           url,
           panelId: session.panelId,
           error: message,
+        });
+        this.recordSessionDiagnostic(session, {
+          type: "readiness-probe-failed",
+          message: capDiagnosticText(message),
         });
         this.updateSession(session, {
           status: "error",

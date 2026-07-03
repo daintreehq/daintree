@@ -186,7 +186,7 @@ export interface DevPreviewPanelOptions extends AddPanelOptionsBase {
   /** Whether the dev-preview console drawer is open */
   devPreviewConsoleOpen?: boolean;
   /** Active dev-preview console drawer tab ("output" = PTY, "console" = guest-page console) */
-  devPreviewConsoleTab?: "output" | "console";
+  devPreviewConsoleTab?: "output" | "console" | "diagnostics";
   /** Active viewport preset for responsive emulation (undefined = fill) */
   viewportPreset?: ViewportPresetId;
   /** Whether the active viewport preset is rotated to landscape */

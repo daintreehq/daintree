@@ -12,6 +12,10 @@ import {
   normalizeBootstrapRedirectPath,
   parseDevPreviewProxyHost,
 } from "../../shared/utils/devPreviewProxy.js";
+import type {
+  DevPreviewProxyFailureCause,
+  DevPreviewUpstreamResolution,
+} from "../../shared/types/ipc/devPreview.js";
 
 // The proxy binds IPv4 loopback only — it should be reachable from this machine, nothing else.
 const PROXY_LISTEN_HOST = "127.0.0.1";
@@ -51,12 +55,29 @@ interface BrowserTokenPayload {
 
 /**
  * Resolves an incoming dev-preview subdomain (e.g. `dp-proj-panel`) to the live upstream
- * dev-server port AND transport scheme, or null when no session owns that subdomain. The
- * `isHttps` flag lets the proxy dial a TLS dev server (Vite `server.https`, Next.js
- * `--experimental-https`, mkcert) over HTTPS instead of 502-ing on a plain-HTTP dial (#9974).
+ * dev-server port AND transport scheme, or a classified miss. The `isHttps` flag lets the
+ * proxy dial a TLS dev server (Vite `server.https`, Next.js `--experimental-https`, mkcert)
+ * over HTTPS instead of 502-ing on a plain-HTTP dial (#9974). The legacy `{port,isHttps} |
+ * null` shape stays accepted (null ≙ unknown subdomain) so existing resolvers keep working;
+ * the classified union lets the 502 say WHY there is no upstream (#9100 follow-up).
  * Injected so the proxy stays decoupled from DevPreviewSessionService internals.
  */
-export type ResolveUpstream = (subdomain: string) => { port: number; isHttps: boolean } | null;
+export type ResolveUpstream = (
+  subdomain: string
+) => DevPreviewUpstreamResolution | { port: number; isHttps: boolean } | null;
+
+/**
+ * Failure report emitted toward the dev-preview diagnostics timeline. Carries the
+ * subdomain (never the request path/body), the transport, a classified cause, and
+ * the raw errno code when one exists. Purely observational — proxy behavior is
+ * identical with or without a listener.
+ */
+export interface DevPreviewProxyDiagnostic {
+  subdomain: string;
+  kind: "http" | "ws";
+  cause: DevPreviewProxyFailureCause;
+  code?: string;
+}
 
 /**
  * Fixed-port reverse proxy that gives every dev-preview panel a stable `*.localhost` origin
@@ -74,6 +95,7 @@ export class DevPreviewProxyService {
   private server: http.Server | null = null;
   private proxy: ProxyServer | null = null;
   private actualPort = 0;
+  private portFallback = false;
   private startPromise: Promise<number> | null = null;
   private disposed = false;
   // Live sockets (HTTP keep-alive + upgraded WebSockets). server.closeAllConnections() handles
@@ -89,11 +111,19 @@ export class DevPreviewProxyService {
   private readonly pendingTokens = new Map<string, number>();
   private reaper: NodeJS.Timeout | null = null;
 
-  constructor(private readonly resolveUpstreamFn: ResolveUpstream) {}
+  constructor(
+    private readonly resolveUpstreamFn: ResolveUpstream,
+    private readonly onDiagnostic?: (event: DevPreviewProxyDiagnostic) => void
+  ) {}
 
   /** The port the proxy actually bound to (43000, or an OS-assigned fallback). 0 until started. */
   get port(): number {
     return this.actualPort;
+  }
+
+  /** True when the fixed port was taken and the proxy is on an OS-assigned fallback. */
+  get usedPortFallback(): boolean {
+    return this.portFallback;
   }
 
   /** Idempotent: starts the proxy once and resolves with the bound port on every call. */
@@ -119,7 +149,17 @@ export class DevPreviewProxyService {
     // hangs on a dead upstream. (An attached listener is also required so a late socket error
     // doesn't surface as an unhandled 'error' event and crash the process.) The per-call
     // try/catch below is a backstop for the reject path; send502/destroy are idempotent.
-    proxy.on("error", (_err, _req, res) => {
+    proxy.on("error", (err, req, res) => {
+      if (req) {
+        const subdomain = parseDevPreviewProxyHost(req.headers?.host);
+        const classified = this.classifyUpstreamError(err);
+        this.reportFailure(
+          subdomain,
+          res instanceof http.ServerResponse ? "http" : "ws",
+          classified.cause,
+          classified.code
+        );
+      }
       if (!res) return;
       if (res instanceof http.ServerResponse) {
         this.send502(res, "The dev server isn't responding.");
@@ -167,7 +207,9 @@ export class DevPreviewProxyService {
         }
         // The fixed port is taken (another Daintree window, or an unrelated process). Fall
         // back to an OS-assigned port; the live port is published via IPC, so callers never
-        // assume the fixed value.
+        // assume the fixed value. The fallback is remembered so diagnostics can explain why
+        // the origin (and therefore cookies/localStorage) differs from previous runs.
+        this.portFallback = true;
         server.once("error", reject);
         server.listen(0, PROXY_LISTEN_HOST, resolvePort);
       };
@@ -191,9 +233,15 @@ export class DevPreviewProxyService {
       return;
     }
 
-    const upstream = this.resolveUpstream(req.headers.host);
-    if (upstream === null) {
+    const { subdomain, resolution } = this.resolveUpstream(req.headers.host);
+    if (resolution.kind === "unknown-subdomain") {
+      this.reportFailure(subdomain, "http", "no-session");
       this.send502(res, "No dev server is registered for this preview.");
+      return;
+    }
+    if (resolution.kind === "not-running") {
+      this.reportFailure(subdomain, "http", "not-running");
+      this.send502(res, "The dev server for this preview isn't running.");
       return;
     }
     try {
@@ -201,12 +249,14 @@ export class DevPreviewProxyService {
       // http.request from the target scheme. `secure: false` accepts the self-signed loopback
       // cert (Vite/Next dev TLS); the upstream is always `localhost`, so this stays loopback-only
       // and never disables verification for a remote host (#9974).
-      const scheme = upstream.isHttps ? "https" : "http";
+      const scheme = resolution.isHttps ? "https" : "http";
       await this.proxy!.web(req, res, {
-        target: `${scheme}://${UPSTREAM_HOST}:${upstream.port}`,
-        ...(upstream.isHttps ? { secure: false } : {}),
+        target: `${scheme}://${UPSTREAM_HOST}:${resolution.port}`,
+        ...(resolution.isHttps ? { secure: false } : {}),
       });
-    } catch {
+    } catch (err) {
+      const classified = this.classifyUpstreamError(err);
+      this.reportFailure(subdomain, "http", classified.cause, classified.code);
       this.send502(res, "The dev server isn't responding.");
     }
   }
@@ -219,8 +269,13 @@ export class DevPreviewProxyService {
     this.sockets.add(socket);
     socket.once("close", () => this.sockets.delete(socket));
 
-    const upstream = this.resolveUpstream(req.headers.host);
-    if (upstream === null) {
+    const { subdomain, resolution } = this.resolveUpstream(req.headers.host);
+    if (resolution.kind !== "ok") {
+      this.reportFailure(
+        subdomain,
+        "ws",
+        resolution.kind === "not-running" ? "not-running" : "no-session"
+      );
       socket.destroy();
       return;
     }
@@ -230,25 +285,62 @@ export class DevPreviewProxyService {
       // HMR/WebSocket upgrades reach an HTTPS upstream instead of failing the handshake; httpxy's
       // isSSL check matches both `wss` and `https`, and `secure: false` accepts the self-signed
       // loopback cert (#9974).
-      const scheme = upstream.isHttps ? "wss" : "http";
+      const scheme = resolution.isHttps ? "wss" : "http";
       await this.proxy!.ws(
         req,
         socket as Socket,
         {
-          target: `${scheme}://${UPSTREAM_HOST}:${upstream.port}`,
-          ...(upstream.isHttps ? { secure: false } : {}),
+          target: `${scheme}://${UPSTREAM_HOST}:${resolution.port}`,
+          ...(resolution.isHttps ? { secure: false } : {}),
         },
         head
       );
-    } catch {
+    } catch (err) {
+      const classified = this.classifyUpstreamError(err);
+      this.reportFailure(subdomain, "ws", classified.cause, classified.code);
       socket.destroy();
     }
   }
 
-  private resolveUpstream(host: string | undefined): { port: number; isHttps: boolean } | null {
+  private resolveUpstream(host: string | undefined): {
+    subdomain: string | null;
+    resolution: DevPreviewUpstreamResolution;
+  } {
     const subdomain = parseDevPreviewProxyHost(host);
-    if (!subdomain) return null;
-    return this.resolveUpstreamFn(subdomain);
+    if (!subdomain) return { subdomain: null, resolution: { kind: "unknown-subdomain" } };
+    const resolved = this.resolveUpstreamFn(subdomain);
+    if (resolved === null) return { subdomain, resolution: { kind: "unknown-subdomain" } };
+    if ("kind" in resolved) return { subdomain, resolution: resolved };
+    return {
+      subdomain,
+      resolution: { kind: "ok", port: resolved.port, isHttps: resolved.isHttps },
+    };
+  }
+
+  private classifyUpstreamError(err: unknown): {
+    cause: DevPreviewProxyFailureCause;
+    code?: string;
+  } {
+    const code = (err as NodeJS.ErrnoException | null | undefined)?.code;
+    if (code === "ECONNREFUSED") return { cause: "upstream-refused", code };
+    if (code === "ETIMEDOUT" || code === "ESOCKETTIMEDOUT") {
+      return { cause: "upstream-timeout", code };
+    }
+    return { cause: "upstream-error", ...(typeof code === "string" ? { code } : {}) };
+  }
+
+  private reportFailure(
+    subdomain: string | null,
+    kind: "http" | "ws",
+    cause: DevPreviewProxyFailureCause,
+    code?: string
+  ): void {
+    if (!subdomain || !this.onDiagnostic || this.disposed) return;
+    try {
+      this.onDiagnostic({ subdomain, kind, cause, ...(code !== undefined ? { code } : {}) });
+    } catch {
+      // Diagnostics must never break proxying.
+    }
   }
 
   private send502(res: http.ServerResponse, message: string): void {
