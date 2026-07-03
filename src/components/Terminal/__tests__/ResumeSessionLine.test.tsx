@@ -7,7 +7,10 @@ import { render, screen, fireEvent } from "@testing-library/react";
 const h = vi.hoisted(() => ({
   records: { sessions: [] as unknown[], hasLoaded: true },
   resumeFn: vi.fn(),
-  dispatch: vi.fn(),
+  // dispatch returns a Promise so `.finally()` (the '+N more' button's
+  // shortcut-hint teardown) has something to chain onto, as it does for real.
+  dispatch: vi.fn(() => Promise.resolve()),
+  hide: vi.fn(),
   items: { list: [] as Array<Record<string, unknown>> },
 }));
 
@@ -30,6 +33,9 @@ vi.mock("@/services/resumeSessionItems", () => ({
 }));
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: h.dispatch },
+}));
+vi.mock("@/store/shortcutHintStore", () => ({
+  shortcutHintStore: { getState: () => ({ hide: h.hide }) },
 }));
 vi.mock("@/components/PanelPalette/PanelKindIcon", () => ({
   PanelKindIcon: () => <span data-testid="panel-icon" />,
@@ -55,6 +61,7 @@ beforeEach(() => {
   h.items.list = [];
   h.resumeFn.mockClear();
   h.dispatch.mockClear();
+  h.hide.mockClear();
 });
 
 describe("ResumeSessionLine", () => {
@@ -84,14 +91,28 @@ describe("ResumeSessionLine", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("offers a '+N more' browse entry into the resume launcher", () => {
+  it("offers a '+N more' browse entry into the resume launcher", async () => {
     h.items.list = [makeItem("s1", "Resume Claude"), makeItem("s2", "Resume Codex")];
+    // Hold the dispatch open so the hide assertion proves the load-bearing
+    // `.finally()` teardown (fired after the shortcut hint is emitted), not just
+    // the pre-dispatch clear.
+    let resolveDispatch: (() => void) | undefined;
+    h.dispatch.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (resolveDispatch = () => resolve()))
+    );
     render(<ResumeSessionLine />);
     const more = screen.getByRole("button", { name: /browse 1 more resumable session/i });
     fireEvent.click(more);
     expect(h.dispatch).toHaveBeenCalledWith("terminal.resumeSessions", undefined, {
       source: "user",
     });
+    // The launcher opens as a modal; the teaching shortcut hint sits above it,
+    // so opening it must tear the hint down once dispatch settles (mirrors the
+    // toolbar resume button).
+    const hidesBeforeSettle = h.hide.mock.calls.length;
+    resolveDispatch?.();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.hide.mock.calls.length).toBeGreaterThan(hidesBeforeSettle);
   });
 
   it("does not show '+N more' when there is only one session", () => {

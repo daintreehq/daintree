@@ -3,6 +3,7 @@ import { SquareTerminal, Search } from "lucide-react";
 import { KbdChord } from "@/components/ui/Kbd";
 import { useEffectiveCombo, useAriaKeyshortcuts } from "@/hooks/useKeybinding";
 import { actionService } from "@/services/ActionService";
+import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { getLaunchOptions, type LaunchOption } from "@/components/TerminalPalette/launchOptions";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -54,10 +55,21 @@ function QuickAction({ icon, label, actionId, onClick }: QuickActionProps) {
 function PaletteSearchButton() {
   const combo = useEffectiveCombo("panel.palette");
   const ariaKeyshortcuts = useAriaKeyshortcuts("panel.palette");
+  const handleClick = () => {
+    // panel.palette opens a modal palette. Its post-dispatch shortcut hint
+    // (ShortcutHint sits at z-toast, above z-modal) would otherwise land on
+    // top of the just-opened palette and linger until its 2.5s auto-dismiss.
+    // Mirror the toolbar's palette/resume buttons and tear the hint down once
+    // the dispatch chain settles.
+    shortcutHintStore.getState().hide();
+    void actionService
+      .dispatch("panel.palette", undefined, { source: "user" })
+      .finally(() => shortcutHintStore.getState().hide());
+  };
   return (
     <button
       type="button"
-      onClick={() => void actionService.dispatch("panel.palette", undefined, { source: "user" })}
+      onClick={handleClick}
       aria-keyshortcuts={ariaKeyshortcuts}
       className="flex w-full items-center gap-2.5 rounded-[var(--radius-md)] border border-border-default bg-overlay-soft px-3 py-2.5 text-sm text-daintree-text/70 transition-colors hover:bg-overlay-medium hover:text-daintree-text focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
     >

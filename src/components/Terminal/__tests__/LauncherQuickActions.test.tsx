@@ -7,7 +7,10 @@ import { render, screen, fireEvent } from "@testing-library/react";
 // (layout, which ids are built-in agents, and which buttons are visible) before
 // rendering.
 const h = vi.hoisted(() => ({
-  dispatch: vi.fn(),
+  // dispatch returns a Promise so `.finally()` (the palette button's shortcut-
+  // hint teardown) has something to chain onto, matching the real signature.
+  dispatch: vi.fn(() => Promise.resolve()),
+  hide: vi.fn(),
   avail: { availability: {} as Record<string, unknown> },
   options: [] as Array<{
     id: string;
@@ -59,6 +62,9 @@ vi.mock("@/hooks/useKeybinding", () => ({
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: h.dispatch },
 }));
+vi.mock("@/store/shortcutHintStore", () => ({
+  shortcutHintStore: { getState: () => ({ hide: h.hide }) },
+}));
 vi.mock("@/components/ui/Kbd", () => ({
   KbdChord: ({ shortcut }: { shortcut: string }) => <span data-testid="kbd">{shortcut}</span>,
 }));
@@ -67,6 +73,7 @@ import { LauncherQuickActions } from "../LauncherQuickActions";
 
 beforeEach(() => {
   h.dispatch.mockClear();
+  h.hide.mockClear();
   h.avail.availability = {};
   h.options = [
     { id: "claude", launchAgentId: "claude", label: "Claude", description: "", icon: null },
@@ -176,6 +183,29 @@ describe("LauncherQuickActions", () => {
     fireEvent.click(screen.getByRole("button", { name: /Search agents & panels/i }));
     expect(h.dispatch).toHaveBeenCalledWith("terminal.new", undefined, { source: "user" });
     expect(h.dispatch).toHaveBeenCalledWith("panel.palette", undefined, { source: "user" });
+  });
+
+  it("leaves the shortcut hint alone for a plain agent launch (no modal opens over it)", () => {
+    render(<LauncherQuickActions />);
+    fireEvent.click(screen.getByRole("button", { name: /Claude/i }));
+    expect(h.hide).not.toHaveBeenCalled();
+  });
+
+  it("clears the shortcut hint once the palette dispatch settles so it can't strand over the modal", async () => {
+    // Hold the dispatch open so the assertion proves the load-bearing teardown:
+    // the `.finally()` that runs AFTER dispatch (and thus after the shortcut
+    // hint is emitted) settles. The pre-dispatch clear alone would pass and mask
+    // a regression, so assert a hide fires only once the promise resolves.
+    let resolveDispatch: (() => void) | undefined;
+    h.dispatch.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (resolveDispatch = () => resolve()))
+    );
+    render(<LauncherQuickActions />);
+    fireEvent.click(screen.getByRole("button", { name: /Search agents & panels/i }));
+    const hidesBeforeSettle = h.hide.mock.calls.length;
+    resolveDispatch?.();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.hide.mock.calls.length).toBeGreaterThan(hidesBeforeSettle);
   });
 
   it("exposes an agent's binding via aria-keyshortcuts, not its accessible name", () => {
