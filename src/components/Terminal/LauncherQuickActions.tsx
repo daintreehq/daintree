@@ -1,5 +1,5 @@
 import { useMemo, useSyncExternalStore } from "react";
-import { SquareTerminal, Plus } from "lucide-react";
+import { SquareTerminal, Search } from "lucide-react";
 import { KbdChord } from "@/components/ui/Kbd";
 import { useEffectiveCombo, useAriaKeyshortcuts } from "@/hooks/useKeybinding";
 import { actionService } from "@/services/ActionService";
@@ -44,7 +44,34 @@ function QuickAction({ icon, label, actionId, onClick }: QuickActionProps) {
           (otherwise "Claude" reads as "Claude Cmd Alt C"). */}
       {combo && (
         <span aria-hidden="true">
-          <KbdChord shortcut={combo} className="ml-0.5 opacity-70 group-hover:opacity-100" />
+          <KbdChord shortcut={combo} className="ml-0.5" />
+        </span>
+      )}
+    </button>
+  );
+}
+
+/**
+ * Search-shaped entry into the panel palette (⌘N) — the launcher's "find
+ * anything" affordance. Same quiet surface as the QuickAction chips (it's a
+ * peer launch affordance, not an elevated input); only the shape and Search
+ * icon say "search". The palette itself is the real search field.
+ */
+function PaletteSearchButton() {
+  const combo = useEffectiveCombo("panel.palette");
+  const ariaKeyshortcuts = useAriaKeyshortcuts("panel.palette");
+  return (
+    <button
+      type="button"
+      onClick={() => void actionService.dispatch("panel.palette", undefined, { source: "user" })}
+      aria-keyshortcuts={ariaKeyshortcuts}
+      className="flex w-full items-center gap-2.5 rounded-[var(--radius-md)] border border-border-subtle bg-overlay-subtle px-3 py-2 text-sm text-daintree-text/55 transition-colors hover:bg-overlay-soft hover:border-border-default hover:text-daintree-text/80 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+    >
+      <Search className="h-4 w-4 shrink-0 text-daintree-text/40" aria-hidden="true" />
+      <span className="min-w-0 flex-1 truncate text-left">Search agents &amp; panels…</span>
+      {combo && (
+        <span aria-hidden="true">
+          <KbdChord shortcut={combo} />
         </span>
       )}
     </button>
@@ -92,37 +119,34 @@ export function LauncherQuickActions() {
   };
 
   return (
-    <div className="flex w-full max-w-lg flex-wrap items-center justify-center gap-2">
-      {agents.map((agent) => {
-        const id = agent.launchAgentId!;
-        // Built-ins carry a canonical `agent.<id>` action (keybinding + label);
-        // plugin agents have none, so route them through the generic launcher.
-        const builtIn = isBuiltInAgentId(id);
-        const actionId = (builtIn ? `agent.${id}` : "agent.launch") as ActionId;
-        return (
-          <QuickAction
-            key={agent.id}
-            icon={agent.icon}
-            label={agent.label}
-            actionId={actionId}
-            onClick={() =>
-              builtIn ? dispatch(actionId) : dispatch("agent.launch", { agentId: id })
-            }
-          />
-        );
-      })}
-      <QuickAction
-        icon={<SquareTerminal className="h-4 w-4" />}
-        label="New terminal"
-        actionId="terminal.new"
-        onClick={() => dispatch("terminal.new")}
-      />
-      <QuickAction
-        icon={<Plus className="h-4 w-4" />}
-        label="New panel…"
-        actionId="panel.palette"
-        onClick={() => dispatch("panel.palette")}
-      />
+    <div className="flex w-full max-w-lg flex-col items-center gap-2.5">
+      <div className="flex w-full flex-wrap items-center justify-center gap-2">
+        {agents.map((agent) => {
+          const id = agent.launchAgentId!;
+          // Built-ins carry a canonical `agent.<id>` action (keybinding + label);
+          // plugin agents have none, so route them through the generic launcher.
+          const builtIn = isBuiltInAgentId(id);
+          const actionId = (builtIn ? `agent.${id}` : "agent.launch") as ActionId;
+          return (
+            <QuickAction
+              key={agent.id}
+              icon={agent.icon}
+              label={agent.label}
+              actionId={actionId}
+              onClick={() =>
+                builtIn ? dispatch(actionId) : dispatch("agent.launch", { agentId: id })
+              }
+            />
+          );
+        })}
+        <QuickAction
+          icon={<SquareTerminal className="h-4 w-4" />}
+          label="New terminal"
+          actionId="terminal.new"
+          onClick={() => dispatch("terminal.new")}
+        />
+      </div>
+      <PaletteSearchButton />
     </div>
   );
 }

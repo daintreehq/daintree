@@ -126,7 +126,7 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
       onClick={expand}
       aria-expanded={false}
       aria-label={activityLabel}
-      className="group flex w-full max-w-lg items-center gap-3 rounded-[var(--radius-md)] border border-border-subtle/60 px-3 py-2 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+      className="group flex w-full max-w-lg items-center gap-3 rounded-[var(--radius-md)] border border-border-subtle px-3 py-2 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
     >
       <Activity className="h-3.5 w-3.5 shrink-0 text-status-success/70" aria-hidden="true" />
       <span className="shrink-0 text-xs font-medium text-daintree-text/70">Project pulse</span>

@@ -66,11 +66,11 @@ beforeEach(() => {
 });
 
 describe("LauncherQuickActions", () => {
-  it("shows installed agents plus the two core launch actions", () => {
+  it("shows installed agents, a new-terminal chip, and the palette search entry", () => {
     render(<LauncherQuickActions />);
     expect(screen.getByRole("button", { name: /Claude/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /New terminal/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /New panel/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Search agents & panels/i })).toBeTruthy();
   });
 
   it("hides uninstalled built-in agents once availability is known", () => {
@@ -99,10 +99,10 @@ describe("LauncherQuickActions", () => {
     );
   });
 
-  it("dispatches terminal.new and panel.palette for the core actions", () => {
+  it("dispatches terminal.new for the chip and panel.palette from the search entry", () => {
     render(<LauncherQuickActions />);
     fireEvent.click(screen.getByRole("button", { name: /New terminal/i }));
-    fireEvent.click(screen.getByRole("button", { name: /New panel/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Search agents & panels/i }));
     expect(h.dispatch).toHaveBeenCalledWith("terminal.new", undefined, { source: "user" });
     expect(h.dispatch).toHaveBeenCalledWith("panel.palette", undefined, { source: "user" });
   });

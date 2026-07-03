@@ -83,31 +83,20 @@ export function ContentGridEmptyState({
     );
   };
 
-  // Large, heavily-faded backdrop mark (VS Code-style). Non-interactive and
-  // aria-hidden — pure atmosphere behind the launcher, never a focus target.
+  // Centered stacked hero: mark above, name below — one alignment axis with
+  // the rest of the launcher column (a left-aligned lockup and a floating
+  // watermark both read as misplaced against a centered page). ~10% smaller
+  // than the pre-redesign hero. Decorative; the project's own icon wins over
+  // the Daintree mark when one is set.
   const sanitizedIcon = projectIconSvg ? sanitizeSvg(projectIconSvg) : null;
-  const watermark =
-    hasActiveWorktree &&
-    (sanitizedIcon?.ok ? (
-      <img
-        src={svgToDataUrl(sanitizedIcon.svg)}
-        alt=""
-        className="h-80 w-80 object-contain opacity-[0.05]"
-      />
-    ) : (
-      <DaintreeIcon className="h-80 w-80 text-daintree-text/[0.04]" />
-    ));
+  const identityMark = sanitizedIcon?.ok ? (
+    <img src={svgToDataUrl(sanitizedIcon.svg)} alt="" className="h-25 w-25 object-contain" />
+  ) : (
+    <DaintreeIcon className="h-25 w-25 text-tint/65" aria-hidden="true" />
+  );
 
   return (
-    <div className="relative h-full w-full overflow-hidden animate-in fade-in duration-500">
-      {watermark && (
-        <div
-          className="pointer-events-none absolute inset-0 flex items-center justify-center"
-          aria-hidden="true"
-        >
-          {watermark}
-        </div>
-      )}
+    <div className="relative h-full w-full overflow-hidden animate-in fade-in duration-200">
       {/* Content scrolls independently of the fixed watermark so an expanded
           pulse (or a tall recipe list) on a short canvas stays reachable
           instead of being clipped; `min-h-full` keeps it centered when short. */}
@@ -116,12 +105,15 @@ export function ContentGridEmptyState({
           <div className="max-w-3xl w-full flex flex-col items-center">
             {hasActiveWorktree && (
               <div className="mb-6 flex flex-col items-center text-center">
+                <div className="mb-4">{identityMark}</div>
                 {hasProjectIdentity ? (
-                  <div className="flex flex-col items-center gap-1 min-w-0 max-w-full">
+                  <div className="flex flex-col items-center gap-1.5 min-w-0 max-w-full">
                     <div className="group flex items-center gap-1.5 min-w-0 max-w-full">
-                      <h3 className="text-xl font-semibold text-daintree-text tracking-tight truncate max-w-full">
+                      <h3 className="text-2xl font-semibold text-daintree-text tracking-tight truncate max-w-full">
                         {projectEmoji ? (
-                          <span className="mr-2" aria-hidden="true">
+                          // The name outweighs the emoji — the text is the
+                          // identity, the emoji is seasoning.
+                          <span className="mr-2 text-lg align-middle" aria-hidden="true">
                             {projectEmoji}
                           </span>
                         ) : null}
@@ -137,31 +129,26 @@ export function ContentGridEmptyState({
                       </button>
                     </div>
                     {(branchLabel || pathLabel) && (
-                      <div className="flex items-center gap-2 text-daintree-text/55 font-mono text-xs max-w-full min-w-0">
+                      <div className="flex flex-col items-center gap-0.5 text-daintree-text/60 max-w-full min-w-0 font-mono">
                         {branchLabel && (
-                          <span className="flex items-center gap-1 min-w-0">
-                            <GitBranch className="h-3 w-3 shrink-0" aria-hidden="true" />
+                          <div className="flex items-center gap-1.5 text-sm max-w-full min-w-0">
+                            <GitBranch className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                             <span className="truncate min-w-0">{branchLabel}</span>
-                          </span>
-                        )}
-                        {branchLabel && pathLabel && (
-                          <span className="text-daintree-text/30" aria-hidden="true">
-                            ·
-                          </span>
+                          </div>
                         )}
                         {pathLabel && (
-                          <span
-                            className="truncate min-w-0"
+                          <p
+                            className="text-xs truncate max-w-full"
                             title={activeWorktreePath ?? undefined}
                           >
                             {pathLabel}
-                          </span>
+                          </p>
                         )}
                       </div>
                     )}
                   </div>
                 ) : (
-                  <h3 className="text-xl font-semibold text-daintree-text tracking-tight">
+                  <h3 className="text-xl font-semibold text-daintree-text tracking-tight truncate max-w-full">
                     {activeWorktreeName || "Daintree"}
                   </h3>
                 )}
@@ -200,7 +187,7 @@ export function ContentGridEmptyState({
             )}
 
             {hasActiveWorktree && recipesProjectId !== null && !recipesLoading && (
-              <div className="mb-4 w-full flex justify-center">
+              <div className="mb-3 w-full flex justify-center">
                 <RecipeRunner activeWorktreeId={activeWorktreeId} defaultCwd={defaultCwd} />
               </div>
             )}

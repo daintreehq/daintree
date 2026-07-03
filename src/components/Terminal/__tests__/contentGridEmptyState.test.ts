@@ -5,16 +5,21 @@ import { resolve } from "path";
 const EMPTY_STATE_PATH = resolve(__dirname, "../ContentGridEmptyState.tsx");
 
 describe("ContentGrid EmptyState — RecipeRunner integration", () => {
-  it("identity hero stays compact and drops the large solid logo for a faded watermark", async () => {
+  it("identity is a centered stacked hero — mark above the name, one alignment axis", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    // Compact centered identity line retained…
+    // Centered identity block…
     expect(content).toContain('"mb-6 flex flex-col items-center text-center"');
-    // …but the large solid project logo block is gone, replaced by a
-    // heavily-faded, non-interactive backdrop mark.
+    // …with the mark stacked above the name (no left-aligned lockup, no
+    // gear-overlaid logo wrapper from the pre-redesign layout)…
+    expect(content).toContain("identityMark");
     expect(content).not.toContain('"relative group mb-4"');
-    // Correctness invariant (not cosmetics): the backdrop mark is
-    // non-interactive so it can never intercept launcher clicks.
-    expect(content).toContain("pointer-events-none absolute inset-0");
+    // …and no floating canvas watermark layer (it read as misplaced).
+    expect(content).not.toContain("pointer-events-none absolute");
+    // A near-invisible color-alpha mark must not return — the
+    // `prefers-contrast: more` rescue rule for `text-daintree-text/*` forces
+    // sub-0.1 alphas to a fully opaque silhouette. (The hero mark rides the
+    // neutral `tint` idiom instead.)
+    expect(content).not.toContain("text-daintree-text/[0");
   });
 
   it("renders RecipeRunner component instead of inline recipe list", async () => {
@@ -25,7 +30,10 @@ describe("ContentGrid EmptyState — RecipeRunner integration", () => {
     expect(content).not.toContain("handleRunRecipe");
   });
 
-  it("gates RecipeRunner on hasEverLaunchedAgent so first-run users don't see it", async () => {
+  it("derives hasEverLaunchedAgent from the panel store to gate teaching content", async () => {
+    // RecipeRunner itself is deliberately NOT gated on hasEverLaunchedAgent
+    // (recipes are the launcher hero; see the CLAUDE.md recipe-gating gotcha) —
+    // the flag only gates teaching content like RotatingTip.
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
     expect(content).toContain("hasEverLaunchedAgent");
     expect(content).toContain("usePanelStore");

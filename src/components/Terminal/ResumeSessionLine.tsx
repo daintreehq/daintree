@@ -40,11 +40,14 @@ export function ResumeSessionLine() {
   };
 
   return (
-    <div className="flex w-full max-w-lg items-center gap-1">
+    // Hugs its content (centered) rather than stretching to the column width —
+    // a stretched row strands "+N more" at the far edge, visually orphaned
+    // from the session it extends.
+    <div className="flex w-full max-w-lg items-center justify-center gap-1">
       <button
         type="button"
         onClick={() => void resume(primary.session)}
-        className="group flex min-w-0 flex-1 items-center gap-2.5 rounded-[var(--radius-md)] px-2.5 py-1.5 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+        className="group flex min-w-0 items-center gap-2.5 rounded-[var(--radius-md)] px-2.5 py-1.5 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
       >
         <History className="h-3.5 w-3.5 shrink-0 text-daintree-text/40" aria-hidden="true" />
         <span className="shrink-0">
@@ -54,7 +57,9 @@ export function ResumeSessionLine() {
           {primary.name}
         </span>
         {primary.description && (
-          <span className="shrink-0 truncate text-xs text-daintree-text/40">
+          // Shrinkable (no shrink-0): a long worktree/branch description must
+          // truncate inside max-w-lg, not push the row past it.
+          <span className="min-w-0 truncate text-xs text-daintree-text/40">
             {primary.description}
           </span>
         )}

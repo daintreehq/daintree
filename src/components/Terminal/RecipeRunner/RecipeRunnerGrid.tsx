@@ -47,7 +47,11 @@ export function RecipeRunnerGrid({
   onCreate,
   setFocusedIndex,
 }: RecipeRunnerGridProps) {
-  const gridCols = recipes.length <= 2 ? "grid-cols-2" : "grid-cols-3";
+  // A lone recipe renders as one full-width hero card — a half-empty two-column
+  // grid reads as a mistake when there's a single pinned recipe (the common
+  // fresh-worktree case).
+  const gridCols =
+    recipes.length === 1 ? "grid-cols-1" : recipes.length === 2 ? "grid-cols-2" : "grid-cols-3";
   const createIndex = recipes.length;
   const focusableCount = recipes.length + 1;
   const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -73,7 +77,7 @@ export function RecipeRunnerGrid({
       role="listbox"
       id="recipe-listbox"
       aria-label="Recipes"
-      className={`grid ${gridCols} gap-2`}
+      className={`group/recipes grid ${gridCols} gap-2`}
     >
       {recipes.map((recipe, i) => (
         <RecipeRunnerItem
@@ -105,7 +109,7 @@ export function RecipeRunnerGrid({
         onFocus={() => setFocusedIndex(createIndex)}
         onKeyDown={handleOptionKeyDown(createIndex)}
         tabIndex={disabled || focusedIndex === createIndex ? 0 : -1}
-        className="group col-span-full flex items-center justify-center gap-2 px-3 py-2 mt-1 rounded-[var(--radius-md)] hover:bg-overlay-medium transition-colors text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent aria-selected:ring-2 aria-selected:ring-daintree-accent/60"
+        className="group col-span-full flex items-center justify-center gap-2 px-3 py-2 mt-1 rounded-[var(--radius-md)] hover:bg-overlay-medium transition-colors text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60"
       >
         <Plus
           className="h-3.5 w-3.5 text-text-muted group-hover:text-daintree-text transition-colors shrink-0"
