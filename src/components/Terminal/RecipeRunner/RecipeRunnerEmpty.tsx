@@ -20,7 +20,7 @@ export function RecipeRunnerEmpty({
   return (
     <div
       data-testid="recipe-runner-empty"
-      className="flex flex-col items-stretch gap-3 py-6 w-full max-w-md mx-auto"
+      className="flex flex-col items-stretch gap-3 py-2 w-full max-w-lg mx-auto"
     >
       {hasSuggestions ? (
         <div className="flex flex-col gap-2">
@@ -50,12 +50,8 @@ export function RecipeRunnerEmpty({
           ))}
         </div>
       ) : (
-        <div className="text-xs text-text-muted text-center space-y-1">
+        <div className="text-xs text-text-muted text-center">
           <p>Launch agents, dev servers, and terminals together with one click</p>
-          <p>
-            Recipes you save to the repo are shared as team recipes. Personal recipes stay on this
-            machine.
-          </p>
         </div>
       )}
       <div className="flex justify-center">
@@ -69,7 +65,7 @@ export function RecipeRunnerEmpty({
             aria-hidden
           />
           <span className="text-sm text-text-muted group-hover:text-daintree-text transition-colors">
-            Create your first recipe
+            Create your first recipe…
           </span>
         </button>
       </div>

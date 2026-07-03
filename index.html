@@ -161,9 +161,6 @@
       .skel-circle {
         border-radius: 50%;
       }
-      .skel-pill {
-        border-radius: 9999px;
-      }
 
       /* ── Toolbar shapes: subtler than content shapes ── */
       .skeleton-toolbar .skel-shape {
@@ -362,18 +359,29 @@
         align-items: center;
       }
 
-      /* ── Logo section ── */
+      /* ── Identity hero (centered stack: mark above, name + meta below —
+            one alignment axis with the launcher column it predicts) ── */
       .skeleton-logo-section {
         display: flex;
         flex-direction: column;
         align-items: center;
         text-align: center;
+        max-width: 100%;
         margin-bottom: 24px;
       }
+      .skeleton-identity-text {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        max-width: 100%;
+      }
       .skeleton-logo {
+        width: 141px;
+        height: 101px;
+        margin-bottom: 16px;
         color: var(--theme-text-primary, #e4e4e7);
         opacity: 0.08;
-        margin-bottom: 16px;
         /* The stroke-draw reveal is driven by public/skeleton-logo.js, which
            lifts opacity inline while drawing; this transition eases it back to
            the 0.08 resting value (or the project-identified 0.16) when done. */
@@ -386,7 +394,7 @@
       .skeleton-title {
         position: relative;
         overflow: hidden;
-        width: 140px;
+        width: 150px;
         height: 28px;
         border-radius: 6px;
         background: color-mix(
@@ -423,13 +431,16 @@
       .skeleton-title.skeleton-title--identified {
         width: auto;
         height: auto;
-        min-height: 28px;
-        overflow: visible;
+        min-height: 24px;
         background: none;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 18px;
+        display: block;
+        /* Long injected names ellipsize instead of stretching the hero — the
+           React layout truncates this path too. */
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 22px;
         font-weight: 600;
         line-height: 1.4;
         color: var(--theme-text-primary, #e4e4e7);
@@ -443,31 +454,6 @@
       .skeleton-logo-section--identified .skeleton-logo {
         color: var(--theme-accent-primary, #e4e4e7);
         opacity: 0.16;
-      }
-
-      /* ── Tagline (real text — synced with WelcomeScreen.tsx) ── */
-      .skeleton-tagline {
-        margin-top: 12px;
-        font-size: 13px;
-        font-weight: 500;
-        font-family:
-          system-ui,
-          -apple-system,
-          BlinkMacSystemFont,
-          "Segoe UI",
-          Roboto,
-          Helvetica,
-          Arial,
-          sans-serif;
-        line-height: 1.5;
-        color: color-mix(
-          in oklab,
-          var(--theme-surface-grid, #0e0e0d),
-          var(--theme-text-primary, #e4e4e7) 60%
-        );
-        opacity: 0;
-        animation: skeleton-reveal 400ms ease-out forwards;
-        animation-delay: 160ms;
       }
 
       /* ── Stuck-state card (fades in at 6s if React never hydrates) ── */
@@ -537,9 +523,9 @@
         outline-offset: 2px;
       }
 
-      /* ── Recipes skeleton ── */
+      /* ── Recipes skeleton (the launcher hero) ── */
       .skeleton-recipes {
-        margin-bottom: 24px;
+        margin-bottom: 12px;
         width: 100%;
         max-width: 512px;
         display: grid;
@@ -615,65 +601,51 @@
         border-radius: var(--radius-md, 8px);
       }
 
-      /* ── Pulse card skeleton ── */
-      .skeleton-pulse {
-        margin-bottom: 32px;
-        width: fit-content;
-        border-radius: var(--radius-lg, 12px);
-        background: color-mix(
-          in oklab,
-          var(--theme-surface-grid, #0e0e0d),
-          var(--theme-text-primary, #e4e4e7) 3%
-        );
-        overflow: hidden;
-      }
-      .skeleton-pulse-header {
-        padding: 12px 16px;
+      /* ── Resume line skeleton ── */
+      .skeleton-resume {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 16px;
+        justify-content: center;
+        gap: 10px;
+        height: 32px;
+        margin-bottom: 12px;
       }
-      .skeleton-pulse-header-left {
+
+      /* ── Quick-launch chips row ── */
+      .skeleton-chips {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
+        justify-content: center;
         gap: 8px;
+        width: 100%;
+        max-width: 512px;
+        margin-bottom: 10px;
       }
-      .skeleton-pulse-body {
-        padding: 16px;
-        display: flex;
-        flex-direction: column;
-        gap: 16px;
+      .skel-chip {
+        height: 34px;
+        border-radius: var(--radius-md, 8px);
       }
-      /* Heatmap skeleton */
-      .skeleton-heatmap {
-        display: flex;
-        gap: 3px;
+
+      /* ── Palette search pill ── */
+      .skeleton-search {
+        width: 100%;
+        max-width: 512px;
+        margin-bottom: 24px;
       }
-      .skel-heat-cell {
-        width: 10px;
-        height: 10px;
-        flex-shrink: 0;
-        border-radius: 2px;
-        background: color-mix(
-          in oklab,
-          var(--theme-surface-grid, #0e0e0d),
-          var(--theme-text-primary, #e4e4e7) 6%
-        );
-      }
-      /* Stats row skeleton */
-      .skeleton-pulse-stats {
-        display: flex;
-        align-items: center;
-        gap: 16px;
-      }
-      /* ── Tip section skeleton ── */
-      .skeleton-tip {
-        margin-top: 16px;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 8px;
+
+      /* ── Collapsed pulse strip (quiet outline, no shimmer) ── */
+      .skeleton-pulse-strip {
+        width: 100%;
+        max-width: 512px;
+        height: 38px;
+        border-radius: var(--radius-md, 8px);
+        border: 1px solid
+          color-mix(
+            in oklab,
+            var(--theme-surface-grid, #0e0e0d),
+            var(--theme-text-primary, #e4e4e7) 10%
+          );
       }
 
       /* ── Light mode overrides ── */
@@ -838,25 +810,11 @@
             var(--theme-text-primary, #1e252e) 7%
           );
         }
-        .skeleton-pulse {
-          background: color-mix(
+        .skeleton-pulse-strip {
+          border-color: color-mix(
             in oklab,
             var(--theme-surface-grid, #cdd3db),
-            var(--theme-text-primary, #1e252e) 3%
-          );
-        }
-        .skel-heat-cell {
-          background: color-mix(
-            in oklab,
-            var(--theme-surface-grid, #cdd3db),
-            var(--theme-text-primary, #1e252e) 5%
-          );
-        }
-        .skeleton-tagline {
-          color: color-mix(
-            in oklab,
-            var(--theme-surface-grid, #cdd3db),
-            var(--theme-text-primary, #1e252e) 60%
+            var(--theme-text-primary, #1e252e) 10%
           );
         }
         .skeleton-stuck {
@@ -914,10 +872,6 @@
           transition: none;
         }
         .skel-reveal {
-          animation: none;
-          opacity: 1;
-        }
-        .skeleton-tagline {
           animation: none;
           opacity: 1;
         }
@@ -1056,7 +1010,7 @@
           <!-- Main content area (reveals third) -->
           <div class="skeleton-main" aria-hidden="true">
             <div class="skeleton-main-inner">
-              <!-- Logo + title (reveals third) -->
+              <!-- Identity lockup: mark + name/meta column (reveals third) -->
               <div class="skeleton-logo-section skel-reveal skel-reveal-d3">
                 <!-- Daintree mark. Stroke-draw reveal animated by
                      public/skeleton-logo.js (no animation library). The masks
@@ -1209,9 +1163,18 @@
                     d="M823.1866 524.0726C823.1866 524.0726 823.1866 593.009 823.1866 593.009C823.1866 595.0799 821.5018 596.7647 819.4309 596.7647C819.4309 596.7647 768.4657 596.7647 768.4657 596.7647C766.3948 596.7647 764.71 595.0799 764.71 593.009C764.71 593.009 764.71 523.9673 764.71 523.9673C764.71 487.8494 745.4401 454.4342 714.1309 436.3928C714.1309 436.3928 562.5691 348.8885 562.5691 348.8885C531.2599 330.812 492.7201 330.812 461.4109 348.8885C461.4109 348.8885 309.8491 436.3928 309.8491 436.3928C278.5399 454.4693 259.27 487.8494 259.27 523.9673C259.27 523.9673 259.27 586.2698 259.27 586.2698C259.27 586.4804 259.27 586.7261 259.27 593.7812C259.27 595.8521 257.5852 597.5369 255.5143 597.5369C255.5143 597.5369 204.5491 597.5369 204.5491 597.5369C202.4782 597.5369 200.7934 595.8521 200.7934 593.7812C200.7934 593.7812 200.7934 524.0726 200.7934 524.0726C200.7934 466.9649 231.2602 414.2096 280.681 385.6733C280.681 385.6733 432.0673 298.2743 432.0673 298.2743C481.5232 269.738 542.4217 269.738 591.8776 298.2743C591.8776 298.2743 743.2288 385.6382 743.2288 385.6382C792.6847 414.1745 823.1515 466.9649 823.1515 524.0726C823.1515 524.0726 823.1866 524.0726 823.1866 524.0726Z"
                   />
                 </svg>
-                <div class="skeleton-title"></div>
-                <!-- Source of truth: src/components/Project/WelcomeScreen.tsx line 83 -->
-                <p class="skeleton-tagline">A habitat for your AI agents.</p>
+                <div class="skeleton-identity-text">
+                  <div class="skeleton-title"></div>
+                  <!-- branch line + path line under the project name -->
+                  <div
+                    class="skel-shape"
+                    style="width: 170px; height: 13px; border-radius: 3px"
+                  ></div>
+                  <div
+                    class="skel-shape"
+                    style="width: 220px; height: 11px; border-radius: 3px"
+                  ></div>
+                </div>
               </div>
 
               <!-- Recipes (reveals fourth) -->
@@ -1241,64 +1204,36 @@
                 </div>
               </div>
 
-              <!-- Project Pulse (reveals fifth) -->
-              <div class="skeleton-pulse skel-reveal skel-reveal-d5">
-                <div class="skeleton-pulse-header">
-                  <div class="skeleton-pulse-header-left">
-                    <div class="skel-shape skel-circle" style="width: 14px; height: 14px"></div>
-                    <div class="skel-shape" style="width: 88px; height: 13px"></div>
-                  </div>
-                  <div style="display: flex; gap: 2px">
-                    <div class="skel-shape skel-pill" style="width: 32px; height: 22px"></div>
-                    <div class="skel-shape skel-pill" style="width: 36px; height: 22px"></div>
-                    <div class="skel-shape skel-pill" style="width: 36px; height: 22px"></div>
-                  </div>
-                </div>
-                <div class="skeleton-pulse-body">
-                  <!-- Heatmap row -->
-                  <div class="skeleton-heatmap" id="skel-heatmap"></div>
-                  <!-- Summary text -->
-                  <div
-                    class="skel-shape"
-                    style="width: 160px; height: 12px; border-radius: 3px"
-                  ></div>
-                  <!-- Health signal chips -->
-                  <div class="skeleton-pulse-stats" style="padding-top: 12px">
-                    <div class="skel-shape skel-pill" style="width: 72px; height: 22px"></div>
-                    <div class="skel-shape skel-pill" style="width: 48px; height: 22px"></div>
-                    <div class="skel-shape skel-pill" style="width: 48px; height: 22px"></div>
-                    <div class="skel-shape skel-pill" style="width: 88px; height: 22px"></div>
-                    <div class="skel-shape skel-pill" style="width: 96px; height: 22px"></div>
-                  </div>
-                  <!-- Stats row -->
-                  <div class="skeleton-pulse-stats" style="padding-top: 12px">
-                    <div
-                      class="skel-shape"
-                      style="width: 60px; height: 12px; border-radius: 3px"
-                    ></div>
-                    <div
-                      class="skel-shape"
-                      style="width: 52px; height: 12px; border-radius: 3px"
-                    ></div>
-                    <div
-                      class="skel-shape"
-                      style="width: 64px; height: 12px; border-radius: 3px"
-                    ></div>
-                  </div>
-                </div>
+              <!-- Resume line (reveals fourth, with recipes) -->
+              <div class="skeleton-resume skel-reveal skel-reveal-d4">
+                <div class="skel-shape skel-circle" style="width: 14px; height: 14px"></div>
+                <div
+                  class="skel-shape"
+                  style="width: 150px; height: 12px; border-radius: 3px"
+                ></div>
+                <div class="skel-shape" style="width: 90px; height: 11px; border-radius: 3px"></div>
               </div>
 
-              <!-- Tip section (reveals with pulse) -->
-              <div class="skeleton-tip skel-reveal skel-reveal-d5">
-                <div
-                  class="skel-shape"
-                  style="width: 200px; height: 12px; border-radius: 3px"
-                ></div>
-                <div
-                  class="skel-shape"
-                  style="width: 110px; height: 12px; border-radius: 3px"
-                ></div>
+              <!-- Quick-launch agent chips (reveals fifth) -->
+              <!-- Six chips sized to wrap 3 + 3 inside the 512px column,
+                   matching the real row (5 agents + New terminal) -->
+              <div class="skeleton-chips skel-reveal skel-reveal-d5">
+                <div class="skel-shape skel-chip" style="width: 150px"></div>
+                <div class="skel-shape skel-chip" style="width: 120px"></div>
+                <div class="skel-shape skel-chip" style="width: 158px"></div>
+                <div class="skel-shape skel-chip" style="width: 130px"></div>
+                <div class="skel-shape skel-chip" style="width: 140px"></div>
+                <div class="skel-shape skel-chip" style="width: 168px"></div>
               </div>
+
+              <!-- Palette search pill (reveals fifth) -->
+              <div class="skeleton-search skel-reveal skel-reveal-d5">
+                <!-- Same quiet chip surface as the quick actions, full width -->
+                <div class="skel-shape" style="height: 38px; border-radius: 8px"></div>
+              </div>
+
+              <!-- Collapsed pulse strip (reveals fifth) -->
+              <div class="skeleton-pulse-strip skel-reveal skel-reveal-d5"></div>
             </div>
           </div>
 
@@ -1318,7 +1253,6 @@
       </div>
     </div>
     <script src="/skeleton-ready.js"></script>
-    <script src="/skeleton-heatmap.js"></script>
     <script src="/skeleton-stuck.js"></script>
     <script src="/skeleton-logo.js"></script>
     <script type="module" src="/src/main.tsx"></script>

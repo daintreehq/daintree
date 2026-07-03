@@ -5,10 +5,21 @@ import { resolve } from "path";
 const EMPTY_STATE_PATH = resolve(__dirname, "../ContentGridEmptyState.tsx");
 
 describe("ContentGrid EmptyState — RecipeRunner integration", () => {
-  it("hero section uses reduced spacing (mb-6 / mb-4)", async () => {
+  it("identity is a centered stacked hero — mark above the name, one alignment axis", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
+    // Centered identity block…
     expect(content).toContain('"mb-6 flex flex-col items-center text-center"');
-    expect(content).toContain('"relative group mb-4"');
+    // …with the mark stacked above the name (no left-aligned lockup, no
+    // gear-overlaid logo wrapper from the pre-redesign layout)…
+    expect(content).toContain("identityMark");
+    expect(content).not.toContain('"relative group mb-4"');
+    // …and no floating canvas watermark layer (it read as misplaced).
+    expect(content).not.toContain("pointer-events-none absolute");
+    // A near-invisible color-alpha mark must not return — the
+    // `prefers-contrast: more` rescue rule for `text-daintree-text/*` forces
+    // sub-0.1 alphas to a fully opaque silhouette. (The hero mark rides the
+    // neutral `tint` idiom instead.)
+    expect(content).not.toContain("text-daintree-text/[0");
   });
 
   it("renders RecipeRunner component instead of inline recipe list", async () => {
@@ -19,7 +30,10 @@ describe("ContentGrid EmptyState — RecipeRunner integration", () => {
     expect(content).not.toContain("handleRunRecipe");
   });
 
-  it("gates RecipeRunner on hasEverLaunchedAgent so first-run users don't see it", async () => {
+  it("derives hasEverLaunchedAgent from the panel store to gate teaching content", async () => {
+    // RecipeRunner itself is deliberately NOT gated on hasEverLaunchedAgent
+    // (recipes are the launcher hero; see the CLAUDE.md recipe-gating gotcha) —
+    // the flag only gates teaching content like RotatingTip.
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
     expect(content).toContain("hasEverLaunchedAgent");
     expect(content).toContain("usePanelStore");
@@ -33,6 +47,30 @@ describe("ContentGrid EmptyState — RecipeRunner integration", () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
     expect(content).toContain("<RotatingTip />");
     expect(content).toMatch(/hasActiveWorktree && hasEverLaunchedAgent &&[\s\S]*?<RotatingTip \/>/);
+  });
+});
+
+describe("ContentGrid EmptyState — recipe-forward launcher composition", () => {
+  it("composes recipes (hero), a single-line resume, and quick-launch actions", async () => {
+    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
+    expect(content).toContain("<RecipeRunner");
+    expect(content).toContain("<ResumeSessionLine />");
+    expect(content).toContain('from "./ResumeSessionLine"');
+    expect(content).toContain("<LauncherQuickActions />");
+    expect(content).toContain('from "./LauncherQuickActions"');
+  });
+
+  it("renders the project pulse as a collapsible strip, not the full always-open card", async () => {
+    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
+    expect(content).toContain("<ProjectPulseStrip");
+    expect(content).not.toContain("<ProjectPulseCard");
+    // Still honors the user's Settings hide toggle.
+    expect(content).toContain("showProjectPulse && hasActiveWorktree && activeWorktreeId");
+  });
+
+  it("drops the three-row ResumeSessionsCard entirely", async () => {
+    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
+    expect(content).not.toContain("ResumeSessionsCard");
   });
 });
 
