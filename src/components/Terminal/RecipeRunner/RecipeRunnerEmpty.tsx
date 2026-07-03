@@ -65,7 +65,7 @@ export function RecipeRunnerEmpty({
             aria-hidden
           />
           <span className="text-sm text-text-muted group-hover:text-daintree-text transition-colors">
-            Create your first recipe
+            Create your first recipe…
           </span>
         </button>
       </div>
