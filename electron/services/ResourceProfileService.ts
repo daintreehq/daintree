@@ -357,11 +357,26 @@ export class ResourceProfileService {
     // Paint-gate values are no-ops at default but pushed for symmetry so the
     // profile config remains the single source of truth — drift in the PVM
     // defaults stops mattering.
-    for (const pvm of this.deps.getAllProjectViewManagers()) {
+    for (const pvm of this.getProjectViewManagersSafe()) {
       this.applyCurrentProfileTo(pvm);
     }
 
     this.startLagMonitor();
+  }
+
+  /**
+   * Resolve the PVM fan-out targets without letting a throwing provider take
+   * down the caller. Both start() and applyProfile() iterate this list ahead
+   * of other consumers (and ahead of the renderer broadcast) — a throw from
+   * the dep would otherwise skip everything after it, leaving the profile
+   * half-applied with no retry trigger.
+   */
+  private getProjectViewManagersSafe(): ProjectViewManager[] {
+    try {
+      return this.deps.getAllProjectViewManagers();
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -1014,7 +1029,7 @@ export class ResourceProfileService {
     // avoiding cold-start storms when switching among many open projects.
     // Fan out across every open window's PVM so multi-window sessions all
     // honor the profile change, not just the most-recently-created window.
-    for (const pvm of this.deps.getAllProjectViewManagers()) {
+    for (const pvm of this.getProjectViewManagersSafe()) {
       // Split try/catch per call: a throw from setCachedViewLimit (e.g. an
       // onViewEvicted callback failing inside evictStaleViews) must NOT block
       // setEfficiencyFreeze(false) on the exit path — leaving renderers
