@@ -11,6 +11,9 @@
  * ActivityMonitor.
  */
 
+import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
+import { buildPatternConfig } from "./terminalActivityPatterns.js";
+
 export interface PatternDetectionConfig {
   /**
    * Primary patterns that indicate working state (high confidence).
@@ -88,86 +91,39 @@ export function stripAnsi(text: string): string {
 }
 
 /**
- * Agent-specific pattern configurations.
- * These patterns are derived from observing actual CLI output.
- */
-export const AGENT_PATTERN_CONFIGS: Record<string, PatternDetectionConfig> = {
-  claude: {
-    primaryPatterns: [
-      // Full format with interrupt hint (superset: v2.1.79 chars + legacy)
-      /[·*✢✳✶✻✽●✼✾⟡◇◆○]\s+[^()\n]{2,80}\s*\(esc to interrupt/i,
-      // Simple: just "esc to interrupt" at end of line (handles long/wrapped text)
-      /esc to interrupt[^)\n]*\)?$/im,
-      // Time + escape hint structure: (15s · esc to interrupt)
-      /\(\d+s\s*[·•]\s*esc to interrupt/i,
-    ],
-    fallbackPatterns: [
-      // Structural: distinctive spinner + any verb + Unicode ellipsis (verb-agnostic)
-      /[✢✳✶✻✽●]\s+\w+…/i,
-    ],
-    scanLineCount: 10,
-    primaryConfidence: 0.95,
-    fallbackConfidence: 0.75,
-  },
-
-  gemini: {
-    primaryPatterns: [
-      // ASCII spinner + text + cancel hint (short descriptions)
-      /[⠀-⣿]\s+[^()\n]{2,80}\s*\(esc to cancel/i,
-      // Simple: just "esc to cancel" at end of line (handles long/wrapped text)
-      /esc to cancel[^)\n]*\)?$/im,
-      // Time + escape hint structure: (14s, esc to cancel)
-      /\(\d+s,?\s*esc to cancel/i,
-    ],
-    fallbackPatterns: [
-      // Just the spinner (Braille dots used by Gemini — full U+2800–U+28FF block)
-      /[⠀-⣿]\s+\w/,
-    ],
-    scanLineCount: 10,
-    primaryConfidence: 0.95,
-    fallbackConfidence: 0.7,
-  },
-
-  codex: {
-    primaryPatterns: [
-      // Full format with interrupt hint (short descriptions)
-      /[•·]\s+[^()\n]{2,80}\s+\([^)]*esc to interrupt/i,
-      // Simple: just "esc to interrupt" at end of line (handles long/wrapped text)
-      /esc to interrupt[^)\n]*\)?$/im,
-      // Time + escape hint structure: (4s • esc to interrupt)
-      /\(\d+s\s*[·•]\s*esc to interrupt/i,
-    ],
-    fallbackPatterns: [
-      // Minimal "Working" indicator
-      /[•·]\s+Working/i,
-    ],
-    scanLineCount: 10,
-    primaryConfidence: 0.95,
-    fallbackConfidence: 0.75,
-  },
-};
-
-/**
  * Universal patterns that work across all agents.
  * Used when agent-specific patterns aren't configured.
+ *
+ * The interrupt-hint alternation covers the wordings shipped by the agents in
+ * `shared/config/agents/`: "esc to interrupt" (Claude/Codex), "esc to cancel"
+ * (Gemini/Copilot), "escape to interrupt", "esc again to interrupt/cancel"
+ * (OpenCode), "esc to stop" (Cursor), and "Ctrl+C to interrupt" (Goose).
  */
+const INTERRUPT_HINT = String.raw`(?:esc|escape|ctrl\+c)(?:\s+again)?\s+to\s+(?:interrupt|cancel|stop)`;
+
 export const UNIVERSAL_PATTERN_CONFIG: PatternDetectionConfig = {
   primaryPatterns: [
-    // Full format patterns (superset: v2.1.79 Claude chars + legacy + Gemini + Codex)
-    /[·*✢✳✶✻✽●✼✾⟡◇◆○•⠀-⣿]\s+[^()\n]{2,80}\s*\(esc to interrupt/i,
-    /[·*✢✳✶✻✽●✼✾⟡◇◆○•⠀-⣿]\s+[^()\n]{2,80}\s*\(esc to cancel/i,
-    /[·*✢✳✶✻✽●✼✾⟡◇◆○•⠀-⣿]\s+[^()\n]{2,80}\s*\(escape to interrupt/i,
-    // Simple: escape hints at end of line (handles long/wrapped text)
-    /esc to interrupt[^)\n]*\)?$/im,
-    /esc to cancel[^)\n]*\)?$/im,
-    /escape to interrupt[^)\n]*\)?$/im,
-    // Time + escape hint structures
-    /\(\d+s\s*[·•]\s*esc to interrupt/i,
-    /\(\d+s,?\s*esc to cancel/i,
+    // Full format: status marker + text + parenthesised interrupt hint
+    // (marker superset: Claude v2.1.79 chars + legacy + Codex/Cursor dots +
+    // Gemini/Goose/OpenCode braille U+2800–U+28FF).
+    new RegExp(
+      String.raw`[·*✢✳✶✻✽●✼✾⟡◇◆○•∙∘◉⠀-⣿]\s+[^()\n]{2,80}\s*\((?:[^()\n]*?\s)?${INTERRUPT_HINT}`,
+      "i"
+    ),
+    // Simple: interrupt hint near end of line (handles long/wrapped text).
+    // Two tail shapes: a short tail with optional close-paren ("· 15s)"), or
+    // a longer tail that MUST end in ")" — covers wrapped status rows carrying
+    // time + token counters ("esc to interrupt · 123s · ↓ 4.2k tokens)").
+    // Prose that mentions the escape key keeps talking past the hint with no
+    // closing paren, so an unbounded tail is what made sentences ending in
+    // "esc to cancel the dialog works." register as working.
+    new RegExp(String.raw`${INTERRUPT_HINT}(?:[^)\n]{0,20}\)?|[^)\n]{0,60}\))$`, "im"),
+    // Time + hint structures: "(15s · esc to interrupt)", "(14s, esc to cancel)"
+    new RegExp(String.raw`\(\d+[smh]?\s*[·•∙⋅,]?\s*${INTERRUPT_HINT}`, "i"),
   ],
   fallbackPatterns: [
     // Common spinner characters followed by activity
-    /[✢✳✶✻✽●•⠀-⣿]\s+(thinking|working|loading|processing|running)/i,
+    /[✢✳✶✻✽●•◐◓◑◒⠀-⣿]\s+(thinking|working|loading|processing|running|generating|analyzing|reasoning|searching|compacting)/i,
   ],
   scanLineCount: 10,
   primaryConfidence: 0.9,
@@ -184,10 +140,16 @@ export class AgentPatternDetector {
   constructor(agentId?: string, customConfig?: PatternDetectionConfig) {
     if (customConfig) {
       this.config = customConfig;
-    } else if (agentId && AGENT_PATTERN_CONFIGS[agentId]) {
-      this.config = AGENT_PATTERN_CONFIGS[agentId];
     } else {
-      this.config = UNIVERSAL_PATTERN_CONFIG;
+      // Resolve the agent's registry detection config directly. The registry
+      // is the single source of truth for per-agent patterns — a hardcoded
+      // per-agent copy here used to shadow it and drift (the two disagreed on
+      // nothing today only by discipline). Unknown agents fall back to the
+      // universal config.
+      const detection = agentId ? getEffectiveAgentConfig(agentId)?.detection : undefined;
+      this.config =
+        (detection ? buildPatternConfig(detection, agentId) : undefined) ??
+        UNIVERSAL_PATTERN_CONFIG;
     }
 
     this.scanLineCount = this.config.scanLineCount ?? 10;
@@ -307,7 +269,17 @@ export class AgentPatternDetector {
     const cleanedLines = scanLines.map((line) => stripAnsi(line));
     const textToScan = cleanedLines.join("\n");
 
-    return this.matchPatterns(textToScan);
+    const result = this.matchPatterns(textToScan);
+    if (result.isWorking || cleanedLines.length < 2) {
+      return result;
+    }
+
+    // Wrapped-line rescan: a status line that soft-wrapped mid-word across
+    // visual rows ("…esc to inte" / "rrupt · 15s)") can't match on any single
+    // row. Concatenating rows without a separator reassembles it; only a real
+    // wrap produces a cross-row phrase, so the false-positive surface is
+    // negligible.
+    return this.matchPatterns(cleanedLines.join(""));
   }
 }
 

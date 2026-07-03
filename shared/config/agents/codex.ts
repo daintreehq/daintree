@@ -81,7 +81,7 @@ export const config: AgentConfig = {
     primaryPatterns: [
       // @generated:codex:primaryPatterns:start
       "[•·]\\s+[^()\\n]{2,80}\\s+\\([^)]*esc to interrupt",
-      "esc to interrupt[^)\\n]*\\)?$",
+      "esc to interrupt(?:[^)\\n]{0,20}\\)?|[^)\\n]{0,60}\\))$",
       "\\(\\d+s\\s*[·•]\\s*esc to interrupt",
       // @generated:codex:primaryPatterns:end
     ],

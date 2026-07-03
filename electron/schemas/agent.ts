@@ -58,7 +58,7 @@ export const AgentStateChangedSchema = z.extend(EventContextSchema, {
   // Working directory of the spawned terminal (used as the git target for
   // pre-agent snapshots; equal to the worktree path in the typical case).
   cwd: z.optional(z.string()),
-  waitingReason: z.optional(z.enum(["prompt", "question"])),
+  waitingReason: z.optional(z.enum(["prompt", "question", "approval", "error"])),
   sessionCost: z.optional(z.number().check(z.nonnegative())),
   sessionTokens: z.optional(nonNegativeInt),
   // Process exit metadata — present only on "completed"/"exited" transitions

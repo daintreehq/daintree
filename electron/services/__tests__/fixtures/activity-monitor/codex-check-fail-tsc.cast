@@ -1,0 +1,11 @@
+{"version":2,"width":120,"height":10,"timestamp":1700000000,"title":"codex-check-fail-tsc"}
+[0.05,"o","OpenAI Codex v1.0.0\r\n"]
+[0.10,"o","› "]
+[0.40,"o","• Working (1s • esc to interrupt)"]
+[0.85,"o","\r• Running typecheck (2s • esc to interrupt)"]
+[1.30,"o","\r\u001b[2K"]
+[1.40,"o","> tsc --noEmit\r\n"]
+[1.50,"o","src/index.ts(5,3): error TS2322: Type 'string' is not assignable to type 'number'.\r\n"]
+[1.60,"o","src/util.ts(12,7): error TS2304: Cannot find name 'foo'.\r\n"]
+[1.70,"o","Found 2 errors in 2 files.\r\n"]
+[1.90,"o","\r\n› "]

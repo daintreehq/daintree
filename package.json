@@ -140,6 +140,7 @@
     "pattern-discovery:update": "tsx scripts/pattern-discovery/update-registry.ts",
     "pattern-discovery:jsonl-to-cast": "tsx scripts/pattern-discovery/jsonl-to-cast.ts",
     "pattern-discovery:redact-cast": "tsx scripts/pattern-discovery/redact-cast.ts",
+    "pattern-discovery:eval": "vitest run electron/services/__tests__/AgentStateFsm.replay.test.ts electron/services/__tests__/ActivityMonitor.replay.test.ts scripts/pattern-discovery/__tests__/corpus-replay.test.ts",
     "eval:turn-outcome": "tsx scripts/eval/turnOutcome.ts",
     "prepare": "husky"
   },

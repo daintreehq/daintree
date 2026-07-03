@@ -1,0 +1,33 @@
+{
+  "agentId": "customcli",
+  "settleMs": 9500,
+  "transitions": [
+    {
+      "atMs": 0,
+      "state": "busy",
+      "trigger": "pattern"
+    },
+    {
+      "atMs": 8100,
+      "state": "idle",
+      "trigger": "timeout",
+      "waitingReason": "prompt"
+    }
+  ],
+  "fsm": {
+    "transitions": [
+      {
+        "atMs": 0,
+        "state": "working",
+        "trigger": "heuristic"
+      },
+      {
+        "atMs": 8100,
+        "state": "waiting",
+        "waitingReason": "prompt",
+        "trigger": "timeout"
+      }
+    ],
+    "finalWaitingReason": "prompt"
+  }
+}

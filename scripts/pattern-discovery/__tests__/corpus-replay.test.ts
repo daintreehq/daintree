@@ -93,6 +93,52 @@ describe("corpus-replay", () => {
     });
   });
 
+  describe("kimi corpus replay", () => {
+    it("achieves >= 90% accuracy on kimi sample corpus", () => {
+      const result = replayCorpus(path.join(CORPUS_DIR, "kimi_sample.jsonl"), "kimi");
+      expect(result.total).toBeGreaterThan(0);
+      expect(result.accuracy).toBeGreaterThanOrEqual(MIN_ACCURACY);
+    });
+  });
+
+  describe("opencode corpus replay", () => {
+    it("achieves >= 90% accuracy on opencode sample corpus", () => {
+      const result = replayCorpus(path.join(CORPUS_DIR, "opencode_sample.jsonl"), "opencode");
+      expect(result.total).toBeGreaterThan(0);
+      expect(result.accuracy).toBeGreaterThanOrEqual(MIN_ACCURACY);
+    });
+  });
+
+  describe("cursor corpus replay", () => {
+    it("achieves >= 90% accuracy on cursor sample corpus", () => {
+      const result = replayCorpus(path.join(CORPUS_DIR, "cursor_sample.jsonl"), "cursor");
+      expect(result.total).toBeGreaterThan(0);
+      expect(result.accuracy).toBeGreaterThanOrEqual(MIN_ACCURACY);
+    });
+  });
+
+  describe("copilot corpus replay", () => {
+    it("achieves >= 90% accuracy on copilot sample corpus", () => {
+      const result = replayCorpus(path.join(CORPUS_DIR, "copilot_sample.jsonl"), "copilot");
+      expect(result.total).toBeGreaterThan(0);
+      expect(result.accuracy).toBeGreaterThanOrEqual(MIN_ACCURACY);
+    });
+  });
+
+  // Unicode/ANSI adversarial cases: CJK/emoji status lines must detect, and
+  // protocol noise (cursor-position reports, OSC titles with marker glyphs,
+  // split escape sequences, erase-line redraw fragments) must NOT read as
+  // working. 100% accuracy required — every row is deterministic.
+  describe("claude unicode/ANSI-noise corpus replay", () => {
+    it("achieves 100% accuracy on the unicode adversarial corpus", () => {
+      const result = replayCorpus(path.join(CORPUS_DIR, "claude_unicode_sample.jsonl"), "claude");
+      expect(result.total).toBeGreaterThan(0);
+      expect(result.wrong.map((w) => ({ chunk: w.entry.chunk, got: w.actualState }))).toHaveLength(
+        0
+      );
+    });
+  });
+
   describe("replay result structure", () => {
     it("returns detailed wrong entries for debugging", () => {
       const result = replayCorpus(path.join(CORPUS_DIR, "claude_sample.jsonl"), "claude");

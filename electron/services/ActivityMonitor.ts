@@ -35,7 +35,10 @@ import {
 import { detectCompletion } from "./pty/CompletionDetector.js";
 import { CompletionTimer } from "./pty/CompletionTimer.js";
 import { BootDetector } from "./pty/BootDetector.js";
-import { classifyWaitingReason } from "./pty/WaitingReasonClassifier.js";
+import {
+  classifyWaitingReason,
+  WAITING_REASON_SCAN_LINE_COUNT,
+} from "./pty/WaitingReasonClassifier.js";
 import { CpuHighStateTracker } from "./pty/CpuHighStateTracker.js";
 import { WaitingWatchdog } from "./pty/WaitingWatchdog.js";
 import type { WaitingReason } from "../../shared/types/agent.js";
@@ -1754,7 +1757,14 @@ export class ActivityMonitor {
         this.getCursorLine?.() ?? null,
         { allowHistoryScan: true }
       );
-      waitingReason = classifyWaitingReason(lines, promptResult.isPrompt);
+      // Classification scans a wider window than prompt detection: approval
+      // dialogs put the question + selector rows above the input-box chrome,
+      // outside the 6-line prompt window.
+      const reasonLines =
+        WAITING_REASON_SCAN_LINE_COUNT > this.promptDetectorConfig.promptScanLineCount
+          ? this.getVisibleLines(WAITING_REASON_SCAN_LINE_COUNT)
+          : lines;
+      waitingReason = classifyWaitingReason(reasonLines, promptResult.isPrompt);
     }
     this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
       trigger: "timeout",

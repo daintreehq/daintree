@@ -381,7 +381,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.getState",
     title: "Get Agent State",
     description:
-      "Look up the live state of an agent by its agent id. Args: `agentId` (required) — agent id such as 'claude' or 'codex', as seen in `terminal.list` entries' `agentId` field. Returns { agentId, state, waitingReason ('prompt'|'question', non-null only when state is 'waiting'), lastTransitionAt, exitCode (number|null — set once the PTY has exited, null while running or on a signal kill; read alongside `state` to tell pass from fail), spawnedAt, terminalId, found }. Never errors — an unknown agent returns found:false with null fields. Do NOT use this to enumerate terminals — use `terminal.list` or `terminal.getStatus`.",
+      "Look up the live state of an agent by its agent id. Args: `agentId` (required) — agent id such as 'claude' or 'codex', as seen in `terminal.list` entries' `agentId` field. Returns { agentId, state, waitingReason ('prompt'|'question'|'approval'|'error', non-null only when state is 'waiting'), lastTransitionAt, exitCode (number|null — set once the PTY has exited, null while running or on a signal kill; read alongside `state` to tell pass from fail), spawnedAt, terminalId, found }. Never errors — an unknown agent returns found:false with null fields. Do NOT use this to enumerate terminals — use `terminal.list` or `terminal.getStatus`.",
     category: "agent",
     kind: "query",
     danger: "safe",

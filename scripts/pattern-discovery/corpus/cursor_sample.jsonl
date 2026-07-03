@@ -1,0 +1,8 @@
+{"time":0.0,"chunk":"Welcome to Cursor Agent","detectedState":"initializing","confidence":0.9,"agentId":"cursor"}
+{"time":0.5,"chunk":"→ Add a follow-up","detectedState":"waiting","confidence":0.85,"agentId":"cursor"}
+{"time":1.0,"chunk":"⬢ Thinking about your request","detectedState":"working","confidence":0.95,"agentId":"cursor"}
+{"time":2.0,"chunk":"⬢ Searching the codebase (esc to stop)","detectedState":"working","confidence":0.95,"agentId":"cursor"}
+{"time":3.0,"chunk":"Generating response (esc to stop)","detectedState":"working","confidence":0.95,"agentId":"cursor"}
+{"time":4.0,"chunk":"⬢ Grepping for usages","detectedState":"working","confidence":0.7,"agentId":"cursor"}
+{"time":5.0,"chunk":"All changes applied.","detectedState":"unknown","confidence":0.6,"agentId":"cursor"}
+{"time":5.5,"chunk":"\u001b[?25h\u001b[?2004h","detectedState":"unknown","confidence":0.6,"agentId":"cursor"}

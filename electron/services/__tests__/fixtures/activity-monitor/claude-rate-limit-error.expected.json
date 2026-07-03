@@ -1,0 +1,33 @@
+{
+  "agentId": "claude",
+  "settleMs": 9000,
+  "transitions": [
+    {
+      "atMs": 0,
+      "state": "busy",
+      "trigger": "pattern"
+    },
+    {
+      "atMs": 7700,
+      "state": "idle",
+      "trigger": "timeout",
+      "waitingReason": "error"
+    }
+  ],
+  "fsm": {
+    "transitions": [
+      {
+        "atMs": 0,
+        "state": "working",
+        "trigger": "heuristic"
+      },
+      {
+        "atMs": 7700,
+        "state": "waiting",
+        "waitingReason": "error",
+        "trigger": "timeout"
+      }
+    ],
+    "finalWaitingReason": "error"
+  }
+}
