@@ -13,7 +13,6 @@ import {
   Minimize2,
   RotateCcw,
   Grid2X2,
-  Activity,
   Plus,
   RadioTower,
   Bell,
@@ -54,6 +53,7 @@ import { formatShortcutForTooltip } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
+import { STATE_COLORS, STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { PluginPanelBadges } from "@/components/Panel/PluginPanelBadges";
 import { BellDot, FolderGit2 } from "@/components/icons";
@@ -259,7 +259,7 @@ function PanelHeaderComponent({
       : undefined;
 
   // Get background activity stats for Zen Mode header
-  const { activeCount, workingCount } = useBackgroundPanelStats(id, isMaximized);
+  const { activeCount, workingCount, waitingCount } = useBackgroundPanelStats(id, isMaximized);
 
   // Check if panel has dangerous launch flags
   const hasDangerousFlags = (() => {
@@ -915,12 +915,22 @@ function PanelHeaderComponent({
               <AnimatedLabel label={String(activeCount)} textClassName="tabular-nums" /> Background
             </span>
             {workingCount > 0 && (
-              <span className="flex items-center gap-1 text-state-working tabular-nums ml-1">
-                <Activity
-                  className="w-3 h-3 animate-pulse motion-reduce:animate-none"
+              <span
+                className={cn("flex items-center gap-1 tabular-nums ml-1", STATE_COLORS.working)}
+              >
+                <STATE_ICONS.working
+                  className="w-3 h-3 animate-spin-slow motion-reduce:animate-none"
                   aria-hidden="true"
                 />
                 <AnimatedLabel label={String(workingCount)} textClassName="tabular-nums" /> working
+              </span>
+            )}
+            {waitingCount > 0 && (
+              <span
+                className={cn("flex items-center gap-1 tabular-nums ml-1", STATE_COLORS.waiting)}
+              >
+                <STATE_ICONS.waiting className="w-3 h-3" aria-hidden="true" />
+                <AnimatedLabel label={String(waitingCount)} textClassName="tabular-nums" /> waiting
               </span>
             )}
           </div>

@@ -154,11 +154,17 @@ export function useConflictedWorktrees(): WorktreeSnapshot[] {
   );
 }
 
-const EMPTY_BACKGROUND_PANEL_STATS = Object.freeze({ activeCount: 0, workingCount: 0 });
+const EMPTY_BACKGROUND_PANEL_STATS = Object.freeze({
+  activeCount: 0,
+  workingCount: 0,
+  waitingCount: 0,
+});
 
 /**
  * Get background panel stats for Zen Mode header display.
- * Returns count of active (grid) panels excluding the current one, and how many are working.
+ * Returns count of active (grid) panels excluding the current one, and how many are
+ * working (churning) vs waiting (blocked on the user) — the latter is otherwise
+ * invisible while a single panel is maximized, since the other grid panels unmount.
  * @param excludeId - The ID of the current panel to exclude from counts
  * @param enabled - When false (panel not maximized), skips the per-write panel scan
  */
@@ -168,19 +174,24 @@ export function useBackgroundPanelStats(
 ): {
   activeCount: number;
   workingCount: number;
+  waitingCount: number;
 } {
   return usePanelStore(
     useShallow((state) => {
       if (!enabled) return EMPTY_BACKGROUND_PANEL_STATS;
       let active = 0;
       let working = 0;
+      let waiting = 0;
       for (const panel of getNarrowPanels(state.panelsById, state.panelIds)) {
         if (panel.id !== excludeId && (panel.location === "grid" || panel.location === undefined)) {
           active++;
-          if (isPtyPanel(panel) && panel.agentState === "working") working++;
+          if (isPtyPanel(panel)) {
+            if (panel.agentState === "working") working++;
+            else if (panel.agentState === "waiting") waiting++;
+          }
         }
       }
-      return { activeCount: active, workingCount: working };
+      return { activeCount: active, workingCount: working, waitingCount: waiting };
     })
   );
 }

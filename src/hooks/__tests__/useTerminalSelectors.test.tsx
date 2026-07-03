@@ -20,6 +20,7 @@ import {
   useConflictedWorktrees,
   useWaitingTerminals,
   useBackgroundedTerminals,
+  useBackgroundPanelStats,
   useErrorTerminals,
   useWaitingTerminalIds,
   isTerminalVisible,
@@ -45,6 +46,7 @@ function setupTerminals(
     lastStateChange?: number;
     exitCode?: number;
     hasPty?: boolean;
+    kind?: string;
   }>
 ) {
   const state = {
@@ -109,6 +111,55 @@ describe("useTerminalSelectors", () => {
 
     const { result } = renderHook(() => useTerminalNotificationCounts());
     expect(result.current.waitingCount).toBe(1);
+  });
+
+  describe("useBackgroundPanelStats", () => {
+    it("counts working and waiting grid panels, excluding the current one", () => {
+      setupTerminals([
+        { id: "current", agentState: "working", location: "grid" },
+        { id: "w1", agentState: "working", location: "grid" },
+        { id: "w2", agentState: "working", location: undefined },
+        { id: "q1", agentState: "waiting", location: "grid" },
+        { id: "idle", agentState: "idle", location: "grid" },
+      ]);
+
+      const { result } = renderHook(() => useBackgroundPanelStats("current"));
+      expect(result.current.activeCount).toBe(4);
+      expect(result.current.workingCount).toBe(2);
+      expect(result.current.waitingCount).toBe(1);
+    });
+
+    it("ignores panels outside the grid (dock/background) in every count", () => {
+      setupTerminals([
+        { id: "grid-working", agentState: "working", location: "grid" },
+        { id: "dock-working", agentState: "working", location: "dock" },
+        { id: "bg-waiting", agentState: "waiting", location: "background" },
+      ]);
+
+      const { result } = renderHook(() => useBackgroundPanelStats("none"));
+      expect(result.current.activeCount).toBe(1);
+      expect(result.current.workingCount).toBe(1);
+      expect(result.current.waitingCount).toBe(0);
+    });
+
+    it("counts non-PTY grid panels as active but never as working or waiting", () => {
+      setupTerminals([
+        { id: "term", agentState: "waiting", location: "grid" },
+        { id: "browser", agentState: "working", location: "grid", kind: "browser" },
+      ]);
+
+      const { result } = renderHook(() => useBackgroundPanelStats("none"));
+      expect(result.current.activeCount).toBe(2);
+      expect(result.current.workingCount).toBe(0);
+      expect(result.current.waitingCount).toBe(1);
+    });
+
+    it("returns all-zero stats without scanning when disabled", () => {
+      setupTerminals([{ id: "w1", agentState: "working", location: "grid" }]);
+
+      const { result } = renderHook(() => useBackgroundPanelStats("none", false));
+      expect(result.current).toEqual({ activeCount: 0, workingCount: 0, waitingCount: 0 });
+    });
   });
 
   describe("blurTime filtering", () => {
