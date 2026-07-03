@@ -23,6 +23,7 @@ export const WORKBENCH_TIER_TOOLS = [
   "worktree.getAvailableBranch",
   "worktree.resource.status",
   "worktree.compareDiff",
+  "worktree.reviewReadiness",
 
   "files.search",
   "file.view",

@@ -4346,4 +4346,123 @@ describe("ReviewHub", () => {
       ).toBeNull();
     });
   });
+
+  describe("readiness rail", () => {
+    function setWorktreeDivergence(overrides: Record<string, unknown>) {
+      const existing = worktreeStoreData.current.get("main-wt")!;
+      worktreeStoreData.current.set("main-wt", { ...existing, ...overrides });
+    }
+
+    it("stays hidden until staging status resolves", async () => {
+      getStagingStatusMock.mockReturnValue(new Promise(() => {}));
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await act(async () => {});
+      expect(screen.queryByTestId("review-readiness-rail")).toBeNull();
+    });
+
+    it("reports Ready for the default fixture and surfaces the no-remote info", async () => {
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByTestId("review-readiness-rail"));
+      expect(screen.getByTestId("review-readiness-level").dataset.level).toBe("ready");
+      expect(screen.getByTestId("readiness-item-no-remote")).toBeDefined();
+    });
+
+    it("flags conflicts as blocked and expands the file list from the CTA", async () => {
+      useUIStore.getState().setReviewHubFileListExpanded(WORKTREE_PATH, false);
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({
+          staged: [],
+          conflicted: ["src/broken.ts"],
+          conflictedFiles: [{ path: "src/broken.ts", xy: "UU", label: "both modified" }],
+        })
+      );
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByTestId("review-readiness-rail"));
+
+      expect(screen.getByTestId("review-readiness-level").dataset.level).toBe("blocked");
+      expect(screen.getByTestId("readiness-item-conflicts")).toBeDefined();
+
+      act(() => void fireEvent.click(screen.getByTestId("readiness-cta-conflicts")));
+      expect(useUIStore.getState().reviewHubFileListExpanded[WORKTREE_PATH]).toBe(true);
+    });
+
+    it("offers pull-and-rebase behind the existing confirm dialog when behind the remote", async () => {
+      setWorktreeDivergence({ behindCount: 2, aheadCount: 1 });
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByTestId("readiness-item-behind-remote"));
+
+      expect(screen.getByTestId("review-readiness-level").dataset.level).toBe("needs-review");
+      act(() => void fireEvent.click(screen.getByTestId("readiness-cta-behind-remote")));
+
+      // D2 stays intact: the CTA only opens the confirm dialog, never the IPC.
+      const dialog = await screen.findByRole("alertdialog");
+      expect(dialog).toBeDefined();
+      expect(pullRebaseMock).not.toHaveBeenCalled();
+    });
+
+    it("surfaces failing PR CI with a click-through to the forge", async () => {
+      setWorktreeDivergence({
+        linked: {
+          providerId: "github",
+          pr: {
+            ref: { providerId: "github", owner: "t", repo: "t", number: 42, rawData: {} },
+            state: "open",
+            url: "https://github.com/test/repo/pull/42",
+            ciStatus: {
+              state: "failure",
+              total: 1,
+              passed: 0,
+              failed: 1,
+              pending: 0,
+              rawData: null,
+            },
+          },
+        },
+      });
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByTestId("readiness-item-ci-failing"));
+
+      act(() => void fireEvent.click(screen.getByTestId("readiness-cta-ci-failing")));
+      expect(openExternalMock).toHaveBeenCalledWith("https://github.com/test/repo/pull/42");
+    });
+
+    it("hides the rail while switching worktrees so readiness never mixes two worktrees", async () => {
+      const { rerender } = render(
+        <ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      );
+      await waitFor(() => screen.getByTestId("review-readiness-rail"));
+
+      // The next worktree's staging status never resolves — the previous
+      // worktree's summary must not linger against the new path's selectors.
+      getStagingStatusMock.mockReturnValue(new Promise(() => {}));
+      rerender(<ReviewHub isOpen={true} worktreePath="/home/user/other" onClose={vi.fn()} />);
+      await act(async () => {});
+      expect(screen.queryByTestId("review-readiness-rail")).toBeNull();
+    });
+
+    it("updates readiness from a worktree port refresh without losing filter state", async () => {
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("index.ts"));
+      expect(screen.queryByTestId("readiness-item-conflicts")).toBeNull();
+
+      const stagedFilter = screen.getAllByPlaceholderText("Filter…")[0]!;
+      fireEvent.change(stagedFilter, { target: { value: "index" } });
+
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({
+          conflicted: ["src/broken.ts"],
+          conflictedFiles: [{ path: "src/broken.ts", xy: "UU", label: "both modified" }],
+        })
+      );
+      await act(async () => {
+        capturedUpdateCallback!(makeWorktreeState());
+        await Promise.resolve();
+      });
+
+      await waitFor(() => screen.getByTestId("readiness-item-conflicts"));
+      expect((stagedFilter as HTMLInputElement).value).toBe("index");
+    });
+  });
 });

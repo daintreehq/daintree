@@ -45,6 +45,7 @@ export const BUILT_IN_ACTION_IDS = [
   "worktree.getAvailableBranch",
   "worktree.createWithRecipe",
   "worktree.compareDiff",
+  "worktree.reviewReadiness",
   "worktree.switchIndex",
   "worktree.quickCreate",
   "worktree.createDialog.open",
