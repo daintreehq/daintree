@@ -633,7 +633,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           // Prefer the agent's observed task title over the identity title,
           // matching the trash-expiry path — otherwise kill-path records all
           // read "Resume Claude" while trash-path records carry the task.
-          title: info.lastObservedTitle ?? info.title ?? null,
+          // A user-locked title is the exception: the resume row should read
+          // the same as the live tab did, and a lock freezes the tab.
+          title:
+            (info.titleMode === "user" ? info.title : (info.lastObservedTitle ?? info.title)) ??
+            null,
           projectId: info.projectId ?? null,
           agentLaunchFlags: info.agentLaunchFlags,
           agentModelId: info.agentModelId,

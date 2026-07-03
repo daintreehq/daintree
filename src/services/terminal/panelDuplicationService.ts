@@ -16,6 +16,20 @@ import {
   resolveAgentRuntimeSettings,
 } from "@/utils/agentRuntimeSettings";
 
+/**
+ * Ownership rung for a duplicated panel's title. A duplicate keeps an
+ * explicitly-named title pinned (otherwise agent detection immediately
+ * rewrites "X (copy)" back to the registry name), but demotes `"user"` to
+ * `"custom"` — the human named the source panel, not the copy, so automation
+ * may still rename it and the task title still composes.
+ */
+function duplicateTitleMode(
+  panel: import("@shared/types/panel").PtyPanelData
+): import("@shared/types/panel").PanelTitleMode | undefined {
+  const mode = panel.titleMode ?? "default";
+  return mode === "default" ? undefined : "custom";
+}
+
 export interface ResolvedCommand {
   command: string | undefined;
   env: Record<string, string> | undefined;
@@ -139,6 +153,9 @@ export function buildPanelSnapshotOptions(panel: PanelInstance): AddPanelOptions
       launchAgentId: panel.launchAgentId,
       command: panel.command,
       title: panel.title,
+      // Reopen-last restores the same terminal — the ownership rung carries
+      // verbatim so a renamed title stays pinned across close/reopen.
+      titleMode: panel.titleMode,
       cwd: panel.cwd || "",
       worktreeId: panel.worktreeId,
       exitBehavior: panel.exitBehavior,
@@ -184,6 +201,7 @@ export function buildPanelSnapshotOptions(panel: PanelInstance): AddPanelOptions
       kind: "terminal",
       launchAgentId: panel.launchAgentId,
       title: panel.title,
+      titleMode: panel.titleMode,
       cwd: panel.cwd || "",
       worktreeId: panel.worktreeId,
       exitBehavior: panel.exitBehavior,
@@ -235,6 +253,9 @@ export async function buildPanelDuplicateOptions(
       launchAgentId: sourcePanel.launchAgentId,
       command,
       title,
+      // Keep explicit names pinned on the copy — without this, detection
+      // rewrites "X (copy)" back to the registry name moments after spawn.
+      titleMode: presetWasStale ? undefined : duplicateTitleMode(sourcePanel),
       cwd: sourcePanel.cwd || "",
       worktreeId: sourcePanel.worktreeId,
       location: targetLocation,
@@ -283,6 +304,7 @@ export async function buildPanelDuplicateOptions(
       launchAgentId: sourcePanel.launchAgentId,
       cwd: sourcePanel.cwd || "",
       title: sourcePanel.title,
+      titleMode: duplicateTitleMode(sourcePanel),
       worktreeId: sourcePanel.worktreeId,
       location: targetLocation,
       exitBehavior: sourcePanel.exitBehavior,

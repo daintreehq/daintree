@@ -1,5 +1,5 @@
 {
-  "count": 1128,
+  "count": 1127,
   "byRule": {
     "@typescript-eslint/no-explicit-any": 52,
     "@typescript-eslint/no-floating-promises": 86,
@@ -11,5 +11,5 @@
     "react-compiler/react-compiler": 15,
     "react-hooks/exhaustive-deps": 38
   },
-  "updatedAt": "2026-07-01T16:43:42.245Z"
+  "updatedAt": "2026-07-03T06:34:36.196Z"
 }

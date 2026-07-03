@@ -1052,6 +1052,56 @@ describe("buildArgsForRespawn", () => {
     expect(result.title).not.toContain("Deleted");
   });
 
+  // A user-locked title never contains preset branding — the stale-preset
+  // strip must not destroy a human rename or drop its lock. The preset badge
+  // fields are still cleared.
+  it("preserves a user-locked title (and its lock) through a stale-preset strip", () => {
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentPresetId: "user-deleted",
+        agentPresetColor: "#ff00ff",
+        title: "My debug shell",
+        titleMode: "user" as const,
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined
+    );
+    expect(result.title).toBe("My debug shell");
+    expect(result.titleMode).toBe("user");
+    expect(result.agentPresetId).toBeUndefined();
+    expect(result.agentPresetColor).toBeUndefined();
+  });
+
+  it("drops a custom (preset-pinned) titleMode with the stale-preset strip", () => {
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentPresetId: "user-deleted",
+        title: "Claude (Deleted Preset)",
+        titleMode: "custom" as const,
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined
+    );
+    expect(result.titleMode).toBeUndefined();
+    expect(result.title).not.toContain("Deleted");
+  });
+
   // Regression: the inverse — when the preset still resolves, everything is preserved.
   it("preserves agentPresetId/color/title when preset still resolves", () => {
     getMergedPresetMock.mockReturnValueOnce({

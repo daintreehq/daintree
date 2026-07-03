@@ -554,16 +554,21 @@ export function buildArgsForRespawn(
   const respawnOriginalPresetId = presetWasStale
     ? undefined
     : (saved.originalPresetId ?? savedPresetIdForRespawn);
-  const respawnTitle = presetWasStale
-    ? (agentId ? getAgentConfig(agentId)?.name : saved.title) || saved.title
-    : saved.title;
+  // A user-locked title never contains preset branding — stripping it on a
+  // stale preset would destroy a human rename, so the lock exempts it.
+  const userLockedTitle = saved.titleMode === "user";
+  const respawnTitle =
+    presetWasStale && !userLockedTitle
+      ? (agentId ? getAgentConfig(agentId)?.name : saved.title) || saved.title
+      : saved.title;
 
   return {
     kind: respawnKind,
     launchAgentId: agentId,
     title: respawnTitle,
-    // A stale preset's pinned title was just stripped — drop the pin with it.
-    titleMode: presetWasStale ? undefined : saved.titleMode,
+    // A stale preset's pinned title was just stripped — drop the pin with it
+    // (unless the user locked the title, which the strip above exempts).
+    titleMode: presetWasStale && !userLockedTitle ? undefined : saved.titleMode,
     cwd: saved.cwd || projectRoot || "",
     worktreeId: saved.worktreeId,
     location,
