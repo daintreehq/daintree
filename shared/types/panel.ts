@@ -334,6 +334,14 @@ export interface PtyPanelData extends BasePanelData {
   lastCommand?: string;
   /** Command to execute after shell starts (e.g., 'claude --model sonnet-4' for AI agents) */
   command?: string;
+  /**
+   * Caller-resolved launch environment (preset/recipe/caller layers) captured at
+   * spawn time. Persisted so a restored session replays the same provider env it
+   * launched with instead of re-deriving from a preset that may no longer resolve
+   * (#10922). Sanitized via `sanitizeAgentEnv` on the serialize/restore boundary.
+   * The live global/project env layer is re-merged fresh at spawn, not stored here.
+   */
+  env?: Record<string, string>;
   /** Counter incremented on restart to trigger React re-render without unmounting parent */
   restartKey?: number;
   /** Guard flag to prevent auto-trash during restart flow (exit event race condition) */

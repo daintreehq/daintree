@@ -52,6 +52,9 @@ const PTY_FIELD_CLASSIFICATION = {
   agentPresetId: true,
   agentPresetColor: true,
   originalPresetId: true,
+  // Captured launch env replayed on restore so a session keeps its provider
+  // environment (#10922); sanitized on the serialize/restore boundary.
+  env: true,
   isUsingFallback: true,
   fallbackChainIndex: true,
   agentState: true,
@@ -269,6 +272,7 @@ const terminalFixture: PtySerializeInput = {
   agentPresetId: "blue-provider",
   agentPresetColor: "#3366ff",
   originalPresetId: "primary-provider",
+  env: { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" },
   isUsingFallback: true,
   fallbackChainIndex: 1,
   agentState: "idle",

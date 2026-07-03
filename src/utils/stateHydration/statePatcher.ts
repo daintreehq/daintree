@@ -4,7 +4,7 @@ import type { BrowserHistory } from "@shared/types/browser";
 import type { PanelExitBehavior } from "@shared/types/panel";
 import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
-import { getAgentConfig } from "@/config/agents";
+import { getAgentConfig, sanitizeAgentEnv } from "@/config/agents";
 import type { AgentPreset } from "@/config/agents";
 import {
   generateAgentCommand,
@@ -94,6 +94,14 @@ export interface SavedTerminalData {
   agentPresetId?: string;
   agentPresetColor?: string;
   originalPresetId?: string;
+  /**
+   * Caller-resolved launch env captured at launch time (#10922). Preferred over
+   * live preset re-resolution on respawn so a restored session replays the same
+   * provider environment it launched with. Typed as `unknown`-valued because it
+   * is untrusted on-disk JSON — sanitized via `sanitizeAgentEnv` at the read
+   * boundary before use.
+   */
+  env?: Record<string, unknown>;
   isUsingFallback?: boolean;
   fallbackChainIndex?: number;
   /** @deprecated pre-#5459 legacy key; read-only fallback, never written. */
@@ -295,6 +303,11 @@ export function buildArgsForBackendTerminal(
       backendTerminal.originalAgentPresetId ??
       readPresetId(saved) ??
       backendTerminal.agentPresetId,
+    // Carry the captured launch env forward so a reconnect (project switch /
+    // renderer reload to a still-live PTY) re-serializes the snapshot WITH env,
+    // instead of dropping it and reintroducing the provider swap on the next
+    // full restart (#10922). Not used to spawn here — the PTY already has it.
+    env: sanitizeAgentEnv(saved.env),
     isUsingFallback: saved.isUsingFallback,
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
@@ -362,6 +375,10 @@ export function buildArgsForReconnectedFallback(
       reconnectedTerminal.originalAgentPresetId ??
       readPresetId(saved) ??
       reconnectedTerminal.agentPresetId,
+    // Carry the captured launch env forward so a reconnect re-serializes the
+    // snapshot WITH env rather than dropping it and reintroducing the provider
+    // swap on the next full restart (#10922). Not used to spawn — PTY has it.
+    env: sanitizeAgentEnv(saved.env),
     isUsingFallback: saved.isUsingFallback,
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
@@ -515,8 +532,10 @@ export function buildArgsForRespawn(
   // Stale-preset split-brain: when saved.agentPresetId was set but the preset
   // no longer resolves (deleted custom preset, CCR route removed from config),
   // clear agentPresetId/agentPresetColor and strip the preset suffix from the
-  // title so the respawned panel doesn't lie about its identity — it's now
-  // running default env/command, so it should look like default.
+  // title so the respawned panel doesn't lie about its preset identity. Note the
+  // captured launch env (`env` below) is still replayed independently (#10922) —
+  // a deleted preset shouldn't silently swap a live session's provider — so the
+  // command/env are not necessarily "default" here, only the preset badge is.
   presetWasStale = isAgentPanel && presetWasStale;
   const respawnAgentPresetId = presetWasStale ? undefined : savedPresetIdForRespawn;
   const respawnAgentPresetColor = presetWasStale
@@ -555,7 +574,12 @@ export function buildArgsForRespawn(
     isUsingFallback: presetWasStale ? undefined : saved.isUsingFallback,
     fallbackChainIndex: presetWasStale ? undefined : saved.fallbackChainIndex,
     sessionLostOnRestore: sessionLostOnRestore || undefined,
-    env: presetEnv,
+    // Prefer the launch env captured in the snapshot (#10922) so the restored
+    // session replays the same provider environment (e.g. a Z.AI/GLM preset or a
+    // recipe's inline env) even when that preset/recipe no longer resolves in the
+    // current store. Falls back to live re-resolution for legacy snapshots saved
+    // before env was persisted, or when the saved env sanitizes to nothing safe.
+    env: sanitizeAgentEnv(saved.env) ?? presetEnv,
     extensionState: saved.extensionState,
     pluginId: saved.pluginId,
     restore: true,
