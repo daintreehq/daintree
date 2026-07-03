@@ -39,12 +39,12 @@ test.describe.serial("Core: Plugin manager view", () => {
     const { window } = ctx;
     await openPluginManager(window);
 
-    // The list groups by catalog category. The sample declares no `category`
-    // and contributes only toolbar buttons / menu items / file decorations, so
-    // it derives to the "Other" fallback (see resolvePluginCategory). The
-    // header carries a trailing count, so match on the aria-label, not text.
+    // The list groups by catalog category. The sample declares no `category`;
+    // its contributed skill derives it to "AI & agents" (see
+    // resolvePluginCategory). The header carries a trailing count, so match on
+    // the aria-label, not text.
     const list = window.locator(SEL.plugin.list);
-    await expect(list.getByRole("option", { name: "Other", exact: true })).toBeVisible({
+    await expect(list.getByRole("option", { name: "AI & agents", exact: true })).toBeVisible({
       timeout: T_MEDIUM,
     });
     // SEL.plugin.option already scopes to the listbox, so don't re-nest it under

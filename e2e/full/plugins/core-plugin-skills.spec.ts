@@ -3,6 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { closeApp, type AppContext } from "../../helpers/launch";
 import { launchWithSamplePlugin } from "../../helpers/plugins";
+import { T_LONG } from "../../helpers/timeouts";
 
 /**
  * Skills contribution point (#10892) — the full contract, end to end. The
@@ -39,10 +40,23 @@ test.describe.serial("Core: Plugin skills (#10892)", () => {
   });
 
   test("exposes the sample plugin's skill via skills.search / skills.load", async () => {
-    const status = await ctx.window.evaluate(async () => {
+    await ctx.window.evaluate(async () => {
       await window.electron.mcpServer.setEnabled(true);
-      return window.electron.mcpServer.getStatus();
     });
+
+    await expect
+      .poll(
+        async () => {
+          const status = await ctx.window.evaluate(async () =>
+            window.electron.mcpServer.getStatus()
+          );
+          return status.port ?? 0;
+        },
+        { timeout: T_LONG }
+      )
+      .toBeGreaterThan(0);
+
+    const status = await ctx.window.evaluate(async () => window.electron.mcpServer.getStatus());
     expect(status.port ?? 0).toBeGreaterThan(0);
     expect(status.apiKey.length).toBeGreaterThan(0);
 

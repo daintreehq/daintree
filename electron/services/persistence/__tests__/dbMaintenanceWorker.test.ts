@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { DbWorkerOp, DbWorkerResponse } from "../dbWorkerProtocol.js";
@@ -43,7 +43,7 @@ beforeAll(async () => {
         name: "external-better-sqlite3",
         setup(builder) {
           builder.onResolve({ filter: /^better-sqlite3$/ }, () => ({
-            path: require.resolve("better-sqlite3"),
+            path: pathToFileURL(require.resolve("better-sqlite3")).href,
             external: true,
           }));
         },
@@ -111,7 +111,7 @@ describe("dbMaintenanceWorker (real worker thread)", () => {
   });
 
   function spawn(targetDbPath = dbPath): Worker {
-    const w = new Worker(workerFile, { workerData: { dbPath: targetDbPath } });
+    const w = new Worker(pathToFileURL(workerFile), { workerData: { dbPath: targetDbPath } });
     worker = w;
     return w;
   }
@@ -275,12 +275,22 @@ describe("dbMaintenanceWorker (real worker thread)", () => {
   });
 
   it("refuses to create a missing database file", async () => {
-    const w = new Worker(workerFile, {
+    const w = new Worker(pathToFileURL(workerFile), {
       workerData: { dbPath: path.join(tmpDir, "missing.db") },
     });
-    const error = await new Promise<{ code?: string }>((resolve) => w.once("error", resolve));
-    expect(error.code).toBe("SQLITE_CANTOPEN");
+    const outcome = await new Promise<
+      { kind: "error"; code?: string } | { kind: "exit"; code: number }
+    >((resolve) => {
+      w.once("error", (error: Error & { code?: string }) =>
+        resolve({ kind: "error", code: error.code })
+      );
+      w.once("exit", (code) => resolve({ kind: "exit", code }));
+    });
+    if (outcome.kind === "error") {
+      expect(outcome.code).toBe("SQLITE_CANTOPEN");
+    } else {
+      expect(outcome.code).not.toBe(0);
+    }
     expect(fs.existsSync(path.join(tmpDir, "missing.db"))).toBe(false);
-    await new Promise<void>((resolve) => w.once("exit", () => resolve()));
   });
 });

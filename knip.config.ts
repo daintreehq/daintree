@@ -17,7 +17,10 @@ const config: KnipConfig = {
     "electron/plugin-dev-worker.ts",
     "electron/plugin-dev-worker-bootstrap.ts",
     "electron/preload.cts",
+    "electron/pty-host/analysisWorker.ts",
+    "electron/services/persistence/dbMaintenanceWorker.ts",
     "electron/services/voice/openaiVadWorker.ts",
+    "electron/workspace-host/copytreeWorker.ts",
 
     // Web workers instantiated via `new Worker(new URL(...))`. Static analysis
     // can't follow those URLs, so workers read as unreachable without
@@ -81,6 +84,11 @@ const config: KnipConfig = {
     // scripts/codegen/__tests__/ipc-renderer.test.ts via path.join(__dirname,
     // "fixtures-renderer"). Knip cannot trace runtime path resolution.
     "scripts/codegen/__tests__/fixtures-renderer/*.ts",
+
+    // why: public plugin SDK API snapshots are loaded by
+    // scripts/ci/check-api-surface.mjs via readFileSync rather than static
+    // imports. They are tracked files that gate reviewed API changes.
+    "packages/plugin-sdk/api-report/*.d.ts",
 
     // why: compat shims preserved for legacy test/import paths after the
     // GitHub services moved into plugins/builtin/github/main (#8060). No

@@ -349,6 +349,13 @@ export class McpServerService {
     this.persistConfig({ enabled });
     if (enabled && this._registry && !this.isRunning) {
       await this.httpLifecycle.start(this._registry);
+    } else if (enabled && !this.isRunning) {
+      const registry = getWindowRegistry();
+      if (registry) {
+        await this.httpLifecycle.start(registry);
+      } else if (wasEnabled !== enabled) {
+        this.emitRuntimeStateChange();
+      }
     } else if (!enabled && (this.isRunning || this.httpLifecycle.isStartInFlight)) {
       // `stop()` awaits any in-flight `start()` before closing, so a disable
       // that races a slow start still tears the server down instead of
