@@ -14,6 +14,7 @@ export const config: AgentConfig = {
   npmGlobalPackage: "@anthropic-ai/claude-code",
   color: "#CC785C",
   iconId: "claude",
+  tooltip: "Anthropic's CLI",
   supportsContextInjection: true,
   supports: {
     mcpInjection: "project-config",

@@ -298,7 +298,6 @@ export function AgentButton({
     (customPresetGroup.length > 0 ? 1 : 0);
   const hasMultiplePresetGroups = presetGroupCount > 1;
 
-  const tooltipDetails = config.tooltip ? ` — ${config.tooltip}` : "";
   const isLoading = availability === undefined;
   const isLaunchable = isAgentLaunchable(availability);
   // `installed` now only fires for WSL-capped binaries (launch not wired
@@ -328,7 +327,7 @@ export function AgentButton({
     : isLaunchable
       ? signInUnconfirmed
         ? `Start ${config.name}${presetSegment}${visibleStateSuffix} — sign-in not detected`
-        : `Start ${config.name}${presetSegment}${visibleStateSuffix}${tooltipDetails}`
+        : `Start ${config.name}${presetSegment}${visibleStateSuffix}`
       : needsSetup
         ? `Configure ${config.name}`
         : `Install ${config.name} CLI`;

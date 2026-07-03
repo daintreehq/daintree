@@ -7,7 +7,7 @@ export const config: AgentConfig = {
   color: "#F34E3F",
   iconId: "amp",
   supportsContextInjection: true,
-  tooltip: "Sourcegraph's agentic coding tool",
+  tooltip: "Sourcegraph's CLI",
   usageUrl: "https://ampcode.com/",
   externalLinks: [{ label: "View docs", url: "https://ampcode.com/manual" }],
   packages: {

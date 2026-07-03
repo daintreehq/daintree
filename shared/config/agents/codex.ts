@@ -21,7 +21,7 @@ export const config: AgentConfig = {
     tier: "stable",
   },
   shortcut: "Cmd/Ctrl+Alt+X",
-  tooltip: "careful, methodical runs",
+  tooltip: "OpenAI's CLI",
   usageUrl: "https://chatgpt.com/codex/settings/usage",
   externalLinks: [{ label: "View usage", url: "https://chatgpt.com/codex/settings/usage" }],
   version: {

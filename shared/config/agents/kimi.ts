@@ -8,7 +8,7 @@ export const config: AgentConfig = {
   color: "#1E90FF",
   iconId: "kimi",
   supportsContextInjection: true,
-  tooltip: "Moonshot AI's coding agent",
+  tooltip: "Moonshot AI's CLI",
   usageUrl: "https://github.com/MoonshotAI/kimi-cli",
   packages: {
     pypi: "kimi-cli",

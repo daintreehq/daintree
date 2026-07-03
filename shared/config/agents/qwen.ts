@@ -8,7 +8,7 @@ export const config: AgentConfig = {
   color: "#615CED",
   iconId: "qwen",
   supportsContextInjection: true,
-  tooltip: "Alibaba's Qwen3-Coder agent",
+  tooltip: "Alibaba's CLI",
   version: {
     args: ["--version"],
     githubRepo: "QwenLM/qwen-code",

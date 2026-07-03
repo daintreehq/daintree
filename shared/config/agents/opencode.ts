@@ -11,7 +11,7 @@ export const config: AgentConfig = {
   color: "#10b981",
   iconId: "opencode",
   supportsContextInjection: true,
-  tooltip: "provider-agnostic, open source",
+  tooltip: "Open-source CLI",
   usageUrl: "https://opencode.ai/",
   externalLinks: [{ label: "View docs", url: "https://opencode.ai/docs/" }],
   version: {

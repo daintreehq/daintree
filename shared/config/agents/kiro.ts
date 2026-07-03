@@ -7,7 +7,7 @@ export const config: AgentConfig = {
   color: "#7C3AED",
   iconId: "kiro",
   supportsContextInjection: true,
-  tooltip: "Amazon's AI coding agent",
+  tooltip: "Amazon's CLI",
   usageUrl: "https://kiro.dev/",
   externalLinks: [{ label: "View docs", url: "https://kiro.dev/docs/" }],
   version: {

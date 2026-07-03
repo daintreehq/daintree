@@ -16,7 +16,7 @@ export const config: AgentConfig = {
   // agent's session, so Aider is structurally ineligible until/unless
   // upstream adds MCP-client support.
   supports: false,
-  tooltip: "Pip-distributed, git-aware coding agent",
+  tooltip: "Open-source CLI",
   usageUrl: "https://aider.chat/",
   externalLinks: [{ label: "View docs", url: "https://aider.chat/docs/" }],
   // packages.pypi triggers uv/pipx path synthesis in CliAvailabilityService,

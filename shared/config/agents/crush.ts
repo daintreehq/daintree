@@ -12,7 +12,7 @@ export const config: AgentConfig = {
   color: "#E864A4",
   iconId: "crush",
   supportsContextInjection: true,
-  tooltip: "Charm's Bubble Tea TUI agent",
+  tooltip: "Charm's CLI",
   usageUrl: "https://github.com/charmbracelet/crush",
   version: {
     args: ["--version"],
