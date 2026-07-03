@@ -83,6 +83,82 @@ describe("getTerminalTaskTitle", () => {
     );
   });
 
+  it("workspace echo: a title that is just the cwd folder name is not a task (Codex idle)", () => {
+    const codex = ptyPanel({
+      detectedAgentId: "codex",
+      title: "Codex",
+      cwd: "/Users/gpriday/Projects/Daintree/daintree",
+      lastObservedTitle: "⣿ daintree",
+    });
+    expect(getTerminalTaskTitle(codex)).toBeNull();
+    expect(getTerminalDisplayTitle(codex, "full")).toBe("Codex");
+  });
+
+  it("strips identity suffixes from real tasks (Grok's ' - grok')", () => {
+    const grok = ptyPanel({
+      detectedAgentId: "grok",
+      title: "Grok",
+      lastObservedTitle: "User Greets AI and Queries Project Details - grok",
+    });
+    expect(getTerminalDisplayTitle(grok, "full")).toBe(
+      "Grok: User Greets AI and Queries Project Details"
+    );
+  });
+
+  it("keeps useful status remainders after affix stripping (Grok busy)", () => {
+    const busy = ptyPanel({
+      detectedAgentId: "grok",
+      title: "Grok",
+      lastObservedTitle: "⣿ - Responding - grok",
+    });
+    expect(getTerminalDisplayTitle(busy, "full")).toBe("Grok: Responding");
+  });
+
+  it("strips abbreviation prefixes derived from the agent name (OpenCode's 'OC | ')", () => {
+    const opencode = ptyPanel({
+      detectedAgentId: "opencode",
+      title: "OpenCode",
+      lastObservedTitle: "OC | Greeting and project overview",
+    });
+    expect(getTerminalDisplayTitle(opencode, "full")).toBe(
+      "OpenCode: Greeting and project overview"
+    );
+    expect(getTerminalTaskTitle({ ...opencode, lastObservedTitle: "OC" })).toBeNull();
+  });
+
+  it("affix stripping requires a whole identity label — filler and partial-name segments survive", () => {
+    expect(
+      getTerminalTaskTitle(ptyPanel({ lastObservedTitle: "Terminal: preserve OSC title" }))
+    ).toBe("Terminal: preserve OSC title");
+    const interpreter = ptyPanel({
+      detectedAgentId: "interpreter",
+      title: "Open Interpreter",
+      lastObservedTitle: "Open: file picker",
+    });
+    expect(getTerminalTaskTitle(interpreter)).toBe("Open: file picker");
+  });
+
+  it("strips stacked affixes (abbreviation prefix plus name suffix)", () => {
+    const opencode = ptyPanel({
+      detectedAgentId: "opencode",
+      title: "OpenCode",
+      lastObservedTitle: "OC | fix panel resize - opencode",
+    });
+    expect(getTerminalTaskTitle(opencode)).toBe("fix panel resize");
+  });
+
+  it("cursor-agent's 'Cursor Agent' startup title replaces the default identity", () => {
+    const cursor = ptyPanel({
+      detectedAgentId: "cursor",
+      title: "Cursor",
+      lastObservedTitle: "Cursor Agent",
+    });
+    expect(getTerminalDisplayTitle(cursor, "full")).toBe("Cursor Agent");
+    expect(
+      getTerminalDisplayTitle({ ...cursor, lastObservedTitle: "Project Explainer" }, "full")
+    ).toBe("Cursor: Project Explainer");
+  });
+
   it("returns null when no task was ever observed", () => {
     expect(getTerminalTaskTitle(ptyPanel({ lastObservedTitle: undefined }))).toBeNull();
   });

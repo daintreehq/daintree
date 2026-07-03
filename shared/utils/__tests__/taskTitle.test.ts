@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { cleanTaskTitle } from "../taskTitle.js";
+import { cleanTaskTitle, stripIdentityAffixes } from "../taskTitle.js";
 
 describe("cleanTaskTitle", () => {
   it("strips Claude's leading spinner glyph", () => {
@@ -37,5 +37,61 @@ describe("cleanTaskTitle", () => {
     expect(cleanTaskTitle(undefined)).toBe("");
     expect(cleanTaskTitle("   ")).toBe("");
     expect(cleanTaskTitle("✳ ")).toBe("");
+  });
+
+  it("strips braille spinners (Codex, Grok, Claude busy indicator)", () => {
+    expect(cleanTaskTitle("⣿ daintree")).toBe("daintree");
+    expect(cleanTaskTitle("⠋ Fix duplicate Claude prefix in terminal titles")).toBe(
+      "Fix duplicate Claude prefix in terminal titles"
+    );
+  });
+
+  it("strips trailing state glyphs (Gemini's ◇/✦/✋ suffix position)", () => {
+    expect(cleanTaskTitle("writing tests ✦")).toBe("writing tests");
+    expect(cleanTaskTitle("✳ task ⠿")).toBe("task");
+  });
+
+  it("keeps text-plausible trailing characters (* is only spinner noise when leading)", () => {
+    expect(cleanTaskTitle("document glob *")).toBe("document glob *");
+    expect(cleanTaskTitle("* document glob")).toBe("document glob");
+  });
+});
+
+describe("stripIdentityAffixes", () => {
+  const noise = (segment: string) => ["grok", "oc", "opencode"].includes(segment.toLowerCase());
+
+  it("strips a trailing identity suffix (Grok's ' - grok')", () => {
+    expect(stripIdentityAffixes("User Greets AI and Queries Project Details - grok", noise)).toBe(
+      "User Greets AI and Queries Project Details"
+    );
+  });
+
+  it("strips a leading identity prefix (OpenCode's 'OC | ')", () => {
+    expect(stripIdentityAffixes("OC | Greeting and project overview", noise)).toBe(
+      "Greeting and project overview"
+    );
+  });
+
+  it("drops bare separator runs left behind (Grok's busy '- Responding - grok')", () => {
+    expect(stripIdentityAffixes("- Responding - grok", noise)).toBe("Responding");
+  });
+
+  it("never touches interior segments", () => {
+    expect(stripIdentityAffixes("fix auth - update tests - grok", noise)).toBe(
+      "fix auth - update tests"
+    );
+  });
+
+  it("leaves non-noise affix segments alone", () => {
+    expect(stripIdentityAffixes("fix: auth bug", noise)).toBe("fix: auth bug");
+    expect(stripIdentityAffixes("auth bug - part two", noise)).toBe("auth bug - part two");
+  });
+
+  it("does not split hyphenated words (no whitespace around the separator)", () => {
+    expect(stripIdentityAffixes("re-grok the config", noise)).toBe("re-grok the config");
+  });
+
+  it("leaves a final all-noise segment for the caller's classifier (no separator left to split on)", () => {
+    expect(stripIdentityAffixes("OC | grok", noise)).toBe("grok");
   });
 });

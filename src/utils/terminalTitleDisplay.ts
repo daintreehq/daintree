@@ -2,7 +2,7 @@ import type { PanelInstance, PtyPanelData, TerminalInstance } from "@shared/type
 import { isPtyPanel } from "@shared/types/panel";
 import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
 import { isUselessTitle } from "@shared/utils/isUselessTitle";
-import { cleanTaskTitle } from "@shared/utils/taskTitle";
+import { cleanTaskTitle, stripIdentityAffixes } from "@shared/utils/taskTitle";
 
 /**
  * How much room the rendering surface has for a terminal's display title.
@@ -20,7 +20,8 @@ export type TerminalTitleVariant = "full" | "compact" | "base";
 type TitledPanel = Pick<
   PtyPanelData,
   "title" | "titleMode" | "lastObservedTitle" | "detectedAgentId" | "agentState"
->;
+> &
+  Partial<Pick<PtyPanelData, "cwd">>;
 
 // Words that agents pad their non-task titles with: product-name filler
 // ("Claude Code", "Gemini CLI") and idle-status words ("Ready"). Only
@@ -45,6 +46,34 @@ function titleTokens(value: string | undefined): string[] {
     .filter(Boolean);
 }
 
+function normalizeLabel(value: string | undefined): string {
+  return titleTokens(value).join(" ");
+}
+
+// "OC" for "OpenCode", "QC" for "Qwen Code" — agents abbreviate themselves
+// in title affixes. Initials count as filler, never as identity: "OC" alone
+// must fall back to the identity title, not display as an echo.
+function nameInitials(name: string | undefined): string[] {
+  if (!name) return [];
+  const words = name
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean)
+    .flatMap((w) => w.split(/(?<=\p{Ll})(?=\p{Lu})/u));
+  if (words.length < 2) return [];
+  return [
+    words
+      .map((w) => w[0])
+      .join("")
+      .toLowerCase(),
+  ];
+}
+
+function cwdBasename(cwd: string | undefined): string | null {
+  if (!cwd) return null;
+  const segments = cwd.split(/[\\/]/).filter(Boolean);
+  return segments[segments.length - 1] ?? null;
+}
+
 interface ObservedTask {
   task: string;
   /**
@@ -59,24 +88,46 @@ interface ObservedTask {
 function getObservedTask(panel: TitledPanel): ObservedTask | null {
   if ((panel.titleMode ?? "default") === "user") return null;
   if (panel.detectedAgentId === undefined || panel.agentState === "exited") return null;
-  const task = cleanTaskTitle(panel.lastObservedTitle);
-  if (!task || isUselessTitle(task)) return null;
+  const cleaned = cleanTaskTitle(panel.lastObservedTitle);
+  if (!cleaned || isUselessTitle(cleaned)) return null;
   const agent = AGENT_REGISTRY[panel.detectedAgentId];
   const identity = new Set([
     ...titleTokens(panel.title),
     ...titleTokens(agent?.name),
     ...titleTokens(agent?.command),
   ]);
+  const filler = new Set([...GENERIC_TITLE_WORDS, ...nameInitials(agent?.name)]);
+  // Affix noise must be a WHOLE identity label — name, binary, initials, or
+  // the panel title — never token overlap or filler. Anything looser eats
+  // real tasks: "Terminal: preserve OSC title" (filler token), "Open: file
+  // picker" under Open Interpreter (one token of a multi-word name).
+  const noiseLabels = new Set(
+    [
+      normalizeLabel(panel.title),
+      normalizeLabel(agent?.name),
+      normalizeLabel(agent?.command),
+      ...nameInitials(agent?.name),
+    ].filter(Boolean)
+  );
+  const isNoiseSegment = (segment: string) => noiseLabels.has(normalizeLabel(segment));
+  // Grok's " - grok" suffix, OpenCode's "OC | " prefix: identity decoration
+  // around a real task, stripped segment-wise from the ends.
+  const task = stripIdentityAffixes(cleaned, isNoiseSegment);
+  if (!task || isUselessTitle(task)) return null;
+  // Workspace echo (Codex idle titles itself with the cwd folder name):
+  // where the agent is, not what it's doing — the pane already shows that.
+  const folder = cwdBasename(panel.cwd);
+  if (folder && task.toLowerCase() === folder.toLowerCase()) return null;
   const tokens = titleTokens(task);
   if (tokens.length === 0) return null;
-  if (tokens.some((t) => !identity.has(t) && !GENERIC_TITLE_WORDS.has(t))) {
+  if (tokens.some((t) => !identity.has(t) && !filler.has(t))) {
     return { task, isIdentityEcho: false };
   }
   // All tokens are identity/filler. An echo needs at least one identity
   // token that isn't itself filler — "Qwen Code" makes "code" an identity
   // token, but "Code CLI" is still pure filler ("Ready"), useless, not
   // an echo.
-  if (!tokens.some((t) => identity.has(t) && !GENERIC_TITLE_WORDS.has(t))) return null;
+  if (!tokens.some((t) => identity.has(t) && !filler.has(t))) return null;
   return { task, isIdentityEcho: true };
 }
 
