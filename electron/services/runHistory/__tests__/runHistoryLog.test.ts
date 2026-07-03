@@ -186,4 +186,46 @@ describe("RunHistoryLog", () => {
     expect(record.targetCount).toBe(0);
     expect(record.successCount).toBe(3);
   });
+
+  it("persists supervised-run fields: runId, status, isRetry, per-target failureKind/finalAgentState", () => {
+    const { log } = makeFixture();
+    const record = log.append({
+      kind: "fleet",
+      runId: "run-123",
+      status: "completed",
+      isRetry: true,
+      targetCount: 2,
+      successCount: 1,
+      failureCount: 1,
+      cancelled: false,
+      perTarget: [
+        { terminalId: "t1", status: "fulfilled", finalAgentState: "waiting" },
+        { terminalId: "t2", status: "rejected", reason: "EPIPE", failureKind: "permanent" },
+      ],
+    });
+    if (record.kind !== "fleet") throw new Error("expected fleet record");
+    expect(record.runId).toBe("run-123");
+    expect(record.status).toBe("completed");
+    expect(record.isRetry).toBe(true);
+    expect(record.perTarget[0]!.finalAgentState).toBe("waiting");
+    expect(record.perTarget[0]!.failureKind).toBeUndefined();
+    expect(record.perTarget[1]!.failureKind).toBe("permanent");
+  });
+
+  it("drops unknown supervised-run enum values instead of persisting them", () => {
+    const { log } = makeFixture();
+    const record = log.append({
+      kind: "fleet",
+      status: "exploded",
+      targetCount: 1,
+      successCount: 1,
+      failureCount: 0,
+      cancelled: false,
+      perTarget: [{ terminalId: "t1", status: "fulfilled", failureKind: "weird" }],
+    } as unknown as RunHistoryAppendInput);
+    if (record.kind !== "fleet") throw new Error("expected fleet record");
+    expect(record.status).toBeUndefined();
+    expect(record.isRetry).toBeUndefined();
+    expect(record.perTarget[0]!.failureKind).toBeUndefined();
+  });
 });

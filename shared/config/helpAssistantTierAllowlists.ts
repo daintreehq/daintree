@@ -33,6 +33,10 @@ export const WORKBENCH_TIER_TOOLS = [
   "terminal.getOutput",
   "terminal.getStatus",
 
+  // Read-only snapshot of the user's supervised fleet broadcast run (#10930).
+  // Observability only — dispatching a broadcast stays off the MCP surface.
+  "fleet.getRunStatus",
+
   "browser.getConsoleMessages",
   "portal.listTabs",
 

@@ -391,6 +391,11 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "terminal.disarm",
   "terminal.disarmAll",
 
+  // Read-only fleet-run supervision snapshot (#10930). The broadcast itself is
+  // deliberately NOT exposed — external orchestrators fan out
+  // `terminal.sendCommand` per terminal (see CLAUDE.tasks.md guidance).
+  "fleet.getRunStatus",
+
   "worktree.list",
   "worktree.getCurrent",
   "worktree.refresh",
@@ -791,6 +796,8 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
         "```",
         "",
         "**Single terminals pace the same way.** Don't hold a blocking `terminal.waitUntilIdle` open to wait out a task — while the call is in flight the user can't talk to you, so an interactive session looks frozen until they cancel it (the server caps interactive waits at 60s for this reason). Kick off the task, then `ScheduleWakeup` → non-blocking check (`terminal.getStatus` or `waitUntilIdle({ timeoutMs: 0 })`) → repeat. A short bounded `waitUntilIdle` long-poll is fine when completion is expected within the minute; on `timedOut: true`, fall back to wakeup pacing instead of re-blocking back-to-back.",
+        "",
+        '**Fleet broadcast runs are supervised.** When the user fans a prompt out with the in-app fleet broadcast, `fleet.getRunStatus` returns the supervised run in one call: per-target submission outcome (`sent` / `failed` with `permanent`-vs-`transient` classification / `skipped` on cancel), a live `agentState` snapshot, `settled` flags, and aggregate counts. Use it to answer "how is the fleet run going" instead of reconstructing the picture from raw `terminal.getStatus` — but keep using `terminal.getStatus` (with `includeOutput`) as ground truth before acting on any single terminal. `fleet.getRunStatus` never dispatches anything, and there is deliberately no MCP tool that broadcasts to the whole fleet: to orchestrate your own fan-out, send one `terminal.sendCommand` per terminal and watch with batched `terminal.getStatus` / a bounded `terminal.waitUntilIdleBatch`.',
       ].join("\n");
     },
   },

@@ -66,16 +66,40 @@ function RecipeRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "r
   );
 }
 
+const FLEET_RUN_STATUS_LABELS: Record<string, string> = {
+  completed: "Finished",
+  cancelled: "Cancelled",
+  failed: "Failed",
+  superseded: "Superseded",
+};
+
 function FleetRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "fleet" }> }) {
   const rejected = (record.perTarget ?? []).filter((t) => t.status === "rejected");
+  // Supervised records (#10930) carry an explicit outcome; older records only
+  // have the `cancelled` boolean, so fall back to it.
+  const statusLabel = record.status
+    ? FLEET_RUN_STATUS_LABELS[record.status]
+    : record.cancelled
+      ? "Cancelled"
+      : undefined;
+  const waitingCount = (record.perTarget ?? []).filter(
+    (t) => t.status === "fulfilled" && t.finalAgentState === "waiting"
+  ).length;
   return (
     <>
       <div className="flex items-start gap-2.5">
         <Radio className="mt-0.5 h-4 w-4 shrink-0 text-daintree-text/60" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-daintree-text">Fleet broadcast</span>
-            {record.cancelled ? <CountPill tone="muted" label="Cancelled" /> : null}
+            <span className="text-sm font-medium text-daintree-text">
+              {record.isRetry ? "Fleet retry" : "Fleet broadcast"}
+            </span>
+            {statusLabel && statusLabel !== "Finished" ? (
+              <CountPill
+                tone={record.status === "failed" ? "danger" : "muted"}
+                label={statusLabel}
+              />
+            ) : null}
           </div>
           {record.draftPreview ? (
             <p className="mt-0.5 truncate text-xs text-daintree-text/50">{record.draftPreview}</p>
@@ -84,6 +108,9 @@ function FleetRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "fl
             <CountPill tone="success" label={`${record.successCount} sent`} />
             {record.failureCount > 0 ? (
               <CountPill tone="danger" label={`${record.failureCount} failed`} />
+            ) : null}
+            {waitingCount > 0 ? (
+              <CountPill tone="muted" label={`${waitingCount} ended waiting`} />
             ) : null}
             <CountPill tone="muted" label={`${record.targetCount} targets`} />
           </div>

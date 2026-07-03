@@ -21,10 +21,22 @@ export interface FleetFailureSnapshot {
   failedIds: Set<string>;
   /** The literal payload that should be re-fired on retry. */
   payload: string | null;
+  /**
+   * How many targets of the SAME broadcast failed permanently and were
+   * auto-disarmed. Snapshotted here (not read live from the run store) so the
+   * banner never pairs this broadcast's retryable failures with another run's
+   * disarm count — the failure surface stays internally consistent even after
+   * the supervised run is superseded or dismissed (#10930).
+   */
+  disarmedCount: number;
 }
 
 interface FleetFailureState extends FleetFailureSnapshot {
-  recordFailure: (payload: string | null, failedIds: Iterable<string>) => void;
+  recordFailure: (
+    payload: string | null,
+    failedIds: Iterable<string>,
+    disarmedCount?: number
+  ) => void;
   /** Drop a single pane from the failure set (e.g. when retry succeeds). */
   dismissId: (id: string) => void;
   /** Clear everything (user acknowledged, fleet cleared, etc.). */
@@ -36,13 +48,14 @@ const EMPTY_SET: Set<string> = new Set();
 export const useFleetFailureStore = create<FleetFailureState>((set) => ({
   failedIds: EMPTY_SET,
   payload: null,
-  recordFailure: (payload, failedIds) => {
+  disarmedCount: 0,
+  recordFailure: (payload, failedIds, disarmedCount = 0) => {
     const ids = new Set(failedIds);
     if (ids.size === 0) {
-      set({ failedIds: EMPTY_SET, payload: null });
+      set({ failedIds: EMPTY_SET, payload: null, disarmedCount: 0 });
       return;
     }
-    set({ failedIds: ids, payload });
+    set({ failedIds: ids, payload, disarmedCount });
   },
   dismissId: (id) =>
     set((s) => {
@@ -50,11 +63,11 @@ export const useFleetFailureStore = create<FleetFailureState>((set) => ({
       const next = new Set(s.failedIds);
       next.delete(id);
       if (next.size === 0) {
-        return { failedIds: EMPTY_SET, payload: null };
+        return { failedIds: EMPTY_SET, payload: null, disarmedCount: 0 };
       }
       return { failedIds: next };
     }),
-  clear: () => set({ failedIds: EMPTY_SET, payload: null }),
+  clear: () => set({ failedIds: EMPTY_SET, payload: null, disarmedCount: 0 }),
 }));
 
 /**

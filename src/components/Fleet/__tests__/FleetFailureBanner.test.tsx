@@ -44,6 +44,7 @@ function resetStore() {
   useFleetFailureStore.setState({
     failedIds: new Set(),
     payload: null,
+    disarmedCount: 0,
   });
 }
 
@@ -112,5 +113,33 @@ describe("FleetFailureBanner", () => {
     const s = useFleetFailureStore.getState();
     expect(s.failedIds.size).toBe(0);
     expect(s.payload).toBeNull();
+  });
+
+  it("names auto-disarmed unreachable panes recorded with the same broadcast (#10930)", () => {
+    useFleetFailureStore.getState().recordFailure("ls\r", ["t1"], 1);
+    render(<FleetFailureBanner />);
+    expect(
+      screen.getByText("1 terminal rejected the write. 1 unreachable terminal was disarmed.")
+    ).toBeTruthy();
+  });
+
+  it("pluralizes the disarmed suffix", () => {
+    useFleetFailureStore.getState().recordFailure("ls\r", ["t1", "t2"], 2);
+    render(<FleetFailureBanner />);
+    expect(
+      screen.getByText("2 terminals rejected the write. 2 unreachable terminals were disarmed.")
+    ).toBeTruthy();
+  });
+
+  it("keeps the plain copy when the broadcast had no permanent failures", () => {
+    useFleetFailureStore.getState().recordFailure("ls\r", ["t1"]);
+    render(<FleetFailureBanner />);
+    expect(screen.getByText("1 terminal rejected the write.")).toBeTruthy();
+  });
+
+  it("resets the disarmed count when the failure set is cleared", () => {
+    useFleetFailureStore.getState().recordFailure("ls\r", ["t1"], 3);
+    useFleetFailureStore.getState().dismissId("t1");
+    expect(useFleetFailureStore.getState().disarmedCount).toBe(0);
   });
 });

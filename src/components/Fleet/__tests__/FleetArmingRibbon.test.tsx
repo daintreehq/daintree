@@ -79,6 +79,7 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetPendingActionStore } from "@/store/fleetPendingActionStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetPickerSessionStore } from "@/store/fleetPickerSessionStore";
+import { useFleetRunStore, type FleetRun, type FleetRunTarget } from "@/store/fleetRunStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import type { ProjectSettings } from "@shared/types/project";
@@ -97,6 +98,7 @@ function resetStores() {
     previewArmedIds: new Set<string>(),
   });
   useFleetPendingActionStore.setState({ pending: null });
+  useFleetRunStore.getState()._reset();
   usePanelStore.setState({ panelsById: {}, panelIds: [], focusedId: null });
   useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1", isFleetScopeActive: false });
   useWorktreeFilterStore.setState({ quickStateFilter: "all" });
@@ -1269,5 +1271,123 @@ describe("FleetArmingRibbon — saved fleet delete confirm (#8023)", () => {
       useFleetArmingStore.getState().armIds(["a", "b"]);
     });
     expect(screen.queryByText("Delete 'My fleet'?")).toBeNull();
+  });
+});
+
+describe("supervised run status line (#10930)", () => {
+  function makeRunTarget(
+    terminalId: string,
+    overrides: Partial<FleetRunTarget> = {}
+  ): FleetRunTarget {
+    return {
+      terminalId,
+      title: terminalId,
+      worktreeId: "wt-1",
+      submission: "sent",
+      agentState: "working",
+      settled: false,
+      gone: false,
+      ...overrides,
+    };
+  }
+
+  function seedRun(status: FleetRun["status"], targets: FleetRunTarget[]): void {
+    useFleetRunStore.setState({
+      run: {
+        runId: "run-1",
+        status,
+        isRetry: false,
+        draftPreview: "hello",
+        startedAt: Date.now(),
+        targets,
+      },
+    });
+  }
+
+  beforeEach(() => {
+    resetStores();
+    useFleetBroadcastProgressStore.setState({
+      completed: 0,
+      total: 0,
+      failed: 0,
+      isActive: false,
+      cancelled: false,
+    });
+    seed([makeAgent("a"), makeAgent("b"), makeAgent("c")]);
+    useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+  });
+
+  it("shows live counts while the run is watching", () => {
+    seedRun("watching", [
+      makeRunTarget("a"),
+      makeRunTarget("b", { settled: true, agentState: "waiting" }),
+      makeRunTarget("c", {
+        submission: "failed",
+        settled: true,
+        failureKind: "transient",
+        agentState: "idle",
+      }),
+    ]);
+    render(<FleetArmingRibbon />);
+    const status = screen.getByTestId("fleet-run-status");
+    expect(status.textContent).toContain("1 working");
+    expect(status.textContent).toContain("1 waiting");
+    expect(status.textContent).toContain("1 failed");
+    // Watching runs are not dismissible — the line reflects live state.
+    expect(screen.queryByTestId("fleet-run-dismiss")).toBeNull();
+  });
+
+  it("shows a dismissible summary once the run finishes", () => {
+    seedRun("completed", [
+      makeRunTarget("a", { settled: true, agentState: "completed" }),
+      makeRunTarget("b", { settled: true, agentState: "waiting" }),
+    ]);
+    render(<FleetArmingRibbon />);
+    const status = screen.getByTestId("fleet-run-status");
+    expect(status.textContent).toContain("Run finished");
+    expect(status.textContent).toContain("1 waiting");
+    expect(status.textContent).toContain("1 done");
+
+    fireEvent.click(screen.getByTestId("fleet-run-dismiss"));
+    expect(useFleetRunStore.getState().run).toBeNull();
+    expect(screen.queryByTestId("fleet-run-status")).toBeNull();
+  });
+
+  it("shows a dismissible failure summary when nothing was sent", () => {
+    seedRun("failed", [
+      makeRunTarget("a", {
+        submission: "failed",
+        settled: true,
+        failureKind: "permanent",
+        agentState: "idle",
+      }),
+    ]);
+    render(<FleetArmingRibbon />);
+    expect(screen.getByTestId("fleet-run-status").textContent).toContain("Run failed");
+    expect(screen.getByTestId("fleet-run-dismiss")).toBeTruthy();
+  });
+
+  it("renders nothing for cancelled or superseded runs", () => {
+    seedRun("cancelled", [makeRunTarget("a", { submission: "skipped", settled: true })]);
+    const { unmount } = render(<FleetArmingRibbon />);
+    expect(screen.queryByTestId("fleet-run-status")).toBeNull();
+    unmount();
+
+    seedRun("superseded", [makeRunTarget("a")]);
+    render(<FleetArmingRibbon />);
+    expect(screen.queryByTestId("fleet-run-status")).toBeNull();
+  });
+
+  it("yields the slot to submission progress while a broadcast is active", () => {
+    seedRun("watching", [makeRunTarget("a")]);
+    useFleetBroadcastProgressStore.setState({
+      completed: 1,
+      total: 3,
+      failed: 0,
+      isActive: true,
+      cancelled: false,
+    });
+    render(<FleetArmingRibbon />);
+    expect(screen.queryByTestId("fleet-run-status")).toBeNull();
   });
 });

@@ -8,6 +8,7 @@ import {
 import { useFleetArmingStore, subscribeFleetArmingPanelPruning } from "./fleetArmingStore";
 import { subscribeFleetTargetOverridesPruning } from "./fleetTargetOverridesStore";
 import { subscribeFleetFailureAutoClear } from "./fleetFailureStore";
+import { subscribeFleetRunWatcher } from "./fleetRunStore";
 import { useTerminalInputStore, unregisterInputController } from "./terminalInputStore";
 import { subscribeFleetBroadcastResult } from "@/components/Fleet/fleetRawInputBroadcast";
 import { semanticAnalysisService } from "@/services/SemanticAnalysisService";
@@ -376,6 +377,12 @@ export function initStoreOrchestrator(): () => void {
   //     `fleetFailureStore.ts` was never torn down and the `globalThis`
   //     registration guard mishandled re-registration under HMR (#9923).
   disposables.add(toDisposable(subscribeFleetFailureAutoClear()));
+
+  // 5e. Fleet-run watcher: drives the supervised run's `watching` phase —
+  //     refreshes per-target agent-state snapshots on panel changes and
+  //     finalizes the run (with its durable run-history append) once every
+  //     target settles. Same orchestrator-scoped lifecycle as 5a–5d (#10930).
+  disposables.add(toDisposable(subscribeFleetRunWatcher()));
 
   // 5. Availability → agent-settings re-normalization: installed/missing state
   //    is the input to `normalizeAgentSelection`, so re-run normalization any

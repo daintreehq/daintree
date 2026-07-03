@@ -25,6 +25,7 @@ import {
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetPendingActionStore } from "@/store/fleetPendingActionStore";
+import { useFleetRunStore, summarizeFleetRun, type FleetRun } from "@/store/fleetRunStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
@@ -39,6 +40,16 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
+function buildRunCountSegments(run: FleetRun): string[] {
+  const counts = summarizeFleetRun(run);
+  const segments: string[] = [];
+  if (counts.working > 0) segments.push(`${counts.working} working`);
+  if (counts.waiting > 0) segments.push(`${counts.waiting} waiting`);
+  if (counts.done > 0) segments.push(`${counts.done} done`);
+  if (counts.sendFailed > 0) segments.push(`${counts.sendFailed} failed`);
+  return segments;
+}
+
 export function FleetArmingRibbon(): ReactElement | null {
   const armedCount = useFleetArmingStore((s) => s.armedIds.size);
   const clear = useFleetArmingStore((s) => s.clear);
@@ -52,6 +63,27 @@ export function FleetArmingRibbon(): ReactElement | null {
   const progressFailed = useFleetBroadcastProgressStore((s) => s.failed);
   const progressActive = useFleetBroadcastProgressStore((s) => s.isActive);
   const showProgress = useDeferredLoading(progressActive, UI_DOHERTY_THRESHOLD);
+
+  // Supervised-run status line (#10930). Submission progress is owned by the
+  // progress store above; once the fan-out lands, the run store's `watching`
+  // phase takes over the same slot with live per-target counts, and a
+  // finalized run leaves a dismissible one-line summary. Cancelled/superseded
+  // runs render nothing — the announcer + progress store already covered them.
+  const run = useFleetRunStore((s) => s.run);
+  const dismissRun = useFleetRunStore((s) => s.dismiss);
+  let runStatus: { label: string; dismissible: boolean } | null = null;
+  if (run !== null && !progressActive) {
+    if (run.status === "watching") {
+      runStatus = { label: buildRunCountSegments(run).join(" · "), dismissible: false };
+    } else if (run.status === "completed") {
+      runStatus = {
+        label: ["Run finished", ...buildRunCountSegments(run)].join(" · "),
+        dismissible: true,
+      };
+    } else if (run.status === "failed") {
+      runStatus = { label: "Run failed · nothing sent", dismissible: true };
+    }
+  }
 
   const [popoverOpen, setPopoverOpen] = useState(false);
   // The selection menu is controlled so a fleet-delete request can close it
@@ -515,6 +547,25 @@ export function FleetArmingRibbon(): ReactElement | null {
             >
               Cancel
             </button>
+          )}
+          {runStatus !== null && (
+            <span
+              className="flex items-center gap-1 text-[11px] tabular-nums text-daintree-text/70"
+              data-testid="fleet-run-status"
+            >
+              <span>{runStatus.label}</span>
+              {runStatus.dismissible && (
+                <button
+                  type="button"
+                  onClick={dismissRun}
+                  aria-label="Dismiss run summary"
+                  data-testid="fleet-run-dismiss"
+                  className="rounded p-0.5 text-daintree-text/50 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </span>
           )}
           <DropdownMenu
             open={selectionMenuOpen}

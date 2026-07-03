@@ -486,6 +486,7 @@ export const BUILT_IN_ACTION_IDS = [
   "fleet.saveNamedFleet",
   "fleet.recallNamedFleet",
   "fleet.deleteNamedFleet",
+  "fleet.getRunStatus",
 ] as const;
 
 export type BuiltInRuntimeActionId = (typeof BUILT_IN_ACTION_IDS)[number];

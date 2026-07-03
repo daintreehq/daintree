@@ -253,6 +253,12 @@ It is special-cased in the `CallTool` handler to run **in the main process** rat
 
 The returned `busyState`/`idleReason`/`waitingReason` are mapped from the canonical `AgentState` FSM (`mapAgentStateToBusyState`, `mapAgentStateToIdleReason`). The FSM and the `agent:state-changed` event it consumes are owned by `AgentStateService` — see [`agent-activity-monitoring.md`](./agent-activity-monitoring.md). For polling _many_ terminals at once, the `triage_terminals` prompt steers agents to `terminal.getStatus` instead of fanning `waitUntilIdle` out N ways.
 
+## Fleet-run supervision (`fleet.getRunStatus`)
+
+The in-app fleet broadcast is supervised past submission (#10930): `fleetRunStore` (renderer) tracks each structured broadcast as a run — per-target submission outcome (`sent` / `failed` with the permanent-vs-transient classification / `skipped` on cancel), a live agent-state snapshot per target, and a `watching` phase that finalizes once every sent target leaves `working`/`directing` (`waiting` counts as settled, mirroring `waitUntilIdleBatch`). Finalized runs append a durable `runHistory` record carrying `runId`, run `status`, and per-target `failureKind`/`finalAgentState`.
+
+`fleet.getRunStatus` is the read-only MCP window onto that run: workbench tier and the external allowlist, `readOnlyHint`, structured `outputSchema`, no args. It reports the run owned by the dispatching window and never dispatches anything. The broadcast itself is deliberately NOT MCP-exposed (`terminal.bulkCommand` stays renderer-only on every tier) — an external orchestrator fans out `terminal.sendCommand` per terminal and watches with batched `terminal.getStatus` / bounded `waitUntilIdleBatch`, per the `triage_terminals` prompt and `CLAUDE.tasks.md` guidance.
+
 ## Guard rails and observability
 
 - **`abusePolicy.ts`** — per-session sliding-window counter shared by `401`s and tier-mismatches (`abusePolicyMaxDenials` within `abusePolicyWindowMs`). Tripping revokes the session and notifies the pinned renderer (`MCP_SESSION_REVOKED`). The counter map is dropped on every per-session cleanup hook so it can't grow unbounded across session churn, and wiped wholesale on stop/restart.
