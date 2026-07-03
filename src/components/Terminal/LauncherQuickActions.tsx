@@ -1,23 +1,15 @@
-import { useMemo, useSyncExternalStore } from "react";
+import { useMemo } from "react";
 import { SquareTerminal, Search } from "lucide-react";
 import { KbdChord } from "@/components/ui/Kbd";
 import { useEffectiveCombo, useAriaKeyshortcuts } from "@/hooks/useKeybinding";
 import { actionService } from "@/services/ActionService";
-import { getLaunchOptions } from "@/components/TerminalPalette/launchOptions";
+import { getLaunchOptions, type LaunchOption } from "@/components/TerminalPalette/launchOptions";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
-import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
-import {
-  subscribeToPluginAgentRegistry,
-  getPluginAgentRegistrySnapshot,
-} from "@shared/config/pluginAgentRegistry";
-import { isAgentInstalled } from "@shared/utils/agentAvailability";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
+import { isToolbarButtonVisible } from "@/components/Layout/toolbarButtonMetadata";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import type { ActionId } from "@shared/types/actions";
-
-// Cap the agent row so a user with many agents installed still gets a tight
-// launcher rather than a wall of buttons — the rest stay one keystroke away in
-// the panel palette ("New panel…", ⌘N).
-const MAX_AGENTS = 5;
 
 interface QuickActionProps {
   icon: React.ReactNode;
@@ -79,63 +71,70 @@ function PaletteSearchButton() {
 }
 
 /**
- * Compact launch row for the empty grid — installed agents plus the two core
- * "start something" actions (new terminal, panel palette). Recipes are the hero
- * above this; these are the fallback launches when no recipe fits. Agent
- * visibility mirrors the panel palette (installed built-ins + all plugin
- * agents) so the canvas and ⌘N never disagree about what's launchable.
+ * Compact launch row for the empty grid — the built-in agents the user keeps on
+ * their toolbar plus the core "new terminal" action, with the panel palette one
+ * step below. Recipes are the hero above this; these are the fallback launches
+ * when no recipe fits.
+ *
+ * Agent visibility mirrors the toolbar exactly: only ids the toolbar renders as
+ * agent buttons (built-in launchable agents) count, resolved through the same
+ * `isToolbarButtonVisible` tri-state and walked in the toolbar's own left→right
+ * order, so the canvas and toolbar never disagree. Plugin/user agents live in
+ * the agent tray, never as toolbar buttons, so they don't surface here — the
+ * palette (⌘N) reaches them. No cap: the pinned set is already user-curated.
  */
 export function LauncherQuickActions() {
   const availability = useCliAvailabilityStore((state) => state.availability);
-  const isInitialized = useCliAvailabilityStore((state) => state.isInitialized);
-  // Re-derive the roster when plugin- or user-contributed agents load/unload
-  // mid-session, matching usePanelPalette — otherwise a freshly installed
-  // plugin agent wouldn't appear until CLI availability happened to change.
-  const pluginAgentRegistry = useSyncExternalStore(
-    subscribeToPluginAgentRegistry,
-    getPluginAgentRegistrySnapshot
-  );
-  const userRegistry = useUserAgentRegistryStore((state) => state.registry);
+  const agentSettings = useAgentSettingsStore((state) => state.settings);
+  const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
 
   const agents = useMemo(() => {
-    void pluginAgentRegistry;
-    void userRegistry;
-    return getLaunchOptions()
-      .filter((option) => Boolean(option.launchAgentId))
-      .filter((option) => {
-        const id = option.launchAgentId!;
-        // Optimistically show until the first availability probe lands, then
-        // hide only uninstalled built-ins — plugin agents are always shown
-        // (their command may be unresolved; mirrors usePanelPalette #10560).
-        if (!isInitialized) return true;
-        if (!isBuiltInAgentId(id)) return true;
-        return isAgentInstalled(availability[id]);
-      })
-      .slice(0, MAX_AGENTS);
-  }, [availability, isInitialized, pluginAgentRegistry, userRegistry]);
+    // Icon/label for each launchable agent, indexed by id.
+    const byId = new Map<string, LaunchOption>(
+      getLaunchOptions()
+        .filter((option) => Boolean(option.launchAgentId))
+        .map((option) => [option.launchAgentId!, option])
+    );
+    // Walk the toolbar's own left→right order (deduped defensively, #10937) and
+    // keep the built-in agents whose toolbar button is currently visible. The
+    // `isBuiltInAgentId` gate is what makes this an exact toolbar mirror: it
+    // drops every non-agent button (terminal, browser, agent-tray, settings, …)
+    // so a plugin/user agent whose id happens to collide with a toolbar button
+    // id can never sneak in — only built-in agents are ever toolbar buttons.
+    const order = Array.from(
+      new Set([...toolbarLayout.leftButtons, ...toolbarLayout.rightButtons])
+    );
+    const result: LaunchOption[] = [];
+    for (const id of order) {
+      if (!isBuiltInAgentId(id)) continue;
+      const option = byId.get(id);
+      if (!option) continue;
+      if (!isToolbarButtonVisible(id, toolbarLayout.pinnedButtons, agentSettings, availability)) {
+        continue;
+      }
+      result.push(option);
+    }
+    return result;
+  }, [availability, agentSettings, toolbarLayout]);
 
   const dispatch = (actionId: ActionId, args?: Record<string, unknown>) => {
     void actionService.dispatch(actionId, args, { source: "user" });
   };
 
   return (
-    <div className="flex w-full max-w-lg flex-col items-center gap-2.5">
+    <div className="flex w-full max-w-[38rem] flex-col items-center gap-2.5">
       <div className="flex w-full flex-wrap items-center justify-center gap-2">
         {agents.map((agent) => {
-          const id = agent.launchAgentId!;
-          // Built-ins carry a canonical `agent.<id>` action (keybinding + label);
-          // plugin agents have none, so route them through the generic launcher.
-          const builtIn = isBuiltInAgentId(id);
-          const actionId = (builtIn ? `agent.${id}` : "agent.launch") as ActionId;
+          // Every launcher agent is a built-in toolbar agent, so it carries a
+          // canonical `agent.<id>` action (keybinding + label).
+          const actionId = `agent.${agent.launchAgentId!}` as ActionId;
           return (
             <QuickAction
               key={agent.id}
               icon={agent.icon}
               label={agent.label}
               actionId={actionId}
-              onClick={() =>
-                builtIn ? dispatch(actionId) : dispatch("agent.launch", { agentId: id })
-              }
+              onClick={() => dispatch(actionId)}
             />
           );
         })}
