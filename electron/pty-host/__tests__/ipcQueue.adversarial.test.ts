@@ -369,4 +369,55 @@ describe("IpcQueueManager adversarial", () => {
       expect(mgr.getTotalQueuedBytes()).toBe(IPC_MAX_QUEUE_BYTES + 1);
     });
   });
+
+  describe("aggregate sweep on non-ack drains", () => {
+    // A terminal paused by the aggregate watermark with an empty queue of its
+    // own receives no acks, so removeBytes never runs for it. The other two
+    // aggregate-shrinking paths — safety-timeout force-resume and clearQueue —
+    // must run the same resume sweep, or the terminal stays stranded until its
+    // own 10s safety timeout.
+    const BIG = HIGH_BYTES + 1;
+
+    function pauseEightBigProducers() {
+      for (let i = 1; i <= 8; i++) {
+        mgr.addBytes(`big${i}`, BIG);
+        mgr.applyBackpressure(`big${i}`, mgr.getUtilization(`big${i}`));
+        expect(mgr.isPaused(`big${i}`)).toBe(true);
+      }
+    }
+
+    it("safety-timeout force-resume sweeps aggregate-paused siblings", () => {
+      // Eight big producers (own-watermark pauses at T=0) push the aggregate
+      // over its 16MB gate.
+      pauseEightBigProducers();
+
+      // t0 pauses via the aggregate gate 1s later; its own timeout is at
+      // T+11s, strictly after the big producers' timeouts at T+10s.
+      vi.advanceTimersByTime(1000);
+      mgr.addBytes("t0", 1000);
+      mgr.applyBackpressure("t0", mgr.getUtilization("t0"));
+      expect(mgr.isPaused("t0")).toBe(true);
+      mgr.removeBytes("t0", 1000);
+      expect(mgr.isPaused("t0")).toBe(true);
+
+      // At T+10s the big producers force-resume and drop their bytes — t0
+      // must resume in the same tick via the sweep, not at T+11s.
+      vi.advanceTimersByTime(IPC_MAX_PAUSE_MS - 1000);
+      expect(mgr.isPaused("t0")).toBe(false);
+    });
+
+    it("clearQueue (terminal teardown) sweeps aggregate-paused siblings", () => {
+      pauseEightBigProducers();
+      mgr.addBytes("t0", 1000);
+      mgr.applyBackpressure("t0", mgr.getUtilization("t0"));
+      mgr.removeBytes("t0", 1000);
+      expect(mgr.isPaused("t0")).toBe(true);
+
+      for (let i = 1; i <= 8; i++) {
+        mgr.clearQueue(`big${i}`);
+      }
+
+      expect(mgr.isPaused("t0")).toBe(false);
+    });
+  });
 });

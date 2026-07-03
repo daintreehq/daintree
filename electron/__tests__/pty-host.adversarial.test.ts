@@ -124,6 +124,7 @@ interface InspectableBackpressureManager {
 
 interface InspectableIpcQueueManager {
   queuedBytes: Map<string, number>;
+  deps: { emitReliabilityMetric?: (payload: Record<string, unknown>) => void } | undefined;
   clearQueue: TestMock;
   removeBytes: TestMock;
   tryResume: TestMock;
@@ -150,6 +151,8 @@ interface InspectablePortBatcher {
   dispose: TestMock;
   flushTerminal: TestMock;
   write: TestMock;
+  pendingSnapshot: Array<{ id: string; bytes: number }>;
+  getPendingByteSnapshot: TestMock;
 }
 
 const hostState = vi.hoisted(() => ({
@@ -163,6 +166,7 @@ const hostState = vi.hoisted(() => ({
   batchers: [] as InspectablePortBatcher[],
   resourceGovernorDeps: null as {
     getDropSnapshot: () => { droppedBytesDelta: number; dataLossCountDelta: number };
+    getPausedDurationsSnapshot: () => Array<{ terminalId: string; heldDurationMs: number }>;
   } | null,
   reset() {
     this.currentParentPort = null;
@@ -345,6 +349,15 @@ vi.mock("../pty-host/index.js", async () => {
     private terminalStatuses = new Map<string, string>();
     emitReliabilityMetric = vi.fn();
 
+    // Accessors the diagnostics (flow-control snapshot) handler reads.
+    get terminalStatusesMap(): Map<string, string> {
+      return this.terminalStatuses;
+    }
+
+    get suspendedSet(): Set<string> {
+      return this.suspended;
+    }
+
     constructor(
       private readonly deps: {
         getPauseCoordinator: (id: string) => InspectablePauseCoordinator | undefined;
@@ -514,8 +527,11 @@ vi.mock("../pty-host/index.js", async () => {
     getUtilization = vi.fn(() => 0);
     applyBackpressure = vi.fn();
     dispose = vi.fn();
+    getQueueSnapshot = vi.fn(() => ({ totalPendingBytes: 0, perTerminal: [] }));
+    deps: { emitReliabilityMetric?: (payload: Record<string, unknown>) => void } | undefined;
 
-    constructor() {
+    constructor(deps?: { emitReliabilityMetric?: (payload: Record<string, unknown>) => void }) {
+      this.deps = deps;
       hostState.ipcQueueManagers.push(this);
     }
   }
@@ -529,6 +545,7 @@ vi.mock("../pty-host/index.js", async () => {
       private readonly deps: {
         getPauseCoordinator: (id: string) => InspectablePauseCoordinator | undefined;
         pauseToken?: string;
+        emitReliabilityMetric?: (payload: Record<string, unknown>) => void;
       }
     ) {
       this.pauseToken = deps.pauseToken ?? "port-queue";
@@ -537,6 +554,7 @@ vi.mock("../pty-host/index.js", async () => {
 
     removeBytes = vi.fn();
     tryResume = vi.fn();
+    getQueueSnapshot = vi.fn(() => ({ totalPendingBytes: 0, perTerminal: [] }));
     clearQueue = vi.fn((id: string) => {
       this.pausedIds.delete(id);
     });
@@ -556,6 +574,14 @@ vi.mock("../pty-host/index.js", async () => {
     markPaused(id: string): void {
       this.pausedIds.add(id);
       this.deps.getPauseCoordinator(id)?.pause(this.pauseToken);
+      // Mirror the real manager: a pause-start rides the reliability-metric
+      // funnel, registering this window as a pause SOURCE in the host's
+      // per-source tracking map (pausedTerminals closure in pty-host.ts).
+      this.deps.emitReliabilityMetric?.({
+        terminalId: id,
+        metricType: "pause-start",
+        timestamp: Date.now(),
+      });
     }
   }
 
@@ -563,6 +589,10 @@ vi.mock("../pty-host/index.js", async () => {
     dispose = vi.fn();
     flushTerminal = vi.fn();
     write = vi.fn(() => false);
+    // Buffered-but-unflushed bytes, seeded by tests to simulate data batched
+    // for a port that is about to close.
+    pendingSnapshot: Array<{ id: string; bytes: number }> = [];
+    getPendingByteSnapshot = vi.fn(() => this.pendingSnapshot);
 
     constructor() {
       hostState.batchers.push(this);
@@ -572,9 +602,17 @@ vi.mock("../pty-host/index.js", async () => {
   class MockResourceGovernor {
     start = vi.fn();
     dispose = vi.fn();
+    getSnapshot = vi.fn(() => ({
+      isThrottling: false,
+      isWarning: false,
+      activeProfile: "balanced",
+      smoothedUtilizationPercent: null,
+      throttleDurationMs: 0,
+    }));
 
     constructor(deps: {
       getDropSnapshot: () => { droppedBytesDelta: number; dataLossCountDelta: number };
+      getPausedDurationsSnapshot: () => Array<{ terminalId: string; heldDurationMs: number }>;
     }) {
       hostState.resourceGovernorDeps = deps;
     }
@@ -1831,5 +1869,161 @@ describe("pty-host adversarial", () => {
       droppedBytesDelta: 22,
       dataLossCountDelta: 1,
     });
+  });
+
+  // Helper: flow-control snapshots sent to Main (diagnostics pull).
+  function flowControlSnapshots(parentPort: MockParentPort): Array<Record<string, unknown>> {
+    return parentPort.postMessage.mock.calls
+      .map((c: unknown[]) => c[0])
+      .filter(
+        (m: unknown): m is Record<string, unknown> =>
+          typeof m === "object" &&
+          m !== null &&
+          (m as { type?: string }).type === "flow-control-snapshot"
+      );
+  }
+
+  it("DISCONNECT_ACCOUNTS_BATCHER_PENDING_AS_DROPPED", async () => {
+    // Bytes batched for a closing port die with it — dispose() discards them
+    // silently, so disconnectWindow must account them as data loss first.
+    // Before this accounting, a port-replace mid-flood erased up to a full
+    // batch window per terminal from the drop ledger.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1"));
+
+    const port = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    await flushMicrotasks();
+
+    const batcher = hostState.batchers[0];
+    batcher.pendingSnapshot = [
+      { id: "t1", bytes: 120 },
+      { id: "t2", bytes: 40 },
+    ];
+
+    parentPort.emit("message", { type: "disconnect-port", windowId: 1 });
+    await flushMicrotasks();
+
+    expect(batcher.dispose).toHaveBeenCalledTimes(1);
+    expect(hostState.resourceGovernorDeps?.getDropSnapshot()).toEqual({
+      droppedBytesDelta: 160,
+      dataLossCountDelta: 2,
+    });
+  });
+
+  it("DISCONNECT_CLEARS_WINDOW_PAUSE_SOURCE_TRACKING", async () => {
+    // The pre-fix ordering called resumeAll() (which clears the manager's
+    // pause map) BEFORE iterating getPausedTerminalIds() — a live iterator
+    // over that same map — so the removePauseSource loop visited nothing and
+    // the window's pause-source entries leaked: the pause-duration gauge kept
+    // reporting heldDurationMs for a window that no longer existed.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1"));
+    parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+
+    const port = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    await flushMicrotasks();
+
+    // Window 1's port queue pauses t1 — the pause-start rides the funnel and
+    // registers source "port-1" in the host's tracking map.
+    hostState.portQueueManagers[0].markPaused("t1");
+    expect(hostState.resourceGovernorDeps?.getPausedDurationsSnapshot()).toEqual([
+      expect.objectContaining({ terminalId: "t1" }),
+    ]);
+
+    parentPort.emit("message", { type: "disconnect-port", windowId: 1 });
+    await flushMicrotasks();
+
+    expect(hostState.resourceGovernorDeps?.getPausedDurationsSnapshot()).toEqual([]);
+  });
+
+  it("DISCONNECT_PRESERVES_OTHER_SOURCE_PAUSE_TRACKING", async () => {
+    // Multi-source attribution: a terminal paused by BOTH this window's port
+    // queue AND the IPC queue must keep its held-duration tracking when just
+    // the window disconnects — only the "port-1" source is removed.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1"));
+    parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+
+    const port = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    await flushMicrotasks();
+
+    hostState.portQueueManagers[0].markPaused("t1");
+    // The IPC queue also pauses t1 (source "ipc" via its own funnel wiring).
+    hostState.ipcQueueManagers[0].deps?.emitReliabilityMetric?.({
+      terminalId: "t1",
+      metricType: "pause-start",
+      timestamp: Date.now(),
+    });
+
+    parentPort.emit("message", { type: "disconnect-port", windowId: 1 });
+    await flushMicrotasks();
+
+    // The IPC hold keeps t1 in the tracking map after the window is gone.
+    expect(hostState.resourceGovernorDeps?.getPausedDurationsSnapshot()).toEqual([
+      expect.objectContaining({ terminalId: "t1" }),
+    ]);
+  });
+
+  it("FLOW_SNAPSHOT_REPORTS_PER_TERMINAL_DROP_TALLY", async () => {
+    // Two IPC-cap drops on the same terminal must surface as a cumulative
+    // per-terminal tally in the flow-control snapshot — the streaming
+    // data-loss gauge only carries process-wide deltas, so without the tally
+    // a support bundle can't tell WHOSE scrollback has the gap.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1"));
+    parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+    await flushMicrotasks();
+
+    const ipcQueue = hostState.ipcQueueManagers[0];
+    ipcQueue.isAtCapacity.mockReturnValue(true);
+    ipcQueue.getUtilization.mockReturnValue(100);
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "a".repeat(50));
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "b".repeat(30));
+    await flushMicrotasks();
+
+    parentPort.postMessage.mockClear();
+    parentPort.emit("message", { type: "get-flow-control-snapshot", requestId: "req-drop" });
+    await flushMicrotasks();
+
+    const snapshots = flowControlSnapshots(parentPort);
+    expect(snapshots).toHaveLength(1);
+    const terminals = (snapshots[0].snapshot as { terminals: Array<Record<string, unknown>> })
+      .terminals;
+    const t1 = terminals.find((t) => t.terminalId === "t1");
+    expect(t1).toMatchObject({ droppedBytes: 80, dropCount: 2 });
+    expect(typeof t1?.lastDropAt).toBe("number");
+  });
+
+  it("EXIT_CLEARS_DROP_TALLY", async () => {
+    // The tally entry dies with the terminal so the bounded map can't grow
+    // across long sessions and the snapshot only reports live terminals.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1"));
+    parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+    await flushMicrotasks();
+
+    const ipcQueue = hostState.ipcQueueManagers[0];
+    ipcQueue.isAtCapacity.mockReturnValue(true);
+    ipcQueue.getUtilization.mockReturnValue(100);
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "a".repeat(50));
+    await flushMicrotasks();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("exit", "t1", 0);
+    await flushMicrotasks();
+
+    parentPort.postMessage.mockClear();
+    parentPort.emit("message", { type: "get-flow-control-snapshot", requestId: "req-exit" });
+    await flushMicrotasks();
+
+    const snapshots = flowControlSnapshots(parentPort);
+    const terminals = (snapshots[0].snapshot as { terminals: Array<Record<string, unknown>> })
+      .terminals;
+    expect(terminals.find((t) => t.terminalId === "t1" && (t.droppedBytes as number) > 0)).toBe(
+      undefined
+    );
   });
 });

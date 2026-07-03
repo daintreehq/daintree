@@ -279,6 +279,48 @@ import { isLoadBearingReliabilityMetric } from "./pty-host/loadBearingMetrics.js
 // false "regression" on the first emit after the gate opens.
 let dropAccumulator = { droppedBytes: 0, dataLossCount: 0 };
 
+// Per-terminal drop attribution for the on-demand flow-control snapshot
+// ("why is this terminal slow / missing output?"). The streaming
+// `data-loss-count` gauge only carries process-wide deltas, so a support
+// bundle could see THAT bytes were dropped but not WHOSE. Bounded: entries
+// are removed on terminal exit and the map is capped by evicting the
+// oldest-drop entry — a diagnostic tally must never become its own leak.
+// Updated only at drop sites (rare by construction), so it costs nothing on
+// the healthy hot path.
+interface TerminalDropTally {
+  droppedBytes: number;
+  dropCount: number;
+  lastDropAt: number;
+}
+const MAX_DROP_TALLY_TERMINALS = 256;
+const terminalDropTallies = new Map<string, TerminalDropTally>();
+
+function recordTerminalDrop(terminalId: string, droppedBytes: number): void {
+  const existing = terminalDropTallies.get(terminalId);
+  if (existing) {
+    existing.droppedBytes += droppedBytes;
+    existing.dropCount += 1;
+    existing.lastDropAt = Date.now();
+    return;
+  }
+  if (terminalDropTallies.size >= MAX_DROP_TALLY_TERMINALS) {
+    let oldestId: string | null = null;
+    let oldestAt = Number.POSITIVE_INFINITY;
+    for (const [id, tally] of terminalDropTallies) {
+      if (tally.lastDropAt < oldestAt) {
+        oldestAt = tally.lastDropAt;
+        oldestId = id;
+      }
+    }
+    if (oldestId !== null) terminalDropTallies.delete(oldestId);
+  }
+  terminalDropTallies.set(terminalId, {
+    droppedBytes,
+    dropCount: 1,
+    lastDropAt: Date.now(),
+  });
+}
+
 /**
  * Canonical funnel for terminal reliability-metric events. Wraps the
  * `backpressureManager.emitReliabilityMetric` call (which is wired into
@@ -485,8 +527,23 @@ function disconnectWindow(windowId: number, reason: string): void {
   } catch {
     // ignore
   }
+  // Batched-but-unflushed bytes die with the port — account them as data loss
+  // (they were headed to a renderer that will never receive them; the wake/
+  // restore snapshot is the recovery path). dispose() below discards the
+  // chunks without any bookkeeping of its own.
+  for (const { id, bytes } of conn.batcher.getPendingByteSnapshot()) {
+    dropAccumulator.droppedBytes += bytes;
+    dropAccumulator.dataLossCount += 1;
+    recordTerminalDrop(id, bytes);
+  }
   // Dispose batcher (drops buffered data — port is closing)
   conn.batcher.dispose();
+  // Snapshot the paused set BEFORE resumeAll: resumeAll clears the manager's
+  // pause map, and `getPausedTerminalIds()` is a live iterator over that map —
+  // iterating it after resumeAll visits nothing, leaking this window's
+  // per-source pause-tracking entries (stale `heldDurationMs` gauges for a
+  // window that no longer exists).
+  const pausedByThisWindow = [...conn.portQueueManager.getPausedTerminalIds()];
   // Release port-queue pause holds before disposing
   conn.portQueueManager.resumeAll();
   // Clear this window's per-source pause-tracking entries. Multi-source
@@ -495,7 +552,7 @@ function disconnectWindow(windowId: number, reason: string): void {
   // disconnects — `removePauseSource` keeps the entry alive while the
   // IPC path still holds. The renderer is informed via the queue
   // manager's own resume flow + tier-changed message.
-  for (const terminalId of conn.portQueueManager.getPausedTerminalIds()) {
+  for (const terminalId of pausedByThisWindow) {
     removePauseSource(terminalId, `port-${windowId}` as PauseSource);
   }
   conn.portQueueManager.dispose();
@@ -756,6 +813,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
           // metrics are gated off (mirrors the IPC at-capacity path).
           dropAccumulator.droppedBytes += byteCount;
           dropAccumulator.dataLossCount += 1;
+          recordTerminalDrop(id, byteCount);
           try {
             conn.port.postMessage({
               type: "terminal-status",
@@ -963,6 +1021,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
       // gated separately in ResourceGovernor.emitDataLossCount.
       dropAccumulator.droppedBytes += dataBytes;
       dropAccumulator.dataLossCount += 1;
+      recordTerminalDrop(id, dataBytes);
       // `ipc-cap-drop` is a data-path telemetry pulse, not a pause-source
       // transition — the funnel forwards it to the wire without touching
       // the per-source tracking map (a `suspend`/`pause-end` with `null`
@@ -1057,6 +1116,10 @@ ptyManager.on("exit", (id: string, exitCode: number, signal?: number) => {
 
   // Clean up IPC data mirror state
   ipcDataMirrorTerminals.delete(id);
+
+  // Drop-tally entry dies with the terminal — the flow-control snapshot only
+  // reports live terminals, and the map stays bounded across long sessions.
+  terminalDropTallies.delete(id);
 
   sendEvent({ type: "exit", id, exitCode, signal });
 });
@@ -1380,6 +1443,13 @@ const hostContext: HostContext = {
   resumePausedTerminal,
   createPortQueueManager,
   getPausedDurationsSnapshot,
+  getDropTallySnapshot: () =>
+    Array.from(terminalDropTallies, ([terminalId, tally]) => ({
+      terminalId,
+      droppedBytes: tally.droppedBytes,
+      dropCount: tally.dropCount,
+      lastDropAt: tally.lastDropAt,
+    })),
 };
 
 const dispatchMessage = createPtyHostMessageDispatcher(hostContext);

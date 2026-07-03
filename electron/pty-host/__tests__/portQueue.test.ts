@@ -575,6 +575,189 @@ describe("PortQueueManager", () => {
     });
   });
 
+  describe("aggregate sweep on non-ack drains", () => {
+    // The drain event that frees a swamped window is not always an ack:
+    // safety-timeout force-resumes and terminal teardown (clearQueue) also
+    // shrink the aggregate. A terminal paused by the window-level gate with an
+    // empty queue of its own receives no acks, so those paths MUST run the
+    // same resume sweep as removeBytes or it stays stranded until its own
+    // 10s safety timeout.
+    const BIG = 2.05 * 1024 * 1024; // over the ~2MB per-terminal watermark
+
+    function pauseEightBigProducers(mgr: PortQueueManager) {
+      for (let i = 1; i <= 8; i++) {
+        mgr.addBytes(`big${i}`, BIG);
+        mgr.applyBackpressure(`big${i}`, mgr.getUtilization(`big${i}`));
+        expect(mgr.isPaused(`big${i}`)).toBe(true);
+      }
+    }
+
+    it("safety-timeout force-resume sweeps aggregate-paused siblings", () => {
+      const deps = createMockDeps();
+      const mgr = new PortQueueManager(deps);
+
+      // Eight big producers pause on their own watermark at T=0 and push the
+      // aggregate over 16MB.
+      pauseEightBigProducers(mgr);
+      expect(mgr.getTotalQueuedBytes()).toBeGreaterThan(IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES);
+
+      // t0 pauses via the aggregate gate 1s later — its safety timeout is at
+      // T+11s, strictly after the big producers' timeouts at T+10s.
+      vi.advanceTimersByTime(1000);
+      mgr.addBytes("t0", 1000);
+      mgr.applyBackpressure("t0", mgr.getUtilization("t0"));
+      expect(mgr.isPaused("t0")).toBe(true);
+
+      // t0's own queue drains fully; the aggregate is still swamped.
+      mgr.removeBytes("t0", 1000);
+      expect(mgr.isPaused("t0")).toBe(true);
+
+      // Advance to exactly T+10s: the big producers' safety timeouts fire and
+      // drop their byte accounting. t0 must resume in the SAME tick via the
+      // sweep — not 1s later when its own timeout fires.
+      vi.advanceTimersByTime(IPC_MAX_PAUSE_MS - 1000);
+      expect(mgr.isPaused("t0")).toBe(false);
+      expect(deps.getPauseCoordinator("t0")!.resume).toHaveBeenCalledWith("port-queue");
+    });
+
+    it("clearQueue (terminal teardown) sweeps aggregate-paused siblings", () => {
+      const deps = createMockDeps();
+      const mgr = new PortQueueManager(deps);
+
+      pauseEightBigProducers(mgr);
+      mgr.addBytes("t0", 1000);
+      mgr.applyBackpressure("t0", mgr.getUtilization("t0"));
+      mgr.removeBytes("t0", 1000);
+      expect(mgr.isPaused("t0")).toBe(true);
+
+      // The big producers exit (kill/trash) — no acks will ever arrive for
+      // their bytes. Clearing them must free t0 as soon as the aggregate
+      // crosses the low watermark.
+      for (let i = 1; i <= 8; i++) {
+        mgr.clearQueue(`big${i}`);
+      }
+
+      expect(mgr.isPaused("t0")).toBe(false);
+      expect(deps.getPauseCoordinator("t0")!.resume).toHaveBeenCalledWith("port-queue");
+    });
+  });
+
+  describe("resumeAll surfaces the release (stuck-pill regression)", () => {
+    it("emits running + pause-end for each released terminal", () => {
+      const deps = createMockDeps();
+      const mgr = new PortQueueManager(deps);
+
+      const highWatermark = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
+      mgr.addBytes("t1", highWatermark + 1);
+      mgr.applyBackpressure("t1", mgr.getUtilization("t1"));
+      expect(mgr.isPaused("t1")).toBe(true);
+
+      const emitStatus = deps.emitTerminalStatus as ReturnType<typeof vi.fn>;
+      const emitMetric = deps.emitReliabilityMetric as ReturnType<typeof vi.fn>;
+      emitStatus.mockClear();
+      emitMetric.mockClear();
+
+      vi.advanceTimersByTime(1500);
+      mgr.resumeAll();
+
+      // Without the emission, the shared status map keeps "paused-backpressure"
+      // and any other window still showing the terminal wears a stale pill
+      // until an unrelated transition overwrites it.
+      expect(emitStatus).toHaveBeenCalledWith("t1", "running", expect.any(Number), 1500);
+      expect(emitMetric).toHaveBeenCalledWith(
+        expect.objectContaining({
+          terminalId: "t1",
+          metricType: "pause-end",
+          durationMs: 1500,
+        })
+      );
+      expect(mgr.isPaused("t1")).toBe(false);
+      expect(deps.getPauseCoordinator("t1")!.resume).toHaveBeenCalledWith("port-queue");
+    });
+
+    it("suppresses the running status while another source still holds the pause", () => {
+      const deps = createMockDeps();
+      const heldCoordinator: Pick<PtyPauseCoordinator, "pause" | "resume" | "isPaused"> = {
+        pause: vi.fn(),
+        resume: vi.fn(),
+        get isPaused() {
+          // Still held by e.g. the ipc-queue token after this manager resumes.
+          return true;
+        },
+      };
+      deps.getPauseCoordinator = vi.fn(() => heldCoordinator as PtyPauseCoordinator);
+      const mgr = new PortQueueManager(deps);
+
+      const highWatermark = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
+      mgr.addBytes("t1", highWatermark + 1);
+      mgr.applyBackpressure("t1", mgr.getUtilization("t1"));
+
+      const emitStatus = deps.emitTerminalStatus as ReturnType<typeof vi.fn>;
+      const emitMetric = deps.emitReliabilityMetric as ReturnType<typeof vi.fn>;
+      emitStatus.mockClear();
+      emitMetric.mockClear();
+
+      mgr.resumeAll();
+
+      // Terminal is NOT running (another hold remains) — no running status,
+      // but the pause-end metric still fires so per-source tracking clears.
+      expect(emitStatus).not.toHaveBeenCalledWith(
+        "t1",
+        "running",
+        expect.anything(),
+        expect.anything()
+      );
+      expect(emitMetric).toHaveBeenCalledWith(
+        expect.objectContaining({ terminalId: "t1", metricType: "pause-end" })
+      );
+    });
+
+    it("a throwing emitter cannot abort the release or leave pause state stale", () => {
+      // resumeAll runs during window teardown, where sendEvent can race a
+      // dying parent channel. A throw from either emitter must not stop the
+      // remaining terminals from being released or leave the pause maps
+      // populated (a stale map would strand coordinator holds forever).
+      const deps = createMockDeps();
+      let channelDead = false;
+      deps.emitTerminalStatus = vi.fn(() => {
+        if (channelDead) throw new Error("channel closing");
+      });
+      const mgr = new PortQueueManager(deps);
+
+      const highWatermark = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
+      mgr.addBytes("t1", highWatermark + 1);
+      mgr.applyBackpressure("t1", mgr.getUtilization("t1"));
+      mgr.addBytes("t2", highWatermark + 1);
+      mgr.applyBackpressure("t2", mgr.getUtilization("t2"));
+      expect(mgr.isPaused("t1")).toBe(true);
+      expect(mgr.isPaused("t2")).toBe(true);
+
+      // The parent channel dies just as the window tears down.
+      channelDead = true;
+      expect(() => mgr.resumeAll()).not.toThrow();
+
+      expect(mgr.isPaused("t1")).toBe(false);
+      expect(mgr.isPaused("t2")).toBe(false);
+      const coordinator = deps.getPauseCoordinator("t1");
+      expect(coordinator!.resume).toHaveBeenCalledWith("port-queue");
+    });
+
+    it("second resumeAll is a no-op (disconnect then dispose)", () => {
+      const deps = createMockDeps();
+      const mgr = new PortQueueManager(deps);
+
+      const highWatermark = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
+      mgr.addBytes("t1", highWatermark + 1);
+      mgr.applyBackpressure("t1", mgr.getUtilization("t1"));
+      mgr.resumeAll();
+
+      const emitMetric = deps.emitReliabilityMetric as ReturnType<typeof vi.fn>;
+      emitMetric.mockClear();
+      mgr.resumeAll();
+      expect(emitMetric).not.toHaveBeenCalled();
+    });
+  });
+
   describe("focused-terminal prioritization (#10878)", () => {
     function fillBelowPerTerminalWatermark(mgr: PortQueueManager, count: number, bytes: number) {
       for (let i = 0; i < count; i++) {

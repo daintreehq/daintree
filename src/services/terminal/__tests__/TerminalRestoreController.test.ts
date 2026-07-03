@@ -16,7 +16,7 @@ vi.mock("@/utils/logger", () => ({
 describe("TerminalRestoreController", () => {
   let controller: TerminalRestoreController;
   let instances: Map<string, ManagedTerminal>;
-  let writeDataSpy: (id: string, data: string | Uint8Array) => void;
+  let writeDataSpy: (id: string, data: string | Uint8Array, chunkCount: number) => void;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let mockTerminal: Record<string, any>;
   let writeCallbacks: Map<number, () => void>;
@@ -75,7 +75,7 @@ describe("TerminalRestoreController", () => {
     };
 
     instances = new Map();
-    writeDataSpy = vi.fn<(id: string, data: string | Uint8Array) => void>();
+    writeDataSpy = vi.fn<(id: string, data: string | Uint8Array, chunkCount: number) => void>();
 
     controller = new TerminalRestoreController({
       getInstance: (id) => instances.get(id),
@@ -158,19 +158,24 @@ describe("TerminalRestoreController", () => {
 
     it("flushes deferred output after restore", async () => {
       const managed = makeManagedTerminal();
-      managed.deferredOutput = ["deferred1", "deferred2"];
+      managed.deferredOutput = [
+        { data: "deferred1", chunkCount: 1 },
+        { data: "deferred2", chunkCount: 3 },
+      ];
       instances.set("t1", managed);
 
       controller.restoreFromSerialized("t1", "small-state");
       await flushMicrotasks();
 
-      expect(writeDataSpy).toHaveBeenCalledWith("t1", "deferred1");
-      expect(writeDataSpy).toHaveBeenCalledWith("t1", "deferred2");
+      // Each replayed batch carries its own chunkCount so the write settles
+      // exactly the pending port-ack FIFO entries the batch owns.
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "deferred1", 1);
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "deferred2", 3);
     });
 
     it("does not apply callback when destroyed mid-write", async () => {
       const managed = makeManagedTerminal({
-        deferredOutput: ["should-not-flush"],
+        deferredOutput: [{ data: "should-not-flush", chunkCount: 1 }],
       });
       instances.set("t1", managed);
 
@@ -187,7 +192,7 @@ describe("TerminalRestoreController", () => {
 
     it("does not apply first callback when a second restore starts before callback fires", async () => {
       const managed = makeManagedTerminal({
-        deferredOutput: ["first-deferred"],
+        deferredOutput: [{ data: "first-deferred", chunkCount: 1 }],
       });
       instances.set("t1", managed);
 
@@ -195,14 +200,14 @@ describe("TerminalRestoreController", () => {
       controller.restoreFromSerialized("t1", "first-state");
 
       // Second restore before first callback fires
-      managed.deferredOutput = ["second-deferred"];
+      managed.deferredOutput = [{ data: "second-deferred", chunkCount: 2 }];
       controller.restoreFromSerialized("t1", "second-state");
 
       await flushMicrotasks();
 
       // Only the second restore's deferred output should have been flushed
       expect(writeDataSpy).toHaveBeenCalledTimes(1);
-      expect(writeDataSpy).toHaveBeenCalledWith("t1", "second-deferred");
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "second-deferred", 2);
       expect(managed.restoreGeneration).toBe(2);
     });
 
@@ -358,7 +363,7 @@ describe("TerminalRestoreController", () => {
       instances.set("t1", managed);
       const data = "x".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 2);
 
-      managed.deferredOutput = ["deferred-data"];
+      managed.deferredOutput = [{ data: "deferred-data", chunkCount: 1 }];
 
       const promise = controller.restoreFromSerializedIncremental("t1", data);
       await flushMicrotasks();
@@ -368,7 +373,7 @@ describe("TerminalRestoreController", () => {
       }
       await promise;
 
-      expect(writeDataSpy).toHaveBeenCalledWith("t1", "deferred-data");
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "deferred-data", 1);
     });
 
     it("clears all timeout handles after successful multi-chunk restore", async () => {
@@ -494,13 +499,117 @@ describe("TerminalRestoreController", () => {
       expect(result).toBe(false);
       expect(managed.isSerializedRestoreInProgress).toBe(false);
     });
+
+    it("replays output deferred during the fetch when the state comes back null", async () => {
+      // Deferred entries carry unsettled ledger charges (port-ack FIFO, IPC
+      // ledger, ingest inFlightBytes) — a restore that never runs must still
+      // release them by replaying, or the ingest queue strands invisibly
+      // (getStalledBytes reads inFlightBytes>0 as healthy).
+      const { terminalClient } = await import("@/clients");
+      let resolveFetch!: (value: string | null) => void;
+      vi.mocked(terminalClient.getSerializedState).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveFetch = resolve;
+          })
+      );
+
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const promise = controller.fetchAndRestore("t1");
+      await flushMicrotasks();
+
+      // Live output arrives while the snapshot fetch is in flight.
+      managed.deferredOutput.push({ data: "mid-fetch-output", chunkCount: 2 });
+
+      resolveFetch(null);
+      const result = await promise;
+
+      expect(result).toBe(false);
+      expect(managed.isSerializedRestoreInProgress).toBe(false);
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "mid-fetch-output", 2);
+      expect(managed.deferredOutput).toHaveLength(0);
+    });
+
+    it("replays output deferred during the fetch when the fetch rejects", async () => {
+      const { terminalClient } = await import("@/clients");
+      let rejectFetch!: (err: Error) => void;
+      vi.mocked(terminalClient.getSerializedState).mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            rejectFetch = reject;
+          })
+      );
+
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const promise = controller.fetchAndRestore("t1");
+      await flushMicrotasks();
+
+      managed.deferredOutput.push({ data: "mid-fetch-output", chunkCount: 1 });
+
+      rejectFetch(new Error("host gone"));
+      const result = await promise;
+
+      expect(result).toBe(false);
+      expect(managed.isSerializedRestoreInProgress).toBe(false);
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "mid-fetch-output", 1);
+      expect(managed.deferredOutput).toHaveLength(0);
+    });
+
+    it("does NOT replay on a stale-generation fetch failure — the newer restore owns the entries", async () => {
+      const { terminalClient } = await import("@/clients");
+      let rejectFetch!: (err: Error) => void;
+      vi.mocked(terminalClient.getSerializedState).mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            rejectFetch = reject;
+          })
+      );
+
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const promise = controller.fetchAndRestore("t1");
+      await flushMicrotasks();
+      managed.deferredOutput.push({ data: "held-for-next-gen", chunkCount: 1 });
+
+      // A newer restore supersedes this one before the fetch settles.
+      managed.restoreGeneration++;
+      rejectFetch(new Error("host gone"));
+      await promise;
+
+      expect(writeDataSpy).not.toHaveBeenCalled();
+      expect(managed.deferredOutput).toHaveLength(1);
+    });
+  });
+
+  describe("failure-path deferred replay (synchronous restore)", () => {
+    it("replays deferred output when terminal.reset throws mid-restore", () => {
+      const managed = makeManagedTerminal({
+        deferredOutput: [{ data: "held", chunkCount: 3 }],
+      });
+      instances.set("t1", managed);
+      mockTerminal.reset.mockImplementationOnce(() => {
+        throw new Error("core torn down");
+      });
+
+      const result = controller.restoreFromSerialized("t1", "small-state");
+
+      expect(result).toBe(false);
+      expect(managed.isSerializedRestoreInProgress).toBe(false);
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "held", 3);
+      expect(managed.deferredOutput).toHaveLength(0);
+    });
   });
 
   describe("destroy", () => {
     it("bumps restore generation and clears restore state", () => {
       const managed = makeManagedTerminal({
         isSerializedRestoreInProgress: true,
-        deferredOutput: ["data"],
+        deferredOutput: [{ data: "data", chunkCount: 1 }],
       });
       instances.set("t1", managed);
 

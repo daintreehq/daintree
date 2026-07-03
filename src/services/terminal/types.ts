@@ -199,7 +199,12 @@ export interface ManagedTerminal {
   writeChain: Promise<void>;
   restoreGeneration: number;
   isSerializedRestoreInProgress: boolean;
-  deferredOutput: Array<string | Uint8Array>;
+  // Output that arrived mid-restore, replayed once the restore settles. Each
+  // entry keeps the ingest batch's chunkCount so the replay write can settle
+  // the SAME pending port-ack FIFO entries the batch owns — the entries are
+  // deliberately NOT settled at defer time (see TerminalWriteController), so
+  // the host's flow control keeps pacing the PTY while the restore runs.
+  deferredOutput: Array<{ data: string | Uint8Array; chunkCount: number }>;
 
   // Background scrollback restore state — prevents double-restore and tracks
   // lifecycle. Restores are queued ("pending"), replay asynchronously

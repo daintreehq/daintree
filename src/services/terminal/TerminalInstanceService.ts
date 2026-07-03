@@ -172,7 +172,7 @@ class TerminalInstanceService {
 
     this.restoreController = new TerminalRestoreController({
       getInstance: (id) => this.instances.get(id),
-      writeData: (id, data) => this.writeToTerminal(id, data),
+      writeData: (id, data, chunkCount) => this.writeToTerminal(id, data, chunkCount),
     });
 
     this.writeController = new TerminalWriteController({

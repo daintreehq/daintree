@@ -21,6 +21,7 @@ export function createDiagnosticsHandlers(ctx: HostContext): HandlerMap {
     rendererConnections,
     getPauseCoordinator,
     getPausedDurationsSnapshot,
+    getDropTallySnapshot,
     sendEvent,
   } = ctx;
 
@@ -37,6 +38,18 @@ export function createDiagnosticsHandlers(ctx: HostContext): HandlerMap {
         heldDurationById.set(terminalId, heldDurationMs);
       }
 
+      // Per-terminal drop attribution: which terminals have had bytes
+      // intentionally dropped (saturated port, IPC cap, disconnected batcher)
+      // and how much. This is the "missing output" half of "why is this
+      // terminal slow?" — pause state alone can't explain a scrollback gap.
+      const dropTallyById = new Map<
+        string,
+        { droppedBytes: number; dropCount: number; lastDropAt: number }
+      >();
+      for (const { terminalId, ...tally } of getDropTallySnapshot()) {
+        dropTallyById.set(terminalId, tally);
+      }
+
       // Union every terminal id known to any flow-control map so a terminal
       // that is paused/suspended/held but has no recorded status still appears.
       const ids = new Set<string>();
@@ -44,9 +57,11 @@ export function createDiagnosticsHandlers(ctx: HostContext): HandlerMap {
       for (const id of backpressureManager.suspendedSet) ids.add(id);
       for (const id of heldDurationById.keys()) ids.add(id);
       for (const id of pauseCoordinators.keys()) ids.add(id);
+      for (const id of dropTallyById.keys()) ids.add(id);
 
       const terminals: FlowControlTerminalSnapshot[] = [];
       for (const id of ids) {
+        const dropTally = dropTallyById.get(id);
         terminals.push({
           terminalId: id,
           flowStatus: backpressureManager.terminalStatusesMap.get(id) ?? null,
@@ -54,6 +69,9 @@ export function createDiagnosticsHandlers(ctx: HostContext): HandlerMap {
           isSuspended: backpressureManager.isSuspended(id),
           activityTier: backpressureManager.getActivityTier(id),
           pausedDurationMs: heldDurationById.get(id) ?? null,
+          droppedBytes: dropTally?.droppedBytes ?? 0,
+          dropCount: dropTally?.dropCount ?? 0,
+          lastDropAt: dropTally?.lastDropAt ?? null,
         });
       }
       terminals.sort((a, b) => a.terminalId.localeCompare(b.terminalId));
