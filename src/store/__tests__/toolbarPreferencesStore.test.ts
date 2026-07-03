@@ -749,9 +749,7 @@ describe("toolbarPreferencesStore", () => {
     it("sanitizeButtonList dedupes repeated ids when set via setRightButtons (#10937)", async () => {
       const store = await loadStore();
 
-      store
-        .getState()
-        .setRightButtons(["settings", "forge-stats" as never, "forge-stats" as never, "copy-tree"]);
+      store.getState().setRightButtons(["settings", "forge-stats", "forge-stats", "copy-tree"]);
 
       const { rightButtons } = store.getState().layout;
       expect(rightButtons.filter((id) => id === "forge-stats")).toHaveLength(1);
