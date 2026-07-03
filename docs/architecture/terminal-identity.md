@@ -125,6 +125,8 @@ Ownership is the `titleMode` ladder (`shared/types/panel.ts`): `"default"` (iden
 
 `getTerminalDisplayTitle(panel, variant)` (`src/utils/terminalTitleDisplay.ts`) is the single render-time source of truth: `"full"` (grid headers, tooltips, palettes) → `"Claude: fix auth tests"`; `"compact"` (~100px tab strips) → task-first, since the tab icon already carries identity; `"base"` (dock) → identity only. Composition is gated on a live detected agent and the `showAgentTaskTitles` preference (default on). Session-history records prefer `lastObservedTitle` on every close path, so resume rows read the same as the live tab did.
 
+**Identity echoes.** Agents set their OSC title to their own product name at startup (Claude Code emits `"Claude Code"`), which naive composition renders as `"Claude: Claude Code"`. An observed title whose every token matches the agent's identity (panel title, registry name, binary) or generic product filler (`code`, `cli`, …), with at least one genuine identity token, is classified as an identity echo, not a task: a `"default"` identity yields to the richer self-description (header shows `"Claude Code"`), while a `"custom"` preset identity (`"Claude [Z.ai]"`) outranks the echo and renders alone. The echo needs at least one identity token that isn't itself filler — a title that is pure filler (`"Ready"`, or `"Code CLI"` under "Qwen Code", whose identity contributes the filler word `code`) is treated as useless. Real tasks that merely contain the agent's name (`"Claude Code refactor plan"`) still compose normally.
+
 ## Reader Guidance
 
 - **What icon/color/title should I show?** Use `deriveTerminalChrome(panel)` for chrome; `getTerminalDisplayTitle(panel, variant)` for the title string.

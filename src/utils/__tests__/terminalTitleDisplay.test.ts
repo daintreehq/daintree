@@ -48,6 +48,41 @@ describe("getTerminalTaskTitle", () => {
     expect(getTerminalTaskTitle(ptyPanel({ lastObservedTitle: "Claude" }))).toBeNull();
   });
 
+  it("returns null for product-name identity echoes (agent name + generic filler)", () => {
+    expect(getTerminalTaskTitle(ptyPanel({ lastObservedTitle: "Claude Code" }))).toBeNull();
+    expect(getTerminalTaskTitle(ptyPanel({ lastObservedTitle: "✳ Claude Code" }))).toBeNull();
+    expect(
+      getTerminalTaskTitle(
+        ptyPanel({ detectedAgentId: "gemini", title: "Gemini", lastObservedTitle: "Gemini CLI" })
+      )
+    ).toBeNull();
+  });
+
+  it("recognizes the echo against the registry identity even under a preset title", () => {
+    expect(
+      getTerminalTaskTitle(ptyPanel({ title: "Claude [Z.ai]", lastObservedTitle: "Claude Code" }))
+    ).toBeNull();
+  });
+
+  it("a real task containing the agent name still counts as a task", () => {
+    expect(getTerminalTaskTitle(ptyPanel({ lastObservedTitle: "Claude Code refactor plan" }))).toBe(
+      "Claude Code refactor plan"
+    );
+  });
+
+  it("returns null for pure filler titles with no identity token (idle-status words)", () => {
+    expect(getTerminalTaskTitle(ptyPanel({ lastObservedTitle: "Ready" }))).toBeNull();
+    expect(getTerminalTaskTitle(ptyPanel({ lastObservedTitle: "Terminal" }))).toBeNull();
+  });
+
+  it("filler words inherited into the identity ('Qwen Code') don't make pure filler an echo", () => {
+    const qwen = ptyPanel({ detectedAgentId: "qwen", title: "Qwen Code" });
+    expect(getTerminalTaskTitle({ ...qwen, lastObservedTitle: "Code CLI" })).toBeNull();
+    expect(getTerminalDisplayTitle({ ...qwen, lastObservedTitle: "Code CLI" }, "full")).toBe(
+      "Qwen Code"
+    );
+  });
+
   it("returns null when no task was ever observed", () => {
     expect(getTerminalTaskTitle(ptyPanel({ lastObservedTitle: undefined }))).toBeNull();
   });
@@ -72,6 +107,23 @@ describe("getTerminalDisplayTitle", () => {
     expect(getTerminalDisplayTitle(ptyPanel({ lastObservedTitle: undefined }), "compact")).toBe(
       "Claude"
     );
+  });
+
+  it("identity echo replaces a default identity instead of composing", () => {
+    const idle = ptyPanel({ lastObservedTitle: "✳ Claude Code" });
+    expect(getTerminalDisplayTitle(idle, "full")).toBe("Claude Code");
+    expect(getTerminalDisplayTitle(idle, "compact")).toBe("Claude Code");
+    expect(getTerminalDisplayTitle(idle, "base")).toBe("Claude");
+  });
+
+  it("identity echo yields to a custom preset identity", () => {
+    const idle = ptyPanel({
+      title: "Claude [Z.ai]",
+      titleMode: "custom",
+      lastObservedTitle: "Claude Code",
+    });
+    expect(getTerminalDisplayTitle(idle, "full")).toBe("Claude [Z.ai]");
+    expect(getTerminalDisplayTitle(idle, "compact")).toBe("Claude [Z.ai]");
   });
 
   it("base: identity only, even with a live task", () => {
