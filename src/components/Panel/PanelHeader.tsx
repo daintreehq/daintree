@@ -49,7 +49,7 @@ import {
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { PanelTabList } from "./PanelTabList";
 import type { PanelKind } from "@/types";
-import { cn, getBaseTitle } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { formatShortcutForTooltip } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -395,8 +395,9 @@ function PanelHeaderComponent({
     prevFleetPreviewedRef.current = isFleetPreviewed;
   }, [isFleetPreviewed]);
 
-  // In dock, show shortened title without command summary for space efficiency
-  const displayTitle = location === "dock" ? getBaseTitle(title) : title;
+  // The title prop is already variant-resolved by ContentPanel (identity-only
+  // in the dock, task-composed in the grid) — render it verbatim.
+  const displayTitle = title;
 
   const handleHeaderDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
@@ -473,7 +474,7 @@ function PanelHeaderComponent({
   const getTabLabel = useCallback(
     (tabId: UniqueIdentifier) => {
       const tab = tabs?.find((t) => t.id === tabId);
-      return tab ? getBaseTitle(tab.title) : null;
+      return tab ? tab.title : null;
     },
     [tabs]
   );
@@ -601,7 +602,7 @@ function PanelHeaderComponent({
                 userChosen={!!tab.presetColor}
               />
             </span>
-            <span className="truncate">{getBaseTitle(tab.title)}</span>
+            <span className="truncate">{tab.title}</span>
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>
@@ -691,7 +692,8 @@ function PanelHeaderComponent({
                   <SortableTabButton
                     key={tab.id}
                     id={tab.id}
-                    title={getBaseTitle(tab.title)}
+                    title={tab.title}
+                    fullTitle={tab.fullTitle}
                     chrome={tab.chrome}
                     kind={tab.kind}
                     agentState={tab.agentState}
@@ -721,7 +723,8 @@ function PanelHeaderComponent({
               <TabButton
                 key={tab.id}
                 id={tab.id}
-                title={getBaseTitle(tab.title)}
+                title={tab.title}
+                fullTitle={tab.fullTitle}
                 chrome={tab.chrome}
                 kind={tab.kind}
                 agentState={tab.agentState}

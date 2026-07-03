@@ -155,6 +155,79 @@ describe("reduceAgentDetected", () => {
     expect(result!.patch.title).toBeUndefined();
   });
 
+  it("does not update title when titleMode=user", () => {
+    const terminal = makeTerminal({ titleMode: "user", title: "My Terminal" });
+    const result = reduceAgentDetected(terminal, {
+      nextDetectedAgentId: "claude",
+      nextDetectedProcessId: "claude",
+      nextEverDetectedAgent: true,
+      timestamp: 5000,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.patch.title).toBeUndefined();
+  });
+
+  it("clears the stale observed task title when a new agent process is detected", () => {
+    const terminal = makeTerminal({
+      detectedProcessId: "claude",
+      lastObservedTitle: "✳ old claude task",
+    });
+    const result = reduceAgentDetected(terminal, {
+      nextDetectedAgentId: "codex",
+      nextDetectedProcessId: "codex",
+      nextEverDetectedAgent: true,
+      timestamp: 5000,
+    });
+    expect(result).not.toBeNull();
+    expect("lastObservedTitle" in result!.patch).toBe(true);
+    expect(result!.patch.lastObservedTitle).toBeUndefined();
+  });
+
+  it("clears the stale observed task title on relaunch after exit (undefined → new process)", () => {
+    const terminal = makeTerminal({
+      detectedProcessId: undefined,
+      agentState: "exited",
+      lastObservedTitle: "✳ previous session task",
+    });
+    const result = reduceAgentDetected(terminal, {
+      nextDetectedAgentId: "claude",
+      nextDetectedProcessId: "claude",
+      nextEverDetectedAgent: true,
+      timestamp: 5000,
+    });
+    expect(result).not.toBeNull();
+    expect("lastObservedTitle" in result!.patch).toBe(true);
+    expect(result!.patch.lastObservedTitle).toBeUndefined();
+  });
+
+  it("does not clear the observed task title when the process is unchanged", () => {
+    const terminal = makeTerminal({
+      detectedAgentId: "claude",
+      detectedProcessId: "claude",
+      runtimeIdentity: {
+        kind: "agent",
+        id: "claude",
+        iconId: "claude",
+        agentId: "claude",
+        processId: "claude",
+      },
+      everDetectedAgent: true,
+      agentState: "working",
+      lastObservedTitle: "✳ live task",
+      title: "Terminal",
+    });
+    const result = reduceAgentDetected(terminal, {
+      nextDetectedAgentId: "claude",
+      nextDetectedProcessId: "claude",
+      nextEverDetectedAgent: true,
+      timestamp: 5000,
+    });
+    // Title recompute may patch, but the observed task must survive.
+    if (result) {
+      expect("lastObservedTitle" in result.patch).toBe(false);
+    }
+  });
+
   it("returns null when every dimension already matches", () => {
     const terminal = makeTerminal({
       detectedAgentId: "claude",

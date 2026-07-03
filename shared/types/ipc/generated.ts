@@ -1470,7 +1470,7 @@ export interface GeneratedIpcInvokeMap {
         command?: string | undefined;
         env?: Record<string, string> | undefined;
         title?: string | undefined;
-        titleMode?: "default" | "custom" | undefined;
+        titleMode?: "default" | "custom" | "user" | undefined;
         restore?: boolean | undefined;
         isEphemeral?: boolean | undefined;
         agentLaunchFlags?: string[] | undefined;

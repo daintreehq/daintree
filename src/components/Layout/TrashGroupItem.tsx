@@ -10,6 +10,7 @@ import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { isUselessTitle } from "@shared/utils/isUselessTitle";
+import { cleanTaskTitle } from "@shared/utils/taskTitle";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import {
   subscribeToPluginAgentRegistry,
@@ -82,7 +83,9 @@ export function TrashGroupItem({
     if (!activeEntry) return null;
     const { terminal } = activeEntry;
     if (isPtyPanel(terminal)) {
-      const observed = terminal.lastObservedTitle;
+      // A user-locked title is fully frozen — it outranks the observed task.
+      if ((terminal.titleMode ?? "default") === "user") return terminal.title;
+      const observed = cleanTaskTitle(terminal.lastObservedTitle);
       if (observed && !isUselessTitle(observed)) return observed;
       if (terminal.launchAgentId) {
         if (terminal.title && !isUselessTitle(terminal.title)) return terminal.title;

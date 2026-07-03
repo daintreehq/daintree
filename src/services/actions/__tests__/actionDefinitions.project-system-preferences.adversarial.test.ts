@@ -700,6 +700,7 @@ describe("preferences action hardening", () => {
       "preferences.showDeveloperTools.set",
       "preferences.showGridAgentHighlights.set",
       "preferences.showDockAgentHighlights.set",
+      "preferences.showAgentTaskTitles.set",
       "window.toggleFullscreen",
       "window.reload",
       "window.forceReload",
@@ -780,6 +781,11 @@ describe("preferences action hardening", () => {
 
     expect(usePreferencesStore.getState().showGridAgentHighlights).toBe(true);
     expect(usePreferencesStore.getState().showDockAgentHighlights).toBe(true);
+
+    await expect(
+      service.dispatch("preferences.showAgentTaskTitles.set", { show: false })
+    ).resolves.toEqual({ ok: true, result: undefined });
+    expect(usePreferencesStore.getState().showAgentTaskTitles).toBe(false);
   });
 
   it.each([

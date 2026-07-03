@@ -230,7 +230,9 @@ export function registerTerminalLifecycleActions(
       if (!targetId) return;
 
       if (name !== undefined) {
-        usePanelStore.getState().updateTitle(targetId, name);
+        // Programmatic renames (MCP, assistant, plugins) are automation-tier:
+        // they pin `titleMode: "custom"` and bounce off a user lock.
+        usePanelStore.getState().updateTitle(targetId, name, "automation");
       } else {
         // Defer to a macrotask so menu/dropdown close handlers run before the
         // title input mounts. Do not use requestAnimationFrame here: CI Linux

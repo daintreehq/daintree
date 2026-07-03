@@ -11,6 +11,7 @@ import {
   ExternalLink,
   RefreshCw,
   Gauge,
+  Type,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DaintreeIcon, Activity } from "@/components/icons";
@@ -161,6 +162,7 @@ export function GeneralTab({
   const showDeveloperTools = usePreferencesStore((s) => s.showDeveloperTools);
   const showGridAgentHighlights = usePreferencesStore((s) => s.showGridAgentHighlights);
   const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
+  const showAgentTaskTitles = usePreferencesStore((s) => s.showAgentTaskTitles);
   const reduceAnimations = usePreferencesStore((s) => s.reduceAnimations);
 
   useEffect(() => {
@@ -1176,6 +1178,30 @@ export function GeneralTab({
               void actionService.dispatch(
                 "preferences.showDockAgentHighlights.set",
                 { show: false },
+                { source: "user" }
+              )
+            }
+          />
+
+          <SettingsSwitchCard
+            id="general-agent-task-titles"
+            icon={Type}
+            title="Agent task in terminal titles"
+            subtitle="Show the agent's current task next to its name in tabs and panel headers"
+            isEnabled={showAgentTaskTitles}
+            onChange={() =>
+              void actionService.dispatch(
+                "preferences.showAgentTaskTitles.set",
+                { show: !showAgentTaskTitles },
+                { source: "user" }
+              )
+            }
+            ariaLabel="Agent Task Titles Toggle"
+            isModified={!showAgentTaskTitles}
+            onReset={() =>
+              void actionService.dispatch(
+                "preferences.showAgentTaskTitles.set",
+                { show: true },
                 { source: "user" }
               )
             }

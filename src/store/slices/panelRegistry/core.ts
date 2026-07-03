@@ -1,6 +1,6 @@
 import type { PanelRegistryStoreApi, PanelRegistrySlice, PanelRegistryMiddleware } from "./types";
 import { isPtyPanel } from "@shared/types/panel";
-import type { PanelInstance } from "@shared/types/panel";
+import type { PanelInstance, PanelTitleMode } from "@shared/types/panel";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
@@ -252,13 +252,30 @@ export const createCorePanelActions = (
     }
   },
 
-  updateTitle: (id, newTitle) => {
+  updateTitle: (id, newTitle, source = "user") => {
     set((state) => {
       const terminal = state.panelsById[id];
       if (!terminal) return state;
 
-      const effectiveTitle = newTitle.trim() || getDefaultTitle(terminal.kind, terminal);
-      const newById = { ...state.panelsById, [id]: { ...terminal, title: effectiveTitle } };
+      // Ownership ladder: a human-set title ("user") outranks automation
+      // (MCP/assistant renames), which outranks identity-derived defaults.
+      const currentMode = terminal.titleMode ?? "default";
+      if (source === "automation" && currentMode === "user") return state;
+
+      const trimmed = newTitle.trim();
+      // Empty rename resets to the identity-derived default and unlocks.
+      const nextMode: PanelTitleMode = trimmed
+        ? source === "user"
+          ? "user"
+          : "custom"
+        : "default";
+      const effectiveTitle = trimmed || getDefaultTitle(terminal.kind, terminal);
+      if (terminal.title === effectiveTitle && currentMode === nextMode) return state;
+
+      const newById = {
+        ...state.panelsById,
+        [id]: { ...terminal, title: effectiveTitle, titleMode: nextMode },
+      };
       saveNormalized(newById, state.panelIds);
       return { panelsById: newById };
     });

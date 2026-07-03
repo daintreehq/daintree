@@ -181,16 +181,24 @@ export interface TerminalRuntimeIdentity {
 }
 
 /**
- * How a panel's title is currently owned.
+ * How a panel's title is currently owned — an ownership ladder where higher
+ * rungs can never be overwritten by lower ones.
  *
  * - `"default"` — title is derived from live runtime identity and is free to
- *   flip as detection promotes/demotes.
- * - `"custom"` — the user renamed this panel; title is frozen and must not be
- *   overwritten by detection events.
+ *   flip as detection promotes/demotes. The agent's observed task title
+ *   (`lastObservedTitle`) composes into the displayed title.
+ * - `"custom"` — the title was explicitly named by automation (a preset, a
+ *   launch `name`, or an MCP/assistant `terminal.rename`); frozen against
+ *   detection rewrites, but task composition still applies and a later
+ *   automation rename may replace it.
+ * - `"user"` — a human renamed this panel; the title is fully frozen: no
+ *   detection rewrite, no task composition, and automation renames bounce.
+ *   Only a human rename (or an empty rename, which resets to `"default"`)
+ *   changes it.
  *
  * Absent defaults to `"default"` for hydration compatibility.
  */
-export type PanelTitleMode = "default" | "custom";
+export type PanelTitleMode = "default" | "custom" | "user";
 
 /** Structured error state for terminal restart failures */
 export interface TerminalRestartError {

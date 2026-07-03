@@ -32,6 +32,10 @@ export function reduceAgentDetected(
 
   const needsIconUpdate =
     nextDetectedProcessId !== undefined && terminal.detectedProcessId !== nextDetectedProcessId;
+  // A new agent process invalidates the previous session's observed task
+  // title — without this, a relaunched (or different) agent composes the
+  // stale task into its tab until it emits its own OSC title.
+  const needsObservedTitleClear = needsIconUpdate && terminal.lastObservedTitle !== undefined;
   const needsStickyUpdate = nextEverDetectedAgent === true && terminal.everDetectedAgent !== true;
   const needsAgentIdUpdate =
     nextDetectedAgentId !== undefined && terminal.detectedAgentId !== nextDetectedAgentId;
@@ -75,6 +79,7 @@ export function reduceAgentDetected(
 
   const patch: Partial<PtyPanelData> = {
     ...(needsIconUpdate && { detectedProcessId: nextDetectedProcessId }),
+    ...(needsObservedTitleClear && { lastObservedTitle: undefined }),
     ...(needsStickyUpdate && { everDetectedAgent: true }),
     ...(needsAgentIdUpdate && { detectedAgentId: nextDetectedAgentId }),
     ...(needsRuntimeIdentityUpdate && {

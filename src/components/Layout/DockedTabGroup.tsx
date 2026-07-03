@@ -29,7 +29,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { cn, getBaseTitle } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 import { useTabOverflow } from "@/hooks";
 import { useTerminalInputStore, usePanelStore, useFocusStore } from "@/store";
@@ -366,7 +366,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const getPanelTabLabel = useCallback(
     (id: UniqueIdentifier) => {
       const panel = panels.find((p) => p.id === id);
-      return panel ? getBaseTitle(panel.title) : null;
+      return panel ? panel.title : null;
     },
     [panels]
   );
@@ -550,7 +550,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const isWaiting = agentState === "waiting";
   const isActive = isWorking || isWaiting;
   const commandText = activePanel.activityHeadline || activePanel.lastCommand;
-  const displayTitle = getBaseTitle(activePanel.title);
+  const displayTitle = activePanel.title;
   const displayAgentState = getTerminalAgentDisplayState(activeChrome, agentState);
   const StateIcon = displayAgentState ? getEffectiveStateIcon(displayAgentState) : null;
 
@@ -706,7 +706,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                           <SortableTabButton
                             key={panel.id}
                             id={panel.id}
-                            title={getBaseTitle(panel.title)}
+                            title={panel.title}
                             chrome={tabChrome}
                             kind={panel.kind ?? "terminal"}
                             agentState={getDockDisplayAgentState(panel)}
@@ -744,7 +744,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                             >
                               <SortableTabButton
                                 id={panel.id}
-                                title={getBaseTitle(panel.title)}
+                                title={panel.title}
                                 chrome={tabChrome}
                                 kind={panel.kind ?? "terminal"}
                                 agentState={getDockDisplayAgentState(panel)}
@@ -842,7 +842,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                                   userChosen={!!panelPresetColors.get(panel.id)}
                                 />
                               </span>
-                              <span className="truncate">{getBaseTitle(panel.title)}</span>
+                              <span className="truncate">{panel.title}</span>
                             </DropdownMenuItem>
                           );
                         })}

@@ -9,6 +9,7 @@ import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isUselessTitle } from "@shared/utils/isUselessTitle";
+import { cleanTaskTitle } from "@shared/utils/taskTitle";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import {
   subscribeToPluginAgentRegistry,
@@ -60,7 +61,9 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
 
   const terminalName = (() => {
     if (isPtyPanel(terminal)) {
-      const observed = terminal.lastObservedTitle;
+      // A user-locked title is fully frozen — it outranks the observed task.
+      if ((terminal.titleMode ?? "default") === "user") return terminal.title;
+      const observed = cleanTaskTitle(terminal.lastObservedTitle);
       if (observed && !isUselessTitle(observed)) return observed;
       // Launch-intent only: trash labels should read the stable launch identity
       // so a terminal's name doesn't change as runtime detection flips after trashing.

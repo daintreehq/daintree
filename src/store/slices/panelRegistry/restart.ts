@@ -637,6 +637,9 @@ export const createRestartActions = (
         kind: "terminal",
         launchAgentId: isAgent ? currentTerminal.launchAgentId : undefined,
         title: currentTerminal.title,
+        // Keep the ownership rung across restart so the backend's own
+        // default-title rewrites stay gated for pinned/user titles.
+        titleMode: currentTerminal.titleMode,
         command: isAgent ? spawnCommand : undefined,
         restore: false,
         env: restartEnv,
