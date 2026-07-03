@@ -34,16 +34,30 @@ export const RUN_HISTORY_TITLE_MAX_LENGTH = 200;
 export const RUN_HISTORY_MAX_TARGETS = 200;
 
 /**
+ * How a supervised fleet run ended (#10930). `completed` — every sent target
+ * settled (left working/directing; `waiting` counts as settled). `cancelled` —
+ * the user aborted mid-submission. `failed` — no target accepted the write.
+ * `superseded` — a newer broadcast pre-empted the run before it settled.
+ * Absent on records written before supervision landed.
+ */
+export type FleetRunOutcomeStatus = "completed" | "cancelled" | "failed" | "superseded";
+
+/**
  * Per-target outcome snapshot, shared by recipe spawns and fleet sends. `title`
  * is the pane title captured at run time — it makes a record legible even after
  * the terminal closes. `reason` carries the rejection detail for failed sends
- * (capped to {@link RUN_HISTORY_REASON_MAX_LENGTH}).
+ * (capped to {@link RUN_HISTORY_REASON_MAX_LENGTH}). `failureKind` mirrors the
+ * broadcast rejection classification (permanent = dead PTY, auto-disarmed;
+ * transient = retryable). `finalAgentState` is the agent-FSM snapshot at run
+ * finalize — a passive heuristic, NOT an authoritative exit status.
  */
 export interface RunHistoryTargetOutcome {
   terminalId: string;
   title?: string;
   status: "fulfilled" | "rejected";
   reason?: string;
+  failureKind?: "permanent" | "transient";
+  finalAgentState?: string;
 }
 
 interface RunHistoryRecordBase {
@@ -80,6 +94,12 @@ export interface FleetRunHistoryRecord extends RunHistoryRecordBase {
   failureCount: number;
   cancelled: boolean;
   perTarget: RunHistoryTargetOutcome[];
+  /** Renderer-minted run id correlating this record with the live supervised run. */
+  runId?: string;
+  /** Supervised-run outcome; absent on pre-supervision records. */
+  status?: FleetRunOutcomeStatus;
+  /** True when the run was started by `fleet.retryFailures`. */
+  isRetry?: boolean;
 }
 
 export type RunHistoryRecord = RecipeRunHistoryRecord | FleetRunHistoryRecord;

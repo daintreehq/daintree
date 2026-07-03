@@ -67,6 +67,7 @@ const { terminalClient } = await import("@/clients");
 const { filterEligibleIds } = await import("@/components/Fleet/fleetExecution");
 const { runManagedFleetBroadcast } = await import("@/components/Fleet/fleetEnterBroadcast");
 const { registerFleetActions } = await import("../fleetActions");
+const { useFleetRunStore } = await import("@/store/fleetRunStore");
 
 type ActionRegistry = Awaited<
   ReturnType<typeof import("@/services/actions/actionDefinitions").createActionDefinitions>
@@ -775,5 +776,101 @@ describe("fleet.retryFailures", () => {
       permanentlyFailedIds: [],
     });
     await first;
+  });
+});
+
+describe("fleet.getRunStatus", () => {
+  beforeEach(() => {
+    resetStores();
+    useFleetRunStore.getState()._reset();
+    vi.clearAllMocks();
+  });
+
+  async function dispatchGetRunStatus(): Promise<unknown> {
+    const registry = await buildRegistry();
+    const factory = registry.get("fleet.getRunStatus");
+    if (!factory) throw new Error("fleet.getRunStatus not registered");
+    const def = factory();
+    const result = await def.run(undefined as never, {} as never);
+    // Round-trip through the declared result schema so the advertised MCP
+    // outputSchema is proven against what run() actually returns.
+    return def.resultSchema ? def.resultSchema.parse(result) : result;
+  }
+
+  it("registers as a safe read-only query with a structured output schema", async () => {
+    const registry = await buildRegistry();
+    const def = registry.get("fleet.getRunStatus")!();
+    expect(def.kind).toBe("query");
+    expect(def.danger).toBe("safe");
+    expect(def.mcpOutputSchema).toBe(true);
+    expect(def.resultSchema).toBeDefined();
+    expect(def.mcpAnnotations?.readOnlyHint).toBe(true);
+    expect(def.mcpAnnotations?.destructiveHint).toBe(false);
+  });
+
+  it("returns { run: null } with the armed count when no run is tracked", async () => {
+    seedPanels([makeAgent("a"), makeAgent("b")]);
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    const result = (await dispatchGetRunStatus()) as { run: null; armedCount: number };
+    expect(result.run).toBeNull();
+    expect(result.armedCount).toBe(2);
+  });
+
+  it("maps the supervised run with counts, per-target outcomes, and live lastCheckResult", async () => {
+    const check = {
+      command: "npm test",
+      passed: false,
+      ranAt: 123,
+      failureSummary: "2 failed",
+      truncated: false,
+    };
+    seedPanels([
+      makeAgent("a", { agentState: "working", lastCheckResult: check }),
+      makeAgent("b", { agentState: "working" }),
+    ]);
+    const runId = useFleetRunStore.getState().beginRun(["a", "b"], { draft: "run tests" });
+    useFleetRunStore.getState().applySubmissionResult(runId, {
+      total: 2,
+      successCount: 1,
+      failureCount: 1,
+      perTarget: [
+        { terminalId: "a", status: "fulfilled" },
+        { terminalId: "b", status: "rejected", reason: "EPIPE", kind: "permanent" },
+      ],
+      failedIds: ["b"],
+      permanentlyFailedIds: ["b"],
+      transientlyFailedIds: [],
+      cancelled: false,
+      skippedCount: 0,
+    });
+
+    const result = (await dispatchGetRunStatus()) as {
+      run: {
+        runId: string;
+        status: string;
+        counts: Record<string, number>;
+        targets: Array<Record<string, unknown>>;
+      } | null;
+      armedCount: number;
+    };
+    expect(result.run).not.toBeNull();
+    expect(result.run!.runId).toBe(runId);
+    expect(result.run!.status).toBe("watching");
+    expect(result.run!.counts).toMatchObject({ total: 2, sent: 1, sendFailed: 1, working: 1 });
+    const [a, b] = result.run!.targets;
+    expect(a).toMatchObject({
+      terminalId: "a",
+      submission: "sent",
+      agentState: "working",
+      settled: false,
+      lastCheckResult: check,
+    });
+    expect(b).toMatchObject({
+      terminalId: "b",
+      submission: "failed",
+      failureKind: "permanent",
+      failureReason: "EPIPE",
+      settled: true,
+    });
   });
 });

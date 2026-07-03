@@ -12,6 +12,7 @@ import {
   type FleetArmStatePreset,
 } from "@/store/fleetArmingStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
+import { useFleetRunStore, summarizeFleetRun } from "@/store/fleetRunStore";
 import {
   useFleetPendingActionStore,
   type FleetPendingActionKind,
@@ -27,7 +28,7 @@ import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { FleetSavedScope, ProjectSettings } from "@shared/types";
-import type { PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 
 const FLEET_USAGE_HISTORY_CAP = 20;
 
@@ -380,7 +381,10 @@ export function registerFleetActions(actions: ActionRegistry): void {
         // single-flight controller so the retry gains batching, progress, and a
         // working ribbon Cancel button just like the primary Enter path.
         const perTargetOverrides = Object.fromEntries(eligibleTargets.map((id) => [id, payload]));
-        const result = await runManagedFleetBroadcast("", eligibleTargets, perTargetOverrides);
+        const result = await runManagedFleetBroadcast("", eligibleTargets, perTargetOverrides, {
+          isRetry: true,
+          draftPreview: payload,
+        });
         // Permanent failures (dead PTYs) auto-disarm so a future retry doesn't
         // keep firing into the same dead pipes. The retry chip clears for them
         // too — the user already saw them once; surfacing the same id again
@@ -562,6 +566,64 @@ export function registerFleetActions(actions: ActionRegistry): void {
     },
   }));
 
+  actions.set("fleet.getRunStatus", () => ({
+    id: "fleet.getRunStatus",
+    // Query with a structured result — nothing for a palette pick to show.
+    palette: { mode: "hidden" },
+    title: "Fleet: Get run status",
+    description:
+      "Read-only snapshot of the current supervised fleet broadcast run (the user's in-app fleet fan-out), or { run: null } when none is tracked. Per-window: reports the run owned by the window handling this dispatch. Each run has runId, status ('submitting' | 'watching' | 'completed' | 'cancelled' | 'failed' | 'superseded'), aggregate counts, and per-target entries with submission ('sent' | 'failed' | 'skipped' | 'pending'), failureKind ('permanent' = dead PTY, auto-disarmed; 'transient' = retryable), a live agentState/waitingReason snapshot, settled (target left working/directing; 'waiting' counts as settled), gone (panel closed mid-run), and lastCheckResult when the pane has one. agentState is a passive heuristic and lastCheckResult is PARSED, not an authoritative exit code — cross-check with `terminal.getStatus` (includeOutput) before acting on either. This never dispatches anything: to broadcast over MCP, fan out `terminal.sendCommand` per terminal and watch with `terminal.getStatus` / `terminal.waitUntilIdleBatch`.",
+    category: "terminal",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    resultSchema: fleetRunStatusResultSchema,
+    mcpOutputSchema: true,
+    mcpAnnotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: false,
+    },
+    run: async () => {
+      const run = useFleetRunStore.getState().run;
+      const armedCount = useFleetArmingStore.getState().armedIds.size;
+      if (run === null) return { run: null, armedCount };
+      const { panelsById } = usePanelStore.getState();
+      return {
+        run: {
+          runId: run.runId,
+          status: run.status,
+          isRetry: run.isRetry,
+          draftPreview: run.draftPreview,
+          startedAt: run.startedAt,
+          endedAt: run.endedAt,
+          counts: summarizeFleetRun(run),
+          targets: run.targets.map((t) => {
+            // lastCheckResult is read live from the panel registry rather than
+            // snapshotted into the run store — panels remain the single source
+            // of terminal truth; the run store only owns run lifecycle fields.
+            const panel = getNarrowPanel(panelsById, t.terminalId);
+            return {
+              terminalId: t.terminalId,
+              title: t.title,
+              worktreeId: t.worktreeId,
+              submission: t.submission,
+              failureKind: t.failureKind,
+              failureReason: t.failureReason,
+              agentState: t.agentState,
+              waitingReason: t.waitingReason,
+              exitCode: t.exitCode ?? null,
+              settled: t.settled,
+              gone: t.gone,
+              lastCheckResult: panel && isPtyPanel(panel) ? panel.lastCheckResult : undefined,
+            };
+          }),
+        },
+        armedCount,
+      };
+    },
+  }));
+
   actions.set("fleet.deleteNamedFleet", () => ({
     id: "fleet.deleteNamedFleet",
     title: "Fleet: Delete named fleet",
@@ -626,6 +688,56 @@ export function registerFleetActions(actions: ActionRegistry): void {
     },
   }));
 }
+
+// Mirrors `FleetRunTarget` (src/store/fleetRunStore.ts) plus a live-derived
+// `lastCheckResult` (same shape as TerminalStatusEntrySchema's — parsed
+// check summary, not an exit code). Advertised as the MCP outputSchema.
+const fleetRunTargetStatusSchema = z.object({
+  terminalId: z.string(),
+  title: z.string(),
+  worktreeId: z.string().nullable(),
+  submission: z.enum(["pending", "sent", "failed", "skipped"]),
+  failureKind: z.enum(["permanent", "transient"]).optional(),
+  failureReason: z.string().optional(),
+  agentState: z.string().nullable(),
+  waitingReason: z.string().optional(),
+  exitCode: z.number().int().nullable().optional(),
+  settled: z.boolean(),
+  gone: z.boolean(),
+  lastCheckResult: z
+    .object({
+      command: z.string().nullable(),
+      passed: z.boolean(),
+      ranAt: z.number(),
+      failureSummary: z.string().nullable(),
+      truncated: z.boolean(),
+    })
+    .optional(),
+});
+
+const fleetRunStatusResultSchema = z.object({
+  run: z
+    .object({
+      runId: z.string(),
+      status: z.enum(["submitting", "watching", "completed", "cancelled", "failed", "superseded"]),
+      isRetry: z.boolean(),
+      draftPreview: z.string(),
+      startedAt: z.number(),
+      endedAt: z.number().optional(),
+      counts: z.object({
+        total: z.number().int(),
+        sent: z.number().int(),
+        sendFailed: z.number().int(),
+        skipped: z.number().int(),
+        working: z.number().int(),
+        waiting: z.number().int(),
+        done: z.number().int(),
+      }),
+      targets: z.array(fleetRunTargetStatusSchema),
+    })
+    .nullable(),
+  armedCount: z.number().int(),
+});
 
 const saveNamedFleetSchema = z.object({ name: z.string().min(1) }).and(
   z.discriminatedUnion("kind", [
