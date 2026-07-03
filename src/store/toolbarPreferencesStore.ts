@@ -144,7 +144,13 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
           toList.splice(toIndex, 0, buttonId);
 
           return {
-            layout: { ...state.layout, leftButtons, rightButtons },
+            layout: {
+              ...state.layout,
+              // Sanitize both sides so a cross-side move onto a list that
+              // already held the id can't leave a duplicate behind (#10937).
+              leftButtons: sanitizeButtonList(leftButtons),
+              rightButtons: sanitizeButtonList(rightButtons),
+            },
           };
         }),
       toggleButtonVisibility: (buttonId, _side) =>

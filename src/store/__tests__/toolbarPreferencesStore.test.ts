@@ -755,8 +755,10 @@ describe("toolbarPreferencesStore", () => {
 
       const { rightButtons } = store.getState().layout;
       expect(rightButtons.filter((id) => id === "forge-stats")).toHaveLength(1);
-      // First occurrence keeps its slot: dedup preserves order.
+      // Non-duplicated ids all survive, in first-occurrence order.
+      expect(rightButtons).toContain("copy-tree");
       expect(rightButtons.indexOf("settings")).toBeLessThan(rightButtons.indexOf("forge-stats"));
+      expect(rightButtons.indexOf("forge-stats")).toBeLessThan(rightButtons.indexOf("copy-tree"));
     });
 
     it("v4→v5 handles missing layout without throwing", async () => {
