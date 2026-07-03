@@ -2,12 +2,124 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
+import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import { copyTreeClient, systemClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useUIStore } from "@/store/uiStore";
+import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
+import {
+  deriveReviewReadiness,
+  REVIEW_READINESS_ITEM_IDS,
+  type ReviewReadinessCta,
+  type ReviewReadinessItem,
+} from "@/components/Worktree/ReviewHub/reviewReadiness";
+
+/**
+ * Registered actions a readiness item may suggest to programmatic consumers.
+ * The renderer rail dispatches local handlers instead; this closed set exists
+ * so MCP/automation results never reference unregistered action ids, and the
+ * focus-only CTAs deliberately map to opening Review Hub — a read-only result
+ * must not advertise a mutating follow-up (like `git.stageAll`) for what is a
+ * "go look" affordance in the UI.
+ */
+const READINESS_SUGGESTION_ACTION_IDS = [
+  "worktree.openReviewHub",
+  "git.pullRebase",
+  "worktree.openPR",
+] as const satisfies readonly BuiltInRuntimeActionId[];
+
+type ReadinessActionSuggestion =
+  | {
+      actionId: "worktree.openReviewHub" | "worktree.openPR";
+      actionArgs: { worktreeId: string };
+    }
+  | { actionId: "git.pullRebase"; actionArgs: { cwd: string } };
+
+/**
+ * Args always target the inspected worktree explicitly — the suggested
+ * actions fall back to the focused/active worktree when args are omitted,
+ * which is wrong whenever `worktree.reviewReadiness` was queried for another.
+ */
+function toReadinessActionSuggestion(
+  cta: ReviewReadinessCta,
+  target: { worktreeId: string; worktreePath: string }
+): ReadinessActionSuggestion {
+  switch (cta.kind) {
+    case "focus-conflicts":
+    case "focus-staged":
+      return {
+        actionId: "worktree.openReviewHub",
+        actionArgs: { worktreeId: target.worktreeId },
+      };
+    case "pull-rebase":
+      return { actionId: "git.pullRebase", actionArgs: { cwd: target.worktreePath } };
+    case "open-pr":
+      return { actionId: "worktree.openPR", actionArgs: { worktreeId: target.worktreeId } };
+  }
+}
+
+const reviewReadinessItemSchema = z.object({
+  id: z.enum(REVIEW_READINESS_ITEM_IDS),
+  severity: z.enum(["blocker", "warning", "info"]),
+  label: z.string(),
+  detail: z.string().optional(),
+  actionId: z.enum(READINESS_SUGGESTION_ACTION_IDS).optional(),
+  actionArgs: z
+    .union([z.object({ worktreeId: z.string() }), z.object({ cwd: z.string() })])
+    .optional(),
+});
+
+const reviewReadinessResultSchema = z.object({
+  worktreeId: z.string(),
+  worktreePath: z.string(),
+  worktreeName: z.string(),
+  branch: z.string().nullable(),
+  level: z.enum(["ready", "needs-review", "blocked", "unknown"]),
+  commitReady: z.boolean(),
+  pushReady: z.boolean(),
+  prReady: z.union([z.boolean(), z.literal("unknown")]),
+  blockers: z.array(reviewReadinessItemSchema),
+  warnings: z.array(reviewReadinessItemSchema),
+  infos: z.array(reviewReadinessItemSchema),
+  nextActions: z.array(reviewReadinessItemSchema),
+  counts: z.object({
+    staged: z.number(),
+    unstaged: z.number(),
+    conflicted: z.number(),
+  }),
+  aheadCount: z.number().nullable(),
+  behindCount: z.number().nullable(),
+  pr: z
+    .object({
+      number: z.number(),
+      state: z.enum(["open", "merged", "closed", "declined"]),
+      url: z.string().nullable(),
+      ciState: z.enum(["success", "failure", "pending", "neutral", "unknown"]).nullable(),
+    })
+    .nullable(),
+  reviewDecision: z.string().nullable(),
+  forge: z.object({
+    providerId: z.string().nullable(),
+    rateLimited: z.boolean(),
+    authUnhealthy: z.boolean(),
+  }),
+});
+
+function toReadinessResultItem(
+  item: ReviewReadinessItem,
+  target: { worktreeId: string; worktreePath: string }
+) {
+  return {
+    id: item.id,
+    severity: item.severity,
+    label: item.label,
+    ...(item.detail !== undefined ? { detail: item.detail } : {}),
+    ...(item.action !== undefined ? toReadinessActionSuggestion(item.action, target) : {}),
+  };
+}
 
 export function registerWorktreeContextActions(
   actions: ActionRegistry,
@@ -258,6 +370,94 @@ export function registerWorktreeContextActions(
           throw new Error("Unexpected diff string from worktree comparison; expected a file list.");
         }
         return res;
+      },
+    })
+  );
+
+  actions.set("worktree.reviewReadiness", () =>
+    defineAction({
+      id: "worktree.reviewReadiness",
+      title: "Review Readiness",
+      description:
+        "Summarize whether a worktree is ready to commit, push, and merge without performing any git or forge operation. Args: `worktreeId` (optional — defaults to the focused or active worktree). Returns the readiness level (ready / needs-review / blocked / unknown), commit/push/PR readiness flags, prioritized blocker/warning/info items with suggested follow-up action ids, staged/unstaged/conflict counts, ahead/behind counts, and linked PR + CI + forge-provider health context. Signals that depend on forge data report as unknown (never as passing) when the data has not arrived. Read-only; does not open any UI.",
+      category: "worktree",
+      kind: "query",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({ worktreeId: z.string().optional() }).optional(),
+      resultSchema: reviewReadinessResultSchema,
+      mcpOutputSchema: true,
+      mcpAnnotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
+      run: async (args, ctx: ActionContext) => {
+        const targetWorktreeId =
+          args?.worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId ?? null;
+        if (!targetWorktreeId) {
+          throw new Error("No worktree to inspect. Pass `worktreeId` or focus a worktree first.");
+        }
+        const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
+        if (!worktree) {
+          throw new Error(`Worktree not found: ${targetWorktreeId}`);
+        }
+
+        const status = await window.electron.git.getStagingStatus(worktree.path);
+        const linkedPr = worktree.linked?.pr ?? null;
+        const pr = linkedPr
+          ? {
+              number: linkedPr.ref.number,
+              url: linkedPr.url,
+              state: linkedPr.state,
+              ciState: linkedPr.ciStatus?.state ?? null,
+            }
+          : null;
+        const providerId = worktree.linked?.providerId ?? worktree.matchedForgeProviderId ?? null;
+        const health = providerId
+          ? (useForgeProviderHealthStore.getState().providers[providerId] ?? null)
+          : null;
+
+        const summary = deriveReviewReadiness({
+          status,
+          aheadCount: worktree.aheadCount ?? null,
+          behindCount: worktree.behindCount ?? null,
+          pr,
+          providerHealth: health
+            ? { rateLimitBlocked: health.rateLimitBlocked, tokenUnhealthy: health.tokenUnhealthy }
+            : null,
+        });
+
+        const target = { worktreeId: targetWorktreeId, worktreePath: worktree.path };
+        return {
+          worktreeId: targetWorktreeId,
+          worktreePath: worktree.path,
+          worktreeName: worktree.name,
+          branch: status.currentBranch,
+          level: summary.level,
+          commitReady: summary.commitReady,
+          pushReady: summary.pushReady,
+          prReady: summary.prReady,
+          blockers: summary.blockers.map((i) => toReadinessResultItem(i, target)),
+          warnings: summary.warnings.map((i) => toReadinessResultItem(i, target)),
+          infos: summary.infos.map((i) => toReadinessResultItem(i, target)),
+          nextActions: summary.nextActions.map((i) => toReadinessResultItem(i, target)),
+          counts: {
+            staged: status.staged.length,
+            unstaged: status.unstaged.length,
+            conflicted: status.conflicted.length,
+          },
+          aheadCount: worktree.aheadCount ?? null,
+          behindCount: worktree.behindCount ?? null,
+          pr: pr
+            ? { number: pr.number, state: pr.state, url: pr.url ?? null, ciState: pr.ciState }
+            : null,
+          // Not derivable from the worktree snapshot today; kept in the schema
+          // so consumers get a stable shape when a provider-neutral review
+          // decision lands (shared/types/forge.ts NormalizedReviewDecision).
+          reviewDecision: null,
+          forge: {
+            providerId,
+            rateLimited: health?.rateLimitBlocked ?? false,
+            authUnhealthy: health?.tokenUnhealthy ?? false,
+          },
+        };
       },
     })
   );
