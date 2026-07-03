@@ -198,7 +198,7 @@ export interface PanelRegistrySlice {
   setBrowserZoom: (id: string, zoom: number) => void;
   setBrowserConsoleOpen: (id: string, isOpen: boolean) => void;
   setDevPreviewConsoleOpen: (id: string, isOpen: boolean) => void;
-  setDevPreviewConsoleTab: (id: string, tab: "output" | "console") => void;
+  setDevPreviewConsoleTab: (id: string, tab: "output" | "console" | "diagnostics") => void;
   setViewportPreset: (
     id: string,
     preset: import("@shared/types/panel.js").ViewportPresetId | undefined

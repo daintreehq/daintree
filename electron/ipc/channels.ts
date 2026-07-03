@@ -467,6 +467,7 @@ export const CHANNELS = {
   DEV_PREVIEW_GET_STATE: "dev-preview:get-state",
   DEV_PREVIEW_GET_BY_WORKTREE: "dev-preview:get-by-worktree",
   DEV_PREVIEW_GET_ALL_SESSIONS: "dev-preview:get-all-sessions",
+  DEV_PREVIEW_GET_DIAGNOSTICS: "dev-preview:get-diagnostics",
   DEV_PREVIEW_GET_DESTRUCTIVE_PREVIEW_META: "dev-preview:get-destructive-preview-meta",
   DEV_PREVIEW_GET_DESTRUCTIVE_PREVIEW_SIZES: "dev-preview:get-destructive-preview-sizes",
   DEV_PREVIEW_STOP_BY_WORKTREE: "dev-preview:stop-by-worktree",

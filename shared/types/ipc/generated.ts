@@ -236,6 +236,10 @@ export interface GeneratedIpcInvokeMap {
     args: [request: import("./devPreview.js").DevPreviewDestructivePreviewSizesRequest];
     result: import("./devPreview.js").DevPreviewDestructivePreviewSizes;
   };
+  "dev-preview:get-diagnostics": {
+    args: [__0: { panelId: string; projectId: string }];
+    result: import("./devPreview.js").DevPreviewDiagnosticsResult;
+  };
   "dev-preview:get-proxy-port": {
     args: [];
     result: import("./devPreview.js").DevPreviewProxyInfo;

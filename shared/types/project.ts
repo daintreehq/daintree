@@ -99,7 +99,7 @@ export interface PanelSnapshot {
   /** Whether the dev-preview console drawer is open */
   devPreviewConsoleOpen?: boolean;
   /** Active dev-preview console drawer tab ("output" = PTY, "console" = guest-page console) */
-  devPreviewConsoleTab?: "output" | "console";
+  devPreviewConsoleTab?: "output" | "console" | "diagnostics";
   /** Active viewport preset for dev-preview responsive emulation */
   viewportPreset?: ViewportPresetId;
   /** Whether the active dev-preview viewport preset is rotated to landscape */

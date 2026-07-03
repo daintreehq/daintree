@@ -3,7 +3,11 @@ import https from "node:https";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { DevPreviewProxyService } from "../DevPreviewProxyService.js";
+import {
+  DevPreviewProxyService,
+  type DevPreviewProxyDiagnostic,
+} from "../DevPreviewProxyService.js";
+import { DEV_PREVIEW_PROXY_PORT } from "../../../shared/utils/devPreviewProxy.js";
 
 // A self-signed cert/key for `localhost`, valid for 100 years, used to stand up a real TLS
 // upstream so the proxy's HTTPS path (#9974) is exercised end-to-end. The proxy dials with
@@ -637,6 +641,117 @@ describe("DevPreviewProxyService", () => {
       vi.setSystemTime(Date.now() + 60_000);
       const res = await request(proxyPort, host, path);
       expect(res.status).toBe(403);
+    });
+  });
+
+  describe("failure classification and diagnostics", () => {
+    it("502s a not-running session with distinct copy and reports the cause", async () => {
+      const onDiagnostic = vi.fn<(event: DevPreviewProxyDiagnostic) => void>();
+      proxy = new DevPreviewProxyService(
+        () => ({ kind: "not-running", status: "stopped" }),
+        onDiagnostic
+      );
+      const proxyPort = await proxy.start();
+
+      const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
+
+      expect(res.status).toBe(502);
+      expect(res.body).toContain("isn't running");
+      expect(onDiagnostic).toHaveBeenCalledWith(
+        expect.objectContaining({ subdomain: "dp-test", kind: "http", cause: "not-running" })
+      );
+    });
+
+    it("reports no-session for an unknown subdomain and keeps the legacy copy", async () => {
+      const onDiagnostic = vi.fn<(event: DevPreviewProxyDiagnostic) => void>();
+      proxy = new DevPreviewProxyService(() => null, onDiagnostic);
+      const proxyPort = await proxy.start();
+
+      const res = await request(proxyPort, `dp-missing.localhost:${proxyPort}`);
+
+      expect(res.status).toBe(502);
+      expect(res.body).toContain("No dev server is registered");
+      expect(onDiagnostic).toHaveBeenCalledWith(
+        expect.objectContaining({ subdomain: "dp-missing", kind: "http", cause: "no-session" })
+      );
+    });
+
+    it("classifies a refused upstream dial as upstream-refused", async () => {
+      const onDiagnostic = vi.fn<(event: DevPreviewProxyDiagnostic) => void>();
+      // Port 1 is never listening — the dial is refused, not timed out.
+      proxy = new DevPreviewProxyService(() => ({ port: 1, isHttps: false }), onDiagnostic);
+      const proxyPort = await proxy.start();
+
+      const res = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
+
+      expect(res.status).toBe(502);
+      await vi.waitFor(() => {
+        expect(onDiagnostic).toHaveBeenCalledWith(
+          expect.objectContaining({ subdomain: "dp-test", kind: "http", cause: "upstream-refused" })
+        );
+      });
+    });
+
+    it("reports a WebSocket upgrade against a not-running session and destroys the socket", async () => {
+      const onDiagnostic = vi.fn<(event: DevPreviewProxyDiagnostic) => void>();
+      proxy = new DevPreviewProxyService(
+        () => ({ kind: "not-running", status: "starting" }),
+        onDiagnostic
+      );
+      const proxyPort = await proxy.start();
+
+      const client = new WebSocket(`ws://127.0.0.1:${proxyPort}/`, {
+        headers: { host: `dp-test.localhost:${proxyPort}` },
+      });
+      await new Promise<void>((resolve) => {
+        client.on("error", () => resolve());
+        client.on("close", () => resolve());
+      });
+
+      expect(onDiagnostic).toHaveBeenCalledWith(
+        expect.objectContaining({ subdomain: "dp-test", kind: "ws", cause: "not-running" })
+      );
+    });
+
+    it("never lets a throwing diagnostics listener break proxying", async () => {
+      upstream = http.createServer((_req, res) => {
+        res.writeHead(200);
+        res.end("ok");
+      });
+      const upstreamPort = await listen(upstream);
+      proxy = new DevPreviewProxyService(
+        (sub) => (sub === "dp-test" ? { port: upstreamPort, isHttps: false } : null),
+        () => {
+          throw new Error("listener exploded");
+        }
+      );
+      const proxyPort = await proxy.start();
+
+      const missing = await request(proxyPort, `dp-missing.localhost:${proxyPort}`);
+      expect(missing.status).toBe(502);
+
+      const ok = await request(proxyPort, `dp-test.localhost:${proxyPort}`);
+      expect(ok.status).toBe(200);
+    });
+
+    it("marks the fallback port when the fixed proxy port is taken", async () => {
+      // Occupy the fixed port ourselves; if some other process (a running
+      // Daintree) already holds it, the fallback still engages — either way
+      // the proxy must land elsewhere and say so.
+      const blocker = http.createServer();
+      await new Promise<void>((resolve) => {
+        blocker.once("error", () => resolve());
+        blocker.listen(DEV_PREVIEW_PROXY_PORT, "127.0.0.1", () => resolve());
+      });
+      try {
+        proxy = new DevPreviewProxyService(() => null);
+        const proxyPort = await proxy.start();
+
+        expect(proxyPort).not.toBe(DEV_PREVIEW_PROXY_PORT);
+        expect(proxy.usedPortFallback).toBe(true);
+      } finally {
+        blocker.close();
+      }
     });
   });
 });

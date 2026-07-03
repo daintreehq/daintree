@@ -397,7 +397,7 @@ export interface PtyPanelData extends BasePanelData {
   /** Whether the dev-preview console drawer is open */
   devPreviewConsoleOpen?: boolean;
   /** Active dev-preview console drawer tab ("output" = PTY, "console" = guest-page console) */
-  devPreviewConsoleTab?: "output" | "console";
+  devPreviewConsoleTab?: "output" | "console" | "diagnostics";
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
   exitBehavior?: PanelExitBehavior;
   /** Detected process icon ID for dynamic terminal icons (transient, not persisted) */
@@ -516,7 +516,7 @@ export interface DevPreviewPanelData extends BasePanelData {
   /** Whether the console drawer is open */
   devPreviewConsoleOpen?: boolean;
   /** Active dev-preview console drawer tab ("output" = PTY, "console" = guest-page console) */
-  devPreviewConsoleTab?: "output" | "console";
+  devPreviewConsoleTab?: "output" | "console" | "diagnostics";
   /** Dev server status */
   devServerStatus?: "stopped" | "starting" | "installing" | "running" | "error";
   /** Dev server phase label */
@@ -659,7 +659,7 @@ export interface TerminalInstance {
   /** Whether the dev-preview console drawer is open */
   devPreviewConsoleOpen?: boolean;
   /** Active dev-preview console drawer tab ("output" = PTY, "console" = guest-page console) */
-  devPreviewConsoleTab?: "output" | "console";
+  devPreviewConsoleTab?: "output" | "console" | "diagnostics";
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
   exitBehavior?: PanelExitBehavior;
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */

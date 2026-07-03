@@ -23,6 +23,7 @@ import type {
   DevPreviewSessionState,
   DevPreviewProxyInfo,
   DevPreviewMintBrowserTokenResult,
+  DevPreviewDiagnosticsResult,
 } from "../../../shared/types/ipc/devPreview.js";
 import type { DevPreviewSessionService as DevPreviewSessionServiceType } from "../../services/DevPreviewSessionService.js";
 import type { DevPreviewProxyService as DevPreviewProxyServiceType } from "../../services/DevPreviewProxyService.js";
@@ -43,8 +44,14 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
     if (!proxyServicePromise) {
       proxyServicePromise = import("../../services/DevPreviewProxyService.js")
         .then(async (mod) => {
-          const svc = new mod.DevPreviewProxyService((subdomain) =>
-            sessionService ? sessionService.getUpstreamPortForSubdomain(subdomain) : null
+          const svc = new mod.DevPreviewProxyService(
+            // Classified resolution (#9100 follow-up): the proxy can 502 with an
+            // accurate cause instead of collapsing "stopped" into "unregistered".
+            (subdomain) => (sessionService ? sessionService.resolveUpstream(subdomain) : null),
+            // Failure reports land on the owning session's diagnostics timeline.
+            // The session service may not exist yet — drop the report then; the
+            // 502 body is the receipt for that case.
+            (event) => sessionService?.recordProxyDiagnostic(event)
           );
           await svc.start();
           proxyService = svc;
@@ -165,6 +172,21 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
           // service just to return an empty snapshot.
           if (!sessionService) return [];
           return sessionService.getAllSessions();
+        }
+      ),
+      getDiagnostics: opValidated(
+        DEV_PREVIEW_METHOD_CHANNELS.getDiagnostics,
+        z.object({ panelId: z.string().min(1), projectId: z.string().min(1) }),
+        async ({ panelId, projectId }): Promise<DevPreviewDiagnosticsResult> => {
+          // Pure read: report on whatever exists. Never spins up the session
+          // service or the proxy just to answer with an empty timeline.
+          const session = sessionService
+            ? sessionService.getDiagnostics({ panelId, projectId })
+            : null;
+          const proxy = proxyService
+            ? { port: proxyService.port, usedPortFallback: proxyService.usedPortFallback }
+            : null;
+          return { session, proxy };
         }
       ),
       getDestructivePreviewMeta: op(

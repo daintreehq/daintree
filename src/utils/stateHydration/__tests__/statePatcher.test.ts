@@ -252,6 +252,28 @@ describe("buildArgsForBackendTerminal", () => {
     expect(result.devPreviewConsoleOpen).toBe(true);
   });
 
+  it("keeps every known dev-preview console tab and rejects unknown values", () => {
+    for (const tab of ["output", "console", "diagnostics"] as const) {
+      const result = buildArgsForBackendTerminal(
+        { id: "t1", cwd: "/p", kind: "dev-preview" },
+        { id: "t1", location: "grid", devPreviewConsoleTab: tab },
+        "/p"
+      );
+      expect(result.devPreviewConsoleTab).toBe(tab);
+    }
+
+    const rejected = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", kind: "dev-preview" },
+      {
+        id: "t1",
+        location: "grid",
+        devPreviewConsoleTab: "bogus" as unknown as "output",
+      },
+      "/p"
+    );
+    expect(rejected.devPreviewConsoleTab).toBeUndefined();
+  });
+
   it("excludes browser fields for non-dev-preview", () => {
     const result = buildArgsForBackendTerminal(
       { id: "t1", cwd: "/p", kind: "terminal" },

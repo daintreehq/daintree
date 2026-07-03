@@ -252,6 +252,35 @@ server.listen(0, '127.0.0.1', () => {
       });
     });
 
+    test("diagnostics tab shows the session timeline", async () => {
+      const { window } = ctx;
+
+      const consoleToggle = window.locator(SEL.devPreview.consoleToggle).first();
+      await expect(consoleToggle).toBeVisible({ timeout: T_MEDIUM });
+      await consoleToggle.click();
+      await expect(consoleToggle).toHaveAttribute("aria-expanded", "true", {
+        timeout: T_SHORT,
+      });
+
+      await window.getByRole("tab", { name: "Diagnostics" }).click();
+
+      // Summary reflects the live session (running server from the prior test).
+      const diagnosticsPanel = window.getByRole("tabpanel", { name: "Diagnostics" });
+      await expect(diagnosticsPanel).toBeVisible({ timeout: T_MEDIUM });
+      await expect(diagnosticsPanel).toContainText("Proxy upstream", { timeout: T_MEDIUM });
+
+      // The bounded timeline recorded the real lifecycle: spawn and URL
+      // detection came through the main-process ring, not renderer state.
+      await expect(diagnosticsPanel).toContainText("Dev server spawned", { timeout: T_MEDIUM });
+      await expect(diagnosticsPanel).toContainText("URL detected", { timeout: T_MEDIUM });
+
+      // Close the console drawer
+      await consoleToggle.click();
+      await expect(consoleToggle).toHaveAttribute("aria-expanded", "false", {
+        timeout: T_SHORT,
+      });
+    });
+
     test("closing dev preview panel after lifecycle test", async () => {
       const { window } = ctx;
 
