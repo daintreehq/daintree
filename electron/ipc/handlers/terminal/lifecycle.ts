@@ -546,6 +546,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         kind,
         launchAgentId,
         title,
+        titleMode: validatedOptions.titleMode,
         projectId,
         restore: validatedOptions.restore,
         isEphemeral: validatedOptions.isEphemeral,
@@ -629,7 +630,14 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           sessionId,
           agentId: info.launchAgentId,
           worktreeId: info.worktreeId ?? null,
-          title: info.title ?? null,
+          // Prefer the agent's observed task title over the identity title,
+          // matching the trash-expiry path — otherwise kill-path records all
+          // read "Resume Claude" while trash-path records carry the task.
+          // A user-locked title is the exception: the resume row should read
+          // the same as the live tab did, and a lock freezes the tab.
+          title:
+            (info.titleMode === "user" ? info.title : (info.lastObservedTitle ?? info.title)) ??
+            null,
           projectId: info.projectId ?? null,
           agentLaunchFlags: info.agentLaunchFlags,
           agentModelId: info.agentModelId,

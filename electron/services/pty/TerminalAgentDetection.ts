@@ -87,6 +87,10 @@ export function handleAgentDetection(
       }
 
       terminal.detectedAgentId = detectedAgentId;
+      // A new agent session invalidates the previous session's observed task
+      // title (mirrors the renderer's identityReducer clear) — otherwise a
+      // relaunched or different agent journals the old session's title.
+      terminal.lastObservedTitle = undefined;
 
       const detection = getEffectiveAgentConfig(detectedAgentId)?.detection;
       const patternConfig = buildPatternConfig(detection, detectedAgentId);
@@ -105,8 +109,8 @@ export function handleAgentDetection(
       }
 
       // Title sync: write the default-mode title so the renderer can pick
-      // it up via the agent-detected event payload. User-renamed panels
-      // (titleMode === "custom") are left alone.
+      // it up via the agent-detected event payload. Non-default rungs
+      // (custom and user) are left alone.
       const nextTitle = computeDefaultTitle(terminal);
       if ((terminal.titleMode ?? "default") === "default") {
         terminal.title = nextTitle;

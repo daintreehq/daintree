@@ -161,6 +161,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
 
             launchAgentId: terminal.launchAgentId,
             title: terminal.title,
+            titleMode: terminal.titleMode,
             cwd: terminal.cwd,
             agentState: terminal.agentState,
             lastStateChange: terminal.lastStateChange,
@@ -392,6 +393,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
 
         launchAgentId: terminal.launchAgentId,
         title: terminal.title,
+        titleMode: terminal.titleMode,
         cwd: terminal.cwd,
         agentState: terminal.agentState,
         lastStateChange: terminal.lastStateChange,

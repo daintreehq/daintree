@@ -73,7 +73,7 @@ import type {
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
 import type { AgentState, AgentId } from "../../shared/types/agent.js";
-import type { PanelKind } from "../../shared/types/panel.js";
+import type { PanelKind, PanelTitleMode } from "../../shared/types/panel.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
 import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 
@@ -86,6 +86,8 @@ interface TerminalInfoResponse {
   kind?: PanelKind;
   launchAgentId?: AgentId;
   title?: string;
+  /** Title ownership rung mirrored from the pty-host record. */
+  titleMode?: PanelTitleMode;
   cwd: string;
   worktreeId?: string;
   agentState?: AgentState;
@@ -102,6 +104,8 @@ interface TerminalInfoResponse {
   agentSessionId?: string;
   agentLaunchFlags?: string[];
   agentModelId?: string;
+  /** Last non-useless OSC title observed from the agent — preferred over `title` for resume-record labels. */
+  lastObservedTitle?: string;
   agentPresetId?: string;
   agentPresetColor?: string;
   originalAgentPresetId?: string;

@@ -3,7 +3,7 @@ import { useDndMonitor } from "@dnd-kit/core";
 import type { DraggableSyntheticListeners } from "@dnd-kit/core";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
-import { cn, getBaseTitle } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { useTerminalInputStore, usePanelStore, useFocusStore } from "@/store";
 import type { PtyPanelData } from "@shared/types/panel";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -289,7 +289,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const blockedState = useDockBlockedState(agentState);
   const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
   // Use shortened title without command summary for dock items
-  const displayTitle = getBaseTitle(terminal.title);
+  const displayTitle = terminal.title;
   // Indicator stays visible for the lifetime of the agent chrome — idle/missing
   // state coerces to waiting so it never disappears mid-flight.
   const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);

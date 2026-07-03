@@ -189,6 +189,7 @@ export const BUILT_IN_ACTION_IDS = [
   "preferences.showDeveloperTools.set",
   "preferences.showGridAgentHighlights.set",
   "preferences.showDockAgentHighlights.set",
+  "preferences.showAgentTaskTitles.set",
   "preferences.reduceAnimations.set",
 
   // -- windowActions --

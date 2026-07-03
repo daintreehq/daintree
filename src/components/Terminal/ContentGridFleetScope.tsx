@@ -6,6 +6,8 @@ import { GridPanel } from "./GridPanel";
 import { GridShell } from "./GridShell";
 import { ContentGridEmptyState } from "./ContentGridEmptyState";
 import { pixelSnapTransform, type ContentGridContext } from "./useContentGridContext";
+import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
+import { usePreferencesStore } from "@/store/preferencesStore";
 
 export function ContentGridFleetScope({
   ctx,
@@ -19,6 +21,8 @@ export function ContentGridFleetScope({
   className?: string;
 }) {
   "use memo";
+
+  const showAgentTaskTitles = usePreferencesStore((s) => s.showAgentTaskTitles);
 
   // framer-motion's `layout="position"` snapshots every wrapper via
   // getBoundingClientRect on any commit whose layoutDependency changed — or is
@@ -99,7 +103,9 @@ export function ContentGridFleetScope({
                         : worktree.branch?.trim() || worktree.name?.trim() || "Unknown Worktree"
                       : null;
                     if (prefix) {
-                      titleOverride = `${prefix} — ${terminal.title}`;
+                      titleOverride = `${prefix} — ${getTerminalDisplayTitle(terminal, "full", {
+                        showTask: showAgentTaskTitles,
+                      })}`;
                     }
                   }
                   return (

@@ -57,6 +57,8 @@ export interface PtyHostSpawnOptions {
    */
   launchAgentId?: AgentId;
   title?: string;
+  /** Title ownership rung at spawn — lets the backend skip its own default-title rewrites for pinned titles. */
+  titleMode?: PanelTitleMode;
   projectId?: string;
   /** Whether to restore previous session content (default: true). Set to false on restart. */
   restore?: boolean;

@@ -20,7 +20,7 @@ import type {
 
 /** Schema for a launch hint — built-in agent id or plugin-provided string. */
 const LaunchAgentIdSchema = z.union([z.enum(BUILT_IN_AGENT_IDS), z.string().min(1)]);
-const TitleModeSchema = z.enum(["default", "custom"]);
+const TitleModeSchema = z.enum(["default", "custom", "user"]);
 
 // ============================================================================
 // Terminal Entry Validation Schemas

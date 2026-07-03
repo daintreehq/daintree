@@ -692,6 +692,7 @@ export const createAddPanelActions = (
           kind,
           launchAgentId,
           title,
+          titleMode: options.titleMode,
           env: mergedEnv,
           restore: options.restore,
           agentLaunchFlags: options.agentLaunchFlags,

@@ -1,3 +1,5 @@
+import { AGENT_REGISTRY } from "../config/agentRegistry.js";
+
 /**
  * Heuristic filter for OSC-emitted terminal titles.
  *
@@ -7,13 +9,38 @@
  * the last _non-useless_ title so the UI can surface a meaningful label like
  * "Fixing auth bug" instead of "claude".
  */
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// Every registered agent's binary name ("claude", "codex", "opencode", …) is
+// a useless title — agents reset the window title to their own binary right
+// before shutdown. Derived from the registry so new agents are covered
+// without touching this list. Falls back to a no-match pattern when the
+// registry is empty (unit tests mock it away); the static list below still
+// covers the common binaries in that case.
+let agentBinaries: string[] = [];
+try {
+  agentBinaries = [
+    ...new Set(
+      Object.values(AGENT_REGISTRY ?? {})
+        .map((a) => a.command?.trim())
+        .filter((c): c is string => !!c)
+    ),
+  ];
+} catch {
+  // Unit tests that mock the registry module away land here; the static
+  // pattern below still covers the common agent binaries.
+}
+const AGENT_BINARY_PATTERN =
+  agentBinaries.length > 0
+    ? new RegExp(`^(${agentBinaries.map(escapeRegExp).join("|")})(\\.exe)?$`, "i")
+    : /^claude$|^codex$|^gemini$/i;
+
 const USELESS_TITLE_PATTERNS: readonly RegExp[] = [
   // Shell binaries
   /^(bash|zsh|fish|sh|cmd|powershell|pwsh|dash)(\.exe)?$/i,
-  // Agent binary names
-  /^claude$/i,
-  /^codex$/i,
-  /^gemini$/i,
+  // Agent binary names (registry-derived; static core when the registry is mocked/empty)
+  /^(claude|codex|gemini)$/i,
+  AGENT_BINARY_PATTERN,
   // Absolute/home paths (reject only when the whole string is path-shaped)
   /^(?:~\/?|\/)[^\s]*$/,
   /^[A-Z]:\\[^\s]*$/i,

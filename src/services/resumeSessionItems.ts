@@ -1,5 +1,6 @@
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { isUselessTitle } from "@shared/utils/isUselessTitle";
+import { cleanTaskTitle } from "@shared/utils/taskTitle";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { inferWorktreeIdFromCwd } from "@/utils/worktreePaths";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
@@ -105,8 +106,11 @@ export function buildResumeSessionItems(
       const timeAgo = formatTimeAgo(session.savedAt);
       const modelPart = session.agentModelId ? prettifyModelId(session.agentModelId) : null;
       const agentName = agentConfig?.name ?? session.agentId;
-      const hasMeaningfulTitle = !!session.title && !isUselessTitle(session.title);
-      const name = hasMeaningfulTitle ? `Resume: ${session.title}` : `Resume ${agentName}`;
+      // Glyph-stripped so the resume label matches how the live tab rendered
+      // the same task title.
+      const taskTitle = cleanTaskTitle(session.title);
+      const hasMeaningfulTitle = !!taskTitle && !isUselessTitle(taskTitle);
+      const name = hasMeaningfulTitle ? `Resume: ${taskTitle}` : `Resume ${agentName}`;
 
       const liveWorktree = resolvedWorktreeId ? worktrees.get(resolvedWorktreeId) : undefined;
       // Stale means the RECORDED worktree no longer resolves — an inferred id

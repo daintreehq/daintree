@@ -427,9 +427,9 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   {
     file: "src/components/Panel/TabButton.tsx",
     fragment:
-      "text-xs bg-overlay-soft border px-1 h-4 min-w-[60px] max-w-[100px] text-daintree-text select-text transition-colors focus:outline-hidden",
+      "text-xs bg-overlay-soft border border-transparent px-1 h-4 min-w-[60px] max-w-[100px] text-daintree-text select-text focus:outline-hidden",
     reason:
-      "PRE-EXISTING #8940: tab rename input relies on conditional border that doesn't change on focus — follow-up",
+      "PRE-EXISTING #8940: tab rename input has no focus indicator (the input is the sole focus target while editing) — follow-up",
   },
   {
     file: "src/components/Project/QuickRun.tsx",

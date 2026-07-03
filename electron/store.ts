@@ -131,7 +131,7 @@ export interface StoreSchema {
       kind?: PanelKind;
       launchAgentId?: AgentId;
       title: string;
-      titleMode?: "default" | "custom";
+      titleMode?: "default" | "custom" | "user";
       cwd?: string;
       worktreeId?: string;
       location: "grid" | "dock";

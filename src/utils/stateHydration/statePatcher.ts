@@ -1,7 +1,7 @@
 import type { PanelKind, AgentState } from "@/types";
 import { coerceAgentState } from "@shared/types/agent";
 import type { BrowserHistory } from "@shared/types/browser";
-import type { PanelExitBehavior } from "@shared/types/panel";
+import type { PanelExitBehavior, PanelTitleMode } from "@shared/types/panel";
 import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import { getAgentConfig, sanitizeAgentEnv } from "@/config/agents";
@@ -69,6 +69,8 @@ export interface SavedTerminalData {
   agentId?: string;
   launchAgentId?: string;
   title?: string;
+  /** Title ownership rung persisted with the snapshot — restoring it is what keeps preset/user titles pinned across restart (#10738). */
+  titleMode?: PanelTitleMode;
   cwd?: string;
   worktreeId?: string;
   location?: string;
@@ -135,6 +137,7 @@ interface BackendTerminalData {
   kind?: PanelKind;
   launchAgentId?: string;
   title?: string;
+  titleMode?: PanelTitleMode;
   cwd: string;
   agentState?: AgentState;
   lastStateChange?: number;
@@ -155,6 +158,7 @@ interface ReconnectedTerminalData {
   kind?: PanelKind;
   launchAgentId?: string;
   title?: string;
+  titleMode?: PanelTitleMode;
   cwd?: string;
   agentState?: AgentState;
   lastStateChange?: number;
@@ -272,6 +276,7 @@ export function buildArgsForBackendTerminal(
     kind: normalizePtyKind(backendTerminal.kind),
     launchAgentId,
     title: saved.title ?? backendTerminal.title,
+    titleMode: saved.titleMode ?? backendTerminal.titleMode,
     cwd,
     worktreeId: saved.worktreeId,
     location,
@@ -346,6 +351,7 @@ export function buildArgsForReconnectedFallback(
     kind: normalizePtyKind(reconnectedKind),
     launchAgentId,
     title: saved.title ?? reconnectedTerminal.title,
+    titleMode: saved.titleMode ?? reconnectedTerminal.titleMode,
     cwd,
     worktreeId: saved.worktreeId,
     location,
@@ -548,14 +554,21 @@ export function buildArgsForRespawn(
   const respawnOriginalPresetId = presetWasStale
     ? undefined
     : (saved.originalPresetId ?? savedPresetIdForRespawn);
-  const respawnTitle = presetWasStale
-    ? (agentId ? getAgentConfig(agentId)?.name : saved.title) || saved.title
-    : saved.title;
+  // A user-locked title never contains preset branding — stripping it on a
+  // stale preset would destroy a human rename, so the lock exempts it.
+  const userLockedTitle = saved.titleMode === "user";
+  const respawnTitle =
+    presetWasStale && !userLockedTitle
+      ? (agentId ? getAgentConfig(agentId)?.name : saved.title) || saved.title
+      : saved.title;
 
   return {
     kind: respawnKind,
     launchAgentId: agentId,
     title: respawnTitle,
+    // A stale preset's pinned title was just stripped — drop the pin with it
+    // (unless the user locked the title, which the strip above exempts).
+    titleMode: presetWasStale && !userLockedTitle ? undefined : saved.titleMode,
     cwd: saved.cwd || projectRoot || "",
     worktreeId: saved.worktreeId,
     location,
@@ -600,6 +613,7 @@ export function buildArgsForNonPtyRecreation(
   const base: AddTerminalArgs = {
     kind,
     title: saved.title,
+    titleMode: saved.titleMode,
     cwd: resolveSavedCwd(saved.cwd, projectRoot),
     worktreeId: saved.worktreeId,
     location,

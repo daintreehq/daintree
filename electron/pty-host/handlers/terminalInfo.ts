@@ -26,6 +26,10 @@ export function mapTerminalInfo(t: NonNullable<TerminalInfoLike>, ctx: HostConte
 
     launchAgentId: t.launchAgentId,
     title: t.title,
+    titleMode: t.titleMode,
+    // Preferred over `title` for resume-record labels on the kill/shutdown
+    // close paths — without it those records regress to the bare agent name.
+    lastObservedTitle: t.lastObservedTitle,
     cwd: t.cwd,
     agentState: t.agentState,
     waitingReason: t.waitingReason,

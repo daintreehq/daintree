@@ -401,7 +401,7 @@ export class TerminalProcess {
       shell,
       kind: options.kind,
       title: options.title,
-      titleMode: options.title ? "default" : "default",
+      titleMode: options.titleMode ?? "default",
       command: options.command,
       launchAgentId,
       spawnedAt,

@@ -15,6 +15,8 @@ import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { focusPanelInput } from "./terminalFocusRegistry";
 import { getGroupAmbientAgentState } from "@/components/Layout/useDockBlockedState";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
+import { usePreferencesStore } from "@/store/preferencesStore";
 
 export interface GridTabGroupProps {
   group: TabGroup;
@@ -84,6 +86,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
   const agentSettings = useAgentSettingsStore((s) => s.settings);
   const ccrPresetsByAgent = useCcrPresetsStore((s) => s.ccrPresetsByAgent);
   const projectPresetsByAgent = useProjectPresetsStore((s) => s.presetsByAgent);
+  const showAgentTaskTitles = usePreferencesStore((s) => s.showAgentTaskTitles);
 
   // Build tabs array for PanelHeader
   const tabs: TabInfo[] = useMemo(() => {
@@ -120,7 +123,10 @@ export const GridTabGroup = React.memo(function GridTabGroup({
 
       return {
         id: p.id,
-        title: p.title,
+        // Compact slot (~100px): the agent's task alone — the tab icon already
+        // carries identity. Falls back to the identity title when no task.
+        title: getTerminalDisplayTitle(p, "compact", { showTask: showAgentTaskTitles }),
+        fullTitle: getTerminalDisplayTitle(p, "full", { showTask: showAgentTaskTitles }),
         chrome: deriveTerminalChrome({
           kind: p.kind,
           launchAgentId: pty?.launchAgentId,
@@ -141,7 +147,14 @@ export const GridTabGroup = React.memo(function GridTabGroup({
         hasDangerousFlags,
       };
     });
-  }, [panels, activeTabId, agentSettings, ccrPresetsByAgent, projectPresetsByAgent]);
+  }, [
+    panels,
+    activeTabId,
+    agentSettings,
+    ccrPresetsByAgent,
+    projectPresetsByAgent,
+    showAgentTaskTitles,
+  ]);
 
   // Check if this group is currently focused
   const isGroupFocused = useMemo(() => panels.some((p) => p.id === focusedId), [panels, focusedId]);

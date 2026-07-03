@@ -104,6 +104,10 @@ export function TitleEditingProvider({
         const trimmed = editingValue.trim();
         if (trimmed && trimmed !== title) {
           onTitleChange?.(trimmed);
+        } else if (!trimmed) {
+          // Explicit clear: reset to the identity-derived default and unlock
+          // (blur-empty stays a cancel — intent there is ambiguous).
+          onTitleChange?.("");
         }
         stopEditing();
       } else if (e.key === "Escape") {

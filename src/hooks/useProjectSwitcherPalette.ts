@@ -651,7 +651,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       // The active project can't free its own renderer/host — surface the
       // same guidance the backend guard enforces instead of a silent no-op.
       if (project.isActive) {
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "info",
           title: "Switch away first",

@@ -422,7 +422,7 @@ describe("lifecycle spawn — failed-to-start synthesizes an exit for launched a
       trigger: "exit",
     });
     expect(result).toMatchObject({ type: "spawn-result", id: "t1" });
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- narrowed by find above
+
     expect((result as { result: { success: boolean } }).result.success).toBe(false);
 
     // Order: agent-spawned resets store state before agent-state writes "exited",

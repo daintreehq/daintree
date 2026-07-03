@@ -265,7 +265,13 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
                   sessionId: result.agentSessionId as string,
                   agentId: info.launchAgentId as string,
                   worktreeId: info.worktreeId ?? null,
-                  title: info.title ?? null,
+                  // Prefer the observed task title, matching the trash-expiry
+                  // and kill close paths — except under a user lock, where the
+                  // record should read the same as the frozen live tab.
+                  title:
+                    (info.titleMode === "user"
+                      ? info.title
+                      : (info.lastObservedTitle ?? info.title)) ?? null,
                   projectId: info.projectId ?? null,
                   agentLaunchFlags: info.agentLaunchFlags,
                   agentModelId: info.agentModelId,

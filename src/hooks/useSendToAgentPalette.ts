@@ -1,8 +1,9 @@
 import { useCallback, useMemo } from "react";
 import Fuse, { type IFuseOptions } from "fuse.js";
-import { usePanelStore } from "@/store";
+import { usePanelStore, usePreferencesStore } from "@/store";
 import { isPtyPanel, type PanelKind } from "@shared/types/panel";
 import { useSearchablePalette } from "./useSearchablePalette";
+import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { terminalClient } from "@/clients";
 import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
@@ -102,6 +103,7 @@ export function useSendToAgentPalette() {
   const panelIds = usePanelStore((state) => state.panelIds);
   const panelsById = usePanelStore((state) => state.panelsById);
   const isOpen = usePaletteStore((state) => state.activePaletteId === "send-to-agent");
+  const showAgentTaskTitles = usePreferencesStore((s) => s.showAgentTaskTitles);
 
   const items = useMemo<SendToAgentItem[]>(() => {
     const sourceId = isOpen ? pendingState.sourceId : null;
@@ -121,7 +123,9 @@ export function useSendToAgentPalette() {
 
       result.push({
         id: t.id,
-        title: t.title,
+        // Full composed display title so rows read (and fuzzy-match) the same
+        // as the live tab: "Claude: fix auth tests".
+        title: getTerminalDisplayTitle(t, "full", { showTask: showAgentTaskTitles }),
         subtitle,
         terminalKind: t.kind,
         chrome,
@@ -130,7 +134,7 @@ export function useSendToAgentPalette() {
     }
 
     return result;
-  }, [panelIds, panelsById, isOpen]);
+  }, [panelIds, panelsById, isOpen, showAgentTaskTitles]);
 
   const fuse = useMemo(() => new Fuse(items, FUSE_OPTIONS), [items]);
 
