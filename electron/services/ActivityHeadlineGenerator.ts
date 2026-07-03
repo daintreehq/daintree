@@ -72,14 +72,17 @@ export class ActivityHeadlineGenerator {
   generate(context: ActivityContext): GeneratedActivity {
     // Agent terminals use agent state
     if (context.agentId) {
-      return this.generateFromAgentState(context.agentState);
+      return this.generateFromAgentState(context.agentState, context.waitingReason);
     }
 
     // Shell terminals use activity + command detection
     return this.generateFromShellActivity(context);
   }
 
-  private generateFromAgentState(agentState?: AgentState): GeneratedActivity {
+  private generateFromAgentState(
+    agentState?: AgentState,
+    waitingReason?: WaitingReason
+  ): GeneratedActivity {
     switch (agentState) {
       case "working":
         return {
@@ -89,7 +92,12 @@ export class ActivityHeadlineGenerator {
         };
       case "waiting":
         return {
-          headline: "Waiting for input",
+          headline:
+            waitingReason === "approval"
+              ? "Waiting for approval"
+              : waitingReason === "error"
+                ? "Blocked by an error"
+                : "Waiting for input",
           status: "waiting",
           type: "interactive",
         };

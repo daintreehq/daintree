@@ -14,7 +14,6 @@ export {
   AgentPatternDetector,
   createPatternDetector,
   stripAnsi,
-  AGENT_PATTERN_CONFIGS,
   UNIVERSAL_PATTERN_CONFIG,
   type PatternDetectionConfig,
   type PatternDetectionResult,

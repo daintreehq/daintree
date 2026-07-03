@@ -66,7 +66,7 @@ export const config: AgentConfig = {
     primaryPatterns: [
       // @generated:qwen:primaryPatterns:start
       "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+[^()\\n]{2,80}\\s*\\(esc to cancel",
-      "esc to cancel[^)\\n]*\\)?$",
+      "esc to cancel(?:[^)\\n]{0,20}\\)?|[^)\\n]{0,60}\\))$",
       "\\(\\d+s,?\\s*esc to cancel",
       // @generated:qwen:primaryPatterns:end
     ],

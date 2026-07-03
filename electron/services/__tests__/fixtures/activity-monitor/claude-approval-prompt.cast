@@ -1,0 +1,10 @@
+{"version":2,"width":120,"height":10,"timestamp":1700000000,"title":"claude-approval-prompt"}
+[0.05,"o","Claude Code v2.1.79 (Sonnet 4.6)\r\n"]
+[0.10,"o","> "]
+[0.40,"o","✽ Deliberating… (1s · esc to interrupt)"]
+[0.85,"o","\r✽ Editing src/index.ts… (2s · esc to interrupt)"]
+[1.30,"o","\r\u001b[2K"]
+[1.40,"o","Do you want to make this edit to src/index.ts?\r\n"]
+[1.50,"o","❯ 1. Yes\r\n"]
+[1.55,"o","  2. Yes, allow all edits during this session (shift+tab)\r\n"]
+[1.60,"o","  3. No, and tell Claude what to do differently (esc)\r\n"]

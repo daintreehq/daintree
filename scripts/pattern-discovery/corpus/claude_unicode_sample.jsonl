@@ -1,0 +1,10 @@
+{"time":0.0,"chunk":"✽ 正在分析代码库… (esc to interrupt · 5s)","detectedState":"working","confidence":0.95,"agentId":"claude"}
+{"time":1.0,"chunk":"✻ Analyzing 🎯 emoji targets… (esc to interrupt)","detectedState":"working","confidence":0.95,"agentId":"claude"}
+{"time":2.0,"chunk":"\u001b[38;5;153m✽ Deliberating… (esc to interrupt · 3s)\u001b[0m","detectedState":"working","confidence":0.95,"agentId":"claude"}
+{"time":3.0,"chunk":"✽ Reading… 读取文件中","detectedState":"working","confidence":0.75,"agentId":"claude"}
+{"time":4.0,"chunk":"\u001b[38;5;15","detectedState":"unknown","confidence":0.6,"agentId":"claude"}
+{"time":4.1,"chunk":"3m✽ Deliberating… (esc to interrupt)","detectedState":"working","confidence":0.95,"agentId":"claude"}
+{"time":5.0,"chunk":"\u001b[1;10R","detectedState":"unknown","confidence":0.6,"agentId":"claude"}
+{"time":5.5,"chunk":"\u001b]0;✳ claude\u0007","detectedState":"unknown","confidence":0.6,"agentId":"claude"}
+{"time":6.0,"chunk":"\u001b[2K\u001b[1A\u001b[2K> ","detectedState":"unknown","confidence":0.6,"agentId":"claude"}
+{"time":7.0,"chunk":"你想让我先修复哪个文件？","detectedState":"waiting","confidence":0.7,"agentId":"claude"}

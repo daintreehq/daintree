@@ -231,19 +231,29 @@ Important scenarios:
 
 The replay suite (`electron/services/__tests__/ActivityMonitor.replay.test.ts`) feeds asciinema v2 `.cast` recordings through the harness in `electron/services/__tests__/replay/castReplayHarness.ts`, which builds the monitor via the production `buildActivityMonitorOptions` path and asserts the recorded state transitions against a sibling `.expected.json`. Fixtures live in `electron/services/__tests__/fixtures/activity-monitor/` and are named `{agent}-{scenario}` (e.g. `aider-working-to-idle`).
 
+A second tier, `electron/services/__tests__/AgentStateFsm.replay.test.ts`, auto-discovers EVERY fixture in that directory (no registration needed) and replays it through the full production chain via `replayCastThroughFsm`: headless xterm → `ActivityMonitor` → the real `AgentStateService` (hysteresis, schema validation, waiting-reason attachment, cost/token extraction, check-result-on-settle) → `agent:state-changed`. A fixture opts into canonical-FSM assertions with an `fsm` block in its `.expected.json`:
+
+- `fsm.transitions` — expected `idle/working/waiting/completed/exited` timeline, with optional `trigger`, `waitingReason`, `sessionCost`, `sessionTokens`, `exitCode` per entry.
+- `fsm.checkResult` — the settled `lastCheckResult` (`{ passed, commandIncludes, failureSummaryIncludes }`); `null` asserts none was extracted.
+- `fsm.finalWaitingReason` — the waiting reason the terminal must settle on.
+- Top-level `forbidden` — transitions that must NOT appear (`{ scope: "activity"|"fsm", state, betweenMs }`), for pinning false positives like "resize noise must not enter working". Checked even under `allowExtraTransitions`.
+- Cast `x` events (exit code in the data field) drive the FSM exit path, so non-zero exits and exit metadata are assertable.
+
+`npm run pattern-discovery:eval` runs both replay tiers plus the JSONL corpus gate and writes a score report (per-agent pass rates, failure classes: false positives/negatives, wrong waiting reason, wrong check-result extraction) to `.tmp/agent-state-eval/report.md`.
+
 ### Workflow: corpus → convert → trim → calibrate
 
 1. **Get a recording.** Either convert a pattern-discovery JSONL corpus (`scripts/pattern-discovery/corpus/*.jsonl`, recorded via `npm run pattern-discovery:record -- --agent <id>`) with `npm run pattern-discovery:jsonl-to-cast -- --corpus <corpus.jsonl> --out electron/services/__tests__/fixtures/activity-monitor/{agent}-{scenario} --width 120 --height 10`, or redact a real terminal capture with `npm run pattern-discovery:redact-cast -- --in capture.cast`.
 2. **Redaction is mandatory for field recordings.** Both tools run `scrubReportText` (user paths, git remotes, tilde/temp paths, all secret sigils in `shared/utils/secretScrubber.ts`) over every event at the write boundary, so converter output is safe by construction; for hand-edited or externally recorded casts, run `redact-cast` before committing and eyeball the result — the scrubbers are a backstop, not a substitute for review. Never commit the `.bak` file the in-place mode leaves behind.
 3. **Trim.** Cut events that don't serve the scenario (post-prompt chatter, resume hints) so the fixture ends on the signal you're asserting — a trailing low-byte hint line can re-arm output-activity detection and turn a clean prompt-idle into a timeout-idle.
-4. **Calibrate.** The converter writes a stub `.expected.json` with a `STUB_REPLACE_ME` sentinel that always fails. Add the fixture to `REPLAY_CASES`, run the replay test, copy the timings from the `Recorded transitions` block in the failure output into real `transitions` entries, and delete the `_stub` field. Re-run to confirm green. A fixture needing custom `pollingMaxBootMs`/`maxWorkingSilenceMs` overrides follows the bespoke `it()` pattern of `input-event-triggers-busy` instead of `REPLAY_CASES`.
+4. **Calibrate.** The converter writes a stub `.expected.json` with a `STUB_REPLACE_ME` sentinel that always fails. Run `npm run pattern-discovery:eval` (the FSM-tier spec discovers the fixture automatically; adding it to `REPLAY_CASES` in the activity-tier spec is optional), copy the timings from the `Recorded transitions`/`Recorded FSM` blocks in the failure output into real `transitions` entries, and delete the `_stub` field. Re-run to confirm green. A fixture needing custom `pollingMaxBootMs`/`maxWorkingSilenceMs` overrides can declare them in `.expected.json` directly.
 
 ### Fixture-authoring gotchas
 
 - **Terminal geometry is load-bearing.** Prompt and visible-tail detection read the bottom rows of the viewport, so size `height` small enough (existing fixtures use `120x10`) that meaningful content lands in the bottom `promptScanLineCount` rows — a 30-row terminal with 14 lines of content leaves the scan window empty and silently downgrades prompt/completion detection to timeout-idle.
 - **Line-structured vs raw events.** Synthetic corpora store bare strings with no control characters; the converter auto-prepends `\r\n` to each event (`--line-events`/`--raw` to force) so cursor-line prompt detection works. Raw PTY captures already carry their own line discipline and must convert with `--raw` semantics (the auto-detect handles this).
-- **Timing pins.** The harness pins `idleDebounceMs`/`promptFastPathMinQuietMs` to the legacy 6000ms floor (production is 8000ms); new fixtures should state both fields explicitly in `.expected.json` so the calibrated `atMs` values are self-documenting.
-- **OSC 9;4 is not routed yet** (#9870): casts captured from agents that emit progress sequences (e.g. Claude Code) replay through the pattern path only; when OSC routing lands, those fixtures will need recalibration.
+- **Timing pins.** The harness starts from the production options (`simpleOutputState`, the 8000ms debounce floor); a fixture may still pin `idleDebounceMs`/`promptFastPathMinQuietMs` in its `.expected.json` (aider/goose pin the legacy 6000ms) — stating them explicitly keeps the calibrated `atMs` values self-documenting.
+- **OSC 9;4 routing is wired** (#8701): the harness feeds cast output through an `Osc94Parser` into the monitor's progress callbacks, matching production; `claude-osc94-progress-keeps-working` pins the behavior (and `routeOsc94: false` exists to prove the delta).
 - **Cast format is v2** (absolute timestamps). The harness also parses v3, but v2 is what the tooling emits and what hand-editing expects.
 
 ## Future Work

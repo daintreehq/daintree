@@ -1,0 +1,15 @@
+{
+  "agentId": "codex",
+  "settleMs": 3000,
+  "transitions": [
+    { "atMs": 0, "state": "busy", "trigger": "pattern" },
+    { "atMs": 5500, "state": "idle", "trigger": "dispose" }
+  ],
+  "fsm": {
+    "transitions": [
+      { "atMs": 0, "state": "working" },
+      { "atMs": 2500, "state": "exited", "trigger": "exit", "exitCode": 1 }
+    ],
+    "checkResult": null
+  }
+}

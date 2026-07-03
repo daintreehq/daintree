@@ -75,9 +75,9 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
     },
     waitingReason: {
       type: "string",
-      enum: ["prompt", "question"],
+      enum: ["prompt", "question", "approval", "error"],
       description:
-        "Present only when idleReason is 'waiting_for_user'. 'prompt' = empty input prompt (safe to auto-drive); 'question' = agent is asking the user a question.",
+        "Present only when idleReason is 'waiting_for_user'. 'prompt' = empty input prompt (safe to auto-drive); 'question' = agent is asking the user a question; 'approval' = a permission/approval selector needs a specific choice; 'error' = agent stopped after a blocking error (auth/rate limit/network/failed command).",
     },
     previousBusyState: { type: "string", enum: ["working", "idle"] },
     lastTransitionAt: { type: "number" },
@@ -97,7 +97,7 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
 };
 
 export const WAIT_UNTIL_IDLE_DESCRIPTION =
-  "Check whether the agent in one terminal has left the working state, with an optional wait. Args: `terminalId` is a panel UUID from `terminal.list` (the `id` field); `timeoutMs` is optional (0 = immediate non-blocking snapshot — recommended; otherwise max ms to long-poll, default 60s). Returns { terminalId, busyState ('working'|'idle'), idleReason, waitingReason ('prompt'|'question', only while waiting_for_user), exitCode (number|null, only on 'completed'|'exited' — verify a real success before an irreversible follow-up), exitSignal (where available), timedOut }. `timedOut: true` means still working — re-call to keep waiting. Interactive sessions are capped at 60s server-side regardless of `timeoutMs`; headless sessions may block up to 2 hours. An untracked `terminalId` returns immediately as { busyState: 'idle', idleReason: 'unknown', timedOut: false }. To wait on several terminals use `terminal.waitUntilIdleBatch`; for a snapshot of many terminals use `terminal.getStatus`.";
+  "Check whether the agent in one terminal has left the working state, with an optional wait. Args: `terminalId` is a panel UUID from `terminal.list` (the `id` field); `timeoutMs` is optional (0 = immediate non-blocking snapshot — recommended; otherwise max ms to long-poll, default 60s). Returns { terminalId, busyState ('working'|'idle'), idleReason, waitingReason ('prompt'|'question'|'approval'|'error', only while waiting_for_user), exitCode (number|null, only on 'completed'|'exited' — verify a real success before an irreversible follow-up), exitSignal (where available), timedOut }. `timedOut: true` means still working — re-call to keep waiting. Interactive sessions are capped at 60s server-side regardless of `timeoutMs`; headless sessions may block up to 2 hours. An untracked `terminalId` returns immediately as { busyState: 'idle', idleReason: 'unknown', timedOut: false }. To wait on several terminals use `terminal.waitUntilIdleBatch`; for a snapshot of many terminals use `terminal.getStatus`.";
 
 // === Batched wait (fan-out orchestration) ===
 
@@ -153,7 +153,7 @@ export const WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA: Record<string, unknown> = {
             type: "string",
             enum: ["idle", "waiting_for_user", "completed", "exited", "unknown"],
           },
-          waitingReason: { type: "string", enum: ["prompt", "question"] },
+          waitingReason: { type: "string", enum: ["prompt", "question", "approval", "error"] },
           previousBusyState: { type: "string", enum: ["working", "idle"] },
           lastTransitionAt: { type: "number" },
           exitCode: { type: ["number", "null"] },

@@ -18,6 +18,12 @@ import {
   type VisibleContentCell,
   type VisibleContentSnapshot,
 } from "../../pty/SustainedChangeTracker.js";
+import { AgentStateService } from "../../pty/AgentStateService.js";
+import { SemanticBufferManager } from "../../pty/SemanticBufferManager.js";
+import { events } from "../../events.js";
+import type { TerminalInfo } from "../../pty/types.js";
+import type { AgentState, WaitingReason } from "../../../../shared/types/agent.js";
+import type { TerminalCheckResult } from "../../../../shared/types/checkResult.js";
 
 export interface RecordedTransition {
   replayMs: number;
@@ -54,6 +60,17 @@ export interface ReplayCastOpts {
    * content instead).
    */
   routeOsc94?: boolean;
+  /**
+   * Internal hooks used by `replayCastThroughFsm` to mirror the production
+   * TerminalProcess wiring on top of the activity replay. Fired synchronously
+   * at the event's virtual timestamp (timers already advanced).
+   */
+  onActivityObservation?: (
+    state: "busy" | "idle" | "completed",
+    metadata?: ActivityStateMetadata
+  ) => void;
+  onOutputChunk?: (data: string) => void;
+  onExitEvent?: (code: number) => void;
 }
 
 export interface ExpectedTransition {
@@ -63,6 +80,54 @@ export interface ExpectedTransition {
   waitingReason?: ActivityStateMetadata["waitingReason"];
   sessionCost?: number;
   sessionTokens?: number;
+}
+
+export interface ExpectedFsmTransition {
+  atMs: number;
+  state: AgentState;
+  trigger?: string;
+  waitingReason?: WaitingReason;
+  sessionCost?: number;
+  sessionTokens?: number;
+  exitCode?: number | null;
+}
+
+export interface ExpectedCheckResult {
+  passed: boolean;
+  /** Substring the parsed `command` must contain (null command fails the match). */
+  commandIncludes?: string;
+  /** Substring the `failureSummary` must contain (null summary fails the match). */
+  failureSummaryIncludes?: string;
+}
+
+export interface ExpectedFsm {
+  /** Canonical agent-state timeline (idle/working/waiting/completed/exited). */
+  transitions: ExpectedFsmTransition[];
+  toleranceMs?: number;
+  allowExtraTransitions?: boolean;
+  /**
+   * Terminal `lastCheckResult` after the replay settles. `null` asserts that
+   * NO check result was extracted; omit to skip the assertion.
+   */
+  checkResult?: ExpectedCheckResult | null;
+  /** Waiting reason the terminal must settle on (asserted post-replay). */
+  finalWaitingReason?: WaitingReason;
+}
+
+/**
+ * Negative expectation: a transition that must NOT appear in the recording,
+ * optionally bounded to a replay-time window. Checked even when
+ * `allowExtraTransitions` is set — that flag tolerates benign noise, while a
+ * forbidden entry pins a specific false positive (e.g. "resize noise must not
+ * enter working").
+ */
+export interface ExpectedForbidden {
+  /** Which recording to scan. Default "activity". */
+  scope?: "activity" | "fsm";
+  state: string;
+  trigger?: string;
+  /** Inclusive [fromMs, toMs] replay-time window. Omit to scan the whole replay. */
+  betweenMs?: [number, number];
 }
 
 export interface ExpectedFile {
@@ -81,6 +146,9 @@ export interface ExpectedFile {
    */
   allowExtraTransitions?: boolean;
   transitions: ExpectedTransition[];
+  /** Canonical-FSM expectations; fixtures with this block replay through `replayCastThroughFsm`. */
+  fsm?: ExpectedFsm;
+  forbidden?: ExpectedForbidden[];
 }
 
 interface CastEvent {
@@ -403,6 +471,7 @@ export async function replayCast(
         sessionCost: metadata?.sessionCost,
         sessionTokens: metadata?.sessionTokens,
       });
+      opts.onActivityObservation?.(state, metadata);
     },
     {
       ...baseOptions,
@@ -475,6 +544,7 @@ export async function replayCast(
           osc94Parser.feed(event.data, Date.now());
         }
         monitor.onData(event.data);
+        opts.onOutputChunk?.(event.data);
       } else if (event.kind === "i") {
         monitor.onInput(event.data);
       } else if (event.kind === "r") {
@@ -489,8 +559,12 @@ export async function replayCast(
           }
           monitor.notifyResize();
         }
+      } else if (event.kind === "x") {
+        // Exit event (asciinema v3 shape): data is the process exit code.
+        const code = Number(event.data);
+        opts.onExitEvent?.(Number.isFinite(code) ? code : 0);
       }
-      // Ignore "m" (markers) and "x" (exit) for now — they don't drive state.
+      // Ignore "m" (markers) — they don't drive state.
     }
 
     const settleMs = opts.settleMs ?? DEFAULT_SETTLE_MS;
@@ -515,6 +589,131 @@ export function loadExpected(expectedPath: string): ExpectedFile {
   return parsed;
 }
 
+// === Canonical-FSM replay ===
+//
+// `replayCast` stops at the ActivityMonitor observation layer ("busy"/"idle"/
+// "completed"). `replayCastThroughFsm` mirrors the production TerminalProcess
+// wiring on top of it: observations feed the real `AgentStateService`
+// (hysteresis, schema validation, waiting reasons, cost/tokens, check-result
+// extraction on settle), raw output feeds the real `SemanticBufferManager`,
+// and cast "x" events drive the exit path. What comes out is the canonical
+// `agent:state-changed` timeline — the same events `terminal.getStatus` and
+// `waitUntilIdle` consume.
+
+export interface RecordedFsmTransition {
+  replayMs: number;
+  state: AgentState;
+  previousState: AgentState;
+  trigger: string;
+  confidence: number;
+  waitingReason?: WaitingReason;
+  sessionCost?: number;
+  sessionTokens?: number;
+  exitCode?: number | null;
+  exitSignal?: number;
+  checkResult?: TerminalCheckResult;
+}
+
+export interface FsmReplayResult {
+  activity: RecordedTransition[];
+  fsm: RecordedFsmTransition[];
+  finalState: AgentState;
+  finalWaitingReason?: WaitingReason;
+  finalCheckResult?: TerminalCheckResult;
+}
+
+let fsmReplaySeq = 0;
+
+export async function replayCastThroughFsm(
+  castPath: string,
+  opts: ReplayCastOpts = {}
+): Promise<FsmReplayResult> {
+  const startedAt = Date.now();
+  // Unique per replay: the recording listens on the GLOBAL events bus, so a
+  // shared id would cross-record if two replays ever ran in one worker.
+  const terminalId = `replay-terminal-${++fsmReplaySeq}`;
+  // Minimal TerminalInfo — only the fields AgentStateService touches. The
+  // launch hint doubles as the routing agent id (`getLiveAgentId` falls back
+  // to it), so unregistered agent ids exercise the universal fallback while
+  // still carrying a stable identity on emitted events.
+  const terminal = {
+    id: terminalId,
+    cwd: "/replay",
+    shell: "/bin/zsh",
+    spawnedAt: startedAt,
+    analysisEnabled: true,
+    lastInputTime: 0,
+    lastOutputTime: 0,
+    lastCheckTime: 0,
+    restartCount: 0,
+    ...(opts.agentId ? { launchAgentId: opts.agentId } : {}),
+    agentState: "idle",
+    ptyProcess: {} as never,
+    outputBuffer: "",
+    semanticBuffer: [],
+  } as unknown as TerminalInfo;
+
+  const service = new AgentStateService();
+  const semanticBuffer = new SemanticBufferManager(terminal);
+  const fsm: RecordedFsmTransition[] = [];
+
+  const onStateChanged = (payload: {
+    terminalId?: string;
+    state: AgentState;
+    previousState: AgentState;
+    trigger: string;
+    confidence: number;
+    waitingReason?: WaitingReason;
+    sessionCost?: number;
+    sessionTokens?: number;
+    exitCode?: number | null;
+    exitSignal?: number;
+    lastCheckResult?: TerminalCheckResult;
+  }): void => {
+    if (payload.terminalId !== terminalId) return;
+    fsm.push({
+      replayMs: Date.now() - startedAt,
+      state: payload.state,
+      previousState: payload.previousState,
+      trigger: payload.trigger,
+      confidence: payload.confidence,
+      waitingReason: payload.waitingReason,
+      sessionCost: payload.sessionCost,
+      sessionTokens: payload.sessionTokens,
+      exitCode: payload.exitCode,
+      exitSignal: payload.exitSignal,
+      checkResult: payload.lastCheckResult,
+    });
+  };
+  events.on("agent:state-changed", onStateChanged);
+
+  try {
+    const activity = await replayCast(castPath, {
+      ...opts,
+      onOutputChunk: (data) => semanticBuffer.onData(data),
+      onActivityObservation: (state, metadata) => {
+        service.handleActivityState(terminal, state, metadata);
+      },
+      onExitEvent: (code) => {
+        // Flush pending semantic lines first so the settle-time check-result
+        // scan sees the tail of the output (production flushes on teardown).
+        semanticBuffer.flush();
+        service.updateAgentState(terminal, { type: "exit", code });
+      },
+    });
+    return {
+      activity,
+      fsm,
+      finalState: terminal.agentState ?? "idle",
+      finalWaitingReason: terminal.waitingReason,
+      finalCheckResult: terminal.lastCheckResult,
+    };
+  } finally {
+    events.off("agent:state-changed", onStateChanged);
+    semanticBuffer.dispose();
+  }
+}
+
 export interface MatchOpts {
   toleranceMs?: number;
   /**
@@ -531,7 +730,10 @@ export interface MatchFailure {
     | "trigger-mismatch"
     | "waiting-reason-mismatch"
     | "metadata-mismatch"
-    | "timing";
+    | "timing"
+    | "forbidden"
+    | "check-result"
+    | "final-waiting-reason";
   index: number;
   expected?: ExpectedTransition;
   actual?: RecordedTransition;
@@ -592,5 +794,148 @@ export function matchTransitions(
     }
   }
 
+  return failures;
+}
+
+/**
+ * Strict in-order match over the canonical-FSM recording. Same semantics as
+ * `matchTransitions`: state + time window required; trigger, waitingReason,
+ * cost/tokens, exitCode asserted only when the expected entry names them.
+ */
+export function matchFsmTransitions(
+  recorded: RecordedFsmTransition[],
+  expected: ExpectedFsmTransition[],
+  opts: MatchOpts = {}
+): MatchFailure[] {
+  const tolerance = opts.toleranceMs ?? 200;
+  const failures: MatchFailure[] = [];
+  const matched = new Set<number>();
+  let cursor = 0;
+
+  for (let i = 0; i < expected.length; i++) {
+    const want = expected[i];
+    let foundIndex = -1;
+    for (let j = cursor; j < recorded.length; j++) {
+      const got = recorded[j];
+      if (matched.has(j)) continue;
+      if (got.state !== want.state) continue;
+      if (Math.abs(got.replayMs - want.atMs) > tolerance) continue;
+      if (want.trigger && got.trigger !== want.trigger) continue;
+      if (want.waitingReason && got.waitingReason !== want.waitingReason) continue;
+      if (want.sessionCost !== undefined && got.sessionCost !== want.sessionCost) continue;
+      if (want.sessionTokens !== undefined && got.sessionTokens !== want.sessionTokens) continue;
+      if (want.exitCode !== undefined && got.exitCode !== want.exitCode) continue;
+      foundIndex = j;
+      break;
+    }
+    if (foundIndex === -1) {
+      failures.push({
+        kind: "missing",
+        index: i,
+        detail: `expected fsm ${want.state}${want.waitingReason ? `/${want.waitingReason}` : ""} near ${want.atMs}ms`,
+      });
+      continue;
+    }
+    matched.add(foundIndex);
+    cursor = foundIndex + 1;
+  }
+
+  if (!opts.allowExtraTransitions) {
+    for (let j = 0; j < recorded.length; j++) {
+      if (matched.has(j)) continue;
+      failures.push({
+        kind: "extra",
+        index: j,
+        detail: `unmatched fsm transition: ${recorded[j].previousState} → ${recorded[j].state}/${recorded[j].trigger} at ${recorded[j].replayMs}ms`,
+      });
+    }
+  }
+
+  return failures;
+}
+
+/**
+ * Scan both recordings for forbidden transitions. Runs regardless of
+ * `allowExtraTransitions` — a forbidden entry pins a specific false positive.
+ */
+export function checkForbidden(
+  forbidden: ExpectedForbidden[] | undefined,
+  activity: RecordedTransition[],
+  fsm: RecordedFsmTransition[] = []
+): MatchFailure[] {
+  if (!forbidden || forbidden.length === 0) return [];
+  const failures: MatchFailure[] = [];
+  for (let i = 0; i < forbidden.length; i++) {
+    const rule = forbidden[i];
+    const scope = rule.scope ?? "activity";
+    const pool: Array<{ replayMs: number; state: string; trigger?: string }> =
+      scope === "fsm" ? fsm : activity;
+    for (const got of pool) {
+      if (got.state !== rule.state) continue;
+      if (rule.trigger && got.trigger !== rule.trigger) continue;
+      if (
+        rule.betweenMs &&
+        (got.replayMs < rule.betweenMs[0] || got.replayMs > rule.betweenMs[1])
+      ) {
+        continue;
+      }
+      failures.push({
+        kind: "forbidden",
+        index: i,
+        detail: `forbidden ${scope} transition ${got.state}/${got.trigger ?? "-"} recorded at ${got.replayMs}ms`,
+      });
+    }
+  }
+  return failures;
+}
+
+/** Assert the settled check result against the fixture's expectation. */
+export function matchCheckResult(
+  expected: ExpectedCheckResult | null | undefined,
+  actual: TerminalCheckResult | undefined
+): MatchFailure[] {
+  if (expected === undefined) return [];
+  if (expected === null) {
+    return actual === undefined
+      ? []
+      : [
+          {
+            kind: "check-result",
+            index: 0,
+            detail: `expected no check result, got passed=${actual.passed} command=${actual.command ?? "-"}`,
+          },
+        ];
+  }
+  if (!actual) {
+    return [{ kind: "check-result", index: 0, detail: "expected a check result, none extracted" }];
+  }
+  const failures: MatchFailure[] = [];
+  if (actual.passed !== expected.passed) {
+    failures.push({
+      kind: "check-result",
+      index: 0,
+      detail: `check result passed=${actual.passed}, expected ${expected.passed}`,
+    });
+  }
+  if (
+    expected.commandIncludes !== undefined &&
+    !(actual.command ?? "").includes(expected.commandIncludes)
+  ) {
+    failures.push({
+      kind: "check-result",
+      index: 0,
+      detail: `check result command "${actual.command ?? ""}" missing "${expected.commandIncludes}"`,
+    });
+  }
+  if (
+    expected.failureSummaryIncludes !== undefined &&
+    !(actual.failureSummary ?? "").includes(expected.failureSummaryIncludes)
+  ) {
+    failures.push({
+      kind: "check-result",
+      index: 0,
+      detail: `check result failureSummary missing "${expected.failureSummaryIncludes}"`,
+    });
+  }
   return failures;
 }

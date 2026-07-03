@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   createPatternDetector,
   stripAnsi,
-  AGENT_PATTERN_CONFIGS,
   UNIVERSAL_PATTERN_CONFIG,
 } from "../AgentPatternDetector.js";
 import { getAgentConfig } from "../../../../shared/config/agentRegistry.js";
@@ -386,17 +385,26 @@ describe("AgentPatternDetector", () => {
     });
   });
 
-  describe("fallback path (AGENT_PATTERN_CONFIGS)", () => {
-    it("falls back to AGENT_PATTERN_CONFIGS when no customConfig is provided", () => {
+  describe("registry fallback path (no customConfig)", () => {
+    it("resolves the registry detection config when no customConfig is provided", () => {
       const detector = createPatternDetector("claude");
       const result = detector.detect("✽ Deliberating… (esc to interrupt · 15s)");
       expect(result.isWorking).toBe(true);
+      expect(result.matchTier).toBe("primary");
     });
 
-    it("AGENT_PATTERN_CONFIGS has patterns for built-in agents", () => {
-      expect(AGENT_PATTERN_CONFIGS.claude.primaryPatterns.length).toBeGreaterThan(0);
-      expect(AGENT_PATTERN_CONFIGS.gemini.primaryPatterns.length).toBeGreaterThan(0);
-      expect(AGENT_PATTERN_CONFIGS.codex.primaryPatterns.length).toBeGreaterThan(0);
+    it("registry-resolved detector matches the explicitly-built config's verdicts", () => {
+      const explicit = buildTestDetector("codex");
+      const fromRegistry = createPatternDetector("codex");
+      for (const sample of ["• Working (1s • esc to interrupt)", "› ", "plain unrelated output"]) {
+        expect(fromRegistry.detect(sample)).toEqual(explicit.detect(sample));
+      }
+    });
+
+    it("unknown agents fall back to the universal config", () => {
+      const detector = createPatternDetector("some-unregistered-agent");
+      expect(detector.detect("✽ Thinking… (esc to interrupt · 2s)").isWorking).toBe(true);
+      expect(detector.detect("plain output").isWorking).toBe(false);
     });
   });
 
@@ -532,25 +540,26 @@ wraps to the next line where the escape hint appears: esc to interrupt)`;
     });
 
     describe("Known pattern behavior", () => {
-      it("end-of-line patterns may match help text (acceptable tradeoff)", () => {
+      it("prose with a long tail after the hint no longer matches", () => {
+        // The end-of-line hint pattern bounds its tail to ~20 chars: real
+        // status lines trail only short time info ("· 15s)"), while prose
+        // keeps talking past the hint.
         const detector = buildTestDetector("codex");
-        const output = "Press esc to interrupt the operation when needed";
+        const output = "Press esc to interrupt the operation when it is needed";
         const result = detector.detect(output);
 
-        expect(result.isWorking).toBe(true);
-        expect(result.matchTier).toBe("primary");
+        expect(result.isWorking).toBe(false);
       });
 
-      it("patterns prioritize detecting real status over avoiding false positives", () => {
+      it("prose with a long tail does not match for claude either", () => {
         const detector = buildTestDetector("claude");
-        const output = "You can always use esc to interrupt if the task takes too long";
+        const output = "You can always use esc to interrupt whenever the task takes too long";
         const result = detector.detect(output);
 
-        expect(result.isWorking).toBe(true);
-        expect(result.matchTier).toBe("primary");
+        expect(result.isWorking).toBe(false);
       });
 
-      it("escape hints in idle output may trigger detection (rare in practice)", () => {
+      it("escape hints with a short tail may still trigger detection (accepted ambiguity)", () => {
         const detector = buildTestDetector("gemini");
         const output =
           "Task complete. Remember esc to cancel works anytime.\n\nReady for next task.";
@@ -694,7 +703,7 @@ wraps to the next line where the escape hint appears: esc to interrupt)`;
 
   describe("pattern flag invariants", () => {
     it("no configured pattern uses a stateful (/g, /y) flag", () => {
-      const configs = [...Object.values(AGENT_PATTERN_CONFIGS), UNIVERSAL_PATTERN_CONFIG];
+      const configs = [UNIVERSAL_PATTERN_CONFIG];
       for (const config of configs) {
         const patterns = [...config.primaryPatterns, ...(config.fallbackPatterns ?? [])];
         for (const pattern of patterns) {
@@ -733,6 +742,67 @@ wraps to the next line where the escape hint appears: esc to interrupt)`;
       expect(detector.detect("working").isWorking).toBe(true);
       expect(detector.detect("working").isWorking).toBe(true);
       expect(detector.detect("working").isWorking).toBe(true);
+    });
+  });
+
+  describe("universal interrupt-hint coverage", () => {
+    const detector = createPatternDetector(); // universal config
+
+    it.each([
+      ["Goose ctrl+c wording", "⠹ Reticulating splines… (Ctrl+C to interrupt)"],
+      ["Cursor esc-to-stop wording", "⬢ Searching the codebase (esc to stop)"],
+      ["OpenCode esc-again wording", "⣽ Building tool call… press esc again to interrupt"],
+      ["Gemini comma time separator", "(14s, esc to cancel)"],
+      ["Codex bullet time separator", "(4s • esc to interrupt)"],
+      ["escape spelled out", "✶ Working on the change (escape to interrupt)"],
+    ])("detects %s", (_name, output) => {
+      expect(detector.detect(output).isWorking).toBe(true);
+    });
+
+    it("does not fire on prose that merely mentions the escape key", () => {
+      const output = "I added a handler so pressing esc to cancel the dialog works. Done.";
+      expect(detector.detect(output).isWorking).toBe(false);
+    });
+  });
+
+  describe("wrapped status lines", () => {
+    it("detects a hint that soft-wrapped mid-word across visual rows", () => {
+      const detector = buildTestDetector("claude");
+      // A narrow terminal wraps "esc to interrupt" across the row boundary.
+      const rows = ["✽ Refactoring the terminal identity module… (esc to inte", "rrupt · 15s)"];
+      const result = detector.detectFromLines(rows);
+      expect(result.isWorking).toBe(true);
+    });
+
+    it("detects a hint that wrapped cleanly onto its own row", () => {
+      const detector = buildTestDetector("gemini");
+      const rows = [
+        "⠼ Unpacking a very long project description that wraps (",
+        "esc to cancel, 14s)",
+      ];
+      expect(detector.detectFromLines(rows).isWorking).toBe(true);
+    });
+
+    it("detects a wrapped hint row with a long time + token-counter tail", () => {
+      // Tails past the 20-char short bound are still status lines when they
+      // end in ")" — a wrapped row carrying elapsed time and token counters
+      // must not be mistaken for prose.
+      const detector = buildTestDetector("claude");
+      const rows = [
+        "✽ Refactoring the analysis worker pool and rebuilding slots… (",
+        "esc to interrupt · 1m 23s · ↓ 4.2k tokens)",
+      ];
+      expect(detector.detectFromLines(rows).isWorking).toBe(true);
+    });
+  });
+
+  describe("working signal beats a visible prompt", () => {
+    it("still reports working when a prompt row sits under the status line", () => {
+      // Agents redraw their input prompt while background work continues; the
+      // working indicator must win over the prompt-looking row.
+      const detector = buildTestDetector("claude");
+      const rows = ["✽ Running tests… (esc to interrupt · 32s)", "", "> "];
+      expect(detector.detectFromLines(rows).isWorking).toBe(true);
     });
   });
 });

@@ -186,8 +186,21 @@ describe("detectCompletion", () => {
       expect(extractTokensFromLines(["$0.00 · 0 tokens"])).toBe(0);
     });
 
-    it("does not match comma-formatted token counts", () => {
-      expect(extractTokensFromLines(["$0.50 · 1,234 tokens"])).toBeUndefined();
+    it("parses comma-formatted token counts", () => {
+      expect(extractTokensFromLines(["$0.50 · 1,234 tokens"])).toBe(1234);
+    });
+
+    it("parses Gemini stats-table token counts", () => {
+      expect(extractTokensFromLines(["Total Tokens: 12,345"])).toBe(12345);
+    });
+
+    it("parses Codex token-usage summaries", () => {
+      expect(extractTokensFromLines(["Token usage: total=8123"])).toBe(8123);
+      expect(extractTokensFromLines(["Token usage: 8,123"])).toBe(8123);
+    });
+
+    it("parses 'tokens used' phrasing", () => {
+      expect(extractTokensFromLines(["4,096 tokens used this session"])).toBe(4096);
     });
   });
 

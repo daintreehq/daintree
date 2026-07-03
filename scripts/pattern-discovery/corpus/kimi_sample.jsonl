@@ -1,0 +1,11 @@
+{"time":0.0,"chunk":"Welcome to Kimi Code CLI!","detectedState":"initializing","confidence":0.9,"agentId":"kimi"}
+{"time":0.5,"chunk":"✨ ","detectedState":"waiting","confidence":0.85,"agentId":"kimi"}
+{"time":1.0,"chunk":"🌕 ","detectedState":"working","confidence":0.95,"agentId":"kimi"}
+{"time":1.5,"chunk":"🌗","detectedState":"working","confidence":0.95,"agentId":"kimi"}
+{"time":2.0,"chunk":"🌒 正在分析代码...","detectedState":"working","confidence":0.95,"agentId":"kimi"}
+{"time":3.0,"chunk":"⠋ Thinking...","detectedState":"working","confidence":0.75,"agentId":"kimi"}
+{"time":4.0,"chunk":"⠙ Connecting to MCP servers...","detectedState":"working","confidence":0.75,"agentId":"kimi"}
+{"time":5.0,"chunk":"⠸ Compacting context...","detectedState":"working","confidence":0.75,"agentId":"kimi"}
+{"time":6.0,"chunk":"I reviewed the code and found no issues.","detectedState":"unknown","confidence":0.6,"agentId":"kimi"}
+{"time":6.5,"chunk":"\u001b[6n","detectedState":"unknown","confidence":0.6,"agentId":"kimi"}
+{"time":7.0,"chunk":"Done. Anything else? ✨","detectedState":"waiting","confidence":0.7,"agentId":"kimi"}

@@ -1343,8 +1343,17 @@ type PluginCanDispatchResult = "ok" | "confirm" | "restricted";
 
 /** Agent lifecycle state: idle | working | waiting | directing | completed | exited */
 type AgentState = "idle" | "working" | "waiting" | "directing" | "completed" | "exited";
-/** Classification of why an agent is in the "waiting" state */
-type WaitingReason = "prompt" | "question";
+/**
+ * Classification of why an agent is in the "waiting" state.
+ *
+ * - `"prompt"` — empty input prompt visible; safe to auto-drive.
+ * - `"question"` — agent asked a free-form question; verify before replying.
+ * - `"approval"` — permission/approval selector visible (tool approval, y/n
+ *   confirm, trust dialog); a specific choice is required, not free text.
+ * - `"error"` — agent settled after a blocking error (auth failure, rate
+ *   limit, network error, failed command); input may not unblock it.
+ */
+type WaitingReason = "prompt" | "question" | "approval" | "error";
 
 /**
  * Configuration for pattern-based working state detection.
