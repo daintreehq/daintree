@@ -1113,16 +1113,22 @@ export function Toolbar({
 
   const effectiveLeftButtons = useMemo(
     () =>
-      toolbarLayout.leftButtons.filter((id) =>
+      // Dedupe defensively so a persisted list holding a repeated id never
+      // renders duplicate pills (#10937) — the store also heals this, this is
+      // belt-and-suspenders at the render boundary.
+      Array.from(new Set(toolbarLayout.leftButtons)).filter((id) =>
         isToolbarButtonVisible(id, pinnedButtons, effectiveAgentSettings, agentAvailability)
       ),
     [toolbarLayout.leftButtons, pinnedButtons, effectiveAgentSettings, agentAvailability]
   );
 
   const effectiveRightButtons = useMemo(() => {
-    const existing = new Set(toolbarLayout.rightButtons);
+    // Dedupe the persisted base before appending plugin extras, so duplicate
+    // ids (e.g. repeated `forge-stats`, #10937) can't render twice.
+    const base = Array.from(new Set(toolbarLayout.rightButtons));
+    const existing = new Set(base);
     const extra = pluginButtonIds.filter((id) => !existing.has(id));
-    return [...toolbarLayout.rightButtons, ...extra].filter((id) =>
+    return [...base, ...extra].filter((id) =>
       isToolbarButtonVisible(id, pinnedButtons, effectiveAgentSettings, agentAvailability)
     );
   }, [
