@@ -1800,11 +1800,12 @@ export class TerminalProcess {
     const result = this.agentOutputTemperature.observeDelta(Date.now(), {
       changedChars: delta.changedChars,
     });
-    // ActivityMonitor.notifyFocus suppresses its own idle→busy paths, but this
-    // direct call into agentStateService is a parallel promotion path; gate it
-    // on the same window so a focus-triggered TUI repaint can't flip an idle
-    // agent to busy (#8865).
-    if (this.activityMonitor?.isFocusSuppressed()) {
+    // ActivityMonitor suppresses its own idle→busy paths on focus repaints
+    // (#8865) and on recent user input (#10925), but this direct call into
+    // agentStateService is a parallel promotion path; gate it on both windows
+    // so neither a focus-triggered TUI repaint nor a mouse-report-driven redraw
+    // from scrolling a mouse-reporting TUI can flip a settled agent to busy.
+    if (this.activityMonitor?.isFocusSuppressed() || this.activityMonitor?.isRecentUserInput()) {
       return;
     }
     if (result.stateHint === "busy" && this.terminalInfo.agentState === state) {

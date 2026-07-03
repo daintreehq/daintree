@@ -908,10 +908,19 @@ export class ActivityMonitor {
       return;
     }
 
-    // Focus-triggered TUI redrawn during a suppression window is not new work
-    // (#8865). Skip idle→busy promotion until the window expires; lastActivity
-    // is still refreshed above so the idle timer doesn't drift.
-    if (this.state !== "busy" && result.stateHint === "busy" && !this.isFocusSuppressed(now)) {
+    // Focus-triggered TUI redraw during a suppression window is not new work
+    // (#8865), and a redraw driven by recent user input — e.g. mouse-report
+    // bytes emitted while scrolling a mouse-reporting TUI — is likewise not the
+    // agent working (#10925). Both stamp state that other promotion paths in
+    // this file already consult; skip idle→busy promotion until the windows
+    // expire. lastActivity is still refreshed above so the idle timer doesn't
+    // drift.
+    if (
+      this.state !== "busy" &&
+      result.stateHint === "busy" &&
+      !this.isFocusSuppressed(now) &&
+      !this.inputTracker.isRecentUserInput(now)
+    ) {
       this.becomeBusy({ trigger: "output" }, now);
       return;
     }
@@ -1154,6 +1163,14 @@ export class ActivityMonitor {
 
   isFocusSuppressed(now: number = Date.now()): boolean {
     return this.focusSuppressUntil > 0 && now < this.focusSuppressUntil;
+  }
+
+  // Public mirror of the private inputTracker check so the parallel
+  // agentOutputTemperature promotion paths (TerminalProcess/AnalysisSession)
+  // can gate on recent user input the same way this monitor's own paths do
+  // (#10925). Mouse-report bytes from scrolling a TUI stamp lastUserInputAt.
+  isRecentUserInput(now: number = Date.now()): boolean {
+    return this.inputTracker.isRecentUserInput(now);
   }
 
   getState(): "busy" | "idle" {

@@ -484,7 +484,12 @@ export class AnalysisSession {
     const result = this.agentOutputTemperature.observeDelta(Date.now(), {
       changedChars: delta.changedChars,
     });
-    if (this.monitor?.isFocusSuppressed()) {
+    // Parallel promotion path: gate on the monitor's focus-suppression (#8865)
+    // and recent-user-input (#10925) windows, mirroring the in-thread
+    // TerminalProcess.noteAgentOutputActivity path, so a focus repaint or a
+    // mouse-report-driven redraw from scrolling a TUI can't flip a settled
+    // agent to busy.
+    if (this.monitor?.isFocusSuppressed() || this.monitor?.isRecentUserInput()) {
       return;
     }
     if (result.stateHint === "busy" && this.agentState === state) {
