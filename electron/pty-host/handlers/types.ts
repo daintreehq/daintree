@@ -76,6 +76,18 @@ export interface HostContext {
    * paths keep their start times outside `backpressureManager.pauseStartTimes`.
    */
   getPausedDurationsSnapshot: () => Array<{ terminalId: string; heldDurationMs: number }>;
+  /**
+   * Per-terminal cumulative drop attribution (saturated-window port drops,
+   * IPC-cap drops, batched bytes discarded with a closing port). Bounded map,
+   * cleared per terminal on exit. Consumed by the flow-control snapshot so a
+   * support bundle can tell WHOSE bytes were dropped, not just that some were.
+   */
+  getDropTallySnapshot: () => Array<{
+    terminalId: string;
+    droppedBytes: number;
+    dropCount: number;
+    lastDropAt: number;
+  }>;
 }
 
 export type PtyHostHandler = (msg: any, ports?: MessagePort[]) => void | Promise<void>;

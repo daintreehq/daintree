@@ -756,6 +756,37 @@ describe("PortBatcher", () => {
       expect(vi.getTimerCount()).toBe(0);
     });
 
+    it("getPendingByteSnapshot reports per-terminal buffered bytes and empties after flush", () => {
+      const deps = createDeps();
+      const batcher = new PortBatcher(deps);
+
+      batcher.write("t1", bytes("aaaa"), 4);
+      batcher.write("t1", bytes("bb"), 2);
+      batcher.write("t2", bytes("ccc"), 3);
+
+      // Buffered-but-unflushed bytes are visible per terminal — this is what
+      // disconnectWindow accounts as dropped when the port closes with data
+      // still batched.
+      const snapshot = batcher.getPendingByteSnapshot();
+      const byId = new Map(snapshot.map((e) => [e.id, e.bytes]));
+      expect(byId.get("t1")).toBe(6);
+      expect(byId.get("t2")).toBe(3);
+
+      vi.runAllTimers();
+      expect(batcher.getPendingByteSnapshot()).toEqual([]);
+    });
+
+    it("getPendingByteSnapshot is empty after dispose", () => {
+      const deps = createDeps();
+      const batcher = new PortBatcher(deps);
+
+      batcher.write("t1", bytes("aaaa"), 4);
+      expect(batcher.getPendingByteSnapshot()).toHaveLength(1);
+
+      batcher.dispose();
+      expect(batcher.getPendingByteSnapshot()).toEqual([]);
+    });
+
     it("flushTerminal cancels only the target's timer, leaving siblings pending", () => {
       const deps = createDeps();
       const batcher = new PortBatcher(deps);

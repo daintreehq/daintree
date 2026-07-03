@@ -23,7 +23,10 @@ function classifyRestoreError(error: unknown): TerminalScrollbackRestoreError {
 
 export interface RestoreControllerDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
-  writeData: (id: string, data: string | Uint8Array) => void;
+  // chunkCount travels with each replayed deferred batch: the batch's pending
+  // port-ack FIFO entries were deliberately NOT settled at defer time, so the
+  // replay write must settle exactly them (see TerminalWriteController).
+  writeData: (id: string, data: string | Uint8Array, chunkCount: number) => void;
 }
 
 // Slice a chunk without splitting a UTF-16 surrogate pair. xterm 6's parser
@@ -49,6 +52,27 @@ export class TerminalRestoreController {
 
   constructor(deps: RestoreControllerDeps) {
     this.deps = deps;
+  }
+
+  /**
+   * Replay everything deferred while a restore was in progress. Deferred
+   * entries carry live ledger charges (port-ack FIFO, IPC ledger, ingest
+   * inFlightBytes) that only the replay write settles, so EVERY terminal
+   * restore attempt must end in exactly one of: this replay (success OR
+   * failure — a failed restore with a live tail beats a frozen pane), a
+   * newer restore generation taking ownership of the entries, or full
+   * terminal teardown (destroyTerminal discards the FIFO and ingest queue).
+   * A path that drops deferredOutput outside those three strands the ingest
+   * ledger: inFlightBytes stays charged, the queue stops draining at its
+   * watermark, and the watchdog reads the hold as healthy (#9910 class).
+   */
+  private replayDeferred(id: string, managed: ManagedTerminal): void {
+    if (managed.deferredOutput.length === 0) return;
+    const deferred = managed.deferredOutput;
+    managed.deferredOutput = [];
+    for (const entry of deferred) {
+      this.deps.writeData(id, entry.data, entry.chunkCount);
+    }
   }
 
   restoreFromSerialized(id: string, serializedState: string): boolean {
@@ -83,18 +107,16 @@ export class TerminalRestoreController {
         }
 
         current.isSerializedRestoreInProgress = false;
-
-        const deferred = current.deferredOutput;
-        current.deferredOutput = [];
-        for (const data of deferred) {
-          this.deps.writeData(id, data);
-        }
+        this.replayDeferred(id, current);
       });
       return true;
     } catch (error) {
       managed.isSerializedRestoreInProgress = false;
       managed.lastScrollbackRestoreError = classifyRestoreError(error);
       logError(`Failed to restore terminal ${id}`, error);
+      // The restore died synchronously (reset/write threw) — release anything
+      // already deferred so its ledger charges settle and live output resumes.
+      this.replayDeferred(id, managed);
       return false;
     }
   }
@@ -186,13 +208,7 @@ export class TerminalRestoreController {
           }
 
           managed.isSerializedRestoreInProgress = false;
-
-          const deferredData = managed.deferredOutput;
-          managed.deferredOutput = [];
-
-          for (const data of deferredData) {
-            this.deps.writeData(id, data);
-          }
+          this.replayDeferred(id, managed);
         }
       }
     };
@@ -204,6 +220,17 @@ export class TerminalRestoreController {
       // failure instead of silently marking the restore "done".
       managed.lastScrollbackRestoreError = classifyRestoreError(err);
       logError(`Write chain error for ${id}`, err);
+      // task's finally never ran either: clear the defer gate and release the
+      // held output ourselves (only while this generation still owns it), or
+      // every subsequent chunk defers forever behind a restore that will
+      // never complete.
+      if (
+        this.deps.getInstance(id) === managed &&
+        managed.restoreGeneration === restoreGeneration
+      ) {
+        managed.isSerializedRestoreInProgress = false;
+        this.replayDeferred(id, managed);
+      }
       return false;
     });
 
@@ -250,16 +277,38 @@ export class TerminalRestoreController {
       const result = await this.restoreFetchedState(id, serializedState);
       if (!result) {
         managed.isSerializedRestoreInProgress = false;
+        // The restore never ran (null state) or failed — release anything
+        // deferred while we awaited the snapshot. replayDeferred empties the
+        // array, so a failure path that already replayed makes this a no-op.
+        if (managed.restoreGeneration === restoreGeneration) {
+          this.replayDeferred(id, managed);
+        }
       }
       return result;
     } catch (error) {
       managed.isSerializedRestoreInProgress = false;
       managed.lastScrollbackRestoreError = classifyRestoreError(error);
       logError(`Failed to fetch state for terminal ${id}`, error);
+      // Output deferred during the failed snapshot fetch must not stay
+      // stranded — settle its ledger charges by replaying it live.
+      if (
+        this.deps.getInstance(id) === managed &&
+        managed.restoreGeneration === restoreGeneration
+      ) {
+        this.replayDeferred(id, managed);
+      }
       return false;
     }
   }
 
+  /**
+   * Valid ONLY inside full terminal teardown (TerminalInstanceService's
+   * destroy path): dropping deferredOutput here discards entries whose ledger
+   * charges are settled by the teardown that follows — discardPortAcks drains
+   * the pending port-ack FIFO and resetForTerminal drops the ingest queue.
+   * Calling this outside that path would strand those ledgers (see
+   * replayDeferred).
+   */
   destroy(id: string): void {
     const managed = this.deps.getInstance(id);
     if (!managed) return;

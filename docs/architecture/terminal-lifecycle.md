@@ -35,6 +35,7 @@ Because it is a pulse, it is excluded from persistence at the type level: `Persi
 - The pty-host carries the signal in-band as a structured private-use **OSC 57301** sequence (wire format `ESC ] 57301 ; <droppedBytes> ; <reasonCode> BEL`), written via `injectDataLossMarker` in `TerminalInstanceService`. Presentation is kept off the wire.
 - The OSC handler registered in `TerminalParserHandler` parses the payload, consumes the sequence (it never reaches the buffer as text), and fires an `onDataLoss` callback. The callback draws the user-visible yellow `⚠ Output dropped` line into xterm scrollback, deferred via `queueMicrotask` to avoid write-during-parse reentrancy.
 - The marker is a gap indicator only. Recovery is the xterm scrollback above and below it; the user sees a clearly-marked discontinuity rather than a silent corruption.
+- Every drop site (saturated-window port drop, IPC-cap drop, batched bytes discarded with a closing port) also records into a bounded per-terminal drop tally in the pty-host, surfaced as `droppedBytes`/`dropCount`/`lastDropAt` on each terminal in the on-demand flow-control snapshot (`get-flow-control-snapshot`) — so a support bundle can attribute WHOSE scrollback has a gap, not just that bytes were dropped process-wide. Entries are cleared on terminal exit.
 
 ## Notes
 

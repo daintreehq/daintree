@@ -252,6 +252,16 @@ export interface FlowControlTerminalSnapshot {
   activityTier: PtyHostActivityTier;
   /** Wall-clock ms the terminal has been paused, or null when not paused. */
   pausedDurationMs: number | null;
+  /**
+   * Cumulative bytes intentionally dropped for this terminal (saturated-window
+   * port drops, IPC-cap drops, batched bytes discarded with a closing port)
+   * since spawn. 0 when nothing was ever dropped.
+   */
+  droppedBytes: number;
+  /** Number of distinct drop events behind {@link droppedBytes}. */
+  dropCount: number;
+  /** Timestamp of the most recent drop, or null when nothing was dropped. */
+  lastDropAt: number | null;
 }
 
 /** Per-transport queue-depth entry in a {@link FlowControlSnapshot}. */

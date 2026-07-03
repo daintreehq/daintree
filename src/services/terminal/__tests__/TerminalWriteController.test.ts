@@ -119,19 +119,48 @@ describe("TerminalWriteController.write", () => {
     expect((managed.terminal as unknown as MockTerminal).write).not.toHaveBeenCalled();
   });
 
-  it("serialized-restore path: defers output and acks port data, never the IPC ledger", () => {
+  it("serialized-restore path: defers output without settling ANY ledger", () => {
     managed.isSerializedRestoreInProgress = true;
     controller.write("t1", "abc");
-    controller.write("t1", new Uint8Array([0x61, 0x62]));
+    controller.write("t1", new Uint8Array([0x61, 0x62]), 3);
 
-    expect(managed.deferredOutput).toEqual(["abc", new Uint8Array([0x61, 0x62])]);
-    expect(deps.acknowledgePortData).toHaveBeenNthCalledWith(1, "t1", 3, 1);
-    expect(deps.acknowledgePortData).toHaveBeenNthCalledWith(2, "t1", 2, 1);
-    // Deferred chunks are replayed through the normal path once restore
-    // finishes, which acks the IPC ledger then — acking here too would
-    // double-drain the host ledger.
+    // The batch's chunkCount travels with the deferred entry so the replay
+    // write can settle exactly the FIFO entries the batch owns.
+    expect(managed.deferredOutput).toEqual([
+      { data: "abc", chunkCount: 1 },
+      { data: new Uint8Array([0x61, 0x62]), chunkCount: 3 },
+    ]);
+    // No ledger moves at defer time. Deferred chunks are replayed through the
+    // normal path once restore finishes, and ALL bookkeeping (port-ack FIFO,
+    // IPC ledger, ingest inFlightBytes) happens on the replay write's
+    // completion. Acking here AND at replay double-debited the port-ack FIFO:
+    // each replayed chunk stole an entry belonging to a chunk that arrived
+    // after the restore, permanently inflating the host's queued-byte ledger
+    // (every later pause then degrades to its 10s safety timeout). Holding the
+    // charge also keeps the host's watermarks pacing the PTY while the restore
+    // runs, bounding mid-restore buffering without dropping bytes.
+    expect(deps.acknowledgePortData).not.toHaveBeenCalled();
     expect(deps.acknowledgeData).not.toHaveBeenCalled();
+    expect(deps.notifyWriteComplete).not.toHaveBeenCalled();
     expect((managed.terminal as unknown as MockTerminal).write).not.toHaveBeenCalled();
+  });
+
+  it("replaying a deferred batch settles its own FIFO entries exactly once", () => {
+    // End-to-end defer→replay: the ONLY acknowledgement for a deferred batch
+    // is the one its replay write produces, with the original chunkCount.
+    managed.isSerializedRestoreInProgress = true;
+    controller.write("t1", new Uint8Array([1, 2, 3]), 2);
+    expect(deps.acknowledgePortData).not.toHaveBeenCalled();
+
+    managed.isSerializedRestoreInProgress = false;
+    const [entry] = managed.deferredOutput;
+    managed.deferredOutput = [];
+    controller.write("t1", entry!.data, entry!.chunkCount);
+
+    expect(deps.acknowledgePortData).toHaveBeenCalledTimes(1);
+    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3, 2);
+    expect(deps.notifyWriteComplete).toHaveBeenCalledTimes(1);
+    expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 3);
   });
 
   it("normal path: writes to terminal, acks both data and port data, increments unseen", () => {
@@ -196,12 +225,12 @@ describe("TerminalWriteController.write", () => {
 
     it("deferred-restore path: never acks the IPC ledger even for non-ASCII strings", () => {
       // The IPC ledger is drained when the deferred chunk replays through the
-      // normal path after restore. Acking here would double-drain it. The port
-      // ack stays in UTF-16 code units (1 for the single box-drawing char).
+      // normal path after restore. Acking here would double-drain it. The
+      // port-ack FIFO is equally untouched (settled by the replay write).
       managed.isSerializedRestoreInProgress = true;
       controller.write("t1", "│");
 
-      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 1, 1);
+      expect(deps.acknowledgePortData).not.toHaveBeenCalled();
       expect(deps.acknowledgeData).not.toHaveBeenCalled();
     });
   });
@@ -219,10 +248,11 @@ describe("TerminalWriteController.write", () => {
       expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 2, 2);
     });
 
-    it("deferred-restore path: forwards the chunk count when acking held batches", () => {
+    it("deferred-restore path: preserves the chunk count on the held batch", () => {
       managed.isSerializedRestoreInProgress = true;
       controller.write("t1", new Uint8Array([1, 2]), 2);
-      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 2, 2);
+      expect(deps.acknowledgePortData).not.toHaveBeenCalled();
+      expect(managed.deferredOutput).toEqual([{ data: new Uint8Array([1, 2]), chunkCount: 2 }]);
     });
   });
 

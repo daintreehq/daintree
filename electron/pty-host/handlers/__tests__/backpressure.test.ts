@@ -79,6 +79,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     resumePausedTerminal: vi.fn(),
     createPortQueueManager: vi.fn(),
     getPausedDurationsSnapshot: vi.fn(() => []),
+    getDropTallySnapshot: vi.fn(() => []),
     ...overrides,
   };
 }

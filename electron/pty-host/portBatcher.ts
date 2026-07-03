@@ -200,6 +200,21 @@ export class PortBatcher {
     return true;
   }
 
+  /**
+   * Per-terminal buffered-but-unflushed byte counts. Read by the host's
+   * `disconnectWindow` before `dispose()` so bytes about to be dropped with
+   * the closing port are accounted as data loss instead of vanishing
+   * silently — dispose() discards `pendingChunks` without any drop
+   * bookkeeping of its own.
+   */
+  getPendingByteSnapshot(): Array<{ id: string; bytes: number }> {
+    const out: Array<{ id: string; bytes: number }> = [];
+    for (const [id, entry] of this.pendingChunks) {
+      if (entry.bytes > 0) out.push({ id, bytes: entry.bytes });
+    }
+    return out;
+  }
+
   flushTerminal(id: string): void {
     const entry = this.pendingChunks.get(id);
     if (!entry) return;

@@ -521,6 +521,72 @@ describe("terminalClient MessagePort data routing", () => {
     });
   });
 
+  it("port replacement clears the pending-ack FIFO — stale entries never debit the fresh generation", () => {
+    // Generation A: two chunks delivered live, FIFO holds [10, 20]. The host
+    // side of this port (its PortQueueManager ledger) dies with the
+    // replacement, so these entries describe bytes no live ledger holds.
+    const portA = acquirePort();
+    terminalClient.onData("term-1", () => {});
+    portA.postMessage({ type: "data", id: "term-1", data: "aaaaaaaaaa", bytes: 10 });
+    portA.postMessage({ type: "data", id: "term-1", data: "bbbbbbbbbbbbbbbbbbbb", bytes: 20 });
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        // Generation B replaces the port, then delivers one fresh chunk (7
+        // bytes). Without the activation-time clear, the xterm write
+        // completion for a NEW chunk would shift generation A's 10-byte entry
+        // and post a wrong-sized ack against B's fresh ledger.
+        const portB = acquirePort();
+        portB.postMessage({ type: "data", id: "term-1", data: "ccccccc", bytes: 7 });
+
+        setTimeout(() => {
+          const acks: Record<string, unknown>[] = [];
+          portB.addEventListener("message", (event: MessageEvent) => {
+            const msg = event.data as Record<string, unknown>;
+            if (msg?.type === "ack" && msg.id === "term-1") acks.push(msg);
+          });
+          portB.start();
+
+          terminalClient.acknowledgePortData("term-1", 999);
+          // FIFO now empty — generation A's entries are gone, not queued behind.
+          terminalClient.acknowledgePortData("term-1", 999, 5);
+
+          setTimeout(() => {
+            expect(acks).toEqual([{ type: "ack", id: "term-1", bytes: 7 }]);
+            resolve();
+          }, 100);
+        }, 50);
+      }, 50);
+    });
+  });
+
+  it("write completions that fire after a port replacement degrade to no-op acks", () => {
+    const portA = acquirePort();
+    terminalClient.onData("term-1", () => {});
+    portA.postMessage({ type: "data", id: "term-1", data: "old-data", bytes: 42 });
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        const portB = acquirePort();
+        const acks: Record<string, unknown>[] = [];
+        portB.addEventListener("message", (event: MessageEvent) => {
+          const msg = event.data as Record<string, unknown>;
+          if (msg?.type === "ack") acks.push(msg);
+        });
+        portB.start();
+
+        // The stale chunk's write completion arrives AFTER the replacement:
+        // its FIFO entry was cleared at activation, so nothing is posted.
+        terminalClient.acknowledgePortData("term-1", 42);
+
+        setTimeout(() => {
+          expect(acks).toEqual([]);
+          resolve();
+        }, 100);
+      }, 50);
+    });
+  });
+
   it("dispatches to correct terminal only", () => {
     const port = acquirePort();
     const received1: string[] = [];

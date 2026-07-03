@@ -180,10 +180,19 @@ export class TerminalWriteController {
     }
 
     if (managed.isSerializedRestoreInProgress) {
-      managed.deferredOutput.push(data);
-      const deferredBytes = typeof data === "string" ? data.length : data.byteLength;
-      this.deps.acknowledgePortData(id, deferredBytes, chunkCount);
-      this.deps.notifyWriteComplete(id, deferredBytes);
+      // Defer WITHOUT settling any ledger. The batch's pending port-ack FIFO
+      // entries, the host's queued-byte ledger, and the ingest inFlightBytes
+      // all stay charged until the replay write (post-restore) completes and
+      // runs the normal bookkeeping below. This is load-bearing twice over:
+      // (1) acking here and again at replay double-debited the FIFO — each
+      // replayed chunk stole an entry belonging to a chunk that arrived after
+      // the restore, leaving the host ledger permanently inflated and every
+      // subsequent backpressure pause degraded to its 10s safety timeout;
+      // (2) holding the charge means the host's own watermarks pace the PTY
+      // while the restore runs, so a flooding agent can no longer grow
+      // deferredOutput without bound — the transport backpressure IS the cap,
+      // and no bytes are dropped to enforce it.
+      managed.deferredOutput.push({ data, chunkCount });
       return;
     }
 
