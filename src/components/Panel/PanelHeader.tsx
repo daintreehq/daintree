@@ -909,9 +909,9 @@ function PanelHeaderComponent({
           role="status"
           aria-live="polite"
         >
-          <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider font-semibold max-w-[300px]">
+          <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider font-semibold whitespace-nowrap">
             <Grid2X2 className="w-3 h-3 shrink-0" aria-hidden="true" />
-            <span className="truncate tabular-nums inline-flex items-center gap-1">
+            <span className="tabular-nums inline-flex items-center gap-1">
               <AnimatedLabel label={String(activeCount)} textClassName="tabular-nums" /> Background
             </span>
             {workingCount > 0 && (
