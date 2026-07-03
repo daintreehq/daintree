@@ -45,9 +45,11 @@ function QuickAction({ icon, label, actionId, onClick }: QuickActionProps) {
 
 /**
  * Search-shaped entry into the panel palette (⌘N) — the launcher's "find
- * anything" affordance. Same quiet surface as the QuickAction chips (it's a
- * peer launch affordance, not an elevated input); only the shape and Search
- * icon say "search". The palette itself is the real search field.
+ * anything" affordance, and its single most capable control (it reaches every
+ * agent, panel kind, and resumable session). Carries a slightly raised surface
+ * so it reads as the deliberate escape hatch rather than blending into the
+ * quieter chips above — the launcher's one visually-weighted control (neutral,
+ * never accent). The palette itself is the real search field.
  */
 function PaletteSearchButton() {
   const combo = useEffectiveCombo("panel.palette");
@@ -57,9 +59,9 @@ function PaletteSearchButton() {
       type="button"
       onClick={() => void actionService.dispatch("panel.palette", undefined, { source: "user" })}
       aria-keyshortcuts={ariaKeyshortcuts}
-      className="flex w-full items-center gap-2.5 rounded-[var(--radius-md)] border border-border-subtle bg-overlay-subtle px-3 py-2 text-sm text-daintree-text/55 transition-colors hover:bg-overlay-soft hover:border-border-default hover:text-daintree-text/80 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+      className="flex w-full items-center gap-2.5 rounded-[var(--radius-md)] border border-border-default bg-overlay-soft px-3 py-2.5 text-sm text-daintree-text/70 transition-colors hover:bg-overlay-medium hover:text-daintree-text focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
     >
-      <Search className="h-4 w-4 shrink-0 text-daintree-text/40" aria-hidden="true" />
+      <Search className="h-4 w-4 shrink-0 text-daintree-text/55" aria-hidden="true" />
       <span className="min-w-0 flex-1 truncate text-left">Search agents &amp; panels…</span>
       {combo && (
         <span aria-hidden="true">
