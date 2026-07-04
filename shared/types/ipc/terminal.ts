@@ -1,6 +1,6 @@
 import type { PanelKind, PanelLocation, PanelTitleMode } from "../panel.js";
 import type { AgentId } from "../agent.js";
-import type { AgentState } from "../agent.js";
+import type { AgentState, WaitingReason } from "../agent.js";
 import type { BuiltInAgentId } from "../../config/agentIds.js";
 import type { ActionContext } from "../actions.js";
 
@@ -182,6 +182,8 @@ export interface BackendTerminalInfo {
   titleMode?: PanelTitleMode;
   cwd: string;
   agentState?: AgentState;
+  /** Why the agent is waiting; only meaningful while agentState is "waiting" */
+  waitingReason?: WaitingReason;
   lastStateChange?: number;
   spawnedAt: number;
   isTrashed?: boolean;
@@ -230,6 +232,8 @@ export interface TerminalReconnectResult {
   titleMode?: PanelTitleMode;
   cwd?: string;
   agentState?: AgentState;
+  /** Why the agent is waiting; only meaningful while agentState is "waiting" */
+  waitingReason?: WaitingReason;
   lastStateChange?: number;
   spawnedAt?: number;
   activityTier?: "active" | "background";

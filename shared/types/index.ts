@@ -36,7 +36,7 @@ export type {
 export type { NotificationType, Notification, NotificationPayload } from "./notification.js";
 
 // Agent types
-export type { AgentState, AgentStateChangeTrigger } from "./agent.js";
+export type { AgentState, AgentStateChangeTrigger, WaitingReason } from "./agent.js";
 export type { TerminalCheckResult } from "./checkResult.js";
 
 // Panel types

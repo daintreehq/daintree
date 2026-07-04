@@ -1,5 +1,6 @@
 import type { TerminalActivityStatus, TerminalTaskType } from "../../shared/types/terminal.js";
 import type { AgentState, WaitingReason } from "../../shared/types/agent.js";
+import { waitingHeadline } from "../../shared/utils/waitingReasonDisplay.js";
 
 export interface ActivityContext {
   terminalId: string;
@@ -92,12 +93,7 @@ export class ActivityHeadlineGenerator {
         };
       case "waiting":
         return {
-          headline:
-            waitingReason === "approval"
-              ? "Waiting for approval"
-              : waitingReason === "error"
-                ? "Blocked by an error"
-                : "Waiting for input",
+          headline: waitingHeadline(waitingReason),
           status: "waiting",
           type: "interactive",
         };

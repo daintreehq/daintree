@@ -145,6 +145,54 @@ describe("TerminalHeaderContent — agent state chip tooltip", () => {
     expect(agentTooltip!.textContent).toContain("Since:");
   });
 
+  it("names the waiting reason in the tooltip state line and chip aria-label when classified", () => {
+    mockTerminal = {
+      id: "t1",
+      stateChangeTrigger: "heuristic",
+      stateChangeConfidence: 1,
+      waitingReason: "approval",
+    };
+
+    render(<TerminalHeaderContent id="t1" agentState="waiting" />);
+
+    const chip = screen.getByRole("status", { name: "Agent state: waiting (approval)" });
+    expect(chip).toBeTruthy();
+    const tooltips = screen.getAllByTestId("tooltip-content");
+    const agentTooltip = tooltips.find((el) => el.textContent?.includes("State: waiting"));
+    expect(agentTooltip!.textContent).toContain("State: waiting (approval)");
+  });
+
+  it("keeps the plain waiting label for the prompt fallback (no overclaiming)", () => {
+    mockTerminal = {
+      id: "t1",
+      stateChangeTrigger: "heuristic",
+      stateChangeConfidence: 1,
+      waitingReason: "prompt",
+    };
+
+    render(<TerminalHeaderContent id="t1" agentState="waiting" />);
+
+    const chip = screen.getByRole("status", { name: "Agent state: waiting" });
+    expect(chip).toBeTruthy();
+    const tooltips = screen.getAllByTestId("tooltip-content");
+    const agentTooltip = tooltips.find((el) => el.textContent?.includes("State: waiting"));
+    expect(agentTooltip!.textContent).not.toContain("(prompt)");
+  });
+
+  it("ignores a stale waiting reason once the agent is no longer waiting", () => {
+    mockTerminal = {
+      id: "t1",
+      stateChangeTrigger: "output",
+      stateChangeConfidence: 1,
+      waitingReason: "approval",
+    };
+
+    render(<TerminalHeaderContent id="t1" agentState="working" />);
+
+    const chip = screen.getByRole("status", { name: "Agent state: working" });
+    expect(chip).toBeTruthy();
+  });
+
   it("shows AI classification trigger label", () => {
     mockTerminal = {
       id: "t1",

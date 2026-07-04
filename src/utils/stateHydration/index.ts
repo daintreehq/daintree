@@ -10,6 +10,7 @@ import type {
   TerminalReconnectError,
   TabGroup,
 } from "@/types";
+import type { WaitingReason } from "@shared/types/agent";
 import type { BackendTerminalInfo, TerminalReconnectResult } from "@shared/types/ipc/terminal";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
@@ -75,6 +76,7 @@ export interface HydrationOptions {
     location?: "grid" | "dock";
     command?: string;
     agentState?: AgentState;
+    waitingReason?: WaitingReason;
     lastStateChange?: number;
     existingId?: string; // Pass to reconnect to existing backend process
     requestedId?: string; // Pass to spawn with a stable ID

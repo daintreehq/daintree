@@ -159,7 +159,12 @@ export function setupIdentityListeners(): DisposableStore {
                 priority: "low",
                 title: "Agent finished with changes",
                 message: "Open the review hub to see what changed.",
-                context: { worktreeId, eventKind: "completed" },
+                // panelId enables the notification center's "Go to source"
+                // affordance; the supersede key retires the previous
+                // completion row for this worktree so repeated runs don't
+                // stack stale "finished" entries in the inbox.
+                context: { worktreeId, panelId: terminalId, eventKind: "completed" },
+                supersedeKey: `agent-completed:${worktreeId}`,
                 action: {
                   label: "Open review hub",
                   actionId: "worktree.openReviewHub",

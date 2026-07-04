@@ -2,7 +2,8 @@ import { useEffect, useRef } from "react";
 import { usePanelStore } from "@/store";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import type { AgentState } from "@shared/types/agent";
+import type { AgentState, WaitingReason } from "@shared/types/agent";
+import { describeWaiting } from "@shared/utils/waitingReasonDisplay";
 import { isPtyPanel } from "@shared/types/panel";
 import type { PanelLocation, TerminalFlowStatus } from "@shared/types/panel";
 
@@ -26,13 +27,16 @@ const BADGE_DEBOUNCE_MS = 300;
 
 function getAgentStateMessage(
   title: string,
-  newState: AgentState
+  newState: AgentState,
+  waitingReason?: WaitingReason
 ): { msg: string; priority: "polite" | "assertive" } | null {
   switch (newState) {
     case "working":
       return { msg: `${title} is working`, priority: "polite" };
     case "waiting":
-      return { msg: `${title} is waiting for input`, priority: "polite" };
+      // Reason-specific phrasing when the classifier had evidence; the
+      // `prompt` fallback keeps the generic "waiting for input".
+      return { msg: describeWaiting(title, waitingReason), priority: "polite" };
     case "completed":
       return { msg: `${title} finished`, priority: "polite" };
     case "exited":
@@ -203,7 +207,11 @@ export function useAccessibilityAnnouncements() {
             nextSnapshot.stateChangeConfidence = prev.stateChangeConfidence;
           } else if (prev) {
             // State changed with sufficient confidence — announce.
-            const announcement = getAgentStateMessage(terminal.title, terminal.agentState);
+            const announcement = getAgentStateMessage(
+              terminal.title,
+              terminal.agentState,
+              terminal.waitingReason
+            );
             if (announcement) {
               const { msg, priority } = announcement;
               const key = terminal.id;

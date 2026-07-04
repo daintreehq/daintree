@@ -7,6 +7,12 @@ import { soundService } from "./SoundService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { isScheduledQuietNow } from "../../shared/utils/quietHours.js";
 import { getOsDndService } from "./OsDndService.js";
+import { coerceWaitingReason, type WaitingReason } from "../../shared/types/agent.js";
+import {
+  actionableWaitingReason,
+  describeWaiting,
+  describeWaitingMany,
+} from "../../shared/utils/waitingReasonDisplay.js";
 
 const COMPLETION_DEBOUNCE_MS = 2000;
 const NOTIFICATION_STAGGER_MS = 500;
@@ -47,6 +53,7 @@ interface BurstWaitingEntry {
   worktreeId?: string;
   terminalId?: string;
   agentId?: string;
+  waitingReason?: WaitingReason;
   soundFile: string;
   soundEnabled: boolean;
 }
@@ -275,7 +282,14 @@ class AgentNotificationService {
     // Suppress during spawn grace period — agents that initialize directly into waiting
     // should not trigger escalation sounds.
     if (state === "waiting" && terminalId && !this.isWithinSpawnGrace(agentId, terminalId)) {
-      this.scheduleWaitingEscalation(terminalId, settings, terminals, worktreeId, agentId);
+      this.scheduleWaitingEscalation(
+        terminalId,
+        settings,
+        terminals,
+        worktreeId,
+        agentId,
+        coerceWaitingReason(payload.waitingReason)
+      );
     }
 
     // Schedule working pulse for watched/docked agents entering working state
@@ -306,6 +320,7 @@ class AgentNotificationService {
         worktreeId,
         terminalId,
         agentId,
+        waitingReason: coerceWaitingReason(payload.waitingReason),
         soundFile: settings.waitingSoundFile,
         soundEnabled: settings.soundEnabled,
       });
@@ -409,17 +424,19 @@ class AgentNotificationService {
     const items = this.waitingBurstBuffer.splice(0);
     if (items.length === 0) return;
 
-    const dedupedItems: BurstWaitingEntry[] = [];
-    const seen = new Set<string>();
+    // Last entry wins per terminal: a terminal that cycles
+    // waiting → working → waiting inside the burst window keeps its most
+    // recent classification, so the body never names a stale reason.
+    // Map preserves first-insertion order, so burst ordering is stable.
+    const dedupedByKey = new Map<string, BurstWaitingEntry>();
     for (const [index, item] of items.entries()) {
       const key =
         (item.terminalId ?? item.agentId ?? item.worktreeId)
           ? `${item.terminalId ?? ""}|${item.agentId ?? ""}|${item.worktreeId ?? ""}`
           : `unknown:${index}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      dedupedItems.push(item);
+      dedupedByKey.set(key, item);
     }
+    const dedupedItems = Array.from(dedupedByKey.values());
 
     const first = dedupedItems[0];
     this.playNotificationSound(first.soundEnabled, first.soundFile);
@@ -429,16 +446,22 @@ class AgentNotificationService {
       const context = this.makeContext(first.terminalId, first.agentId, first.worktreeId);
       notificationService.showWatchNotification(
         "Agent waiting",
-        `${label} is waiting for input`,
+        describeWaiting(label, first.waitingReason),
         context,
         CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
         true
       );
     } else {
       const context = this.makeContext(first.terminalId, first.agentId, first.worktreeId);
+      // Reason-specific plural copy only when the whole burst shares one
+      // classified reason — a mixed burst keeps the generic body so the copy
+      // never overclaims for any member.
+      const uniformReason = dedupedItems.every((item) => item.waitingReason === first.waitingReason)
+        ? actionableWaitingReason(first.waitingReason)
+        : null;
       notificationService.showWatchNotification(
         "Agents waiting",
-        `${dedupedItems.length} agents waiting for input`,
+        describeWaitingMany(dedupedItems.length, uniformReason ?? undefined),
         context,
         CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
         true
@@ -477,7 +500,8 @@ class AgentNotificationService {
     settings: NotificationSettings,
     terminals: TerminalSnapshot,
     worktreeId?: string,
-    agentId?: string
+    agentId?: string,
+    waitingReason?: WaitingReason
   ): void {
     if (this.waitingEscalationTimers.has(terminalId)) {
       clearTimeout(this.waitingEscalationTimers.get(terminalId)!);
@@ -520,9 +544,14 @@ class AgentNotificationService {
         );
       } else {
         const label = currentTerminal.title || this.getLabel(agentId, worktreeId);
+        // Reason captured at the waiting transition — repeated waiting events
+        // while already waiting don't reschedule this timer, so the closure
+        // value is the reason for this wait episode. The duration-flavored
+        // fallback stays for the weak `prompt` classification.
+        const reason = actionableWaitingReason(waitingReason);
         notificationService.showNativeNotification(
           "Agent still waiting",
-          `${label} has been waiting for input`
+          reason ? describeWaiting(label, reason) : `${label} has been waiting for input`
         );
       }
     }, settings.waitingEscalationDelayMs);

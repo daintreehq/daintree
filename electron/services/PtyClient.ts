@@ -73,7 +73,7 @@ import type {
 } from "../../shared/types/pty-host.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
-import type { AgentState, AgentId } from "../../shared/types/agent.js";
+import type { AgentState, AgentId, WaitingReason } from "../../shared/types/agent.js";
 import type { PanelKind, PanelTitleMode } from "../../shared/types/panel.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
 import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
@@ -92,7 +92,7 @@ interface TerminalInfoResponse {
   cwd: string;
   worktreeId?: string;
   agentState?: AgentState;
-  waitingReason?: string;
+  waitingReason?: WaitingReason;
   lastStateChange?: number;
   lastInputTime?: number;
   lastOutputTime?: number;
