@@ -501,6 +501,20 @@ export const SystemOpenPathPayloadSchema = z.object({
   path: z.string().min(1).max(4096),
 });
 
+// User-initiated reveal of a path that lives OUTSIDE project roots (the only
+// caller is the OUTSIDE_ROOT recovery action on a file-link toast). Null bytes
+// are rejected at the schema boundary (lesson #6263); roots containment is
+// intentionally NOT applied here — that's the whole point — so the handler
+// must keep the executable deny-list and realpath canonicalization itself.
+export const SystemShowItemInFolderUnconfinedPayloadSchema = z.object({
+  path: z
+    .string()
+    .min(1)
+    .max(4096)
+    // eslint-disable-next-line no-control-regex
+    .regex(/^[^\x00]*$/, "Null bytes not allowed"),
+});
+
 export const SystemOpenInEditorPayloadSchema = z.object({
   path: z.string().min(1).max(4096),
   line: z.number().int().positive().optional(),
@@ -724,6 +738,9 @@ export type FileReadPayload = z.infer<typeof FileReadPayloadSchema>;
 export type VoiceInputCorrectPayload = z.infer<typeof VoiceInputCorrectPayloadSchema>;
 export type SystemOpenExternalPayload = z.infer<typeof SystemOpenExternalPayloadSchema>;
 export type SystemOpenPathPayload = z.infer<typeof SystemOpenPathPayloadSchema>;
+export type SystemShowItemInFolderUnconfinedPayload = z.infer<
+  typeof SystemShowItemInFolderUnconfinedPayloadSchema
+>;
 export type SystemOpenInEditorPayload = z.infer<typeof SystemOpenInEditorPayloadSchema>;
 export type TerminalReplayHistoryPayload = z.infer<typeof TerminalReplayHistoryPayloadSchema>;
 export type DevPreviewStartPayload = z.infer<typeof DevPreviewStartPayloadSchema>;

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Terminal, IBufferLine, ILink } from "@xterm/xterm";
-import { FileLinksAddon } from "../FileLinksAddon";
+import { FileLinksAddon, reportFileLinkFailure } from "../FileLinksAddon";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 import { systemClient } from "@/clients";
@@ -14,7 +14,7 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 vi.mock("@/clients", () => ({
-  systemClient: { openPath: vi.fn(), openInEditor: vi.fn() },
+  systemClient: { openPath: vi.fn(), openInEditor: vi.fn(), showItemInFolderUnconfined: vi.fn() },
 }));
 
 describe("FileLinksAddon", () => {
@@ -385,6 +385,10 @@ describe("FileLinksAddon", () => {
       vi.mocked(actionService.dispatch).mockReset();
       vi.mocked(systemClient.openPath).mockReset();
       vi.mocked(systemClient.openInEditor).mockReset();
+      vi.mocked(systemClient.showItemInFolderUnconfined).mockReset();
+      // The real client returns Promise<void>; give the mock a resolved default
+      // so the Reveal action's fire-and-forget .catch() has a promise to chain.
+      vi.mocked(systemClient.showItemInFolderUnconfined).mockResolvedValue(undefined);
       Object.defineProperty(global.navigator, "clipboard", {
         value: { writeText: vi.fn().mockResolvedValue(undefined) },
         configurable: true,
@@ -436,10 +440,21 @@ describe("FileLinksAddon", () => {
       expect(payload.type).toBe("error");
       expect(payload.title).toBe("Couldn't open file link");
       expect(payload.priority).toBe("high");
-      expect(payload.coalesce?.key).toBe("filelink-activate-fail");
+      expect(payload.coalesce?.key).toBe("filelink-activate-fail:outside-root");
       expect(payload.message).toContain("Path is outside your project roots");
       expect(payload.message).toContain("App.tsx");
-      expect(payload.action?.label).toBe("Copy path");
+      // OUTSIDE_ROOT offers Reveal (the file is real, just outside roots) — not
+      // Copy path. The coalesce key is split so this action can't bleed into a
+      // coalesced INVALID_PATH / generic "Copy path" toast.
+      expect(payload.action?.label).toBe("Reveal in File Manager");
+
+      // Clicking Reveal routes the resolved absolute path (line/col stripped)
+      // through the unconfined IPC op — never auto, always user-initiated.
+      payload.action?.onClick?.();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(systemClient.showItemInFolderUnconfined).toHaveBeenCalledWith(
+        "/home/user/project/src/App.tsx"
+      );
     });
 
     it("surfaces INVALID_PATH (e.g. WSL UNC) using the code-aware message", async () => {
@@ -591,6 +606,67 @@ describe("FileLinksAddon", () => {
       expect(notify).toHaveBeenCalledTimes(1);
       const payload = vi.mocked(notify).mock.calls[0]?.[0] as { message: string };
       expect(payload.message).toContain("Path is not a valid file");
+    });
+
+    it("OUTSIDE_ROOT and INVALID_PATH produce distinct coalesce keys and actions (no bleed)", () => {
+      // notify() overwrites the singular action with the latest call's on each
+      // coalesce tick — a shared key would flip a coalesced toast's button
+      // between Reveal and Copy path across a mixed-code burst. Splitting the
+      // key by affordance keeps each toast honest.
+      reportFileLinkFailure(
+        "test",
+        new Error(
+          "[AppError|OUTSIDE_ROOT|Path is not in a project root] Path is not in a project root"
+        ),
+        "/etc/outside.txt"
+      );
+      reportFileLinkFailure(
+        "test",
+        new Error("[AppError|INVALID_PATH|Path is not a valid file] Path is not a valid file"),
+        "/bad/path.txt"
+      );
+
+      const outsidePayload = vi.mocked(notify).mock.calls[0]?.[0] as {
+        coalesce?: { key: string };
+        action?: { label: string };
+      };
+      const invalidPayload = vi.mocked(notify).mock.calls[1]?.[0] as {
+        coalesce?: { key: string };
+        action?: { label: string };
+      };
+      expect(outsidePayload.coalesce?.key).toBe("filelink-activate-fail:outside-root");
+      expect(outsidePayload.action?.label).toBe("Reveal in File Manager");
+      expect(invalidPayload.coalesce?.key).toBe("filelink-activate-fail");
+      expect(invalidPayload.action?.label).toBe("Copy path");
+      expect(outsidePayload.coalesce?.key).not.toBe(invalidPayload.coalesce?.key);
+    });
+
+    it("Reveal action catches a rejection and surfaces a recovery toast", async () => {
+      reportFileLinkFailure(
+        "test",
+        new Error(
+          "[AppError|OUTSIDE_ROOT|Path is not in a project root] Path is not in a project root"
+        ),
+        "/etc/outside.txt"
+      );
+      const payload = vi.mocked(notify).mock.calls[0]?.[0] as {
+        action?: { onClick?: () => void };
+      };
+      vi.mocked(systemClient.showItemInFolderUnconfined).mockRejectedValueOnce(new Error("gone"));
+
+      // onClick is synchronous; the reveal is fire-and-forget with a .catch().
+      expect(() => payload.action?.onClick?.()).not.toThrow();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(systemClient.showItemInFolderUnconfined).toHaveBeenCalledWith("/etc/outside.txt");
+      // The catch surfaced a recovery toast (Copy path) — proving the rejection
+      // was handled, not swallowed into a silent no-op.
+      expect(notify).toHaveBeenCalledTimes(2);
+      const recovery = vi.mocked(notify).mock.calls[1]?.[0] as {
+        title?: string;
+        action?: { label?: string };
+      };
+      expect(recovery.title).toBe("Couldn't reveal file");
+      expect(recovery.action?.label).toBe("Copy path");
     });
   });
 });

@@ -26,6 +26,10 @@ export const systemClient = {
     return window.electron.system.showItemInFolder(path);
   },
 
+  showItemInFolderUnconfined: (path: string): Promise<void> => {
+    return window.electron.system.showItemInFolderUnconfined(path);
+  },
+
   openInEditor: (payload: {
     path: string;
     line?: number;

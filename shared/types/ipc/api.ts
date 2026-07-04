@@ -363,6 +363,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     openExternal(url: string): Promise<void>;
     openPath(path: string): Promise<void>;
     showItemInFolder(path: string): Promise<void>;
+    showItemInFolderUnconfined(path: string): Promise<void>;
     openInEditor(payload: SystemOpenInEditorPayload & { projectId?: string }): Promise<void>;
     checkCommand(command: string): Promise<boolean>;
     checkDirectory(path: string): Promise<boolean>;

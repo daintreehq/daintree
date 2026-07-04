@@ -28,23 +28,29 @@ export const FILE_LINK_ACTIVATION_COALESCE_KEY = "filelink-activate-fail";
 /**
  * Surface a file-link activation failure to the user as a single sticky,
  * coalesced error toast. The toast auto-promotes to `duration: 0` (sticky)
- * because the `Copy path` action button needs to stay clickable — the
- * toaster's 3s fallback would dismiss it before the user can act.
+ * because its action button needs to stay clickable — the toaster's 3s
+ * fallback would dismiss it before the user can act.
  *
  * The basename (not the full path) goes in the body so toast width stays
  * readable and so we don't echo long absolute paths into the persistent
- * inbox. The full path is only exposed via the clipboard, on explicit user
- * action.
+ * inbox. The full path is only exposed on explicit user action.
+ *
+ * The recovery action branches on the failure code: an OUTSIDE_ROOT failure
+ * offers "Reveal in File Manager" (the file is real, just outside the
+ * project — the user cmd-clicked it with intent, so revealing it in the OS
+ * file manager is the discoverable inverse), while every other failure keeps
+ * "Copy path". Reveal runs through the unconfined IPC op, which skips roots
+ * containment but keeps the executable deny-list.
  *
  * Coalesce caveat: when multiple failures fire inside the 1500ms window,
  * the `buildMessage`/`buildTitle` callbacks only know the *current* call's
  * body, so a coalesced toast can't honestly mix per-failure reasons. The
  * coalesced branch deliberately drops the per-failure body and shows a
  * generic "see inbox for details" message — every coalesced failure still
- * lands as its own inbox row carrying the real reason. The first-failure
- * Copy-path callback is preserved on the live toast (notify() patches with
- * the original `payload.action`), so it always copies a path the user
- * actually clicked.
+ * lands as its own inbox row carrying the real reason. notify() overwrites
+ * the singular `action` with the latest call's on each coalesce tick, so the
+ * key is split by affordance — otherwise a mixed OUTSIDE_ROOT / INVALID_PATH
+ * burst would flip a coalesced toast's button between Reveal and Copy path.
  */
 export function reportFileLinkFailure(reason: string, error: unknown, absolutePath: string): void {
   const code = isClientAppError(error) ? error.code : undefined;
@@ -64,6 +70,42 @@ export function reportFileLinkFailure(reason: string, error: unknown, absolutePa
 
   const name = basename(absolutePath) || absolutePath || "file";
   const singleMessage = `${body} (${name})`;
+  const isOutsideRoot = code === "OUTSIDE_ROOT";
+  const coalesceKey = isOutsideRoot
+    ? `${FILE_LINK_ACTIVATION_COALESCE_KEY}:outside-root`
+    : FILE_LINK_ACTIVATION_COALESCE_KEY;
+  const copyPathAction = {
+    label: "Copy path",
+    onClick: () => {
+      if (!navigator.clipboard) return;
+      void navigator.clipboard.writeText(absolutePath).catch(() => {
+        /* clipboard unavailable — sticky toast is the durable surface */
+      });
+    },
+  };
+  const action = isOutsideRoot
+    ? {
+        label: "Reveal in File Manager",
+        onClick: () => {
+          void systemClient.showItemInFolderUnconfined(absolutePath).catch((revealError) => {
+            logError("[FileLinksAddon] Failed to reveal out-of-root file link", revealError, {
+              absolutePath,
+            });
+            // The reveal was user-initiated, so a silent no-op is the wrong
+            // UX — the file may have been moved/deleted/blocked since the link
+            // was rendered. Surface the failure with Copy path as the recovery.
+            notify({
+              type: "error",
+              title: "Couldn't reveal file",
+              message: `${name} couldn't be revealed in your file manager`,
+              context: { eventKind: "uiFeedback" },
+              action: copyPathAction,
+            });
+          });
+        },
+      }
+    : copyPathAction;
+
   notify({
     type: "error",
     title: "Couldn't open file link",
@@ -71,7 +113,7 @@ export function reportFileLinkFailure(reason: string, error: unknown, absolutePa
     priority: "high",
     context: { eventKind: "uiFeedback" },
     coalesce: {
-      key: FILE_LINK_ACTIVATION_COALESCE_KEY,
+      key: coalesceKey,
       windowMs: 1500,
       buildTitle: (count) =>
         count <= 1 ? "Couldn't open file link" : `Couldn't open ${count} file links`,
@@ -82,15 +124,7 @@ export function reportFileLinkFailure(reason: string, error: unknown, absolutePa
       buildMessage: (count) =>
         count <= 1 ? singleMessage : `Couldn't open ${count} file links — see inbox for details`,
     },
-    action: {
-      label: "Copy path",
-      onClick: () => {
-        if (!navigator.clipboard) return;
-        void navigator.clipboard.writeText(absolutePath).catch(() => {
-          /* clipboard unavailable — sticky toast is the durable surface */
-        });
-      },
-    },
+    action,
   });
 
   logError(`[FileLinksAddon] ${reason}`, error, { absolutePath });

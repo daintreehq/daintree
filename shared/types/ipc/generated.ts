@@ -1300,6 +1300,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { path: string }];
     result: void;
   };
+  "system:show-item-in-folder-unconfined": {
+    args: [payload: { path: string }];
+    result: void;
+  };
   "telemetry:get": {
     args: [];
     result: { enabled: boolean; hasSeenPrompt: boolean };

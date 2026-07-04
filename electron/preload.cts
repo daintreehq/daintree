@@ -1306,6 +1306,9 @@ function buildElectronApi(): ElectronAPI {
       showItemInFolder: (path: string) =>
         _unwrappingInvoke(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER, { path }),
 
+      showItemInFolderUnconfined: (path: string) =>
+        _unwrappingInvoke(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER_UNCONFINED, { path }),
+
       openInEditor: (payload: { path: string; line?: number; col?: number; projectId?: string }) =>
         _unwrappingInvoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, payload),
 

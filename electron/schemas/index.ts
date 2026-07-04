@@ -27,6 +27,7 @@ export {
   VoiceInputCorrectPayloadSchema,
   SystemOpenExternalPayloadSchema,
   SystemOpenPathPayloadSchema,
+  SystemShowItemInFolderUnconfinedPayloadSchema,
   SystemOpenInEditorPayloadSchema,
   TerminalReplayHistoryPayloadSchema,
   DevPreviewStartPayloadSchema,
