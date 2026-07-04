@@ -39,9 +39,15 @@ interface SetupArgs {
   win: ReturnType<typeof createMockWindow>;
   appView: ReturnType<typeof createMockAppView>;
   windowBg: string;
-  buildSkeletonCss?: () => string;
+  buildSkeletonCss?: (
+    project: unknown | null,
+    themeConfig?: unknown,
+    options?: { instantReveal?: boolean }
+  ) => string;
   insertSkeletonCss?: (wc: unknown, css: string) => void;
-  injectSkeletonCss?: (wc: unknown) => void;
+  injectSkeletonCss?: (wc: unknown, project: unknown | null) => void;
+  injectSkeletonProjectIdentity?: (wc: unknown, project: unknown | null) => void;
+  readLastActiveProjectIdentity?: (projectId: string) => unknown | null;
 }
 
 const SHOW_FALLBACK_MS = 5_000;
@@ -58,24 +64,36 @@ function buildLoadRenderer({
   buildSkeletonCss = () => "precomputed",
   insertSkeletonCss = vi.fn(),
   injectSkeletonCss = vi.fn(),
+  injectSkeletonProjectIdentity = vi.fn(),
+  readLastActiveProjectIdentity = () => null,
 }: SetupArgs) {
   appView.setBackgroundColor(windowBg);
   const appWebContents = appView.webContents;
+  const themeConfig = {}; // fixture — production holds the pre-read appTheme config
 
   let rendererLoadRequested = false;
-  return (reason: string): void => {
+  return (reason: string, projectId?: string): void => {
     if (win.isDestroyed() || rendererLoadRequested) return;
     rendererLoadRequested = true;
 
-    const precomputedSkeletonCss = buildSkeletonCss();
+    // Resolve the persisted last-active project's identity via the standalone
+    // read-only reader so the boot skeleton matches a cold project switch
+    // (#10942). Mirrors createWindow.ts.
+    const initialProject = projectId ? readLastActiveProjectIdentity(projectId) : null;
+    const precomputedSkeletonCss = buildSkeletonCss(initialProject, themeConfig);
     let firstDomReady = true;
     appWebContents.on("dom-ready", () => {
-      if (firstDomReady) {
-        firstDomReady = false;
+      const crashReload = !firstDomReady;
+      // Re-read on crash auto-reload so a renamed/recolored project stays fresh.
+      const project =
+        crashReload && projectId ? readLastActiveProjectIdentity(projectId) : initialProject;
+      firstDomReady = false;
+      if (!crashReload) {
         insertSkeletonCss(appWebContents, precomputedSkeletonCss);
       } else {
-        injectSkeletonCss(appWebContents);
+        injectSkeletonCss(appWebContents, project);
       }
+      injectSkeletonProjectIdentity(appWebContents, project);
     });
 
     let shown = false;
@@ -254,10 +272,141 @@ describe("window show sequence", () => {
     persistentCssHandler();
 
     // First parse uses the precomputed string; the crash-reload re-resolves
-    // theme/sidebar/focus state via the full injection path.
+    // theme/sidebar/focus state via the full injection path, threading the
+    // (null here — no projectId supplied) project through.
     expect(insertSkeletonCss).toHaveBeenCalledOnce();
     expect(injectSkeletonCss).toHaveBeenCalledOnce();
-    expect(injectSkeletonCss).toHaveBeenCalledWith(appView.webContents);
+    expect(injectSkeletonCss).toHaveBeenCalledWith(appView.webContents, null);
+  });
+
+  it("threads the persisted project's accent + identity into the boot skeleton (#10942)", () => {
+    const listeners: ListenerMap = new Map();
+    const win = createMockWindow();
+    const appView = createMockAppView(listeners);
+    const project = { name: "Daintree", emoji: "🌳", color: "#11a06b" };
+    const buildSkeletonCss = vi.fn((p: unknown | null) =>
+      p ? "css-with-project-accent" : "css-anonymous"
+    );
+    const insertSkeletonCss = vi.fn();
+    const injectSkeletonProjectIdentity = vi.fn();
+    const readLastActiveProjectIdentity = vi.fn((id: string) => (id === "proj-1" ? project : null));
+
+    const loadRenderer = buildLoadRenderer({
+      win,
+      appView,
+      windowBg: "#0e0e0d",
+      buildSkeletonCss,
+      insertSkeletonCss,
+      injectSkeletonProjectIdentity,
+      readLastActiveProjectIdentity,
+    });
+
+    loadRenderer("startup", "proj-1");
+
+    // The project is resolved before the CSS precompute, threaded in alongside
+    // the pre-read themeConfig. The boot path passes exactly two args — project
+    // + themeConfig — and NO instantReveal option, so the 400ms Doherty gate
+    // stays on the initial launch (toHaveBeenCalledWith already pins arity).
+    expect(buildSkeletonCss).toHaveBeenCalledWith(project, expect.anything());
+    expect(buildSkeletonCss.mock.calls[0]).toHaveLength(2);
+    expect(readLastActiveProjectIdentity).toHaveBeenCalledWith("proj-1");
+
+    const domReadyHandlers = listeners.get("dom-ready") ?? [];
+    domReadyHandlers[0]();
+
+    // First parse inserts the project-accented precomputed CSS and paints identity.
+    expect(insertSkeletonCss).toHaveBeenCalledWith(appView.webContents, "css-with-project-accent");
+    expect(injectSkeletonProjectIdentity).toHaveBeenCalledWith(appView.webContents, project);
+  });
+
+  it("keeps the anonymous skeleton when no persisted project id is present (#10942)", () => {
+    const listeners: ListenerMap = new Map();
+    const win = createMockWindow();
+    const appView = createMockAppView(listeners);
+    const buildSkeletonCss = vi.fn((p: unknown | null) =>
+      p ? "css-with-project-accent" : "css-anonymous"
+    );
+    const readLastActiveProjectIdentity = vi.fn();
+
+    const loadRenderer = buildLoadRenderer({
+      win,
+      appView,
+      windowBg: "#0e0e0d",
+      buildSkeletonCss,
+      readLastActiveProjectIdentity,
+    });
+
+    loadRenderer("startup"); // no projectId — first launch / no last-active project
+
+    expect(readLastActiveProjectIdentity).not.toHaveBeenCalled();
+    expect(buildSkeletonCss).toHaveBeenCalledWith(null, expect.anything());
+  });
+
+  it("keeps the anonymous skeleton when the persisted project is no longer in the DB", () => {
+    const listeners: ListenerMap = new Map();
+    const win = createMockWindow();
+    const appView = createMockAppView(listeners);
+    const buildSkeletonCss = vi.fn((p: unknown | null) =>
+      p ? "css-with-project-accent" : "css-anonymous"
+    );
+
+    const loadRenderer = buildLoadRenderer({
+      win,
+      appView,
+      windowBg: "#0e0e0d",
+      buildSkeletonCss,
+      readLastActiveProjectIdentity: () => null, // project row gone (deleted)
+    });
+
+    loadRenderer("startup", "proj-1");
+
+    expect(buildSkeletonCss).toHaveBeenCalledWith(null, expect.anything());
+  });
+
+  it("re-reads fresh project identity + accent on a renderer-crash reload (#10942)", () => {
+    const listeners: ListenerMap = new Map();
+    const win = createMockWindow();
+    const appView = createMockAppView(listeners);
+    const initial = { name: "Beta", emoji: "β", color: "#ff0000" };
+    const renamed = { name: "Beta Renamed", emoji: "🟢", color: "#00ff00" };
+    const buildSkeletonCss = vi.fn((p: unknown | null) =>
+      p ? "css-with-project-accent" : "css-anonymous"
+    );
+    const insertSkeletonCss = vi.fn();
+    const injectSkeletonCss = vi.fn();
+    const injectSkeletonProjectIdentity = vi.fn();
+    let readCount = 0;
+    const readLastActiveProjectIdentity = vi.fn(() => (readCount++ === 0 ? initial : renamed));
+
+    const loadRenderer = buildLoadRenderer({
+      win,
+      appView,
+      windowBg: "#0e0e0d",
+      buildSkeletonCss,
+      insertSkeletonCss,
+      injectSkeletonCss,
+      injectSkeletonProjectIdentity,
+      readLastActiveProjectIdentity,
+    });
+
+    loadRenderer("startup", "proj-1");
+
+    // One read at boot for the precomputed CSS.
+    expect(readLastActiveProjectIdentity).toHaveBeenCalledTimes(1);
+
+    const persistentCssHandler = (listeners.get("dom-ready") ?? [])[0];
+    persistentCssHandler(); // initial parse
+    persistentCssHandler(); // crash auto-reload
+
+    // Initial parse uses the boot-read project's precomputed CSS + identity.
+    expect(insertSkeletonCss).toHaveBeenCalledWith(appView.webContents, "css-with-project-accent");
+    expect(injectSkeletonProjectIdentity).toHaveBeenCalledWith(appView.webContents, initial);
+
+    // Crash reload re-reads (now renamed) and rebuilds via the injection path,
+    // so a renamed/recolored project stays current instead of going stale.
+    expect(readLastActiveProjectIdentity).toHaveBeenCalledTimes(2);
+    expect(injectSkeletonCss).toHaveBeenCalledWith(appView.webContents, renamed);
+    expect(injectSkeletonProjectIdentity).toHaveBeenLastCalledWith(appView.webContents, renamed);
   });
 
   it("shows the window via the 5s fallback timer when dom-ready never fires", () => {
