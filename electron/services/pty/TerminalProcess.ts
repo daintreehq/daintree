@@ -24,11 +24,6 @@ import {
   OUTPUT_BUFFER_SIZE,
   DEFAULT_SCROLLBACK,
 } from "./types.js";
-import {
-  TERMINAL_RETENTION_BUDGETS,
-  type TerminalRetentionTier,
-} from "../../../shared/config/terminalRetention.js";
-import type { TerminalRetentionState } from "../../../shared/types/pty-host.js";
 import { WriteQueue } from "./WriteQueue.js";
 import { events } from "../events.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
@@ -190,20 +185,6 @@ export class TerminalProcess {
   private exitObservers!: TerminalExitObservers;
 
   private _scrollback: number;
-  // Retention-policy state (lossless terminal memory diet). The tier is
-  // stamped by the host's retention coordinator sweep; null until the first
-  // sweep. Trim bookkeeping records intentional memory-retention trimming of
-  // the ANALYSIS buffers — never PTY output data loss.
-  private retentionTier: TerminalRetentionTier | null = null;
-  private retentionTrimCount = 0;
-  private lastRetentionTrimAt: number | null = null;
-  private lastRetentionTrimReason: "tier-change" | "memory-pressure" | null = null;
-  // Monotonic generation counter bumped on every destructive mirror trim.
-  // SessionSnapshotter compares it across its async serialize await so a
-  // snapshot whose serialize overlapped a trim is never persisted as the
-  // latest full state (the next flush persists the post-trim truth instead).
-  private _trimEpoch = 0;
-  private agentOutputRetentionChars = OUTPUT_BUFFER_SIZE;
   private ptyDataDisposable: { dispose: () => void } | null = null;
   private headlessResponderDisposable: { dispose: () => void } | null = null;
   private synchronizedFrameDetector: SynchronizedFrameDetector | null = null;
@@ -282,9 +263,6 @@ export class TerminalProcess {
         get contentEpoch() {
           return parent.terminalInfo.contentEpoch;
         },
-        get trimEpoch() {
-          return parent._trimEpoch;
-        },
         // Route every persistence serialize through the worker's banner-aware
         // op (it falls back to a plain serialize when no banner markers exist),
         // so the host never needs to know whether a restore banner is present.
@@ -313,10 +291,6 @@ export class TerminalProcess {
 
       get contentEpoch(): number {
         return this.parent.terminalInfo.contentEpoch;
-      }
-
-      get trimEpoch(): number {
-        return this.parent._trimEpoch;
       }
 
       hasBannerMarkers(): boolean {
@@ -513,15 +487,6 @@ export class TerminalProcess {
       forensicsBuffer: this.forensicsBuffer,
       agentStateService: this.deps.agentStateService,
     });
-
-    // Every terminal is born stamped at full retention. This is a pure stamp
-    // (foreground budgets equal the construction-time caps, so nothing trims)
-    // but it closes the untiered window before the retention coordinator's
-    // first sweep: the governor's state-aware trim treats an untiered entry
-    // as legacy trim-eligible, which would leave a just-spawned focused
-    // terminal unprotected — and a pressure trim landing pre-stamp would be
-    // undone when the first stamp re-grew the cap.
-    this.applyRetentionTier("foreground");
 
     // Replay any output the pooled shell printed before we took ownership
     // (banner, MOTD, first prompt). Must run BEFORE setupPtyHandlers so the
@@ -1727,106 +1692,16 @@ export class TerminalProcess {
   }
 
   // xterm 6.0 actively resizes the buffer when scrollback shrinks (verified in headless-scrollback-trim.test.ts).
-  trimScrollback(
-    targetLines: number,
-    reason: "tier-change" | "memory-pressure" = "memory-pressure"
-  ): void {
+  trimScrollback(targetLines: number): void {
     if (this._scrollback <= targetLines) return;
     if (!this.analysis.setScrollback(targetLines)) return;
     this._scrollback = targetLines;
-    // A shrink destructively evicts the oldest mirror lines. Bump the trim
-    // epoch so any serialize that was in flight across this point is not
-    // persisted (SessionSnapshotter), bump contentEpoch so the next
-    // event-driven flush re-serializes the post-trim buffer, and record the
-    // trim as retention trimming for the flow-control diagnostics.
-    this._trimEpoch++;
-    this.terminalInfo.contentEpoch++;
-    this.retentionTrimCount++;
-    this.lastRetentionTrimAt = Date.now();
-    this.lastRetentionTrimReason = reason;
   }
 
   growScrollback(targetLines: number): void {
     if (this._scrollback >= targetLines) return;
     if (!this.analysis.setScrollback(targetLines)) return;
     this._scrollback = targetLines;
-  }
-
-  /** Monotonic destructive-trim generation. See the field comment. */
-  get trimEpoch(): number {
-    return this._trimEpoch;
-  }
-
-  getRetentionTier(): TerminalRetentionTier | null {
-    return this.retentionTier;
-  }
-
-  hasPreservedSnapshot(): boolean {
-    return this.terminalInfo.preservedSnapshot !== undefined;
-  }
-
-  /**
-   * Apply a retention tier's budgets to this terminal's host-side analysis
-   * buffers. No-op when the tier is unchanged — so a pressure trim that took
-   * the mirror below the tier cap is NOT undone by the next sweep; the cap
-   * only re-grows on an actual tier transition (e.g. a settled agent starts
-   * working again). Never touches renderer state or live PTY flow.
-   */
-  applyRetentionTier(tier: TerminalRetentionTier): void {
-    if (this.retentionTier === tier) return;
-    this.retentionTier = tier;
-    const budget = TERMINAL_RETENTION_BUDGETS[tier];
-
-    this.semanticBufferManager.setMaxLines(budget.semanticBufferLines);
-    this.forensicsBuffer.setMaxChars(budget.forensicsChars);
-    this.agentOutputRetentionChars = budget.agentOutputChars;
-    const outputBuffer = this.terminalInfo.outputBuffer;
-    if (outputBuffer.length > this.agentOutputRetentionChars) {
-      this.terminalInfo.outputBuffer = outputBuffer.slice(-this.agentOutputRetentionChars);
-    }
-
-    // Mirror scrollback: trim down to the tier cap (recorded as a tier-change
-    // retention trim) or restore the cap upward on a tier upgrade. Preserved
-    // terminals have no live mirror — setScrollback returns false and both
-    // paths no-op.
-    if (this._scrollback > budget.mirrorScrollbackLines) {
-      this.trimScrollback(budget.mirrorScrollbackLines, "tier-change");
-    } else if (this._scrollback < budget.mirrorScrollbackLines) {
-      this.growScrollback(budget.mirrorScrollbackLines);
-    }
-  }
-
-  /**
-   * Point-in-time retention diagnostics for the flow-control snapshot. Byte
-   * figures are estimates for attribution: mirror uses the same
-   * `scrollbackLines × cols × 12` closed form as the buffer-memory gauge;
-   * string-backed buffers count UTF-16 storage (`length × 2`).
-   */
-  getRetentionSnapshot(): TerminalRetentionState | null {
-    if (this.retentionTier === null) return null;
-    const t = this.terminalInfo;
-    const cols = t.ptyProcess?.cols || 80;
-    const mirrorBytes = t.preservedSnapshot !== undefined ? 0 : this._scrollback * cols * 12;
-    let semanticBytes = 0;
-    for (const line of t.semanticBuffer) semanticBytes += line.length * 2;
-    const forensicsBytes = this.forensicsBuffer.getRecentOutput().length * 2;
-    const agentOutputBytes = t.outputBuffer.length * 2;
-    const preservedSnapshotBytes = (t.preservedSnapshot?.length ?? 0) * 2;
-    return {
-      tier: this.retentionTier,
-      estimatedRetainedBytes: {
-        mirrorBytes,
-        semanticBytes,
-        forensicsBytes,
-        agentOutputBytes,
-        preservedSnapshotBytes,
-        totalBytes:
-          mirrorBytes + semanticBytes + forensicsBytes + agentOutputBytes + preservedSnapshotBytes,
-      },
-      trimCount: this.retentionTrimCount,
-      lastTrimAt: this.lastRetentionTrimAt,
-      lastTrimReason: this.lastRetentionTrimReason,
-    };
   }
 
   /**
@@ -2101,8 +1976,8 @@ export class TerminalProcess {
     // hint or detection). Plain terminals skip both to save work.
     if (this.isAgentLive) {
       terminal.outputBuffer += data;
-      if (terminal.outputBuffer.length > this.agentOutputRetentionChars) {
-        terminal.outputBuffer = terminal.outputBuffer.slice(-this.agentOutputRetentionChars);
+      if (terminal.outputBuffer.length > OUTPUT_BUFFER_SIZE) {
+        terminal.outputBuffer = terminal.outputBuffer.slice(-OUTPUT_BUFFER_SIZE);
       }
 
       const liveId = getLiveAgentId(terminal);

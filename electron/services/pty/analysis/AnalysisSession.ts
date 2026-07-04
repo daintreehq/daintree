@@ -278,11 +278,6 @@ export class AnalysisSession {
     return this.monitor !== null;
   }
 
-  /** True when `epoch` matches this session's live slot generation. */
-  matchesEpoch(epoch: number): boolean {
-    return this.epoch === epoch;
-  }
-
   setScrollback(lines: number): void {
     if (this.disposed || !this.headlessTerminal) return;
     this.headlessTerminal.options.scrollback = lines;

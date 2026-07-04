@@ -261,11 +261,6 @@ vi.mock("../services/PtyManager.js", () => {
     setResourceMonitoring = vi.fn();
     setResourceProfile = vi.fn();
     setActivityTier = vi.fn();
-    getAllProcesses = vi.fn(() => []);
-    isTerminalTrashed = vi.fn(() => false);
-    prunePreservedSnapshots = vi.fn();
-    getTerminalRetention = vi.fn(() => null);
-    getAllTerminalRetention = vi.fn(() => []);
 
     constructor() {
       super();

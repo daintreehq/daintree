@@ -15,12 +15,6 @@ export interface SessionSnapshotterHost {
   // Monotonic buffer-mutation counter (bumped per PTY chunk / resize / snapshot
   // capture). Read as a dirty check so an unchanged buffer is not re-serialized.
   readonly contentEpoch: number;
-  // Monotonic destructive-trim counter (bumped per retention/pressure mirror
-  // trim). Compared across the async serialize await: a serialize that
-  // overlapped a trim may hold mid-truncation content, so its result is
-  // discarded rather than persisted as the latest snapshot; the next flush
-  // captures the post-trim state.
-  readonly trimEpoch: number;
   hasBannerMarkers(): boolean;
   getSerializedState(): string | null;
   getSerializedStateAsync(): Promise<string | null>;
@@ -69,20 +63,12 @@ export class SessionSnapshotter {
     this.inFlight = true;
     try {
       this.dirty = false;
-      const entryTrimEpoch = this.host.trimEpoch;
       const state = await (this.host.hasBannerMarkers()
         ? this.host.serializeForPersistence()
         : this.host.getSerializedStateAsync());
       // Re-check lifecycle after the await — a kill or dispose during async
       // serialize would otherwise stomp the sync snapshot written from kill().
       if (this.disposed || this.host.wasKilled) return;
-      // A retention/pressure trim landed while the serialize was in flight —
-      // the result may be mid-truncation. Drop it and re-mark dirty so the
-      // finally block reschedules a clean post-trim serialize.
-      if (this.host.trimEpoch !== entryTrimEpoch) {
-        this.dirty = true;
-        return;
-      }
       if (!state) return;
       await persistSessionSnapshotAsync(this.host.id, state);
     } catch (error) {
@@ -125,16 +111,12 @@ export class SessionSnapshotter {
     this.eventDrivenInFlight = true;
     this.lastEventDrivenFlushAt = now;
     try {
-      const entryTrimEpoch = this.host.trimEpoch;
       const state = await (this.host.hasBannerMarkers()
         ? this.host.serializeForPersistence()
         : this.host.getSerializedStateAsync());
       // Re-check lifecycle after the await — a kill or dispose during async
       // serialize would otherwise stomp the sync snapshot written from kill().
       if (this.disposed || this.host.wasKilled) return;
-      // Trim landed mid-serialize — do not persist a possibly mid-truncation
-      // result, and leave lastFlushedEpoch uncovered so a later flush retries.
-      if (this.host.trimEpoch !== entryTrimEpoch) return;
       if (!state) return;
       await persistSessionSnapshotAsync(this.host.id, state);
       // Mark coverage only after a successful persist. Uses the entry epoch, so

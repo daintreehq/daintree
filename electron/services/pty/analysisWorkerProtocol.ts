@@ -56,12 +56,7 @@ export type HostToWorkerMessage =
       hasActiveChildren: boolean;
       cpuUsage: number;
     }
-  // `epoch` is the sender's slot generation (matches `create`/`data`). The
-  // runtime drops a set-scrollback whose epoch doesn't match the session's
-  // current generation, so a stale trim posted by a superseded backend can't
-  // shrink a freshly-rebuilt session's mirror. Optional for compatibility
-  // with direct/test senders — omitted means "apply unconditionally".
-  | { type: "set-scrollback"; terminalId: string; lines: number; epoch?: number }
+  | { type: "set-scrollback"; terminalId: string; lines: number }
   | { type: "free"; terminalId: string }
   | { type: "plugin-agent-registry"; registry: Record<string, AgentConfig> }
   | {

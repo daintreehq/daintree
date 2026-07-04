@@ -118,16 +118,9 @@ export class AnalysisWorkerRuntime {
       case "process-state":
         this.sessions.get(msg.terminalId)?.updateProcessState(msg.hasActiveChildren, msg.cpuUsage);
         return;
-      case "set-scrollback": {
-        const session = this.sessions.get(msg.terminalId);
-        if (!session) return;
-        // Stale-generation guard: a trim posted by a superseded backend slot
-        // (worker loss / feed-overflow rebuild) must not clobber the fresh
-        // session's scrollback cap.
-        if (msg.epoch !== undefined && !session.matchesEpoch(msg.epoch)) return;
-        session.setScrollback(msg.lines);
+      case "set-scrollback":
+        this.sessions.get(msg.terminalId)?.setScrollback(msg.lines);
         return;
-      }
       case "free": {
         const session = this.sessions.get(msg.terminalId);
         if (session) {
