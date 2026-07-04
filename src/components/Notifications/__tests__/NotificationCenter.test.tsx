@@ -1068,6 +1068,48 @@ describe("NotificationCenter — Needs attention pinned section", () => {
     expect(messages).toHaveLength(5);
   });
 
+  it("shows a '+N more below' note when severe unread threads exceed the pinned cap", async () => {
+    const baseT = Date.now();
+    setEntries(
+      Array.from({ length: 7 }, (_, i) =>
+        makeEntry({
+          id: `failure-${i}`,
+          type: "error",
+          message: `Failure ${i}`,
+          timestamp: baseT - i,
+          seenAsToast: false,
+        })
+      )
+    );
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+
+    // 7 severe unread threads, 5 pinned → the remaining 2 are acknowledged,
+    // not silently dropped; "below" must be literally true — the overflowed
+    // entries stay reachable in the chronological list.
+    expect(screen.getByTestId("needs-attention-overflow").textContent).toBe("+2 more below");
+    const chrono = screen.getByTestId("chrono-section");
+    expect(within(chrono).getByText("Failure 5")).toBeTruthy();
+    expect(within(chrono).getByText("Failure 6")).toBeTruthy();
+
+    // The pinned rail is computed from the global unread set, so the note
+    // (and the reachable rows) survive switching to the Unread filter.
+    await act(async () => {
+      fireEvent.click(screen.getByText("Unread"));
+    });
+    expect(screen.getByTestId("needs-attention-overflow").textContent).toBe("+2 more below");
+    expect(within(screen.getByTestId("chrono-section")).getByText("Failure 6")).toBeTruthy();
+  });
+
+  it("omits the overflow note when severe unread threads fit within the cap", () => {
+    setEntries([makeEntry({ type: "error", message: "Build failed", seenAsToast: false })]);
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+
+    expect(screen.getByTestId("needs-attention-section")).toBeTruthy();
+    expect(screen.queryByTestId("needs-attention-overflow")).toBeNull();
+  });
+
   it("stays consistent across All and Unread filter views for mixed read/unread threads", async () => {
     const correlationId = "thread-mixed";
     const t = Date.now();

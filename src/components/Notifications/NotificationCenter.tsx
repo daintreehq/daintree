@@ -376,57 +376,59 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     return entries.filter((e) => e.archivedAt === null && !e.seenAsToast && !isSnoozed(e));
   }, [entries, filter, frozenUnreadIds, snoozedThreads]);
 
-  const { needsAttentionGroups, chronoSections, dividerGroupId } = useMemo(() => {
-    const now = Date.now();
-    const isSnoozedGroup = (g: ThreadGroup): boolean => {
-      if (!g.correlationId) return false;
-      const until = snoozedThreads[g.correlationId];
-      return typeof until === "number" && until > now;
-    };
-    // Pinned reflects the global unread severe-threads set so it stays the
-    // same in All and Unread filter views. Hidden in Archived and Snoozed —
-    // pinned is for active, attention-required items only. Snoozed threads
-    // are an explicit defer so they must drop out of the pinned rail.
-    const pinned =
-      filter === "archived" || filter === "snoozed"
-        ? []
-        : groupByCorrelationId(entries.filter((e) => e.archivedAt === null))
-            .filter((g) => {
-              if (isSnoozedGroup(g)) return false;
-              if (!isUnreadGroup(g)) return false;
-              const sev = getWorstSeverity(g.entries);
-              return sev === "error" || sev === "warning";
-            })
-            .sort((a, b) => {
-              const sevDiff =
-                SEVERITY_WEIGHTS[getWorstSeverity(b.entries)] -
-                SEVERITY_WEIGHTS[getWorstSeverity(a.entries)];
-              if (sevDiff !== 0) return sevDiff;
-              return b.latestTimestamp - a.latestTimestamp;
-            })
-            .slice(0, NEEDS_ATTENTION_CAP);
+  const { needsAttentionGroups, needsAttentionOverflow, chronoSections, dividerGroupId } =
+    useMemo(() => {
+      const now = Date.now();
+      const isSnoozedGroup = (g: ThreadGroup): boolean => {
+        if (!g.correlationId) return false;
+        const until = snoozedThreads[g.correlationId];
+        return typeof until === "number" && until > now;
+      };
+      // Pinned reflects the global unread severe-threads set so it stays the
+      // same in All and Unread filter views. Hidden in Archived and Snoozed —
+      // pinned is for active, attention-required items only. Snoozed threads
+      // are an explicit defer so they must drop out of the pinned rail.
+      const severeUnread =
+        filter === "archived" || filter === "snoozed"
+          ? []
+          : groupByCorrelationId(entries.filter((e) => e.archivedAt === null))
+              .filter((g) => {
+                if (isSnoozedGroup(g)) return false;
+                if (!isUnreadGroup(g)) return false;
+                const sev = getWorstSeverity(g.entries);
+                return sev === "error" || sev === "warning";
+              })
+              .sort((a, b) => {
+                const sevDiff =
+                  SEVERITY_WEIGHTS[getWorstSeverity(b.entries)] -
+                  SEVERITY_WEIGHTS[getWorstSeverity(a.entries)];
+                if (sevDiff !== 0) return sevDiff;
+                return b.latestTimestamp - a.latestTimestamp;
+              });
+      const pinned = severeUnread.slice(0, NEEDS_ATTENTION_CAP);
 
-    const chronoGroups = groupByCorrelationId(filteredEntries);
-    const sections: ContextSection[] = groupByContext
-      ? partitionByContext(chronoGroups)
-      : [{ key: "all", groups: chronoGroups }];
+      const chronoGroups = groupByCorrelationId(filteredEntries);
+      const sections: ContextSection[] = groupByContext
+        ? partitionByContext(chronoGroups)
+        : [{ key: "all", groups: chronoGroups }];
 
-    let divider: string | null = null;
-    if (lastClosedAt > 0 && filter !== "archived" && filter !== "snoozed") {
-      for (const g of chronoGroups) {
-        if (g.latestTimestamp > lastClosedAt) {
-          divider = g.correlationId ?? g.entries[0]?.id ?? null;
-          break;
+      let divider: string | null = null;
+      if (lastClosedAt > 0 && filter !== "archived" && filter !== "snoozed") {
+        for (const g of chronoGroups) {
+          if (g.latestTimestamp > lastClosedAt) {
+            divider = g.correlationId ?? g.entries[0]?.id ?? null;
+            break;
+          }
         }
       }
-    }
 
-    return {
-      needsAttentionGroups: pinned,
-      chronoSections: sections,
-      dividerGroupId: divider,
-    };
-  }, [entries, filteredEntries, groupByContext, lastClosedAt, filter, snoozedThreads]);
+      return {
+        needsAttentionGroups: pinned,
+        needsAttentionOverflow: severeUnread.length - pinned.length,
+        chronoSections: sections,
+        dividerGroupId: divider,
+      };
+    }, [entries, filteredEntries, groupByContext, lastClosedAt, filter, snoozedThreads]);
 
   const totalChronoGroups = chronoSections.reduce((sum, s) => sum + s.groups.length, 0);
 
@@ -1074,6 +1076,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               {needsAttentionGroups.length > 0 && (
                 <NeedsAttentionSection
                   groups={needsAttentionGroups}
+                  overflowCount={needsAttentionOverflow}
                   indexOffset={0}
                   focusedIndex={focusedIndex}
                   setRowRef={setRowRef}
@@ -1166,6 +1169,7 @@ interface RovingSectionProps {
 
 function NeedsAttentionSection({
   groups,
+  overflowCount,
   indexOffset,
   focusedIndex,
   setRowRef,
@@ -1181,6 +1185,8 @@ function NeedsAttentionSection({
   onUnsnoozeRow,
 }: {
   groups: ThreadGroup[];
+  /** Severe unread threads beyond the pinned cap — they remain in the chronological list below. */
+  overflowCount: number;
   onDismiss: (id: string) => void;
   onDismissThread: (correlationId: string) => void;
   snoozePendingIndex: number | null;
@@ -1224,6 +1230,14 @@ function NeedsAttentionSection({
           );
         })}
       </div>
+      {overflowCount > 0 && (
+        <div
+          data-testid="needs-attention-overflow"
+          className="px-3 pb-2 text-[10px] text-daintree-text/45"
+        >
+          +{overflowCount} more below
+        </div>
+      )}
     </div>
   );
 }
