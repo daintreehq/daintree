@@ -2,6 +2,7 @@ import { Terminal } from "@xterm/xterm";
 import { TerminalRefreshTier } from "@/types";
 import { isSidebarMeasurementLocked } from "@/lib/layoutTransitionLock";
 import { logDebug, logWarn } from "@/utils/logger";
+import { hasStreamingWrites } from "./TerminalResizeController";
 import type { ManagedTerminal } from "./types";
 
 // Sweep cadence. Matches the TerminalReflowController heartbeat — slow enough
@@ -347,6 +348,17 @@ export class TerminalReconciliationWatchdog {
     const inSynchronizedBlock = managed.terminal.modes?.synchronizedOutputMode === true;
     const element = managed.terminal.element;
 
+    // A streaming main-buffer pane (recent or still-parsing writes) will have
+    // any grid-changing reconcile deferred by reconcileGeometryFresh's
+    // quiescence gate (#10863). Issuing a geometry repair anyway would stamp
+    // the 6s repair cooldown and spend heavy budget on a guaranteed no-op, so
+    // both geometry branches below skip the attempt and fall through to the
+    // cheaper render-pause / WebGL layers, retrying once the stream pauses.
+    // Main-buffer only: the gate in reconcileGeometryFresh sits after the
+    // alt-buffer early-return, so an alt-buffer reconcile is never deferred
+    // by writes.
+    const streamingDeferred = !managed.isAltBuffer && hasStreamingWrites(managed, now);
+
     // Reveal-pending guaranteed redraw (#10632). The project-switch suppression
     // window cleared while this host was still detached/occluded, so its one-shot
     // resetRenderer was deferred to the watchdog rather than spent on a zero-box
@@ -357,6 +369,9 @@ export class TerminalReconciliationWatchdog {
     // by the attachGeneration it was armed under: a later re-attach that already
     // re-ran its own reveal supersedes it. Cleared ONLY on a successful reconcile
     // (false = unmeasurable/occluded box → keep the flag and retry next tick).
+    // A streaming-deferred tick keeps the obligation armed WITHOUT issuing the
+    // repair (no cooldown stamp, no heavy budget) and falls through to the
+    // cheaper layers below.
     if (managed.revealPendingRepair && !inSynchronizedBlock) {
       if (
         managed.revealPendingGeneration !== undefined &&
@@ -366,7 +381,7 @@ export class TerminalReconciliationWatchdog {
         // the id) — the obligation can't belong to this incarnation; drop it.
         managed.revealPendingRepair = false;
         managed.revealPendingGeneration = undefined;
-      } else {
+      } else if (!streamingDeferred) {
         if (heavyBudget <= 0) return 0;
         managed.lastWatchdogRepairAt = now;
         logWarn(
@@ -428,7 +443,12 @@ export class TerminalReconciliationWatchdog {
           // Breaker tripped: stop re-wrapping this pane's scrollback. Fall through so
           // the cheaper render-pause / WebGL layers below still reconcile — the
           // breaker disables only the expensive geometry repair, not the whole chain.
-          if (!managed.geometryRepairGaveUp) {
+          // A streaming-deferred tick is not a failed convergence — don't
+          // issue the repair or burn a breaker attempt on it (see the
+          // streamingDeferred declaration above); the render-pause / WebGL
+          // layers below still run so a streaming pane with a paused renderer
+          // gets its unpause.
+          if (!managed.geometryRepairGaveUp && !streamingDeferred) {
             const attempts = managed.geometryRepairAttempts ?? 0;
             if (attempts >= WATCHDOG_MAX_GEOMETRY_REPAIR_ATTEMPTS) {
               managed.geometryRepairGaveUp = true;

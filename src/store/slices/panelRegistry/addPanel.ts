@@ -18,6 +18,7 @@ import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrol
 import { getXtermOptions, calculateTerminalDimensions } from "@/config/xtermConfig";
 import { deriveTerminalRuntimeIdentity } from "@/utils/terminalChrome";
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
+import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelLimitStore, evaluatePanelLimit } from "@/store/panelLimitStore";
 import { notify } from "@/lib/notify";
 import { saveNormalized } from "./persistence";
@@ -56,6 +57,54 @@ function countNonTrashTerminals(state: PanelRegistrySlice): number {
 }
 
 const TERMINAL_STARTUP_ATTACH_TIMEOUT_MS = 2500;
+
+// Chrome allowance for the overlay (help panel) grid estimate: horizontal =
+// panel border + terminal-host inset; vertical = header + banners + hybrid
+// input bar + footer. Rough is fine — the estimate only has to be close
+// enough that a CLI painting before the first real fit lands near the final
+// wrap width instead of the legacy 80×24 spawn default.
+const OVERLAY_CHROME_X_PX = 16;
+const OVERLAY_CHROME_Y_PX = 240;
+
+/**
+ * Live grid of an ATTACHED renderer xterm. Returns null until the instance is
+ * mounted in the real DOM — a prewarmed (never-attached) instance still holds
+ * its construction-default grid, which must not be mistaken for a fitted
+ * measurement.
+ */
+function getAttachedGridDims(id: string): { cols: number; rows: number } | null {
+  const managed = terminalInstanceService.get(id);
+  if (!managed?.terminal.element?.isConnected) return null;
+  return { cols: managed.terminal.cols, rows: managed.terminal.rows };
+}
+
+/**
+ * Estimated grid for an overlay (help panel) terminal, derived from the
+ * persisted panel width and the current viewport. The overlay's XtermAdapter
+ * mounts without waiting for spawnStatus, but historically both the prewarmed
+ * xterm and the PTY booted at the 80×24 spawn default, so the assistant CLI
+ * painted its banner at 80 cols and the first real fit re-wrapped (or, when
+ * the fit's PTY resize raced the spawn and was dropped, permanently desynced)
+ * the committed output — the duplicated/garbled assistant startup (#10863).
+ */
+function estimateOverlayGridDims(fontSize: number): { cols: number; rows: number } | null {
+  const panelWidth = useHelpPanelStore.getState().width;
+  const viewportHeight = window.innerHeight;
+  // NaN/∞ would flow into the panel record, the xterm constructor, and the
+  // spawn payload — fall back to the legacy defaults instead of estimating.
+  if (
+    !Number.isFinite(panelWidth) ||
+    !Number.isFinite(viewportHeight) ||
+    !Number.isFinite(fontSize)
+  ) {
+    return null;
+  }
+  return calculateTerminalDimensions(
+    Math.max(200, panelWidth - OVERLAY_CHROME_X_PX),
+    Math.max(240, viewportHeight - OVERLAY_CHROME_Y_PX),
+    fontSize
+  );
+}
 
 class TerminalStartupQueue {
   private readonly tasks: Array<() => Promise<void>> = [];
@@ -316,6 +365,16 @@ export const createAddPanelActions = (
     // Reconnects don't go through a fresh spawn — mark them "ready" directly.
     const spawnStatus: "spawning" | "ready" | "failed" = isReconnect ? "ready" : "spawning";
 
+    // Overlay terminals boot at ~their real grid instead of the 80×24 spawn
+    // default so the assistant CLI never paints its startup banner at a width
+    // the first fit then re-wraps (#10863). Grid/dock keep the legacy default:
+    // their XtermAdapter attaches only after spawnStatus flips "ready", so the
+    // fit's PTY resize always lands on a live PTY.
+    const overlayDims =
+      location === "overlay" && !isReconnect
+        ? estimateOverlayGridDims(getTerminalAppearanceSnapshot().fontSize)
+        : null;
+
     const terminal = {
       id,
       kind,
@@ -328,8 +387,8 @@ export const createAddPanelActions = (
       ...(options.titleMode && { titleMode: options.titleMode }),
       worktreeId: options.worktreeId,
       cwd: options.cwd ?? "",
-      cols: 80,
-      rows: 24,
+      cols: overlayDims?.cols ?? 80,
+      rows: overlayDims?.rows ?? 24,
       agentState,
       lastStateChange,
       location,
@@ -540,6 +599,13 @@ export const createAddPanelActions = (
         theme: appearance.effectiveTheme,
         screenReaderMode: appearance.screenReaderMode,
       });
+      // Overlay panes are BORN at their estimated grid (xterm constructor
+      // cols/rows) so pre-attach CLI output wraps near the final width — a
+      // prewarmed-but-unattached xterm otherwise sits at the 80×24 default
+      // until the help panel's XtermAdapter mounts (#10863).
+      const prewarmOptions = overlayDims
+        ? { ...terminalOptions, cols: overlayDims.cols, rows: overlayDims.rows }
+        : terminalOptions;
 
       // Prewarm ALL terminal types to ensure the managed instance and data
       // listeners exist before the backend PTY can emit output. Do not attach
@@ -556,7 +622,7 @@ export const createAddPanelActions = (
         // Awaited so the managed instance and its PTY data listener exist before
         // the queued spawn runs — prewarmTerminal is async now that the lazy
         // Unicode11 addon is loaded during terminal construction (#10840).
-        await terminalInstanceService.prewarmTerminal(id, launchAgentId, terminalOptions, {
+        await terminalInstanceService.prewarmTerminal(id, launchAgentId, prewarmOptions, {
           offscreen: false,
           widthPx: location === "dock" ? DOCK_PREWARM_WIDTH_PX : DOCK_TERM_WIDTH,
           heightPx: location === "dock" ? DOCK_PREWARM_HEIGHT_PX : DOCK_TERM_HEIGHT,
@@ -570,7 +636,7 @@ export const createAddPanelActions = (
         // Awaited so the instance exists before the sendPtyResize below targets
         // it — prewarmTerminal is async now that the lazy Unicode11 addon is
         // loaded during terminal construction (#10840).
-        await terminalInstanceService.prewarmTerminal(id, launchAgentId, terminalOptions, {
+        await terminalInstanceService.prewarmTerminal(id, launchAgentId, prewarmOptions, {
           offscreen: false,
           widthPx,
           heightPx,
@@ -579,9 +645,16 @@ export const createAddPanelActions = (
         // Only send explicit resize for active grid spawns. Background/dock
         // terminals can boot at the spawn default and will be resized on reveal.
         // Cell metrics come from calculateTerminalDimensions so the lineHeight
-        // assumption stays in sync with xtermConfig.
-        if (!isDockOrInactive) {
-          const { cols, rows } = calculateTerminalDimensions(widthPx, heightPx, fontSize);
+        // assumption stays in sync with xtermConfig. An overlay panel that
+        // reaches this branch (no active worktree) must use its own estimate —
+        // the DOCK_TERM-derived dims would re-poison the grid the overlay
+        // spawn path just fixed (#10863), and for a settled-strategy agent
+        // this call arms a 500ms timer that can land AFTER the spawn. When the
+        // estimate is unavailable (non-finite inputs), skip entirely and let
+        // the spawn-time dims own overlay geometry.
+        if (!isDockOrInactive && (location !== "overlay" || overlayDims)) {
+          const { cols, rows } =
+            overlayDims ?? calculateTerminalDimensions(widthPx, heightPx, fontSize);
           terminalInstanceService.sendPtyResize(id, cols, rows);
         }
       }
@@ -681,13 +754,22 @@ export const createAddPanelActions = (
         if (!_p1 || !isPtyPanel(_p1) || _p1.spawnStatus !== "spawning") return;
 
         const commandToExecute = options.skipCommandExecution ? undefined : options.command;
+        // Spawn the PTY at the grid the renderer is actually showing. The
+        // overlay XtermAdapter mounts without waiting for spawnStatus, so by
+        // now the xterm may already be attached and fitted — a PTY resize it
+        // sent before this spawn resolved was silently dropped by the
+        // pty-host (no terminal yet), and booting at 80×24 anyway left the
+        // CLI painting a width the renderer wasn't wrapping at (#10863).
+        const attachedDims = getAttachedGridDims(id);
+        const spawnCols = attachedDims?.cols ?? overlayDims?.cols ?? 80;
+        const spawnRows = attachedDims?.rows ?? overlayDims?.rows ?? 24;
         await terminalClient.spawn({
           id,
           projectId: capturedProjectId,
           cwd: options.cwd,
           shell: options.shell,
-          cols: 80,
-          rows: 24,
+          cols: spawnCols,
+          rows: spawnRows,
           command: commandToExecute,
           kind,
           launchAgentId,
@@ -732,6 +814,20 @@ export const createAddPanelActions = (
               error: killError,
             });
           });
+        } else {
+          // Recover the attach-during-spawn race: a fit that ran while the
+          // spawn IPC was in flight had its PTY resize dropped (no terminal
+          // existed yet), which would strand the CLI at the spawn dims while
+          // xterm renders the fitted grid — the assistant's progressively
+          // garbled prompt (#10863). Re-assert the live grid now that the PTY
+          // exists. PTY-only and direct: xterm already shows these dims, and
+          // sendPtyResize would defer 500ms for a settled-strategy agent —
+          // exactly the window in which the CLI paints its banner at the
+          // stale spawn width. The backend dedupes when nothing drifted.
+          const settledDims = getAttachedGridDims(id);
+          if (settledDims && (settledDims.cols !== spawnCols || settledDims.rows !== spawnRows)) {
+            terminalClient.resize(id, settledDims.cols, settledDims.rows);
+          }
         }
 
         if (mountedPanel && shouldWaitForVisibleAttach) {

@@ -39,6 +39,9 @@ vi.mock("@/clients", () => ({
 
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
+    // No attached renderer xterm in these tests — spawn falls back to the
+    // default/estimated dims path.
+    get: vi.fn(() => null),
     cleanup: vi.fn(),
     destroy: vi.fn(),
     detachForProjectSwitch: vi.fn(),
