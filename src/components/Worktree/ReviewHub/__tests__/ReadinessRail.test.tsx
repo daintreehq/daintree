@@ -57,6 +57,42 @@ describe("ReadinessRail", () => {
     expect(screen.getByTestId("review-readiness-overflow").textContent).toBe("+2 more");
   });
 
+  it("discloses the hidden items' labels on the overflow indicator", () => {
+    const summary = makeSummary({
+      level: "blocked",
+      blockers: [item({ id: "conflicts", severity: "blocker" })],
+      warnings: [
+        item({ id: "behind-remote", severity: "warning" }),
+        item({ id: "ci-failing", severity: "warning" }),
+      ],
+      infos: [
+        item({ id: "no-remote", label: "No remote configured" }),
+        item({ id: "pr-missing", label: "No pull request for this branch" }),
+      ],
+    });
+    render(<ReadinessRail summary={summary} onCta={vi.fn()} />);
+    const overflow = screen.getByTestId("review-readiness-overflow");
+    expect(overflow.getAttribute("title")).toBe(
+      "No remote configured\nNo pull request for this branch"
+    );
+    expect(overflow.getAttribute("aria-label")).toBe(
+      "2 more: No remote configured, No pull request for this branch"
+    );
+  });
+
+  it("labels the rail as a group and announces level changes via a status region", () => {
+    const { rerender } = render(
+      <ReadinessRail summary={makeSummary({ level: "ready" })} onCta={vi.fn()} />
+    );
+    const rail = screen.getByTestId("review-readiness-rail");
+    expect(rail.getAttribute("role")).toBe("group");
+    expect(rail.getAttribute("aria-label")).toBe("Review readiness");
+    const chip = screen.getByTestId("review-readiness-level");
+    expect(chip.getAttribute("role")).toBe("status");
+    rerender(<ReadinessRail summary={makeSummary({ level: "blocked" })} onCta={vi.fn()} />);
+    expect(screen.getByTestId("review-readiness-level").textContent).toBe("Blocked");
+  });
+
   it("renders detail inline after the label", () => {
     const summary = makeSummary({
       level: "needs-review",

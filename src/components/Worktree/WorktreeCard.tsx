@@ -822,7 +822,6 @@ export function WorktreeCard({
               <TooltipContent side="right" align="start" className="text-xs">
                 {
                   {
-                    approval: "Agent waiting for approval",
                     waiting: "Agent waiting for input",
                     cleanup: "Ready for cleanup",
                     complete: "Complete: in review",
