@@ -23,6 +23,7 @@ vi.mock("@shared/config/agentRegistry", async (importOriginal) => {
 import {
   TerminalResizeController,
   getXtermCellDimensions,
+  REVEAL_REWRAP_QUIESCENT_MS,
   type ResizeControllerDeps,
 } from "../TerminalResizeController";
 
@@ -1293,6 +1294,66 @@ describe("TerminalResizeController", () => {
       expect(ok).toBe(true);
       expect(managed.terminal.resize).not.toHaveBeenCalled();
       expect(resizeMock).not.toHaveBeenCalled();
+    });
+
+    it("defers a grid-changing reflow while the pane is still streaming output (#10863)", () => {
+      const managed = createManagedTerminal();
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+      // A write landed just now — the CLI is mid-paint.
+      (managed as { lastWriteAt?: number }).lastWriteAt = Date.now();
+
+      const controller = makeController(managed);
+      const before = {
+        latestCols: managed.latestCols,
+        latestRows: managed.latestRows,
+        lastWidth: managed.lastWidth,
+        lastHeight: managed.lastHeight,
+      };
+      const ok = controller.reconcileGeometryFresh("term-1");
+
+      // Reports "not paintable yet" so the reveal sweep retries later, and
+      // must not have re-wrapped xterm, resized the PTY, or poisoned the dim
+      // caches (applyDeferredResize's cache==current check relies on them).
+      expect(ok).toBe(false);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+      expect(managed.latestCols).toBe(before.latestCols);
+      expect(managed.latestRows).toBe(before.latestRows);
+      expect(managed.lastWidth).toBe(before.lastWidth);
+      expect(managed.lastHeight).toBe(before.lastHeight);
+    });
+
+    it("applies the deferred reflow once the pane has gone write-quiescent", () => {
+      const managed = createManagedTerminal();
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+      (managed as { lastWriteAt?: number }).lastWriteAt = Date.now();
+
+      const controller = makeController(managed);
+      expect(controller.reconcileGeometryFresh("term-1")).toBe(false);
+
+      vi.advanceTimersByTime(REVEAL_REWRAP_QUIESCENT_MS + 1);
+      const ok = controller.reconcileGeometryFresh("term-1");
+
+      expect(ok).toBe(true);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(100, 30);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+    });
+
+    it("still re-asserts the PTY during streaming when the grid has not drifted", () => {
+      const managed = createManagedTerminal();
+      managed.terminal.cols = 100;
+      managed.terminal.rows = 30;
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+      (managed as { lastWriteAt?: number }).lastWriteAt = Date.now();
+
+      const controller = makeController(managed);
+      const ok = controller.reconcileGeometryFresh("term-1");
+
+      // No re-wrap is involved, so streaming doesn't defer the dedupe-safe
+      // PTY re-assert.
+      expect(ok).toBe(true);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
     });
 
     it("ignores an active resize lock without clearing it (the reveal exception)", () => {

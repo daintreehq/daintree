@@ -2,6 +2,7 @@ import { Terminal } from "@xterm/xterm";
 import { TerminalRefreshTier } from "@/types";
 import { isSidebarMeasurementLocked } from "@/lib/layoutTransitionLock";
 import { logDebug, logWarn } from "@/utils/logger";
+import { REVEAL_REWRAP_QUIESCENT_MS } from "./TerminalResizeController";
 import type { ManagedTerminal } from "./types";
 
 // Sweep cadence. Matches the TerminalReflowController heartbeat — slow enough
@@ -428,7 +429,18 @@ export class TerminalReconciliationWatchdog {
           // Breaker tripped: stop re-wrapping this pane's scrollback. Fall through so
           // the cheaper render-pause / WebGL layers below still reconcile — the
           // breaker disables only the expensive geometry repair, not the whole chain.
-          if (!managed.geometryRepairGaveUp) {
+          // A main-buffer pane that wrote within the reveal quiescence window
+          // will have its reconcile deferred by reconcileGeometryFresh's
+          // streaming gate (#10863) — that's a deferred tick, not a failed
+          // convergence, so don't issue the repair or burn a breaker attempt
+          // on it; retry once the stream pauses. Main-buffer only: the gate in
+          // reconcileGeometryFresh sits after the alt-buffer early-return, so
+          // an alt-buffer reconcile is never deferred by writes. Fall through
+          // (not return) so the render-pause / WebGL layers below still run —
+          // a streaming pane with a paused renderer needs that unpause.
+          const streamingDeferred =
+            !managed.isAltBuffer && now - (managed.lastWriteAt ?? 0) < REVEAL_REWRAP_QUIESCENT_MS;
+          if (!managed.geometryRepairGaveUp && !streamingDeferred) {
             const attempts = managed.geometryRepairAttempts ?? 0;
             if (attempts >= WATCHDOG_MAX_GEOMETRY_REPAIR_ATTEMPTS) {
               managed.geometryRepairGaveUp = true;

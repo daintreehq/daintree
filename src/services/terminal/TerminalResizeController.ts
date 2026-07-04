@@ -65,6 +65,15 @@ export interface ResizeControllerDeps {
   dataBuffer: TerminalOutputIngestService;
 }
 
+/**
+ * How long a main-buffer pane must be write-quiescent before the reveal-path
+ * reconcile ({@link TerminalResizeController.reconcileGeometryFresh}) may apply
+ * a grid-changing resize. A resize that lands while a main-buffer CLI is still
+ * streaming re-wraps its committed scrollback under the app's cursor-relative
+ * sticky-region repaint and duplicates/garbles the block (#10863).
+ */
+export const REVEAL_REWRAP_QUIESCENT_MS = 300;
+
 export class TerminalResizeController {
   private resizeLocks = new Map<string, number>();
   private settledResizeTimers = new Map<string, number>();
@@ -402,6 +411,23 @@ export class TerminalResizeController {
       if (!cellDims) return false;
       cols = Math.max(2, Math.floor(rect.width / cellDims.width));
       rows = Math.max(1, Math.floor(rect.height / cellDims.height));
+    }
+
+    // Never re-wrap a main-buffer pane out from under a CLI that is still
+    // streaming (#10863). xterm's resize() reflows committed scrollback while
+    // an Ink-style CLI repaints its sticky region with cursor-relative erase
+    // math sized for the old grid — a reveal that lands mid-paint duplicates
+    // or garbles the block it is painting. Report "not paintable yet" (before
+    // touching the dim caches, so applyDeferredResize's cache==current check
+    // stays truthful) and let the reveal sweep retry once the pane has been
+    // write-quiescent; the reconciliation watchdog backstops a pane that
+    // never goes quiet. A no-drift pass falls through: the PTY re-assert
+    // below is dedupe-safe and never re-wraps.
+    if (
+      (managed.terminal.cols !== cols || managed.terminal.rows !== rows) &&
+      Date.now() - (managed.lastWriteAt ?? 0) < REVEAL_REWRAP_QUIESCENT_MS
+    ) {
+      return false;
     }
 
     managed.lastWidth = rect.width;
