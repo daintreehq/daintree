@@ -100,6 +100,8 @@ jobs:
         run: node scripts/ci/verify-electron-install.mjs
 
       - name: Build app
+        env:
+          NODE_OPTIONS: "--max-old-space-size=6144"
         run: npm run build
 
       - name: Install Claude Code
