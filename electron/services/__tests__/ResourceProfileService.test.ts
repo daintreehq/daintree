@@ -50,6 +50,8 @@ import { broadcastToRenderer } from "../../ipc/utils.js";
 import { ResourceProfileService, type ResourceProfileDeps } from "../ResourceProfileService.js";
 import { RESOURCE_PROFILE_CONFIGS } from "../../../shared/types/resourceProfile.js";
 import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
+import { resetMemoryAccountingForTesting } from "../memoryAccounting.js";
+import type { MemoryRollup } from "../../../shared/types/pty-host.js";
 
 const EIGHT_GB = 8 * 1024 * 1024 * 1024;
 
@@ -1911,6 +1913,239 @@ describe("ResourceProfileService", () => {
       expect(snap.pressureScore).toBe(3);
       expect(snap.targetProfile).toBe("efficiency");
       expect(snap.isOnBattery).toBe(true);
+
+      service.stop();
+    });
+  });
+
+  describe("terminal-workload pressure signal", () => {
+    // At the pinned 8 GB: LOW band = 2048 MB (0.25 × RAM), HIGH band = 3276.8 MB (0.4 × RAM).
+    const setWorkload = (
+      service: ResourceProfileService,
+      totalMemoryMb: number,
+      opts?: { available?: boolean; ageMs?: number }
+    ): void => {
+      (
+        service as unknown as {
+          cachedTerminalWorkload: {
+            totalMemoryMb: number;
+            available: boolean;
+            sampledAt: number;
+          } | null;
+        }
+      ).cachedTerminalWorkload = {
+        totalMemoryMb,
+        available: opts?.available ?? true,
+        sampledAt: Date.now() - (opts?.ageMs ?? 1_000),
+      };
+    };
+
+    beforeEach(() => {
+      resetMemoryAccountingForTesting();
+    });
+
+    it("contributes +1 above the low band from a fresh measurement", () => {
+      const service = new ResourceProfileService(createDeps());
+      setWorkload(service, 2_500);
+
+      const snap = service.getWhySlowResourceSnapshot();
+
+      const reason = snap.reasons.find((r) => r.signal === "terminalWorkloads");
+      expect(reason).toBeDefined();
+      expect(reason?.contribution).toBe(1);
+      expect(reason?.detail).toBe("terminal workloads 2500MB");
+      expect(snap.pressureScore).toBe(1);
+      expect(snap.targetProfile).toBe("balanced");
+    });
+
+    it("is bounded at +2 — terminal workloads alone can never latch efficiency", () => {
+      const service = new ResourceProfileService(createDeps());
+      // 6 GB of descendants on an 8 GB machine — as extreme as it gets.
+      setWorkload(service, 6_000);
+
+      const snap = service.getWhySlowResourceSnapshot();
+
+      const reason = snap.reasons.find((r) => r.signal === "terminalWorkloads");
+      expect(reason?.contribution).toBe(2);
+      expect(snap.pressureScore).toBe(2);
+      expect(snap.targetProfile).toBe("balanced");
+    });
+
+    it("reaches efficiency only with a second corroborating signal", () => {
+      const service = new ResourceProfileService(createDeps());
+      mockIsOnBatteryPower.mockReturnValue(true);
+      (service as unknown as { isOnBattery: boolean }).isOnBattery = true;
+      setWorkload(service, 3_400);
+
+      const snap = service.getWhySlowResourceSnapshot();
+
+      expect(snap.pressureScore).toBe(3);
+      expect(snap.targetProfile).toBe("efficiency");
+    });
+
+    it("ignores a huge-but-stale sample", () => {
+      const service = new ResourceProfileService(createDeps());
+      setWorkload(service, 6_000, { ageMs: 61_000 });
+
+      const snap = service.getWhySlowResourceSnapshot();
+
+      expect(snap.reasons.find((r) => r.signal === "terminalWorkloads")).toBeUndefined();
+      expect(snap.pressureScore).toBe(0);
+      expect(snap.targetProfile).toBe("performance");
+    });
+
+    it("ignores an unavailable rollup regardless of magnitude", () => {
+      const service = new ResourceProfileService(createDeps());
+      setWorkload(service, 6_000, { available: false });
+
+      const snap = service.getWhySlowResourceSnapshot();
+
+      expect(snap.reasons.find((r) => r.signal === "terminalWorkloads")).toBeUndefined();
+      expect(snap.pressureScore).toBe(0);
+    });
+
+    it("ignores a sample stamped in the future (clock moved backwards)", () => {
+      const service = new ResourceProfileService(createDeps());
+      // Negative age: the sample claims to be from an hour ahead of now.
+      setWorkload(service, 6_000, { ageMs: -3_600_000 });
+
+      const snap = service.getWhySlowResourceSnapshot();
+
+      expect(snap.reasons.find((r) => r.signal === "terminalWorkloads")).toBeUndefined();
+      expect(snap.pressureScore).toBe(0);
+    });
+
+    it("drops the hysteresis latch across a stale gap", () => {
+      const service = new ResourceProfileService(createDeps());
+
+      // Engage tier 2 above the 3276.8 MB band.
+      setWorkload(service, 3_300);
+      expect(service.getWhySlowResourceSnapshot().pressureScore).toBe(2);
+
+      // The sample goes stale — contribution drops AND the latch releases.
+      setWorkload(service, 3_300, { ageMs: 120_000 });
+      expect(service.getWhySlowResourceSnapshot().pressureScore).toBe(0);
+
+      // Fresh data returns below the tier-2 entry threshold: it must score as
+      // a cold +1 evaluation, not inherit the pre-gap tier's 0.9× exit band.
+      setWorkload(service, 3_000);
+      expect(service.getWhySlowResourceSnapshot().pressureScore).toBe(1);
+    });
+
+    it("holds an engaged tier through the 10% exit band, releasing below it", () => {
+      const service = new ResourceProfileService(createDeps());
+
+      // Engage tier 1 above the 2048 MB band.
+      setWorkload(service, 2_100);
+      expect(service.getWhySlowResourceSnapshot().pressureScore).toBe(1);
+
+      // Dip below entry but above the exit bar (2048 × 0.9 = 1843.2) — held.
+      setWorkload(service, 1_900);
+      expect(service.getWhySlowResourceSnapshot().pressureScore).toBe(1);
+
+      // Below the exit bar — released.
+      setWorkload(service, 1_800);
+      expect(service.getWhySlowResourceSnapshot().pressureScore).toBe(0);
+    });
+
+    it("steps an engaged high tier down through both exit bands", () => {
+      const service = new ResourceProfileService(createDeps());
+
+      // Engage tier 2 above the 3276.8 MB band.
+      setWorkload(service, 3_300);
+      expect(service.getWhySlowResourceSnapshot().pressureScore).toBe(2);
+
+      // Above the tier-2 exit bar (3276.8 × 0.9 ≈ 2949) — held at +2.
+      setWorkload(service, 3_000);
+      expect(service.getWhySlowResourceSnapshot().pressureScore).toBe(2);
+
+      // Below the tier-2 exit bar but well above the low band — steps to +1.
+      setWorkload(service, 2_900);
+      expect(service.getWhySlowResourceSnapshot().pressureScore).toBe(1);
+    });
+
+    it("populates the cached sample from the pty-host rollup on start", async () => {
+      const rollupBase: MemoryRollup = {
+        byProject: [],
+        totalMemoryKb: 2_500 * 1024,
+        totalProcessCount: 4,
+        terminalCount: 2,
+        available: true,
+        sampledAt: 0,
+      };
+      const ptyClient = {
+        setResourceProfile: vi.fn(),
+        getAllTerminalsAsync: vi.fn().mockResolvedValue([]),
+        getMemoryRollup: vi
+          .fn()
+          .mockImplementation(() => Promise.resolve({ ...rollupBase, sampledAt: Date.now() })),
+      };
+      const service = new ResourceProfileService(
+        createDeps({
+          getPtyClient: () => ptyClient as unknown as import("../PtyClient.js").PtyClient,
+        })
+      );
+      service.start();
+      await flushAsync();
+
+      const snap = service.getWhySlowResourceSnapshot();
+      const reason = snap.reasons.find((r) => r.signal === "terminalWorkloads");
+      expect(reason?.contribution).toBe(1);
+      expect(reason?.detail).toBe("terminal workloads 2500MB");
+
+      service.stop();
+    });
+
+    it("recovers from efficiency when the workload data goes unavailable", async () => {
+      const rollupBase: MemoryRollup = {
+        byProject: [],
+        totalMemoryKb: 3_500 * 1024,
+        totalProcessCount: 6,
+        terminalCount: 3,
+        available: true,
+        sampledAt: 0,
+      };
+      const ptyClient = {
+        setResourceProfile: vi.fn(),
+        getAllTerminalsAsync: vi.fn().mockResolvedValue([]),
+        getMemoryRollup: vi
+          .fn()
+          .mockImplementation(() => Promise.resolve({ ...rollupBase, sampledAt: Date.now() })),
+      };
+      const service = new ResourceProfileService(
+        createDeps({
+          getPtyClient: () => ptyClient as unknown as import("../PtyClient.js").PtyClient,
+        })
+      );
+      // Battery +1 corroborates the workload +2 → score 3 → efficiency.
+      mockIsOnBatteryPower.mockReturnValue(true);
+      service.start();
+      await flushAsync();
+
+      // Warmup (2 ticks), first scoring tick starts the candidate, downgrade
+      // hold (30s) applies it on the following tick.
+      for (let i = 0; i < 4; i += 1) {
+        vi.advanceTimersByTime(30_000);
+        await flushAsync();
+      }
+      expect(service.getProfile()).toBe("efficiency");
+
+      // The process table wedges: unavailable rollup with even bigger numbers.
+      // The contribution must drop to 0, leaving battery (+1) → balanced after
+      // the 90s upgrade hold — huge-but-unmeasurable data can't pin efficiency.
+      ptyClient.getMemoryRollup.mockImplementation(() =>
+        Promise.resolve({
+          ...rollupBase,
+          totalMemoryKb: 6_000 * 1024,
+          available: false,
+          sampledAt: Date.now(),
+        })
+      );
+      for (let i = 0; i < 6; i += 1) {
+        vi.advanceTimersByTime(30_000);
+        await flushAsync();
+      }
+      expect(service.getProfile()).toBe("balanced");
 
       service.stop();
     });

@@ -2,8 +2,10 @@ import { z } from "zod";
 import { defineIpcNamespace, op, opValidated } from "../define.js";
 import type { HandlerDependencies } from "../types.js";
 import type { WhySlowSnapshot } from "../../../shared/types/whySlow.js";
+import type { CompositeMemorySnapshot } from "../../../shared/types/memoryAccounting.js";
 import { WHY_SLOW_METHOD_CHANNELS } from "./whySlow.preload.js";
 import { collectWhySlowSnapshot } from "../../services/DiagnosticsCollector.js";
+import { getCompositeMemorySnapshot } from "../../services/memoryAccounting.js";
 import { recordRendererTerminalDiagnostics } from "../../services/RendererTerminalDiagnosticsCache.js";
 
 // Renderer-pushed terminal-rendering state (#10910). Bounded so a compromised
@@ -32,6 +34,14 @@ export function registerWhySlowHandlers(deps: HandlerDependencies): () => void {
       getWhySlowSnapshot: op(
         WHY_SLOW_METHOD_CHANNELS.getWhySlowSnapshot,
         async (): Promise<WhySlowSnapshot> => collectWhySlowSnapshot(deps)
+      ),
+      // Composite memory snapshot (Electron working-set + terminal descendant
+      // RSS by project) for the resource badge popover. Reads go through
+      // shared TTL caches, so popover-cadence polling stays cheap.
+      getMemorySnapshot: op(
+        WHY_SLOW_METHOD_CHANNELS.getMemorySnapshot,
+        async (): Promise<CompositeMemorySnapshot> =>
+          getCompositeMemorySnapshot(deps.ptyClient ?? null)
       ),
       // Fire-and-forget renderer push: cache the sender's terminal WebGL/tier
       // state by webContents id. Ignored once the sender is torn down, mirroring

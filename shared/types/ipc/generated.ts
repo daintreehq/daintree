@@ -1269,6 +1269,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  "system:get-memory-snapshot": {
+    args: [];
+    result: import("../memoryAccounting.js").CompositeMemorySnapshot;
+  };
   "system:get-resource-profile": {
     args: [];
     result: import("../resourceProfile.js").ResourceProfilePayload;
