@@ -31,12 +31,14 @@ import {
   buildSkeletonCss,
   insertSkeletonCss,
   injectSkeletonCss,
+  injectSkeletonProjectIdentity,
   resolveInitialColorSchemeId,
   resolveE2EPreloadArgs,
   resolveInstanceRole,
   INITIAL_COLOR_SCHEME_ARG,
   INSTANCE_ROLE_ARG,
 } from "./skeletonCss.js";
+import { readLastActiveProjectIdentitySync } from "../services/persistence/readLastProjectId.js";
 import { attachRendererConsoleCapture } from "./rendererConsoleCapture.js";
 import { markPerformance } from "../utils/performance.js";
 import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js";
@@ -370,15 +372,36 @@ export function setupBrowserWindow(
     // skips the synchronous config.json re-reads; later dom-ready events
     // (crash auto-reloads) rebuild it so the skeleton reflects current
     // theme/sidebar/focus state.
-    const precomputedSkeletonCss = buildSkeletonCss(undefined, themeConfig);
+    // Resolve the persisted last-active project so the initial host skeleton
+    // paints that project's accent + name/emoji, matching a cold project switch
+    // (#10942). readLastActiveProjectIdentitySync reads via its own throwaway
+    // read-only sqlite connection — the shared DB is NOT open yet on the
+    // early-renderer boot path (and opening it would run migrations on the
+    // loadURL-dispatch path), so projectStore.getProjectById can't be used here.
+    // When the id is missing, the project row is gone, or the read fails, the
+    // anonymous gray skeleton (the prior behavior) remains the fallback. Mirrors
+    // the cold-switch handler in ProjectViewManager, minus instantReveal (the
+    // 400ms Doherty gate belongs on the initial launch).
+    const initialProject = projectId ? readLastActiveProjectIdentitySync(projectId) : null;
+    const precomputedSkeletonCss = buildSkeletonCss(initialProject, themeConfig);
     let firstDomReady = true;
     appWebContents.on("dom-ready", () => {
-      if (firstDomReady) {
-        firstDomReady = false;
+      const crashReload = !firstDomReady;
+      // Re-read on crash auto-reload so a renamed/recolored project stays
+      // current (mirrors ProjectViewManager's re-read inside its dom-ready
+      // handler). The first parse reuses the boot-path value captured above.
+      const project =
+        crashReload && projectId ? readLastActiveProjectIdentitySync(projectId) : initialProject;
+      firstDomReady = false;
+      if (!crashReload) {
         insertSkeletonCss(appWebContents, precomputedSkeletonCss);
       } else {
-        injectSkeletonCss(appWebContents);
+        // Rebuild fresh so the skeleton reflects current theme/sidebar/focus
+        // state, keeping the persisted project's accent.
+        injectSkeletonCss(appWebContents, project);
       }
+      // Repaint name/emoji on every parse so crash reloads stay identified.
+      injectSkeletonProjectIdentity(appWebContents, project);
     });
 
     // Gate win.show() on the skeleton markup being parsed so the OS never
