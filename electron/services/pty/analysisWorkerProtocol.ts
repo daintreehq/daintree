@@ -59,7 +59,19 @@ export type HostToWorkerMessage =
   | { type: "set-scrollback"; terminalId: string; lines: number }
   | { type: "free"; terminalId: string }
   | { type: "plugin-agent-registry"; registry: Record<string, AgentConfig> }
-  | { type: "request"; requestId: number; terminalId: string; op: AnalysisRequestOp };
+  | {
+      /**
+       * `generation` is the pool slot's worker generation at post time (bumped
+       * on every respawn). The worker echoes it on the response so the host
+       * can discard a reply produced by a superseded worker instance — the
+       * request/response counterpart of the data-path `epoch` fence.
+       */
+      type: "request";
+      requestId: number;
+      terminalId: string;
+      op: AnalysisRequestOp;
+      generation: number;
+    };
 
 export interface AnalysisFinalSnapshot {
   /** Full-buffer serialize (banner included) for the preserved snapshot. */
@@ -104,4 +116,6 @@ export type WorkerToHostMessage =
       terminalId: string;
       result: AnalysisRequestResult;
       error?: string;
+      /** Echo of the request's worker generation; absent from legacy workers. */
+      generation?: number;
     };

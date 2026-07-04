@@ -17,6 +17,7 @@ import type {
   WhySlowPtySummary,
   WhySlowResourceSnapshot,
   WhySlowSnapshot,
+  WhySlowWorkerSummary,
   WhySlowWorktreeSummary,
 } from "../../shared/types/whySlow.js";
 
@@ -707,6 +708,29 @@ async function collectWhySlowPty(ptyClient?: PtyClient): Promise<WhySlowPtySumma
   }
 }
 
+// Bounded persistent-worker resource report: analysis pool slots, DB worker,
+// copytree workers, plugin workers, and the utility hosts themselves. Provider
+// isolation and time-boxing live inside the service; this wrapper only guards
+// the import/singleton path.
+async function collectWorkerGovernance() {
+  try {
+    const { getWorkerGovernanceService } = await import("./WorkerGovernanceService.js");
+    return await getWorkerGovernanceService().collectReport();
+  } catch {
+    return { error: "Failed to collect worker governance report" };
+  }
+}
+
+async function collectWhySlowWorkers(): Promise<WhySlowWorkerSummary | null> {
+  try {
+    const { getWorkerGovernanceService } = await import("./WorkerGovernanceService.js");
+    const service = getWorkerGovernanceService();
+    return service.summarize(await service.collectReport());
+  } catch {
+    return null;
+  }
+}
+
 async function collectWhySlowWorktrees(): Promise<WhySlowWorktreeSummary | null> {
   try {
     const { getWorkspaceClientRef } = await import("../window/serviceRefs.js");
@@ -736,10 +760,11 @@ export async function collectWhySlowSnapshot(deps: HandlerDependencies): Promise
   // section in withTimeout, but the live dock pull calls this directly. A hung
   // pty-host or workspace-host must not wedge the very snapshot meant to explain
   // a slowdown — degrade the stuck section to null instead.
-  const [resource, pty, worktrees] = await Promise.all([
+  const [resource, pty, worktrees, workers] = await Promise.all([
     withTimeout(collectWhySlowResource(), WHY_SLOW_ASYNC_TIMEOUT_MS, null),
     withTimeout(collectWhySlowPty(deps.ptyClient), WHY_SLOW_ASYNC_TIMEOUT_MS, null),
     withTimeout(collectWhySlowWorktrees(), WHY_SLOW_ASYNC_TIMEOUT_MS, null),
+    withTimeout(collectWhySlowWorkers(), WHY_SLOW_ASYNC_TIMEOUT_MS, null),
   ]);
   return {
     timestamp: Date.now(),
@@ -748,6 +773,7 @@ export async function collectWhySlowSnapshot(deps: HandlerDependencies): Promise
     rendererTerminals: collectWhySlowRendererTerminals(),
     pty,
     worktrees,
+    workers,
   };
 }
 
@@ -775,6 +801,7 @@ export async function collectDiagnosticsWithKeys(
     { key: "rendererMemory", fn: collectRendererMemory },
     { key: "memoryTrends", fn: collectMemoryTrends },
     { key: "resourceState", fn: collectResourceState },
+    { key: "workerGovernance", fn: collectWorkerGovernance },
     { key: "whySlow", fn: () => collectWhySlowSnapshot(deps) },
     { key: "counts", fn: () => collectCounts(deps) },
     { key: "logs", fn: collectLogs },

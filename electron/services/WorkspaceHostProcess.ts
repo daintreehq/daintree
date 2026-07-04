@@ -998,6 +998,10 @@ export class WorkspaceHostProcess extends EventEmitter {
         this.handleRequestResult(this.toResult(event, true));
         break;
 
+      case "governance:snapshot-result":
+        this.handleRequestResult(this.toResult(event, true));
+        break;
+
       case "copytree:error":
         this.handleRequestResult({
           requestId: event.requestId,

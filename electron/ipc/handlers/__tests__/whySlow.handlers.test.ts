@@ -71,6 +71,7 @@ describe("registerWhySlowHandlers — getWhySlowSnapshot", () => {
       rendererTerminals: [],
       pty: null,
       worktrees: null,
+      workers: null,
     };
     collectorMock.collectWhySlowSnapshot.mockResolvedValue(snapshot);
 

@@ -15,6 +15,7 @@ import type {
   HostToWorkerMessage,
   WorkerToHostMessage,
 } from "../analysisWorkerProtocol.js";
+import type { WorkerResourceSnapshot } from "../../../../shared/types/workerGovernance.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -62,6 +63,8 @@ export interface WorkerLike {
   on(event: "exit", cb: (code: number) => void): void;
   on(event: "error", cb: (err: Error) => void): void;
   unref(): void;
+  /** worker_threads thread id — optional so test fakes stay minimal. */
+  threadId?: number;
 }
 
 interface PoolSlot {
@@ -70,6 +73,15 @@ interface PoolSlot {
   terminals: Set<string>;
   respawnCount: number;
   alive: boolean;
+  /**
+   * Monotonic worker generation, bumped on every (re)spawn into this slot.
+   * Stamped onto each request and echoed on its response so a reply produced
+   * by a superseded worker instance can never settle a fresh request — the
+   * request/response counterpart of the backend's data-path feed epoch.
+   */
+  generation: number;
+  /** Epoch ms of the last message routed at this slot; drives idle reporting. */
+  lastActivityAt: number;
 }
 
 interface PendingRequest {
@@ -77,6 +89,7 @@ interface PendingRequest {
   timer: NodeJS.Timeout;
   slotIndex: number;
   op: AnalysisRequestOp;
+  generation: number;
 }
 
 function emptyResult(op: AnalysisRequestOp): AnalysisRequestResult {
@@ -120,6 +133,7 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
     if (!slot?.alive || !slot.worker) return false;
     try {
       slot.worker.postMessage(msg);
+      slot.lastActivityAt = Date.now();
       return true;
     } catch (error) {
       console.error(`[AnalysisWorkerPool] postMessage failed for ${terminalId}:`, error);
@@ -140,9 +154,11 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
         resolve(emptyResult(op));
       }, REQUEST_TIMEOUT_MS);
       timer.unref();
-      this.pending.set(requestId, { resolve, timer, slotIndex: slot.index, op });
+      const generation = slot.generation;
+      this.pending.set(requestId, { resolve, timer, slotIndex: slot.index, op, generation });
       try {
-        slot.worker!.postMessage({ type: "request", requestId, terminalId, op });
+        slot.worker!.postMessage({ type: "request", requestId, terminalId, op, generation });
+        slot.lastActivityAt = Date.now();
       } catch (error) {
         clearTimeout(timer);
         this.pending.delete(requestId);
@@ -180,6 +196,40 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
       aliveWorkers: this.slots.filter((s) => s.alive).length,
       terminals: this.assignments.size,
     };
+  }
+
+  /**
+   * Per-slot governance snapshots. Analysis workers are trim-eligible (their
+   * sessions' scrollback can shrink) but never dispose/restart-eligible —
+   * persistent worker_threads must not be terminate/recreate cycled (Electron
+   * `!flush_tasks_` crash), and a dead slot's recovery is the respawn path's.
+   */
+  getGovernanceSnapshots(): WorkerResourceSnapshot[] {
+    const now = Date.now();
+    return this.slots.map((slot) => {
+      let queueDepth = 0;
+      for (const req of this.pending.values()) {
+        if (req.slotIndex === slot.index) queueDepth++;
+      }
+      return {
+        kind: "analysis-pool" as const,
+        id: `analysis-worker-${slot.index}`,
+        pid: null,
+        threadId: slot.worker?.threadId ?? null,
+        alive: slot.alive,
+        activeSessionCount: slot.terminals.size,
+        queueDepth,
+        lastActivityAt: slot.lastActivityAt,
+        memory: null,
+        eligibility: { trim: true, dispose: false, restart: false },
+        state: slot.alive ? "running" : "dead",
+        detail: {
+          respawnCount: slot.respawnCount,
+          generation: slot.generation,
+          idleMs: Math.max(0, now - slot.lastActivityAt),
+        },
+      };
+    });
   }
 
   dispose(): void {
@@ -221,6 +271,8 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
       terminals: new Set(),
       respawnCount: 0,
       alive: false,
+      generation: 0,
+      lastActivityAt: Date.now(),
     };
     if (!this.spawnIntoSlot(slot)) return null;
     this.slots.push(slot);
@@ -237,6 +289,8 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
     }
     slot.worker = worker;
     slot.alive = true;
+    slot.generation++;
+    slot.lastActivityAt = Date.now();
     worker.on("message", (msg) => this.onWorkerMessage(msg));
     worker.on("error", (err) => {
       console.error(`[AnalysisWorkerPool] Worker ${slot.index} error:`, err);
@@ -259,8 +313,25 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
     if (msg.type === "response") {
       const req = this.pending.get(msg.requestId);
       if (req) {
+        // Generation fence: a reply stamped with a superseded worker
+        // generation (or arriving after the slot respawned) must not settle
+        // the request with stale content — resolve empty instead. Exit
+        // handling already flushes pending entries for a dead slot, so this
+        // is the belt for replies that race the respawn window.
+        const currentGeneration = this.slots[req.slotIndex]?.generation;
+        const stale =
+          (msg.generation !== undefined && msg.generation !== req.generation) ||
+          currentGeneration !== req.generation;
         this.pending.delete(msg.requestId);
         clearTimeout(req.timer);
+        if (stale) {
+          console.warn(
+            `[AnalysisWorkerPool] Discarding stale ${req.op} reply for ${msg.terminalId} ` +
+              `(generation ${msg.generation ?? "unknown"} != ${req.generation})`
+          );
+          req.resolve(emptyResult(req.op));
+          return;
+        }
         req.resolve(msg.result);
       }
       return;

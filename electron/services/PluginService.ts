@@ -174,6 +174,8 @@ import type { PluginToolbarButtonId } from "../../shared/types/toolbar.js";
 import { getPluginActionAuditService } from "./PluginActionAuditService.js";
 import { stableArgsSha256 } from "../utils/pluginMcpHash.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { canDisposeIdlePluginWorker } from "../../shared/utils/workerGovernancePolicy.js";
+import type { WorkerResourceSnapshot } from "../../shared/types/workerGovernance.js";
 import { markAuditedHandlerFailure } from "../utils/pluginAuditMarker.js";
 import type {
   PluginDiagnosticsAuditRecord,
@@ -787,6 +789,12 @@ export class PluginService {
     string,
     { workerHost: PluginDevWorkerHost; bridge: PluginDevWorkerMainBridge; revoke: () => void }
   >();
+  /**
+   * Last time each plugin was needed (activation trigger, action dispatch,
+   * panel/forge/decoration pull — all funnel through `activatePlugin`). Drives
+   * the idle gate for governance worker disposal; entries die with the plugin.
+   */
+  private pluginWorkerActivity = new Map<string, number>();
   private pluginsRoot: string;
   /**
    * Optional override for the built-in plugins directory. When unset, the
@@ -2002,6 +2010,10 @@ export class PluginService {
    * contract that a failed activation must leave routing entries intact.
    */
   async activatePlugin(pluginId: string): Promise<void> {
+    // Every lazy trigger (dispatch, panel open, forge/decoration pull) funnels
+    // through here — including post-activation short-circuits — so this is the
+    // single "the plugin was needed now" edge the idle-dispose gate reads.
+    this.pluginWorkerActivity.set(pluginId, Date.now());
     if (this.activatedPlugins.has(pluginId)) return;
     const existing = this.activationPromises.get(pluginId);
     if (existing) return existing;
@@ -4645,6 +4657,7 @@ export class PluginService {
     );
 
     this.plugins.delete(pluginId);
+    this.pluginWorkerActivity.delete(pluginId);
 
     // Drop any live panel badges this plugin set and tell the renderer to clear
     // them (#10585). Only broadcast when the plugin actually had badges so an
@@ -4668,6 +4681,200 @@ export class PluginService {
         }
       });
     }
+  }
+
+  /**
+   * Governance snapshots for the plugin-worker subsystem: one entry per
+   * user-plugin worker (live or not-yet-forked) plus disabled/blocked plugins
+   * (whose workers the unload cascade already cleared). Built-ins run
+   * in-process and have no separable worker, so they are not reported.
+   * Memory is joined by pid to `app.getAppMetrics()` in the governance
+   * service, not here.
+   */
+  getWorkerGovernanceSnapshots(): WorkerResourceSnapshot[] {
+    const snapshots: WorkerResourceSnapshot[] = [];
+    for (const [pluginId, plugin] of this.plugins) {
+      if (plugin.isBuiltin) continue;
+      const entry = this.pluginWorkers.get(pluginId);
+      const loadError = this.records.getInstalledRecord(pluginId)?.loadError ?? null;
+      snapshots.push({
+        kind: "plugin-worker",
+        id: pluginId,
+        pid: entry?.workerHost.pid ?? null,
+        threadId: null,
+        alive: entry?.workerHost.isReady() ?? false,
+        activeSessionCount:
+          (this.processManager?.runningCount(pluginId) ?? 0) +
+          (this.pluginFsWatchers.get(pluginId)?.size ?? 0),
+        queueDepth: entry ? entry.bridge.pendingInvokeCount + entry.bridge.pendingHostCallCount : 0,
+        lastActivityAt: this.pluginWorkerActivity.get(pluginId) ?? null,
+        memory: null,
+        eligibility: {
+          trim: false,
+          dispose: entry ? this.canDisposeIdleWorker(pluginId).ok : false,
+          restart: false,
+        },
+        state: entry ? (entry.workerHost.isReady() ? "running" : "starting") : "no-worker",
+        detail: {
+          builtin: false,
+          devMode: plugin.devMode ?? false,
+          activated: this.activatedPlugins.has(pluginId),
+          panels: plugin.manifest.contributes.panels.length,
+          bootError: loadError ? loadError.message : null,
+        },
+      });
+    }
+    for (const [pluginId, info] of this.disabledPlugins) {
+      snapshots.push({
+        kind: "plugin-worker",
+        id: pluginId,
+        pid: null,
+        threadId: null,
+        alive: false,
+        activeSessionCount: 0,
+        queueDepth: 0,
+        lastActivityAt: null,
+        memory: null,
+        eligibility: { trim: false, dispose: false, restart: false },
+        state: "disabled",
+        detail: { builtin: info.isBuiltin },
+      });
+    }
+    for (const [pluginId, info] of this.blockedPlugins) {
+      snapshots.push({
+        kind: "plugin-worker",
+        id: pluginId,
+        pid: null,
+        threadId: null,
+        alive: false,
+        activeSessionCount: 0,
+        queueDepth: 0,
+        lastActivityAt: null,
+        memory: null,
+        eligibility: { trim: false, dispose: false, restart: false },
+        state: "blocked",
+        detail: { builtin: info.isBuiltin, reason: info.reason },
+      });
+    }
+    return snapshots;
+  }
+
+  /**
+   * Governance sweep: dispose the workers of idle plugins that expose no live
+   * surface a dead worker could break (see {@link canDisposeIdlePluginWorker}
+   * for the full disqualifier list). Deliberately conservative — most real
+   * plugins keep a panel, subscription, or process alive and are never
+   * eligible; the target is pure action/formatter plugins that were used once
+   * and have sat cold since.
+   */
+  disposeIdlePluginWorkers(opts?: { now?: number; idleDisposeMs?: number }): {
+    disposed: string[];
+    skipped: number;
+  } {
+    const disposed: string[] = [];
+    let skipped = 0;
+    for (const pluginId of [...this.pluginWorkers.keys()]) {
+      const verdict = this.canDisposeIdleWorker(pluginId, opts);
+      if (!verdict.ok) {
+        skipped++;
+        continue;
+      }
+      if (this.deactivateIdleWorker(pluginId)) {
+        disposed.push(pluginId);
+      } else {
+        skipped++;
+      }
+    }
+    if (disposed.length > 0) {
+      console.log(
+        `[PluginService] Governance disposed ${disposed.length} idle plugin worker(s): ${disposed.join(", ")}`
+      );
+    }
+    return { disposed, skipped };
+  }
+
+  private canDisposeIdleWorker(
+    pluginId: string,
+    opts?: { now?: number; idleDisposeMs?: number }
+  ): { ok: boolean; reason: string } {
+    const plugin = this.plugins.get(pluginId);
+    const entry = this.pluginWorkers.get(pluginId);
+    if (!plugin || !entry) return { ok: false, reason: "not running" };
+    if (this.enableTransitions.has(pluginId)) {
+      return { ok: false, reason: "enable/disable transition in flight" };
+    }
+    // A settled activation leaves its promise in the map (the fast-path is
+    // `activatedPlugins`); only an entry WITHOUT the activated latch is a
+    // genuinely in-flight activation.
+    if (!this.activatedPlugins.has(pluginId) && this.activationPromises.has(pluginId)) {
+      return { ok: false, reason: "activation in flight" };
+    }
+    // Imperative (`host.registerAction`) actions die with the worker and have
+    // no manifest descriptor to lazily re-fork through — a plugin that owns
+    // any is never dispose-eligible (the documented command-plugin shape).
+    let imperativeActionCount = 0;
+    for (const actionId of this.pluginActionOwners.get(pluginId) ?? []) {
+      if (!this.manifestCommandIds.has(actionId)) imperativeActionCount++;
+    }
+    return canDisposeIdlePluginWorker({
+      isBuiltin: plugin.isBuiltin ?? false,
+      devMode: plugin.devMode ?? false,
+      panelContributionCount: plugin.manifest.contributes.panels.length,
+      mcpServerContributionCount: plugin.manifest.contributes.mcpServers.length,
+      startupActivation: this.shouldActivateOnStartup(plugin.manifest),
+      eventSubscriptionCount: this.pluginEventCleanups.get(pluginId)?.length ?? 0,
+      imperativeActionCount,
+      pendingInvokeCount: entry.bridge.pendingInvokeCount,
+      pendingHostCallCount: entry.bridge.pendingHostCallCount,
+      managedProcessCount: this.processManager?.runningCount(pluginId) ?? 0,
+      fsWatcherCount: this.pluginFsWatchers.get(pluginId)?.size ?? 0,
+      lastActivityAt: this.pluginWorkerActivity.get(pluginId) ?? null,
+      now: opts?.now ?? Date.now(),
+      idleDisposeMs: opts?.idleDisposeMs,
+    });
+  }
+
+  /**
+   * Narrow worker teardown for the idle-dispose path: the worker, bridge, and
+   * activate-time imperative registrations go; the plugin, its manifest
+   * contributions, and its provenance record stay. The next lazy trigger
+   * (dispatch, panel open, forge/decoration pull) re-forks via
+   * `activateViaWorker` exactly like a dev reload re-registers over
+   * `clearPriorRegistrations` — that cycle is the proof this teardown is
+   * re-entrant. Contrast `unloadPlugin`, which removes the plugin entirely.
+   */
+  private deactivateIdleWorker(pluginId: string): boolean {
+    const entry = this.pluginWorkers.get(pluginId);
+    if (!entry) return false;
+    this.activatedPlugins.delete(pluginId);
+    this.activationPromises.delete(pluginId);
+    const cleanup = this.cleanupMap.get(pluginId);
+    if (cleanup) {
+      try {
+        cleanup();
+      } catch (err) {
+        console.error(`[PluginService] Idle-dispose cleanup for "${pluginId}" threw:`, err);
+      }
+      this.cleanupMap.delete(pluginId);
+    }
+    // Activate-time imperative registrations — the same set the dev-reload
+    // cycle clears before a worker re-registers.
+    this.removeHandlers(pluginId);
+    this.unregisterImperativePluginActions(pluginId);
+    this.flushPluginEventCleanups(pluginId);
+    // Impls are proxies bound to the dead worker; manifest descriptors stay so
+    // the lazy triggers keep routing. Belt calls — the eligibility gate already
+    // required zero live subscriptions.
+    runUnloadStep(pluginId, "unregisterForgeProviderImpls", () =>
+      unregisterForgeProviderImpls(pluginId)
+    );
+    runUnloadStep(pluginId, "unregisterFileDecorationProviderImpls", () =>
+      unregisterFileDecorationProviderImpls(pluginId)
+    );
+    runUnloadStep(pluginId, "cancelUiPrompts", () =>
+      this.promptDispatcher.cancelForPlugin(pluginId)
+    );
+    return true;
   }
 
   /**

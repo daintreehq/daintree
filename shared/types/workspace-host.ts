@@ -31,6 +31,22 @@ import type {
   FileTreeNode,
 } from "./ipc.js";
 import type { ProjectPulse, PulseRangeDays } from "./pulse.js";
+import type { WorkerResourceSnapshot } from "./workerGovernance.js";
+
+/**
+ * Worker-governance snapshot for one workspace host: the copytree worker's
+ * state plus the host process's own memory usage (the copytree worker is a
+ * worker_thread inside this host, so host-level memory is its memory story).
+ */
+export interface WorkspaceHostGovernanceSnapshot {
+  timestamp: number;
+  workers: WorkerResourceSnapshot[];
+  hostMemory: {
+    rssBytes: number;
+    heapUsedBytes: number;
+    externalBytes: number;
+  };
+}
 
 export type { BranchInfo, CreateWorktreeOptions } from "./git.js";
 
@@ -413,6 +429,8 @@ export type WorkspaceHostRequest =
       rootPath: string;
       options?: CopyTreeOptions;
     }
+  // Worker-governance snapshot pull (copytree worker + host memory)
+  | { type: "governance:snapshot"; requestId: string }
   // Resource profile config update
   | { type: "update-monitor-config"; requestId: string; config: MonitorConfig }
   // Resource actions
@@ -714,6 +732,12 @@ export type WorkspaceHostEvent =
       type: "copytree:test-config-result";
       requestId: string;
       result: CopyTreeTestConfigResult;
+    }
+  // Worker-governance snapshot result
+  | {
+      type: "governance:snapshot-result";
+      requestId: string;
+      snapshot: WorkspaceHostGovernanceSnapshot;
     }
   // File tree events
   | {

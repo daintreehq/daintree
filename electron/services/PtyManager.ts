@@ -36,6 +36,8 @@ import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
 import { events } from "./events.js";
 import { getGitBranch } from "../utils/gitUtils.js";
 import type { GracefulKillResult } from "../../shared/types/pty-host.js";
+import { SCROLLBACK_MIN } from "../../shared/config/scrollback.js";
+import { shouldTrimAnalysisSession } from "../../shared/utils/workerGovernancePolicy.js";
 
 /**
  * PtyManager - Facade for terminal process management.
@@ -148,6 +150,43 @@ export class PtyManager extends EventEmitter {
     if (!terminal) return false;
     terminal.trimScrollback(targetLines);
     return true;
+  }
+
+  /**
+   * Governance trim pass: shrink the analysis scrollback of terminals that have
+   * been quiet past the idle floor and have no active agent
+   * (ACTIVE_AGENT_STATES — the same set that protects against eviction and
+   * hibernation). Unlike the resource governor's heap-pressure trims this is
+   * profile-driven (efficiency entry), so the per-session policy is the only
+   * thing between it and a working agent — it must stay conservative.
+   */
+  trimIdleAnalysisSessions(opts?: { now?: number; targetLines?: number; idleTrimMs?: number }): {
+    trimmed: number;
+    skipped: number;
+  } {
+    const now = opts?.now ?? Date.now();
+    const targetLines = opts?.targetLines ?? SCROLLBACK_MIN;
+    let trimmed = 0;
+    let skipped = 0;
+    for (const terminal of this.registry.getAll()) {
+      const info = terminal.getInfo();
+      const eligible = shouldTrimAnalysisSession({
+        agentState: info.agentState,
+        lastInputTime: info.lastInputTime,
+        lastOutputTime: info.lastOutputTime,
+        scrollbackLines: terminal.getCurrentScrollback(),
+        minScrollbackLines: targetLines,
+        now,
+        idleTrimMs: opts?.idleTrimMs,
+      });
+      if (!eligible) {
+        skipped++;
+        continue;
+      }
+      terminal.trimScrollback(targetLines);
+      trimmed++;
+    }
+    return { trimmed, skipped };
   }
 
   /**

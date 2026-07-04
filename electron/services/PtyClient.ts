@@ -69,6 +69,7 @@ import type {
   FlowControlSnapshot,
   MemoryRollup,
   GracefulKillResult,
+  PtyHostWorkerGovernanceSnapshot,
 } from "../../shared/types/pty-host.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
@@ -1164,6 +1165,19 @@ export class PtyClient extends EventEmitter {
       },
       eventLoop: null,
     }));
+  }
+
+  /**
+   * On-demand worker-governance snapshot from the pty-host (per-slot analysis
+   * worker pool state + host process memory). Resolves null on IPC
+   * failure/timeout — the governance caller reports the provider as errored
+   * rather than throwing.
+   */
+  async getWorkerGovernanceSnapshotAsync(): Promise<PtyHostWorkerGovernanceSnapshot | null> {
+    const requestId = this.broker.generateId("worker-governance-snapshot");
+    const promise = this.broker.register<PtyHostWorkerGovernanceSnapshot>(requestId);
+    this.send({ type: "get-worker-governance-snapshot", requestId });
+    return promise.catch(() => null);
   }
 
   /**

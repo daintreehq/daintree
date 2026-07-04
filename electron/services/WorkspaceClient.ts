@@ -12,6 +12,7 @@
 
 import { EventEmitter } from "events";
 import { CHANNELS } from "../ipc/channels.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { sendToEntryWindows } from "./workspace-client/types.js";
 import {
   WorkspaceHostPool,
@@ -26,6 +27,7 @@ import type {
   MonitorConfig,
   CreateWorktreeOptions,
   BranchInfo,
+  WorkspaceHostGovernanceSnapshot,
 } from "../../shared/types/workspace-host.js";
 import type {
   CopyTreeOptions,
@@ -359,6 +361,41 @@ export class WorkspaceClient extends EventEmitter {
 
   relayForgeProviderMatchers(matchers: ForgeProviderMatcher[]): void {
     this.pool.relayForgeProviderMatchers(matchers);
+  }
+
+  // ── Worker governance ──
+
+  /**
+   * Pull the worker-governance snapshot from every live workspace host
+   * (copytree worker state + host memory), tagged with the owning project
+   * path. Per-host failures degrade to an entry in `errors` — one crashed or
+   * slow host must not blank the report for the others.
+   */
+  async getWorkerGovernanceSnapshotsAsync(): Promise<{
+    hosts: Array<{ projectPath: string; snapshot: WorkspaceHostGovernanceSnapshot }>;
+    errors: Array<{ projectPath: string; error: string }>;
+  }> {
+    if (this.isDisposed) return { hosts: [], errors: [] };
+    const entries = [...this.pool.entries.values()];
+    const hosts: Array<{ projectPath: string; snapshot: WorkspaceHostGovernanceSnapshot }> = [];
+    const errors: Array<{ projectPath: string; error: string }> = [];
+    await Promise.all(
+      entries.map(async (entry) => {
+        try {
+          const requestId = entry.host.generateRequestId();
+          const result = await entry.host.sendWithResponse<{
+            snapshot: WorkspaceHostGovernanceSnapshot;
+          }>({ type: "governance:snapshot", requestId });
+          hosts.push({ projectPath: entry.projectPath, snapshot: result.snapshot });
+        } catch (error) {
+          errors.push({
+            projectPath: entry.projectPath,
+            error: formatErrorMessage(error, "governance snapshot failed"),
+          });
+        }
+      })
+    );
+    return { hosts, errors };
   }
 
   // ── State queries ──

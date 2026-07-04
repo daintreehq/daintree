@@ -9,6 +9,9 @@
 // renderer pushes, so it may be empty (no active views have reported yet).
 
 import type { ResourceProfile, ResourceThermalState } from "./resourceProfile.js";
+import type { WhySlowWorkerSummary } from "./workerGovernance.js";
+
+export type { WhySlowWorkerSummary };
 
 /** A single pressure signal that contributed to the current resource-profile decision. */
 export interface WhySlowResourceReason {
@@ -118,6 +121,8 @@ export interface WhySlowSnapshot {
   rendererTerminals: WhySlowRendererTerminalSample[];
   pty: WhySlowPtySummary | null;
   worktrees: WhySlowWorktreeSummary | null;
+  /** Persistent-worker pressure summary (queue depth, degraded subsystems), or null. */
+  workers: WhySlowWorkerSummary | null;
 }
 
 /** Renderer-pushed payload for {@link WhySlowRendererTerminalSample} (id + freshness added main-side). */
