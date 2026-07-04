@@ -104,6 +104,32 @@ interface WorktreeActionsToolbarProps {
   handleLaunchAgent: (agentId: string) => void;
 }
 
+// APG toolbar keyboard support: arrow keys move focus between the toolbar's
+// buttons (wrapping), Home/End jump to the ends. Handled only while focus is
+// on a toolbar button, and stopped from bubbling so card/grid-level arrow-key
+// domains don't also react. Dropdown content is portaled, so menu keystrokes
+// never reach this handler.
+function handleToolbarKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== "Home" && e.key !== "End") {
+    return;
+  }
+  const buttons = Array.from(
+    e.currentTarget.querySelectorAll<HTMLButtonElement>("button:not([disabled])")
+  );
+  const active = document.activeElement;
+  const currentIndex = buttons.findIndex((button) => button === active);
+  if (currentIndex === -1 || buttons.length < 2) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const nextIndex =
+    e.key === "Home"
+      ? 0
+      : e.key === "End"
+        ? buttons.length - 1
+        : (currentIndex + (e.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+  buttons[nextIndex]?.focus();
+}
+
 export function WorktreeActionsToolbar({
   isCollapsed,
   isActive,
@@ -122,6 +148,7 @@ export function WorktreeActionsToolbar({
       data-worktree-row-toolbar=""
       role="toolbar"
       aria-label="Worktree actions"
+      onKeyDown={handleToolbarKeyDown}
       className={cn(
         "flex items-center gap-0.5 shrink-0 transition-opacity duration-150",
         isCollapsed

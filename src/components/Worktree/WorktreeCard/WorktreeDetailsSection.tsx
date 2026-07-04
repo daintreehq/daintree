@@ -140,7 +140,11 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   }, [changedFileCount, prefersReducedMotion, animate, countScope]);
 
   const isConflicted = reviewState === "conflicted";
-  const showReviewHubButton = !!onOpenReviewHub && hasChanges;
+  // A clean tree with unpushed commits still has a Review Hub next step —
+  // push — so the opener stays visible; only the label shifts to match.
+  const isUnpushedClean = reviewState === "unpushed-clean" && !hasChanges;
+  const showReviewHubButton = !!onOpenReviewHub && (hasChanges || isUnpushedClean);
+  const reviewHubButtonLabel = isUnpushedClean ? "Review & Push" : "Review & Commit";
   const rightButtonGroupShown = showReviewHubButton;
 
   const lifecycleState = worktree.lifecycleStatus?.state;
@@ -452,12 +456,12 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                         "rounded-r-[var(--radius-lg)]",
                         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
                       )}
-                      aria-label="Open Review & Commit"
+                      aria-label={`Open ${reviewHubButtonLabel}`}
                     >
                       <GitCommitHorizontal className="w-3.5 h-3.5" />
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">Review & Commit</TooltipContent>
+                  <TooltipContent side="bottom">{reviewHubButtonLabel}</TooltipContent>
                 </Tooltip>
               )}
             </div>

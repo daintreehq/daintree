@@ -162,6 +162,13 @@ export function useWorktreeStatus({
       return { text: prTitle, tone: "muted" };
     }
 
+    // Distinguish "git status hasn't resolved yet" from a genuinely quiet
+    // worktree — "No recent activity" on a not-yet-indexed worktree reads as
+    // an all-clear the data can't support.
+    if (worktree.worktreeChanges == null) {
+      return { text: "Checking status…", tone: "muted" };
+    }
+
     return { text: "No recent activity", tone: "muted" };
   })();
 

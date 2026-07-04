@@ -332,6 +332,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
 
 import { ReviewHub } from "../ReviewHub";
 import { useUIStore } from "@/store/uiStore";
+import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 
 const WORKTREE_PATH = "/home/user/project";
@@ -4463,6 +4464,98 @@ describe("ReviewHub", () => {
 
       await waitFor(() => screen.getByTestId("readiness-item-conflicts"));
       expect((stagedFilter as HTMLInputElement).value).toBe("index");
+    });
+  });
+
+  describe("clean-tree push affordance", () => {
+    afterEach(() => {
+      // The real (unmocked) confirm store is shared suite-wide — resolve any
+      // request a failing test left pending so it can't bleed forward.
+      useGitPushConfirmStore.getState().resolveConfirmation(false);
+    });
+
+    function setWorktreeDivergence(overrides: Record<string, unknown>) {
+      const existing = worktreeStoreData.current.get("main-wt")!;
+      worktreeStoreData.current.set("main-wt", { ...existing, ...overrides });
+    }
+
+    function renderCleanHub(divergence: Record<string, unknown>, hasRemote = true) {
+      setWorktreeDivergence(divergence);
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({ staged: [], unstaged: [], hasRemote, repoState: "CLEAN" })
+      );
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    }
+
+    it("names the unpushed commits and gates Push behind the D2 preview dialog", async () => {
+      renderCleanHub({ aheadCount: 2, behindCount: 0 });
+      await waitFor(() => screen.getByText("Working tree clean"));
+
+      expect(screen.getByTestId("review-hub-clean-unpushed").textContent).toBe(
+        "2 commits not pushed"
+      );
+
+      act(() => void fireEvent.click(screen.getByTestId("review-hub-clean-push")));
+      // The click only requests the push confirmation — nothing reaches the
+      // IPC until the globally-mounted preview dialog resolves it.
+      expect(pushMock).not.toHaveBeenCalled();
+      expect(useGitPushConfirmStore.getState().pendingConfirm?.cwd).toBe(WORKTREE_PATH);
+
+      await act(async () => {
+        useGitPushConfirmStore.getState().resolveConfirmation(true);
+      });
+      await waitFor(() => expect(pushMock).toHaveBeenCalledWith(WORKTREE_PATH));
+    });
+
+    it("does not push when the preview dialog is declined", async () => {
+      renderCleanHub({ aheadCount: 1, behindCount: 0 });
+      await waitFor(() => screen.getByText("Working tree clean"));
+
+      act(() => void fireEvent.click(screen.getByTestId("review-hub-clean-push")));
+      await act(async () => {
+        useGitPushConfirmStore.getState().resolveConfirmation(false);
+      });
+      expect(pushMock).not.toHaveBeenCalled();
+    });
+
+    it("names the unpushed commits but offers no Push while divergence is unknown", async () => {
+      // behindCount undefined — an unknown divergence state must never read
+      // as pushable (mirrors deriveReviewReadiness.pushReady).
+      renderCleanHub({ aheadCount: 3, behindCount: undefined });
+      await waitFor(() => screen.getByText("Working tree clean"));
+
+      expect(screen.getByTestId("review-hub-clean-unpushed").textContent).toBe(
+        "3 commits not pushed"
+      );
+      expect(screen.queryByTestId("review-hub-clean-push")).toBeNull();
+    });
+
+    it("offers no Push while behind the remote", async () => {
+      renderCleanHub({ aheadCount: 2, behindCount: 1 });
+      await waitFor(() => screen.getByText("Working tree clean"));
+      // The unpushed copy proves the divergence fixture reached the component
+      // — without it the missing button would pass vacuously.
+      expect(screen.getByTestId("review-hub-clean-unpushed").textContent).toBe(
+        "2 commits not pushed"
+      );
+      expect(screen.queryByTestId("review-hub-clean-push")).toBeNull();
+    });
+
+    it("keeps the quiet no-changes copy when there is nothing to push", async () => {
+      renderCleanHub({ aheadCount: 0, behindCount: 0 });
+      await waitFor(() => screen.getByText("Working tree clean"));
+
+      expect(screen.getByText("No changes to commit")).toBeDefined();
+      expect(screen.queryByTestId("review-hub-clean-unpushed")).toBeNull();
+      expect(screen.queryByTestId("review-hub-clean-push")).toBeNull();
+    });
+
+    it("keeps the quiet copy when unpushed commits exist but there is no remote", async () => {
+      renderCleanHub({ aheadCount: 2, behindCount: 0 }, false);
+      await waitFor(() => screen.getByText("Working tree clean"));
+
+      expect(screen.getByText("No changes to commit")).toBeDefined();
+      expect(screen.queryByTestId("review-hub-clean-push")).toBeNull();
     });
   });
 });

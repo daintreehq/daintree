@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { useUIStore } from "@/store/uiStore";
+import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
@@ -1189,6 +1190,16 @@ export function ReviewHubContent({
     await runPush();
   }, [runPush]);
 
+  // Push from the clean-tree state, where no CommitPanel (and thus no local
+  // push confirm) is mounted. Routes through the same D2 preview dialog the
+  // git.push action uses, then reuses runPush so progress and error banners
+  // stay on the hub's existing paths.
+  const handlePushClean = useCallback(async () => {
+    const confirmed = await useGitPushConfirmStore.getState().requestConfirmation(worktreePath);
+    if (!confirmed) return;
+    await runPush();
+  }, [worktreePath, runPush]);
+
   const handleFocusBlocker = useCallback(
     (blocker: "conflicts" | "staged-files") => {
       // Conflict warning + Staged + Unstaged sections live inside the
@@ -1969,7 +1980,31 @@ export function ReviewHubContent({
                 <div className="flex flex-col items-center justify-center py-12 text-daintree-text/50">
                   <CheckSquare className="w-8 h-8 mb-2 text-daintree-text/30" />
                   <p className="text-sm">Working tree clean</p>
-                  <p className="text-xs mt-1">No changes to commit</p>
+                  {status.hasRemote && (aheadCount ?? 0) > 0 ? (
+                    <>
+                      <p className="text-xs mt-1" data-testid="review-hub-clean-unpushed">
+                        {aheadCount} commit{aheadCount !== 1 ? "s" : ""} not pushed
+                      </p>
+                      {readinessSummary.pushReady && (
+                        <button
+                          type="button"
+                          onClick={() => void handlePushClean()}
+                          disabled={isPushing}
+                          data-testid="review-hub-clean-push"
+                          className={cn(
+                            "mt-3 px-2.5 py-1 rounded text-xs font-medium transition-colors",
+                            "bg-filter-selected-bg-soft hover:bg-tint/[0.14] text-daintree-text/80",
+                            "disabled:opacity-50 disabled:cursor-not-allowed",
+                            "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent"
+                          )}
+                        >
+                          {isPushing ? "Pushing…" : "Push"}
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-xs mt-1">No changes to commit</p>
+                  )}
                 </div>
               ) : status ? (
                 <div>
