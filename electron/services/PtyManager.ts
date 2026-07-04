@@ -33,6 +33,8 @@ import {
 import { computeSpawnContext, acquirePtyProcess } from "./pty/terminalSpawn.js";
 import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
 import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
+import { ledgerFactsFromSpawnOptions } from "./pty/lifecycleLedger.js";
+import { AgentTerminalLifecycleLedger } from "../../shared/utils/agentLifecycleLedger.js";
 import { events } from "./events.js";
 import { getGitBranch } from "../utils/gitUtils.js";
 import type { GracefulKillResult, TerminalRetentionState } from "../../shared/types/pty-host.js";
@@ -75,7 +77,26 @@ export class PtyManager extends EventEmitter {
   // Applied as initial dims at spawn so the PTY boots at the correct size
   // (no SIGWINCH-after-start), avoiding the race between the renderer's
   // ResizeObserver/MessagePort resize and the slower spawn IPC round-trip.
-  private pendingResizes = new Map<string, { cols: number; rows: number }>();
+  // Each entry is stamped with the ledger generation current at buffering
+  // time (null = id never launched here): a resize buffered against a killed
+  // incarnation must not become the initial dims of its successor.
+  private pendingResizes = new Map<
+    string,
+    { cols: number; rows: number; generation: number | null }
+  >();
+  // Host-local lifecycle ledger. Adopts the generation Main stamped on spawn
+  // options so both processes key each incarnation identically; guards the
+  // pendingResizes buffer across same-id respawns and provides the audit
+  // trail for stale completions inside the host.
+  private lifecycleLedger = new AgentTerminalLifecycleLedger({
+    onAnomaly: (anomaly) => {
+      if (process.env.NODE_ENV === "production") return;
+      logWarn(
+        `Lifecycle invariant rejected: ${anomaly.op} on ${anomaly.terminalId} ` +
+          `(gen ${anomaly.generation ?? "?"} vs current ${anomaly.currentGeneration ?? "?"}): ${anomaly.reason}`
+      );
+    },
+  });
 
   constructor() {
     super();
@@ -338,12 +359,6 @@ export class PtyManager extends EventEmitter {
    */
   spawn(id: string, options: PtySpawnOptions): void {
     const pendingResize = this.pendingResizes.get(id);
-    if (pendingResize) {
-      options = { ...options, cols: pendingResize.cols, rows: pendingResize.rows };
-      // Defer the delete until spawn definitively succeeds (just before
-      // registry.add) so a thrown acquirePtyProcess / TerminalProcess
-      // constructor preserves the buffered dims for a caller retry.
-    }
 
     if (this.registry.has(id)) {
       const existing = this.registry.get(id);
@@ -356,6 +371,36 @@ export class PtyManager extends EventEmitter {
     logInfo(
       `Spawning terminal ${id} (kind: ${options.kind}, launchAgentId: ${options.launchAgentId})`
     );
+
+    // Adopt Main's generation (or mint locally for direct callers/tests) BEFORE
+    // consuming any buffered resize, so the staleness check below compares the
+    // buffered stamp against this incarnation.
+    this.lifecycleLedger.recordLaunch(id, ledgerFactsFromSpawnOptions(options), {
+      generation: options.launchGeneration,
+    });
+
+    if (pendingResize) {
+      // A null stamp is the classic pre-first-spawn race (renderer resize beat
+      // the spawn IPC) — apply as initial dims. A non-null stamp belongs to a
+      // previous incarnation of this id; recordResize rejects it as stale so
+      // it never becomes the successor's boot geometry.
+      const applies =
+        pendingResize.generation === null ||
+        this.lifecycleLedger.recordResize(
+          id,
+          pendingResize.generation,
+          pendingResize.cols,
+          pendingResize.rows
+        ).accepted;
+      if (applies) {
+        options = { ...options, cols: pendingResize.cols, rows: pendingResize.rows };
+        // Defer the delete until spawn definitively succeeds (just before
+        // registry.add) so a thrown acquirePtyProcess / TerminalProcess
+        // constructor preserves the buffered dims for a caller retry.
+      } else {
+        this.pendingResizes.delete(id);
+      }
+    }
 
     const spawnContext = computeSpawnContext(id, options);
     const acquired = acquirePtyProcess(
@@ -386,7 +431,7 @@ export class PtyManager extends EventEmitter {
             if (this.registry.get(termId) !== terminalProcess) {
               return;
             }
-            this.emit("exit", termId, exitCode, signal);
+            this.emit("exit", termId, exitCode, signal, options.launchGeneration);
             if (!terminalProcess.shouldPreserveOnExit(exitCode)) {
               this.registry.delete(termId);
             }
@@ -505,7 +550,14 @@ export class PtyManager extends EventEmitter {
       terminal.resize(cols, rows);
     } else {
       // Buffer the dims and apply them at spawn time. Coalesces last-write-wins.
-      this.pendingResizes.set(id, { cols, rows });
+      // Stamp the current ledger generation (null = never launched) so a
+      // resize buffered against a killed incarnation is dropped at the next
+      // spawn instead of becoming its initial dims.
+      this.pendingResizes.set(id, {
+        cols,
+        rows,
+        generation: this.lifecycleLedger.currentGeneration(id) ?? null,
+      });
       logDebug(`Terminal ${id} not yet registered, buffering resize ${cols}x${rows}`);
     }
   }
@@ -577,6 +629,8 @@ export class PtyManager extends EventEmitter {
             // real retention setting. Forwarded by the pty-host entry, bridged
             // onto the main bus, persisted in the terminal event handlers.
             events.emit("agent-session:captured", {
+              terminalId: termId,
+              launchGeneration: info.launchGeneration,
               record: {
                 sessionId,
                 agentId: info.launchAgentId,
@@ -1032,6 +1086,7 @@ export class PtyManager extends EventEmitter {
 
     this.registry.dispose();
     this.pendingResizes.clear();
+    this.lifecycleLedger.clear();
     this.removeAllListeners();
 
     disposeTerminalSerializerService();

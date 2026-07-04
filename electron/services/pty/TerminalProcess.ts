@@ -452,6 +452,7 @@ export class TerminalProcess {
       agentPresetId: options.agentPresetId,
       agentPresetColor: options.agentPresetColor,
       originalAgentPresetId: options.originalAgentPresetId ?? options.agentPresetId,
+      launchGeneration: options.launchGeneration,
       spawnArgs,
     };
 

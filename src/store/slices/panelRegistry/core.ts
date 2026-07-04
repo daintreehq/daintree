@@ -25,9 +25,22 @@ import {
 } from "./hydrationBatch";
 import type { HydrationBatchToken } from "./types";
 import { removeFromWorktreeIndex } from "./worktreeIndex";
+import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
+
+/**
+ * Close out a panel's ledger generation on a user-final removal. Marks
+ * exactly-once per generation; a spawn still in flight for this incarnation
+ * will see the entry closed and route through the compensating-kill path.
+ */
+function recordLedgerClose(id: string, reason: string): void {
+  const generation = agentLifecycleLedger.currentGeneration(id);
+  if (generation !== undefined) {
+    agentLifecycleLedger.recordClose(id, generation, reason);
+  }
+}
 
 /**
  * Reveal a batch's collected panel ids in `panelIds` and persist once. The
@@ -122,6 +135,7 @@ export const createCorePanelActions = (
 
     // Only call PTY operations for PTY-backed terminals
     if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
+      recordLedgerClose(id, "removed");
       terminalClient.kill(id).catch((error) => {
         logError("[TerminalStore] Failed to kill terminal", error);
       });
@@ -199,6 +213,7 @@ export const createCorePanelActions = (
       }
 
       if (panelKindHasPty(terminal.kind ?? "terminal")) {
+        recordLedgerClose(id, "trash-emptied");
         terminalClient.kill(id).catch((error) => {
           logError("[TerminalStore] Failed to kill terminal", error);
         });

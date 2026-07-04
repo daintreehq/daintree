@@ -453,6 +453,31 @@ async function collectFlowControl(ptyClient?: PtyClient) {
   }
 }
 
+/**
+ * Agent-terminal lifecycle ledger snapshot: per-terminal launch facts
+ * (identity, provenance, generations) plus the anomaly ring buffer — the
+ * rejected stale/duplicate lifecycle operations. Secret-free by construction
+ * (env is key names + hash only) and cwd is sanitized like `collectTerminals`.
+ */
+async function collectLifecycleLedger() {
+  try {
+    const { getLifecycleLedger } = await import("./pty/lifecycleLedger.js");
+    const diagnostics = getLifecycleLedger().getDiagnostics();
+    return {
+      anomalies: diagnostics.anomalies,
+      terminals: diagnostics.terminals.map((t) => ({
+        ...t,
+        facts: {
+          ...t.facts,
+          cwd: t.facts.cwd ? sanitizePath(t.facts.cwd) : undefined,
+        },
+      })),
+    };
+  } catch {
+    return { error: "Failed to get lifecycle ledger snapshot" };
+  }
+}
+
 async function collectLogs() {
   try {
     const entries = logBuffer.getAll();
@@ -851,6 +876,7 @@ export async function collectDiagnosticsWithKeys(
     { key: "config", fn: collectStoreConfig },
     { key: "terminals", fn: () => collectTerminals(deps.ptyClient) },
     { key: "flowControl", fn: () => collectFlowControl(deps.ptyClient) },
+    { key: "lifecycleLedger", fn: collectLifecycleLedger },
     { key: "projectViews", fn: () => collectProjectViews(deps) },
     { key: "rendererMemory", fn: collectRendererMemory },
     { key: "memoryTrends", fn: collectMemoryTrends },

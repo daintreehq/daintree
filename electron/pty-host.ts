@@ -1100,47 +1100,50 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   }
 });
 
-ptyManager.on("exit", (id: string, exitCode: number, signal?: number) => {
-  // Release all pause holds and remove coordinator for this terminal
-  const coordinator = pauseCoordinators.get(id);
-  if (coordinator) {
-    coordinator.forceReleaseAll();
-    pauseCoordinators.delete(id);
-  }
-
-  // Drop any tracked pause-duration sources for this terminal so the next
-  // `pause-duration-gauge` tick doesn't emit a stale `heldDurationMs`
-  // for a terminal that no longer exists. Cleanup paths (this one,
-  // `disconnectWindow`, `clearQueue`, `dispose`) bypass the funnel
-  // because they don't carry a wire emission — a disconnected window
-  // or torn-down queue manager shouldn't trigger a "pause-end" wire
-  // event. The renderer is informed separately via terminal-exit /
-  // disconnect flows.
-  clearAllPauseSources(id);
-
-  // Clean up any active backpressure monitoring for this terminal
-  backpressureManager.cleanupTerminal(id);
-
-  // Flush pending batched data for exiting terminal, then clean up backpressure state
-  ipcQueueManager.clearQueue(id);
-  for (const conn of rendererConnections.values()) {
-    try {
-      conn.batcher.flushTerminal(id);
-    } catch {
-      // Port may already be closed — safe to ignore
+ptyManager.on(
+  "exit",
+  (id: string, exitCode: number, signal?: number, launchGeneration?: number) => {
+    // Release all pause holds and remove coordinator for this terminal
+    const coordinator = pauseCoordinators.get(id);
+    if (coordinator) {
+      coordinator.forceReleaseAll();
+      pauseCoordinators.delete(id);
     }
-    conn.portQueueManager.clearQueue(id);
+
+    // Drop any tracked pause-duration sources for this terminal so the next
+    // `pause-duration-gauge` tick doesn't emit a stale `heldDurationMs`
+    // for a terminal that no longer exists. Cleanup paths (this one,
+    // `disconnectWindow`, `clearQueue`, `dispose`) bypass the funnel
+    // because they don't carry a wire emission — a disconnected window
+    // or torn-down queue manager shouldn't trigger a "pause-end" wire
+    // event. The renderer is informed separately via terminal-exit /
+    // disconnect flows.
+    clearAllPauseSources(id);
+
+    // Clean up any active backpressure monitoring for this terminal
+    backpressureManager.cleanupTerminal(id);
+
+    // Flush pending batched data for exiting terminal, then clean up backpressure state
+    ipcQueueManager.clearQueue(id);
+    for (const conn of rendererConnections.values()) {
+      try {
+        conn.batcher.flushTerminal(id);
+      } catch {
+        // Port may already be closed — safe to ignore
+      }
+      conn.portQueueManager.clearQueue(id);
+    }
+
+    // Clean up IPC data mirror state
+    ipcDataMirrorTerminals.delete(id);
+
+    // Drop-tally entry dies with the terminal — the flow-control snapshot only
+    // reports live terminals, and the map stays bounded across long sessions.
+    terminalDropTallies.delete(id);
+
+    sendEvent({ type: "exit", id, exitCode, signal, launchGeneration });
   }
-
-  // Clean up IPC data mirror state
-  ipcDataMirrorTerminals.delete(id);
-
-  // Drop-tally entry dies with the terminal — the flow-control snapshot only
-  // reports live terminals, and the map stays bounded across long sessions.
-  terminalDropTallies.delete(id);
-
-  sendEvent({ type: "exit", id, exitCode, signal });
-});
+);
 
 ptyManager.on("error", (id: string, error: string) => {
   sendEvent({ type: "error", id, error });
@@ -1308,6 +1311,8 @@ events.on("terminal:restored", (payload) => {
 events.on("agent-session:captured", (payload) => {
   sendEvent({
     type: "agent-session-captured",
+    terminalId: payload.terminalId,
+    launchGeneration: payload.launchGeneration,
     record: payload.record,
   });
 });

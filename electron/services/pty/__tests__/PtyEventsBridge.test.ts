@@ -189,16 +189,25 @@ describe("bridgePtyEvent", () => {
   });
 
   it("re-emits a pty-host captured session onto the main bus for persistence", () => {
-    const payloads: Array<{ sessionId: string; worktreeId: string | null }> = [];
+    const payloads: Array<{
+      sessionId: string;
+      worktreeId: string | null;
+      terminalId: string;
+      launchGeneration: number | undefined;
+    }> = [];
     events.on("agent-session:captured", (payload) => {
       payloads.push({
         sessionId: payload.record.sessionId,
         worktreeId: payload.record.worktreeId,
+        terminalId: payload.terminalId,
+        launchGeneration: payload.launchGeneration,
       });
     });
 
     const handled = bridgePtyEvent({
       type: "agent-session-captured",
+      terminalId: "term-9",
+      launchGeneration: 3,
       record: {
         sessionId: "sess-1",
         agentId: "claude",
@@ -210,7 +219,9 @@ describe("bridgePtyEvent", () => {
     });
 
     expect(handled).toBe(true);
-    expect(payloads).toEqual([{ sessionId: "sess-1", worktreeId: null }]);
+    expect(payloads).toEqual([
+      { sessionId: "sess-1", worktreeId: null, terminalId: "term-9", launchGeneration: 3 },
+    ]);
   });
 
   it("returns false for unhandled event types", () => {

@@ -18,6 +18,14 @@ export interface AddPanelOptionsBase {
   /** How the title is owned. Absent defaults to "default". */
   titleMode?: PanelTitleMode;
   worktreeId?: string;
+  /**
+   * How `worktreeId` was determined: `"explicit"` (caller/user chose it, the
+   * default when omitted) or `"inferred"` (derived from cwd prefix matching —
+   * orphan reconnects, journal resume). Recorded in the lifecycle ledger,
+   * whose invariant is that inferred attribution never overwrites a differing
+   * explicit one.
+   */
+  worktreeIdSource?: "explicit" | "inferred";
   cwd?: string;
   location?: PanelLocation;
   /** If provided, request a stable ID when spawning a new backend process */

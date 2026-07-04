@@ -55,6 +55,7 @@ const logWarn = (msg: string, ctx?: Record<string, unknown>) =>
 import { getTrashedPidTracker } from "./TrashedPidTracker.js";
 import { helpSessionService } from "./HelpSessionService.js";
 import { helpSessionJobService } from "./HelpSessionJobService.js";
+import { getLifecycleLedger, ledgerFactsFromSpawnOptions } from "./pty/lifecycleLedger.js";
 import { RequestResponseBroker, BrokerError } from "./rpc/index.js";
 import { routeHostEvent, type PtyEventRouterDeps } from "./pty/PtyEventRouter.js";
 import { PtyHealthWatchdog } from "./pty/PtyHealthWatchdog.js";
@@ -338,6 +339,28 @@ export class PtyClient extends EventEmitter {
             helpSessionJobService.attachHelpSessionPid(pid);
           }
         },
+        // Lifecycle-ledger bookkeeping. Exits carry the host-adopted
+        // launchGeneration so a stale exit arriving after a same-id respawn
+        // closes its own incarnation, never the successor.
+        onTerminalExit: (id, exitCode, launchGeneration) => {
+          const ledger = getLifecycleLedger();
+          const generation = launchGeneration ?? ledger.currentGeneration(id);
+          if (generation !== undefined && ledger.currentGeneration(id) !== undefined) {
+            ledger.recordClose(id, generation, "exit", exitCode);
+          }
+        },
+        onSpawnResult: (id, result) => {
+          const ledger = getLifecycleLedger();
+          // Prefer the generation echoed by the host: a stale result from a
+          // killed predecessor must record against its own incarnation (where
+          // the ledger rejects it as stale), never the live successor's.
+          const generation = result.launchGeneration ?? ledger.currentGeneration(id);
+          if (generation === undefined || ledger.currentGeneration(id) === undefined) return;
+          const resolved = ledger.recordSpawnResolved(id, generation, result.success);
+          if (resolved.accepted && !result.success) {
+            ledger.recordClose(id, generation, `spawn-failed:${result.error?.code ?? "UNKNOWN"}`);
+          }
+        },
       },
       logWarn: (message) => console.warn(message),
     };
@@ -468,10 +491,24 @@ export class PtyClient extends EventEmitter {
       this.onPortRefresh();
     }
 
-    // Respawn terminals that were active when host crashed
+    // Respawn terminals that were active when host crashed. Each replay is a
+    // NEW incarnation — the previous PTY died with the host — so close the old
+    // generation and mint a fresh one. Without this, a session captured before
+    // the crash and one captured after would share a generation and the
+    // journal's exactly-once gate would drop the second record. (The initial
+    // host-ready replay in handleReady keeps its generation: nothing was ever
+    // delivered, so it is the same incarnation.)
+    const ledger = getLifecycleLedger();
     for (const [id, options] of this.pendingSpawns) {
       console.log(`[PtyClient] Respawning terminal: ${id}`);
-      this.send({ type: "spawn", id, options });
+      const previousGeneration = options.launchGeneration ?? ledger.currentGeneration(id);
+      if (previousGeneration !== undefined && ledger.currentGeneration(id) !== undefined) {
+        ledger.recordClose(id, previousGeneration, "pty-host-crash");
+      }
+      const generation = ledger.recordLaunch(id, ledgerFactsFromSpawnOptions(options));
+      const stamped: PtyHostSpawnOptions = { ...options, launchGeneration: generation };
+      this.pendingSpawns.set(id, stamped);
+      this.send({ type: "spawn", id, options: stamped });
     }
 
     // Re-enable IPC data mirrors that were active before crash
@@ -725,8 +762,21 @@ export class PtyClient extends EventEmitter {
         : undefined;
 
     const resolvedProjectId = normalizedProjectId ?? activeProjectId;
-    const resolvedOptions =
+    const projectResolvedOptions: PtyHostSpawnOptions =
       resolvedProjectId !== undefined ? { ...options, projectId: resolvedProjectId } : options;
+    // Mint the launch generation here — every spawn (fresh, restart, resume)
+    // funnels through this method, so the ledger sees each incarnation exactly
+    // once. The pty-host adopts the stamped generation and echoes it on exits
+    // and session captures, which is what lets close/journal events reject
+    // stale or duplicate completions instead of relying on timing.
+    const generation = getLifecycleLedger().recordLaunch(
+      id,
+      ledgerFactsFromSpawnOptions(projectResolvedOptions)
+    );
+    const resolvedOptions: PtyHostSpawnOptions = {
+      ...projectResolvedOptions,
+      launchGeneration: generation,
+    };
 
     this.pendingSpawns.set(id, resolvedOptions);
     this.send({ type: "spawn", id, options: resolvedOptions });

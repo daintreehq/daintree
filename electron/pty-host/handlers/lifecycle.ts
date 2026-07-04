@@ -54,7 +54,11 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
         }
 
         ptyManager.spawn(msg.id, msg.options);
-        spawnResult = { success: true, id: msg.id };
+        spawnResult = {
+          success: true,
+          id: msg.id,
+          launchGeneration: msg.options.launchGeneration,
+        };
 
         // Eagerly create coordinator so all subsystems can pause from the start
         getOrCreatePauseCoordinator(msg.id);
@@ -73,6 +77,7 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
         spawnResult = {
           success: false,
           id: msg.id,
+          launchGeneration: msg.options.launchGeneration,
           error: parseSpawnError(error),
         };
 
