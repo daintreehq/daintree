@@ -202,7 +202,7 @@ This is the **most-urgent global banner** (top of the priority list) because the
 
 ## 6. Global banner coordination & local-error suppression
 
-All six top-of-app recovery banners compete for a **single slot**. `useGlobalBannerPriority` (`src/components/Recovery/useGlobalBannerPriority.ts`) computes the winner; `GlobalBannerCoordinator` (mounted once in `App.tsx`) renders exactly one and **unmounts** the rest (so e.g. `RestoreConfirmationBanner`'s auto-dismiss timer only runs while visible).
+All seven top-of-app recovery banners compete for a **single slot**. `useGlobalBannerPriority` (`src/components/Recovery/useGlobalBannerPriority.ts`) computes the winner; `GlobalBannerCoordinator` (mounted once in `App.tsx`) renders exactly one and **unmounts** the rest (so e.g. `RestoreConfirmationBanner`'s auto-dismiss timer only runs while visible).
 
 Precedence (high → low):
 
@@ -211,8 +211,9 @@ host-crash         backendStatus !== "connected"   — backend unusable now
 watchdog-disabled  watchdogStatus === "disabled"    — deadlock detector gone
 safe-mode          safeMode && !dismissed           — panels held back after a crash loop
 restore-confirmation                                — informational "session recovered"
-github-token                                        — expired credentials
+forge-token                                         — expired forge credentials
 cloud-sync                                          — synced-folder warning
+rosetta                                             — x64 build translated on Apple Silicon
 ```
 
 Watchdog ranks below host-crash (a live failure beats a downed monitor) and above safe-mode (the watchdog protects against the _next_ crash; safe-mode is a consequence of the _previous_ one).

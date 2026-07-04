@@ -21,6 +21,64 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function formatSnapshotAge(ageMs: number): string {
+  if (ageMs < 10_000) return "just now";
+  if (ageMs < 60_000) return `${Math.floor(ageMs / 1000)}s ago`;
+  const minutes = Math.floor(ageMs / 60_000);
+  if (minutes < 60) return `${minutes}m ago`;
+  return `${Math.floor(minutes / 60)}h ago`;
+}
+
+// Shared by the PTY-lag tile tone and isAllClear so the calm summary can never
+// disagree with a warn-toned tile over the same number.
+const PTY_LAG_WARN_THRESHOLD_MS = 50;
+
+/**
+ * True when nothing in the snapshot would render a warn/alert tone — the same
+ * conditions the tiles and badges below use, so the calm summary line can
+ * never contradict a highlighted metric next to it. The resource and pty
+ * sections must be present: a section degraded to null means "unknown", and
+ * claiming all-clear over missing data would be false calm. `worktrees` may be
+ * null legitimately (no workspace open), so it only vetoes when present, as do
+ * renderer samples (an empty push cache just means no view has reported yet).
+ */
+export function isAllClear(snapshot: WhySlowSnapshot): boolean {
+  const r = snapshot.resource;
+  if (!r) return false;
+  if (
+    r.currentProfile !== "performance" ||
+    r.targetProfile !== "performance" ||
+    r.reasons.length > 0 ||
+    r.lagPressureActive ||
+    r.interactiveOverrideActive ||
+    r.isOnBattery ||
+    (r.thermalState !== "unknown" && r.thermalState !== "nominal") ||
+    r.speedLimit < 100
+  ) {
+    return false;
+  }
+  if (snapshot.focusThrottle.throttled) return false;
+  // Any view on the DOM fallback renders the WebGL tile in warn tone.
+  if (snapshot.rendererTerminals.some((s) => s.webglMode === "dom")) return false;
+  const p = snapshot.pty;
+  if (!p) return false;
+  if (p.totalPendingBytes > 0 || p.pausedCount > 0) return false;
+  if (p.eventLoopP99Ms !== null && p.eventLoopP99Ms > PTY_LAG_WARN_THRESHOLD_MS) return false;
+  if (snapshot.worktrees && snapshot.worktrees.fetchInFlightCount > 0) return false;
+  return true;
+}
+
+/**
+ * Bottleneck-first ordering: the largest pressure contribution is the likeliest
+ * answer to "why am I slow?", so it leads the list. Stable sort keeps the
+ * collector's declaration order for ties.
+ */
+export function sortReasonsByContribution<T extends { contribution: number }>(
+  reasons: readonly T[]
+): T[] {
+  return [...reasons].sort((a, b) => b.contribution - a.contribution);
+}
+
 function profileTone(profile: string): MetricTone {
   if (profile === "efficiency") return "alert";
   if (profile === "balanced") return "warn";
@@ -99,6 +157,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const mountedRef = useRef(true);
   const inFlightRef = useRef(false);
+  const failStreakRef = useRef(0);
 
   const refresh = useCallback(async () => {
     // Skip if a fetch is already in flight so the poll interval can't stack
@@ -111,9 +170,17 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
       if (!mountedRef.current) return;
       setSnapshot(next);
       setError(false);
+      failStreakRef.current = 0;
     } catch (err) {
       if (!mountedRef.current) return;
-      logError("Failed to load why-slow snapshot", err);
+      // Log only the first failure of a streak — the poll retries every 5s
+      // indefinitely, so a persistently-dead collector would otherwise write
+      // an identical error line on every tick. The streak resets on success
+      // so a fresh outage still logs.
+      failStreakRef.current += 1;
+      if (failStreakRef.current === 1) {
+        logError("Failed to load why-slow snapshot", err);
+      }
       setError(true);
     } finally {
       inFlightRef.current = false;
@@ -135,6 +202,8 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
 
   const renderer = snapshot ? aggregateRenderer(snapshot) : null;
   const resource = snapshot?.resource ?? null;
+  const snapshotAgeMs = snapshot ? Math.max(0, Date.now() - snapshot.timestamp) : 0;
+  const sortedReasons = resource ? sortReasonsByContribution(resource.reasons) : [];
 
   return (
     <div className={cn("h-full overflow-auto p-3 text-sm text-daintree-text", className)}>
@@ -143,19 +212,46 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
           <Gauge className="w-4 h-4 text-daintree-text/60" />
           <span className="font-medium">Why am I slow?</span>
         </div>
-        <button
-          onClick={() => void refresh()}
-          disabled={isRefreshing}
-          className="flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] text-xs text-daintree-text/70 hover:text-daintree-text hover:bg-tint/[0.06] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent disabled:opacity-50"
-          aria-label="Refresh diagnostics snapshot"
-        >
-          <RefreshCw className={cn("w-3.5 h-3.5", isRefreshing && "animate-spin")} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {snapshot ? (
+            error ? (
+              <span
+                data-testid="why-slow-stale-note"
+                className="text-[10px] text-status-warning/80 tabular-nums"
+              >
+                Refresh failed · data from {formatSnapshotAge(snapshotAgeMs)}
+              </span>
+            ) : (
+              <span
+                data-testid="why-slow-updated-note"
+                className="text-[10px] text-daintree-text/40 tabular-nums"
+              >
+                Updated {formatSnapshotAge(snapshotAgeMs)}
+              </span>
+            )
+          ) : null}
+          <button
+            onClick={() => void refresh()}
+            disabled={isRefreshing}
+            className="flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] text-xs text-daintree-text/70 hover:text-daintree-text hover:bg-tint/[0.06] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent disabled:opacity-50"
+            aria-label="Refresh diagnostics snapshot"
+          >
+            <RefreshCw className={cn("w-3.5 h-3.5", isRefreshing && "animate-spin")} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {error && !snapshot ? (
         <div className="text-status-error text-xs">Couldn't load the diagnostics snapshot.</div>
+      ) : null}
+
+      {/* Suppressed while a refresh is failing: "right now" from stale data
+          would contradict the stale note in the header. */}
+      {snapshot && !error && isAllClear(snapshot) ? (
+        <p data-testid="why-slow-all-clear" className="text-xs text-daintree-text/55 mb-3">
+          Nothing is slowing Daintree down right now
+        </p>
       ) : null}
 
       {snapshot ? (
@@ -204,15 +300,22 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
                     <Badge tone="warn">thermal {resource.thermalState}</Badge>
                   ) : null}
                 </div>
-                {resource.reasons.length > 0 ? (
+                {sortedReasons.length > 0 ? (
                   <ul className="flex flex-col gap-1 mt-1">
-                    {resource.reasons.map((r) => (
+                    {sortedReasons.map((r, index) => (
                       <li
                         key={r.signal}
-                        className="flex items-center justify-between text-xs text-daintree-text/75 font-mono"
+                        className={cn(
+                          "flex items-center justify-between text-xs font-mono",
+                          // Bottleneck-first: the top contributor is the likely
+                          // answer, so it reads at full strength; the rest recede.
+                          index === 0 && sortedReasons.length > 1
+                            ? "text-daintree-text font-medium"
+                            : "text-daintree-text/75"
+                        )}
                       >
                         <span>{r.detail}</span>
-                        <span className="text-daintree-text/45">+{r.contribution}</span>
+                        <span className="text-daintree-text/45 font-normal">+{r.contribution}</span>
                       </li>
                     ))}
                   </ul>
@@ -290,7 +393,8 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
                   snapshot.pty?.eventLoopP99Ms != null ? `${snapshot.pty.eventLoopP99Ms}ms` : "—"
                 }
                 tone={
-                  snapshot.pty?.eventLoopP99Ms != null && snapshot.pty.eventLoopP99Ms > 50
+                  snapshot.pty?.eventLoopP99Ms != null &&
+                  snapshot.pty.eventLoopP99Ms > PTY_LAG_WARN_THRESHOLD_MS
                     ? "warn"
                     : "default"
                 }

@@ -967,20 +967,31 @@ export function notify(payload: NotifyPayload): string {
   // escalation from the unread badge and re-entry summary. Blurred
   // escalations stay inbox-only (`seenAsToast: false`) so they surface on
   // refocus; `urgent` bypasses quiet hours and rate limiting, not focus.
-  const shouldToastThread =
-    !shouldToast && isFocused && correlationId && !payload.transient
+  const wouldRePromoteThread =
+    correlationId && !payload.transient
       ? shouldReToast(type, getEntriesByCorrelationId(correlationId), payload.urgent)
       : false;
+  const shouldToastThread = !shouldToast && isFocused && wouldRePromoteThread;
   const effectiveShouldToast = shouldToast || shouldToastThread;
 
-  // Auto-resurface: a snoozed thread that re-toasts (escalated severity,
+  // Auto-resurface: a snoozed thread that re-promotes (escalated severity,
   // urgent, or full un-snooze) must clear its snooze before `addEntry`
   // lands the new history row. Running this before the write keeps the
   // store atomically consistent — observers never see an unread badge that
   // counts the new entry while still hiding its thread behind the snooze
-  // filter. Routine same-severity updates do not pass `shouldReToast` and
-  // therefore stay snoozed, preserving the user's defer choice.
-  if (effectiveShouldToast && correlationId) {
+  // filter. Routine same-severity updates that would otherwise route
+  // inbox-only do not pass `shouldReToast` and therefore stay snoozed,
+  // preserving the user's defer choice; an update that clears the normal
+  // toast gate (`effectiveShouldToast`) un-snoozes regardless, because a
+  // thread actively toasting must not keep its inbox row hidden.
+  //
+  // `wouldRePromoteThread` is included alongside `effectiveShouldToast` so a
+  // blurred escalation still un-snoozes: the toast stays focus-gated
+  // (#10056), but the escalated entry must land unread and count toward the
+  // badge rather than staying hidden behind a snooze the user set on a
+  // milder thread. Mirrors the grid-bar path, which already clears the
+  // snooze off `shouldReToast` regardless of focus.
+  if ((effectiveShouldToast || wouldRePromoteThread) && correlationId) {
     useNotificationHistoryStore.getState().clearSnooze(correlationId);
   }
 
