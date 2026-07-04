@@ -117,6 +117,14 @@ function canAutoInitializeTerminalIngest(): boolean {
 
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
+  // In-flight creations keyed by id: concurrent getOrCreate(id) share ONE build
+  // so a single id can never wire two terminalClient.onData subscriptions (see
+  // getOrCreate).
+  private creating = new Map<string, Promise<ManagedTerminal>>();
+  // Ids destroyed WHILE a creation was in flight. createManagedTerminal consumes
+  // this after its async addon load and aborts, so a panel torn down mid-build
+  // never publishes a stale instance/onData listener for a dead id.
+  private cancelledCreations = new Set<string>();
   // Throttle for the interactive resource-profile override IPC (see onActiveWheel).
   private lastInteractiveOverrideRequestAt = 0;
   // Which terminal received the most recent alt-buffer wheel event, and when —
@@ -1511,20 +1519,93 @@ class TerminalInstanceService {
   ): Promise<ManagedTerminal> {
     const existing = this.instances.get(id);
     if (existing) {
-      existing.getRefreshTier = getRefreshTier;
-      existing.onInput = onInput;
-      if (getCwd) {
-        this.cwdProviders.set(id, getCwd);
-      }
-      if (options) {
-        this.updateOptions(id, options);
-      }
-      if (launchAgentId !== undefined && !existing.isHibernated) {
-        existing.terminal.options.cursorBlink = false;
-      }
+      this.refreshManagedFromCreateArgs(
+        existing,
+        launchAgentId,
+        options,
+        getRefreshTier,
+        onInput,
+        getCwd
+      );
       return existing;
     }
 
+    // In-flight creation guard (the assistant double-render). #10840 made
+    // setupTerminalAddons async, so getOrCreate now awaits between the
+    // instances.get() guard above and the instances.set() in
+    // createManagedTerminal — a window in which a SECOND concurrent
+    // getOrCreate(id) for the same id (the overlay's prewarmTerminal racing the
+    // XtermAdapter mount, both firing on "+"/new-session once the panel chunk is
+    // warm) also sees an empty map, builds its own Terminal, and wires its OWN
+    // terminalClient.onData(id) listener. The pty-host then fans every live
+    // chunk out to BOTH listeners, which buffer it under the same id — so all
+    // output is written TWICE into the one visible xterm (duplicated banner,
+    // messages, composer). Share a single creation per id: a concurrent caller
+    // awaits the in-flight build and re-applies its own args to the shared
+    // instance instead of constructing a second one.
+    const inFlight = this.creating.get(id);
+    if (inFlight) {
+      const managed = await inFlight;
+      this.refreshManagedFromCreateArgs(
+        managed,
+        launchAgentId,
+        options,
+        getRefreshTier,
+        onInput,
+        getCwd
+      );
+      return managed;
+    }
+
+    const createPromise = this.createManagedTerminal(
+      id,
+      launchAgentId,
+      options,
+      getRefreshTier,
+      onInput,
+      getCwd
+    );
+    this.creating.set(id, createPromise);
+    try {
+      return await createPromise;
+    } finally {
+      this.creating.delete(id);
+    }
+  }
+
+  // Re-apply the per-call providers/options a getOrCreate caller supplied to an
+  // already-built instance. Used by both the existing-instance fast path and the
+  // in-flight-await path so a concurrent caller's getRefreshTier/onInput/cwd/
+  // options still take effect on the shared instance.
+  private refreshManagedFromCreateArgs(
+    managed: ManagedTerminal,
+    launchAgentId: string | undefined,
+    options: ConstructorParameters<typeof Terminal>[0],
+    getRefreshTier: RefreshTierProvider,
+    onInput: ((data: string) => void) | undefined,
+    getCwd: (() => string) | undefined
+  ): void {
+    managed.getRefreshTier = getRefreshTier;
+    managed.onInput = onInput;
+    if (getCwd) {
+      this.cwdProviders.set(managed.id, getCwd);
+    }
+    if (options) {
+      this.updateOptions(managed.id, options);
+    }
+    if (launchAgentId !== undefined && !managed.isHibernated) {
+      managed.terminal.options.cursorBlink = false;
+    }
+  }
+
+  private async createManagedTerminal(
+    id: string,
+    launchAgentId: string | undefined,
+    options: ConstructorParameters<typeof Terminal>[0],
+    getRefreshTier: RefreshTierProvider,
+    onInput: ((data: string) => void) | undefined,
+    getCwd: (() => string) | undefined
+  ): Promise<ManagedTerminal> {
     const openLink = (url: string, event?: MouseEvent) => {
       this.linkHandler.openLink(url, id, event);
     };
@@ -1561,6 +1642,18 @@ class TerminalInstanceService {
     // listener is wired below — terminalClient.onData flushes any buffered early
     // output synchronously on registration, so the activation must land first.
     const addons = await setupTerminalAddons(terminal);
+
+    // Destroyed mid-build: destroy(id) ran while this create was suspended on the
+    // async addon load, so the id it targeted no longer has a home. Tear down the
+    // half-built terminal and abort BEFORE wiring terminalClient.onData or
+    // publishing to `instances` — otherwise a torn-down id gets a live listener
+    // and a ghost instance the app can't see to clean up. The waiting getOrCreate
+    // caller's rejection is handled by prewarmTerminal/XtermAdapter (both
+    // catch+log; there is nothing to attach to a removed panel).
+    if (this.cancelledCreations.delete(id)) {
+      terminal.dispose();
+      throw new Error(`Terminal ${id} creation cancelled: destroyed before build completed`);
+    }
 
     const hostElement = document.createElement("div");
     hostElement.style.width = "100%";
@@ -3502,6 +3595,16 @@ class TerminalInstanceService {
   }
 
   destroy(id: string): void {
+    // Cancel an in-flight creation for this id: if the panel is torn down while
+    // getOrCreate is still awaiting setupTerminalAddons, the instance isn't in
+    // `instances` yet (so the guard below would no-op), but the pending build
+    // would otherwise resume and publish a stale instance/onData listener for a
+    // dead id. createManagedTerminal consumes this flag after its await and
+    // aborts. Marked regardless of the `instances` presence check below.
+    if (this.creating.has(id)) {
+      this.cancelledCreations.add(id);
+    }
+
     const managed = this.instances.get(id);
     if (!managed) return;
 
