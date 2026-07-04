@@ -125,6 +125,7 @@ export const CHANNELS = {
   SYSTEM_GET_RESOURCE_PROFILE_SNAPSHOT: "system:get-resource-profile-snapshot",
   SYSTEM_REQUEST_INTERACTIVE_OVERRIDE: "system:request-interactive-override",
   SYSTEM_GET_WHY_SLOW_SNAPSHOT: "system:get-why-slow-snapshot",
+  SYSTEM_GET_MEMORY_SNAPSHOT: "system:get-memory-snapshot",
   SYSTEM_REPORT_TERMINAL_RENDERER_DIAGNOSTICS: "system:report-terminal-renderer-diagnostics",
   DIAGNOSTICS_GET_PROCESS_METRICS: "diagnostics:get-process-metrics",
   DIAGNOSTICS_GET_HEAP_STATS: "diagnostics:get-heap-stats",
