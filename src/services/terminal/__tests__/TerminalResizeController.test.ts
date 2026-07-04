@@ -1323,6 +1323,22 @@ describe("TerminalResizeController", () => {
       expect(managed.lastHeight).toBe(before.lastHeight);
     });
 
+    it("defers a grid-changing reflow while a write batch is still parsing (pendingWrites)", () => {
+      const managed = createManagedTerminal();
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+      // First-ever batch queued but not yet parsed: lastWriteAt is unset (its
+      // stamp rides the write-buffer completion callback), so recency alone
+      // would wave this through and re-wrap mid-first-paint.
+      (managed as { pendingWrites?: number }).pendingWrites = 1;
+
+      const controller = makeController(managed);
+      const ok = controller.reconcileGeometryFresh("term-1");
+
+      expect(ok).toBe(false);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+    });
+
     it("applies the deferred reflow once the pane has gone write-quiescent", () => {
       const managed = createManagedTerminal();
       managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
