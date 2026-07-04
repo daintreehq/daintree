@@ -14,7 +14,7 @@ export const config: AgentConfig = {
   // from both `getAssistantSupportedAgentIds()` and
   // `getAssistantWiredAgentIds()` until the overlay path is verified.
   shortcut: "Cmd/Ctrl+Alt+A",
-  tooltip: "Google's agy — Gemini CLI successor",
+  tooltip: "Google's CLI",
   version: {
     args: ["--version"],
   },

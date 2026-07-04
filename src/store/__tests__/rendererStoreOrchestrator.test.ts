@@ -13,6 +13,7 @@ vi.mock("@/clients", () => ({
     onExit: vi.fn(),
     onAgentStateChanged: vi.fn(),
     onBroadcastResult: vi.fn().mockReturnValue(() => {}),
+    setFocusedTerminal: vi.fn(),
   },
   appClient: {
     setState: vi.fn().mockResolvedValue(undefined),
@@ -83,6 +84,7 @@ const { useTerminalInputStore } = await import("../terminalInputStore");
 const { useConsoleCaptureStore } = await import("../consoleCaptureStore");
 const { useResourceMonitoringStore } = await import("../resourceMonitoringStore");
 const { useVoiceRecordingStore } = await import("../voiceRecordingStore");
+const { usePluginPanelBadgeStore } = await import("../pluginPanelBadgeStore");
 const { unregisterInputController } = await import("../terminalInputStore");
 const { semanticAnalysisService } = await import("@/services/SemanticAnalysisService");
 const { useCliAvailabilityStore, cleanupCliAvailabilityStore } =
@@ -113,6 +115,7 @@ describe("rendererStoreOrchestrator", () => {
     useConsoleCaptureStore.setState({ messages: new Map() });
     useResourceMonitoringStore.setState({ metrics: new Map() });
     useVoiceRecordingStore.setState({ panelBuffers: {} });
+    usePluginPanelBadgeStore.setState({ badgesByPanelId: {} });
   });
 
   afterEach(() => {
@@ -225,6 +228,74 @@ describe("rendererStoreOrchestrator", () => {
     usePanelStore.getState().removePanel(panelId);
 
     expect(useConsoleCaptureStore.getState().messages.has(panelId)).toBe(false);
+  });
+
+  it("prunes plugin panel badges when a terminal is removed", () => {
+    const panelId = "term-badge";
+
+    usePanelStore.setState({
+      panelsById: {
+        [panelId]: {
+          id: panelId,
+          title: "T",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      },
+      panelIds: [panelId],
+    });
+    usePluginPanelBadgeStore.setState({
+      badgesByPanelId: {
+        [panelId]: { "plugin-1": { kind: "dot" } },
+        keep: { "plugin-1": { kind: "dot" } },
+      },
+    });
+
+    usePanelStore.getState().removePanel(panelId);
+
+    const badges = usePluginPanelBadgeStore.getState().badgesByPanelId;
+    expect(badges[panelId]).toBeUndefined();
+    // Unrelated panels' badges survive the prune.
+    expect(badges.keep).toEqual({ "plugin-1": { kind: "dot" } });
+  });
+
+  it("prunes plugin panel badges for every terminal removed in one batch", () => {
+    usePanelStore.setState({
+      panelsById: {
+        a: {
+          id: "a",
+          title: "A",
+          kind: "terminal" as const,
+          cwd: "/",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+        b: {
+          id: "b",
+          title: "B",
+          kind: "terminal" as const,
+          cwd: "/",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      },
+      panelIds: ["a", "b"],
+    });
+    usePluginPanelBadgeStore.setState({
+      badgesByPanelId: {
+        a: { "plugin-1": { kind: "dot" } },
+        b: { "plugin-1": { kind: "dot" } },
+      },
+    });
+
+    usePanelStore.setState({ panelsById: {}, panelIds: [] });
+
+    expect(usePluginPanelBadgeStore.getState().badgesByPanelId).toEqual({});
   });
 
   it("cleans up input store when terminal is removed", () => {

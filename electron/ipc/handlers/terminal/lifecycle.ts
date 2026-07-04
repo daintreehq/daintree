@@ -13,7 +13,12 @@ import type * as McpServerServiceModule from "../../../services/McpServerService
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
 import { helpSessionService } from "../../../services/HelpSessionService.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
-import { TerminalSpawnOptionsSchema } from "../../../schemas/ipc.js";
+import {
+  TerminalSpawnOptionsSchema,
+  AgentSessionRetentionDaysSchema,
+} from "../../../schemas/ipc.js";
+import { store } from "../../../store.js";
+import type { AgentSessionRetentionDays } from "../../../../shared/types/ipc/agentSessionHistory.js";
 import { resolveDaintreeMcpTier } from "../../../../shared/types/project.js";
 import { DEFAULT_DANGEROUS_ARGS } from "../../../../shared/types/agentSettings.js";
 import {
@@ -25,6 +30,7 @@ import {
   SettingTemplateError,
   substituteSettingsTemplates,
 } from "../../../services/settingsTemplateResolver.js";
+import { events } from "../../../services/events.js";
 import type * as PluginServiceModule from "../../../services/PluginService.js";
 
 type ValidatedTerminalSpawnOptions = z.output<typeof TerminalSpawnOptionsSchema>;
@@ -77,7 +83,11 @@ async function getPluginService(): Promise<PluginServiceSingleton> {
 import {
   listAgentSessions,
   clearAgentSessions,
+  persistAgentSession,
+  pruneAgentSessions,
 } from "../../../services/pty/agentSessionHistory.js";
+import { getAgentSessionRetentionDays } from "../../../services/pty/agentSessionRetention.js";
+import type { WorkspaceClient } from "../../../services/WorkspaceClient.js";
 import { getDefaultShell } from "../../../services/pty/terminalShell.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { quoteCommandArg } from "../../../../shared/utils/shellEscape.js";
@@ -536,6 +546,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         kind,
         launchAgentId,
         title,
+        titleMode: validatedOptions.titleMode,
         projectId,
         restore: validatedOptions.restore,
         isEphemeral: validatedOptions.isEphemeral,
@@ -575,12 +586,96 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     }
   };
 
+  // Resolve the worktree's branch in the main process (where the pty-host's
+  // direct-git path is unavailable). Best-effort and time-boxed: a stalled
+  // workspace-host must not hold up a terminal close, so cap the lookup at
+  // 200ms and treat any miss/timeout/detached-HEAD as "no branch".
+  const resolveBranchForMain = async (
+    worktreeId: string | undefined,
+    svc: WorkspaceClient | undefined
+  ): Promise<string | undefined> => {
+    if (!worktreeId || !svc) return undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const snapshot = await Promise.race([
+        svc.getMonitorAsync(worktreeId),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), 200);
+        }),
+      ]);
+      const branch = snapshot?.branch;
+      return branch && branch !== "HEAD" ? branch : undefined;
+    } catch {
+      return undefined;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+
+  // Journal a resume record for an agent terminal close (kill / gracefulKill).
+  // Best-effort: a null sessionId (no resumable session — e.g. Cursor or a
+  // non-resume-config agent), a non-agent terminal, or a branch-lookup failure
+  // all skip silently and never fail the close. Mirrors PtyManager's trash-
+  // expiry capture, the fourth close path that already journals.
+  const persistCloseRecord = async (
+    info: Awaited<ReturnType<typeof ptyClient.getTerminalAsync>>,
+    sessionId: string | null
+  ): Promise<void> => {
+    if (!sessionId || !info?.launchAgentId) return;
+    try {
+      const branch = await resolveBranchForMain(info.worktreeId, deps.worktreeService);
+      const { app } = await import("electron");
+      await persistAgentSession(
+        {
+          sessionId,
+          agentId: info.launchAgentId,
+          worktreeId: info.worktreeId ?? null,
+          // Prefer the agent's observed task title over the identity title,
+          // matching the trash-expiry path — otherwise kill-path records all
+          // read "Resume Claude" while trash-path records carry the task.
+          // A user-locked title is the exception: the resume row should read
+          // the same as the live tab did, and a lock freezes the tab.
+          title:
+            (info.titleMode === "user" ? info.title : (info.lastObservedTitle ?? info.title)) ??
+            null,
+          projectId: info.projectId ?? null,
+          agentLaunchFlags: info.agentLaunchFlags,
+          agentModelId: info.agentModelId,
+          cwd: info.cwd ?? undefined,
+          branch,
+        },
+        app.getPath("userData"),
+        getAgentSessionRetentionDays()
+      );
+      // Signal AFTER the write lands so a refetch it triggers sees the record.
+      // Bridged to every renderer for live resume-list refresh.
+      events.emit("agent-session:recorded", {
+        sessionId,
+        worktreeId: info.worktreeId ?? null,
+        projectId: info.projectId ?? null,
+        timestamp: Date.now(),
+      });
+    } catch (err) {
+      console.warn("[TerminalLifecycle] Failed to persist agent session on close:", err);
+    }
+  };
+
   const handleTerminalKill = async (id: string): Promise<void> => {
     try {
       if (typeof id !== "string") {
         throw new Error("Invalid terminal ID: must be a string");
       }
-      ptyClient.kill(id);
+      // Capture a resume record before tearing down an agent terminal. The info
+      // snapshot must precede the kill (it's gone afterward), and gracefulKill —
+      // not a bare kill — is what extracts the session id, so route agent
+      // terminals through it. Plain terminals keep the original hard kill.
+      const info = await ptyClient.getTerminalAsync(id).catch(() => null);
+      if (info?.launchAgentId) {
+        const sessionId = await ptyClient.gracefulKill(id);
+        await persistCloseRecord(info, sessionId);
+      } else {
+        ptyClient.kill(id);
+      }
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "Failed to kill terminal");
       throw new Error(`Failed to kill terminal: ${errorMessage}`);
@@ -591,7 +686,10 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     if (typeof id !== "string") {
       throw new Error("Invalid terminal ID: must be a string");
     }
-    return ptyClient.gracefulKill(id);
+    const info = await ptyClient.getTerminalAsync(id).catch(() => null);
+    const sessionId = await ptyClient.gracefulKill(id);
+    await persistCloseRecord(info, sessionId);
+    return sessionId;
   };
 
   const handleTerminalTrash = async (id: string): Promise<void> => {
@@ -624,12 +722,35 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
 
   const handleAgentSessionList = async (payload: { worktreeId?: string }) => {
     const { app } = await import("electron");
-    return listAgentSessions(payload?.worktreeId, app.getPath("userData"));
+    return listAgentSessions(
+      payload?.worktreeId,
+      app.getPath("userData"),
+      getAgentSessionRetentionDays()
+    );
   };
 
   const handleAgentSessionClear = async (payload: { worktreeId?: string }): Promise<void> => {
     const { app } = await import("electron");
     await clearAgentSessions(payload?.worktreeId, app.getPath("userData"));
+  };
+
+  const handleAgentSessionGetRetention = async (): Promise<AgentSessionRetentionDays> =>
+    getAgentSessionRetentionDays();
+
+  const handleAgentSessionSetRetention = async (days: AgentSessionRetentionDays): Promise<void> => {
+    // Dot-path write — never spread-write the slice, which would bake current
+    // defaults to disk and freeze future default changes for existing users (#6106).
+    store.set("agentSessionHistory.retentionDays", days);
+    // Apply the (possibly tighter) window immediately rather than lazily on the
+    // next persist/list — mirrors helpAssistant's prune-on-write. Fire-and-forget:
+    // the write is best-effort and must not block the settings-save round-trip.
+    const { app } = await import("electron");
+    void pruneAgentSessions(days, app.getPath("userData")).catch((err) => {
+      console.warn(
+        "[TerminalLifecycle] Failed to prune agent sessions after retention change:",
+        err
+      );
+    });
   };
 
   const namespace = defineIpcNamespace({
@@ -645,6 +766,15 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       restartService: op(CHANNELS.TERMINAL_RESTART_SERVICE, handleTerminalRestartService),
       agentSessionList: op(CHANNELS.AGENT_SESSION_LIST, handleAgentSessionList),
       agentSessionClear: op(CHANNELS.AGENT_SESSION_CLEAR, handleAgentSessionClear),
+      agentSessionGetRetention: op(
+        CHANNELS.AGENT_SESSION_GET_RETENTION,
+        handleAgentSessionGetRetention
+      ),
+      agentSessionSetRetention: opValidated(
+        CHANNELS.AGENT_SESSION_SET_RETENTION,
+        AgentSessionRetentionDaysSchema,
+        handleAgentSessionSetRetention
+      ),
     },
   });
 

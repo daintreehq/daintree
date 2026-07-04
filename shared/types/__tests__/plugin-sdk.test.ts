@@ -434,6 +434,7 @@ describe("plugin-sdk boundary", () => {
           commands: [],
           views: [],
           mcpServers: [],
+          skills: [],
           keybindings: [],
           contextMenus: [],
           forgeProviders: [],

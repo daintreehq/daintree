@@ -106,7 +106,14 @@ export interface PanelRegistrySlice {
   flushSpawnBatch: (token: HydrationBatchToken | null) => void;
   removePanel: (id: string) => void;
   emptyTrash: (ids: string[]) => void;
-  updateTitle: (id: string, newTitle: string) => void;
+  /**
+   * Rename a panel. `source` is the ownership rung doing the write: `"user"`
+   * (default — inline editors, rename dialog) locks the title as
+   * `titleMode: "user"`; `"automation"` (MCP/assistant `terminal.rename`)
+   * writes `titleMode: "custom"` and is a no-op against a user lock. An empty
+   * `newTitle` resets to the identity-derived default and unlocks.
+   */
+  updateTitle: (id: string, newTitle: string, source?: "user" | "automation") => void;
   updateLastObservedTitle: (id: string, title: string) => void;
   updateAgentState: (
     id: string,
@@ -198,7 +205,7 @@ export interface PanelRegistrySlice {
   setBrowserZoom: (id: string, zoom: number) => void;
   setBrowserConsoleOpen: (id: string, isOpen: boolean) => void;
   setDevPreviewConsoleOpen: (id: string, isOpen: boolean) => void;
-  setDevPreviewConsoleTab: (id: string, tab: "output" | "console") => void;
+  setDevPreviewConsoleTab: (id: string, tab: "output" | "console" | "diagnostics") => void;
   setViewportPreset: (
     id: string,
     preset: import("@shared/types/panel.js").ViewportPresetId | undefined

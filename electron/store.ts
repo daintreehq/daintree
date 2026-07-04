@@ -34,7 +34,11 @@ import type { BuiltInAgentId } from "../shared/config/agentIds.js";
 import type { AgentId } from "../shared/types/agent.js";
 import { DEFAULT_AGENT_SETTINGS, DEFAULT_APP_AGENT_CONFIG } from "../shared/types/index.js";
 import type { AppThemeConfig } from "../shared/types/appTheme.js";
-import type { SettingsRecovery, ActionFrecencyEntry } from "../shared/types/ipc/app.js";
+import type {
+  SettingsRecovery,
+  ActionFrecencyEntry,
+  ActionUsageEntry,
+} from "../shared/types/ipc/app.js";
 import type { HelpAssistantTier } from "../shared/types/ipc/maps.js";
 
 interface WindowStateEntry {
@@ -94,6 +98,11 @@ export interface StoreSchema {
     enabled: boolean;
     thresholdMinutes: number;
   };
+  pluginBackgroundUpdateCheck: {
+    enabled: boolean;
+    /** Wall-clock ms of the last completed pass; null until the first runs. */
+    lastCheckedAt: number | null;
+  };
   appState: {
     activeWorktreeId?: string;
     sidebarWidth: number;
@@ -122,7 +131,7 @@ export interface StoreSchema {
       kind?: PanelKind;
       launchAgentId?: AgentId;
       title: string;
-      titleMode?: "default" | "custom";
+      titleMode?: "default" | "custom" | "user";
       cwd?: string;
       worktreeId?: string;
       location: "grid" | "dock";
@@ -155,7 +164,7 @@ export interface StoreSchema {
     }>;
     panelGridConfig?: PanelGridConfig;
     mruList?: string[];
-    actionMruList?: ActionFrecencyEntry[] | string[];
+    actionMruList?: ActionUsageEntry[] | ActionFrecencyEntry[] | string[];
     actionPinnedIds?: string[];
     actionHiddenIds?: string[];
     fleetScopeMode?: "legacy" | "scoped";
@@ -223,6 +232,15 @@ export interface StoreSchema {
     telemetryLevel: "off" | "errors" | "full";
     hasSeenPrompt: boolean;
     logRetentionDays: 7 | 30 | 90 | 0;
+  };
+  /**
+   * Agent resume journal (`agent-session-history.json`) settings. Kept as its
+   * own slice rather than folded into `privacy` — it governs a distinct record
+   * type (resumable agent sessions), not telemetry/log retention.
+   */
+  agentSessionHistory: {
+    /** Retention window in days; `0` = keep forever. */
+    retentionDays: 7 | 30 | 90 | 0;
   };
   voiceInput: {
     enabled: boolean;
@@ -511,6 +529,12 @@ const storeOptions = {
       enabled: false,
       thresholdMinutes: 15,
     },
+    // Background plugin update checks default OFF (#10893): a periodic network
+    // re-fetch of every URL-installed plugin is an opt-in behavior, not a default.
+    pluginBackgroundUpdateCheck: {
+      enabled: false,
+      lastCheckedAt: null,
+    },
     appState: {
       sidebarWidth: 350,
       focusMode: false,
@@ -564,6 +588,9 @@ const storeOptions = {
       telemetryLevel: "off" as const,
       hasSeenPrompt: false,
       logRetentionDays: 30 as const,
+    },
+    agentSessionHistory: {
+      retentionDays: 30 as const,
     },
     voiceInput: {
       enabled: false,

@@ -10,6 +10,7 @@ export const DEV_PREVIEW_METHOD_CHANNELS = {
   getState: "dev-preview:get-state",
   getByWorktree: "dev-preview:get-by-worktree",
   getAllSessions: "dev-preview:get-all-sessions",
+  getDiagnostics: "dev-preview:get-diagnostics",
   getDestructivePreviewMeta: "dev-preview:get-destructive-preview-meta",
   getDestructivePreviewSizes: "dev-preview:get-destructive-preview-sizes",
   stopByWorktree: "dev-preview:stop-by-worktree",

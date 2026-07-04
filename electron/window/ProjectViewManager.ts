@@ -25,6 +25,7 @@ import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { forgetBlinkSample, forgetEluSample } from "../services/ProcessMemoryMonitor.js";
+import { forgetRendererTerminalDiagnostics } from "../services/RendererTerminalDiagnosticsCache.js";
 import type { PtyClient } from "../services/PtyClient.js";
 import { events } from "../services/events.js";
 import { notifyError } from "../ipc/errorHandlers.js";
@@ -431,6 +432,12 @@ export class ProjectViewManager {
     projectId: string,
     projectPath: string
   ): Promise<{ view: WebContentsView; isNew: boolean }> {
+    // A switch queued behind switchChain can land after dispose() (window
+    // close mid-queue). Creating a view on a disposed manager would leak it:
+    // no timer sweeps, no eviction, no dispose pass will ever reach it.
+    if (this.disposed) {
+      throw new Error("Cannot switch view — manager is disposed");
+    }
     if (this.win.isDestroyed()) {
       throw new Error("Cannot switch view — window is destroyed");
     }
@@ -1302,6 +1309,23 @@ export class ProjectViewManager {
   private deactivateEntry(current: ViewEntry): void {
     if (this.win.isDestroyed()) return;
 
+    // Stale-entry guard: destroyView (HibernationService runs outside
+    // switchChain) or an eviction can tear this entry down while it serves as
+    // a paint-gate bridge, and the gate's settle path still holds the old
+    // reference. Deactivating the torn-down entry would re-register its
+    // closing webContents as a cached view (a mark with no destroy listener
+    // left to clear it), fire onViewCached for a dead renderer, and mutate a
+    // dead entry's state. Detach only and leave the teardown path's work alone.
+    if (this.views.get(current.projectId) !== current) {
+      try {
+        this.win.contentView.removeChildView(current.view);
+      } catch {
+        // Already detached by the teardown path.
+      }
+      logWarn("projectview.stale-deactivate", { projectId: current.projectId });
+      return;
+    }
+
     try {
       this.win.contentView.removeChildView(current.view);
     } catch {
@@ -1597,6 +1621,7 @@ export class ProjectViewManager {
     }
     forgetBlinkSample(wcId);
     forgetEluSample(wcId);
+    forgetRendererTerminalDiagnostics(wcId);
 
     try {
       this.onViewEvicted?.(wcId);
@@ -2128,25 +2153,59 @@ export class ProjectViewManager {
       }
     }
 
-    // Unregister from WindowRegistry
-    const wcId = entry.view.webContents.id;
-    if (this.windowRegistry) {
-      this.windowRegistry.unregisterAppViewWebContents(this.win.id, wcId);
+    // Electron 41 (#50249): view.webContents is undefined once the view is
+    // destroyed, and a teardown race (window close ordering, OS-level view
+    // destruction) can land cleanupEntry after that point. Fall back to the
+    // reverse map so registry/port cleanup still runs with the last-known id
+    // instead of throwing and stranding the entry in `views`.
+    let wc: Electron.WebContents | null = null;
+    let wcId: number | null = null;
+    try {
+      const maybeWc = entry.view.webContents ?? null;
+      if (maybeWc) {
+        wcId = maybeWc.id;
+        wc = maybeWc;
+      }
+    } catch {
+      // Getter or id read threw — treat the webContents as unreachable.
+    }
+    if (wcId === null) {
+      for (const [mappedWcId, mappedProjectId] of this.webContentsToProject) {
+        if (mappedProjectId === projectId) {
+          wcId = mappedWcId;
+          break;
+        }
+      }
     }
 
-    this.webContentsToProject.delete(wcId);
-    unregisterProjectView(wcId);
-    forgetBlinkSample(wcId);
-    forgetEluSample(wcId);
+    if (wcId !== null) {
+      // Unregister from WindowRegistry
+      if (this.windowRegistry) {
+        this.windowRegistry.unregisterAppViewWebContents(this.win.id, wcId);
+      }
 
-    // Notify listeners (e.g. WorkspaceClient) so they can clean up direct ports
-    this.onViewEvicted?.(wcId);
+      this.webContentsToProject.delete(wcId);
+      unregisterProjectView(wcId);
+      forgetBlinkSample(wcId);
+      forgetEluSample(wcId);
+      forgetRendererTerminalDiagnostics(wcId);
+
+      // Notify listeners (e.g. WorkspaceClient) so they can clean up direct
+      // ports. Isolated so a throwing callback cannot abort the eviction loop
+      // or dispose() mid-iteration and strand this entry with its listeners
+      // already detached.
+      try {
+        this.onViewEvicted?.(wcId);
+      } catch (error) {
+        console.error("[ProjectViewManager] onViewEvicted threw during eviction:", error);
+      }
+    }
 
     // Close webContents — only unregister from webContentsRegistry, NOT unregisterAppView
     // (which would remove the active view's registration)
-    if (!entry.view.webContents.isDestroyed()) {
-      unregisterWebContents(entry.view.webContents);
-      entry.view.webContents.close();
+    if (wc && !wc.isDestroyed()) {
+      unregisterWebContents(wc);
+      wc.close();
     }
 
     this.views.delete(projectId);

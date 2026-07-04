@@ -181,6 +181,9 @@ describe("TerminalInstanceService — installTerminalBoundListeners call-site pa
         writeSelection: vi.fn().mockResolvedValue(undefined),
         readSelection: vi.fn().mockResolvedValue({ text: "" }),
       },
+      system: {
+        requestInteractiveOverride: vi.fn().mockResolvedValue(undefined),
+      },
     };
 
     ({ terminalInstanceService: service } =
@@ -204,6 +207,21 @@ describe("TerminalInstanceService — installTerminalBoundListeners call-site pa
       "t1",
       expect.any(Object)
     );
+  });
+
+  it("onUserScrollIntent dep requests an interactive profile-hold over IPC (#10858)", async () => {
+    await service.getOrCreate("t1", undefined, {});
+
+    const deps = installMock.mock.calls[0]?.[3] as { onUserScrollIntent: (id: string) => void };
+    deps.onUserScrollIntent("t1");
+
+    expect(
+      (
+        window as unknown as {
+          electron: { system: { requestInteractiveOverride: ReturnType<typeof vi.fn> } };
+        }
+      ).electron.system.requestInteractiveOverride
+    ).toHaveBeenCalledWith(1500);
   });
 
   it("detach path: detachForProjectSwitch does not install listeners", () => {

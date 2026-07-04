@@ -177,9 +177,9 @@ export interface TerminalInfo extends TerminalPublicState {
   /**
    * Monotonic count of buffer mutations: PTY output chunks (bumped at the
    * pty-host routing site), resize reflows, and the preserved-snapshot
-   * capture. Runtime-only; not persisted, not crossed over IPC. Vestigial: the
-   * only reader was the wake no-change short-circuit, removed with the rest of
-   * the hibernation/wake teardown — kept as a write-only counter for now.
+   * capture. Runtime-only; not persisted, not crossed over IPC. Read by
+   * SessionSnapshotter (via SessionSnapshotterHost.contentEpoch) as the dirty
+   * check that skips re-serializing an unchanged buffer on event-driven flush.
    */
   contentEpoch: number;
   /**

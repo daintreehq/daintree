@@ -1,9 +1,9 @@
 import type { AgentId } from "../agent.js";
 import type { TerminalState } from "./terminal.js";
 import type { TerminalConfig } from "./config.js";
-import type { ActionFrecencyEntry } from "../actions.js";
+import type { ActionFrecencyEntry, ActionUsageEntry } from "../actions.js";
 
-export type { ActionFrecencyEntry };
+export type { ActionFrecencyEntry, ActionUsageEntry };
 
 /** Saved recipe terminal */
 export interface SavedRecipeTerminal {
@@ -81,8 +81,8 @@ export interface AppState {
   panelGridConfig?: import("../config.js").PanelGridConfig;
   /** Most-recently-used ordered list of quick-switcher item IDs ("terminal:<id>" | "worktree:<id>") */
   mruList?: string[];
-  /** Most-recently-used action frecency entries for the action palette (migrated from legacy string[] format) */
-  actionMruList?: ActionFrecencyEntry[] | string[];
+  /** Per-action rolling 7-day usage entries for the command palette. Legacy frecency ({score}) and string[] shapes are still accepted on read and migrated. */
+  actionMruList?: ActionUsageEntry[] | ActionFrecencyEntry[] | string[];
   /** Action IDs pinned to the "Favorites" rail of the empty-query action palette. */
   actionPinnedIds?: string[];
   /** Action IDs the user has hidden from the "Recently used" rail of the action palette. */

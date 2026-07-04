@@ -48,6 +48,10 @@ const openImageViewerArgsSchema = z.object({
   path: z.string(),
 });
 
+const showItemInFolderArgsSchema = z.object({
+  path: z.string().min(1),
+});
+
 export function registerFileActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("file.view", () => ({
     id: "file.view",
@@ -134,6 +138,22 @@ export function registerFileActions(actions: ActionRegistry, _callbacks: ActionC
     run: async (args: unknown) => {
       const { path } = args as z.infer<typeof openImageViewerArgsSchema>;
       await systemClient.openPath(path);
+    },
+  }));
+
+  actions.set("file.showItemInFolder", () => ({
+    id: "file.showItemInFolder",
+    title: "Reveal in File Manager",
+    description:
+      "Reveal a file or directory in the OS file manager (Finder on macOS, Explorer on Windows, the default file manager on Linux) with the item selected. Args: `path` (required) — absolute file or directory path. Reveals only; it never opens or launches the item. Errors when the path is missing, outside your project roots, or no longer exists.",
+    category: "files",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: showItemInFolderArgsSchema,
+    run: async (args: unknown) => {
+      const { path } = showItemInFolderArgsSchema.parse(args);
+      await systemClient.showItemInFolder(path);
     },
   }));
 }

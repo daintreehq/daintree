@@ -102,7 +102,7 @@ vi.mock("../../utils/gitFileWatcher.js", () => {
   return {
     GitFileWatcher: class {
       start() {
-        return false;
+        return Promise.resolve(false);
       }
       dispose() {}
     },
@@ -1381,8 +1381,8 @@ describe("WorkspaceService.loadProject performance behavior", () => {
     expect(mockSimpleGit.raw).toHaveBeenCalledTimes(2);
   });
 
-  it("uses the worktree folder name for detached worktrees", () => {
-    const mapped = service["listService"].mapToWorktrees([
+  it("uses the worktree folder name for detached worktrees", async () => {
+    const mapped = await service["listService"].mapToWorktrees([
       {
         path: "/repo/daintree-bisect/cross-worktree-diff-2026-03-06",
         branch: "",

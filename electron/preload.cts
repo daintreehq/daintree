@@ -64,6 +64,7 @@ import { buildIdleBackgroundAutoClosePreloadBindings } from "./ipc/handlers/idle
 import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.preload.js";
 import { buildAppVersionInfoPreloadBindings } from "./ipc/handlers/appVersionInfo.preload.js";
 import { buildResourceProfilePreloadBindings } from "./ipc/handlers/resourceProfile.preload.js";
+import { buildWhySlowPreloadBindings } from "./ipc/handlers/whySlow.preload.js";
 import { buildOsDndPreloadBindings } from "./ipc/handlers/osDnd.preload.js";
 import { buildAgentCapabilitiesPreloadBindings } from "./ipc/handlers/agentCapabilities.preload.js";
 import { buildHelpAssistantPreloadBindings } from "./ipc/handlers/helpAssistant.preload.js";
@@ -1100,6 +1101,8 @@ function buildElectronApi(): ElectronAPI {
       setActivityTier: (id: string, tier: "active" | "background", pollingIntervalMs?: number) =>
         ipcRenderer.send(CHANNELS.TERMINAL_SET_ACTIVITY_TIER, { id, tier, pollingIntervalMs }),
 
+      setFocused: (id: string | null) => ipcRenderer.send(CHANNELS.TERMINAL_SET_FOCUSED, { id }),
+
       acknowledgeData: (id: string, length: number) =>
         ipcRenderer.send(CHANNELS.TERMINAL_ACKNOWLEDGE_DATA, { id, length }),
 
@@ -1300,6 +1303,9 @@ function buildElectronApi(): ElectronAPI {
 
       openPath: (path: string) => _unwrappingInvoke(CHANNELS.SYSTEM_OPEN_PATH, { path }),
 
+      showItemInFolder: (path: string) =>
+        _unwrappingInvoke(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER, { path }),
+
       openInEditor: (payload: { path: string; line?: number; col?: number; projectId?: string }) =>
         _unwrappingInvoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, payload),
 
@@ -1392,6 +1398,8 @@ function buildElectronApi(): ElectronAPI {
         _eventBusOn("resource:profile-changed", callback),
 
       ...buildResourceProfilePreloadBindings(_unwrappingInvoke),
+
+      ...buildWhySlowPreloadBindings(_unwrappingInvoke),
     },
 
     // App State API
@@ -1752,6 +1760,9 @@ function buildElectronApi(): ElectronAPI {
 
       setGlobal: (value: boolean) => _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET_GLOBAL, value),
 
+      setGlobalInline: (value: boolean) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET_GLOBAL_INLINE, value),
+
       reset: (agentType?: string) => _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_RESET, agentType),
 
       stampVersion: (version: number) =>
@@ -1960,6 +1971,8 @@ function buildElectronApi(): ElectronAPI {
       ): (() => void) => _typedOn(CHANNELS.WEBVIEW_FIND_SHORTCUT, callback),
       onReloadShortcut: (callback: (payload: { panelId: string }) => void): (() => void) =>
         _typedOn(CHANNELS.WEBVIEW_RELOAD_SHORTCUT, callback),
+      onCloseShortcut: (callback: (payload: { panelId: string }) => void): (() => void) =>
+        _typedOn(CHANNELS.WEBVIEW_CLOSE_SHORTCUT, callback),
       onNavigationBlocked: (
         callback: (payload: { panelId: string; url: string; canOpenExternal: boolean }) => void
       ): (() => void) => _typedOn(CHANNELS.WEBVIEW_NAVIGATION_BLOCKED, callback),
@@ -2209,6 +2222,7 @@ function buildElectronApi(): ElectronAPI {
           message: string;
           duration?: number;
           rateLimitKey?: string;
+          priority?: "high" | "low" | "watch";
           action?: { label: string; ipcChannel: string; data?: string };
         }) => void
       ) => _typedOn(CHANNELS.NOTIFICATION_SHOW_TOAST, callback),
@@ -2350,6 +2364,9 @@ function buildElectronApi(): ElectronAPI {
       list: (worktreeId?: string) => _unwrappingInvoke(CHANNELS.AGENT_SESSION_LIST, { worktreeId }),
       clear: (worktreeId?: string) =>
         _unwrappingInvoke(CHANNELS.AGENT_SESSION_CLEAR, { worktreeId }),
+      getRetentionDays: () => _unwrappingInvoke(CHANNELS.AGENT_SESSION_GET_RETENTION),
+      setRetentionDays: (days: number) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SESSION_SET_RETENTION, days),
     },
 
     // Clipboard API — bindings built from the preload-safe channel map in
@@ -2826,6 +2843,11 @@ function buildElectronApi(): ElectronAPI {
         _eventBusOn("plugin:actions-changed", callback),
       onProvenanceChanged: (callback: (payload: Record<string, never>) => void) =>
         _eventBusOn("plugin:provenance-changed", callback),
+      onBackgroundUpdateAvailable: (
+        callback: (
+          payload: import("../shared/types/plugin.js").PluginBackgroundUpdateCheckResult
+        ) => void
+      ) => _eventBusOn("plugin:bg-update-available", callback),
       onPanelKindsChanged: (callback: (payload: { kinds: PanelKindConfig[] }) => void) =>
         _eventBusOn("plugin:panel-kinds-changed", callback),
       onAgentsChanged: (

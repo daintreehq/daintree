@@ -419,6 +419,12 @@ function TerminalPaneComponent({
       agentModelId: panel.agentModelId,
       agentPresetId: panel.agentPresetId,
       env: presetEnv,
+      // Carry the gate panel's persistence policy through the re-launch. Since
+      // env is now persisted onto the panel (#10922), dropping these would let a
+      // session-scoped secret (e.g. DAINTREE_MCP_TOKEN on a help session, which
+      // launches excluded) leak into the on-disk snapshot on "Run anyway".
+      excludeFromPersistence: panel.excludeFromPersistence,
+      removeOnExit: panel.removeOnExit,
     });
   };
 

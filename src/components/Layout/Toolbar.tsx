@@ -88,6 +88,7 @@ import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { NotificationCenterToolbarButton } from "./NotificationCenterToolbarButton";
 import { ToolbarLauncherButton } from "./ToolbarLauncherButton";
 import { ToolbarCommandPaletteButton } from "./ToolbarCommandPaletteButton";
+import { ResumeSessionsToolbarButton } from "./ResumeSessionsToolbarButton";
 import { ToolbarSettingsButton } from "./ToolbarSettingsButton";
 import { ToolbarProblemsButton } from "./ToolbarProblemsButton";
 import { ToolbarPortalButton } from "./ToolbarPortalButton";
@@ -579,6 +580,7 @@ export function Toolbar({
   const devServerShortcut = useKeybindingDisplay("devServer.start");
   const notificationsShortcut = useKeybindingDisplay("notifications.toggle");
   const commandPaletteShortcut = useKeybindingDisplay("action.palette.open");
+  const resumeSessionsShortcut = useKeybindingDisplay("terminal.resumeSessions");
   const settingsShortcut = useKeybindingDisplay("app.settings");
   const problemsShortcut = useKeybindingDisplay("panel.toggleDiagnostics");
   const terminalShortcut = useKeybindingDisplay("agent.terminal");
@@ -1019,6 +1021,10 @@ export function Toolbar({
         render: () => <ToolbarCommandPaletteButton key="command-palette" data-toolbar-item="" />,
         isAvailable: true,
       },
+      "resume-sessions": {
+        render: () => <ResumeSessionsToolbarButton key="resume-sessions" data-toolbar-item="" />,
+        isAvailable: true,
+      },
       settings: {
         render: () => (
           <ToolbarSettingsButton
@@ -1107,16 +1113,22 @@ export function Toolbar({
 
   const effectiveLeftButtons = useMemo(
     () =>
-      toolbarLayout.leftButtons.filter((id) =>
+      // Dedupe defensively so a persisted list holding a repeated id never
+      // renders duplicate pills (#10937) — the store also heals this, this is
+      // belt-and-suspenders at the render boundary.
+      Array.from(new Set(toolbarLayout.leftButtons)).filter((id) =>
         isToolbarButtonVisible(id, pinnedButtons, effectiveAgentSettings, agentAvailability)
       ),
     [toolbarLayout.leftButtons, pinnedButtons, effectiveAgentSettings, agentAvailability]
   );
 
   const effectiveRightButtons = useMemo(() => {
-    const existing = new Set(toolbarLayout.rightButtons);
+    // Dedupe the persisted base before appending plugin extras, so duplicate
+    // ids (e.g. repeated `forge-stats`, #10937) can't render twice.
+    const base = Array.from(new Set(toolbarLayout.rightButtons));
+    const existing = new Set(base);
     const extra = pluginButtonIds.filter((id) => !existing.has(id));
-    return [...toolbarLayout.rightButtons, ...extra].filter((id) =>
+    return [...base, ...extra].filter((id) =>
       isToolbarButtonVisible(id, pinnedButtons, effectiveAgentSettings, agentAvailability)
     );
   }, [
@@ -1299,6 +1311,9 @@ export function Toolbar({
       "command-palette": () => {
         void actionService.dispatch("action.palette.open", undefined, { source: "user" });
       },
+      "resume-sessions": () => {
+        void actionService.dispatch("terminal.resumeSessions", undefined, { source: "user" });
+      },
       settings: onSettings,
       problems: onToggleProblems,
       ...Object.fromEntries(
@@ -1333,6 +1348,7 @@ export function Toolbar({
     "copy-tree": copyTreeShortcut,
     "notification-center": notificationsShortcut,
     "command-palette": commandPaletteShortcut,
+    "resume-sessions": resumeSessionsShortcut,
     "dev-server": devServerShortcut,
     settings: settingsShortcut,
     problems: problemsShortcut,

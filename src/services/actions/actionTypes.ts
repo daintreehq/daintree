@@ -43,6 +43,7 @@ export interface ActionCallbacks {
   onOpenWorktreeOverview: () => void;
   onCloseWorktreeOverview: () => void;
   onOpenPanelPalette: () => void;
+  onOpenResumeSessionsPalette: () => void;
   onOpenProjectSwitcherPalette: () => void;
   onConfirmCloseActiveProject: (projectId: string) => void;
   onOpenActionPalette: () => void;

@@ -1,0 +1,9 @@
+{"time":0.0,"chunk":"OpenCode v0.5.0","detectedState":"initializing","confidence":0.9,"agentId":"opencode"}
+{"time":0.5,"chunk":"Ask anything","detectedState":"waiting","confidence":0.85,"agentId":"opencode"}
+{"time":1.0,"chunk":"⣾ Generating response (esc to interrupt)","detectedState":"working","confidence":0.95,"agentId":"opencode"}
+{"time":2.0,"chunk":"● Building tool call","detectedState":"working","confidence":0.95,"agentId":"opencode"}
+{"time":3.0,"chunk":"● Waiting for tool response","detectedState":"working","confidence":0.95,"agentId":"opencode"}
+{"time":4.0,"chunk":"press esc again to interrupt","detectedState":"working","confidence":0.95,"agentId":"opencode"}
+{"time":5.0,"chunk":"⣽ Reading files","detectedState":"working","confidence":0.7,"agentId":"opencode"}
+{"time":6.0,"chunk":"The refactor is complete.","detectedState":"unknown","confidence":0.6,"agentId":"opencode"}
+{"time":6.5,"chunk":"\u001b]0;opencode\u0007","detectedState":"unknown","confidence":0.6,"agentId":"opencode"}

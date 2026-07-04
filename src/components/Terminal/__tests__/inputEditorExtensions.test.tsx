@@ -1743,18 +1743,93 @@ describe("two-press Backspace on /slash chips", () => {
     view.destroy();
   });
 
-  it("two-press also works for invalid /slash commands (still atomic)", () => {
+  it("does not solidify an invalid /slash command into an atomic chip", () => {
     const map = new Map<string, SlashCommand>();
     const view = makeView("/unknowncmd ", map);
     const chipEnd = "/unknowncmd".length;
     view.dispatch({ selection: { anchor: chipEnd } });
 
-    runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Backspace" }), "editor");
-    expect(view.state.doc.toString()).toBe("/unknowncmd ");
-    expect(view.state.field(chipPendingDeleteField)).toEqual({ from: 0, to: chipEnd });
+    // A still-draft / mistyped command stays plain editable text: Backspace must
+    // NOT stage-and-select the whole token. The chip binding declines (returns
+    // false) so the event falls through to the default keymap, which deletes one
+    // character in the real editor; the jsdom harness has no default keymap, so
+    // we assert the binding declined and nothing was staged.
+    const handled = runScopeHandlers(
+      view,
+      new KeyboardEvent("keydown", { key: "Backspace" }),
+      "editor"
+    );
+    expect(handled).toBe(false);
+    expect(view.state.field(chipPendingDeleteField)).toBeNull();
+    expect(view.state.selection.main.empty).toBe(true);
 
-    runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Backspace" }), "editor");
-    expect(view.state.doc.toString()).toBe(" ");
+    // The invalid token is not registered as an atomic range.
+    let covered = false;
+    for (const getRanges of view.state.facet(EditorView.atomicRanges)) {
+      getRanges(view).between(0, chipEnd, () => {
+        covered = true;
+        return false;
+      });
+    }
+    expect(covered).toBe(false);
+
+    // It renders as an editable mark (the "no match" hint), not a replace widget.
+    expect(view.dom.querySelector('[role="img"]')).toBeNull();
+    expect(view.dom.querySelector(".cm-slash-command-chip-invalid")).not.toBeNull();
+    view.destroy();
+  });
+
+  it("still solidifies a valid /slash command into an atomic chip", () => {
+    const map = new Map<string, SlashCommand>([["/build", makeSlashCommand("/build")]]);
+    const view = makeView("/build ", map);
+    const chipEnd = "/build".length;
+    view.dispatch({ selection: { anchor: chipEnd } });
+
+    let covered = false;
+    for (const getRanges of view.state.facet(EditorView.atomicRanges)) {
+      getRanges(view).between(0, chipEnd, () => {
+        covered = true;
+        return false;
+      });
+    }
+    expect(covered).toBe(true);
+    view.destroy();
+  });
+
+  it("renders a mixed valid + invalid doc: widget for valid, editable mark for invalid", () => {
+    // Exercises the combined decoration set (a replace widget and a plain mark
+    // in the same Decoration.set) plus the atomicRanges split.
+    const map = new Map<string, SlashCommand>([["/build", makeSlashCommand("/build")]]);
+    const view = makeView("/build /unknowncmd", map);
+
+    // Exactly one solidified chip widget, for the valid command.
+    const widgets = view.dom.querySelectorAll('[role="img"]');
+    expect(widgets).toHaveLength(1);
+    expect(widgets[0]?.textContent).toBe("/build");
+
+    // The invalid token renders as an editable "no match" mark, not a widget.
+    expect(view.dom.querySelector(".cm-slash-command-chip-invalid")?.textContent).toBe(
+      "/unknowncmd"
+    );
+
+    const coversRange = (from: number, to: number) => {
+      let covered = false;
+      for (const getRanges of view.state.facet(EditorView.atomicRanges)) {
+        getRanges(view).between(from, to, (rFrom, rTo) => {
+          if (rFrom === from && rTo === to) {
+            covered = true;
+            return false;
+          }
+          return undefined;
+        });
+      }
+      return covered;
+    };
+
+    // Only the valid command is atomic.
+    expect(coversRange(0, "/build".length)).toBe(true);
+    const invalidStart = "/build ".length;
+    expect(coversRange(invalidStart, invalidStart + "/unknowncmd".length)).toBe(false);
     view.destroy();
   });
 });

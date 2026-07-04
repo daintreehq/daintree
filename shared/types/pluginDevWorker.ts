@@ -147,10 +147,22 @@ export type PluginHostToWorkerMessage =
    */
   | { type: "register-error"; registrationKey: string; error: string };
 
+/**
+ * Empirical permission-model self-check the worker reports at boot (spike
+ * #10890). `present` is `true` when Node's permission model is actually active
+ * in the worker (`process.permission` exists). It lets the host record whether
+ * Electron honored the `--permission` `execArgv` flags — expected `false` on
+ * Electron 42, whose utility-process bootstrap does not run Node's permission
+ * CLI parsing. Optional so older workers (no self-check) stay protocol-compatible.
+ */
+export interface PluginWorkerPermissionStatus {
+  present: boolean;
+}
+
 /** Messages sent worker → main. */
 export type PluginWorkerToHostMessage =
   /** Worker booted, parent-port listener attached, ready for `start`. */
-  | { type: "ready" }
+  | { type: "ready"; permission?: PluginWorkerPermissionStatus }
   /** `activate(proxy)` resolved. `hasCleanup` records whether it returned a disposer. */
   | { type: "activated"; hasCleanup: boolean }
   /** `activate(proxy)` threw or rejected. */

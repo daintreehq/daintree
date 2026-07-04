@@ -19,6 +19,16 @@ export const WATCHDOG_REPAIR_COOLDOWN_MS = 6000;
 // context attach) allowed per tick. Light repairs (flush, reflow) are uncapped.
 export const WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK = 2;
 
+// Consecutive geometry-convergence repairs allowed for one terminal before the
+// circuit breaker trips (#10909). The cooldown spaces repairs ~2 ticks apart but
+// never caps them, so a pane whose proposeDimensions() never converges (a stable
+// off-by-one, e.g. a scrollbar-gutter width step it can't reach) would re-wrap its
+// full scrollback — renderer xterm plus the 10000-line headless copy — every
+// cooldown window indefinitely. After this many issued repairs still fail to
+// converge, stop repairing and log once, matching TerminalWebGLManager's
+// LOSS_THRESHOLD one-way-trip pattern. Reset on genuine convergence or re-attach.
+export const WATCHDOG_MAX_GEOMETRY_REPAIR_ATTEMPTS = 3;
+
 /** Narrow structural type for the private xterm.js render-pause flag. */
 interface XtermCoreRenderPause {
   _renderService?: { _isPaused?: boolean };
@@ -393,29 +403,74 @@ export class TerminalReconciliationWatchdog {
     // grid that all diverges at once never lands as a single long task.
     if (!inSynchronizedBlock) {
       const proposal = managed.fitAddon.proposeDimensions?.();
-      if (
-        proposal &&
-        proposal.cols > 1 &&
-        proposal.rows > 1 &&
-        (proposal.cols !== managed.terminal.cols || proposal.rows !== managed.terminal.rows)
-      ) {
-        if (heavyBudget <= 0) return 0;
-        managed.lastWatchdogRepairAt = now;
-        logWarn(
-          "[TerminalReconciliationWatchdog] geometry divergence for on-screen terminal — reconciling",
-          {
-            id,
-            xtermCols: managed.terminal.cols,
-            xtermRows: managed.terminal.rows,
-            proposedCols: proposal.cols,
-            proposedRows: proposal.rows,
-            isAltBuffer: managed.isAltBuffer === true,
+      if (proposal && proposal.cols > 1 && proposal.rows > 1) {
+        const diverged =
+          proposal.cols !== managed.terminal.cols || proposal.rows !== managed.terminal.rows;
+        if (!diverged) {
+          // Converged: the grid now matches what the container can hold. Re-arm the
+          // circuit breaker (#10909) so a pane that self-corrected — e.g. a resize
+          // moved the container to a reachable width — isn't permanently barred from
+          // future repairs. reconcileRevealGeometry's boolean is measurability, not
+          // convergence, so this proposeDimensions comparison is the only real signal.
+          if (managed.geometryRepairAttempts || managed.geometryRepairGaveUp) {
+            managed.geometryRepairAttempts = 0;
+            managed.geometryRepairGaveUp = false;
           }
-        );
-        if (this.deps.reconcileRevealGeometry(id)) {
-          this.unpauseIfNeeded(managed, element);
+        } else {
+          // A fresh incarnation reusing this id must start with a clean counter —
+          // the old instance's give-up state can't apply to new geometry (mirrors
+          // the revealPendingGeneration guard above).
+          if (managed.geometryRepairGeneration !== managed.attachGeneration) {
+            managed.geometryRepairGeneration = managed.attachGeneration;
+            managed.geometryRepairAttempts = 0;
+            managed.geometryRepairGaveUp = false;
+          }
+          // Breaker tripped: stop re-wrapping this pane's scrollback. Fall through so
+          // the cheaper render-pause / WebGL layers below still reconcile — the
+          // breaker disables only the expensive geometry repair, not the whole chain.
+          if (!managed.geometryRepairGaveUp) {
+            const attempts = managed.geometryRepairAttempts ?? 0;
+            if (attempts >= WATCHDOG_MAX_GEOMETRY_REPAIR_ATTEMPTS) {
+              managed.geometryRepairGaveUp = true;
+              logWarn(
+                "[TerminalReconciliationWatchdog] geometry never converged after repeated repairs — giving up (circuit breaker)",
+                {
+                  id,
+                  attempts,
+                  limit: WATCHDOG_MAX_GEOMETRY_REPAIR_ATTEMPTS,
+                  xtermCols: managed.terminal.cols,
+                  xtermRows: managed.terminal.rows,
+                  proposedCols: proposal.cols,
+                  proposedRows: proposal.rows,
+                  isAltBuffer: managed.isAltBuffer === true,
+                }
+              );
+            } else {
+              // Count only issued repairs — a budget-deferred tick wasn't a failed
+              // convergence, just an untried one, so the check gates before the bump.
+              if (heavyBudget <= 0) return 0;
+              managed.geometryRepairAttempts = attempts + 1;
+              managed.lastWatchdogRepairAt = now;
+              logWarn(
+                "[TerminalReconciliationWatchdog] geometry divergence for on-screen terminal — reconciling",
+                {
+                  id,
+                  attempt: managed.geometryRepairAttempts,
+                  limit: WATCHDOG_MAX_GEOMETRY_REPAIR_ATTEMPTS,
+                  xtermCols: managed.terminal.cols,
+                  xtermRows: managed.terminal.rows,
+                  proposedCols: proposal.cols,
+                  proposedRows: proposal.rows,
+                  isAltBuffer: managed.isAltBuffer === true,
+                }
+              );
+              if (this.deps.reconcileRevealGeometry(id)) {
+                this.unpauseIfNeeded(managed, element);
+              }
+              return 1;
+            }
+          }
         }
-        return 1;
       }
     }
 

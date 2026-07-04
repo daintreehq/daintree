@@ -73,6 +73,16 @@ export function createSlashChipField(config: SlashChipFieldConfig) {
         if (!fieldValue || fieldValue.tokens.length === 0) return Decoration.none;
         const pending = view.state.field(chipPendingDeleteField, false) ?? null;
         const ranges = fieldValue.tokens.map((token) => {
+          // Only a recognized command solidifies into an atomic chip. A token
+          // that's still being typed or mistyped stays plain editable text
+          // (single-char Backspace) with just a "no match" hint, so a finger
+          // slip is fixable instead of nuking the whole draft.
+          if (!token.isValid) {
+            return Decoration.mark({ class: "cm-slash-command-chip-invalid" }).range(
+              token.start,
+              token.end
+            );
+          }
           const selected = isChipSelected(pending, token.start, token.end);
           return Decoration.replace({
             widget: new SlashChipWidget(token.command, token.isValid, selected),
@@ -83,7 +93,10 @@ export function createSlashChipField(config: SlashChipFieldConfig) {
       EditorView.atomicRanges.of((view) => {
         const fieldValue = view.state.field(f, false);
         if (!fieldValue || fieldValue.tokens.length === 0) return Decoration.none;
-        const ranges = fieldValue.tokens.map((t) => Decoration.mark({}).range(t.start, t.end));
+        const ranges = fieldValue.tokens
+          .filter((t) => t.isValid)
+          .map((t) => Decoration.mark({}).range(t.start, t.end));
+        if (ranges.length === 0) return Decoration.none;
         return Decoration.set(ranges, true);
       }),
     ],

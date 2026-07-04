@@ -22,8 +22,6 @@ import {
 } from "../../store/projectSettingsStore";
 import { useWorktreeFilterStore } from "../../store/worktreeFilterStore";
 import { errorsClient, worktreeClient } from "@/clients";
-import { notify } from "@/lib/notify";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { actionService } from "@/services/ActionService";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -387,6 +385,7 @@ export function WorktreeCard({
     handleSelectWorkingAgents,
     handleCloseAll,
     handleTerminateAll,
+    handleClearHistory,
     handleResourceTeardown,
     hasSnapshot,
     handleRevertAgentChanges,
@@ -667,63 +666,6 @@ export function WorktreeCard({
       })
       .catch(() => {});
   }, [isActive, worktree.lastGitStatusCheckedAt]);
-
-  // Abort/continue a stuck blocking git operation (revert/rebase/merge/
-  // cherry-pick) directly from the card. The IPC handlers live in
-  // git-write.ts; this mirrors ReviewHubContent's wiring. After the call we
-  // refresh the worktree directly (not via handleRevalidate, which has a 10s
-  // freshness gate that would suppress this user-driven refresh) so the card
-  // recovers immediately instead of waiting for the filesystem watcher.
-  // Named function expressions so the Retry action can re-invoke the operation
-  // via the function's own internal name. Referencing the outer useCallback
-  // binding from inside itself is a React Compiler TDZ error ("accessed before
-  // it is declared"); the internal name is in scope throughout the body.
-  const handleAbortRepositoryOperation = useCallback(
-    async function runAbort() {
-      try {
-        await window.electron.git.abortRepositoryOperation(worktree.path);
-      } catch (err) {
-        // The git abort itself failed — the operation is still in progress.
-        notify({
-          type: "error",
-          title: "Abort failed",
-          message: formatErrorMessage(
-            err,
-            "Couldn't abort the operation. The working tree is unchanged."
-          ),
-          action: { label: "Retry", onClick: () => void runAbort() },
-          context: { eventKind: "git" },
-        });
-        throw err;
-      }
-      // Abort succeeded; a refresh failure is non-fatal (the watcher will pick up
-      // the cleared sentinel), so swallow it rather than report a false "failed".
-      await worktreeClient.refresh(worktree.id).catch(() => {});
-    },
-    [worktree.path, worktree.id]
-  );
-
-  const handleContinueRepositoryOperation = useCallback(
-    async function runContinue() {
-      try {
-        await window.electron.git.continueRepositoryOperation(worktree.path);
-      } catch (err) {
-        notify({
-          type: "error",
-          title: "Continue failed",
-          message: formatErrorMessage(
-            err,
-            "Couldn't continue the operation. Resolve any remaining conflicts and try again."
-          ),
-          action: { label: "Retry", onClick: () => void runContinue() },
-          context: { eventKind: "git" },
-        });
-        throw err;
-      }
-      await worktreeClient.refresh(worktree.id).catch(() => {});
-    },
-    [worktree.path, worktree.id]
-  );
 
   const handlePointerEnter = useCallback(() => {
     if (isActive || !worktree.lastGitStatusCheckedAt) return;
@@ -1010,8 +952,6 @@ export function WorktreeCard({
                   onOpenPlan: worktree.hasPlanFile ? () => setShowPlanViewer(true) : undefined,
                 }}
                 gitStateIndicator={gitStateIndicator}
-                onAbortRepositoryOperation={handleAbortRepositoryOperation}
-                onContinueRepositoryOperation={handleContinueRepositoryOperation}
                 menu={{
                   launchAgents,
                   recipes,
@@ -1060,6 +1000,7 @@ export function WorktreeCard({
                   onMaximizeAll: handleMaximizeAll,
                   onCloseAll: handleCloseAll,
                   onTerminateAll: handleTerminateAll,
+                  onClearHistory: handleClearHistory,
                   onResetRenderers: handleResetRenderers,
                   onSelectAllAgents: handleSelectAllAgents,
                   onSelectWaitingAgents: handleSelectWaitingAgents,
@@ -1230,6 +1171,7 @@ export function WorktreeCard({
           onMaximizeAll={handleMaximizeAll}
           onCloseAll={handleCloseAll}
           onTerminateAll={handleTerminateAll}
+          onClearHistory={handleClearHistory}
           onResetRenderers={handleResetRenderers}
           onSelectAllAgents={handleSelectAllAgents}
           onSelectWaitingAgents={handleSelectWaitingAgents}

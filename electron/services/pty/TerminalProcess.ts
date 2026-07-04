@@ -29,6 +29,7 @@ import { events } from "../events.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import { destroyPty, type PooledPtyDataHandoff, type PtyPool } from "../PtyPool.js";
 import { installHeadlessResponder } from "./headlessResponder.js";
+import { headlessMirrorScheduler } from "./HeadlessMirrorScheduler.js";
 import { handleOscColorQueries } from "./OscResponder.js";
 import { Osc94Parser } from "./Osc94Parser.js";
 import { SynchronizedFrameDetector } from "./SynchronizedFrameDetector.js";
@@ -50,7 +51,7 @@ import {
   OUTPUT_SETTLE_MAX_WAIT_MS,
   OUTPUT_SETTLE_POLL_INTERVAL_MS,
 } from "./terminalInput.js";
-import type { IBufferCell, IMarker } from "@xterm/headless";
+import type { IMarker } from "@xterm/headless";
 import {
   TERMINAL_SESSION_PERSISTENCE_ENABLED,
   isSessionPersistSuppressed,
@@ -79,15 +80,26 @@ import {
   serializeForPersistence,
 } from "./terminalSerialization.js";
 import { ForegroundProcessGroupProbe } from "./ForegroundProcessGroupProbe.js";
+import type { AnalysisBackend, MonitorStartOptions } from "./analysis/AnalysisBackend.js";
+import {
+  InThreadAnalysisBackend,
+  type InThreadAnalysisHost,
+} from "./analysis/InThreadAnalysisBackend.js";
+import type { WorkerAnalysisDelegate } from "./analysis/WorkerAnalysisBackend.js";
+import type { AnalysisWorkerPool } from "./analysis/AnalysisWorkerPool.js";
+import {
+  readCursorLine,
+  readLastNLines,
+  readVisibleActivityLines,
+  readVisibleActivitySnapshot,
+} from "./analysis/headlessViewport.js";
+import type { AnalysisFinalSnapshot } from "./analysisWorkerProtocol.js";
 import { TerminalExitObservers, type TerminalExitArgs } from "./TerminalExitObservers.js";
 import { gracefulShutdown as runGracefulShutdown } from "./TerminalGracefulShutdown.js";
 import { handleAgentDetection as runHandleAgentDetection } from "./TerminalAgentDetection.js";
 import { TerminalProcessLifecycle } from "./TerminalProcessLifecycle.js";
 import {
-  createVisibleCellContentSnapshot,
-  createVisibleContentSnapshot,
   measureVisibleContentDelta,
-  type VisibleContentCell,
   type VisibleContentSnapshot,
 } from "./SustainedChangeTracker.js";
 import {
@@ -100,17 +112,16 @@ import {
 // turn-outcome classification still sees the tail in order.
 const AGENT_OUTPUT_FLUSH_INTERVAL_MS = 50;
 
-type CursorBufferLine = {
-  translateToString: (trimRight?: boolean) => string;
-  getCell?: (index: number, cell?: IBufferCell) => IBufferCell | undefined;
-};
-
-type CursorBuffer = {
-  cursorY?: number;
-  baseY: number;
-  getNullCell?: () => IBufferCell;
-  getLine: (index: number) => CursorBufferLine | undefined;
-};
+// Floor between agent-output content comparisons (noteAgentOutputActivity).
+// Each comparison costs two full viewport extractions from the headless mirror
+// plus a char diff, and it runs exactly while an agent is waiting/idle — i.e.
+// while the user may be wheel-scrolling a mouse-reporting TUI whose every
+// redraw chunk lands here. The temperature model needs a sustained-activity
+// signal, not per-chunk granularity, so redraw-rate extraction is pure waste.
+// A trailing timer preserves the final comparison of a burst; the persistent
+// `agentOutputContentSnapshot` baseline makes the skipped chunks' delta
+// accumulate into it rather than being lost.
+const AGENT_OUTPUT_NOTE_MIN_INTERVAL_MS = 50;
 
 export interface TerminalProcessCallbacks {
   emitData: (id: string, data: string | Uint8Array) => void;
@@ -131,9 +142,19 @@ export interface TerminalProcessDependencies {
   sabModeEnabled?: boolean;
   processTreeCache: ProcessTreeCache | null;
   imagePathProbe?: ImagePathProbe | null;
+  /**
+   * When set, the analysis stack (headless mirror + ActivityMonitor) runs in
+   * a persistent worker_threads pool instead of on this thread. Absent/null →
+   * legacy in-thread path (the DAINTREE_DISABLE_ANALYSIS_WORKERS fallback).
+   */
+  analysisWorkerPool?: AnalysisWorkerPool | null;
 }
 
 export class TerminalProcess {
+  // Analysis seam: in-thread (legacy, kill-switch) or worker-pool backed.
+  // In worker mode `activityMonitor`, `headlessTerminal`, and `serializeAddon`
+  // stay null/undefined on this thread — the stack lives in the worker slot.
+  private analysis!: AnalysisBackend;
   private activityMonitor: ActivityMonitor | null = null;
   // Streaming OSC 9;4 parser (#8701). Created once per TerminalProcess and
   // fed every PTY chunk upstream of `activityMonitor.onData()`. Callbacks
@@ -170,6 +191,10 @@ export class TerminalProcess {
   private sessionSnapshotter!: SessionSnapshotter;
   private readonly agentOutputTemperature = new AgentActivityTemperature();
   private agentOutputContentSnapshot: VisibleContentSnapshot | undefined;
+  // -Infinity so the first comparison is never throttled regardless of where
+  // the clock starts (fake test clocks sit at 0).
+  private lastAgentOutputNoteAt = Number.NEGATIVE_INFINITY;
+  private agentOutputNoteTimer: NodeJS.Timeout | null = null;
 
   private pendingAgentOutput = "";
   private pendingAgentOutputAgentId: string | null = null;
@@ -222,6 +247,33 @@ export class TerminalProcess {
   }
 
   private createSessionSnapshotter(): SessionSnapshotter {
+    if (this.analysis.kind === "worker") {
+      // eslint-disable-next-line @typescript-eslint/no-this-alias
+      const parent = this;
+      const host: SessionSnapshotterHost = {
+        get id() {
+          return parent.id;
+        },
+        get wasKilled() {
+          return parent.terminalInfo.wasKilled === true;
+        },
+        get launchAgentId() {
+          return parent.terminalInfo.launchAgentId;
+        },
+        get contentEpoch() {
+          return parent.terminalInfo.contentEpoch;
+        },
+        // Route every persistence serialize through the worker's banner-aware
+        // op (it falls back to a plain serialize when no banner markers exist),
+        // so the host never needs to know whether a restore banner is present.
+        hasBannerMarkers: () => true,
+        getSerializedState: () => null,
+        getSerializedStateAsync: () => parent.getSerializedStateAsync(),
+        serializeForPersistence: () => parent.analysis.serializeForPersistence(),
+      };
+      return new SessionSnapshotter(host);
+    }
+
     class Host implements SessionSnapshotterHost {
       constructor(private parent: TerminalProcess) {}
 
@@ -235,6 +287,10 @@ export class TerminalProcess {
 
       get launchAgentId(): string | undefined {
         return this.parent.terminalInfo.launchAgentId;
+      }
+
+      get contentEpoch(): number {
+        return this.parent.terminalInfo.contentEpoch;
       }
 
       hasBannerMarkers(): boolean {
@@ -337,28 +393,6 @@ export class TerminalProcess {
     // plain tier" split was retired along with the tiered capability model.
     this._scrollback = DEFAULT_SCROLLBACK;
 
-    const headlessTerminal: HeadlessTerminalType = new HeadlessTerminal({
-      cols: options.cols,
-      rows: options.rows,
-      scrollback: this._scrollback,
-      allowProposedApi: true,
-    });
-    // SynchronizedFrameAnalyzer reads cell.width from this buffer; without
-    // Unicode 11 widths, emoji and CJK rows would mis-report column counts.
-    headlessTerminal.loadAddon(new Unicode11Addon());
-    headlessTerminal.unicode.activeVersion = "11";
-    const serializeAddon: SerializeAddonType = new SerializeAddon();
-    headlessTerminal.loadAddon(serializeAddon);
-
-    // Structural-signal tier (#6668): hook the headless parser for DEC mode
-    // 2026 brackets so frame snapshots can drive the analyzer. Lifetime ties
-    // to the headless terminal — disposed alongside it in disposeHeadless().
-    // The callback resolves activityMonitor lazily so frame events fire even
-    // for plain terminals that are promoted to agents post-spawn.
-    this.synchronizedFrameDetector = new SynchronizedFrameDetector(headlessTerminal, (snapshot) => {
-      this.activityMonitor?.onSynchronizedFrame(snapshot);
-    });
-
     this.terminalInfo = {
       id,
       projectId: options.projectId,
@@ -367,7 +401,7 @@ export class TerminalProcess {
       shell,
       kind: options.kind,
       title: options.title,
-      titleMode: options.title ? "default" : "default",
+      titleMode: options.titleMode ?? "default",
       command: options.command,
       launchAgentId,
       spawnedAt,
@@ -382,8 +416,6 @@ export class TerminalProcess {
       lastCheckTime: spawnedAt,
       contentEpoch: 0,
       semanticBuffer: [],
-      headlessTerminal,
-      serializeAddon,
       restartCount: 0,
       // Analysis is enabled whenever an agent is expected or live. Plain
       // terminals enable it on the fly when the process detector promotes.
@@ -397,7 +429,25 @@ export class TerminalProcess {
       spawnArgs,
     };
 
-    this.restoreSessionIfPresent(headlessTerminal);
+    // Analysis backend selection: worker pool when available, else the legacy
+    // in-thread stack. The worker slot performs its own session restore (the
+    // banner markers live with the buffer, wherever it is).
+    const workerPool = deps.analysisWorkerPool ?? null;
+    const workerBackend = workerPool
+      ? workerPool.createBackend(
+          {
+            terminalId: id,
+            cols: options.cols,
+            rows: options.rows,
+            scrollback: this._scrollback,
+            restore:
+              TERMINAL_SESSION_PERSISTENCE_ENABLED && !hasLaunchHint && options.restore !== false,
+            spawnedAt,
+          },
+          this.createWorkerAnalysisDelegate()
+        )
+      : null;
+    this.analysis = workerBackend ?? this.setupInThreadAnalysis(options);
 
     // NOTE: The headless responder is intentionally NOT installed for agent
     // terminals. It would forward query responses (CSI 6n cursor position,
@@ -475,41 +525,11 @@ export class TerminalProcess {
     // terminals start the monitor only when detection promotes them; see
     // `handleAgentDetection`.
     if (hasLaunchHint) {
-      const processStateValidator = createProcessStateValidator(ptyPid, deps.processTreeCache);
-      this.activityMonitor = new ActivityMonitor(
-        id,
-        spawnedAt,
-        (_termId, cbSpawnedAt, state, metadata) => {
-          if (this.terminalInfo.spawnedAt !== cbSpawnedAt) {
-            console.warn(
-              `[TerminalProcess] Rejected stale activity state from old monitor ${_termId} ` +
-                `(session ${cbSpawnedAt} vs current ${this.terminalInfo.spawnedAt})`
-            );
-            return;
-          }
-          this.flushAgentOutput();
-          deps.agentStateService.handleActivityState(this.terminalInfo, state, metadata);
-        },
-        {
-          ...buildActivityMonitorOptions(launchAgentId, {
-            getVisibleLines: (n) => this.getVisibleActivityLines(n),
-            getVisibleContentSnapshot: (n) => this.getVisibleActivitySnapshot(n),
-            getCursorLine: () => this.getCursorLine(),
-          }),
-          processStateValidator,
-          onWaitingTimeout: (_id, _spawnedAt) => {
-            this.flushAgentOutput();
-            deps.agentStateService.updateAgentState(
-              this.terminalInfo,
-              { type: "watchdog-timeout" },
-              "timeout",
-              0.6
-            );
-          },
-          onBootComplete: (timestamp) => this.recordBootComplete(timestamp),
-        }
-      );
-      this.activityMonitor.startPolling();
+      this.analysis.startMonitor({
+        agentId: launchAgentId,
+        initialState: "idle",
+        skipInitialStateEmit: false,
+      });
     }
 
     if (hasLaunchHint && launchAgentId) {
@@ -545,13 +565,227 @@ export class TerminalProcess {
     throw new Error("Headless terminal unavailable (unexpected)");
   }
 
+  /**
+   * Builds the legacy in-thread analysis stack: headless xterm + addons +
+   * synchronized-frame detector, then wraps it behind the AnalysisBackend
+   * seam. Also the fallback when the worker pool can't provide a slot.
+   */
+  private setupInThreadAnalysis(options: PtySpawnOptions): InThreadAnalysisBackend {
+    const headlessTerminal: HeadlessTerminalType = new HeadlessTerminal({
+      cols: options.cols,
+      rows: options.rows,
+      scrollback: this._scrollback,
+      allowProposedApi: true,
+    });
+    // SynchronizedFrameAnalyzer reads cell.width from this buffer; without
+    // Unicode 11 widths, emoji and CJK rows would mis-report column counts.
+    headlessTerminal.loadAddon(new Unicode11Addon());
+    headlessTerminal.unicode.activeVersion = "11";
+    const serializeAddon: SerializeAddonType = new SerializeAddon();
+    headlessTerminal.loadAddon(serializeAddon);
+
+    // Structural-signal tier (#6668): hook the headless parser for DEC mode
+    // 2026 brackets so frame snapshots can drive the analyzer. Lifetime ties
+    // to the headless terminal — disposed alongside it in disposeHeadless().
+    // The callback resolves activityMonitor lazily so frame events fire even
+    // for plain terminals that are promoted to agents post-spawn.
+    this.synchronizedFrameDetector = new SynchronizedFrameDetector(headlessTerminal, (snapshot) => {
+      this.activityMonitor?.onSynchronizedFrame(snapshot);
+    });
+
+    this.terminalInfo.headlessTerminal = headlessTerminal;
+    this.terminalInfo.serializeAddon = serializeAddon;
+    this.restoreSessionIfPresent(headlessTerminal);
+
+    return new InThreadAnalysisBackend(this.createInThreadAnalysisHost());
+  }
+
+  private createInThreadAnalysisHost(): InThreadAnalysisHost {
+    return {
+      feedChunk: (data) => this.feedChunkInThread(data),
+      feedPrelude: (data) => this.feedPreludeInThread(data),
+      resize: (cols, rows) => this.resizeAnalysisInThread(cols, rows),
+      handleFocus: () => this.handleFocusInThread(),
+      getMonitor: () => this.activityMonitor,
+      startMonitor: (opts) => this.startMonitorInThread(opts),
+      stopMonitor: () => this.stopMonitorInThread(),
+      setScrollback: (lines) => {
+        if (!this.terminalInfo.headlessTerminal) return false;
+        this.terminalInfo.headlessTerminal.options.scrollback = lines;
+        return true;
+      },
+      readViewportLines: (n) => readLastNLines(this.terminalInfo.headlessTerminal, n),
+      readCursorLine: () => readCursorLine(this.terminalInfo.headlessTerminal),
+      serialize: () => serializeTerminalAsync(this.id, this.terminalInfo),
+      serializeForPersistence: () => this.serializeForPersistence(),
+      captureFinalSnapshot: async (): Promise<AnalysisFinalSnapshot> => {
+        const snapshot = await serializeTerminalAsync(this.id, this.terminalInfo);
+        return { snapshot, persistence: this.serializeForPersistence() };
+      },
+      releaseHeadless: () => this.disposeHeadlessInThread(),
+    };
+  }
+
+  private createWorkerAnalysisDelegate(): WorkerAnalysisDelegate {
+    return {
+      onActivityState: (spawnedAt, state, metadata) => {
+        if (this.terminalInfo.spawnedAt !== spawnedAt) {
+          console.warn(
+            `[TerminalProcess] Rejected stale activity state from old monitor ${this.id} ` +
+              `(session ${spawnedAt} vs current ${this.terminalInfo.spawnedAt})`
+          );
+          return;
+        }
+        this.flushAgentOutput();
+        this.deps.agentStateService.handleActivityState(this.terminalInfo, state, metadata);
+      },
+      onWaitingTimeout: (spawnedAt) => {
+        // Same session guard as onActivityState: after a worker respawn or
+        // slot re-registration a late timeout from an old monitor generation
+        // must not fire a watchdog transition against the current terminal.
+        if (this.terminalInfo.spawnedAt !== spawnedAt) {
+          console.warn(
+            `[TerminalProcess] Rejected stale waiting-timeout from old monitor ${this.id} ` +
+              `(session ${spawnedAt} vs current ${this.terminalInfo.spawnedAt})`
+          );
+          return;
+        }
+        this.flushAgentOutput();
+        this.deps.agentStateService.updateAgentState(
+          this.terminalInfo,
+          { type: "watchdog-timeout" },
+          "timeout",
+          0.6
+        );
+      },
+      onBootComplete: (timestamp) => this.recordBootComplete(timestamp),
+      onPtyResponse: (data) => {
+        if (this.terminalInfo.wasKilled || !this.lifecycle.isAlive) return;
+        try {
+          this.terminalInfo.ptyProcess.write(data);
+        } catch (error) {
+          this.logWriteError(error, { operation: "write(analysis-responder)" });
+        }
+      },
+      getProcessState: () => {
+        const validator = createProcessStateValidator(
+          this.terminalInfo.ptyProcess.pid,
+          this.deps.processTreeCache
+        );
+        if (!validator) return null;
+        return {
+          hasActiveChildren: validator.hasActiveChildren(),
+          cpuUsage: validator.getDescendantsCpuUsage?.() ?? 0,
+        };
+      },
+      getAgentContext: () => ({
+        agentLive: this.isAgentLive,
+        agentState: this.terminalInfo.agentState,
+      }),
+    };
+  }
+
+  private startMonitorInThread(opts: MonitorStartOptions): void {
+    if (this.activityMonitor) return;
+    const processStateValidator = createProcessStateValidator(
+      this.terminalInfo.ptyProcess.pid,
+      this.deps.processTreeCache
+    );
+    this.activityMonitor = new ActivityMonitor(
+      this.id,
+      this.terminalInfo.spawnedAt,
+      (_termId, cbSpawnedAt, state, metadata) => {
+        if (this.terminalInfo.spawnedAt !== cbSpawnedAt) {
+          console.warn(
+            `[TerminalProcess] Rejected stale activity state from old monitor ${_termId} ` +
+              `(session ${cbSpawnedAt} vs current ${this.terminalInfo.spawnedAt})`
+          );
+          return;
+        }
+        this.flushAgentOutput();
+        this.deps.agentStateService.handleActivityState(this.terminalInfo, state, metadata);
+      },
+      {
+        ...buildActivityMonitorOptions(opts.agentId, {
+          getVisibleLines: (n) => this.getVisibleActivityLines(n),
+          getVisibleContentSnapshot: (n) => this.getVisibleActivitySnapshot(n),
+          getCursorLine: () => this.getCursorLine(),
+        }),
+        processStateValidator,
+        initialState: opts.initialState,
+        skipInitialStateEmit: opts.skipInitialStateEmit,
+        onWaitingTimeout: (_id, cbSpawnedAt) => {
+          // Structurally the in-thread monitor can't outlive its session
+          // (stopMonitorInThread disposes it synchronously and spawnedAt is
+          // immutable per TerminalProcess), but keep the same guard the
+          // worker delegate and both activity-state paths use.
+          if (this.terminalInfo.spawnedAt !== cbSpawnedAt) {
+            console.warn(
+              `[TerminalProcess] Rejected stale waiting-timeout from old monitor ${this.id} ` +
+                `(session ${cbSpawnedAt} vs current ${this.terminalInfo.spawnedAt})`
+            );
+            return;
+          }
+          this.flushAgentOutput();
+          this.deps.agentStateService.updateAgentState(
+            this.terminalInfo,
+            { type: "watchdog-timeout" },
+            "timeout",
+            0.6
+          );
+        },
+        onBootComplete: (timestamp) => this.recordBootComplete(timestamp),
+      }
+    );
+    this.activityMonitor.startPolling();
+  }
+
+  private stopMonitorInThread(): void {
+    if (this.activityMonitor) {
+      this.activityMonitor.dispose();
+      this.activityMonitor = null;
+    }
+    // Clear any in-flight OSC 9;4 fragment so a sequence split across the
+    // teardown boundary can't trigger a callback against a stale monitor.
+    this.osc94Parser.reset();
+  }
+
+  private handleFocusInThread(): void {
+    this.activityMonitor?.notifyFocus();
+    this.agentOutputTemperature.reset();
+    this.agentOutputContentSnapshot = undefined;
+  }
+
+  private resizeAnalysisInThread(cols: number, rows: number): void {
+    const terminal = this.terminalInfo;
+    if (terminal.headlessTerminal) {
+      terminal.headlessTerminal.resize(cols, rows);
+      // Reflow rewraps the buffer — invalidate any wake no-change skip.
+      terminal.contentEpoch++;
+    }
+    // Notify activity monitor so reflow bytes are suppressed. Issue #2364.
+    if (this.activityMonitor) {
+      this.activityMonitor.notifyResize();
+    }
+    this.agentOutputTemperature.noteResize(Date.now());
+    this.agentOutputContentSnapshot = undefined;
+  }
+
   private disposeHeadless(): void {
+    this.analysis.release();
+  }
+
+  private disposeHeadlessInThread(): void {
     const terminal = this.terminalInfo;
     this.agentOutputTemperature.reset();
     this.agentOutputContentSnapshot = undefined;
     if (!terminal.headlessTerminal) {
       return;
     }
+    // Drop any feeds still held for this mirror — queued-slice callbacks are
+    // discarded (matching disposed-xterm write callbacks never firing) and the
+    // scheduler's aggregate in-flight accounting is released.
+    headlessMirrorScheduler.clear(this.id);
     if (this.headlessResponderDisposable) {
       try {
         this.headlessResponderDisposable.dispose();
@@ -590,12 +824,20 @@ export class TerminalProcess {
    * existing buffer beats serving nothing, at the cost of the memory.
    */
   private snapshotAndDisposePreserved(): void {
+    if (this.analysis.kind === "worker") {
+      this.snapshotAndDisposePreservedViaWorker();
+      return;
+    }
     const terminal = this.terminalInfo;
     const headless = terminal.headlessTerminal;
     if (!headless || !terminal.serializeAddon) {
       return;
     }
-    headless.write("", () => {
+    // Route the drain-sentinel through the scheduler: it fires only after all
+    // feeds held for this terminal have been released AND parsed, preserving
+    // the "tail of the output must land in the buffer" contract now that
+    // chunks can be held outside xterm's own write queue.
+    headlessMirrorScheduler.flush(this.id, headless, () => {
       if (terminal.headlessTerminal !== headless || !terminal.serializeAddon) {
         return;
       }
@@ -642,6 +884,44 @@ export class TerminalProcess {
     });
   }
 
+  // Worker-mode counterpart of the in-thread capture above: the drain +
+  // serialize happens in the worker slot; on failure the slot is kept alive
+  // (serving the live buffer beats serving nothing), matching the in-thread
+  // keep-on-serialize-failure semantics.
+  private snapshotAndDisposePreservedViaWorker(): void {
+    const terminal = this.terminalInfo;
+    void this.analysis.captureFinalSnapshot().then(({ snapshot, persistence }) => {
+      // dispose() may have run while the capture was in flight (LRU eviction,
+      // app shutdown) — the slot is already released and the registry entry
+      // may be gone; a late snapshot must not resurrect preserved state or
+      // fire onPreserved. Mirrors the in-thread capture's same-headless-
+      // instance guard.
+      if (this.lifecycle.isDisposed) {
+        return;
+      }
+      if (snapshot === null) {
+        return;
+      }
+      if (
+        TERMINAL_SESSION_PERSISTENCE_ENABLED &&
+        !isSessionPersistSuppressed() &&
+        !terminal.launchAgentId
+      ) {
+        try {
+          persistSessionSnapshotSync(this.id, persistence ?? snapshot);
+        } catch {
+          // best-effort only
+        }
+      }
+      terminal.preservedSnapshot = snapshot;
+      terminal.preservedAt = Date.now();
+      terminal.contentEpoch++;
+      terminal.pendingHeadlessWrites = 0;
+      this.analysis.release();
+      this.callbacks.onPreserved?.(this.id);
+    });
+  }
+
   /**
    * Mechanical resource cleanup shared by `kill()`, `dispose()`, and the
    * natural PTY `onExit` handler. Idempotent — the first caller transitions
@@ -671,6 +951,10 @@ export class TerminalProcess {
     this.identityWatcher.stop();
     this.semanticBufferManager.flush();
     this.flushAgentOutput();
+    if (this.agentOutputNoteTimer) {
+      clearTimeout(this.agentOutputNoteTimer);
+      this.agentOutputNoteTimer = null;
+    }
 
     if (this.ptyDataDisposable) {
       try {
@@ -857,11 +1141,11 @@ export class TerminalProcess {
     if (traceId !== undefined) {
       terminal.traceId = traceId || undefined;
     }
-    if (this.activityMonitor) {
+    if (this.analysis.hasMonitor()) {
       if (isFocusReport(data)) {
         this.handleFocusInput();
       } else {
-        this.activityMonitor.onInput(data);
+        this.analysis.notifyInput(data);
       }
     }
 
@@ -890,11 +1174,11 @@ export class TerminalProcess {
       terminal.traceId = traceId || undefined;
     }
 
-    if (this.activityMonitor) {
+    if (this.analysis.hasMonitor()) {
       if (isFocusReport(data)) {
         this.handleFocusInput();
       } else {
-        this.activityMonitor.onInput(data);
+        this.analysis.notifyInput(data);
       }
     }
 
@@ -972,8 +1256,8 @@ export class TerminalProcess {
     // state transitions before the async write sequence in performSubmit().
     // Without this, the split between body write and Enter write causes the
     // character-by-character detection in onInput() to miss the submission.
-    if (this.activityMonitor && text.trim().length > 0) {
-      this.activityMonitor.notifySubmission();
+    if (this.analysis.hasMonitor() && text.trim().length > 0) {
+      this.analysis.notifySubmission();
     }
 
     this.writeQueue.submit(text);
@@ -1026,8 +1310,8 @@ export class TerminalProcess {
     // Notify activity monitor at execution time (not just enqueue time) to ensure
     // the working state transition happens even for queued submissions that execute
     // after a potential idle transition. Issue #2185.
-    if (this.activityMonitor && text.trim().length > 0) {
-      this.activityMonitor.notifySubmission();
+    if (this.analysis.hasMonitor() && text.trim().length > 0) {
+      this.analysis.notifySubmission();
     }
 
     const normalized = normalizeSubmitText(text);
@@ -1093,9 +1377,10 @@ export class TerminalProcess {
     const terminal = this.terminalInfo;
     if (terminal.isExited) {
       try {
-        if (terminal.headlessTerminal) {
-          terminal.headlessTerminal.resize(cols, rows);
+        this.analysis.resize(cols, rows);
+        if (this.analysis.kind === "worker") {
           // Reflow rewraps the buffer — invalidate any wake no-change skip.
+          // (The in-thread path bumps the epoch itself, gated on a live buffer.)
           terminal.contentEpoch++;
         }
       } catch (error) {
@@ -1113,18 +1398,10 @@ export class TerminalProcess {
 
       terminal.ptyProcess.resize(cols, rows);
 
-      if (terminal.headlessTerminal) {
-        terminal.headlessTerminal.resize(cols, rows);
-        // Reflow rewraps the buffer — invalidate any wake no-change skip.
+      this.analysis.resize(cols, rows);
+      if (this.analysis.kind === "worker") {
         terminal.contentEpoch++;
       }
-
-      // Notify activity monitor so reflow bytes are suppressed. Issue #2364.
-      if (this.activityMonitor) {
-        this.activityMonitor.notifyResize();
-      }
-      this.agentOutputTemperature.noteResize(Date.now());
-      this.agentOutputContentSnapshot = undefined;
     } catch (error) {
       console.error(`Failed to resize terminal ${this.id}:`, error);
     }
@@ -1142,7 +1419,11 @@ export class TerminalProcess {
     });
   }
 
-  kill(reason?: string, escalationDelayMs?: number): void {
+  kill(
+    reason?: string,
+    escalationDelayMs?: number,
+    options?: { skipFinalSessionPersist?: boolean }
+  ): void {
     const terminal = this.terminalInfo;
     const exitReason: ExitReason = reason === "graceful-shutdown" ? "graceful-shutdown" : "kill";
 
@@ -1150,7 +1431,16 @@ export class TerminalProcess {
     // Once teardown disposes the writeQueue and processTreeKiller.abort() fires,
     // debounced writes are lost — so this is the last chance.
     // See lesson #3177.
-    this.sessionSnapshotter.flushSyncOnKill();
+    //
+    // Worker-mode caveat: the flush degrades to an async worker round-trip,
+    // which would race — and lose to — PtyManager.kill's deleteSessionFile,
+    // resurrecting a file the caller intends to delete. When the caller is
+    // about to delete the session anyway (skipFinalSessionPersist), skip the
+    // deferred flush; the in-thread path keeps its sync persist-then-delete
+    // ordering unchanged.
+    if (!(options?.skipFinalSessionPersist && this.analysis.kind === "worker")) {
+      this.sessionSnapshotter.flushSyncOnKill();
+    }
 
     if (!this.teardown(exitReason)) {
       return;
@@ -1196,144 +1486,23 @@ export class TerminalProcess {
     };
   }
 
+  // Serves IdentityWatcher's sync reads: in-thread it reads the live headless
+  // buffer; in worker mode it reads the throttled viewport mirror pushed by
+  // the analysis worker.
   getLastNLines(n: number): string[] {
-    const terminal = this.terminalInfo.headlessTerminal;
-    if (!terminal) return [];
-
-    const buffer = terminal.buffer.active;
-    if (!buffer) return [];
-
-    const viewportTop = buffer.baseY;
-    const viewportBottom = buffer.baseY + terminal.rows;
-
-    const lines: string[] = [];
-    for (let i = viewportTop; i < viewportBottom; i++) {
-      const line = buffer.getLine(i);
-      if (!line) continue;
-      const text = line.translateToString(true);
-      if (text.trim().length > 0) {
-        lines.push(text);
-      }
-    }
-    return lines.slice(-n);
+    return this.analysis.getViewportLines(n);
   }
 
   getVisibleActivityLines(n: number): string[] {
-    const terminal = this.terminalInfo.headlessTerminal;
-    if (!terminal) return [];
-
-    const buffer = terminal.buffer.active as CursorBuffer;
-    if (!buffer || typeof buffer.getLine !== "function") return [];
-
-    const viewportTop = buffer.baseY;
-    const viewportBottom = buffer.baseY + terminal.rows;
-    const end = viewportBottom;
-    const start = Math.max(viewportTop, end - n);
-
-    const lines: string[] = [];
-    for (let i = start; i < end; i += 1) {
-      const line = buffer.getLine(i);
-      if (line) lines.push(line.translateToString(true));
-    }
-    return lines;
+    return readVisibleActivityLines(this.terminalInfo.headlessTerminal, n);
   }
 
   getVisibleActivitySnapshot(n: number): VisibleContentSnapshot | undefined {
-    const cells = this.getVisibleActivityCells();
-    return cells
-      ? createVisibleCellContentSnapshot(cells)
-      : createVisibleContentSnapshot(this.getVisibleActivityLines(n));
-  }
-
-  private getVisibleActivityCells(): VisibleContentCell[][] | undefined {
-    const terminal = this.terminalInfo.headlessTerminal;
-    if (!terminal) return undefined;
-
-    const buffer = terminal.buffer.active as CursorBuffer;
-    if (
-      !buffer ||
-      typeof buffer.getLine !== "function" ||
-      typeof buffer.getNullCell !== "function"
-    ) {
-      return undefined;
-    }
-
-    const viewportTop = buffer.baseY;
-    const viewportBottom = buffer.baseY + terminal.rows;
-    const end = viewportBottom;
-    // Scan the FULL visible viewport. A cursor-anchored bottom-n window (the
-    // v0.19.0 regression) misses spinner/status activity that TUI agents
-    // (Claude/Gemini/Codex) stream ABOVE a pinned bottom input box: with the
-    // cursor parked low, the window collapsed to the bottom rows and the
-    // changing rows above produced changedChars=0, so the temperature decayed
-    // and a busy agent flipped to "waiting" during low-output thinking (and
-    // waiting→working recovery was starved). Blank cells are skipped below, so
-    // scanning the whole viewport costs reads but not allocations. The line
-    // budget only constrains the line-based fallback in getVisibleActivitySnapshot.
-    const start = viewportTop;
-    const reusableCell = buffer.getNullCell();
-
-    const rows: VisibleContentCell[][] = [];
-    for (let y = start; y < end; y += 1) {
-      const line = buffer.getLine(y);
-      if (!line || typeof line.getCell !== "function") {
-        continue;
-      }
-
-      const row: VisibleContentCell[] = [];
-      for (let x = 0; x < terminal.cols; x += 1) {
-        const cell = line.getCell(x, reusableCell);
-        if (!cell) continue;
-        // Same predicate as visibleCellUnit (SustainedChangeTracker): blank
-        // cells never contribute a unit, so skip before allocating — most of
-        // an idle viewport is whitespace.
-        const width = cell.getWidth();
-        if (width === 0) continue;
-        const chars = cell.getChars();
-        if (chars.length === 0 || /^\s*$/u.test(chars)) continue;
-        row.push(this.createVisibleContentCell(cell, chars, width));
-      }
-      rows.push(row);
-    }
-
-    return rows;
-  }
-
-  private createVisibleContentCell(
-    cell: IBufferCell,
-    chars: string,
-    width: number
-  ): VisibleContentCell {
-    const attributes =
-      (cell.isBold() ? 1 : 0) |
-      (cell.isItalic() ? 1 << 1 : 0) |
-      (cell.isDim() ? 1 << 2 : 0) |
-      (cell.isUnderline() ? 1 << 3 : 0) |
-      (cell.isBlink() ? 1 << 4 : 0) |
-      (cell.isInverse() ? 1 << 5 : 0) |
-      (cell.isInvisible() ? 1 << 6 : 0) |
-      (cell.isStrikethrough() ? 1 << 7 : 0) |
-      (cell.isOverline() ? 1 << 8 : 0);
-
-    return {
-      chars,
-      code: cell.getCode(),
-      width,
-      fgColorMode: cell.getFgColorMode(),
-      fgColor: cell.getFgColor(),
-      attributes,
-    };
+    return readVisibleActivitySnapshot(this.terminalInfo.headlessTerminal, n);
   }
 
   getCursorLine(): string | null {
-    const terminal = this.terminalInfo.headlessTerminal;
-    if (!terminal) return null;
-
-    const buffer = terminal.buffer.active as CursorBuffer;
-    if (!buffer || typeof buffer.getLine !== "function") return null;
-    const cursorY = buffer.cursorY ?? 0;
-    const line = buffer.getLine(buffer.baseY + cursorY);
-    return line ? line.translateToString(true) : null;
+    return this.analysis.getCursorLine();
   }
 
   private createIdentityWatcherDelegate(): IdentityWatcherDelegate {
@@ -1398,7 +1567,15 @@ export class TerminalProcess {
   }
 
   getSerializedStateAsync(): Promise<string | null> {
-    return serializeTerminalAsync(this.id, this.terminalInfo);
+    const terminal = this.terminalInfo;
+    // Preserved snapshot served — stamp access time so eviction (issue #10839)
+    // treats it as currently-viewed. Checked host-side in both modes; the
+    // in-thread serialize path repeats the check harmlessly.
+    if (terminal.preservedSnapshot !== undefined) {
+      terminal.preservedSnapshotLastAccessedAt = Date.now();
+      return Promise.resolve(terminal.preservedSnapshot);
+    }
+    return this.analysis.serialize();
   }
 
   serializeForPersistence(): string | null {
@@ -1480,61 +1657,19 @@ export class TerminalProcess {
   }
 
   startActivityMonitor(options?: { preserveState?: boolean }): void {
-    if (!this.activityMonitor) {
-      const ptyPid = this.terminalInfo.ptyProcess.pid;
-      const processStateValidator = createProcessStateValidator(ptyPid, this.deps.processTreeCache);
-
-      const preserveState = options?.preserveState ?? false;
-      const currentAgentState = this.terminalInfo.agentState;
-      const initialState = preserveState && currentAgentState === "working" ? "busy" : "idle";
-
-      this.activityMonitor = new ActivityMonitor(
-        this.id,
-        this.terminalInfo.spawnedAt,
-        (_termId, cbSpawnedAt, state, metadata) => {
-          if (this.terminalInfo.spawnedAt !== cbSpawnedAt) {
-            console.warn(
-              `[TerminalProcess] Rejected stale activity state from old monitor ${_termId} ` +
-                `(session ${cbSpawnedAt} vs current ${this.terminalInfo.spawnedAt})`
-            );
-            return;
-          }
-          this.flushAgentOutput();
-          this.deps.agentStateService.handleActivityState(this.terminalInfo, state, metadata);
-        },
-        {
-          ...buildActivityMonitorOptions(getLiveAgentId(this.terminalInfo), {
-            getVisibleLines: (n) => this.getVisibleActivityLines(n),
-            getVisibleContentSnapshot: (n) => this.getVisibleActivitySnapshot(n),
-            getCursorLine: () => this.getCursorLine(),
-          }),
-          processStateValidator,
-          initialState,
-          skipInitialStateEmit: preserveState,
-          onWaitingTimeout: (_id, _spawnedAt) => {
-            this.flushAgentOutput();
-            this.deps.agentStateService.updateAgentState(
-              this.terminalInfo,
-              { type: "watchdog-timeout" },
-              "timeout",
-              0.6
-            );
-          },
-          onBootComplete: (timestamp) => this.recordBootComplete(timestamp),
-        }
-      );
-      this.activityMonitor.startPolling();
-    }
+    if (this.analysis.hasMonitor()) return;
+    const preserveState = options?.preserveState ?? false;
+    const currentAgentState = this.terminalInfo.agentState;
+    const initialState = preserveState && currentAgentState === "working" ? "busy" : "idle";
+    this.analysis.startMonitor({
+      agentId: getLiveAgentId(this.terminalInfo),
+      initialState,
+      skipInitialStateEmit: preserveState,
+    });
   }
 
   stopActivityMonitor(): void {
-    if (this.activityMonitor) {
-      this.activityMonitor.dispose();
-      this.activityMonitor = null;
-    }
-    // Clear any in-flight OSC 9;4 fragment so a sequence split across the
-    // teardown boundary can't trigger a callback against a stale monitor.
-    this.osc94Parser.reset();
+    this.analysis.stopMonitor();
   }
 
   setActivityMonitorTier(tier: "active" | "background", pollingIntervalMs: number): void {
@@ -1544,9 +1679,7 @@ export class TerminalProcess {
     // only adjusts the headless agent-state poll cadence.
     this._activityTier = tier;
 
-    if (this.activityMonitor) {
-      this.activityMonitor.setPollingInterval(pollingIntervalMs);
-    }
+    this.analysis.setPollingInterval(pollingIntervalMs);
   }
 
   getActivityTier(): "active" | "background" {
@@ -1560,16 +1693,14 @@ export class TerminalProcess {
   // xterm 6.0 actively resizes the buffer when scrollback shrinks (verified in headless-scrollback-trim.test.ts).
   trimScrollback(targetLines: number): void {
     if (this._scrollback <= targetLines) return;
-    if (!this.terminalInfo.headlessTerminal) return;
+    if (!this.analysis.setScrollback(targetLines)) return;
     this._scrollback = targetLines;
-    this.terminalInfo.headlessTerminal.options.scrollback = targetLines;
   }
 
   growScrollback(targetLines: number): void {
     if (this._scrollback >= targetLines) return;
-    if (!this.terminalInfo.headlessTerminal) return;
+    if (!this.analysis.setScrollback(targetLines)) return;
     this._scrollback = targetLines;
-    this.terminalInfo.headlessTerminal.options.scrollback = targetLines;
   }
 
   /**
@@ -1621,7 +1752,7 @@ export class TerminalProcess {
     return this.getVisibleActivitySnapshot(AGENT_OUTPUT_ACTIVITY_LINE_COUNT);
   }
 
-  private noteAgentOutputActivity(beforeSnapshot: VisibleContentSnapshot | undefined): void {
+  private noteAgentOutputActivity(): void {
     if (!this.isAgentLive) {
       this.agentOutputTemperature.reset();
       this.agentOutputContentSnapshot = undefined;
@@ -1633,15 +1764,32 @@ export class TerminalProcess {
       return;
     }
 
+    // Throttle: viewport extraction + diff at most once per interval. Skipped
+    // chunks aren't lost — the diff runs against the stored baseline from the
+    // last accepted comparison, so it covers everything since then. (A per-chunk
+    // "before" viewport walk used to seed a fresher baseline; it was dropped —
+    // a second full rows×cols extraction per note, running precisely in the
+    // settled-agent states where the user scrolls a full-screen TUI, bought
+    // only a marginally tighter diff window.)
+    const now = Date.now();
+    const sinceLastNote = now - this.lastAgentOutputNoteAt;
+    if (sinceLastNote < AGENT_OUTPUT_NOTE_MIN_INTERVAL_MS) {
+      if (!this.agentOutputNoteTimer) {
+        this.agentOutputNoteTimer = setTimeout(() => {
+          this.agentOutputNoteTimer = null;
+          this.noteAgentOutputActivity();
+        }, AGENT_OUTPUT_NOTE_MIN_INTERVAL_MS - sinceLastNote);
+      }
+      return;
+    }
+    this.lastAgentOutputNoteAt = now;
+
     const afterSnapshot = this.getAgentOutputContentSnapshot();
     if (afterSnapshot === undefined) {
       return;
     }
 
-    const delta = measureVisibleContentDelta(
-      beforeSnapshot ?? this.agentOutputContentSnapshot,
-      afterSnapshot
-    );
+    const delta = measureVisibleContentDelta(this.agentOutputContentSnapshot, afterSnapshot);
     const hadFallbackBaseline = this.agentOutputContentSnapshot !== undefined;
     this.agentOutputContentSnapshot = afterSnapshot;
     if (!hadFallbackBaseline) {
@@ -1652,11 +1800,12 @@ export class TerminalProcess {
     const result = this.agentOutputTemperature.observeDelta(Date.now(), {
       changedChars: delta.changedChars,
     });
-    // ActivityMonitor.notifyFocus suppresses its own idle→busy paths, but this
-    // direct call into agentStateService is a parallel promotion path; gate it
-    // on the same window so a focus-triggered TUI repaint can't flip an idle
-    // agent to busy (#8865).
-    if (this.activityMonitor?.isFocusSuppressed()) {
+    // ActivityMonitor suppresses its own idle→busy paths on focus repaints
+    // (#8865) and on recent user input (#10925), but this direct call into
+    // agentStateService is a parallel promotion path; gate it on both windows
+    // so neither a focus-triggered TUI repaint nor a mouse-report-driven redraw
+    // from scrolling a mouse-reporting TUI can flip a settled agent to busy.
+    if (this.activityMonitor?.isFocusSuppressed() || this.activityMonitor?.isRecentUserInput()) {
       return;
     }
     if (result.stateHint === "busy" && this.terminalInfo.agentState === state) {
@@ -1677,9 +1826,7 @@ export class TerminalProcess {
   // window AND invalidate the agentOutputTemperature baseline so the redraw
   // that follows the focus event is treated as a fresh comparison point.
   private handleFocusInput(): void {
-    this.activityMonitor?.notifyFocus();
-    this.agentOutputTemperature.reset();
-    this.agentOutputContentSnapshot = undefined;
+    this.analysis.notifyFocus();
   }
 
   /**
@@ -1743,16 +1890,21 @@ export class TerminalProcess {
     }
     terminal.lastOutputTime = now;
 
-    if (terminal.headlessTerminal) {
-      terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
-      terminal.headlessTerminal.write(prelude, () => {
-        terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
-      });
-    }
+    this.analysis.feedPrelude(prelude);
     this.sessionSnapshotter.schedule();
     this.emitData(prelude);
     this.forensicsBuffer.capture(prelude);
     this.semanticBufferManager.onData(prelude);
+  }
+
+  private feedPreludeInThread(prelude: string): void {
+    const terminal = this.terminalInfo;
+    if (terminal.headlessTerminal) {
+      terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
+      headlessMirrorScheduler.enqueue(this.id, terminal.headlessTerminal, prelude, () => {
+        terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
+      });
+    }
   }
 
   private handlePtyData(ptyProcess: pty.IPty, data: string): void {
@@ -1768,15 +1920,6 @@ export class TerminalProcess {
       terminal.firstByteAt = now;
     }
     terminal.lastOutputTime = now;
-
-    // Tap OSC 9;4 progress sequences upstream of the rest of the pipeline so
-    // the agent-state signal is viewport-independent (#8701). The parser is
-    // a read-only side channel; `IdleSequenceFilter.stripIdleTerminalSequences`
-    // still removes the sequence from the ActivityMonitor byte-volume /
-    // activity-gate path, so those detectors stay clean (the renderer keeps
-    // the raw bytes — see TerminalProcess.osc.test.ts). This runs per-chunk for
-    // backgrounded terminals too so the heartbeat never lags (#8753, #10744).
-    this.osc94Parser.feed(data, now);
 
     // Hibernation removed: PTY output ALWAYS flows through the live parse
     // pipeline regardless of activity tier, so a backgrounded pane's renderer
@@ -1795,35 +1938,13 @@ export class TerminalProcess {
   private _runPtyPipeline(data: string): void {
     const terminal = this.terminalInfo;
 
-    // noteAgentOutputActivity only acts on waiting/idle/completed — skip the
-    // full-viewport extraction in other states (it would be computed and
-    // discarded on every chunk during "working", the heaviest output phase).
-    // If the state flips before the async write callback, the
-    // `beforeSnapshot ?? this.agentOutputContentSnapshot` fallback covers it.
-    const agentState = terminal.agentState;
-    const beforeContentSnapshot =
-      this.isAgentLive &&
-      (agentState === "waiting" || agentState === "idle" || agentState === "completed")
-        ? this.getAgentOutputContentSnapshot()
-        : undefined;
-
-    if (this.activityMonitor) {
-      this.activityMonitor.onData(data);
-    }
-
-    // The headless responder answers device-attribute queries (CSI 6n, 5n)
-    // for plain terminals so zsh et al. don't block waiting. When an agent
-    // is live the renderer's xterm.js is the sole responder (installing
-    // both would double-respond and corrupt TUI parsers), so skip.
-    if (!this.isAgentLive && (data.includes("\x1b[6n") || data.includes("\x1b[5n"))) {
-      this.ensureHeadlessResponder();
-    }
-
     // OSC 10/11 color queries are answered whenever the terminal is agent-owned
     // (spawn-time agent panel OR runtime-promoted plain terminal). The
     // call-site gate and quick-test heuristic stay here; the responder logic
     // lives in OscResponder. See OscResponder.ts for the strip-on-success
     // contract that keeps the renderer's xterm.js from double-responding.
+    // This is the ONLY stage that must precede the forward — it derives the
+    // renderer-bound copy.
     let rendererData = data;
     if (this.shouldHandleOscColorQueries && data.includes("\x1b]1")) {
       rendererData = handleOscColorQueries(data, (response) => {
@@ -1831,21 +1952,20 @@ export class TerminalProcess {
       });
     }
 
-    if (terminal.headlessTerminal) {
-      // Outstanding-parse counter: the wake path only trusts a serialized
-      // snapshot to cover the current contentEpoch when no headless writes
-      // are still queued in xterm's async parser.
-      terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
-      terminal.headlessTerminal.write(data, () => {
-        terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
-        this.noteAgentOutputActivity(beforeContentSnapshot);
-      });
-    } else {
-      this.noteAgentOutputActivity(beforeContentSnapshot);
-    }
+    // Forward to the renderer before the analysis stages below: they are
+    // bookkeeping the user never sees, and on the batcher's synchronous
+    // threshold-flush path every pre-forward millisecond is a millisecond
+    // added to the visible frame's latency.
+    this.emitData(rendererData);
+
+    // Analysis stack: OSC 9;4 tap, ActivityMonitor onData, headless mirror
+    // write, agent-output temperature. In worker mode this is one postMessage.
+    this.analysis.feedChunk(data, {
+      agentLive: this.isAgentLive,
+      agentState: terminal.agentState,
+    });
     this.sessionSnapshotter.schedule();
 
-    this.emitData(rendererData);
     this.forensicsBuffer.capture(data);
     this.identityWatcher.observeOutput(data);
     this.semanticBufferManager.onData(data);
@@ -1863,6 +1983,45 @@ export class TerminalProcess {
       if (liveId) {
         this.queueAgentOutput(liveId, data);
       }
+    }
+  }
+
+  private feedChunkInThread(data: string): void {
+    const terminal = this.terminalInfo;
+
+    // Tap OSC 9;4 progress sequences upstream of the rest of the analysis so
+    // the agent-state signal is viewport-independent (#8701). The parser is
+    // a read-only side channel; `IdleSequenceFilter.stripIdleTerminalSequences`
+    // still removes the sequence from the ActivityMonitor byte-volume /
+    // activity-gate path, so those detectors stay clean (the renderer keeps
+    // the raw bytes — see TerminalProcess.osc.test.ts). This runs per-chunk for
+    // backgrounded terminals too so the heartbeat never lags (#8753, #10744).
+    this.osc94Parser.feed(data, Date.now());
+
+    if (this.activityMonitor) {
+      this.activityMonitor.onData(data);
+    }
+
+    // The headless responder answers device-attribute queries (CSI 6n, 5n)
+    // for plain terminals so zsh et al. don't block waiting. When an agent
+    // is live the renderer's xterm.js is the sole responder (installing
+    // both would double-respond and corrupt TUI parsers), so skip.
+    if (!this.isAgentLive && (data.includes("\x1b[6n") || data.includes("\x1b[5n"))) {
+      this.ensureHeadlessResponder();
+    }
+
+    if (terminal.headlessTerminal) {
+      // Outstanding-parse counter: the wake path only trusts a serialized
+      // snapshot to cover the current contentEpoch when no headless writes
+      // are still queued (scheduler hold + xterm's async parser both count —
+      // the callback fires only after the chunk has actually parsed).
+      terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
+      headlessMirrorScheduler.enqueue(this.id, terminal.headlessTerminal, data, () => {
+        terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
+        this.noteAgentOutputActivity();
+      });
+    } else {
+      this.noteAgentOutputActivity();
     }
   }
 
@@ -2022,9 +2181,11 @@ export class TerminalProcess {
         agentStateService: this.deps.agentStateService,
         headlineGenerator: this.headlineGenerator,
         semanticBufferManager: this.semanticBufferManager,
-        get activityMonitor() {
-          return self.activityMonitor;
+        get hasActivityMonitor() {
+          return self.analysis.hasMonitor();
         },
+        reconfigureActivityMonitor: (agentId, patternConfig) =>
+          this.analysis.reconfigureMonitor(agentId, patternConfig),
         get lastDetectedProcessIconId() {
           return self.lastDetectedProcessIconId;
         },

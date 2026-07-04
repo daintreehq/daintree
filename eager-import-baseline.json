@@ -74,7 +74,6 @@
     "electron/store.ts",
     "electron/utils/emergencyLog.ts",
     "electron/utils/fs.ts",
-    "electron/utils/git.ts",
     "electron/utils/gitRepoOperationState.ts",
     "electron/utils/gpuDetection.ts",
     "electron/utils/hostPerformance.ts",
@@ -1396,21 +1395,6 @@
     {
       "file": "electron/utils/fs.ts",
       "line": 156,
-      "pattern": "sync-fs"
-    },
-    {
-      "file": "electron/utils/git.ts",
-      "line": 156,
-      "pattern": "sync-fs"
-    },
-    {
-      "file": "electron/utils/git.ts",
-      "line": 417,
-      "pattern": "sync-fs"
-    },
-    {
-      "file": "electron/utils/git.ts",
-      "line": 716,
       "pattern": "sync-fs"
     },
     {

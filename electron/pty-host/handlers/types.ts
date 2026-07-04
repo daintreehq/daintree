@@ -1,6 +1,7 @@
 import type { MessagePort } from "node:worker_threads";
 import type { PtyManager } from "../../services/PtyManager.js";
 import type { PtyPool } from "../../services/PtyPool.js";
+import type { AnalysisWorkerPool } from "../../services/pty/analysis/AnalysisWorkerPool.js";
 import type { ProcessTreeCache } from "../../services/ProcessTreeCache.js";
 import type { TerminalResourceMonitor } from "../../services/pty/TerminalResourceMonitor.js";
 import type { PtyHostEvent } from "../../../shared/types/pty-host.js";
@@ -35,7 +36,16 @@ export interface HostContext {
   pauseCoordinators: Map<string, PtyPauseCoordinator>;
   rendererConnections: Map<number, RendererConnection>;
   windowProjectMap: Map<number, string | null>;
+  /**
+   * Per-window UI-focused terminal id, pushed from the renderer's
+   * `focusedId` (terminalFocusSlice). Read by each window's PortQueueManager
+   * and PortBatcher to prioritize the focused terminal under backpressure and
+   * batching. `null` (or absent) means no terminal is focused in that window.
+   */
+  windowFocusedTerminalMap: Map<number, string | null>;
   ipcDataMirrorTerminals: Set<string>;
+  /** Analysis worker pool (null when DAINTREE_DISABLE_ANALYSIS_WORKERS=1). */
+  analysisWorkerPool: AnalysisWorkerPool | null;
 
   // Reassignable — backed by getter/setter pairs in the construction site
   // so handlers always see the current value after init-buffers reassigns.
@@ -55,7 +65,7 @@ export interface HostContext {
   getPauseCoordinator: (id: string) => PtyPauseCoordinator | undefined;
   getOrCreatePauseCoordinator: (id: string) => PtyPauseCoordinator | undefined;
   disconnectWindow: (windowId: number, reason: string) => void;
-  recomputeActivityTiers: () => void;
+  recomputeActivityTiers: (nextProjectId: string | null) => void;
   tryReplayAndResume: (id: string) => void;
   resumePausedTerminal: (id: string) => void;
   createPortQueueManager: (windowId: number) => PortQueueManager;
@@ -66,6 +76,18 @@ export interface HostContext {
    * paths keep their start times outside `backpressureManager.pauseStartTimes`.
    */
   getPausedDurationsSnapshot: () => Array<{ terminalId: string; heldDurationMs: number }>;
+  /**
+   * Per-terminal cumulative drop attribution (saturated-window port drops,
+   * IPC-cap drops, batched bytes discarded with a closing port). Bounded map,
+   * cleared per terminal on exit. Consumed by the flow-control snapshot so a
+   * support bundle can tell WHOSE bytes were dropped, not just that some were.
+   */
+  getDropTallySnapshot: () => Array<{
+    terminalId: string;
+    droppedBytes: number;
+    dropCount: number;
+    lastDropAt: number;
+  }>;
 }
 
 export type PtyHostHandler = (msg: any, ports?: MessagePort[]) => void | Promise<void>;

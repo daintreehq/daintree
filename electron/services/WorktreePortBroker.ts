@@ -152,19 +152,26 @@ export class WorktreePortBroker {
 
   /**
    * Re-broker all views that were connected to a host after it restarts.
-   * Called after the host respawns and is ready.
+   * Called after the host respawns and is ready. Views destroyed between the
+   * crash and the re-broker (e.g. an LRU eviction landing mid-restart) are
+   * skipped. Returns the number of views actually re-brokered so callers can
+   * log the real outcome rather than the snapshot size.
    */
   reBrokerForHost(
     host: WorkspaceHostProcess,
     getWebContents: (wcId: number) => WebContents | undefined,
     wcIds: number[]
-  ): void {
+  ): number {
+    let reBrokered = 0;
     for (const wcId of wcIds) {
       const wc = getWebContents(wcId);
       if (wc && !wc.isDestroyed()) {
-        this.brokerPort(host, wc);
+        if (this.brokerPort(host, wc)) {
+          reBrokered += 1;
+        }
       }
     }
+    return reBrokered;
   }
 
   /**

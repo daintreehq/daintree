@@ -50,21 +50,20 @@ export function getAgentIds(): string[] {
 }
 
 export const AGENT_DESCRIPTIONS: Record<string, string> = {
-  claude: "Deep refactoring, architecture, and complex reasoning",
-  gemini: "Quick exploration and broad knowledge lookup",
-  antigravity: "Google's agy — successor to Gemini CLI for consumer accounts",
-  codex: "Careful, methodical runs with sandboxed execution",
-  grok: "xAI's terminal agent with plan mode and parallel subagents",
-  opencode: "Provider-agnostic, open-source flexibility",
-  cursor: "Cursor's agentic coding assistant",
-  kiro: "Spec-driven development with autonomous execution",
-  copilot: "GitHub's AI assistant with broad model choice",
-  crush: "Charmbracelet's multi-provider Bubble Tea TUI agent",
-  interpreter: "Local code execution — Python, shell, and JavaScript on your machine",
-  mistral: "Mistral's terminal coding agent with local model support",
-  kimi: "Moonshot AI's fast coding assistant",
-  "daintree-assistant":
-    "Daintree's own orchestration assistant — drives agents and the workspace over MCP",
+  claude: "Anthropic's CLI",
+  gemini: "Google's CLI",
+  antigravity: "Google's CLI",
+  codex: "OpenAI's CLI",
+  grok: "xAI's CLI",
+  opencode: "Open-source CLI",
+  cursor: "Cursor's CLI",
+  kiro: "Amazon's CLI",
+  copilot: "GitHub's CLI",
+  crush: "Charm's CLI",
+  interpreter: "Open Interpreter's CLI",
+  mistral: "Mistral's CLI",
+  kimi: "Moonshot AI's CLI",
+  "daintree-assistant": "Daintree's built-in assistant",
 };
 
 /**
@@ -182,7 +181,13 @@ export function getMergedPresets(
         typeof preset.customFlags === "string" && !hasShellMetachar(preset.customFlags)
           ? preset.customFlags.slice(0, 10000)
           : undefined,
-      inlineMode: typeof preset.inlineMode === "boolean" ? preset.inlineMode : undefined,
+      inlineMode:
+        preset.inlineMode === "inherit" ||
+        preset.inlineMode === "on" ||
+        preset.inlineMode === "off" ||
+        typeof preset.inlineMode === "boolean"
+          ? preset.inlineMode
+          : undefined,
       color:
         typeof preset.color === "string" &&
         /^#[0-9a-fA-F]{3,4}$|^#[0-9a-fA-F]{6}$|^#[0-9a-fA-F]{8}$/.test(preset.color)

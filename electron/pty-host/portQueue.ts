@@ -28,6 +28,14 @@ export interface PortQueueDeps {
   ) => void;
   emitReliabilityMetric: (payload: TerminalReliabilityMetricPayload) => void;
   pauseToken?: PauseToken;
+  /**
+   * The UI-focused terminal id for this window, or null when none is focused.
+   * The focused terminal is exempt from the aggregate (window-level) pause
+   * trigger — its own per-terminal watermark still applies unconditionally —
+   * and is resumed first when the aggregate drains. Optional: when absent the
+   * manager behaves exactly as before (no terminal is treated as focused).
+   */
+  getFocusedTerminalId?: () => string | null;
 }
 
 export class PortQueueManager {
@@ -68,17 +76,40 @@ export class PortQueueManager {
     }
     const previousTotal = this.totalQueuedBytes;
     this.totalQueuedBytes = Math.max(0, this.totalQueuedBytes - removed);
-    // Aggregate-gate resume sweep: a terminal paused by the window-level
-    // watermark may have an empty queue of its own, so no further acks (and
-    // therefore no tryResume calls) ever arrive for it. When the aggregate
-    // crosses back below the low watermark, re-check every paused terminal.
+    this.sweepAggregateResume(previousTotal);
+  }
+
+  /**
+   * Aggregate-gate resume sweep: a terminal paused by the window-level
+   * watermark may have an empty queue of its own, so no further acks (and
+   * therefore no tryResume calls) ever arrive for it. When the aggregate
+   * crosses back below the low watermark, re-check every paused terminal.
+   * Called from every path that shrinks the aggregate — acks (removeBytes),
+   * the safety-timeout force-resume, and clearQueue — because any of them can
+   * be the drain event that frees the window; sweeping only on acks left
+   * aggregate-paused siblings stranded until their own safety timeouts when
+   * the drain came from a timeout or a terminal teardown instead.
+   */
+  private sweepAggregateResume(previousTotal: number): void {
     if (
-      previousTotal >= IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES &&
-      this.totalQueuedBytes < IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES
+      previousTotal < IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES ||
+      this.totalQueuedBytes >= IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES
     ) {
-      for (const pausedId of [...this.pausedTerminals.keys()]) {
-        this.tryResume(pausedId);
-      }
+      return;
+    }
+    // Resume the focused terminal first so the pane the user is watching
+    // recovers ahead of its siblings. tryResume reads only totalQueuedBytes
+    // and per-terminal bytes (neither mutated by a resume), so visiting the
+    // focused id first is order-independent for correctness — it only changes
+    // which coordinator.resume() fires first. Every other paused terminal is
+    // still swept, so no producer is starved (#7030).
+    const focusedId = this.deps.getFocusedTerminalId?.() ?? null;
+    if (focusedId !== null && this.pausedTerminals.has(focusedId)) {
+      this.tryResume(focusedId);
+    }
+    for (const pausedId of [...this.pausedTerminals.keys()]) {
+      if (pausedId === focusedId) continue;
+      this.tryResume(pausedId);
     }
   }
 
@@ -133,8 +164,16 @@ export class PortQueueManager {
     // aggregate trigger pauses the currently producing terminal — under a
     // fleet burst every active producer reaches here within one batch flush.
     const overOwnWatermark = currentBytes >= highWatermarkBytes;
+    // The focused terminal is exempt from the aggregate trigger: it is paused
+    // LAST under a fleet burst, staying live while its siblings absorb the
+    // window-level backpressure. Its OWN watermark still applies (above), so
+    // its queue can never grow unbounded — a runaway focused terminal still
+    // pauses on its own gate and the saturated/data-loss fallback is unchanged.
+    const focusedId = this.deps.getFocusedTerminalId?.() ?? null;
     const overAggregateWatermark =
-      currentBytes > 0 && this.totalQueuedBytes >= IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES;
+      currentBytes > 0 &&
+      id !== focusedId &&
+      this.totalQueuedBytes >= IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES;
     if ((!overOwnWatermark && !overAggregateWatermark) || this.pausedTerminals.has(id)) {
       return false;
     }
@@ -181,6 +220,7 @@ export class PortQueueManager {
         // and the pause loop wedges across the entire renderer reload (#6244).
         const droppedBytes = this.queuedBytes.get(id) ?? 0;
         this.queuedBytes.delete(id);
+        const previousTotal = this.totalQueuedBytes;
         this.totalQueuedBytes = Math.max(0, this.totalQueuedBytes - droppedBytes);
 
         const coordinator = this.deps.getPauseCoordinator(id);
@@ -200,6 +240,13 @@ export class PortQueueManager {
             bufferUtilization: currentUtilization,
           });
         }
+
+        // The force-resume dropped this terminal's byte accounting — if that
+        // took the aggregate below its low watermark, siblings paused by the
+        // window-level gate (with empty queues of their own, so no acks are
+        // coming) must be re-checked here or they stay stranded until each of
+        // their own safety timeouts fires.
+        this.sweepAggregateResume(previousTotal);
       }, IPC_MAX_PAUSE_MS);
 
       this.pausedTerminals.set(id, safetyTimeout);
@@ -275,17 +322,49 @@ export class PortQueueManager {
     }
     const removed = this.queuedBytes.get(id) ?? 0;
     this.queuedBytes.delete(id);
+    const previousTotal = this.totalQueuedBytes;
     this.totalQueuedBytes = Math.max(0, this.totalQueuedBytes - removed);
     this.pausedTerminals.delete(id);
     this.pauseStartTimes.delete(id);
+    // A cleared terminal (exit, force-resume) can be the terminal holding most
+    // of the window aggregate — sweep so aggregate-paused siblings don't wait
+    // out their safety timeouts for bytes that will never be acked.
+    this.sweepAggregateResume(previousTotal);
   }
 
   resumeAll(): void {
     for (const [id, safetyTimeout] of this.pausedTerminals) {
       clearTimeout(safetyTimeout);
       const coordinator = this.deps.getPauseCoordinator(id);
-      if (coordinator) {
-        coordinator.resume(this.pauseToken);
+      if (!coordinator) continue;
+      coordinator.resume(this.pauseToken);
+      // Surface the release. resumeAll runs when this manager's window goes
+      // away (disconnect/replace/dispose) — without an emission here the
+      // shared status map keeps "paused-backpressure" and any other window
+      // still showing this terminal wears a stale paused pill until some
+      // unrelated transition overwrites it. The pause-end metric also clears
+      // this window's entry in the host's per-source pause-duration tracking
+      // (the funnel maps this manager's metrics to its own `port-<windowId>`
+      // source), so multi-source attribution survives: a terminal also held
+      // by the IPC queue stays tracked by that source. Emission is
+      // best-effort: this path runs during window teardown where sendEvent
+      // can race a dying parent channel, and a throw here must not abort the
+      // remaining releases or leave the pause maps stale.
+      try {
+        const pauseStart = this.pauseStartTimes.get(id);
+        const pauseDuration = pauseStart ? Date.now() - pauseStart : undefined;
+        if (!coordinator.isPaused) {
+          this.deps.emitTerminalStatus(id, "running", this.getUtilization(id), pauseDuration);
+        }
+        this.deps.emitReliabilityMetric({
+          terminalId: id,
+          metricType: "pause-end",
+          timestamp: Date.now(),
+          durationMs: pauseDuration,
+          bufferUtilization: this.getUtilization(id),
+        });
+      } catch (error) {
+        console.warn(`[PtyHost] resumeAll emission failed for ${id}:`, error);
       }
     }
     this.pausedTerminals.clear();

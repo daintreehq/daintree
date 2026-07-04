@@ -113,9 +113,30 @@ The backend starts the activity monitor when an agent is detected at runtime. Th
 
 Live detection (`detectedAgentId`, then an agent `runtimeIdentity`) still takes precedence: while an agent is detected, `launchAgentId` is never what's driving chrome. Its affinity role only fills the gap before detection commits or after detection clears without an exit — see Exit-Gated Demotion. It does not by itself unlock the legacy `isDemotedExAgent()` case, which `getRuntimeAgentId()` and `isAgentTerminal()` treat as non-agent.
 
+## Title Ownership And Composition
+
+A terminal's human-facing title has three layers, resolved at render time — components never concatenate title strings themselves:
+
+- **Identity** (`panel.title`) — "what is this?" The registry name ("Claude"), a preset brand ("Claude [Z.ai]"), a launch `name`, or an automation rename. Persisted.
+- **Task** (`lastObservedTitle`) — "what is it doing?" The agent's own OSC 0/2 window title, captured in `TerminalListenerInstaller`, filtered by `isUselessTitle`, glyph-stripped for display by `cleanTaskTitle` (`shared/utils/taskTitle.ts`). Live and always replaceable; cleared when a new agent process is detected so a relaunched or different agent never inherits a stale task.
+- **User lock** — a human rename freezes the title entirely.
+
+Ownership is the `titleMode` ladder (`shared/types/panel.ts`): `"default"` (identity derived, detection may rewrite, task composes) < `"custom"` (explicitly named by a preset, launch `name`, or MCP/assistant `terminal.rename`; detection may not rewrite, task still composes) < `"user"` (human rename; nothing rewrites it, composition off, automation renames bounce). `titleMode` persists with the panel snapshot, which is what keeps pinned titles stable across restart (#10738). An empty rename resets to `"default"`.
+
+`getTerminalDisplayTitle(panel, variant)` (`src/utils/terminalTitleDisplay.ts`) is the single render-time source of truth: `"full"` (grid headers, tooltips, palettes) → `"Claude: fix auth tests"`; `"compact"` (~100px tab strips) → task-first, since the tab icon already carries identity; `"base"` (dock) → identity only. Composition is gated on a live detected agent and the `showAgentTaskTitles` preference (default on). Session-history records prefer `lastObservedTitle` on every close path, so resume rows read the same as the live tab did.
+
+**Title noise.** Agents decorate their OSC titles in ways that defeat naive composition. The normalization pipeline (all render-time, generic across agents — no per-agent rules) runs in order:
+
+1. **Glyph stripping** (`cleanTaskTitle`) — leading/trailing status-glyph clusters: Claude's spinner set, Gemini's state glyphs, and the braille spinners (U+2800–U+28FF) Codex, Grok, and Claude use as busy indicators. Daintree's own state indicators carry that signal.
+2. **Identity affix stripping** (`stripIdentityAffixes`) — leading/trailing separator-delimited segments that exactly match a whole identity label (registry name, binary, name initials, or the panel title): Grok appends `" - grok"` to every title, OpenCode prepends `"OC | "` (initials are derived from the registry name, so abbreviation affixes need no per-agent list). Whole-label equality is deliberate — token overlap or filler words would eat real tasks like `"Terminal: preserve OSC title"` or `"Open: file picker"` under Open Interpreter. Interior segments are never touched.
+3. **Workspace echo** — a remaining title equal to the cwd folder basename (Codex idle emits the workspace folder name) says where the agent is, not what it's doing: treated as no-task.
+4. **Identity echo** — a title whose every token matches the agent's identity (panel title, registry name, binary) or generic filler (`code`, `cli`, …), with at least one identity token that isn't itself filler (Claude Code emits `"Claude Code"` at startup): a `"default"` identity yields to the richer self-description (header shows `"Claude Code"`), while a `"custom"` preset identity (`"Claude [Z.ai]"`) outranks the echo and renders alone. Pure filler (`"Ready"`, or `"Code CLI"` under "Qwen Code", whose identity contributes the filler word `code`) is treated as useless.
+
+Real tasks that merely contain the agent's name (`"Claude Code refactor plan"`) still compose normally, and useful status remainders survive affix stripping (Grok's busy title becomes `"Grok: Responding"`).
+
 ## Reader Guidance
 
-- **What icon/color/title should I show?** Use `deriveTerminalChrome(panel)`.
+- **What icon/color/title should I show?** Use `deriveTerminalChrome(panel)` for chrome; `getTerminalDisplayTitle(panel, variant)` for the title string.
 - **Is this terminal currently an agent?** Use `deriveTerminalChrome(panel).isAgent` or `getRuntimeAgentId(panel)`.
 - **Should agent activity UI be visible?** Only when runtime chrome is agent.
 - **What command should restart use?** Use persisted command/launch hint fields.

@@ -132,7 +132,7 @@ Session mute crosses the process boundary: `setSessionQuietUntil` (`src/lib/noti
 
 ## Global banner coordinator (Tier 4a)
 
-Top-of-app global banners all contend for a **single slot** through `GlobalBannerCoordinator` (`src/components/Recovery/GlobalBannerCoordinator.tsx`), mounted once in `src/App.tsx`. `useGlobalBannerPriority` (`src/components/Recovery/useGlobalBannerPriority.ts`) resolves the highest-priority active banner:
+Top-of-app global banners all contend for a **single slot** through `GlobalBannerCoordinator` (`src/components/Recovery/GlobalBannerCoordinator.tsx`), mounted once (lazily) in `src/components/Layout/AppLayout.tsx`. `useGlobalBannerPriority` (`src/components/Recovery/useGlobalBannerPriority.ts`) resolves the highest-priority active banner:
 
 ```
 host-crash          backendStatus !== "connected"        (backend unusable now)
@@ -154,7 +154,7 @@ Rationale for the order lives inline in `useGlobalBannerPriority.ts`: watchdog s
 
 **Low-priority inbox fallback.** Because a live global banner can be suppressed by a higher-priority one, any suppressible banner whose signal must stay findable also routes a `priority: "low"` inbox `notify()` with a project-scoped `supersedeKey`. The canonical example is `useCloudSyncWarning` (`src/hooks/app/useCloudSyncWarning.tsx`): it sets the `CloudSyncBanner` live surface _and_ fires a one-per-project inbox entry (`supersedeKey: cloud-sync:<projectId>`, `countable: false`, `context.eventKind: "host"`, explicit `priority: "low"` to override the host kind's time-sensitive default). When the banner loses the slot, the audit trail survives in the inbox.
 
-New top-of-app global banners belong in this coordinator, not as additional `App.tsx` siblings. Region-scoped globals (settings, worktree dashboard — Tier 4b) mount within their own region and do not contend for the slot.
+New top-of-app global banners belong in this coordinator, not as additional layout siblings. Region-scoped globals (settings, worktree dashboard — Tier 4b) mount within their own region and do not contend for the slot.
 
 ## Tier model → enforcing code
 

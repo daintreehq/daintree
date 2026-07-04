@@ -1037,6 +1037,98 @@ describe("ProcessDetector", () => {
       vi.useRealTimers();
     });
 
+    it("anchors a runtime-promoted agent once the process tree corroborates it (#10911)", () => {
+      // User typed `codex` into a plain shell (no launchAgentId ⇒ isLaunchAnchored
+      // starts false). Once the process tree confirms a real codex process, the
+      // agent must become sticky so process-tree-absence ticks (idle TUI, argv
+      // rewrite) can't flap it back to a plain terminal.
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "codex", command: "codex" }]);
+      const callback = vi.fn();
+      const detector = new ProcessDetector(
+        "terminal-runtime-anchor",
+        Date.now(),
+        100,
+        callback,
+        cache as never,
+        false
+      );
+      detector.start();
+      cache.emitRefresh(); // second poll commits via process-tree hysteresis
+      expect(detector.getLastDetected()).toBe("codex");
+      callback.mockClear();
+
+      // Empty tree would demote an un-anchored runtime promotion after the
+      // hysteresis window; anchoring must hold it instead.
+      cache.setChildren(100, []);
+      cache.emitRefresh();
+      cache.emitRefresh();
+      cache.emitRefresh();
+
+      expect(detector.getLastDetected()).toBe("codex");
+      expect(callback.mock.calls.filter(([r]) => r.detectionState === "no_agent")).toHaveLength(0);
+    });
+
+    it("does not anchor a runtime-promoted agent on shell-command-only evidence (#10911)", () => {
+      // Anchoring must require process-tree corroboration. A shell-command-only
+      // commit (no matching process in the tree) must stay un-anchored so it
+      // can still demote via the off-streak path once its sticky evidence is
+      // gone — otherwise a mistyped/aliased command would stick forever.
+      const base = Date.now();
+      vi.setSystemTime(base);
+      const cache = createCacheMock();
+      cache.setChildren(100, []); // no corroborating process
+      const callback = vi.fn();
+      const detector = new ProcessDetector(
+        "terminal-shell-only-noanchor",
+        base,
+        100,
+        callback,
+        cache as never,
+        false
+      );
+      detector.start();
+
+      detector.injectShellCommandEvidence(
+        { agentType: "codex", processIconId: "codex", processName: "codex" },
+        "codex",
+        base
+      );
+      expect(detector.getLastDetected()).toBe("codex");
+
+      // Drop the shell evidence (manual clear keeps the committed agent but
+      // removes the sticky TTL), then let empty-tree polls run past hysteresis.
+      // An un-anchored agent must demote; an incorrectly anchored one would hold.
+      detector.clearShellCommandEvidence();
+      cache.emitRefresh();
+      cache.emitRefresh();
+      cache.emitRefresh();
+
+      expect(detector.getLastDetected()).toBeNull();
+      vi.useRealTimers();
+    });
+
+    it("prompt-return still demotes a runtime-promoted agent anchored by the process tree (#10911)", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "codex", command: "codex" }]);
+      const callback = vi.fn();
+      const detector = new ProcessDetector(
+        "terminal-runtime-anchor-demote",
+        Date.now(),
+        100,
+        callback,
+        cache as never,
+        false
+      );
+      detector.start();
+      cache.emitRefresh();
+      expect(detector.getLastDetected()).toBe("codex");
+
+      // Explicit lifecycle signal must override the anchor.
+      detector.clearShellCommandEvidence("prompt-return");
+      expect(detector.getLastDetected()).toBeNull();
+    });
+
     it("retains expired shell-agent evidence while the PTY still has a live child", () => {
       // Real agent CLIs can rewrite argv/comm so process-tree matching never
       // corroborates the shell command, but a live child still proves the

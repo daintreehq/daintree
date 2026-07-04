@@ -57,6 +57,7 @@ function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo
         commands: [],
         views: [],
         mcpServers: [],
+        skills: [],
         keybindings: [],
         contextMenus: [],
         forgeProviders: [],
@@ -77,6 +78,7 @@ function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo
     updateAvailable: null,
     devMode: false,
     pluginDanger: "safe",
+    blocklisted: false,
     ...overrides,
   };
 }
@@ -185,6 +187,21 @@ describe("PluginManagerView", () => {
     expect(toggle.getAttribute("aria-checked")).toBe("false");
   });
 
+  it("shows a 'Blocked' badge and disables the toggle for a blocklisted plugin (#10891)", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePlugin({ disabled: false, blocklisted: true, blocklistReason: "Steals tokens" }),
+    ]);
+    renderDialog();
+    await screen.findAllByText("Acme Demo");
+
+    expect(screen.getAllByText("Blocked").length).toBeGreaterThan(0);
+    // A blocklisted plugin's user-disabled state is false, but it must not read
+    // as enabled and the toggle must be inert — the block is host-decided.
+    const toggle = screen.getByRole("switch", { name: "Enable Acme Demo" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect((toggle as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("does not flash 'Restart required' when a built-in plugin is toggled (#10512)", async () => {
     // Built-ins transition live, so their authoritative pendingRestart stays
     // false. The optimistic update must match — not invert — to avoid a
@@ -202,10 +219,10 @@ describe("PluginManagerView", () => {
     expect(screen.queryByText("Restart required")).toBeNull();
   });
 
-  it("flashes 'Restart required' when a session-fixed user plugin is toggled (#10512)", async () => {
-    // Control for the built-in case: user plugins are fixed for the session, so
-    // a toggle genuinely diverges desired vs. running state and must surface the
-    // restart cue.
+  it("does not flash 'Restart required' when a user plugin is toggled (#10887)", async () => {
+    // User plugins now transition live too (#10887): setEnabled unloads/reloads
+    // them without a restart, so their authoritative pendingRestart stays false.
+    // The optimistic update must match — not invert — to avoid a false badge.
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
       makePlugin({ isBuiltin: false, disabled: false, pendingRestart: false }),
     ]);
@@ -213,7 +230,8 @@ describe("PluginManagerView", () => {
     const toggle = await screen.findByRole("switch", { name: "Enable Acme Demo" });
     fireEvent.click(toggle);
 
-    await waitFor(() => expect(screen.getAllByText("Restart required").length).toBeGreaterThan(0));
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
+    expect(screen.queryByText("Restart required")).toBeNull();
   });
 
   it("renders a plugin's settings form in the detail pane once selected", async () => {
@@ -440,7 +458,7 @@ describe("PluginManagerView", () => {
     expect(window.electron.plugin.uninstall).not.toHaveBeenCalled();
   });
 
-  it("calls setEnabled(false) and shows a restart badge when disabling", async () => {
+  it("calls setEnabled(false) when disabling and applies live — no restart badge (#10887)", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
     renderDialog();
     await screen.findAllByText("Acme Demo");
@@ -450,9 +468,10 @@ describe("PluginManagerView", () => {
     await waitFor(() => {
       expect(window.electron.plugin.setEnabled).toHaveBeenCalledWith("acme.demo", false);
     });
-    await waitFor(() => {
-      expect(screen.getByText("Restart required")).toBeTruthy();
-    });
+    // User plugins now toggle live (#10887): no restart badge flashes.
+    const toggle = screen.getByRole("switch", { name: "Enable Acme Demo" });
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
+    expect(screen.queryByText("Restart required")).toBeNull();
   });
 
   it("keeps the restart badge after a remount (pendingRestart comes from listPlugins)", async () => {
@@ -485,18 +504,21 @@ describe("PluginManagerView", () => {
     expect(screen.queryByText("Restart required")).toBeNull();
   });
 
-  it("clears the restart badge when toggled back to the startup state", async () => {
+  it("toggling off then back on calls setEnabled correctly and never flashes a restart badge (#10887)", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
     renderDialog();
     await screen.findAllByText("Acme Demo");
     const toggle = () => screen.getByRole("switch", { name: "Enable Acme Demo" });
 
     fireEvent.click(toggle());
-    await waitFor(() => expect(screen.getByText("Restart required")).toBeTruthy());
+    await waitFor(() => expect(toggle().getAttribute("aria-checked")).toBe("false"));
+    expect(screen.queryByText("Restart required")).toBeNull();
 
     fireEvent.click(toggle());
-    await waitFor(() => expect(screen.queryByText("Restart required")).toBeNull());
-    expect(window.electron.plugin.setEnabled).toHaveBeenLastCalledWith("acme.demo", true);
+    await waitFor(() => expect(toggle().getAttribute("aria-checked")).toBe("true"));
+    expect(screen.queryByText("Restart required")).toBeNull();
+    expect(window.electron.plugin.setEnabled).toHaveBeenNthCalledWith(1, "acme.demo", false);
+    expect(window.electron.plugin.setEnabled).toHaveBeenNthCalledWith(2, "acme.demo", true);
   });
 
   it("renders the install buttons immediately, before the list resolves", () => {
@@ -1048,16 +1070,20 @@ describe("PluginManagerView", () => {
       expect(screen.getByRole("button", { name: "Restart" })).toBeTruthy();
     });
 
-    it("appears after a toggle flips a plugin into the pending-restart state", async () => {
+    it("does not surface the restart bar after toggling a live plugin (#10887)", async () => {
+      // User plugins now apply live (#10887), so setEnabled reconciles state
+      // immediately and the optimistic update holds pendingRestart at false —
+      // toggling must not flash the global restart bar. The bar still appears
+      // when listPlugins() authoritatively reports pendingRestart (covered
+      // above); it just isn't triggered optimistically by a toggle anymore.
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
       renderDialog();
-      await screen.findAllByText("Acme Demo");
+      const toggle = await screen.findByRole("switch", { name: "Enable Acme Demo" });
       expect(screen.queryByText("Restart required to apply plugin changes")).toBeNull();
 
-      fireEvent.click(screen.getByRole("switch", { name: "Enable Acme Demo" }));
-      await waitFor(() =>
-        expect(screen.getByText("Restart required to apply plugin changes")).toBeTruthy()
-      );
+      fireEvent.click(toggle);
+      await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
+      expect(screen.queryByText("Restart required to apply plugin changes")).toBeNull();
     });
 
     it("confirms before relaunching and does not restart until confirmed", async () => {
@@ -1458,6 +1484,93 @@ describe("PluginManagerView", () => {
       fireEvent.change(input, { target: { value: "Notepad" } });
       // Plugin00 is filtered out, so the detail pane falls back to its empty state.
       await waitFor(() => expect(screen.getByText("Explore plugins")).toBeTruthy());
+    });
+  });
+
+  describe("Update all (#10893)", () => {
+    const makeUrl = (name: string, displayName: string, url?: string) =>
+      makePlugin({
+        manifest: { ...makePlugin().manifest, name, displayName },
+        source: "url",
+        originalUrl: url ?? `https://example.com/${name}.dntr`,
+        archiveHash: "h",
+      });
+
+    const listMock = () => window.electron.plugin.list as ReturnType<typeof vi.fn>;
+    const checkMock = () => window.electron.plugin.checkForUpdate as ReturnType<typeof vi.fn>;
+    const installMock = () => window.electron.plugin.installFromUrl as ReturnType<typeof vi.fn>;
+
+    it("hides the Update all button when no plugins are URL-installed", async () => {
+      listMock().mockResolvedValue([makePlugin()]); // sideload — originalUrl null
+      renderDialog();
+      await screen.findAllByText("Acme Demo");
+      expect(screen.queryByRole("button", { name: "Update all" })).toBeNull();
+    });
+
+    it("checks only URL-installed plugins and opens the confirm for the first available", async () => {
+      listMock().mockResolvedValue([
+        makeUrl("acme.a", "Plugin A"),
+        makeUrl("acme.b", "Plugin B"),
+        makePlugin(), // sideload — must be skipped
+      ]);
+      checkMock().mockImplementation(async (id: string) =>
+        id === "acme.a"
+          ? { status: "available", name: "acme.a", version: "2.0.0", capabilities: [] }
+          : { status: "up-to-date" }
+      );
+      renderDialog();
+      fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
+
+      await waitFor(() => expect(screen.getByText("Update 'Plugin A'?")).toBeTruthy());
+      const checkedIds = checkMock().mock.calls.map((c) => c[0]);
+      expect(checkedIds).toContain("acme.a");
+      expect(checkedIds).toContain("acme.b");
+      expect(checkedIds).not.toContain("acme.demo");
+
+      fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+      await waitFor(() =>
+        expect(installMock()).toHaveBeenCalledWith("https://example.com/acme.a.dntr")
+      );
+    });
+
+    it("drains multiple available updates one confirm at a time", async () => {
+      listMock().mockResolvedValue([makeUrl("acme.a", "Plugin A"), makeUrl("acme.b", "Plugin B")]);
+      checkMock().mockImplementation(async (id: string) => ({
+        status: "available",
+        name: id,
+        version: "2.0.0",
+        capabilities: [],
+      }));
+      renderDialog();
+      fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
+
+      await waitFor(() => expect(screen.getByText("Update 'Plugin A'?")).toBeTruthy());
+      fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+
+      await waitFor(() => expect(screen.getByText("Update 'Plugin B'?")).toBeTruthy());
+      fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+
+      await waitFor(() => expect(installMock()).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(screen.queryByText(/^Update '/)).toBeNull());
+    });
+
+    it("routes an http update through the HTTP confirm before installing", async () => {
+      listMock().mockResolvedValue([makeUrl("acme.a", "Plugin A", "http://example.com/a.dntr")]);
+      checkMock().mockResolvedValue({
+        status: "available",
+        name: "acme.a",
+        version: "2.0.0",
+        capabilities: [],
+      });
+      renderDialog();
+      fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
+
+      await waitFor(() => expect(screen.getByText("Update 'Plugin A'?")).toBeTruthy());
+      fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+
+      await waitFor(() => expect(screen.getByText("Install over HTTP?")).toBeTruthy());
+      // The HTTP gate must fire before any download leaves the app.
+      expect(installMock()).not.toHaveBeenCalled();
     });
   });
 });

@@ -251,6 +251,10 @@ import {
   unregisterFileDecorationProviderImpls,
 } from "../fileDecorationRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import {
+  PluginBlocklistService,
+  type ParsedPluginBlocklist,
+} from "../plugin/PluginBlocklistService.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
   return {
@@ -756,8 +760,8 @@ describe("PluginManifestSchema forgeProviders contribution", () => {
         ],
         settings: [{ id: "github", type: "string", label: "GitHub" }],
         views: [
-          { id: "github-issues", name: "Issues", componentPath: "./issues.js", location: "panel" },
-          { id: "github-prs", name: "PRs", componentPath: "./prs.js", location: "panel" },
+          { id: "github-issues", componentPath: "./issues.js", location: "panel" },
+          { id: "github-prs", componentPath: "./prs.js", location: "panel" },
         ],
         forgeProviders: [
           {
@@ -917,7 +921,7 @@ describe("PluginManifestSchema contributes strict validation", () => {
       contributes: {
         // A view needs a matching panel id (view_panel_ref_unknown, #10620).
         panels: [{ id: "v", name: "V", iconId: "eye", color: "#abc" }],
-        views: [{ id: "v", name: "V", componentPath: "./v.js", location: "panel" }],
+        views: [{ id: "v", componentPath: "./v.js", location: "panel" }],
       },
     });
     expect(result.success).toBe(true);
@@ -943,7 +947,7 @@ describe("PluginManifestSchema contributes strict validation", () => {
       contributes: {
         // A view needs a matching panel id (view_panel_ref_unknown, #10620).
         panels: [{ id: "v", name: "V", iconId: "eye", color: "#abc" }],
-        experimental_views: [{ id: "v", name: "V", componentPath: "./v.js", location: "panel" }],
+        experimental_views: [{ id: "v", componentPath: "./v.js", location: "panel" }],
       },
     });
     expect(result.success).toBe(true);
@@ -975,10 +979,8 @@ describe("PluginManifestSchema contributes strict validation", () => {
       contributes: {
         // The surviving canonical view needs a matching panel id (#10620).
         panels: [{ id: "canonical", name: "Canonical", iconId: "eye", color: "#abc" }],
-        views: [{ id: "canonical", name: "Canonical", componentPath: "./c.js", location: "panel" }],
-        experimental_views: [
-          { id: "legacy", name: "Legacy", componentPath: "./l.js", location: "panel" },
-        ],
+        views: [{ id: "canonical", componentPath: "./c.js", location: "panel" }],
+        experimental_views: [{ id: "legacy", componentPath: "./l.js", location: "panel" }],
       },
     });
     expect(result.success).toBe(true);
@@ -994,9 +996,7 @@ describe("PluginManifestSchema contributes strict validation", () => {
       ...validBase,
       contributes: {
         views: [],
-        experimental_views: [
-          { id: "legacy", name: "Legacy", componentPath: "./l.js", location: "panel" },
-        ],
+        experimental_views: [{ id: "legacy", componentPath: "./l.js", location: "panel" }],
       },
     });
     expect(result.success).toBe(true);
@@ -2117,33 +2117,58 @@ describe("PluginService built-in plugin loading", () => {
       await expect(service.setEnabled("   ", false)).rejects.toThrow(/non-empty string/);
     });
 
-    it("user plugin disable diverges desired/running state and raises pendingRestart", async () => {
+    it("user plugin disable unloads live — disabled, not pending, no longer running (#10887)", async () => {
       storeMock._state.set("plugins", { disabled: [] });
       await writePlugin("acme.runtime", { name: "acme.runtime", version: "1.0.0" });
       const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
       await service.initialize();
 
-      expect(service.listPlugins()[0]).toMatchObject({ disabled: false, pendingRestart: false });
+      expect(service.listPlugins()[0]).toMatchObject({
+        disabled: false,
+        pendingRestart: false,
+        isBuiltin: false,
+      });
+      broadcastToRendererMock.mockClear();
 
       await service.setEnabled("acme.runtime", false);
 
-      // User plugin stays loaded this session (no live unload); the desired
-      // state is now off, so the restart-required cue is raised.
-      expect(service.listPlugins()[0]).toMatchObject({ disabled: true, pendingRestart: true });
+      // Applied immediately: the user plugin is unloaded live (its worker torn
+      // down via the unload cascade) and surfaced from the skipped map, so
+      // loadedAt resets to 0 and no restart is required — isBuiltin stays false.
+      const row = service.listPlugins()[0];
+      expect(row).toMatchObject({ disabled: true, pendingRestart: false, isBuiltin: false });
+      expect(row.loadedAt).toBe(0);
+      expect(broadcastToRendererMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ name: "plugin:provenance-changed" })
+      );
     });
 
-    it("user plugin re-enable of a launch-disabled plugin stays pendingRestart", async () => {
+    it("user plugin re-enable of a launch-disabled plugin loads live — enabled, not pending (#10887)", async () => {
       storeMock._state.set("plugins", { disabled: ["acme.off"] });
       await writePlugin("acme.off", { name: "acme.off", version: "1.0.0" });
       const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
       await service.initialize();
 
-      expect(service.listPlugins()[0]).toMatchObject({ disabled: true, pendingRestart: false });
+      expect(service.listPlugins()[0]).toMatchObject({
+        disabled: true,
+        pendingRestart: false,
+        isBuiltin: false,
+      });
+      broadcastToRendererMock.mockClear();
 
       await service.setEnabled("acme.off", true);
 
-      // User plugin is not loaded live; desired state is on, so it's pending.
-      expect(service.listPlugins()[0]).toMatchObject({ disabled: false, pendingRestart: true });
+      // Applied immediately: re-registered with the real isBuiltin (false) and
+      // re-activated via a freshly forked worker, so it's running (loadedAt set)
+      // with no restart cue.
+      const row = service.listPlugins()[0];
+      expect(row).toMatchObject({ disabled: false, pendingRestart: false, isBuiltin: false });
+      expect(row.loadedAt).toBeGreaterThan(0);
+      expect(broadcastToRendererMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ name: "plugin:provenance-changed" })
+      );
     });
 
     it("built-in disable unloads live — disabled, not pending, no longer running", async () => {
@@ -7395,7 +7420,6 @@ describe("reserved contribution point warnings", () => {
         views: [
           {
             id: "main",
-            name: "Main",
             componentPath: "./dist/view.js",
             location: "panel",
           },
@@ -7430,7 +7454,6 @@ describe("reserved contribution point warnings", () => {
         views: [
           {
             id: "ghost",
-            name: "Ghost",
             componentPath: "./dist/view.js",
             location: "panel",
           },
@@ -7462,7 +7485,6 @@ describe("reserved contribution point warnings", () => {
         views: [
           {
             id: "main",
-            name: "Main",
             componentPath: "./dist/view.js",
             location: "sidebar",
           },
@@ -7494,7 +7516,6 @@ describe("reserved contribution point warnings", () => {
         views: [
           {
             id: "main",
-            name: "Main",
             componentPath: "./dist/view.js",
             location: "panel",
           },
@@ -7526,7 +7547,6 @@ describe("reserved contribution point warnings", () => {
         views: [
           {
             id: "main",
-            name: "Main",
             componentPath: "../escape.js",
             location: "panel",
           },
@@ -7557,7 +7577,6 @@ describe("reserved contribution point warnings", () => {
         views: [
           {
             id: "main",
-            name: "Main",
             componentPath: "https://evil.example/view.js",
             location: "panel",
           },
@@ -7584,8 +7603,8 @@ describe("reserved contribution point warnings", () => {
       contributes: {
         panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
         views: [
-          { id: "main", name: "First", componentPath: "./first.js", location: "panel" },
-          { id: "main", name: "Second", componentPath: "./second.js", location: "panel" },
+          { id: "main", componentPath: "./first.js", location: "panel" },
+          { id: "main", componentPath: "./second.js", location: "panel" },
         ],
       },
     });
@@ -7656,7 +7675,6 @@ describe("reserved contribution point warnings", () => {
         views: [
           {
             id: "github-issues",
-            name: "Issues",
             componentPath: "./issues.js",
             location: "panel",
           },
@@ -7758,9 +7776,7 @@ describe("reserved contribution point warnings", () => {
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
-        experimental_views: [
-          { id: "viewer", name: "Viewer", componentPath: "./v.js", location: "panel" },
-        ],
+        experimental_views: [{ id: "viewer", componentPath: "./v.js", location: "panel" }],
         experimental_mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
       },
     });
@@ -7807,7 +7823,7 @@ describe("reserved contribution point warnings", () => {
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
-        views: [{ id: "viewer", name: "Viewer", componentPath: "./v.js", location: "panel" }],
+        views: [{ id: "viewer", componentPath: "./v.js", location: "panel" }],
         mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
       },
     });
@@ -7834,8 +7850,8 @@ describe("reserved contribution point warnings", () => {
         // (view_panel_ref_unknown superRefine) rather than logging a warning.
         panels: [{ id: "a", name: "A", iconId: "eye", color: "#000" }],
         views: [
-          { id: "a", name: "A", componentPath: "./a.js", location: "panel" },
-          { id: "c", name: "C", componentPath: "./c.js", location: "panel" },
+          { id: "a", componentPath: "./a.js", location: "panel" },
+          { id: "c", componentPath: "./c.js", location: "panel" },
         ],
       },
     });
@@ -7860,7 +7876,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.bad-location",
       version: "1.0.0",
       contributes: {
-        views: [{ id: "main", name: "Main", componentPath: "./v.js", location: "floating" }],
+        views: [{ id: "main", componentPath: "./v.js", location: "floating" }],
       },
     });
     expect(result.success).toBe(false);
@@ -7871,7 +7887,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.no-path",
       version: "1.0.0",
       contributes: {
-        views: [{ id: "main", name: "Main", location: "panel" }],
+        views: [{ id: "main", location: "panel" }],
       },
     });
     expect(result.success).toBe(false);
@@ -8832,7 +8848,7 @@ describe("Deferred activation — activatePlugin", () => {
               showInPalette: true,
             },
           ],
-          views: [{ id: "viewer", name: "Viewer", componentPath: "view.mjs", location: "panel" }],
+          views: [{ id: "viewer", componentPath: "view.mjs", location: "panel" }],
         },
       })
     );
@@ -8881,7 +8897,7 @@ describe("Deferred activation — activatePlugin", () => {
               showInPalette: true,
             },
           ],
-          views: [{ id: "viewer", name: "Viewer", componentPath: "view.mjs", location: "panel" }],
+          views: [{ id: "viewer", componentPath: "view.mjs", location: "panel" }],
         },
       })
     );
@@ -8929,7 +8945,7 @@ describe("Deferred activation — activatePlugin", () => {
               showInPalette: true,
             },
           ],
-          views: [{ id: "viewer", name: "Viewer", componentPath: "view.mjs", location: "panel" }],
+          views: [{ id: "viewer", componentPath: "view.mjs", location: "panel" }],
         },
       })
     );
@@ -9602,5 +9618,140 @@ describe("dev-mode hot reload (#9304)", () => {
     clearPriorRegistrations();
 
     expect(service.listPluginActions().some((a) => a.id === "acme.dev.do-thing")).toBe(true);
+  });
+});
+
+describe("PluginService blocklist / kill-switch (#10891)", () => {
+  function blocklistService(
+    entries: ParsedPluginBlocklist["entries"],
+    fetchImpl = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ entries }),
+    }))
+  ) {
+    // Route disk cache into the test tmpDir so a real userData path is never touched.
+    const svc = new PluginBlocklistService({
+      fetchImpl,
+      cachePath: path.join(tmpDir, "blocklist-cache.json"),
+    });
+    return { svc, fetchImpl };
+  }
+
+  it("refuses to load a blocklisted plugin and surfaces it in listPlugins", async () => {
+    // Declare a panel so the "no registration" assertion is meaningful: a
+    // manifest that *has* a contribution yet registers nothing proves the gate
+    // runs before contribution registration, not merely that there was nothing
+    // to register.
+    await writePlugin("bad", {
+      name: "acme.bad",
+      version: "1.2.3",
+      contributes: {
+        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#ff0000" }],
+      },
+    });
+    const { svc } = blocklistService([
+      { name: "acme.bad", ranges: ["<2.0.0"], reason: "malware", message: "Steals tokens" },
+    ]);
+
+    const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    const info = plugins[0];
+    expect(info.manifest.name).toBe("acme.bad");
+    expect(info.blocklisted).toBe(true);
+    expect(info.blocklistReason).toBe("Steals tokens");
+    // Never ran — no activation, no pending-restart cue, no load error.
+    expect(info.loadedAt).toBe(0);
+    expect(info.pendingRestart).toBe(false);
+    expect(info.loadError).toBeNull();
+    // The declared panel must NOT register — the gate precedes contribution wiring.
+    expect(registerPanelKind).not.toHaveBeenCalled();
+  });
+
+  it("emits a low-priority inbox notification for a blocked plugin", async () => {
+    await writePlugin("bad", {
+      name: "acme.bad",
+      version: "1.0.0",
+      displayName: "Bad Plugin",
+    });
+    const { svc } = blocklistService([
+      { name: "acme.bad", ranges: ["*"], reason: "malware", message: "Known-bad build" },
+    ]);
+
+    const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+    await service.initialize();
+
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(
+      CHANNELS.NOTIFICATION_SHOW_TOAST,
+      expect.objectContaining({
+        type: "warning",
+        priority: "low",
+        title: "Plugin blocked",
+        message: expect.stringContaining("Bad Plugin"),
+      })
+    );
+  });
+
+  it("loads a plugin whose version is outside every blocklisted range", async () => {
+    await writePlugin("ok", { name: "acme.ok", version: "3.0.0" });
+    const { svc } = blocklistService([{ name: "acme.ok", ranges: ["<2.0.0"], reason: "old-cve" }]);
+
+    const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].blocklisted).toBe(false);
+    expect(plugins[0].loadedAt).toBeGreaterThan(0);
+  });
+
+  it("reports a disabled-and-blocklisted plugin as blocklisted (block gate wins)", async () => {
+    storeMock._state.set("plugins", { disabled: ["acme.bad"] });
+    await writePlugin("bad", { name: "acme.bad", version: "1.0.0" });
+    const { svc } = blocklistService([
+      { name: "acme.bad", ranges: ["*"], reason: "revoked", message: "Publisher revoked" },
+    ]);
+
+    const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].blocklisted).toBe(true);
+    expect(plugins[0].blocklistReason).toBe("Publisher revoked");
+  });
+
+  it("fails open — a fetch failure loads plugins normally", async () => {
+    await writePlugin("ok", { name: "acme.ok", version: "1.0.0" });
+    const failing = vi.fn(async () => {
+      throw new Error("network down");
+    });
+    const { svc } = blocklistService([], failing);
+
+    const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].blocklisted).toBe(false);
+    expect(plugins[0].loadedAt).toBeGreaterThan(0);
+  });
+
+  it("resolves the blocklist once at initialize, not once per plugin", async () => {
+    await writePlugin("a", { name: "acme.a", version: "1.0.0" });
+    await writePlugin("b", { name: "acme.b", version: "1.0.0" });
+    await writePlugin("c", { name: "acme.c", version: "1.0.0" });
+    const { svc, fetchImpl } = blocklistService([
+      { name: "acme.a", ranges: ["<0.0.1"], reason: "n/a" },
+    ]);
+
+    const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
+    await service.initialize();
+
+    // A single fetch backs the whole multi-plugin scan.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });

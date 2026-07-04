@@ -181,16 +181,24 @@ export interface TerminalRuntimeIdentity {
 }
 
 /**
- * How a panel's title is currently owned.
+ * How a panel's title is currently owned — an ownership ladder where higher
+ * rungs can never be overwritten by lower ones.
  *
  * - `"default"` — title is derived from live runtime identity and is free to
- *   flip as detection promotes/demotes.
- * - `"custom"` — the user renamed this panel; title is frozen and must not be
- *   overwritten by detection events.
+ *   flip as detection promotes/demotes. The agent's observed task title
+ *   (`lastObservedTitle`) composes into the displayed title.
+ * - `"custom"` — the title was explicitly named by automation (a preset, a
+ *   launch `name`, or an MCP/assistant `terminal.rename`); frozen against
+ *   detection rewrites, but task composition still applies and a later
+ *   automation rename may replace it.
+ * - `"user"` — a human renamed this panel; the title is fully frozen: no
+ *   detection rewrite, no task composition, and automation renames bounce.
+ *   Only a human rename (or an empty rename, which resets to `"default"`)
+ *   changes it.
  *
  * Absent defaults to `"default"` for hydration compatibility.
  */
-export type PanelTitleMode = "default" | "custom";
+export type PanelTitleMode = "default" | "custom" | "user";
 
 /** Structured error state for terminal restart failures */
 export interface TerminalRestartError {
@@ -334,6 +342,14 @@ export interface PtyPanelData extends BasePanelData {
   lastCommand?: string;
   /** Command to execute after shell starts (e.g., 'claude --model sonnet-4' for AI agents) */
   command?: string;
+  /**
+   * Caller-resolved launch environment (preset/recipe/caller layers) captured at
+   * spawn time. Persisted so a restored session replays the same provider env it
+   * launched with instead of re-deriving from a preset that may no longer resolve
+   * (#10922). Sanitized via `sanitizeAgentEnv` on the serialize/restore boundary.
+   * The live global/project env layer is re-merged fresh at spawn, not stored here.
+   */
+  env?: Record<string, string>;
   /** Counter incremented on restart to trigger React re-render without unmounting parent */
   restartKey?: number;
   /** Guard flag to prevent auto-trash during restart flow (exit event race condition) */
@@ -389,7 +405,7 @@ export interface PtyPanelData extends BasePanelData {
   /** Whether the dev-preview console drawer is open */
   devPreviewConsoleOpen?: boolean;
   /** Active dev-preview console drawer tab ("output" = PTY, "console" = guest-page console) */
-  devPreviewConsoleTab?: "output" | "console";
+  devPreviewConsoleTab?: "output" | "console" | "diagnostics";
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
   exitBehavior?: PanelExitBehavior;
   /** Detected process icon ID for dynamic terminal icons (transient, not persisted) */
@@ -508,7 +524,7 @@ export interface DevPreviewPanelData extends BasePanelData {
   /** Whether the console drawer is open */
   devPreviewConsoleOpen?: boolean;
   /** Active dev-preview console drawer tab ("output" = PTY, "console" = guest-page console) */
-  devPreviewConsoleTab?: "output" | "console";
+  devPreviewConsoleTab?: "output" | "console" | "diagnostics";
   /** Dev server status */
   devServerStatus?: "stopped" | "starting" | "installing" | "running" | "error";
   /** Dev server phase label */
@@ -651,7 +667,7 @@ export interface TerminalInstance {
   /** Whether the dev-preview console drawer is open */
   devPreviewConsoleOpen?: boolean;
   /** Active dev-preview console drawer tab ("output" = PTY, "console" = guest-page console) */
-  devPreviewConsoleTab?: "output" | "console";
+  devPreviewConsoleTab?: "output" | "console" | "diagnostics";
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
   exitBehavior?: PanelExitBehavior;
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */

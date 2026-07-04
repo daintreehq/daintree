@@ -18,12 +18,12 @@ vi.mock("fs", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
-    realpathSync: vi.fn((p: string) => p),
     promises: {
       ...(actual as { promises: Record<string, unknown> }).promises,
       access: vi.fn().mockResolvedValue(undefined),
       stat: vi.fn().mockResolvedValue({ mtimeMs: 1000, size: 512 }),
       readFile: readFileMock,
+      realpath: vi.fn(async (p: string) => p),
     },
   };
 });

@@ -602,6 +602,92 @@ describe("PortBatcher", () => {
     });
   });
 
+  describe("focused-terminal prioritization (#10878)", () => {
+    it("flush services the focused terminal's pending entry first", () => {
+      const deps = createDeps({ getFocusedTerminalId: () => "t2" });
+      const batcher = new PortBatcher(deps);
+
+      // Written in t1, t2, t3 insertion order; the focused entry (t2) must be
+      // posted first regardless.
+      batcher.write("t1", bytes("a"), 1);
+      batcher.write("t2", bytes("b"), 1);
+      batcher.write("t3", bytes("c"), 1);
+      vi.runAllTimers();
+
+      const postMessage = deps.postMessage as ReturnType<typeof vi.fn>;
+      const order = postMessage.mock.calls.map((c) => c[0] as string);
+      expect(order).toEqual(["t2", "t1", "t3"]);
+    });
+
+    it("falls back to insertion order when no terminal is focused", () => {
+      const deps = createDeps({ getFocusedTerminalId: () => null });
+      const batcher = new PortBatcher(deps);
+
+      batcher.write("t1", bytes("a"), 1);
+      batcher.write("t2", bytes("b"), 1);
+      batcher.write("t3", bytes("c"), 1);
+      vi.runAllTimers();
+
+      const postMessage = deps.postMessage as ReturnType<typeof vi.fn>;
+      const order = postMessage.mock.calls.map((c) => c[0] as string);
+      expect(order).toEqual(["t1", "t2", "t3"]);
+    });
+
+    it("focused id absent from the flush leaves sibling order intact", () => {
+      const deps = createDeps({ getFocusedTerminalId: () => "t9" });
+      const batcher = new PortBatcher(deps);
+
+      batcher.write("t1", bytes("a"), 1);
+      batcher.write("t2", bytes("b"), 1);
+      vi.runAllTimers();
+
+      const postMessage = deps.postMessage as ReturnType<typeof vi.fn>;
+      const order = postMessage.mock.calls.map((c) => c[0] as string);
+      expect(order).toEqual(["t1", "t2"]);
+    });
+
+    it("failure on the focused-first entry reports it plus the remaining siblings in order", () => {
+      const deps = createDeps({ getFocusedTerminalId: () => "t2" });
+      (deps.postMessage as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error("port closed");
+      });
+      const batcher = new PortBatcher(deps);
+
+      batcher.write("t1", bytes("one"), 3);
+      batcher.write("t2", bytes("two"), 3);
+      batcher.write("t3", bytes("three"), 5);
+      vi.runAllTimers();
+
+      // t2 (focused) is attempted first and throws; failedBatches carries it
+      // ahead of the still-unprocessed siblings (t1, t3 in insertion order).
+      expect(deps.onError).toHaveBeenCalledWith(expect.any(Error), [
+        { id: "t2", data: bytes("two"), bytes: 3 },
+        { id: "t1", data: bytes("one"), bytes: 3 },
+        { id: "t3", data: bytes("three"), bytes: 5 },
+      ]);
+    });
+
+    it("failure after the focused entry succeeds excludes the already-sent focused batch", () => {
+      const deps = createDeps({ getFocusedTerminalId: () => "t2" });
+      (deps.postMessage as ReturnType<typeof vi.fn>).mockImplementation((id: string) => {
+        if (id === "t1") throw new Error("port closed");
+      });
+      const batcher = new PortBatcher(deps);
+
+      batcher.write("t1", bytes("one"), 3);
+      batcher.write("t2", bytes("two"), 3);
+      batcher.write("t3", bytes("three"), 5);
+      vi.runAllTimers();
+
+      // t2 (focused) posts successfully first, then t1 throws — the failed set is
+      // the failing entry plus the still-buffered remainder (t3); t2 is excluded.
+      expect(deps.onError).toHaveBeenCalledWith(expect.any(Error), [
+        { id: "t1", data: bytes("one"), bytes: 3 },
+        { id: "t3", data: bytes("three"), bytes: 5 },
+      ]);
+    });
+  });
+
   describe("per-terminal isolation", () => {
     it("quiet terminal is not stalled by a busy sibling's throughput cadence", () => {
       // Regression for #7652: previously a single class-level mode meant t1 entering
@@ -668,6 +754,37 @@ describe("PortBatcher", () => {
 
       batcher.dispose();
       expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("getPendingByteSnapshot reports per-terminal buffered bytes and empties after flush", () => {
+      const deps = createDeps();
+      const batcher = new PortBatcher(deps);
+
+      batcher.write("t1", bytes("aaaa"), 4);
+      batcher.write("t1", bytes("bb"), 2);
+      batcher.write("t2", bytes("ccc"), 3);
+
+      // Buffered-but-unflushed bytes are visible per terminal — this is what
+      // disconnectWindow accounts as dropped when the port closes with data
+      // still batched.
+      const snapshot = batcher.getPendingByteSnapshot();
+      const byId = new Map(snapshot.map((e) => [e.id, e.bytes]));
+      expect(byId.get("t1")).toBe(6);
+      expect(byId.get("t2")).toBe(3);
+
+      vi.runAllTimers();
+      expect(batcher.getPendingByteSnapshot()).toEqual([]);
+    });
+
+    it("getPendingByteSnapshot is empty after dispose", () => {
+      const deps = createDeps();
+      const batcher = new PortBatcher(deps);
+
+      batcher.write("t1", bytes("aaaa"), 4);
+      expect(batcher.getPendingByteSnapshot()).toHaveLength(1);
+
+      batcher.dispose();
+      expect(batcher.getPendingByteSnapshot()).toEqual([]);
     });
 
     it("flushTerminal cancels only the target's timer, leaving siblings pending", () => {

@@ -101,6 +101,9 @@ export interface GeneratedElectronAPI {
     getDestructivePreviewSizes(
       ...args: IpcInvokeMap["dev-preview:get-destructive-preview-sizes"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:get-destructive-preview-sizes"]["result"]>;
+    getDiagnostics(
+      ...args: IpcInvokeMap["dev-preview:get-diagnostics"]["args"]
+    ): Promise<IpcInvokeMap["dev-preview:get-diagnostics"]["result"]>;
     getProxyPort(
       ...args: IpcInvokeMap["dev-preview:get-proxy-port"]["args"]
     ): Promise<IpcInvokeMap["dev-preview:get-proxy-port"]["result"]>;
@@ -403,6 +406,9 @@ export interface GeneratedElectronAPI {
     getAuditRecords(
       ...args: IpcInvokeMap["plugin:get-audit-records"]["args"]
     ): Promise<IpcInvokeMap["plugin:get-audit-records"]["result"]>;
+    getBackgroundUpdateCheckSettings(
+      ...args: IpcInvokeMap["plugin:bg-update-check-settings-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:bg-update-check-settings-get"]["result"]>;
     getDecorations(
       ...args: IpcInvokeMap["plugin:file-decorations-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:file-decorations-get"]["result"]>;
@@ -412,6 +418,9 @@ export interface GeneratedElectronAPI {
     getForgeProviders(
       ...args: IpcInvokeMap["plugin:forge-providers-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:forge-providers-get"]["result"]>;
+    getLatestBackgroundUpdateCheck(
+      ...args: IpcInvokeMap["plugin:bg-update-check-latest"]["args"]
+    ): Promise<IpcInvokeMap["plugin:bg-update-check-latest"]["result"]>;
     getPanelKinds(
       ...args: IpcInvokeMap["plugin:panel-kinds-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:panel-kinds-get"]["result"]>;
@@ -457,6 +466,9 @@ export interface GeneratedElectronAPI {
     setAuditMaxRecords(
       ...args: IpcInvokeMap["plugin:set-audit-max-records"]["args"]
     ): Promise<IpcInvokeMap["plugin:set-audit-max-records"]["result"]>;
+    setBackgroundUpdateCheckSettings(
+      ...args: IpcInvokeMap["plugin:bg-update-check-settings-set"]["args"]
+    ): Promise<IpcInvokeMap["plugin:bg-update-check-settings-set"]["result"]>;
     setEnabled(
       ...args: IpcInvokeMap["plugin:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["plugin:set-enabled"]["result"]>;
@@ -612,6 +624,12 @@ export interface GeneratedElectronAPI {
     getResourceProfileSnapshot(
       ...args: IpcInvokeMap["system:get-resource-profile-snapshot"]["args"]
     ): Promise<IpcInvokeMap["system:get-resource-profile-snapshot"]["result"]>;
+    getWhySlowSnapshot(
+      ...args: IpcInvokeMap["system:get-why-slow-snapshot"]["args"]
+    ): Promise<IpcInvokeMap["system:get-why-slow-snapshot"]["result"]>;
+    reportTerminalRendererDiagnostics(
+      ...args: IpcInvokeMap["system:report-terminal-renderer-diagnostics"]["args"]
+    ): Promise<IpcInvokeMap["system:report-terminal-renderer-diagnostics"]["result"]>;
     requestInteractiveOverride(
       ...args: IpcInvokeMap["system:request-interactive-override"]["args"]
     ): Promise<IpcInvokeMap["system:request-interactive-override"]["result"]>;

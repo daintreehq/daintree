@@ -7,6 +7,7 @@ import type { PtyPool } from "./PtyPool.js";
 import type { ProcessTreeCache } from "./ProcessTreeCache.js";
 import type { DetectionResult } from "./ProcessDetector.js";
 import type { ImagePathProbe } from "./pty/ImagePathProbe.js";
+import type { AnalysisWorkerPool } from "./pty/analysis/AnalysisWorkerPool.js";
 import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("pty-host:PtyManager");
@@ -32,7 +33,9 @@ import {
 import { computeSpawnContext, acquirePtyProcess } from "./pty/terminalSpawn.js";
 import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
 import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
-import { persistAgentSession } from "./pty/agentSessionHistory.js";
+import { events } from "./events.js";
+import { getGitBranch } from "../utils/gitUtils.js";
+import type { GracefulKillResult } from "../../shared/types/pty-host.js";
 
 /**
  * PtyManager - Facade for terminal process management.
@@ -62,6 +65,7 @@ export class PtyManager extends EventEmitter {
   private ptyPool: PtyPool | null = null;
   private processTreeCache: ProcessTreeCache | null = null;
   private imagePathProbe: ImagePathProbe | null = null;
+  private analysisWorkerPool: AnalysisWorkerPool | null = null;
   private activeProjectId: string | null = null;
   private sabModeEnabled = false;
   // Resize requests that arrived before the terminal was registered.
@@ -82,6 +86,16 @@ export class PtyManager extends EventEmitter {
 
   setImagePathProbe(probe: ImagePathProbe): void {
     this.imagePathProbe = probe;
+  }
+
+  /**
+   * Route per-terminal analysis (headless mirror + ActivityMonitor) into the
+   * worker pool. Terminals spawned before this is set — and all terminals when
+   * it never is (tests, DAINTREE_DISABLE_ANALYSIS_WORKERS=1) — use the legacy
+   * in-thread path.
+   */
+  setAnalysisWorkerPool(pool: AnalysisWorkerPool | null): void {
+    this.analysisWorkerPool = pool;
   }
 
   /**
@@ -309,6 +323,7 @@ export class PtyManager extends EventEmitter {
           sabModeEnabled: this.sabModeEnabled,
           processTreeCache: this.processTreeCache,
           imagePathProbe: this.imagePathProbe,
+          analysisWorkerPool: this.analysisWorkerPool,
         },
         spawnContext,
         ptyProcess,
@@ -437,7 +452,9 @@ export class PtyManager extends EventEmitter {
     const terminal = this.registry.get(id);
     if (terminal) {
       const wasExited = terminal.getInfo().isExited;
-      terminal.kill(reason, options?.escalationDelayMs);
+      terminal.kill(reason, options?.escalationDelayMs, {
+        skipFinalSessionPersist: !options?.preserveSession,
+      });
       // Note: deletion handled in onExit callback
       if (wasExited) {
         this.registry.delete(id);
@@ -463,20 +480,39 @@ export class PtyManager extends EventEmitter {
 
       void (async () => {
         try {
-          const sessionId = await this.gracefulKill(termId);
+          const { sessionId } = await this.gracefulKill(termId);
           if (sessionId && info?.launchAgentId) {
-            await persistAgentSession({
-              sessionId,
-              agentId: info.launchAgentId,
-              worktreeId: info.worktreeId ?? null,
-              title: info.lastObservedTitle ?? info.title ?? null,
-              projectId: info.projectId ?? null,
-              agentLaunchFlags: info.agentLaunchFlags,
-              agentModelId: info.agentModelId,
+            // Best-effort branch stamp for resume sanity checks. The pty-host
+            // has FS access but no WorkspaceClient, so resolve directly from
+            // git with a short timeout; never let it block or fail the close.
+            const branch = info.cwd ? await getGitBranch(info.cwd) : null;
+            // Ship the captured record to Main rather than writing the journal
+            // here — Main is the journal's single writer (two processes with
+            // separate write queues doing read-modify-write on one file can
+            // silently drop each other's records), and only Main can read the
+            // real retention setting. Forwarded by the pty-host entry, bridged
+            // onto the main bus, persisted in the terminal event handlers.
+            events.emit("agent-session:captured", {
+              record: {
+                sessionId,
+                agentId: info.launchAgentId,
+                worktreeId: info.worktreeId ?? null,
+                // Observed task title unless the user locked the title — a
+                // locked record should read the same as the frozen live tab.
+                title:
+                  (info.titleMode === "user"
+                    ? info.title
+                    : (info.lastObservedTitle ?? info.title)) ?? null,
+                projectId: info.projectId ?? null,
+                agentLaunchFlags: info.agentLaunchFlags,
+                agentModelId: info.agentModelId,
+                cwd: info.cwd ?? undefined,
+                branch: branch ?? undefined,
+              },
             });
           }
         } catch (err) {
-          logError("[PtyManager] Failed to persist agent session on trash expiry", err);
+          logError("[PtyManager] Failed to capture agent session on trash expiry", err);
           // Ensure the terminal is killed even if gracefulKill failed
           try {
             this.kill(termId, "trash-expired");
@@ -784,12 +820,15 @@ export class PtyManager extends EventEmitter {
    * Gracefully kill a terminal, capturing its session ID if it's an agent terminal.
    * Falls back to immediate kill for non-agent terminals.
    */
-  async gracefulKill(id: string, options?: { preserveSession?: boolean }): Promise<string | null> {
+  async gracefulKill(
+    id: string,
+    options?: { preserveSession?: boolean }
+  ): Promise<GracefulKillResult> {
     this.pendingResizes.delete(id);
     this.registry.clearTrashTimeout(id);
 
     const terminal = this.registry.get(id);
-    if (!terminal) return null;
+    if (!terminal) return { sessionId: null };
 
     const sessionId = await terminal.gracefulShutdown();
 
@@ -800,7 +839,7 @@ export class PtyManager extends EventEmitter {
       this.kill(id, "graceful-kill-fallback", options);
     }
 
-    return sessionId;
+    return { sessionId };
   }
 
   /**
@@ -818,7 +857,7 @@ export class PtyManager extends EventEmitter {
     const results = await Promise.all(
       terminalIds.map(async (terminalId) => {
         try {
-          const sessionId = await this.gracefulKill(terminalId, options);
+          const { sessionId } = await this.gracefulKill(terminalId, options);
           return { id: terminalId, agentSessionId: sessionId };
         } catch (error) {
           logError(`Failed to graceful-kill terminal ${terminalId}`, error);

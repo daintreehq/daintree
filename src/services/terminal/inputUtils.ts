@@ -23,6 +23,16 @@ export function isNonKeyboardInput(data: string): boolean {
   // Focus reports
   if (data === "\x1b[I" || data === "\x1b[O") return true;
 
+  // Private-mode CSI sequences (DEC private mode set/reset `?…h/l`, DSR
+  // responses, the `?997` color-scheme report xterm emits in reply to a `?996n`
+  // query). These are terminal-side control/report bytes that travel back
+  // through onData but are never keyboard input — no keyboard protocol uses the
+  // CSI `?` private prefix (Kitty is `CSI …u`, application-cursor is `SS3`).
+  // Without this, a focus-triggered color-scheme reply (`\x1b[?997;1n`) was
+  // misclassified as a keystroke and flipped a `waiting` agent to `directing`
+  // on a plain click.
+  if (data.startsWith("\x1b[?")) return true;
+
   // Lone Escape
   if (data === "\x1b") return true;
 

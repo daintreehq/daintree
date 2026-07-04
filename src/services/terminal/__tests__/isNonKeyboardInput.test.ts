@@ -30,6 +30,25 @@ describe("isNonKeyboardInput", () => {
     });
   });
 
+  describe("private-mode CSI sequences (must NOT trigger directing)", () => {
+    it("detects the ?997 color-scheme report xterm sends on focus (the click bug)", () => {
+      expect(isNonKeyboardInput("\x1b[?997;1n")).toBe(true); // dark
+      expect(isNonKeyboardInput("\x1b[?997;2n")).toBe(true); // light
+    });
+
+    it("detects DEC private mode set/reset (alt screen, cursor visibility, bracketed paste)", () => {
+      expect(isNonKeyboardInput("\x1b[?1049h")).toBe(true); // enter alt screen
+      expect(isNonKeyboardInput("\x1b[?1049l")).toBe(true); // leave alt screen
+      expect(isNonKeyboardInput("\x1b[?25l")).toBe(true); // hide cursor
+      expect(isNonKeyboardInput("\x1b[?2004h")).toBe(true); // bracketed paste on
+    });
+
+    it("treats multi-parameter and truncated private-mode prefixes as non-keyboard", () => {
+      expect(isNonKeyboardInput("\x1b[?1049;0;0h")).toBe(true); // multi-param set
+      expect(isNonKeyboardInput("\x1b[?")).toBe(true); // truncated prefix — safe default
+    });
+  });
+
   describe("navigation sequences (must match)", () => {
     it("matches arrow keys (normal mode)", () => {
       expect(isNonKeyboardInput("\x1b[A")).toBe(true);

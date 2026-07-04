@@ -17,6 +17,7 @@ import { LogsContent } from "./LogsContent";
 import { EventsContent } from "./EventsContent";
 import { TelemetryContent } from "./TelemetryContent";
 import { PerfContent } from "./PerfContent";
+import { WhySlowContent } from "./WhySlowContent";
 import {
   ProblemsActions,
   LogsActions,
@@ -280,6 +281,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
     { id: "events", label: "Events" },
     { id: "telemetry", label: "Telemetry" },
     { id: "perf", label: "Perf", badge: failedBudgetCount },
+    { id: "whySlow", label: "Why slow?" },
   ];
 
   return (
@@ -419,6 +421,16 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
             className="h-full"
           >
             <PerfContent />
+          </div>
+        )}
+        {activeTab === "whySlow" && (
+          <div
+            id="diagnostics-whySlow-panel"
+            role="tabpanel"
+            aria-labelledby="diagnostics-whySlow-tab"
+            className="h-full"
+          >
+            <WhySlowContent />
           </div>
         )}
       </div>

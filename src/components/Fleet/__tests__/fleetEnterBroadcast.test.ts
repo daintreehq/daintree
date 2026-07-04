@@ -10,6 +10,7 @@ import {
   subscribeFleetTargetOverridesPruning,
 } from "@/store/fleetTargetOverridesStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { useFleetRunStore } from "@/store/fleetRunStore";
 import { usePanelStore } from "@/store/panelStore";
 import type { PtyPanelData } from "@shared/types/panel";
 
@@ -76,6 +77,7 @@ beforeEach(() => {
   });
   useFleetResolutionPreviewStore.getState().clear();
   __resetFleetTargetOverridesStoreForTesting();
+  useFleetRunStore.getState()._reset();
   useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
   Object.assign(window, {
     electron: {
@@ -535,6 +537,87 @@ describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)
       expect(submitMock).toHaveBeenCalledWith("b", "hello");
     } finally {
       unsub();
+    }
+  });
+});
+
+describe("tryFleetBroadcastFromEditor — supervised run integration (#10930)", () => {
+  it("records a supervised run and appends run history once it settles", async () => {
+    // makeAgent seeds agentState "idle", so every sent target settles on the
+    // immediate post-submission reconcile — the run finalizes as completed
+    // and the durable history append fires without a watcher subscription.
+    arm(["a", "b"]);
+    tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+    await flush();
+    await flush();
+
+    const run = useFleetRunStore.getState().run!;
+    expect(run.status).toBe("completed");
+    expect(run.targets.map((t) => t.submission)).toEqual(["sent", "sent"]);
+
+    const appendMock = window.electron.runHistory.append as ReturnType<typeof vi.fn>;
+    expect(appendMock).toHaveBeenCalledTimes(1);
+    const record = appendMock.mock.calls[0]![0] as Record<string, unknown>;
+    expect(record).toMatchObject({
+      kind: "fleet",
+      status: "completed",
+      runId: run.runId,
+      draftPreview: "hello",
+      targetCount: 2,
+      successCount: 2,
+      failureCount: 0,
+      cancelled: false,
+    });
+  });
+
+  it("classifies submission failures on the run's targets", async () => {
+    submitMock.mockImplementation(async (id) => {
+      if (id === "dead") throw new Error("EPIPE");
+      if (id === "slow") throw new Error("ENOSPC");
+    });
+    arm(["alive", "dead", "slow"]);
+    tryFleetBroadcastFromEditor("alive", "hello", vi.fn());
+    await flush();
+    await flush();
+
+    const run = useFleetRunStore.getState().run!;
+    const byId = new Map(run.targets.map((t) => [t.terminalId, t]));
+    expect(byId.get("alive")!.submission).toBe("sent");
+    expect(byId.get("dead")!.failureKind).toBe("permanent");
+    expect(byId.get("slow")!.failureKind).toBe("transient");
+  });
+
+  it("finalizes the run as cancelled with skipped targets on mid-run cancel", async () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `t${i}`);
+    const agents = ids.map((id) => makeAgent(id));
+    const panelsById: Record<string, PtyPanelData> = {};
+    for (const a of agents) panelsById[a.id] = a;
+    usePanelStore.setState({ panelsById, panelIds: ids });
+    useFleetArmingStore.getState().armIds(ids);
+
+    let batchCount = 0;
+    const origAdvance = useFleetBroadcastProgressStore.getState().advance;
+    useFleetBroadcastProgressStore.setState({
+      advance: (b, f) => {
+        batchCount += 1;
+        origAdvance(b, f);
+        if (batchCount === 1) cancelActiveBroadcast();
+      },
+    });
+    try {
+      tryFleetBroadcastFromEditor(ids[0]!, "x".repeat(120_000), vi.fn());
+      for (let i = 0; i < 20; i += 1) await flush();
+
+      const run = useFleetRunStore.getState().run!;
+      expect(run.status).toBe("cancelled");
+      const skipped = run.targets.filter((t) => t.submission === "skipped");
+      expect(skipped).toHaveLength(7);
+      const record = (window.electron.runHistory.append as ReturnType<typeof vi.fn>).mock
+        .calls[0]![0] as Record<string, unknown>;
+      expect(record.status).toBe("cancelled");
+      expect(record.cancelled).toBe(true);
+    } finally {
+      useFleetBroadcastProgressStore.setState({ advance: origAdvance });
     }
   });
 });

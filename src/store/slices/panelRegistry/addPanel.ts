@@ -360,6 +360,12 @@ export const createAddPanelActions = (
       agentPresetId: options.agentPresetId,
       agentPresetColor: options.agentPresetColor,
       originalPresetId: options.originalPresetId ?? options.agentPresetId,
+      // Caller-resolved launch env captured so a restored session replays the
+      // SAME provider environment it launched with (#10922). This is the
+      // launcher's merged env (agent global + preset/recipe + caller layers); the
+      // ambient global/project env is still re-fetched fresh at spawn time below
+      // and layered UNDER this, so only the launch-resolved layer is frozen here.
+      ...(options.env && { env: options.env }),
       isUsingFallback: options.isUsingFallback,
       fallbackChainIndex: options.fallbackChainIndex,
       sessionLostOnRestore: options.sessionLostOnRestore,
@@ -686,6 +692,7 @@ export const createAddPanelActions = (
           kind,
           launchAgentId,
           title,
+          titleMode: options.titleMode,
           env: mergedEnv,
           restore: options.restore,
           agentLaunchFlags: options.agentLaunchFlags,

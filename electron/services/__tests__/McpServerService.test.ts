@@ -31,6 +31,7 @@ import {
   WAIT_UNTIL_IDLE_BATCH_DESCRIPTION,
   WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA,
 } from "../../../shared/types/terminalWaitUntilIdle.js";
+import { setWindowRegistry } from "../../window/windowRef.js";
 
 const waitUntilIdleManifestEntry = (): ActionManifestEntry => ({
   id: "terminal.waitUntilIdle" as ActionId,
@@ -649,6 +650,25 @@ describe("McpServerService", () => {
 
   afterAll(async () => {
     await fs.rm(testHomeDir, { recursive: true, force: true });
+  });
+
+  it("starts when enabled mid-session after disabled boot skipped deferred startup", async () => {
+    storeState.mcpServer = {
+      ...storeState.mcpServer,
+      enabled: false,
+      port: 0,
+    };
+    const fresh = new McpServerService();
+    currentService = fresh;
+    const { window } = createMockWindow();
+    setWindowRegistry(window);
+
+    await fresh.setEnabled(true);
+
+    expect(fresh.isRunning).toBe(true);
+    expect(fresh.currentPort ?? 0).toBeGreaterThan(0);
+    await fresh.stop();
+    currentService = service;
   });
 
   it("lists tools without injecting _meta confirmation properties on destructive actions", async () => {

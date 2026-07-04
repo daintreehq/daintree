@@ -160,6 +160,10 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
       events.emit("terminal:restored", { id: event.id });
       return true;
 
+    case "agent-session-captured":
+      events.emit("agent-session:captured", { record: event.record });
+      return true;
+
     case "terminal-status": {
       const statusPayload = {
         id: event.id,

@@ -20,6 +20,14 @@ interface PluginPanelBadgeState {
   badgesByPanelId: BadgesByPanelId;
   /** Idempotent: subscribes to live badge updates. */
   init: () => void;
+  /**
+   * Drop all badges for a closed panel. Called from the renderer store
+   * orchestrator's terminal-removal cleanup when `panelIds` shrinks — without
+   * it a closed panel's badge entry leaks for the renderer's lifetime (#10908).
+   * Idempotent: a no-op (preserving the root reference so subscribers don't
+   * re-render) when the panel has no badges.
+   */
+  removePanel: (panelId: string) => void;
 }
 
 let initialized = false;
@@ -83,6 +91,12 @@ export const usePluginPanelBadgeStore = create<PluginPanelBadgeState>((set, get)
       set({ badgesByPanelId: applyPluginBadges(get().badgesByPanelId, pluginId, {}) });
     });
   },
+  removePanel: (panelId) =>
+    set((state) => {
+      if (!(panelId in state.badgesByPanelId)) return state;
+      const { [panelId]: _removed, ...badgesByPanelId } = state.badgesByPanelId;
+      return { badgesByPanelId };
+    }),
 }));
 
 /** Stable empty reference so panels with no badges never re-render on identity. */

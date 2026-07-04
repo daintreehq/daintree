@@ -160,6 +160,15 @@ function activatePort(port: MessagePort): void {
   if (messagePort) {
     messagePort.close();
   }
+  // Port-generation boundary: the pending-ack FIFO describes chunks delivered
+  // on the OUTGOING port, whose host-side ledger is being torn down with it
+  // (disconnectWindow disposes that window's PortQueueManager). Carrying the
+  // entries across would let stale xterm write completions settle them against
+  // the NEW port's ledger — debiting bytes the fresh generation actually has
+  // in flight and permanently misaligning the per-chunk FIFO. Stale write
+  // callbacks that fire after this clear degrade to no-op acks instead
+  // (acknowledgePortData shifts at most what is queued).
+  pendingPortAckBytes.clear();
   messagePort = port;
   installPortDataHandler(port);
   port.addEventListener("close", () => {
@@ -437,6 +446,15 @@ export const terminalClient = {
     pollingIntervalMs?: number
   ): void => {
     window.electron.terminal.setActivityTier(id, tier, pollingIntervalMs);
+  },
+
+  /**
+   * Report the UI-focused terminal (or null) to the backend so the pty-host
+   * can prioritize it in per-window backpressure and output batching. A soft
+   * hint — fire-and-forget, deduped upstream by the focus subscription.
+   */
+  setFocusedTerminal: (id: string | null): void => {
+    window.electron.terminal.setFocused(id);
   },
 
   /**

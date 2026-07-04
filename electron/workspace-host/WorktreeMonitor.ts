@@ -1513,92 +1513,116 @@ export class WorktreeMonitor {
     if (this._isUpdating) {
       return;
     }
+    // Claim the single-flight slot before the first await. Everything below
+    // suspends (git-dir resolution, the stat pre-check), and forced refreshes
+    // bypass both the worktree-changes in-flight cache and the pre-check — so
+    // without the early claim two rapid forced refreshes could pass the guard
+    // together and run duplicate status passes with out-of-order commits.
+    this._isUpdating = true;
 
-    // Skip the git status invocation while a rebase/merge/cherry-pick/revert
-    // is in progress — running it would compete with the user's git client
-    // for .git/index.lock. The watcher tracks the same sentinel files, so
-    // it fires when the operation finishes and triggers a fresh refresh.
-    // Polling continues uninterrupted, so the next scheduled poll after
-    // sentinels clear also picks up the change.
-    const gitDir = getGitDir(this.path, { cache: true, logErrors: false });
+    // Definite-assignment: assigned as the first statement of the try below;
+    // the status pass (the only later reader) is unreachable unless that try
+    // completed normally, so every read is dominated by the assignment.
+    let gitDir!: string | null;
+    let reachedStatusPass = false;
+    try {
+      // Skip the git status invocation while a rebase/merge/cherry-pick/revert
+      // is in progress — running it would compete with the user's git client
+      // for .git/index.lock. The watcher tracks the same sentinel files, so
+      // it fires when the operation finishes and triggers a fresh refresh.
+      // Polling continues uninterrupted, so the next scheduled poll after
+      // sentinels clear also picks up the change.
+      gitDir = await getGitDir(this.path, { cache: true, logErrors: false });
 
-    // Detect blocking git operation state from sentinel files so the renderer
-    // can surface it even when git status is skipped.
-    let opState: import("../../shared/types/git.js").RepoState | undefined;
-    if (gitDir) {
-      opState = getRepoOperationStateSync(gitDir);
-      if (opState !== this._repoState) {
-        this._repoState = opState;
-        if (this._hasInitialStatus) {
+      // Detect blocking git operation state from sentinel files so the renderer
+      // can surface it even when git status is skipped.
+      let opState: import("../../shared/types/git.js").RepoState | undefined;
+      if (gitDir) {
+        opState = getRepoOperationStateSync(gitDir);
+        if (opState !== this._repoState) {
+          this._repoState = opState;
+          if (this._hasInitialStatus) {
+            this.emitUpdate();
+          }
+        }
+      } else {
+        this._repoState = undefined;
+      }
+
+      if (gitDir && opState !== undefined) {
+        // Stamp the completion timestamp before any emit so every snapshot below
+        // carries the advanced value. Git status was skipped, but the sentinel
+        // state was freshly observed above, so the freshness signal is accurate
+        // and the heartbeat-gap detector (which reads this field) won't
+        // false-positive on a long blocking operation. Without this, a
+        // user-triggered refresh during a stuck blocking operation never advances
+        // lastGitStatusCompletedAt, leaving the freshness pill permanently stale
+        // and its Refresh button a no-op (#10715).
+        this.lastGitStatusCompletedAt = Date.now();
+        if (!this._hasInitialStatus) {
+          // First poll started mid-operation (e.g. app started mid-rebase) — emit
+          // a default snapshot so the renderer can still display the worktree.
+          // Mirrors startWithoutGitStatus()'s contract.
+          this._hasInitialStatus = true;
+          this.emitUpdate();
+        } else if (forceRefresh) {
+          // The user clicked Refresh on a stale card. Emit so the renderer
+          // receives the advanced timestamp and the freshness pill resets —
+          // otherwise the click is silently dropped. Background polls stamp
+          // silently; the watcher emits a real status once sentinels clear.
           this.emitUpdate();
         }
+        return;
       }
-    } else {
-      this._repoState = undefined;
-    }
 
-    if (gitDir && opState !== undefined) {
-      // Stamp the completion timestamp before any emit so every snapshot below
-      // carries the advanced value. Git status was skipped, but the sentinel
-      // state was freshly observed above, so the freshness signal is accurate
-      // and the heartbeat-gap detector (which reads this field) won't
-      // false-positive on a long blocking operation. Without this, a
-      // user-triggered refresh during a stuck blocking operation never advances
-      // lastGitStatusCompletedAt, leaving the freshness pill permanently stale
-      // and its Refresh button a no-op (#10715).
-      this.lastGitStatusCompletedAt = Date.now();
-      if (!this._hasInitialStatus) {
-        // First poll started mid-operation (e.g. app started mid-rebase) — emit
-        // a default snapshot so the renderer can still display the worktree.
-        // Mirrors startWithoutGitStatus()'s contract.
-        this._hasInitialStatus = true;
-        this.emitUpdate();
-      } else if (forceRefresh) {
-        // The user clicked Refresh on a stale card. Emit so the renderer
-        // receives the advanced timestamp and the freshness pill resets —
-        // otherwise the click is silently dropped. Background polls stamp
-        // silently; the watcher emits a real status once sentinels clear.
-        this.emitUpdate();
-      }
-      return;
-    }
-
-    // Cheap stat pre-check: when the four git files we care about haven't
-    // changed since the last baseline and no watcher event has fired since,
-    // the simple-git fork-exec would be redundant. Skip it. This is the
-    // common case on a quiet repo — the per-poll cost drops from ~15-50ms
-    // (fork + git status) to ~1ms (four stat() calls).
-    //
-    // The baseline only exists after the first real check, so this branch
-    // is a no-op on the very first poll. Forced refreshes (watcher events,
-    // user actions) always run the full check.
-    if (!forceRefresh && gitDir && this._hasInitialStatus && this.lastStatBaseline !== null) {
-      const baselineAt = this.lastStatBaselineAt;
-      const checkStartedAt = Date.now();
-      try {
-        const commonDir = await this.resolveCommonDirAsync(gitDir);
-        const fresh = await this.buildStatBaseline(gitDir, commonDir);
-        if (
-          fresh !== null &&
-          this.lastWatcherEventAt <= baselineAt &&
-          this.statBaselineMatches(this.lastStatBaseline, fresh)
-        ) {
-          // Treat the skip as a no-change observation so the idle backoff
-          // ramps up the next interval. lastGitStatusCompletedAt bumps too,
-          // otherwise the heartbeat-gap check would false-positive on a
-          // long quiet streak that only ran stat-skips.
-          this.pollingStrategy.recordNoChange();
-          this.lastStatBaselineAt = checkStartedAt;
-          this.lastGitStatusCompletedAt = Date.now();
-          return;
+      // Cheap stat pre-check: when the four git files we care about haven't
+      // changed since the last baseline and no watcher event has fired since,
+      // the simple-git fork-exec would be redundant. Skip it. This is the
+      // common case on a quiet repo — the per-poll cost drops from ~15-50ms
+      // (fork + git status) to ~1ms (four stat() calls).
+      //
+      // The baseline only exists after the first real check, so this branch
+      // is a no-op on the very first poll. Forced refreshes (watcher events,
+      // user actions) always run the full check.
+      if (!forceRefresh && gitDir && this._hasInitialStatus && this.lastStatBaseline !== null) {
+        const baselineAt = this.lastStatBaselineAt;
+        const checkStartedAt = Date.now();
+        try {
+          const commonDir = await this.resolveCommonDirAsync(gitDir);
+          const fresh = await this.buildStatBaseline(gitDir, commonDir);
+          if (
+            fresh !== null &&
+            this.lastWatcherEventAt <= baselineAt &&
+            this.statBaselineMatches(this.lastStatBaseline, fresh)
+          ) {
+            // Treat the skip as a no-change observation so the idle backoff
+            // ramps up the next interval. lastGitStatusCompletedAt bumps too,
+            // otherwise the heartbeat-gap check would false-positive on a
+            // long quiet streak that only ran stat-skips.
+            this.pollingStrategy.recordNoChange();
+            this.lastStatBaselineAt = checkStartedAt;
+            this.lastGitStatusCompletedAt = Date.now();
+            return;
+          }
+        } catch {
+          // Unexpected stat error — fall through to the full git check.
+          // Don't poison the baseline; the post-check rebuild will refresh it.
         }
-      } catch {
-        // Unexpected stat error — fall through to the full git check.
-        // Don't poison the baseline; the post-check rebuild will refresh it.
+      }
+
+      reachedStatusPass = true;
+    } finally {
+      // Early exits (sentinel skip, stat skip, a throw above) release the
+      // claim here and drain any pending watcher flush that queued while it
+      // was held. The status pass below keeps the claim; its own finally is
+      // the release point — and stays the LAST code to touch the flag, so a
+      // flush-triggered synchronous re-entry can't have its claim clobbered.
+      if (!reachedStatusPass) {
+        this._isUpdating = false;
+        this.watcherController.flushPendingIfReady(true);
       }
     }
 
-    this._isUpdating = true;
     // Tracks whether the try block reached a clean exit point — either the
     // no-change early return or the post-emit fall-through. The catch block
     // doesn't flip it (so the finally clears the stale baseline) which means
@@ -1842,7 +1866,7 @@ export class WorktreeMonitor {
    * inside `<repo>/.git/worktrees/<name>/` points at `commondir`, which
    * holds packed-refs and the shared refs/heads tree). Returns `gitDir`
    * itself for the main worktree, or when the commondir file is missing.
-   * Mirrors `GitFileWatcher.resolveCommonDir` but uses async `readFile`.
+   * Mirrors `GitFileWatcher.resolveCommonDir`.
    */
   private async resolveCommonDirAsync(gitDir: string): Promise<string> {
     // The commondir pointer is immutable for the lifetime of a worktree, so
@@ -1935,7 +1959,7 @@ export class WorktreeMonitor {
   }
 
   private async readCurrentBranch(): Promise<string | undefined> {
-    const gitDir = getGitDir(this.path, { cache: true, logErrors: false });
+    const gitDir = await getGitDir(this.path, { cache: true, logErrors: false });
     if (!gitDir) {
       this._isDetached = false;
       this._head = undefined;
@@ -2079,7 +2103,7 @@ export class WorktreeMonitor {
   ): Promise<string | null> {
     const branch = this._branch;
     if (!branch) return null;
-    const gitDir = getGitDir(this.path, { cache: true, logErrors: false });
+    const gitDir = await getGitDir(this.path, { cache: true, logErrors: false });
     if (!gitDir) return null;
     try {
       const commonDir = await this.resolveCommonDirAsync(gitDir);

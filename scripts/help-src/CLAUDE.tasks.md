@@ -25,8 +25,12 @@ These cover ~90% of what the assistant is asked to do. They all live in the defa
 `terminal.bulkCommand` (the in-app fleet broadcast) is not exposed via MCP. To broadcast over the control plane:
 
 1. `terminal.list` to enumerate target terminals (filter by `worktreeId`, agent kind, or whatever the user asked for).
-2. Fan out **parallel** `terminal.sendCommand({ terminalId, command })` calls — one per terminal. Broadcast semantics imply "same prompt, independent terminals," and serializing makes the user wait for no reason. Sequential only when the user asks for ordering or commands depend on each other.
+2. Fan out **parallel** `terminal.sendCommand({ terminalId, command })` calls — one per terminal. Broadcast semantics imply "same prompt, independent terminals," and serializing makes the user wait for no reason. Sequential only when the user asks for ordering or commands depend on each other. If a `sendCommand` call errors, check `terminal.getStatus` for that terminal before re-sending — a retry after an ambiguous failure can double-submit the prompt.
 3. Confirm with one batch `terminal.getStatus({ terminalIds, includeOutput: { lines: 20 } })` so you can report which terminals picked up the prompt.
+
+### Report on the user's fleet broadcast run
+
+When the user broadcasts from the in-app fleet UI, Daintree supervises the run past submission. `fleet.getRunStatus` (no args, read-only) returns it in one call: run `status` (`submitting` / `watching` / `completed` / `cancelled` / `failed` / `superseded`), aggregate counts, and per-target entries — submission outcome (`sent`, `failed` with `permanent` vs `transient` classification, `skipped` on cancel), a live `agentState` snapshot, and `settled` flags (`waiting` counts as settled: the agent stopped for the user). Use it to answer "how's the fleet run going" instead of reconstructing the picture from raw `terminal.getStatus`; drop to `terminal.getStatus({ includeOutput })` when you need ground truth on one terminal before acting. It never dispatches anything, and it reports the run of the window that handles the call.
 
 ### Spawn an agent on a task
 

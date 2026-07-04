@@ -229,6 +229,12 @@ interface AgentSettingsActions {
    */
   setGlobalSkipPermissions: (value: boolean) => Promise<void>;
   /**
+   * Set the global "use alt-screen mode by default" override (#10876). Writes
+   * the root-level `globalUseAltScreen` field only — does not mutate any
+   * per-agent `inlineMode`. Optimistic with rollback on IPC failure.
+   */
+  setGlobalUseAltScreen: (value: boolean) => Promise<void>;
+  /**
    * Set or clear the worktree-scoped preset override for an agent. Reads the
    * current `worktreePresets` map, spreads sibling keys, then writes the merged
    * map — bypasses the IPC handler's shallow-merge clobber on the submap.
@@ -441,6 +447,30 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
       if (myEpoch !== normalizeEpoch) return;
       if (previous) set({ settings: previous });
       set({ error: formatErrorMessage(e, "Failed to update global skip-permissions setting") });
+      throw e;
+    }
+  },
+
+  setGlobalUseAltScreen: async (value: boolean) => {
+    const myEpoch = ++normalizeEpoch;
+    set({ error: null });
+    const previous = get().settings;
+    // Optimistic top-level spread — never route through updateAgent (which
+    // merges into the agents record and would not touch this root field, #5514).
+    // This must not mutate any per-agent `inlineMode`; it is a live override
+    // resolved at flag-generation time (#10876).
+    if (previous) {
+      set({ settings: { ...previous, globalUseAltScreen: value } });
+    }
+    try {
+      await agentSettingsClient.setGlobalInline(value);
+      if (myEpoch !== normalizeEpoch) return;
+      // The IPC response echoes the persisted value; the optimistic state
+      // already reflects it, so keep the renderer-normalized snapshot.
+    } catch (e) {
+      if (myEpoch !== normalizeEpoch) return;
+      if (previous) set({ settings: previous });
+      set({ error: formatErrorMessage(e, "Failed to update global alt-screen setting") });
       throw e;
     }
   },

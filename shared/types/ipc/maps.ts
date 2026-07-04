@@ -207,6 +207,14 @@ export interface MainProcessToastPayload {
    * critical notification into a generic overflow row.
    */
   rateLimitKey?: string;
+  /**
+   * Routing priority threaded through to `notify({ priority })`. Omit for the
+   * default `"high"` (toast when focused). `"low"` routes to the history inbox
+   * only — never a toast or OS notification — for signals the user can act on
+   * later (e.g. a plugin refused by the blocklist / kill-switch, #10891).
+   * `"watch"` always shows both an in-app toast and an OS native notification.
+   */
+  priority?: "high" | "low" | "watch";
   action?: {
     label: string;
     /** IPC channel to invoke when the action button is clicked */
@@ -1377,6 +1385,14 @@ export interface IpcEventMap {
   "terminal:error": [id: string, error: string];
   "terminal:trashed": { id: string; expiresAt: number };
   "terminal:restored": { id: string };
+  // A close path journaled a resumable agent session (trash expiry, kill,
+  // gracefulKill). Signal-only for resume surfaces to refetch the journal.
+  "agent-session:recorded": {
+    sessionId: string;
+    worktreeId: string | null;
+    projectId: string | null;
+    timestamp: number;
+  };
   "terminal:status": TerminalStatusPayload;
   "terminal:reliability-metric": TerminalReliabilityMetricPayload;
   "terminal:fd-leak-warning": FdLeakWarningPayload;
@@ -1733,6 +1749,11 @@ export interface IpcEventMap {
     panelId: string;
   };
 
+  // Webview close shortcut (Cmd/Ctrl+W) forwarded from focused guest
+  "webview:close-shortcut": {
+    panelId: string;
+  };
+
   // Webview navigation blocked — cross-origin navigation was prevented
   "webview:navigation-blocked": {
     panelId: string;
@@ -1893,6 +1914,11 @@ export interface IpcEventMap {
   // renderer re-pulls via `plugin:list` for the full data.
   "plugin:provenance-changed": Record<string, never>;
 
+  // Background plugin update check found available updates (main → renderer,
+  // #10893). Carries the batched set so the renderer can raise one low-priority
+  // inbox notification. Broadcast only when at least one update is available.
+  "plugin:bg-update-available": import("../plugin.js").PluginBackgroundUpdateCheckResult;
+
   // Run history changed (main → renderer, #9949). Carries the full newest-first
   // snapshot so every live window updates without a reload after a recipe/fleet
   // run is recorded or the log is cleared.
@@ -2014,6 +2040,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:panel-badges-cleared"
   // Plugin provenance record changed (global broadcast)
   | "plugin:provenance-changed"
+  // Background plugin update check found updates (global broadcast)
+  | "plugin:bg-update-available"
   // Run history changed (global broadcast)
   | "run-history:update"
   // Plugin deep-link intent (targeted at the primary window)
@@ -2027,6 +2055,8 @@ export type IpcEventBusMap = Pick<
   // Terminal observability
   | "terminal:reliability-metric"
   | "terminal:status"
+  // Agent session journaled — resume surfaces refetch (global broadcast)
+  | "agent-session:recorded"
   // Watchdog deadlock detector — emitted once on cap-hit; global broadcast.
   | "watchdog:disabled"
   | "watchdog:active"

@@ -770,6 +770,18 @@ export async function initGlobalServices(
     },
   });
 
+  // Opt-in background plugin update checks (#10893). Registered after
+  // `plugin-service` so the checker reads a populated list; `start()` no-ops
+  // while the feature is disabled (the default), so this is free when off.
+  registerDeferredTask({
+    name: "plugin-update-check-service",
+    run: async () => {
+      const { getPluginUpdateCheckService } =
+        await import("../services/PluginUpdateCheckService.js");
+      getPluginUpdateCheckService().start();
+    },
+  });
+
   if (windowRegistry) {
     const registryRef = windowRegistry;
     // Wire `helpSessionService.mcpRegistry` synchronously by construction (no

@@ -107,6 +107,56 @@ describe("detectCheckResult", () => {
     expect(result?.truncated).toBe(true);
     expect(result?.failureSummary?.length ?? 0).toBeLessThanOrEqual(600);
   });
+
+  describe("package-runner lifecycle failures", () => {
+    it("detects a pnpm ELIFECYCLE failure", () => {
+      const out = [
+        "> pnpm test",
+        "some test output with no recognized summary",
+        " ELIFECYCLE  Command failed with exit code 1.",
+      ].join("\n");
+      const result = detectCheckResult(out, RAN_AT);
+      expect(result?.passed).toBe(false);
+      expect(result?.command).toContain("pnpm test");
+      expect(result?.failureSummary).toContain("ELIFECYCLE");
+    });
+
+    it("detects an npm lifecycle-script failure", () => {
+      const out = [
+        "> npm run typecheck",
+        "npm error Lifecycle script `typecheck` failed with error:",
+        "npm error code 2",
+      ].join("\n");
+      const result = detectCheckResult(out, RAN_AT);
+      expect(result?.passed).toBe(false);
+      expect(result?.command).toContain("npm run typecheck");
+    });
+
+    it("detects yarn and bun script failures", () => {
+      expect(detectCheckResult("error Command failed with exit code 1.", RAN_AT)?.passed).toBe(
+        false
+      );
+      expect(detectCheckResult('error: script "test" exited with code 1', RAN_AT)?.passed).toBe(
+        false
+      );
+    });
+
+    it("prose mentioning a failure phrase mid-sentence does not fire", () => {
+      const out = "Earlier the npm error Lifecycle script issue was fixed by pinning node.";
+      expect(detectCheckResult(out, RAN_AT)).toBeNull();
+    });
+
+    it("a real tool summary below the lifecycle line still reports failure", () => {
+      const out = [
+        "> npm test",
+        "Tests  2 failed | 8 passed (10)",
+        " ELIFECYCLE  Command failed with exit code 1.",
+      ].join("\n");
+      const result = detectCheckResult(out, RAN_AT);
+      expect(result?.passed).toBe(false);
+      expect(result?.failureSummary).toContain("2 failed");
+    });
+  });
 });
 
 describe("checkResultsEqual", () => {

@@ -303,6 +303,7 @@ export type {
   AgentSettingsEntry,
   AgentSettings,
   DangerousMode,
+  InlineMode,
   GenerateAgentCommandOptions,
   GenerateAgentFlagsOptions,
 } from "./agentSettings.js";
@@ -324,6 +325,10 @@ export {
   resolveDangerousMode,
   combineDangerousModes,
   reconcileBypassFlags,
+  resolveInlineMode,
+  combineInlineModes,
+  resolveEffectiveInlineMode,
+  reconcileInlineModeFlag,
 } from "./agentSettings.js";
 
 // User agent registry types - user-defined agent configuration

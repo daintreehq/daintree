@@ -11,7 +11,7 @@ import {
   SquareMenu,
   SquareTerminal,
 } from "lucide-react";
-import { Folders } from "@/components/icons";
+import { Folders, History } from "@/components/icons";
 import {
   BUILT_IN_AGENT_IDS,
   isBuiltInAgentId,
@@ -98,6 +98,11 @@ export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, Toolbar
     label: "Command palette",
     icon: SquareMenu,
     description: "Search and run any action",
+  },
+  "resume-sessions": {
+    label: "Resume session",
+    icon: History,
+    description: "Browse and resume closed agent sessions",
   },
   settings: {
     label: "Settings",

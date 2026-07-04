@@ -43,6 +43,8 @@ import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { FileStageRow, type FileStageRowSection } from "./FileStageRow";
 import { CommitPanel } from "./CommitPanel";
 import { ConflictPanel } from "./ConflictPanel";
+import { ReadinessRail } from "./ReadinessRail";
+import { deriveReviewReadiness, type ReviewReadinessCta } from "./reviewReadiness";
 // Lazy: these modals statically reach the DiffViewer/CodeViewer/vendor-editor
 // chunks (~223 KB gzip), and ReviewPane is a first-render preload seed — a
 // static import drags the whole editor stack into every boot's modulepreload
@@ -72,6 +74,10 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { debounce } from "@/utils/debounce";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useFileDecorations } from "@/hooks/useFileDecorations";
+import {
+  useForgeProviderHealthStore,
+  selectForgeProviderHealth,
+} from "@/store/forgeProviderHealthStore";
 import { useShallow } from "zustand/react/shallow";
 import { systemClient } from "@/clients/systemClient";
 import { forgeClient } from "@/clients/forgeClient";
@@ -134,6 +140,8 @@ interface BaseBranchFileRowProps {
   unresolvedDecoration?: FileDecoration;
   onBadgeClick?: () => void;
 }
+
+const selectNoProviderHealth = () => null;
 
 function BaseBranchFileRow({
   file,
@@ -596,6 +604,46 @@ export function ReviewHubContent({
     return undefined;
   });
 
+  const forgeHealthProviderId = useWorktreeStore((state) => {
+    for (const wt of state.worktrees.values()) {
+      if (wt.path === worktreePath) {
+        return wt.linked?.providerId ?? wt.matchedForgeProviderId ?? null;
+      }
+    }
+    return null;
+  });
+
+  const providerHealth = useForgeProviderHealthStore(
+    forgeHealthProviderId
+      ? selectForgeProviderHealth(forgeHealthProviderId)
+      : selectNoProviderHealth
+  );
+
+  const readinessSummary = useMemo(
+    () =>
+      deriveReviewReadiness({
+        status,
+        aheadCount,
+        behindCount,
+        pr: worktreePR
+          ? {
+              number: worktreePR.prNumber,
+              url: worktreePR.prUrl,
+              state: worktreePR.prState,
+              ciState: worktreePR.prCiStatus?.state ?? null,
+            }
+          : null,
+        providerHealth: providerHealth
+          ? {
+              rateLimitBlocked: providerHealth.rateLimitBlocked,
+              tokenUnhealthy: providerHealth.tokenUnhealthy,
+            }
+          : null,
+        pushError: pushError ? { reason: pushError.reason } : null,
+      }),
+    [status, aheadCount, behindCount, worktreePR, providerHealth, pushError]
+  );
+
   const refresh = useCallback(async () => {
     if (!worktreePath) return;
     const requestId = ++refreshIdRef.current;
@@ -707,6 +755,10 @@ export function ReviewHubContent({
 
   useEffect(() => {
     if (isOpen) {
+      // This branch also re-runs when worktreePath changes while open (via
+      // `refresh`'s identity): drop the previous worktree's staging status so
+      // the file list and readiness rail never mix two worktrees' state.
+      setStatus(null);
       setActionError(null);
       setPushError(null);
       const seed = readInitialCommitMessage();
@@ -1157,6 +1209,27 @@ export function ReviewHubContent({
       });
     },
     [fileListExpanded, setFileListExpanded, worktreePath]
+  );
+
+  const handleReadinessCta = useCallback(
+    (cta: ReviewReadinessCta) => {
+      switch (cta.kind) {
+        case "focus-conflicts":
+        case "focus-staged":
+          // The file list only renders in working-tree mode; flip back first so
+          // the focus targets exist by the time handleFocusBlocker's rAF runs.
+          setDiffMode("working-tree");
+          handleFocusBlocker(cta.kind === "focus-conflicts" ? "conflicts" : "staged-files");
+          return;
+        case "pull-rebase":
+          setPullRebaseConfirmOpen(true);
+          return;
+        case "open-pr":
+          void systemClient.openExternal(cta.url);
+          return;
+      }
+    },
+    [handleFocusBlocker]
   );
 
   const handlePullRebase = useCallback(async () => {
@@ -1643,6 +1716,9 @@ export function ReviewHubContent({
             </button>
           </div>
         </div>
+
+        {/* Merge-readiness rail — hidden until staging status resolves */}
+        <ReadinessRail summary={readinessSummary} onCta={handleReadinessCta} />
 
         {/* Inline error banners */}
         {actionError && (

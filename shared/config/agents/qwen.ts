@@ -8,7 +8,7 @@ export const config: AgentConfig = {
   color: "#615CED",
   iconId: "qwen",
   supportsContextInjection: true,
-  tooltip: "Alibaba's Qwen3-Coder agent",
+  tooltip: "Alibaba's CLI",
   version: {
     args: ["--version"],
     githubRepo: "QwenLM/qwen-code",
@@ -66,7 +66,7 @@ export const config: AgentConfig = {
     primaryPatterns: [
       // @generated:qwen:primaryPatterns:start
       "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+[^()\\n]{2,80}\\s*\\(esc to cancel",
-      "esc to cancel[^)\\n]*\\)?$",
+      "esc to cancel(?:[^)\\n]{0,20}\\)?|[^)\\n]{0,60}\\))$",
       "\\(\\d+s,?\\s*esc to cancel",
       // @generated:qwen:primaryPatterns:end
     ],

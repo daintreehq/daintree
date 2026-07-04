@@ -7,7 +7,7 @@ export const config: AgentConfig = {
   color: "#7C3AED",
   iconId: "kiro",
   supportsContextInjection: true,
-  tooltip: "Amazon's AI coding agent",
+  tooltip: "Amazon's CLI",
   usageUrl: "https://kiro.dev/",
   externalLinks: [{ label: "View docs", url: "https://kiro.dev/docs/" }],
   version: {
@@ -49,7 +49,7 @@ export const config: AgentConfig = {
     primaryPatterns: [
       // @generated:kiro:primaryPatterns:start
       "[·*✢✳✶✻✽●✼✾⟡◇◆○⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+[^()\\n]{2,80}\\s*\\(esc to interrupt",
-      "esc to interrupt[^)\\n]*\\)?$",
+      "esc to interrupt(?:[^)\\n]{0,20}\\)?|[^)\\n]{0,60}\\))$",
       "\\(\\d+s\\s*[·•]\\s*esc to interrupt",
       "[·*✢✳✶✻✽●✼✾⟡◇◆○⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+Thinking",
       // @generated:kiro:primaryPatterns:end

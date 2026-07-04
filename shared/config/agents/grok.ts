@@ -18,7 +18,7 @@ export const config: AgentConfig = {
   // assistant-overlay wiring (`supports: { mcpInjection: "project-config", … }`)
   // is plausible, but the exact injection format needs verification before it's
   // enabled — left unwired so Grok still launches normally from the toolbar.
-  tooltip: "fast, autonomous coding",
+  tooltip: "xAI's CLI",
   usageUrl: "https://console.x.ai",
   externalLinks: [
     { label: "View docs", url: "https://docs.x.ai/build/overview" },
@@ -89,7 +89,7 @@ export const config: AgentConfig = {
   // broad UNIVERSAL_PATTERN_CONFIG (a superset of every agent's "esc to
   // interrupt"/spinner patterns) plus the universal approval-prompt hints — a
   // safer default than shipping speculative narrow regex. Calibrate later by
-  // observing real scrollback (see AGENT_PATTERN_CONFIGS in AgentPatternDetector).
+  // observing real scrollback (scripts/pattern-discovery has the capture tooling).
   resume: {
     kind: "session-id",
     args: (sessionId: string) => ["--resume", sessionId],

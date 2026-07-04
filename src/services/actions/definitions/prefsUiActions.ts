@@ -65,6 +65,21 @@ export function registerPrefsUiActions(actions: ActionRegistry, _callbacks: Acti
     },
   }));
 
+  actions.set("preferences.showAgentTaskTitles.set", () => ({
+    id: "preferences.showAgentTaskTitles.set",
+    title: "Set Agent Task Titles Visibility",
+    description: "Compose the agent's current task into terminal tab and header titles",
+    category: "preferences",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ show: z.boolean() }),
+    run: async (args: unknown) => {
+      const { show } = z.object({ show: z.boolean() }).parse(args);
+      usePreferencesStore.getState().setShowAgentTaskTitles(show);
+    },
+  }));
+
   actions.set("preferences.reduceAnimations.set", () => ({
     id: "preferences.reduceAnimations.set",
     title: "Set Reduce UI Animations",

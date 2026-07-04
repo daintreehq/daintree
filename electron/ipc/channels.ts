@@ -34,6 +34,7 @@ export const CHANNELS = {
   TERMINAL_TRASHED: "terminal:trashed",
   TERMINAL_RESTORED: "terminal:restored",
   TERMINAL_SET_ACTIVITY_TIER: "terminal:set-activity-tier",
+  TERMINAL_SET_FOCUSED: "terminal:set-focused",
   TERMINAL_GET_FOR_PROJECT: "terminal:get-for-project",
   TERMINAL_GET_AVAILABLE: "terminal:get-available",
   TERMINAL_GET_BY_STATE: "terminal:get-by-state",
@@ -66,6 +67,8 @@ export const CHANNELS = {
 
   AGENT_SESSION_LIST: "agent-session:list",
   AGENT_SESSION_CLEAR: "agent-session:clear",
+  AGENT_SESSION_GET_RETENTION: "agent-session:get-retention",
+  AGENT_SESSION_SET_RETENTION: "agent-session:set-retention",
 
   FILES_SEARCH: "files:search",
   FILES_READ: "files:read",
@@ -91,6 +94,7 @@ export const CHANNELS = {
 
   SYSTEM_OPEN_EXTERNAL: "system:open-external",
   SYSTEM_OPEN_PATH: "system:open-path",
+  SYSTEM_SHOW_ITEM_IN_FOLDER: "system:show-item-in-folder",
   SYSTEM_OPEN_IN_EDITOR: "system:open-in-editor",
   SYSTEM_CHECK_COMMAND: "system:check-command",
   SYSTEM_CHECK_DIRECTORY: "system:check-directory",
@@ -119,6 +123,8 @@ export const CHANNELS = {
   SYSTEM_GET_RESOURCE_PROFILE: "system:get-resource-profile",
   SYSTEM_GET_RESOURCE_PROFILE_SNAPSHOT: "system:get-resource-profile-snapshot",
   SYSTEM_REQUEST_INTERACTIVE_OVERRIDE: "system:request-interactive-override",
+  SYSTEM_GET_WHY_SLOW_SNAPSHOT: "system:get-why-slow-snapshot",
+  SYSTEM_REPORT_TERMINAL_RENDERER_DIAGNOSTICS: "system:report-terminal-renderer-diagnostics",
   DIAGNOSTICS_GET_PROCESS_METRICS: "diagnostics:get-process-metrics",
   DIAGNOSTICS_GET_HEAP_STATS: "diagnostics:get-heap-stats",
   DIAGNOSTICS_GET_INFO: "diagnostics:get-info",
@@ -257,6 +263,7 @@ export const CHANNELS = {
   AGENT_SETTINGS_GET: "agent-settings:get",
   AGENT_SETTINGS_SET: "agent-settings:set",
   AGENT_SETTINGS_SET_GLOBAL: "agent-settings:set-global",
+  AGENT_SETTINGS_SET_GLOBAL_INLINE: "agent-settings:set-global-inline",
   AGENT_SETTINGS_RESET: "agent-settings:reset",
   AGENT_SETTINGS_STAMP_VERSION: "agent-settings:stamp-version",
 
@@ -354,6 +361,7 @@ export const CHANNELS = {
   WEBVIEW_DIALOG_DISMISS: "webview:dialog-dismiss",
   WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut",
   WEBVIEW_RELOAD_SHORTCUT: "webview:reload-shortcut",
+  WEBVIEW_CLOSE_SHORTCUT: "webview:close-shortcut",
   WEBVIEW_NAVIGATION_BLOCKED: "webview:navigation-blocked",
   WEBVIEW_UNRESPONSIVE: "webview:unresponsive",
   WEBVIEW_RESPONSIVE: "webview:responsive",
@@ -459,6 +467,7 @@ export const CHANNELS = {
   DEV_PREVIEW_GET_STATE: "dev-preview:get-state",
   DEV_PREVIEW_GET_BY_WORKTREE: "dev-preview:get-by-worktree",
   DEV_PREVIEW_GET_ALL_SESSIONS: "dev-preview:get-all-sessions",
+  DEV_PREVIEW_GET_DIAGNOSTICS: "dev-preview:get-diagnostics",
   DEV_PREVIEW_GET_DESTRUCTIVE_PREVIEW_META: "dev-preview:get-destructive-preview-meta",
   DEV_PREVIEW_GET_DESTRUCTIVE_PREVIEW_SIZES: "dev-preview:get-destructive-preview-sizes",
   DEV_PREVIEW_STOP_BY_WORKTREE: "dev-preview:stop-by-worktree",
@@ -940,6 +949,12 @@ export const CHANNELS = {
   PLUGIN_PICK_PATH: "plugin:pick-path",
   /** Existence probe for a stored plugin `mustExist` path setting. */
   PLUGIN_PATH_EXISTS: "plugin:path-exists",
+  /** Opt-in background plugin update check (#10893): read the enabled setting. */
+  PLUGIN_BG_UPDATE_CHECK_SETTINGS_GET: "plugin:bg-update-check-settings-get",
+  /** Opt-in background plugin update check (#10893): set the enabled setting. */
+  PLUGIN_BG_UPDATE_CHECK_SETTINGS_SET: "plugin:bg-update-check-settings-set",
+  /** Opt-in background plugin update check (#10893): hydrate the last cached result. */
+  PLUGIN_BG_UPDATE_CHECK_LATEST: "plugin:bg-update-check-latest",
   /** Bridge: main process dispatches a plugin-sourced action request to the renderer. */
   PLUGIN_DISPATCH_ACTION_REQUEST: "plugin:dispatch-action-request",
   /** Bridge: renderer returns the plugin-sourced action dispatch result to the main process. */

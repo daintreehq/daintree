@@ -208,7 +208,9 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       return true;
 
     case "graceful-kill-result":
-      broker.resolve(event.requestId, event.agentSessionId ?? null);
+      broker.resolve(event.requestId, {
+        sessionId: event.agentSessionId ?? null,
+      });
       return true;
 
     case "graceful-kill-by-project-result":

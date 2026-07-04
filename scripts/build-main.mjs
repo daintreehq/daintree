@@ -523,6 +523,14 @@ async function run() {
       // `new Worker()` from OpenAITranscriptionProvider; needs its own entry so
       // esbuild emits a standalone bundle at the resolved worker path.
       "electron/services/voice/openaiVadWorker.ts",
+      // Multi-threading workers: per-terminal analysis (headless xterm +
+      // activity detection) inside pty-host, SQLite maintenance off the main
+      // event loop, and copytree generation inside workspace-host. Each is
+      // loaded via `new Worker()` and needs a standalone bundle at its
+      // resolved worker path (same pattern as openaiVadWorker).
+      "electron/pty-host/analysisWorker.ts",
+      "electron/services/persistence/dbMaintenanceWorker.ts",
+      "electron/workspace-host/copytreeWorker.ts",
       ...discoverBuiltInPluginMainEntries(),
       // Sample plugins compiled for the host-contract e2e harness (#9286, #9592).
       // Sideloaded via `DAINTREE_E2E_SIDELOAD_PLUGIN_DIR`; absent in prod because

@@ -14,6 +14,7 @@ export const config: AgentConfig = {
   npmGlobalPackage: "@anthropic-ai/claude-code",
   color: "#CC785C",
   iconId: "claude",
+  tooltip: "Anthropic's CLI",
   supportsContextInjection: true,
   supports: {
     mcpInjection: "project-config",
@@ -82,7 +83,7 @@ export const config: AgentConfig = {
     primaryPatterns: [
       // @generated:claude:primaryPatterns:start
       "[·*✢✳✶✻✽●✼✾⟡◇◆○]\\s+[^()\\n]{2,80}\\s*\\(esc to interrupt",
-      "esc to interrupt[^)\\n]*\\)?$",
+      "esc to interrupt(?:[^)\\n]{0,20}\\)?|[^)\\n]{0,60}\\))$",
       "\\(\\d+s\\s*[·•]\\s*esc to interrupt",
       // @generated:claude:primaryPatterns:end
     ],

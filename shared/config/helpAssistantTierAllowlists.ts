@@ -23,6 +23,7 @@ export const WORKBENCH_TIER_TOOLS = [
   "worktree.getAvailableBranch",
   "worktree.resource.status",
   "worktree.compareDiff",
+  "worktree.reviewReadiness",
 
   "files.search",
   "file.view",
@@ -33,16 +34,24 @@ export const WORKBENCH_TIER_TOOLS = [
   "terminal.getOutput",
   "terminal.getStatus",
 
+  // Read-only snapshot of the user's supervised fleet broadcast run (#10930).
+  // Observability only — dispatching a broadcast stays off the MCP surface.
+  "fleet.getRunStatus",
+
   "browser.getConsoleMessages",
   "portal.listTabs",
 
   "agent.getState",
   "agent.listToolbar",
+  "agentSessionHistory.list",
 
   "agentSettings.get",
   "keybinding.getOverrides",
 
   "slashCommands.list",
+
+  "skills.search",
+  "skills.load",
 
   "git.getProjectPulse",
   "git.getFileDiff",

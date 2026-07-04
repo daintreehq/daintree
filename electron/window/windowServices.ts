@@ -377,12 +377,14 @@ export async function setupWindowServices(
         if (!worktreePortBroker) return;
         const wcIds = worktreePortBroker.closePortsForHost(projectPath);
         if (wcIds.length > 0) {
-          worktreePortBroker.reBrokerForHost(
+          const reBrokered = worktreePortBroker.reBrokerForHost(
             host,
             (wcId: number) => webContents.fromId(wcId) ?? undefined,
             wcIds
           );
-          console.log(`[MAIN] Re-brokered ${wcIds.length} worktree port(s) after host restart`);
+          console.log(
+            `[MAIN] Re-brokered ${reBrokered}/${wcIds.length} worktree port(s) after host restart`
+          );
         }
         if (isE2EFaultMode) {
           const g = globalThis as Record<string, unknown>;

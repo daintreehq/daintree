@@ -1,6 +1,12 @@
 import type { AgentPreset } from "@/config/agents";
 import { getMergedPreset, sanitizeAgentEnv } from "@/config/agents";
-import { buildAgentLaunchFlags, combineDangerousModes, resolveDangerousMode } from "@shared/types";
+import {
+  buildAgentLaunchFlags,
+  combineDangerousModes,
+  combineInlineModes,
+  resolveDangerousMode,
+  resolveInlineMode,
+} from "@shared/types";
 import type { AgentSettingsEntry } from "@shared/types/agentSettings";
 
 export interface AgentRuntimeSettingsResolution {
@@ -32,12 +38,18 @@ export function applyPresetBehaviorOverrides(
     resolveDangerousMode(entry),
     resolveDangerousMode(preset)
   );
+  // Layer the preset's tri-state inline mode on top of the agent's resolved mode
+  // and bake the combined result onto the effective entry, so the single
+  // resolveEffectiveInlineMode chokepoint sees the final intent (#10876) — a
+  // preset "off" (alt-screen) vetoes an agent/global "on" (inline), just like
+  // the bypass tri-state above.
+  const combinedInline = combineInlineModes(resolveInlineMode(entry), resolveInlineMode(preset));
   return {
     ...entry,
     dangerousMode: combinedMode,
     dangerousEnabled: combinedMode === "on",
+    inlineMode: combinedInline,
     ...(preset.customFlags !== undefined && { customFlags: preset.customFlags }),
-    ...(preset.inlineMode !== undefined && { inlineMode: preset.inlineMode }),
   };
 }
 
@@ -90,11 +102,12 @@ export function buildAgentLaunchFlagsForRuntimeSettings(
   entry: AgentSettingsEntry,
   agentId: string,
   preset: AgentPreset | undefined,
-  options?: { modelId?: string; globalSkipPermissions?: boolean }
+  options?: { modelId?: string; globalSkipPermissions?: boolean; globalUseAltScreen?: boolean }
 ): string[] {
   return buildAgentLaunchFlags(entry, agentId, {
     modelId: options?.modelId,
     presetArgs: preset?.args,
     globalSkipPermissions: options?.globalSkipPermissions,
+    globalUseAltScreen: options?.globalUseAltScreen,
   });
 }

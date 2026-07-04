@@ -11,8 +11,10 @@ export {
   Activity, // project pulse / live activity heartbeat
   BellDot, // watch alert / notify on completion
   FolderGit2, // git worktree (single)
+  FolderOpen, // reveal in file manager (Finder / Explorer / file manager)
   Folders, // copy tree / file hierarchy capture (two overlapping folders)
   GitPullRequest, // forge provider / code-host plugin category
+  History, // resume closed session / session history
   Layers, // worktree overview (multiple worktrees, stacked)
   LayoutPanelTop, // workspace plugin category (panels, notes)
   Plug, // agent (integration that plugs into the host system)

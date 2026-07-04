@@ -171,9 +171,16 @@ export class RepoFetchCoordinator {
    * serialized on a single per-repo promise chain.
    */
   async fetchForWorktree(opts: FetchOptions): Promise<FetchResult> {
-    const commonDir = getGitCommonDir(opts.worktreePath, { logErrors: false });
+    const baseGenerationAtStart = this.baseGeneration;
+    const commonDir = await getGitCommonDir(opts.worktreePath, { logErrors: false });
     if (!commonDir) {
       return { status: "skipped", skipReason: "no-common-dir" };
+    }
+    if (this.baseGeneration !== baseGenerationAtStart) {
+      // destroy() ran while the commondir resolved. Creating state now would
+      // repopulate the cleared map at the fresh generation, letting this
+      // stale continuation dodge runFetch's stale-generation guard.
+      return { status: "skipped", skipReason: "stale-generation" };
     }
 
     const state = this.getOrCreateState(commonDir);

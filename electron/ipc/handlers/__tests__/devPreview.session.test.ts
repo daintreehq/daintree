@@ -730,4 +730,61 @@ describe("dev preview session handlers", () => {
 
     expect(ptyClient.kill).toHaveBeenCalledWith(state.terminalId, "dev-preview:dispose");
   });
+
+  it("get-diagnostics reports null services before first use, then the live timeline", async () => {
+    const diagnosticsHandler = getRegisteredHandle<
+      [Electron.IpcMainInvokeEvent, { panelId: string; projectId: string }],
+      {
+        session: { status: string; events: Array<{ type: string }> } | null;
+        proxy: { port: number; usedPortFallback: boolean } | null;
+      }
+    >(CHANNELS.DEV_PREVIEW_GET_DIAGNOSTICS);
+    expect(diagnosticsHandler).toBeDefined();
+
+    // Neither service exists yet — the query must not lazily create them.
+    const before = await diagnosticsHandler!({} as Electron.IpcMainInvokeEvent, {
+      panelId: "panel-1",
+      projectId: "project-1",
+    });
+    expect(before).toEqual({ session: null, proxy: null });
+
+    const ensureHandler = getRegisteredHandle<
+      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+      { terminalId: string | null }
+    >(CHANNELS.DEV_PREVIEW_ENSURE);
+    await ensureHandler!({} as Electron.IpcMainInvokeEvent, {
+      panelId: "panel-1",
+      projectId: "project-1",
+      cwd: "/repo",
+      devCommand: "npm run dev",
+    });
+
+    const after = await diagnosticsHandler!({} as Electron.IpcMainInvokeEvent, {
+      panelId: "panel-1",
+      projectId: "project-1",
+    });
+    expect(after.session?.status).toBe("starting");
+    expect(after.session?.events.map((event) => event.type)).toContain("spawned");
+    // The proxy still hasn't started; diagnostics must not spin it up.
+    expect(after.proxy).toBeNull();
+  });
+
+  it("get-diagnostics rejects malformed requests", async () => {
+    const diagnosticsHandler = getRegisteredHandle<
+      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+      unknown
+    >(CHANNELS.DEV_PREVIEW_GET_DIAGNOSTICS);
+
+    // The mocked typedHandleValidated parses synchronously, so schema
+    // violations surface as throws rather than rejections here.
+    expect(() =>
+      diagnosticsHandler!({} as Electron.IpcMainInvokeEvent, {
+        panelId: "",
+        projectId: "project-1",
+      })
+    ).toThrow();
+    expect(() =>
+      diagnosticsHandler!({} as Electron.IpcMainInvokeEvent, { panelId: "panel-1" })
+    ).toThrow();
+  });
 });

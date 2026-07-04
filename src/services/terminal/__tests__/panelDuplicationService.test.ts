@@ -109,6 +109,26 @@ describe("buildPanelSnapshotOptions", () => {
     expect(result!.agentLaunchFlags).not.toBe((panel as PtyPanelData).agentLaunchFlags);
   });
 
+  it("carries the title ownership rung verbatim (reopen-last is a restore, not a copy)", () => {
+    const locked = makePanel({ command: "bash", title: "My debug shell", titleMode: "user" });
+    expect(buildPanelSnapshotOptions(locked)).toMatchObject({
+      title: "My debug shell",
+      titleMode: "user",
+    });
+
+    const pinned = makePanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude-cmd",
+      title: "Auth worker",
+      titleMode: "custom",
+    });
+    expect(buildPanelSnapshotOptions(pinned)).toMatchObject({
+      title: "Auth worker",
+      titleMode: "custom",
+    });
+  });
+
   it("does not include location in the snapshot", () => {
     const panel = makePanel({ location: "dock" });
     const result = buildPanelSnapshotOptions(panel);
@@ -489,6 +509,51 @@ describe("panelDuplicationService", () => {
     expect(result.agentPresetColor).toBeUndefined();
     expect(result.title).not.toContain("(Deleted");
   });
+
+  // Ownership rung on duplicates: an explicit name stays pinned on the copy
+  // (otherwise detection rewrites "X (copy)" back to the registry name), but
+  // a user lock demotes to "custom" — the human named the source, not the copy.
+  it("demotes a user-locked rung to custom on the copy", async () => {
+    const panel = makePanel({ command: "bash", title: "My debug shell", titleMode: "user" });
+    const result = await buildPanelDuplicateOptions(panel, "grid");
+    expect(result.titleMode).toBe("custom");
+  });
+
+  it("keeps a custom rung pinned and leaves default unpinned on the copy", async () => {
+    const { agentSettingsClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+      agents: { claude: {} },
+    });
+
+    const pinned = makePanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude-cmd",
+      title: "Auth worker",
+      titleMode: "custom",
+    });
+    expect((await buildPanelDuplicateOptions(pinned, "grid")).titleMode).toBe("custom");
+
+    const unpinned = makePanel({ command: "bash", title: "Terminal" });
+    expect((await buildPanelDuplicateOptions(unpinned, "grid")).titleMode).toBeUndefined();
+  });
+
+  it("drops the rung with the stale-preset strip (title fell back to the registry name)", async () => {
+    const { agentSettingsClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+      agents: { claude: {} },
+    });
+    getMergedPresetMock.mockReturnValue(undefined);
+
+    const panel = makePanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      agentPresetId: "user-deleted",
+      title: "Claude (Deleted Preset)",
+      titleMode: "custom",
+    });
+    expect((await buildPanelDuplicateOptions(panel, "grid")).titleMode).toBeUndefined();
+  });
 });
 
 // ── adversarial: behavioral overrides must reach generateAgentCommand ─────────
@@ -581,7 +646,9 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
     await buildPanelDuplicateOptions(panel, "grid");
 
     const entry = spy.mock.calls[0]![1] as Record<string, unknown>;
-    expect(entry.inlineMode).toBe(false);
+    // Baked as the tri-state "off" (alt-screen) now (#10876): the preset's
+    // alt-screen choice still vetoes the base's inline (true → "on").
+    expect(entry.inlineMode).toBe("off");
   });
 
   it("preset.dangerousEnabled=undefined does NOT clobber base true (undefined guard)", async () => {

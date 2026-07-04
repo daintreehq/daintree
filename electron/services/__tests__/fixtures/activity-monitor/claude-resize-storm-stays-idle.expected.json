@@ -1,0 +1,44 @@
+{
+  "agentId": "claude",
+  "settleMs": 5000,
+  "transitions": [
+    {
+      "atMs": 0,
+      "state": "busy",
+      "trigger": "pattern"
+    },
+    {
+      "atMs": 6200,
+      "state": "idle",
+      "trigger": "timeout",
+      "waitingReason": "prompt"
+    }
+  ],
+  "fsm": {
+    "transitions": [
+      {
+        "atMs": 0,
+        "state": "working",
+        "trigger": "heuristic"
+      },
+      {
+        "atMs": 6200,
+        "state": "waiting",
+        "waitingReason": "prompt",
+        "trigger": "timeout"
+      }
+    ]
+  },
+  "forbidden": [
+    {
+      "scope": "activity",
+      "state": "busy",
+      "betweenMs": [7000, 30000]
+    },
+    {
+      "scope": "fsm",
+      "state": "working",
+      "betweenMs": [7000, 30000]
+    }
+  ]
+}

@@ -340,6 +340,7 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "agent.terminal",
   "agent.getState",
   "agent.listToolbar",
+  "agentSessionHistory.list",
 
   "git.getProjectPulse",
   "git.getFileDiff",
@@ -390,6 +391,11 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "terminal.disarm",
   "terminal.disarmAll",
 
+  // Read-only fleet-run supervision snapshot (#10930). The broadcast itself is
+  // deliberately NOT exposed — external orchestrators fan out
+  // `terminal.sendCommand` per terminal (see CLAUDE.tasks.md guidance).
+  "fleet.getRunStatus",
+
   "worktree.list",
   "worktree.getCurrent",
   "worktree.refresh",
@@ -417,6 +423,9 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "copyTree.injectToTerminal",
 
   "slashCommands.list",
+
+  "skills.search",
+  "skills.load",
 
   "project.getAll",
   "project.getCurrent",
@@ -722,7 +731,7 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
         "4. **Act on `agentState`** for non-working terminals:",
         "   - `completed` — agent finished its task; record the result and dispatch the next step.",
         "   - `exited` — agent process exited; surface to the user, the terminal won't recover on its own.",
-        '   - `waiting` — agent paused, likely needing input. `waitingReason` distinguishes `"prompt"` (empty input prompt, safe to auto-drive) from `"question"` (agent is asking the user something — verify before auto-replying).',
+        '   - `waiting` — agent paused, likely needing input. `waitingReason` distinguishes `"prompt"` (empty input prompt, safe to auto-drive), `"question"` (agent is asking the user something — verify before auto-replying), `"approval"` (a permission/approval selector needs a specific choice — send the selection keys, not free text), and `"error"` (agent stopped after a blocking error such as auth/rate limit/network — input alone may not unblock it; surface to the user when unsure).',
         "   - `idle` — agent is settling between subtasks; skip and re-poll.",
         "   - `null` — no agent attached or unknown state; treat as still busy.",
         "5. **Cross-check stuck state with `includeOutput`.** The state cache is a heuristic, not ground truth — `ActivityMonitor` can pin a finished agent at `working`. **If `agentState` for a given terminal hasn't transitioned across roughly 3 polling rounds, set `includeOutput` on the next round to verify against actual terminal text.** A short scrollback tail is usually enough to tell a stuck FSM from a genuinely working agent.",
@@ -777,7 +786,8 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
         '    case "exited":',
         "      /* surface to user */ break;",
         '    case "waiting":',
-        '      /* t.waitingReason: "prompt" → safe to auto-drive; "question" → verify against scrollback, then act or ask */',
+        '      /* t.waitingReason: "prompt" → safe to auto-drive; "question" → verify against scrollback, then act or ask; */',
+        '      /* "approval" → answer the selector (keys, not prose); "error" → check scrollback, often needs the user */',
         "      break;",
         "  }",
         "  stuckCount[t.terminalId] = 0;",
@@ -787,6 +797,8 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
         "```",
         "",
         "**Single terminals pace the same way.** Don't hold a blocking `terminal.waitUntilIdle` open to wait out a task — while the call is in flight the user can't talk to you, so an interactive session looks frozen until they cancel it (the server caps interactive waits at 60s for this reason). Kick off the task, then `ScheduleWakeup` → non-blocking check (`terminal.getStatus` or `waitUntilIdle({ timeoutMs: 0 })`) → repeat. A short bounded `waitUntilIdle` long-poll is fine when completion is expected within the minute; on `timedOut: true`, fall back to wakeup pacing instead of re-blocking back-to-back.",
+        "",
+        '**Fleet broadcast runs are supervised.** When the user fans a prompt out with the in-app fleet broadcast, `fleet.getRunStatus` returns the supervised run in one call: per-target submission outcome (`sent` / `failed` with `permanent`-vs-`transient` classification / `skipped` on cancel), a live `agentState` snapshot, `settled` flags, and aggregate counts. Use it to answer "how is the fleet run going" instead of reconstructing the picture from raw `terminal.getStatus` — but keep using `terminal.getStatus` (with `includeOutput`) as ground truth before acting on any single terminal. `fleet.getRunStatus` never dispatches anything, and there is deliberately no MCP tool that broadcasts to the whole fleet: to orchestrate your own fan-out, send one `terminal.sendCommand` per terminal and watch with batched `terminal.getStatus` / a bounded `terminal.waitUntilIdleBatch`.',
       ].join("\n");
     },
   },

@@ -20,6 +20,7 @@ function makeManifest(overrides: Partial<PluginManifest> = {}): PluginManifest {
       commands: [],
       views: [],
       mcpServers: [],
+      skills: [],
       forgeProviders: [],
       fileDecorationProviders: [],
       agents: [],

@@ -62,7 +62,7 @@ vi.mock("../services/ProjectStore.js", () => ({
   },
 }));
 
-import { createWindowWithState } from "../windowState.js";
+import { createWindowWithState, pruneWindowStateForPath } from "../windowState.js";
 
 describe("createWindowWithState", () => {
   // Helper: fire the deferred 'show' handler (fullscreen is applied after show)
@@ -797,6 +797,97 @@ describe("createWindowWithState", () => {
       expect(constructorCalls[0]).toEqual(
         expect.objectContaining({ x: 530, y: 312, width: 1024, height: 768 })
       );
+    });
+  });
+
+  describe("MRU cap and prune", () => {
+    // Wire the mocked store to a real backing object so successive saves
+    // accumulate the way electron-store would.
+    function makeStateful(initial: Record<string, unknown> = {}) {
+      let state: Record<string, unknown> = { ...initial };
+      windowStatesStoreMock.get.mockImplementation(() => state);
+      windowStatesStoreMock.set.mockImplementation(
+        (_key: string, value: Record<string, unknown>) => {
+          state = value;
+        }
+      );
+      return () => state;
+    }
+
+    function saveForPath(projectPath: string) {
+      createWindowWithState({ show: false }, projectPath);
+      eventHandlers.get("close")!();
+    }
+
+    it("caps project entries at the MRU limit, evicting the oldest, keeping __legacy__", () => {
+      const getState = makeStateful();
+      for (let i = 0; i < 55; i++) saveForPath(`/proj/${i}`);
+
+      const state = getState();
+      const projectKeys = Object.keys(state).filter((k) => k !== "__legacy__");
+      expect(projectKeys).toHaveLength(50);
+      // The five oldest are evicted; the newest survive.
+      expect(state["/proj/0"]).toBeUndefined();
+      expect(state["/proj/4"]).toBeUndefined();
+      expect(state["/proj/5"]).toBeDefined();
+      expect(state["/proj/54"]).toBeDefined();
+      // The cold-start fallback is exempt from the cap.
+      expect(state["__legacy__"]).toBeDefined();
+    });
+
+    it("re-touching a path moves it to most-recent and shields it from eviction", () => {
+      const getState = makeStateful();
+      for (let i = 0; i < 50; i++) saveForPath(`/keep/${i}`);
+      // Touch the oldest so it becomes most-recent...
+      saveForPath("/keep/0");
+      // ...then add one new path, forcing exactly one eviction.
+      saveForPath("/new");
+
+      const state = getState();
+      expect(state["/keep/0"]).toBeDefined();
+      // /keep/1 is now the oldest and is evicted instead of the refreshed /keep/0.
+      expect(state["/keep/1"]).toBeUndefined();
+      expect(state["/new"]).toBeDefined();
+      expect(Object.keys(state).filter((k) => k !== "__legacy__")).toHaveLength(50);
+    });
+
+    it("pruneWindowStateForPath removes only the target, preserving others and __legacy__", () => {
+      const entry = {
+        x: 0,
+        y: 0,
+        width: 800,
+        height: 600,
+        isMaximized: false,
+        isFullScreen: false,
+      };
+      const getState = makeStateful({ "/a": entry, "/b": entry, __legacy__: entry });
+
+      pruneWindowStateForPath("/a");
+
+      const state = getState();
+      expect(state["/a"]).toBeUndefined();
+      expect(state["/b"]).toBeDefined();
+      expect(state["__legacy__"]).toBeDefined();
+      // Never persists an `undefined` value (electron-store v11 rejects it).
+      const lastSet = windowStatesStoreMock.set.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+      expect(Object.values(lastSet)).not.toContain(undefined);
+    });
+
+    it("pruneWindowStateForPath is a no-op when the path is absent", () => {
+      const entry = {
+        x: 0,
+        y: 0,
+        width: 800,
+        height: 600,
+        isMaximized: false,
+        isFullScreen: false,
+      };
+      makeStateful({ "/b": entry, __legacy__: entry });
+      windowStatesStoreMock.set.mockClear();
+
+      pruneWindowStateForPath("/missing");
+
+      expect(windowStatesStoreMock.set).not.toHaveBeenCalled();
     });
   });
 });

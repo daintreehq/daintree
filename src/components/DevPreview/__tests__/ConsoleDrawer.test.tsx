@@ -248,6 +248,28 @@ describe("ConsoleDrawer", () => {
       const consoleTab = screen.getByRole("tab", { name: /console/i });
       expect(consoleTab.textContent).toBe("Console");
     });
+
+    it("activates the Diagnostics tab on click and renders the diagnostics panel", () => {
+      renderDrawer({ defaultOpen: true });
+      const diagnosticsTab = screen.getByRole("tab", { name: /diagnostics/i });
+      fireEvent.click(diagnosticsTab);
+      expect(diagnosticsTab.getAttribute("aria-selected")).toBe("true");
+      // No bridge in jsdom — the panel must degrade to its empty state
+      // instead of crashing the drawer.
+      expect(screen.getByText(/No lifecycle events yet/i)).toBeTruthy();
+    });
+
+    it("reaches the Diagnostics tab via arrow-key navigation", () => {
+      renderDrawer({ defaultOpen: true, activeTab: undefined });
+      const tablist = screen.getByRole("tablist");
+      const outputTab = screen.getByRole("tab", { name: /output/i });
+      outputTab.focus();
+      fireEvent.keyDown(tablist, { key: "ArrowLeft" });
+      // Wraps backward from Output to the last tab.
+      expect(screen.getByRole("tab", { name: /diagnostics/i }).getAttribute("aria-selected")).toBe(
+        "true"
+      );
+    });
   });
 
   describe("tiered restart actions", () => {

@@ -13,6 +13,7 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.sendCommand",
   "terminal.waitUntilIdle",
   "terminal.waitUntilIdleBatch",
+  "terminal.resumeSessions",
 
   // -- panelActions --
   "panel.list",
@@ -44,6 +45,7 @@ export const BUILT_IN_ACTION_IDS = [
   "worktree.getAvailableBranch",
   "worktree.createWithRecipe",
   "worktree.compareDiff",
+  "worktree.reviewReadiness",
   "worktree.switchIndex",
   "worktree.quickCreate",
   "worktree.createDialog.open",
@@ -75,6 +77,7 @@ export const BUILT_IN_ACTION_IDS = [
   "worktree.sessions.closeCompleted",
   "worktree.sessions.trashAll",
   "worktree.sessions.endAll",
+  "worktree.sessions.clearHistory",
 
   // -- worktreeBulkActions (overview multi-select) --
   "worktree.bulk.closeSessions",
@@ -143,9 +146,14 @@ export const BUILT_IN_ACTION_IDS = [
   "file.openDiff",
   "file.openInEditor",
   "file.openImageViewer",
+  "file.showItemInFolder",
 
   // -- slashCommandsActions --
   "slashCommands.list",
+
+  // -- skillActions --
+  "skills.search",
+  "skills.load",
 
   // -- artifactActions --
   "artifact.saveToFile",
@@ -182,6 +190,7 @@ export const BUILT_IN_ACTION_IDS = [
   "preferences.showDeveloperTools.set",
   "preferences.showGridAgentHighlights.set",
   "preferences.showDockAgentHighlights.set",
+  "preferences.showAgentTaskTitles.set",
   "preferences.reduceAnimations.set",
 
   // -- windowActions --
@@ -270,6 +279,7 @@ export const BUILT_IN_ACTION_IDS = [
 
   // -- diagnosticsActions --
   "diagnostics.openReview",
+  "diagnostics.openWhySlow",
 
   // -- errorActions --
   "errors.clearAll",
@@ -309,6 +319,7 @@ export const BUILT_IN_ACTION_IDS = [
   "agent.focusPreviousAgent",
   "agent.getState",
   "agent.listToolbar",
+  "agentSessionHistory.list",
 
   // -- app settings (other) --
   "app.settings.openTab",
@@ -477,6 +488,7 @@ export const BUILT_IN_ACTION_IDS = [
   "fleet.saveNamedFleet",
   "fleet.recallNamedFleet",
   "fleet.deleteNamedFleet",
+  "fleet.getRunStatus",
 ] as const;
 
 export type BuiltInRuntimeActionId = (typeof BUILT_IN_ACTION_IDS)[number];

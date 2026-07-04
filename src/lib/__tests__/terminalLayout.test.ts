@@ -6,6 +6,9 @@ import {
   applyHysteresis,
   computeScrollRowHeight,
   gridRowsOverflow,
+  gridRowsOverflowWithHysteresis,
+  gridRowOverflowHysteresisBuffer,
+  GRID_ROW_OVERFLOW_HYSTERESIS_MULTIPLIER,
   getGridFitMetrics,
   getMaxGridCapacity,
   getPanelLayoutMode,
@@ -195,6 +198,106 @@ describe("gridRowsOverflow — the only thing that triggers scroll mode", () => 
     // A tall display packs several rows in — panel count alone never scrolls.
     expect(gridRowsOverflow(4, 1600)).toBe(false);
     expect(gridRowsOverflow(2, 700)).toBe(false);
+  });
+});
+
+describe("gridRowsOverflowWithHysteresis — scroll-mode Schmitt trigger (#10871)", () => {
+  // Height at which exactly `n` minimum-height rows stop fitting. `hRows(n)` is
+  // the entry threshold; a container shorter than it overflows. Derived from the
+  // engine's own metric model so the test survives a metric tune.
+  const hRows = (n: number) =>
+    n * pxForRows(GRID_MIN_PANEL_ROWS) + (n - 1) * GRID_GAP_PX + GRID_PADDING_PX;
+
+  it("never overflows for a single row, regardless of previous state", () => {
+    expect(gridRowsOverflowWithHysteresis(1, 100, true)).toBe(false);
+    expect(gridRowsOverflowWithHysteresis(0, 100, false)).toBe(false);
+  });
+
+  it("does not overflow when height is unknown", () => {
+    expect(gridRowsOverflowWithHysteresis(8, null, true)).toBe(false);
+  });
+
+  it("enters scroll mode on the bare threshold when not already scrolling", () => {
+    const needed = hRows(3);
+    // previous = undefined (first paint) and previous = false behave identically
+    // to the bare threshold on the way *in* — the mode is never sticky to enter.
+    expect(gridRowsOverflowWithHysteresis(3, needed, undefined)).toBe(false);
+    expect(gridRowsOverflowWithHysteresis(3, needed - 1, undefined)).toBe(true);
+    expect(gridRowsOverflowWithHysteresis(3, needed, false)).toBe(false);
+    expect(gridRowsOverflowWithHysteresis(3, needed - 1, false)).toBe(true);
+  });
+
+  it("holds scroll mode until the container grows a full buffer past entry (dead band)", () => {
+    const needed = hRows(3);
+    const buffer = gridRowOverflowHysteresisBuffer();
+    // Just inside the band: was scrolling, container grew a little — still holds.
+    expect(gridRowsOverflowWithHysteresis(3, needed + buffer - 1, true)).toBe(true);
+    // Past the band: releases.
+    expect(gridRowsOverflowWithHysteresis(3, needed + buffer + 1, true)).toBe(false);
+    // The invariant the fix guarantees: exit height (H_off) > entry height
+    // (H_on) — a real dead band, not a knife-edge.
+    const H_on = needed; // enters just below this
+    const H_off = needed + buffer; // exits just above this
+    expect(H_off).toBeGreaterThan(H_on);
+    expect(buffer).toBeGreaterThan(0);
+  });
+
+  it("swallows content-box/border-box measurement jitter at the boundary", () => {
+    // The RO callback and the initial/remeasure paths could disagree by the
+    // vertical padding term right at the boundary. A few-px disagreement must
+    // NOT drop the grid out of scroll mode on its own.
+    const needed = hRows(3);
+    const jitter = GRID_PADDING_PX;
+    expect(gridRowsOverflowWithHysteresis(3, needed + jitter, true)).toBe(true);
+    // The buffer dominates that jitter by a wide margin.
+    expect(gridRowOverflowHysteresisBuffer()).toBeGreaterThan(jitter * 4);
+  });
+
+  it("stays in scroll mode when the container is smaller than the buffer", () => {
+    // Regression guard for the inline exit math: reusing `gridRowsOverflow` on
+    // `containerHeight - buffer` would hit its `<= 0` guard and wrongly report
+    // "no overflow" for a tiny container. A tiny container must stay scrolling.
+    const buffer = gridRowOverflowHysteresisBuffer();
+    expect(gridRowsOverflowWithHysteresis(3, 50, true)).toBe(true);
+    expect(gridRowsOverflowWithHysteresis(3, Math.floor(buffer / 2), true)).toBe(true);
+  });
+
+  it("releases immediately when previous is reset to undefined (content-shrink path)", () => {
+    // The dead band is for resize jitter only. When the grid's content shrinks
+    // (a panel closes, or a worktree switch drops the count), the caller resets
+    // the fed-back `previous` to undefined so the buffer can't pin scroll mode
+    // to a now-smaller layout. This is the pure-function half of that contract:
+    // at a height inside the buffer, `previous=true` holds but `previous=undefined`
+    // (the reset state) falls back to the bare threshold and releases.
+    const needed = hRows(2);
+    const holdHeight = needed + gridRowOverflowHysteresisBuffer() - 1;
+    expect(gridRowsOverflowWithHysteresis(2, holdHeight, true)).toBe(true); // held (resize)
+    expect(gridRowsOverflowWithHysteresis(2, holdHeight, undefined)).toBe(false); // released (reset)
+  });
+
+  it("documents the pre-fix bug: the bare threshold has no dead band", () => {
+    // The un-hysteretic `gridRowsOverflow` this fix supersedes flips at the SAME
+    // height in both directions (no previous-state memory) — H_on === H_off,
+    // the oscillation source. At a height inside the fixed function's dead band,
+    // the bare threshold has already released while the fixed one still holds.
+    const needed = hRows(3);
+    const holdHeight = needed + gridRowOverflowHysteresisBuffer() - 1;
+    expect(gridRowsOverflow(3, holdHeight)).toBe(false); // bare: released (bug)
+    expect(gridRowsOverflowWithHysteresis(3, holdHeight, true)).toBe(true); // fixed: held
+  });
+});
+
+describe("gridRowOverflowHysteresisBuffer", () => {
+  it("scales with measured cell metrics and stays a generous multiple of one row", () => {
+    const buffer = gridRowOverflowHysteresisBuffer();
+    const oneRow = pxForRows(GRID_MIN_PANEL_ROWS);
+    expect(buffer).toBe(Math.ceil(oneRow * GRID_ROW_OVERFLOW_HYSTERESIS_MULTIPLIER));
+    expect(buffer).toBeGreaterThan(oneRow); // multiplier > 1 → dead band exceeds a row
+
+    // A denser (smaller cell) metric set yields a proportionally smaller buffer,
+    // proving it tracks the metrics rather than being a fixed pixel band.
+    const dense: TerminalMetrics = { ...DEFAULT_TERMINAL_METRICS, cellHeight: 12 };
+    expect(gridRowOverflowHysteresisBuffer(dense)).toBeLessThan(buffer);
   });
 });
 

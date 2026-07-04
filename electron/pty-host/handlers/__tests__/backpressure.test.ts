@@ -27,6 +27,7 @@ function makeRendererConnection(): RendererConnection {
 
 function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
   return {
+    analysisWorkerPool: null,
     ptyManager: {
       getTerminal: vi.fn(() => undefined),
       getAll: vi.fn(() => []),
@@ -62,6 +63,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     pauseCoordinators: new Map(),
     rendererConnections: new Map(),
     windowProjectMap: new Map(),
+    windowFocusedTerminalMap: new Map(),
     ipcDataMirrorTerminals: new Set(),
     visualBuffers: [],
     visualSignalView: null,
@@ -77,6 +79,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     resumePausedTerminal: vi.fn(),
     createPortQueueManager: vi.fn(),
     getPausedDurationsSnapshot: vi.fn(() => []),
+    getDropTallySnapshot: vi.fn(() => []),
     ...overrides,
   };
 }

@@ -1,4 +1,5 @@
-import { defineIpcNamespace, op } from "../define.js";
+import { z } from "zod";
+import { defineIpcNamespace, op, opValidated } from "../define.js";
 import {
   RESOURCE_PROFILE_CONFIGS,
   type ResourceProfilePayload,
@@ -7,6 +8,8 @@ import {
 import { getResourceProfileService } from "../../window/serviceRefs.js";
 import type { HandlerDependencies } from "../types.js";
 import { RESOURCE_PROFILE_METHOD_CHANNELS } from "./resourceProfile.preload.js";
+
+const INTERACTIVE_OVERRIDE_DURATION_SCHEMA = z.number().finite().nonnegative().max(5_000);
 
 export function registerResourceProfileHandlers(_deps: HandlerDependencies): () => void {
   const namespace = defineIpcNamespace({
@@ -44,8 +47,9 @@ export function registerResourceProfileHandlers(_deps: HandlerDependencies): () 
       // Renderer-driven, fire-and-forget: hold the profile at ≥ balanced for a
       // short window because the user is actively interacting (scrolling a
       // full-screen mouse-reporting TUI). No-ops if the service hasn't started.
-      requestInteractiveOverride: op(
+      requestInteractiveOverride: opValidated(
         RESOURCE_PROFILE_METHOD_CHANNELS.requestInteractiveOverride,
+        INTERACTIVE_OVERRIDE_DURATION_SCHEMA,
         async (durationMs: number): Promise<void> => {
           getResourceProfileService()?.requestInteractiveOverride(durationMs);
         }

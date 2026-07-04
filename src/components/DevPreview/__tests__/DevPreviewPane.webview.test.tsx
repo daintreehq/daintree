@@ -4,6 +4,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { DevPreviewPaneProps } from "../DevPreviewPane";
 import { DevPreviewPane } from "../DevPreviewPane";
 import { projectClient } from "@/clients";
+import { actionService } from "@/services/ActionService";
 
 const notifyMock = vi.hoisted(() => vi.fn());
 
@@ -415,6 +416,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         onDialogRequest: vi.fn(() => vi.fn()),
         onFindShortcut: vi.fn(() => vi.fn()),
         onReloadShortcut: vi.fn(() => vi.fn()),
+        onCloseShortcut: vi.fn(() => vi.fn()),
         onNavigationBlocked: vi.fn(() => vi.fn()),
         onOAuthLoopbackStatus: vi.fn(() => vi.fn()),
         setLifecycleState: vi.fn().mockResolvedValue(undefined),
@@ -492,6 +494,54 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
     const { unmount } = render(<DevPreviewPane {...baseProps} />);
     expect(electron.webview.onReloadShortcut).toHaveBeenCalled();
+    unmount();
+    expect(unsubscribe).toHaveBeenCalled();
+  });
+
+  it("closes this panel when onCloseShortcut fires for it, and ignores other panels (#10859)", async () => {
+    let closeCb: ((payload: { panelId: string }) => void) | undefined;
+    const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
+      .electron;
+    electron.webview.onCloseShortcut = vi.fn((cb: (payload: { panelId: string }) => void) => {
+      closeCb = cb;
+      return vi.fn();
+    });
+    const dispatchSpy = vi
+      .spyOn(actionService, "dispatch")
+      .mockResolvedValue({ ok: true } as Awaited<ReturnType<typeof actionService.dispatch>>);
+
+    render(<DevPreviewPane {...baseProps} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(closeCb).toBeDefined();
+
+    // A shortcut targeting a different panel must not close this one
+    act(() => {
+      closeCb?.({ panelId: "some-other-panel" });
+    });
+    expect(dispatchSpy).not.toHaveBeenCalled();
+
+    // A shortcut targeting this panel closes exactly this panel by id
+    act(() => {
+      closeCb?.({ panelId: "dev-preview-panel-1" });
+    });
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      "terminal.close",
+      { terminalId: "dev-preview-panel-1" },
+      { source: "keybinding" }
+    );
+  });
+
+  it("unsubscribes from onCloseShortcut on unmount (#10859)", () => {
+    const unsubscribe = vi.fn();
+    const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
+      .electron;
+    electron.webview.onCloseShortcut = vi.fn(() => unsubscribe);
+
+    const { unmount } = render(<DevPreviewPane {...baseProps} />);
+    expect(electron.webview.onCloseShortcut).toHaveBeenCalled();
     unmount();
     expect(unsubscribe).toHaveBeenCalled();
   });
@@ -886,6 +936,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         onDialogRequest: vi.fn(() => vi.fn()),
         onFindShortcut: vi.fn(() => vi.fn()),
         onReloadShortcut: vi.fn(() => vi.fn()),
+        onCloseShortcut: vi.fn(() => vi.fn()),
         onNavigationBlocked: vi.fn(() => vi.fn()),
         onOAuthLoopbackStatus: vi.fn(() => vi.fn()),
         onUnresponsive: vi.fn(() => vi.fn()),
@@ -945,6 +996,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         onDialogRequest: vi.fn(() => vi.fn()),
         onFindShortcut: vi.fn(() => vi.fn()),
         onReloadShortcut: vi.fn(() => vi.fn()),
+        onCloseShortcut: vi.fn(() => vi.fn()),
         onNavigationBlocked: vi.fn(() => vi.fn()),
         onOAuthLoopbackStatus: vi.fn(() => vi.fn()),
         onUnresponsive: vi.fn(() => vi.fn()),
@@ -994,6 +1046,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         onDialogRequest: vi.fn(() => vi.fn()),
         onFindShortcut: vi.fn(() => vi.fn()),
         onReloadShortcut: vi.fn(() => vi.fn()),
+        onCloseShortcut: vi.fn(() => vi.fn()),
         onNavigationBlocked: vi.fn(() => vi.fn()),
         onOAuthLoopbackStatus: vi.fn(() => vi.fn()),
         onUnresponsive: vi.fn(() => vi.fn()),

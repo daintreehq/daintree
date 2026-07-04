@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import { execFile } from "child_process";
 import { isAbsolute, join as pathJoin } from "path";
 import { logWarn } from "./logger.js";
 import { Cache } from "./cache.js";
@@ -6,12 +6,19 @@ import { Cache } from "./cache.js";
 // worktreePath → gitDir/commonDir is immutable for a live worktree and all
 // removal/switch paths invalidate explicitly via clearGitDirCache /
 // clearGitCommonDirCache, so successful resolutions never expire — a TTL
-// would only force periodic blocking execSync re-resolution on hot poll
-// paths. Cached error (null) entries keep the default TTL so transient
-// failures self-heal.
+// would only force periodic git re-resolution on hot poll paths. Cached
+// error (null) entries keep the default TTL so transient failures self-heal.
+// The cache stores the resolution promise itself so concurrent callers for
+// the same worktree share a single git spawn.
 const SUCCESS_TTL_MS = Number.POSITIVE_INFINITY;
-const gitDirCache = new Cache<string, string | null>({ maxSize: 200, defaultTTL: 600_000 });
-const gitCommonDirCache = new Cache<string, string | null>({ maxSize: 200, defaultTTL: 600_000 });
+const gitDirCache = new Cache<string, Promise<string | null>>({
+  maxSize: 200,
+  defaultTTL: 600_000,
+});
+const gitCommonDirCache = new Cache<string, Promise<string | null>>({
+  maxSize: 200,
+  defaultTTL: 600_000,
+});
 
 export interface GitDirOptions {
   cache?: boolean;
@@ -20,42 +27,87 @@ export interface GitDirOptions {
   cacheErrors?: boolean;
 }
 
-export function getGitDir(worktreePath: string, options: GitDirOptions = {}): string | null {
-  const { cache = true, timeout = 5000, logErrors = false, cacheErrors = true } = options;
+function execGit(args: string[], cwd: string, timeout: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile("git", args, { cwd, timeout, encoding: "utf-8" }, (error, stdout) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve(typeof stdout === "string" ? stdout : String(stdout));
+      }
+    });
+  });
+}
 
-  if (cache && gitDirCache.has(worktreePath)) {
-    return gitDirCache.get(worktreePath)!;
-  }
-
+async function resolveGitPath(
+  revParseFlag: string,
+  worktreePath: string,
+  timeout: number,
+  logErrors: boolean,
+  warnMessage: string
+): Promise<string | null> {
   try {
-    const result = execSync("git rev-parse --git-dir", {
-      cwd: worktreePath,
-      encoding: "utf-8",
-      timeout,
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
-
-    const resolved = isAbsolute(result) ? result : pathJoin(worktreePath, result);
-
-    if (cache) {
-      gitDirCache.set(worktreePath, resolved, SUCCESS_TTL_MS);
-    }
-
-    return resolved;
+    const result = (await execGit(["rev-parse", revParseFlag], worktreePath, timeout)).trim();
+    return isAbsolute(result) ? result : pathJoin(worktreePath, result);
   } catch (error) {
     if (logErrors) {
-      logWarn("Failed to resolve git directory", {
+      logWarn(warnMessage, {
         path: worktreePath,
         error: (error as Error).message,
       });
     }
-
-    if (cache && cacheErrors) {
-      gitDirCache.set(worktreePath, null);
-    }
-
     return null;
   }
+}
+
+function cachedResolveGitPath(
+  cacheStore: Cache<string, Promise<string | null>>,
+  revParseFlag: string,
+  warnMessage: string,
+  worktreePath: string,
+  options: GitDirOptions
+): Promise<string | null> {
+  const { cache = true, timeout = 5000, logErrors = false, cacheErrors = true } = options;
+
+  if (cache) {
+    const cached = cacheStore.get(worktreePath);
+    if (cached !== undefined) {
+      return cached;
+    }
+  }
+
+  const promise = resolveGitPath(revParseFlag, worktreePath, timeout, logErrors, warnMessage);
+
+  if (cache) {
+    // Insert at the error TTL while in flight; upgrade to the permanent TTL
+    // on success, or drop the entry when errors shouldn't be cached.
+    cacheStore.set(worktreePath, promise);
+    void promise.then((resolved) => {
+      if (cacheStore.get(worktreePath) !== promise) {
+        return;
+      }
+      if (resolved !== null) {
+        cacheStore.set(worktreePath, promise, SUCCESS_TTL_MS);
+      } else if (!cacheErrors) {
+        cacheStore.invalidate(worktreePath);
+      }
+    });
+  }
+
+  return promise;
+}
+
+export function getGitDir(
+  worktreePath: string,
+  options: GitDirOptions = {}
+): Promise<string | null> {
+  return cachedResolveGitPath(
+    gitDirCache,
+    "--git-dir",
+    "Failed to resolve git directory",
+    worktreePath,
+    options
+  );
 }
 
 /**
@@ -67,40 +119,38 @@ export function getGitDir(worktreePath: string, options: GitDirOptions = {}): st
  * touches `.git/objects` or `packed-refs` — most importantly background
  * fetches across sibling worktrees.
  */
-export function getGitCommonDir(worktreePath: string, options: GitDirOptions = {}): string | null {
-  const { cache = true, timeout = 5000, logErrors = false, cacheErrors = true } = options;
+export function getGitCommonDir(
+  worktreePath: string,
+  options: GitDirOptions = {}
+): Promise<string | null> {
+  return cachedResolveGitPath(
+    gitCommonDirCache,
+    "--git-common-dir",
+    "Failed to resolve git common directory",
+    worktreePath,
+    options
+  );
+}
 
-  if (cache && gitCommonDirCache.has(worktreePath)) {
-    return gitCommonDirCache.get(worktreePath)!;
-  }
-
+/**
+ * Resolve the currently checked-out branch name for a worktree. Returns `null`
+ * for a detached HEAD (git emits the literal "HEAD") or on any failure. Not
+ * cached: unlike the git dir, the branch is mutable over a worktree's life.
+ * Used best-effort at terminal-close time to stamp a resume sanity-check onto
+ * the journal record, so it runs with a short default timeout and never throws.
+ */
+export async function getGitBranch(
+  worktreePath: string,
+  options: { timeout?: number } = {}
+): Promise<string | null> {
+  const { timeout = 500 } = options;
   try {
-    const result = execSync("git rev-parse --git-common-dir", {
-      cwd: worktreePath,
-      encoding: "utf-8",
-      timeout,
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
-
-    const resolved = isAbsolute(result) ? result : pathJoin(worktreePath, result);
-
-    if (cache) {
-      gitCommonDirCache.set(worktreePath, resolved, SUCCESS_TTL_MS);
-    }
-
-    return resolved;
-  } catch (error) {
-    if (logErrors) {
-      logWarn("Failed to resolve git common directory", {
-        path: worktreePath,
-        error: (error as Error).message,
-      });
-    }
-
-    if (cache && cacheErrors) {
-      gitCommonDirCache.set(worktreePath, null);
-    }
-
+    const result = (
+      await execGit(["rev-parse", "--abbrev-ref", "HEAD"], worktreePath, timeout)
+    ).trim();
+    if (!result || result === "HEAD") return null;
+    return result;
+  } catch {
     return null;
   }
 }
@@ -121,10 +171,10 @@ export function clearGitCommonDirCache(worktreePath?: string): void {
   }
 }
 
-export function getGitNotePath(
+export async function getGitNotePath(
   worktreePath: string,
   filename: string = "daintree/note"
-): string | null {
-  const gitDir = getGitDir(worktreePath);
+): Promise<string | null> {
+  const gitDir = await getGitDir(worktreePath);
   return gitDir ? pathJoin(gitDir, filename) : null;
 }

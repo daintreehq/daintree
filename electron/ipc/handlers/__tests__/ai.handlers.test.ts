@@ -237,6 +237,38 @@ describe("ai handler payload validation", () => {
     );
   });
 
+  it("rejects AGENT_SETTINGS_SET_GLOBAL_INLINE payload that is not a boolean (#10876)", async () => {
+    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET_GLOBAL_INLINE);
+    await expect(handler({} as never, "true" as never)).rejects.toThrow(
+      "Invalid globalUseAltScreen"
+    );
+    await expect(handler({} as never, 1 as never)).rejects.toThrow("Invalid globalUseAltScreen");
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("writes AGENT_SETTINGS_SET_GLOBAL_INLINE via a dot-path leaf without rewriting the slice (#10876)", async () => {
+    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET_GLOBAL_INLINE);
+    (storeMock.get as Mock).mockImplementation((key: string, defaultValue?: unknown) => {
+      if (key === "agentSettings") {
+        return { agents: { codex: { inlineMode: "on" } }, settingsVersion: 1 };
+      }
+      return defaultValue;
+    });
+
+    const result = await handler({} as never, true as never);
+
+    // Dot-path leaf write — never the whole `agentSettings` slice.
+    expect(storeMock.set).toHaveBeenCalledWith("agentSettings.globalUseAltScreen", true);
+    expect(storeMock.set).not.toHaveBeenCalledWith("agentSettings", expect.anything());
+    // Per-agent records are preserved untouched (no inlineMode mutation).
+    expect(result).toEqual(
+      expect.objectContaining({
+        globalUseAltScreen: true,
+        agents: { codex: { inlineMode: "on" } },
+      })
+    );
+  });
+
   it("normalizes malformed stored agent settings in AGENT_SETTINGS_RESET", async () => {
     const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_RESET);
     (storeMock.get as Mock).mockImplementation((key: string, defaultValue?: unknown) => {

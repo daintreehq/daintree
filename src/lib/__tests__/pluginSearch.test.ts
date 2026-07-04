@@ -28,6 +28,7 @@ function makePlugin(overrides: {
         commands: [],
         views: [],
         mcpServers: [],
+        skills: [],
         keybindings: [],
         contextMenus: [],
         forgeProviders: [],
@@ -47,6 +48,7 @@ function makePlugin(overrides: {
     updateAvailable: null,
     devMode: false,
     pluginDanger: "safe",
+    blocklisted: false,
   };
 }
 

@@ -134,7 +134,9 @@ export function applyFleetBroadcastResult(payload: BroadcastWriteResultPayload):
     // Null payload — raw input has no meaningful retry, and the
     // `Retry failed` action checks for `payload == null` before firing.
     // The chip still surfaces so the user notices something rejected.
-    useFleetFailureStore.getState().recordFailure(null, nonPermanentFailedIds);
+    useFleetFailureStore
+      .getState()
+      .recordFailure(null, nonPermanentFailedIds, permanentlyFailedIds.length);
   }
 
   if (permanentlyFailedIds.length > 0) {

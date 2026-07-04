@@ -7,6 +7,7 @@ import { useFleetPicker } from "@/hooks/useFleetPicker";
 import { FleetPickerContent } from "@/components/Fleet/FleetPickerContent";
 import type { AgentState } from "@/types";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { useFleetRunStore } from "@/store/fleetRunStore";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -31,6 +32,11 @@ export function FleetCountChip({
   const armOrder = useFleetArmingStore((s) => s.armOrder);
   const disarmId = useFleetArmingStore((s) => s.disarmId);
   const addToFleet = useFleetArmingStore((s) => s.addToFleet);
+  // Supervised-run submission failures per pane (#10930): the armed list is
+  // the per-target drill-down surface, so a pane that rejected the last
+  // broadcast write carries an inline "Send failed" marker next to its live
+  // agent-state badge.
+  const run = useFleetRunStore((s) => s.run);
 
   // Internal mode toggle for the popover content. "list" shows the armed
   // terminals (default). "picker" swaps to FleetPickerContent for adding new
@@ -193,6 +199,9 @@ export function FleetCountChip({
               ) : (
                 armOrder.map((id) => {
                   const title = titlesByPane[id] ?? id;
+                  const sendFailed = run?.targets.some(
+                    (t) => t.terminalId === id && t.submission === "failed"
+                  );
                   return (
                     <li key={id} className="flex items-center gap-2 rounded hover:bg-tint/[0.08]">
                       <button
@@ -203,6 +212,14 @@ export function FleetCountChip({
                       >
                         {title}
                       </button>
+                      {sendFailed && (
+                        <span
+                          className="shrink-0 text-[10px] text-status-error"
+                          data-testid={`fleet-row-send-failed-${id}`}
+                        >
+                          Send failed
+                        </span>
+                      )}
                       {renderPaneStateBadge(id, agentStatesByPane[id])}
                       <button
                         type="button"

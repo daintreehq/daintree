@@ -64,17 +64,26 @@ export class IpcQueueManager {
     }
     const previousTotal = this.totalQueuedBytes;
     this.totalQueuedBytes = Math.max(0, this.totalQueuedBytes - removed);
-    // Aggregate-gate resume sweep — mirrors PortQueueManager.removeBytes: a
-    // terminal paused by the aggregate watermark may receive no further acks
-    // of its own, so re-check every paused terminal when the total drains
-    // below the low watermark.
+    this.sweepAggregateResume(previousTotal);
+  }
+
+  /**
+   * Aggregate-gate resume sweep — mirrors PortQueueManager: a terminal paused
+   * by the aggregate watermark may receive no further acks of its own, so
+   * re-check every paused terminal whenever the total drains below the low
+   * watermark. Runs on acks (removeBytes), the safety-timeout force-resume,
+   * and clearQueue — any of them can be the drain event, and sweeping only on
+   * acks left aggregate-paused siblings stranded until their own timeouts.
+   */
+  private sweepAggregateResume(previousTotal: number): void {
     if (
-      previousTotal >= IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES &&
-      this.totalQueuedBytes < IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES
+      previousTotal < IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES ||
+      this.totalQueuedBytes >= IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES
     ) {
-      for (const pausedId of [...this.pausedTerminals.keys()]) {
-        this.tryResume(pausedId);
-      }
+      return;
+    }
+    for (const pausedId of [...this.pausedTerminals.keys()]) {
+      this.tryResume(pausedId);
     }
   }
 
@@ -162,6 +171,7 @@ export class IpcQueueManager {
         // (mirrors the port-path fix in #6244).
         const droppedBytes = this.queuedBytes.get(id) ?? 0;
         this.queuedBytes.delete(id);
+        const previousTotal = this.totalQueuedBytes;
         this.totalQueuedBytes = Math.max(0, this.totalQueuedBytes - droppedBytes);
 
         const coordinator = this.deps.getPauseCoordinator(id);
@@ -181,6 +191,10 @@ export class IpcQueueManager {
             bufferUtilization: currentUtilization,
           });
         }
+
+        // Dropping this terminal's bytes may have drained the aggregate below
+        // its low watermark — re-check siblings paused by the aggregate gate.
+        this.sweepAggregateResume(previousTotal);
       }, IPC_MAX_PAUSE_MS);
 
       this.pausedTerminals.set(id, safetyTimeout);
@@ -254,9 +268,14 @@ export class IpcQueueManager {
     }
     const removed = this.queuedBytes.get(id) ?? 0;
     this.queuedBytes.delete(id);
+    const previousTotal = this.totalQueuedBytes;
     this.totalQueuedBytes = Math.max(0, this.totalQueuedBytes - removed);
     this.pausedTerminals.delete(id);
     this.pauseStartTimes.delete(id);
+    // A cleared terminal (exit, force-resume) can be the one holding most of
+    // the aggregate — sweep so aggregate-paused siblings resume now instead of
+    // waiting out their safety timeouts.
+    this.sweepAggregateResume(previousTotal);
   }
 
   dispose(): void {

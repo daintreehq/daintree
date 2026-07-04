@@ -199,3 +199,30 @@ describe("worktree.sessions.restartAll confirm gate", () => {
     expect(bulkRestartByWorktree).not.toHaveBeenCalled();
   });
 });
+
+describe("worktree.sessions.clearHistory run()", () => {
+  const clearMock = vi.fn().mockResolvedValue(undefined);
+
+  beforeEach(() => {
+    clearMock.mockClear();
+    vi.stubGlobal("window", { electron: { agentSessionHistory: { clear: clearMock } } });
+  });
+
+  it("clears the explicit worktreeId when provided", async () => {
+    const run = setupActions();
+    await run("worktree.sessions.clearHistory", { worktreeId: "wt-explicit" });
+    expect(clearMock).toHaveBeenCalledWith("wt-explicit");
+  });
+
+  it("falls back to the active worktree from context", async () => {
+    const run = setupActions();
+    await run("worktree.sessions.clearHistory", {}, { activeWorktreeId: "wt-active" });
+    expect(clearMock).toHaveBeenCalledWith("wt-active");
+  });
+
+  it("is a no-op when no worktree can be resolved", async () => {
+    const run = setupActions();
+    await run("worktree.sessions.clearHistory", {});
+    expect(clearMock).not.toHaveBeenCalled();
+  });
+});

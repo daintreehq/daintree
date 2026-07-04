@@ -116,9 +116,26 @@ export function ContentGridDefault({
                   // Stop xterm scrollback / overflow strip-of-history from
                   // chaining into the outer chrome via overscroll bounces.
                   overscrollBehavior: "contain",
-                  // Reserve a real gutter on the right for the custom
-                  // GridScrollbar so panels never sit under the handle. The
-                  // native scrollbar is hidden in CSS; this is the only gutter.
+                  // Reserve a real gutter on the right, only in scroll mode, so
+                  // the custom overlay GridScrollbar never sits over panel
+                  // content. Non-scroll mode keeps the symmetric `p-1` (4px) and
+                  // reclaims the 22px — an always-on gutter wastes a strip the
+                  // width of a mini-column when no bar is shown.
+                  //
+                  // This does NOT re-open the #10871 oscillation. That loop ran
+                  // through the ResizeObserver reading `entry.contentRect`
+                  // (content-box, padding-EXCLUSIVE), so toggling this padding
+                  // shrank the measured width and fed back into the col/row math.
+                  // Two shipped guards make the toggle inert now: (1) all three
+                  // measurement paths read `clientWidth`/`clientHeight` — the
+                  // padding-box (content + padding), and `#panel-grid` hides its
+                  // native scrollbar in CSS (zero width) — so toggling this
+                  // padding only reallocates content↔padding inside a fixed box
+                  // and leaves the measured dimensions untouched — no feedback;
+                  // (2) the scroll-mode boundary itself is a Schmitt trigger
+                  // (`gridRowsOverflowWithHysteresis`), so a resize through the
+                  // threshold flips at most once per direction. Keep both before
+                  // re-narrowing this gutter.
                   paddingRight: ctx.isScrollMode ? GRID_SCROLLBAR_GUTTER_PX : undefined,
                 }}
                 id="panel-grid"

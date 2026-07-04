@@ -110,7 +110,13 @@ export function PanelPalette({
     selectedIndex >= 0 && selectedIndex < results.length ? results[selectedIndex] : null;
 
   const renderOption = (kind: PanelKindOption, index: number) => {
-    const isUnavailable = kind.installed === false;
+    const isStale = kind.isStale === true;
+    const isUnavailable = kind.installed === false || isStale;
+    const badgeLabel = isStale
+      ? "Worktree removed"
+      : kind.installed === false
+        ? "Not installed"
+        : null;
     return (
       <button
         key={kind.id}
@@ -146,9 +152,9 @@ export function PanelPalette({
             <div className="text-xs text-daintree-text/50 truncate">{kind.description}</div>
           )}
         </div>
-        {isUnavailable && (
+        {badgeLabel && (
           <span className="shrink-0 text-[10px] font-medium text-daintree-text/40">
-            Not installed
+            {badgeLabel}
           </span>
         )}
       </button>

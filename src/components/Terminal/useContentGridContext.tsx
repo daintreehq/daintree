@@ -38,7 +38,7 @@ import type { PanelInstance, TabGroup, TabGroupLocation } from "@shared/types/pa
 import {
   computeGridColumns,
   computeScrollRowHeight,
-  gridRowsOverflow,
+  gridRowsOverflowWithHysteresis,
   GRID_TRANSITION_DURATION_MS,
 } from "@/lib/terminalLayout";
 import {
@@ -580,7 +580,19 @@ export function useContentGridContext({
         // restored (#10827).
         if (isSidebarMeasurementLocked()) return;
         if (entry) {
-          const { width, height } = entry.contentRect;
+          // Read the same `clientWidth`/`clientHeight` (content-box + padding)
+          // the initial-mount and post-unlock paths use, rather than
+          // `entry.contentRect` (content-box, excludes padding). The scroll
+          // gutter toggles with scroll mode, but because this measurement is
+          // padding-inclusive (and `#panel-grid` hides its native scrollbar in
+          // CSS), that toggle doesn't move the measured size — it's what lets
+          // the gutter be conditional without re-opening #10871's feedback. The
+          // three paths must still agree on box model so a re-subscription never
+          // jumps the measured size — the downstream
+          // `maxFeasibleCols`/`gridRowsOverflow` math subtracts `GRID_PADDING_PX`
+          // and expects the padding-inclusive dimension.
+          const width = container.clientWidth;
+          const height = container.clientHeight;
           setGridWidth((prev) => (prev === width ? prev : width));
           setGridHeight((prev) => (prev === height ? prev : height));
           setGridDimensions({ width, height });
@@ -672,6 +684,23 @@ export function useContentGridContext({
   // column change.
   const [hysteresisGridCols, setHysteresisGridCols] = useState<number | undefined>(undefined);
 
+  // Previous committed scroll-mode boolean, fed back into the row-overflow
+  // Schmitt trigger below. Held as state (not a ref) for the same reason as
+  // `hysteresisGridCols`: it is read during render (in the `isScrollMode`
+  // derivation) and the React Compiler disallows ref reads there. Settled in
+  // the same `useLayoutEffect` that settles `hysteresisGridCols`.
+  const [hysteresisScrollMode, setHysteresisScrollMode] = useState<boolean | undefined>(undefined);
+
+  // Switching worktrees reuses this same hook instance (`activeWorktreeId` is
+  // reactive state, not a remount key), so a scroll-mode hold entered in one
+  // view would otherwise carry into the next — pinning a smaller-panel-count
+  // view in scroll mode at the same window size. Drop the hold on any view
+  // change so the incoming worktree evaluates against the fresh threshold. The
+  // close-path reset lives in the settle effect below.
+  useEffect(() => {
+    setHysteresisScrollMode(undefined);
+  }, [activeWorktreeId]);
+
   const gridCols = useMemo(() => {
     if (
       !maximizedId &&
@@ -710,7 +739,11 @@ export function useContentGridContext({
   // layout settles once the canonical commit clears `closingIds`.
   const scrollModeCount = tabGroups.length + closingIds.size;
   const scrollModeRows = gridCols > 0 ? Math.ceil(scrollModeCount / gridCols) : scrollModeCount;
-  const isScrollMode = gridRowsOverflow(scrollModeRows, gridHeight);
+  const isScrollMode = gridRowsOverflowWithHysteresis(
+    scrollModeRows,
+    gridHeight,
+    hysteresisScrollMode
+  );
   const scrollRowHeight = useMemo(() => computeScrollRowHeight(gridHeight), [gridHeight]);
 
   const layoutTransition: Transition = useMemo(
@@ -909,6 +942,21 @@ export function useContentGridContext({
     setHysteresisGridCols(
       layoutConfig.strategy === "automatic" && !showPlaceholder ? gridCols : undefined
     );
+
+    // Settle the scroll-mode Schmitt trigger. Unlike column hysteresis
+    // (automatic-strategy only), `isScrollMode` is computed for every layout
+    // strategy, so this is NOT gated on strategy (that would silently re-disable
+    // the row-overflow dead band for fixed-rows / fixed-columns layouts).
+    //
+    // The dead band exists to smooth *resize*-driven jitter, not content-shape
+    // changes. On a panel close the layout genuinely has fewer rows, and the
+    // ~1.5-row buffer would otherwise dwarf that swing and pin the grid in
+    // scroll mode until the window grew ~500px — a stale hold unrelated to the
+    // resize the buffer is for. Reset to `undefined` on a close so the next
+    // render re-evaluates against the fresh (bare) threshold; the worktree-switch
+    // reset effect below covers the analogous cross-view case. `applyHysteresis`
+    // gets the same self-correction for free via its `countCeiling` cap.
+    setHysteresisScrollMode(isPureClose ? undefined : isScrollMode);
 
     if (isProjectSwitching || isDraggingRef.current) return;
 

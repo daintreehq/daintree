@@ -82,13 +82,7 @@ import { PanelTransitionOverlay } from "./components/Panel";
 
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
-import {
-  buildResumeCommand,
-  buildResumeLatestCommand,
-  reconcileBypassFlags,
-  resolveEffectiveBypass,
-} from "@shared/types/agentSettings";
-import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { useResumeAgentSession } from "./hooks/useResumeAgentSession";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
 import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
 import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
@@ -104,31 +98,6 @@ const loadE2ENotificationBackdoor = () => import("./lib/e2eNotificationBackdoor"
 const loadJetbrainsMono500 = () => import("@fontsource/jetbrains-mono/latin-500.css");
 const loadJetbrainsMono600 = () => import("@fontsource/jetbrains-mono/latin-600.css");
 const preloadFileViewerModal = () => import("@/components/FileViewer/FileViewerModal");
-
-// Reconciles a resumed session's persisted launch flags against the current
-// global skip-permissions setting (#10432, the "resume trap"): the snapshot may
-// have been captured while the global switch was in a different state, so strip
-// the agent's canonical bypass flag and re-add it only if it currently resolves.
-function reconcileResumeLaunchFlags(session: {
-  agentId: string;
-  agentLaunchFlags?: string[];
-}): string[] | undefined {
-  const settings = useAgentSettingsStore.getState().settings;
-  const entry = settings?.agents?.[session.agentId] ?? {};
-  const effectiveBypass = resolveEffectiveBypass(
-    entry,
-    session.agentId,
-    settings?.globalSkipPermissions
-  );
-  // Pass [] when no flags were captured so global-on still injects the bypass
-  // token for a supported agent (reconcileBypassFlags no-ops for others).
-  return reconcileBypassFlags(
-    session.agentLaunchFlags ?? [],
-    session.agentId,
-    effectiveBypass,
-    entry.dangerousArgs as string | undefined
-  );
-}
 
 // Direct file import (not the Project barrel) so the lazy chunk doesn't pull
 // in barrel siblings. Renders only when no project is open, so it stays off
@@ -243,6 +212,11 @@ function preloadThemePalette() {
 }
 const LazyThemePalette = lazy(() =>
   preloadThemePalette().then((m) => ({ default: m.ThemePalette }))
+);
+const LazyResumeSessionsPalette = lazy(() =>
+  import("./components/Terminal/ResumeSessionsPalette").then((m) => ({
+    default: m.ResumeSessionsPalette,
+  }))
 );
 
 function preloadLogLevelPalette() {
@@ -417,7 +391,6 @@ import { usePluginConfirmStore } from "./store/pluginConfirmStore";
 import { usePluginMcpConfirmStore } from "./store/pluginMcpConfirmStore";
 import { usePluginCapabilityConfirmStore } from "./store/pluginCapabilityConfirmStore";
 import { useDiagnosticsReviewStore } from "./store/diagnosticsReviewStore";
-import { useAgentSettingsStore } from "./store/agentSettingsStore";
 // Eager side-effect import: auto-discovers every built-in plugin renderer and
 // registers its builtin view slots at module-eval time, before first render.
 // Must stay static — a deferred/idle import races the user, so getBuiltinView
@@ -611,6 +584,7 @@ function AppInner() {
   );
 
   const { activeWorktree, defaultTerminalCwd } = useActiveWorktreeSync();
+  const resumeSession = useResumeAgentSession();
 
   const worktreePalette = useWorktreePalette({ worktrees });
   const quickCreatePalette = useQuickCreatePalette();
@@ -668,6 +642,10 @@ function AppInner() {
   const shouldMountQuickCreatePalette = useKeepMounted(quickCreatePalette.isOpen);
   const shouldMountPanelPalette = useKeepMounted(panelPalette.isOpen);
   const shouldMountThemePalette = useKeepMounted(isThemePaletteOpen);
+  const isResumeSessionsPaletteOpen = usePaletteStore(
+    (state) => state.activePaletteId === "resume-sessions"
+  );
+  const shouldMountResumeSessionsPalette = useKeepMounted(isResumeSessionsPaletteOpen);
   const shouldMountLogLevelPalette = useKeepMounted(isLogLevelPaletteOpen);
   const shouldMountActionPalette = useKeepMounted(actionPalette.isOpen);
   const shouldMountCrossDiffDialog = useKeepMounted(crossDiffDialog.isOpen);
@@ -931,6 +909,7 @@ function AppInner() {
     onOpenWorktreeOverview: openWorktreeOverview,
     onCloseWorktreeOverview: closeWorktreeOverview,
     onOpenPanelPalette: panelPalette.open,
+    onOpenResumeSessionsPalette: () => usePaletteStore.getState().openPalette("resume-sessions"),
     onOpenProjectSwitcherPalette: projectSwitcherPalette.toggle,
     onConfirmCloseActiveProject: (projectId: string) => {
       void projectSwitcherPalette.removeProject(projectId);
@@ -1223,23 +1202,7 @@ function AppInner() {
                       const result = panelPalette.handleSelect(kind);
                       if (!result) return;
                       if (result.resumeSession) {
-                        const session = result.resumeSession;
-                        const agentConfig = getEffectiveAgentConfig(session.agentId);
-                        const resumeFlags = reconcileResumeLaunchFlags(session);
-                        const command =
-                          buildResumeCommand(session.agentId, session.sessionId, resumeFlags) ??
-                          buildResumeLatestCommand(session.agentId, resumeFlags);
-                        if (command && agentConfig) {
-                          addPanel({
-                            kind: "terminal",
-                            launchAgentId: session.agentId,
-                            title: agentConfig.name,
-                            cwd: defaultTerminalCwd,
-                            worktreeId: activeWorktreeId ?? undefined,
-                            command,
-                            location: "grid",
-                          });
-                        }
+                        void resumeSession(result.resumeSession);
                       } else if (result.id.startsWith("agent:")) {
                         const agentId = result.id.slice("agent:".length);
                         if (agentId) {
@@ -1259,23 +1222,7 @@ function AppInner() {
                       if (!selected) return;
                       if (selected.id === MORE_AGENTS_PANEL_ID) return;
                       if (selected.resumeSession) {
-                        const session = selected.resumeSession;
-                        const agentConfig = getEffectiveAgentConfig(session.agentId);
-                        const resumeFlags = reconcileResumeLaunchFlags(session);
-                        const command =
-                          buildResumeCommand(session.agentId, session.sessionId, resumeFlags) ??
-                          buildResumeLatestCommand(session.agentId, resumeFlags);
-                        if (command && agentConfig) {
-                          addPanel({
-                            kind: "terminal",
-                            launchAgentId: session.agentId,
-                            title: agentConfig.name,
-                            cwd: defaultTerminalCwd,
-                            worktreeId: activeWorktreeId ?? undefined,
-                            command,
-                            location: "grid",
-                          });
-                        }
+                        void resumeSession(selected.resumeSession);
                       } else if (selected.id.startsWith("agent:")) {
                         const agentId = selected.id.slice("agent:".length);
                         if (agentId) {
@@ -1396,6 +1343,18 @@ function AppInner() {
               {shouldMountThemePalette && (
                 <Suspense fallback={null}>
                   <LazyThemePalette isOpen={isThemePaletteOpen} onClose={closeThemePalette} />
+                </Suspense>
+              )}
+            </ErrorBoundary>
+
+            <ErrorBoundary
+              variant="component"
+              componentName="ResumeSessionsPalette"
+              resetKeys={[Number(isResumeSessionsPaletteOpen)]}
+            >
+              {shouldMountResumeSessionsPalette && (
+                <Suspense fallback={null}>
+                  <LazyResumeSessionsPalette />
                 </Suspense>
               )}
             </ErrorBoundary>

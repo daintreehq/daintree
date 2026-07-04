@@ -1,12 +1,10 @@
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
+import { useFleetRunStore } from "@/store/fleetRunStore";
 import { useFleetTargetOverridesStore } from "@/store/fleetTargetOverridesStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
-import { usePanelStore } from "@/store/panelStore";
-import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { logWarn } from "@/utils/logger";
-import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { resolveFleetBroadcastTargetIds } from "./fleetBroadcast";
 import {
   executeFleetBroadcast,
@@ -31,21 +29,62 @@ export function cancelActiveBroadcast(): void {
  * participates in the same coordination as the Enter path: a newer broadcast
  * pre-empts an older one (they share `fleetBroadcastProgressStore`, which only
  * tracks one run), and `cancelActiveBroadcast` (the ribbon Cancel button) can
- * abort it. Callers own their own result handling; this only manages the
- * controller lifecycle and the cooperative `signal`.
+ * abort it. Callers own their own result handling; this manages the controller
+ * lifecycle, the cooperative `signal`, and the supervised-run record in
+ * `fleetRunStore` (which owns the post-submit `watching` phase and the durable
+ * run-history append at finalize — see #10930).
  */
 export async function runManagedFleetBroadcast(
   draft: string,
   targetIds: string[],
-  perTargetOverrides?: Record<string, string>
+  perTargetOverrides?: Record<string, string>,
+  opts?: { isRetry?: boolean; draftPreview?: string }
 ): Promise<FleetExecutionResult> {
   // A newer broadcast pre-empts the in-flight one — leaving a stale controller
   // would race two runs against the shared progress store. Abort then take over.
   activeBroadcastController?.abort();
   const controller = new AbortController();
   activeBroadcastController = controller;
+  // Zero-target dispatches (every pane went ineligible between snapshot and
+  // send) are structural no-ops — don't mint a run record for them.
+  // `draftPreview` lets the retry path (empty draft, payload in overrides)
+  // still label its run with the literal being replayed.
+  const runId =
+    targetIds.length > 0
+      ? useFleetRunStore.getState().beginRun(targetIds, {
+          draft: opts?.draftPreview ?? draft,
+          isRetry: opts?.isRetry,
+        })
+      : null;
   try {
-    return await executeFleetBroadcast(draft, targetIds, perTargetOverrides, controller.signal);
+    const result = await executeFleetBroadcast(
+      draft,
+      targetIds,
+      perTargetOverrides,
+      controller.signal
+    );
+    if (runId !== null) {
+      useFleetRunStore.getState().applySubmissionResult(runId, result);
+    }
+    return result;
+  } catch (error) {
+    // executeFleetBroadcast absorbs per-target rejections via allSettled, so a
+    // throw is an unexpected crash — finalize the run rather than leaving it
+    // pinned at `submitting` with no terminal record.
+    if (runId !== null) {
+      useFleetRunStore.getState().applySubmissionResult(runId, {
+        total: 0,
+        successCount: 0,
+        failureCount: 0,
+        perTarget: [],
+        failedIds: [],
+        permanentlyFailedIds: [],
+        transientlyFailedIds: [],
+        cancelled: false,
+        skippedCount: targetIds.length,
+      });
+    }
+    throw error;
   } finally {
     if (activeBroadcastController === controller) {
       activeBroadcastController = null;
@@ -93,42 +132,6 @@ function buildBroadcastAnnouncement(result: FleetExecutionResult): string {
     return `Broadcast sent to ${result.successCount} — ${describeFailureSplit(permanent, transient)}`;
   }
   return `Broadcast sent to ${plural(result.successCount, "terminal", "terminals")}`;
-}
-
-/**
- * Record a completed fleet broadcast in the durable run history (#9949).
- * Fire-and-forget: a thrown IPC error must never disrupt the broadcast UX, so
- * we `void` + `.catch`. Pane titles are snapshotted from the live registry so
- * the record stays legible after a terminal closes. Only resolved results are
- * recorded — `runManagedFleetBroadcast` always resolves (cancellation surfaces
- * as `cancelled: true`), so a throw here would be an unexpected crash, not an
- * automation outcome.
- */
-function recordFleetRunHistory(
-  draft: string,
-  targetCount: number,
-  result: FleetExecutionResult,
-  durationMs: number
-): void {
-  const panelsById = usePanelStore.getState().panelsById;
-  safeFireAndForget(
-    window.electron.runHistory.append({
-      kind: "fleet",
-      draftPreview: draft,
-      targetCount,
-      successCount: result.successCount,
-      failureCount: result.failureCount,
-      cancelled: result.cancelled,
-      durationMs,
-      perTarget: result.perTarget.map((t) => ({
-        terminalId: t.terminalId,
-        title: getNarrowPanel(panelsById, t.terminalId)?.title,
-        status: t.status,
-        reason: t.reason,
-      })),
-    }),
-    { context: "Failed to record fleet run history" }
-  );
 }
 
 /**
@@ -225,12 +228,12 @@ export function tryFleetBroadcastFromEditor(
     // `resolveFleetBroadcastTargetIds()`; re-run the panel-eligibility
     // filter so disposed PTYs are dropped too.
     const eligibleTargets = filterEligibleIds(effectiveTargets);
-    const startedAt = Date.now();
     try {
       // A second Enter while a broadcast is in-flight pre-empts the first;
       // the shared controller lets the ribbon Cancel button abort it too.
+      // Run-history recording now happens when the supervised run finalizes
+      // (fleetRunStore), so the record carries watch-phase outcomes too.
       const result = await runManagedFleetBroadcast(text, eligibleTargets, overridesArg);
-      recordFleetRunHistory(text, eligibleTargets.length, result, Date.now() - startedAt);
       if (result.failureCount > 0) {
         logWarn("[fleetEnterBroadcast] broadcast had rejections", {
           failureCount: result.failureCount,
@@ -254,7 +257,12 @@ export function tryFleetBroadcastFromEditor(
           }
         }
         if (result.transientlyFailedIds.length > 0) {
-          useFleetFailureStore.getState().recordFailure(text, result.transientlyFailedIds);
+          // The disarm count rides along so the banner can describe THIS
+          // broadcast's permanent casualties without consulting the run store
+          // (whose run may be superseded by the time the banner renders).
+          useFleetFailureStore
+            .getState()
+            .recordFailure(text, result.transientlyFailedIds, result.permanentlyFailedIds.length);
         }
         // Successful targets in a partial-failure run still clear their
         // stale failure dots — same logic as the all-success branch below.

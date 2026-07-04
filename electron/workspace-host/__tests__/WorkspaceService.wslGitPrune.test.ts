@@ -119,7 +119,7 @@ vi.mock("../../services/events.js", () => ({ events: mockEvents }));
 vi.mock("../../utils/gitFileWatcher.js", () => ({
   GitFileWatcher: class {
     start() {
-      return false;
+      return Promise.resolve(false);
     }
     dispose() {}
   },

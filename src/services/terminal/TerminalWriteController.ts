@@ -16,6 +16,59 @@ import { markRendererPerformance } from "@/utils/performance";
  * Buffer.byteLength/TextEncoder semantics exactly — lone surrogates count as
  * 3 bytes (U+FFFD), valid pairs as 4.
  */
+/**
+ * Max size of a single xterm write-buffer entry. xterm's WriteBuffer enforces
+ * its 12ms parse budget only BETWEEN entries — one entry is parsed atomically,
+ * so a 256KB coalesced batch handed to `terminal.write()` as one entry becomes
+ * a 10-50ms unyieldable main-thread task that starves wheel/keystroke dispatch
+ * (the "scrolled TUI locks itself up" mechanism). Slicing the batch into
+ * ≤32KB entries keeps each parse task under a frame while xterm's own
+ * scheduler yields between them; Chromium then dispatches pending input
+ * between the macrotask continuations.
+ */
+const WRITE_SLICE_BYTES = 32 * 1024;
+
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function isUtf8Continuation(byte: number): boolean {
+  return (byte & 0xc0) === 0x80;
+}
+
+/**
+ * Split a chunk into ≤WRITE_SLICE_BYTES pieces without splitting a UTF-16
+ * surrogate pair (string) or mid-UTF-8-sequence (Uint8Array). xterm's stream
+ * decoders hold interim state across writes, so boundary safety is defensive
+ * rather than load-bearing; the backoff is a handful of comparisons per slice.
+ * Uint8Array slices are zero-copy subarray views.
+ */
+function sliceChunk(data: string | Uint8Array): Array<string | Uint8Array> {
+  const total = typeof data === "string" ? data.length : data.byteLength;
+  if (total <= WRITE_SLICE_BYTES) return [data];
+
+  const slices: Array<string | Uint8Array> = [];
+  let start = 0;
+  while (start < total) {
+    let end = Math.min(start + WRITE_SLICE_BYTES, total);
+    if (end < total) {
+      if (typeof data === "string") {
+        if (isHighSurrogate(data.charCodeAt(end - 1))) end--;
+      } else {
+        let backoff = 0;
+        while (end > start + 1 && backoff < 3 && isUtf8Continuation(data[end]!)) {
+          end--;
+          backoff++;
+        }
+      }
+      if (end <= start) end = Math.min(start + WRITE_SLICE_BYTES, total);
+    }
+    slices.push(typeof data === "string" ? data.slice(start, end) : data.subarray(start, end));
+    start = end;
+  }
+  return slices;
+}
+
 function utf8ByteLength(data: string): number {
   let bytes = 0;
   for (let i = 0; i < data.length; i++) {
@@ -127,10 +180,19 @@ export class TerminalWriteController {
     }
 
     if (managed.isSerializedRestoreInProgress) {
-      managed.deferredOutput.push(data);
-      const deferredBytes = typeof data === "string" ? data.length : data.byteLength;
-      this.deps.acknowledgePortData(id, deferredBytes, chunkCount);
-      this.deps.notifyWriteComplete(id, deferredBytes);
+      // Defer WITHOUT settling any ledger. The batch's pending port-ack FIFO
+      // entries, the host's queued-byte ledger, and the ingest inFlightBytes
+      // all stay charged until the replay write (post-restore) completes and
+      // runs the normal bookkeeping below. This is load-bearing twice over:
+      // (1) acking here and again at replay double-debited the FIFO — each
+      // replayed chunk stole an entry belonging to a chunk that arrived after
+      // the restore, leaving the host ledger permanently inflated and every
+      // subsequent backpressure pause degraded to its 10s safety timeout;
+      // (2) holding the charge means the host's own watermarks pace the PTY
+      // while the restore runs, so a flooding agent can no longer grow
+      // deferredOutput without bound — the transport backpressure IS the cap,
+      // and no bytes are dropped to enforce it.
+      managed.deferredOutput.push({ data, chunkCount });
       return;
     }
 
@@ -183,7 +245,16 @@ export class TerminalWriteController {
         ? performance.now()
         : Date.now()
       : 0;
-    terminal.write(data, () => {
+    // Feed the batch as multiple ≤32KB write-buffer entries (see
+    // WRITE_SLICE_BYTES). Acks/bookkeeping ride the FINAL slice's callback:
+    // xterm parses entries FIFO, so the last callback means the whole batch
+    // has landed — the port-ack ledger and inFlightBytes stay batch-scoped
+    // and no per-slice accounting is needed.
+    const slices = sliceChunk(data);
+    for (let i = 0; i < slices.length - 1; i++) {
+      terminal.write(slices[i]!);
+    }
+    terminal.write(slices[slices.length - 1]!, () => {
       if (this.deps.getInstance(id) !== managed) return;
 
       managed.pendingWrites = Math.max(0, (managed.pendingWrites ?? 1) - 1);

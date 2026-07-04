@@ -21,7 +21,22 @@ const COMMAND_MAX_CHARS = 120;
 /** Lines that indicate a failure, used to assemble `failureSummary`. */
 const ERROR_LINE_RE = /\b(error|errors|fail|failed|failure|failing)\b|error TS\d+|[✖✗×]|\bFAIL\b/i;
 
-type SummaryKind = "tsc" | "eslint" | "test-counts";
+type SummaryKind = "tsc" | "eslint" | "test-counts" | "script";
+
+/**
+ * Package-runner lifecycle epilogues, printed by the runner itself when a
+ * script exits non-zero. Failure-only signals (runners print nothing extra on
+ * success), runner-emitted rather than prose, so they stay inside the
+ * precision-over-recall contract. They catch failures whose tool summary we
+ * don't recognize (or that crashed before printing one).
+ */
+const SCRIPT_FAILURE_PATTERNS: RegExp[] = [
+  /\bELIFECYCLE\b.*Command failed with exit code \d+/, // pnpm
+  /^npm error Lifecycle script `[^`]+` failed/, // npm >= 10
+  /^npm ERR! code ELIFECYCLE/, // npm legacy
+  /^error Command failed with exit code \d+\./, // yarn v1
+  /^error: script "[^"]+" exited with code \d+/, // bun
+];
 
 interface SummaryVerdict {
   passed: boolean;
@@ -72,6 +87,10 @@ function classifySummaryLine(line: string): SummaryVerdict | null {
     return { passed: testRow, kind: "test-counts" };
   }
 
+  if (SCRIPT_FAILURE_PATTERNS.some((p) => p.test(line))) {
+    return { passed: false, kind: "script" };
+  }
+
   return null;
 }
 
@@ -85,6 +104,9 @@ function findCommand(lines: string[], summaryIndex: number): string | null {
     const raw = lines[i];
     // npm prints the script body as "> tsc --noEmit"; strip the leading marker.
     const cleaned = raw.replace(/^\s*[>$%#]\s*/, "").trim();
+    // Runner error epilogues ("npm error Lifecycle script …") start with the
+    // runner token and would match commandRe as a bogus "npm error" command.
+    if (/^npm (?:error|ERR!)/.test(cleaned)) continue;
     const m = cleaned.match(commandRe);
     if (m) {
       const command = m[1].trim();

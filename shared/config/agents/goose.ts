@@ -13,7 +13,7 @@ export const config: AgentConfig = {
   color: "#1c1c1c",
   iconId: "goose",
   supportsContextInjection: true,
-  tooltip: "provider-agnostic, by Block Inc.",
+  tooltip: "Open-source CLI",
   usageUrl: "https://block.github.io/goose/",
   externalLinks: [{ label: "View docs", url: "https://goose-docs.ai/docs/" }],
   version: {

@@ -746,7 +746,8 @@ export default tseslint.config(
   },
 
   // Allowlist — react-diff-view file viewer and worktree diff (DiffViewer's
-  // helper modules live in the same lazy chunk).
+  // helper modules live in the same lazy chunk; diffTokenizer is also the
+  // diff-tokenize worker's entrypoint into react-diff-view, bundled separately).
   {
     files: [
       "src/components/FileViewer/FileViewerModal.tsx",
@@ -754,6 +755,7 @@ export default tseslint.config(
       "src/components/Worktree/diffEditSuppression.ts",
       "src/components/Worktree/diffMovedUtils.ts",
       "src/components/Worktree/diffTokenRanges.ts",
+      "src/components/Worktree/diffTokenizer.ts",
     ],
     rules: { "no-restricted-imports": "off" },
   },
@@ -1125,6 +1127,9 @@ export default tseslint.config(
       // Built output of the workspace CLI packages (tsup). Bundled JS isn't
       // source and trips no-undef on Node globals when linted locally.
       "packages/*/dist/**",
+      // Generated API-surface snapshots (raw tsup .d.ts output committed for
+      // review by scripts/ci/check-api-surface.mjs) — not hand-authored source.
+      "packages/*/api-report/**",
       "release/**",
       "node_modules/**",
       "*.config.js",

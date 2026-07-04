@@ -1,4 +1,5 @@
-import { watch as fsWatch, FSWatcher, readFileSync } from "fs";
+import { watch as fsWatch, FSWatcher } from "fs";
+import { readFile } from "fs/promises";
 import { join as pathJoin, dirname, isAbsolute, basename, normalize as pathNormalize } from "path";
 import parcelWatcher from "@parcel/watcher";
 import { getGitDir } from "./gitUtils.js";
@@ -109,18 +110,23 @@ export class GitFileWatcher {
     this.watchWorktree = options.watchWorktree ?? false;
   }
 
-  start(): boolean {
+  async start(): Promise<boolean> {
     if (this.disposed) {
       return false;
     }
 
-    const gitDir = getGitDir(this.worktreePath, { cache: true, logErrors: false });
-    if (!gitDir) {
+    const gitDir = await getGitDir(this.worktreePath, { cache: true, logErrors: false });
+    if (this.disposed || !gitDir) {
       return false;
     }
 
     try {
-      const commonDir = this.resolveCommonDir(gitDir);
+      const commonDir = await this.resolveCommonDir(gitDir);
+      // Re-check after the async resolution: a dispose() during the await
+      // must not arm watchers that nothing will ever close.
+      if (this.disposed) {
+        return false;
+      }
       const headPath = pathJoin(gitDir, "HEAD");
 
       this.watchFile(headPath);
@@ -217,10 +223,10 @@ export class GitFileWatcher {
     }
   }
 
-  private resolveCommonDir(gitDir: string): string {
+  private async resolveCommonDir(gitDir: string): Promise<string> {
     try {
       const commondirPath = pathJoin(gitDir, "commondir");
-      const commondir = readFileSync(commondirPath, "utf-8").trim();
+      const commondir = (await readFile(commondirPath, "utf-8")).trim();
       return isAbsolute(commondir) ? commondir : pathJoin(gitDir, commondir);
     } catch {
       return gitDir;

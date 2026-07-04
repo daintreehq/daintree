@@ -27,7 +27,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     trash: vi.fn(),
     restore: vi.fn(),
     killByProject: vi.fn(() => 0),
-    gracefulKill: vi.fn(async () => undefined),
+    gracefulKill: vi.fn(async () => ({ sessionId: null })),
     gracefulKillByProject: vi.fn(async () => []),
     getProjectStats: vi.fn(() => ({
       terminalCount: 0,
@@ -52,6 +52,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
   } as unknown as HostContext["resourceGovernor"];
 
   return {
+    analysisWorkerPool: null,
     ptyManager,
     processTreeCache: { setPollInterval: vi.fn() } as unknown as HostContext["processTreeCache"],
     terminalResourceMonitor: {
@@ -80,6 +81,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     pauseCoordinators: new Map(),
     rendererConnections: new Map(),
     windowProjectMap: new Map(),
+    windowFocusedTerminalMap: new Map(),
     ipcDataMirrorTerminals: new Set(),
     visualBuffers: [],
     visualSignalView: null,
@@ -95,6 +97,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     resumePausedTerminal: vi.fn(),
     createPortQueueManager: vi.fn(),
     getPausedDurationsSnapshot: vi.fn(() => []),
+    getDropTallySnapshot: vi.fn(() => []),
     ...overrides,
   };
 }
@@ -203,7 +206,9 @@ describe("lifecycle kill handlers — trackKilledPid", () => {
   it("graceful-kill tracks PID", async () => {
     const ctx = makeCtx();
     (ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>).mockReturnValue(termInfo(5678));
-    (ctx.ptyManager.gracefulKill as ReturnType<typeof vi.fn>).mockResolvedValue("sess-1");
+    (ctx.ptyManager.gracefulKill as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sessionId: "sess-1",
+    });
     const dispatch = createPtyHostMessageDispatcher(ctx);
 
     await dispatch({ type: "graceful-kill", id: "t1", requestId: "r1" });
@@ -215,7 +220,9 @@ describe("lifecycle kill handlers — trackKilledPid", () => {
   it("graceful-kill does not track when PID is undefined", async () => {
     const ctx = makeCtx();
     (ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>).mockReturnValue(termInfo());
-    (ctx.ptyManager.gracefulKill as ReturnType<typeof vi.fn>).mockResolvedValue("sess-1");
+    (ctx.ptyManager.gracefulKill as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sessionId: "sess-1",
+    });
     const dispatch = createPtyHostMessageDispatcher(ctx);
 
     await dispatch({ type: "graceful-kill", id: "t1", requestId: "r1" });
@@ -415,7 +422,7 @@ describe("lifecycle spawn — failed-to-start synthesizes an exit for launched a
       trigger: "exit",
     });
     expect(result).toMatchObject({ type: "spawn-result", id: "t1" });
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- narrowed by find above
+
     expect((result as { result: { success: boolean } }).result.success).toBe(false);
 
     // Order: agent-spawned resets store state before agent-state writes "exited",

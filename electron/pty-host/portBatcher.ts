@@ -21,6 +21,13 @@ export interface PortBatcherDeps {
   portQueueManager: PortQueueManager;
   postMessage: (id: string, data: Uint8Array, bytes: number) => void;
   onError: (error: unknown, failedBatches: PortBatcherFailedBatch[]) => void;
+  /**
+   * The UI-focused terminal id for this window, or null when none is focused.
+   * When set and present in a flush, its pending entry is posted first so the
+   * pane the user is watching lands ahead of noisy siblings. Optional: when
+   * absent flush() uses plain Map insertion order (prior behaviour).
+   */
+  getFocusedTerminalId?: () => string | null;
 }
 
 interface PendingTerminal {
@@ -141,33 +148,71 @@ export class PortBatcher {
       this.cancelEntryTimers(entry);
     }
 
+    // Service the focused terminal's pending entry first so the pane the user
+    // is watching lands ahead of noisy siblings. This is a pure iteration-order
+    // change: each entry is still deleted from `snapshot` before it's processed
+    // (so the catch block builds failedBatches from the failed entry plus only
+    // the still-unprocessed remainder), and mergeChunks / the owned zero-copy
+    // predicate are untouched (#8367).
+    const focusedId = this.deps.getFocusedTerminalId?.() ?? null;
+    if (focusedId !== null && snapshot.has(focusedId)) {
+      if (!this.flushEntry(focusedId, snapshot)) return;
+    }
+
     // Iterate the detached snapshot directly (no intermediate entries array on
     // the happy path); delete each entry as it's consumed so the catch block can
     // build failedBatches from the failed entry plus whatever remains.
-    for (const [id, { chunks, bytes, owned }] of snapshot) {
-      snapshot.delete(id);
-      let data: Uint8Array = new Uint8Array(0);
-      try {
-        data = mergeChunks(chunks, bytes, owned);
-        this.deps.postMessage(id, data, bytes);
-        this.deps.portQueueManager.addBytes(id, bytes);
-        this.deps.portQueueManager.applyBackpressure(
-          id,
-          this.deps.portQueueManager.getUtilization(id)
-        );
-      } catch (error) {
-        const failedBatches: PortBatcherFailedBatch[] = [{ id, data, bytes }];
-        for (const [failedId, pending] of snapshot) {
-          failedBatches.push({
-            id: failedId,
-            data: mergeChunks(pending.chunks, pending.bytes, pending.owned),
-            bytes: pending.bytes,
-          });
-        }
-        this.deps.onError(error, failedBatches);
-        return;
-      }
+    for (const id of snapshot.keys()) {
+      if (!this.flushEntry(id, snapshot)) return;
     }
+  }
+
+  // Process one pending entry out of `snapshot`: delete it, merge/post/account.
+  // Returns false when postMessage/merge threw and onError was invoked (the
+  // caller must stop draining), true otherwise. Deleting before processing keeps
+  // the failedBatches set (failed entry + whatever still remains in `snapshot`)
+  // correct regardless of the order entries are serviced in.
+  private flushEntry(id: string, snapshot: Map<string, PendingTerminal>): boolean {
+    const entry = snapshot.get(id);
+    if (!entry) return true;
+    snapshot.delete(id);
+    let data: Uint8Array = new Uint8Array(0);
+    try {
+      data = mergeChunks(entry.chunks, entry.bytes, entry.owned);
+      this.deps.postMessage(id, data, entry.bytes);
+      this.deps.portQueueManager.addBytes(id, entry.bytes);
+      this.deps.portQueueManager.applyBackpressure(
+        id,
+        this.deps.portQueueManager.getUtilization(id)
+      );
+    } catch (error) {
+      const failedBatches: PortBatcherFailedBatch[] = [{ id, data, bytes: entry.bytes }];
+      for (const [failedId, pending] of snapshot) {
+        failedBatches.push({
+          id: failedId,
+          data: mergeChunks(pending.chunks, pending.bytes, pending.owned),
+          bytes: pending.bytes,
+        });
+      }
+      this.deps.onError(error, failedBatches);
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Per-terminal buffered-but-unflushed byte counts. Read by the host's
+   * `disconnectWindow` before `dispose()` so bytes about to be dropped with
+   * the closing port are accounted as data loss instead of vanishing
+   * silently — dispose() discards `pendingChunks` without any drop
+   * bookkeeping of its own.
+   */
+  getPendingByteSnapshot(): Array<{ id: string; bytes: number }> {
+    const out: Array<{ id: string; bytes: number }> = [];
+    for (const [id, entry] of this.pendingChunks) {
+      if (entry.bytes > 0) out.push({ id, bytes: entry.bytes });
+    }
+    return out;
   }
 
   flushTerminal(id: string): void {

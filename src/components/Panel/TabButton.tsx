@@ -15,11 +15,12 @@ import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { UI_ANIMATION_DURATION, DURATION_100, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
 
-const RENAME_ERROR_TINT_HOLD_MS = 300;
-
 export interface TabInfo {
   id: string;
+  /** Display title for the tab slot — already variant-resolved by the mapping site (compact task-first in grid strips, identity in dock). */
   title: string;
+  /** Full composed title ("Claude: fix auth tests") for the hover tooltip when it differs from the compact slot text. */
+  fullTitle?: string;
   chrome: TerminalChromeDescriptor;
   kind: PanelKind;
   agentState?: AgentState;
@@ -33,6 +34,7 @@ export interface TabInfo {
 export interface TabButtonProps {
   id: string;
   title: string;
+  fullTitle?: string;
   chrome: TerminalChromeDescriptor;
   kind: PanelKind;
   agentState?: AgentState;
@@ -52,6 +54,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
   {
     id,
     title,
+    fullTitle,
     chrome,
     kind,
     agentState,
@@ -70,29 +73,8 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
 ) {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(title);
-  const [showRenameError, setShowRenameError] = useState(false);
-  const [showRenameErrorTint, setShowRenameErrorTint] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const didCommitOrCancelRef = useRef(false);
-  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const errorTintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const clearErrorTimers = useCallback(() => {
-    if (errorTimerRef.current !== null) {
-      clearTimeout(errorTimerRef.current);
-      errorTimerRef.current = null;
-    }
-    if (errorTintTimerRef.current !== null) {
-      clearTimeout(errorTintTimerRef.current);
-      errorTintTimerRef.current = null;
-    }
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      clearErrorTimers();
-    };
-  }, [clearErrorTimers]);
 
   // Focus input when entering edit mode
   useEffect(() => {
@@ -118,9 +100,6 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
       const detail = e.detail as unknown;
       if (!detail || typeof (detail as { id?: unknown }).id !== "string") return;
       if ((detail as { id: string }).id === id) {
-        clearErrorTimers();
-        setShowRenameError(false);
-        setShowRenameErrorTint(false);
         setEditValue(title);
         setIsEditing(true);
         didCommitOrCancelRef.current = false;
@@ -132,7 +111,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
       signal: controller.signal,
     });
     return () => controller.abort();
-  }, [id, title, onRename, clearErrorTimers]);
+  }, [id, title, onRename]);
 
   const handleClose = useCallback(
     (e: React.MouseEvent) => {
@@ -187,52 +166,33 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
         if (e.nativeEvent.isComposing) return;
         e.preventDefault();
         const trimmed = editValue.trim();
-        if (!trimmed || trimmed === title) {
-          clearErrorTimers();
-          setShowRenameError(true);
-          setShowRenameErrorTint(true);
-          errorTimerRef.current = setTimeout(() => {
-            setShowRenameError(false);
-            errorTimerRef.current = null;
-          }, UI_ANIMATION_DURATION);
-          errorTintTimerRef.current = setTimeout(() => {
-            setShowRenameErrorTint(false);
-            errorTintTimerRef.current = null;
-          }, RENAME_ERROR_TINT_HOLD_MS);
-          return;
+        if (trimmed !== title) {
+          // Empty commit is an explicit reset to the identity-derived default.
+          onRename?.(trimmed);
         }
-        onRename?.(trimmed);
-        clearErrorTimers();
-        setShowRenameError(false);
-        setShowRenameErrorTint(false);
         didCommitOrCancelRef.current = true;
         setIsEditing(false);
       } else if (e.key === "Escape") {
         e.preventDefault();
         setEditValue(title);
-        clearErrorTimers();
-        setShowRenameError(false);
-        setShowRenameErrorTint(false);
         didCommitOrCancelRef.current = true;
         setIsEditing(false);
       }
     },
-    [editValue, title, onRename, clearErrorTimers]
+    [editValue, title, onRename]
   );
 
   const handleInputBlur = useCallback(() => {
-    // Only commit on blur if Enter/Escape didn't already handle it
+    // Only commit on blur if Enter/Escape didn't already handle it. Blur with
+    // an empty value cancels (intent is ambiguous) — only Enter resets.
     if (!didCommitOrCancelRef.current) {
       const trimmed = editValue.trim();
       if (trimmed && trimmed !== title) {
         onRename?.(trimmed);
       }
     }
-    clearErrorTimers();
-    setShowRenameError(false);
-    setShowRenameErrorTint(false);
     setIsEditing(false);
-  }, [editValue, title, onRename, clearErrorTimers]);
+  }, [editValue, title, onRename]);
 
   const handleInputClick = useCallback((e: React.MouseEvent) => {
     // Prevent click from bubbling to tab click handler
@@ -355,15 +315,8 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ duration: 0.1 }}
-              className={cn(
-                "text-xs bg-overlay-soft border px-1 h-4 min-w-[60px] max-w-[100px] text-daintree-text select-text transition-colors focus:outline-hidden",
-                showRenameError
-                  ? "border-status-error duration-150"
-                  : "border-transparent duration-250",
-                showRenameErrorTint && "bg-status-error/5"
-              )}
+              className="text-xs bg-overlay-soft border border-transparent px-1 h-4 min-w-[60px] max-w-[100px] text-daintree-text select-text focus:outline-hidden"
               aria-label={`Rename tab ${title}`}
-              aria-invalid={showRenameError || undefined}
             />
           ) : (
             <span
@@ -474,7 +427,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
         </div>
       </TooltipTrigger>
       <TooltipContent side="bottom">
-        {onRename ? `${title} — Double-click to rename` : title}
+        {onRename ? `${fullTitle ?? title} — Double-click to rename` : (fullTitle ?? title)}
       </TooltipContent>
     </Tooltip>
   );

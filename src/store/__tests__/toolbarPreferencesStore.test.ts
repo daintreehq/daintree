@@ -361,6 +361,33 @@ describe("toolbarPreferencesStore", () => {
       expect(right.indexOf("command-palette")).toBeLessThan(right.indexOf("settings"));
     });
 
+    it("includes resume-sessions in default right buttons before settings", async () => {
+      const store = await loadStore();
+      const right = store.getState().layout.rightButtons;
+      expect(right).toContain("resume-sessions");
+      expect(right.indexOf("resume-sessions")).toBeLessThan(right.indexOf("settings"));
+    });
+
+    it("re-inserts resume-sessions for persisted state missing it via mergeButtonList", async () => {
+      setStoredState(
+        {
+          layout: {
+            leftButtons: ["terminal", "browser"],
+            rightButtons: ["copy-tree", "command-palette", "settings"],
+            pinnedButtons: {},
+          },
+          launcher: { alwaysShowDevServer: false },
+        },
+        10
+      );
+
+      const store = await loadStore();
+      const right = store.getState().layout.rightButtons;
+      expect(right).toContain("resume-sessions");
+      // Visibility preserved (not implicitly hidden) for the newly added default.
+      expect(store.getState().layout.pinnedButtons["resume-sessions"]).toBeUndefined();
+    });
+
     it("re-inserts command-palette for persisted state missing it via mergeButtonList", async () => {
       setStoredState(
         {
@@ -719,6 +746,19 @@ describe("toolbarPreferencesStore", () => {
       expect(layout.rightButtons).toContain("copy-tree");
     });
 
+    it("sanitizeButtonList dedupes repeated ids when set via setRightButtons (#10937)", async () => {
+      const store = await loadStore();
+
+      store.getState().setRightButtons(["settings", "forge-stats", "forge-stats", "copy-tree"]);
+
+      const { rightButtons } = store.getState().layout;
+      expect(rightButtons.filter((id) => id === "forge-stats")).toHaveLength(1);
+      // Non-duplicated ids all survive, in first-occurrence order.
+      expect(rightButtons).toContain("copy-tree");
+      expect(rightButtons.indexOf("settings")).toBeLessThan(rightButtons.indexOf("forge-stats"));
+      expect(rightButtons.indexOf("forge-stats")).toBeLessThan(rightButtons.indexOf("copy-tree"));
+    });
+
     it("v4→v5 handles missing layout without throwing", async () => {
       storageMock.setItem(
         STORAGE_KEY,
@@ -1004,6 +1044,96 @@ describe("toolbarPreferencesStore", () => {
         const store = await loadStore();
         expect(store.getState().layout.pinnedButtons).toEqual({ "forge-stats": false });
         expect(store.getState().layout.rightButtons).toContain("forge-stats");
+      });
+
+      it("dedupes a v9 rename collision so only one forge-stats survives (#10937)", async () => {
+        // A v9 profile holding both `forge-stats` and the legacy `github-stats`
+        // would, under the bare-`.map()` v10 rename, produce two `forge-stats`
+        // entries. The dedup guard collapses them to one, keeping the first slot.
+        storageMock.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            state: {
+              layout: {
+                leftButtons: ["terminal"],
+                rightButtons: ["forge-stats", "settings", "github-stats", "problems"],
+                pinnedButtons: {},
+              },
+              launcher: { alwaysShowDevServer: false },
+            },
+            version: 9,
+          })
+        );
+
+        const store = await loadStore();
+        const { rightButtons } = store.getState().layout;
+        expect(rightButtons.filter((id) => id === "forge-stats")).toHaveLength(1);
+        expect(rightButtons).not.toContain("github-stats");
+        // First occurrence wins: forge-stats keeps its original slot ahead of settings.
+        expect(rightButtons.indexOf("forge-stats")).toBeLessThan(rightButtons.indexOf("settings"));
+      });
+    });
+
+    describe("v10→v11 deduplicates button ids", () => {
+      it("collapses repeated ids in both arrays while leaving pinnedButtons untouched", async () => {
+        storageMock.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            state: {
+              layout: {
+                leftButtons: ["terminal", "terminal", "browser"],
+                rightButtons: [
+                  "voice-recording",
+                  "forge-stats",
+                  "forge-stats",
+                  "forge-stats",
+                  "settings",
+                ],
+                pinnedButtons: { "forge-stats": false },
+              },
+              launcher: { alwaysShowDevServer: false },
+            },
+            version: 10,
+          })
+        );
+
+        const store = await loadStore();
+        const { leftButtons, rightButtons, pinnedButtons } = store.getState().layout;
+        expect(leftButtons.filter((id) => id === "terminal")).toHaveLength(1);
+        expect(rightButtons.filter((id) => id === "forge-stats")).toHaveLength(1);
+        // Survivor order is preserved (existing entries never reorder).
+        expect(rightButtons.indexOf("voice-recording")).toBeLessThan(
+          rightButtons.indexOf("forge-stats")
+        );
+        expect(rightButtons.indexOf("forge-stats")).toBeLessThan(rightButtons.indexOf("settings"));
+        // The pin map is a Record — unique keys by construction, left untouched.
+        expect(pinnedButtons).toEqual({ "forge-stats": false });
+      });
+
+      it("heals duplicates on an already-current v11 blob via merge() (#10937)", async () => {
+        // The durable guard lives in `sanitizeButtonList`, run on every
+        // hydration through `merge()` — not only the version-gated migration —
+        // so a blob already stamped v11 that still carries duplicates (a stale
+        // dev build re-corrupting a shared profile) is repaired regardless.
+        storageMock.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            state: {
+              layout: {
+                leftButtons: ["terminal"],
+                rightButtons: ["forge-stats", "forge-stats", "settings"],
+                pinnedButtons: {},
+              },
+              launcher: { alwaysShowDevServer: false },
+            },
+            version: 11,
+          })
+        );
+
+        const store = await loadStore();
+        expect(
+          store.getState().layout.rightButtons.filter((id) => id === "forge-stats")
+        ).toHaveLength(1);
       });
     });
   });

@@ -52,8 +52,13 @@ vi.mock("@/components/Terminal/TerminalHeaderContent", () => ({
 }));
 
 vi.mock("@/store", () => ({
-  usePreferencesStore: (selector: (s: { showGridAgentHighlights: boolean }) => unknown) =>
-    selector({ showGridAgentHighlights: false }),
+  usePreferencesStore: (
+    selector: (s: { showGridAgentHighlights: boolean; showAgentTaskTitles: boolean }) => unknown
+  ) => selector({ showGridAgentHighlights: false, showAgentTaskTitles: true }),
+  // ContentPanel resolves the composed display title from the panel store; an
+  // empty panelsById makes it fall back to the caller-provided title prop.
+  usePanelStore: (selector: (s: { panelsById: Record<string, never> }) => unknown) =>
+    selector({ panelsById: {} }),
 }));
 
 // PanelHeader renders Radix tooltips; supply passthrough stand-ins so the

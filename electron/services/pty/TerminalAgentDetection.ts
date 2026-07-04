@@ -2,7 +2,7 @@ import { isBuiltInAgentId, type BuiltInAgentId } from "../../../shared/config/ag
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import type { DetectionResult, DetectionState } from "../ProcessDetector.js";
 import { events } from "../events.js";
-import type { ActivityMonitor } from "../ActivityMonitor.js";
+import type { PatternDetectionConfig } from "./AgentPatternDetector.js";
 import type { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
 import type { AgentStateService } from "./AgentStateService.js";
 import type { SemanticBufferManager } from "./SemanticBufferManager.js";
@@ -17,8 +17,9 @@ export interface TerminalAgentDetectionHost {
   readonly agentStateService: AgentStateService;
   readonly headlineGenerator: ActivityHeadlineGenerator;
   readonly semanticBufferManager: SemanticBufferManager;
-  readonly activityMonitor: ActivityMonitor | null;
+  readonly hasActivityMonitor: boolean;
   lastDetectedProcessIconId: string | undefined;
+  reconfigureActivityMonitor(agentId: string, patternConfig?: PatternDetectionConfig): void;
   startActivityMonitor(): void;
   stopActivityMonitor(): void;
 }
@@ -86,11 +87,15 @@ export function handleAgentDetection(
       }
 
       terminal.detectedAgentId = detectedAgentId;
+      // A new agent session invalidates the previous session's observed task
+      // title (mirrors the renderer's identityReducer clear) — otherwise a
+      // relaunched or different agent journals the old session's title.
+      terminal.lastObservedTitle = undefined;
 
       const detection = getEffectiveAgentConfig(detectedAgentId)?.detection;
       const patternConfig = buildPatternConfig(detection, detectedAgentId);
-      if (host.activityMonitor) {
-        host.activityMonitor.reconfigure(detectedAgentId, patternConfig);
+      if (host.hasActivityMonitor) {
+        host.reconfigureActivityMonitor(detectedAgentId, patternConfig);
       } else {
         // Runtime promotion: plain terminal now hosts an agent. Start the
         // activity monitor immediately so the renderer sees state
@@ -104,8 +109,8 @@ export function handleAgentDetection(
       }
 
       // Title sync: write the default-mode title so the renderer can pick
-      // it up via the agent-detected event payload. User-renamed panels
-      // (titleMode === "custom") are left alone.
+      // it up via the agent-detected event payload. Non-default rungs
+      // (custom and user) are left alone.
       const nextTitle = computeDefaultTitle(terminal);
       if ((terminal.titleMode ?? "default") === "default") {
         terminal.title = nextTitle;

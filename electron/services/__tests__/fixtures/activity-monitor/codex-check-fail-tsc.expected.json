@@ -1,0 +1,35 @@
+{
+  "agentId": "codex",
+  "settleMs": 10000,
+  "transitions": [
+    {
+      "atMs": 0,
+      "state": "busy",
+      "trigger": "pattern"
+    },
+    {
+      "atMs": 8000,
+      "state": "idle",
+      "trigger": "timeout"
+    }
+  ],
+  "fsm": {
+    "transitions": [
+      {
+        "atMs": 0,
+        "state": "working",
+        "trigger": "heuristic"
+      },
+      {
+        "atMs": 8000,
+        "state": "waiting",
+        "trigger": "timeout"
+      }
+    ],
+    "checkResult": {
+      "passed": false,
+      "commandIncludes": "tsc",
+      "failureSummaryIncludes": "error TS2322"
+    }
+  }
+}

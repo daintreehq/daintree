@@ -12,6 +12,7 @@ import type { PanelKind, TerminalFlowStatus, PanelTitleMode } from "./panel.js";
 import type { ResourceProfile } from "./resourceProfile.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { AgentConfig } from "../config/agentRegistry.js";
+import type { AgentSessionRecord } from "./ipc/agentSessionHistory.js";
 import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js";
 
 export type { TerminalFlowStatus };
@@ -56,6 +57,8 @@ export interface PtyHostSpawnOptions {
    */
   launchAgentId?: AgentId;
   title?: string;
+  /** Title ownership rung at spawn — lets the backend skip its own default-title rewrites for pinned titles. */
+  titleMode?: PanelTitleMode;
   projectId?: string;
   /** Whether to restore previous session content (default: true). Set to false on restart. */
   restore?: boolean;
@@ -163,6 +166,7 @@ export type PtyHostRequest =
       /** Filesystem path of the project; used to warm the PTY pool at the project root. */
       projectPath?: string;
     }
+  | { type: "set-focused-terminal"; windowId: number; id: string | null }
   | { type: "disconnect-port"; windowId: number }
   | { type: "kill-by-project"; projectId: string; requestId: string }
   | { type: "get-project-stats"; projectId: string; requestId: string }
@@ -250,6 +254,16 @@ export interface FlowControlTerminalSnapshot {
   activityTier: PtyHostActivityTier;
   /** Wall-clock ms the terminal has been paused, or null when not paused. */
   pausedDurationMs: number | null;
+  /**
+   * Cumulative bytes intentionally dropped for this terminal (saturated-window
+   * port drops, IPC-cap drops, batched bytes discarded with a closing port)
+   * since spawn. 0 when nothing was ever dropped.
+   */
+  droppedBytes: number;
+  /** Number of distinct drop events behind {@link droppedBytes}. */
+  dropCount: number;
+  /** Timestamp of the most recent drop, or null when nothing was dropped. */
+  lastDropAt: number | null;
 }
 
 /** Per-transport queue-depth entry in a {@link FlowControlSnapshot}. */
@@ -301,6 +315,20 @@ export interface FlowControlSnapshot {
   totalPendingBytes: number;
   stats: BackpressureStatsSnapshot;
   resourceGovernor: ResourceGovernorSnapshot;
+  /** Pty-host loop health since the previous pull; null if unmonitored. */
+  eventLoop: PtyHostEventLoopStats | null;
+}
+
+/**
+ * Event-loop health of the pty-host UtilityProcess over the window since the
+ * previous snapshot pull. High p99/max with zero paused terminals is the
+ * CPU-saturation signature (parse load), distinct from queue backpressure.
+ */
+export interface PtyHostEventLoopStats {
+  p99Ms: number;
+  maxMs: number;
+  /** Fraction of the window the loop was busy (perf_hooks ELU), 0-1. */
+  utilization: number;
 }
 
 /**
@@ -423,6 +451,16 @@ export type PtyHostEvent =
   | { type: "agent-killed"; payload: AgentKilledPayload }
   | { type: "terminal-trashed"; id: string; expiresAt: number }
   | { type: "terminal-restored"; id: string }
+  | {
+      /**
+       * Trash expiry captured a resumable session in the pty-host. The record
+       * is shipped to Main for persistence — Main is the journal's single
+       * writer, so cross-process read-modify-write races on the file can't
+       * drop records, and the real retention setting applies.
+       */
+      type: "agent-session-captured";
+      record: Omit<AgentSessionRecord, "savedAt">;
+    }
   | { type: "terminal-pid"; id: string; pid: number }
   | { type: "snapshot"; id: string; requestId: string; snapshot: PtyHostTerminalSnapshot | null }
   | { type: "all-snapshots"; requestId: string; snapshots: PtyHostTerminalSnapshot[] }
@@ -535,6 +573,14 @@ export interface FdLeakWarningPayload {
  * narrowing first.
  */
 export type PtyHostResponseEvent = Extract<PtyHostEvent, { requestId: string }>;
+
+/**
+ * Result of a graceful kill: the captured resume `sessionId` (null when there is
+ * no resumable session).
+ */
+export interface GracefulKillResult {
+  sessionId: string | null;
+}
 
 export function isPtyHostResponseEvent(event: PtyHostEvent): event is PtyHostResponseEvent {
   return "requestId" in event && typeof (event as { requestId?: unknown }).requestId === "string";

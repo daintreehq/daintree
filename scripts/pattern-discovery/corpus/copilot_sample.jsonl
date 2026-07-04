@@ -1,0 +1,7 @@
+{"time":0.0,"chunk":"Loading environment: /home/dev/project","detectedState":"initializing","confidence":0.9,"agentId":"copilot"}
+{"time":0.5,"chunk":"> ","detectedState":"waiting","confidence":0.85,"agentId":"copilot"}
+{"time":1.0,"chunk":"∙ Thinking (Esc to cancel)","detectedState":"working","confidence":0.95,"agentId":"copilot"}
+{"time":2.0,"chunk":"(Esc to cancel)","detectedState":"working","confidence":0.95,"agentId":"copilot"}
+{"time":3.0,"chunk":"∘ Running command: npm test","detectedState":"working","confidence":0.75,"agentId":"copilot"}
+{"time":4.0,"chunk":"I've updated the README.","detectedState":"unknown","confidence":0.6,"agentId":"copilot"}
+{"time":5.0,"chunk":"Error: not authenticated. Run gh auth login.","detectedState":"error","confidence":0.8,"agentId":"copilot"}

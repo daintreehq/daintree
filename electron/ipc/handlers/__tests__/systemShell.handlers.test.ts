@@ -9,6 +9,7 @@ const ipcMainMock = vi.hoisted(() => ({
 const shellMock = vi.hoisted(() => ({
   openPath: vi.fn(() => Promise.resolve("")),
   openExternal: vi.fn(() => Promise.resolve()),
+  showItemInFolder: vi.fn<(p: string) => void>(() => undefined),
 }));
 
 const appMock = vi.hoisted(() => ({
@@ -245,6 +246,86 @@ describe("system:open-in-editor containment", () => {
         : path.join(PROJECT_ROOT, "scripts", "setup.desktop");
     await handler(fakeEvent, { path: scriptPath });
     expect(openFileMock).toHaveBeenCalledWith(scriptPath, undefined, undefined, null);
+  });
+});
+
+describe("system:show-item-in-folder containment", () => {
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fsMock.promises.realpath.mockImplementation(realpathEcho);
+    projectStoreMock.getAllProjects.mockReturnValue([{ path: PROJECT_ROOT }]);
+    appMock.getPath.mockImplementation((name: string) => path.join(USERDATA_PARENT, name));
+    storeMock.get.mockReturnValue(undefined);
+    cleanup = registerSystemShellHandlers({} as HandlerDependencies);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("reveals a path contained in a project root", async () => {
+    const handler = getHandler(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER);
+    const sourcePath = path.join(PROJECT_ROOT, "src", "index.ts");
+    await handler(fakeEvent, { path: sourcePath });
+    expect(shellMock.showItemInFolder).toHaveBeenCalledWith(sourcePath);
+  });
+
+  it("rejects a path outside all roots with OUTSIDE_ROOT", async () => {
+    const handler = getHandler(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER);
+    await expect(handler(fakeEvent, { path: "/etc/passwd" })).rejects.toMatchObject({
+      code: "OUTSIDE_ROOT",
+    });
+    expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-absolute path with INVALID_PATH", async () => {
+    const handler = getHandler(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER);
+    await expect(handler(fakeEvent, { path: "relative/file.txt" })).rejects.toMatchObject({
+      code: "INVALID_PATH",
+    });
+    expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  // The key behavior difference from system:open-path: revealing an item only
+  // selects it in the file manager, it never launches it — so the executable
+  // deny-list (which blocks .app / .exe / .desktop for the launcher) must NOT
+  // apply. Revealing an executable the user can already see is safe.
+  it("allows revealing an executable extension inside a root (deny-list relaxed)", async () => {
+    const handler = getHandler(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER);
+    const executablePath = path.join(PROJECT_ROOT, deniedLauncherName);
+    await handler(fakeEvent, { path: executablePath });
+    expect(shellMock.showItemInFolder).toHaveBeenCalledWith(executablePath);
+  });
+
+  // A file detected in terminal output can be deleted before the user reveals
+  // it. resolveContainedPath realpaths the target, so a missing path is
+  // rejected (INVALID_PATH) before shell.showItemInFolder — which has no
+  // failure signal — is ever called. Mock realpath to reject like real Node.
+  it("rejects a since-deleted path (realpath ENOENT) without revealing", async () => {
+    const missing = path.join(PROJECT_ROOT, "gone.txt");
+    fsMock.promises.realpath.mockImplementation((p: string) =>
+      path.normalize(p) === path.normalize(missing)
+        ? Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }))
+        : realpathEcho(p)
+    );
+    const handler = getHandler(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER);
+    await expect(handler(fakeEvent, { path: missing })).rejects.toMatchObject({
+      code: "INVALID_PATH",
+    });
+    expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  it("reveals the realpath-resolved target, not the original path", async () => {
+    const link = path.join(PROJECT_ROOT, "link.txt");
+    const resolved = path.join(PROJECT_ROOT, "real.txt");
+    fsMock.promises.realpath.mockImplementation((p: string) =>
+      Promise.resolve(path.normalize(p) === path.normalize(link) ? resolved : path.normalize(p))
+    );
+    const handler = getHandler(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER);
+    await handler(fakeEvent, { path: link });
+    expect(shellMock.showItemInFolder).toHaveBeenCalledWith(resolved);
   });
 });
 

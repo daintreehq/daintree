@@ -945,10 +945,11 @@ export function setupWebviewCSP(): void {
       contents.on("render-process-gone", dismissPendingDialogs);
       contents.once("destroyed", dismissPendingDialogs);
 
-      // Intercept find-in-page (Cmd/Ctrl+F, Cmd/Ctrl+G, Escape) and reload
-      // (Cmd/Ctrl+R) shortcuts from webview guests. When the guest has focus
-      // Chromium routes keystrokes directly to it, so the outer renderer's
-      // keydown listener never sees these — they must be caught here.
+      // Intercept find-in-page (Cmd/Ctrl+F, Cmd/Ctrl+G, Escape), reload
+      // (Cmd/Ctrl+R), and close (Cmd/Ctrl+W) shortcuts from webview guests.
+      // When the guest has focus Chromium routes keystrokes directly to it
+      // — bypassing the host webContents' setIgnoreMenuShortcuts guards —
+      // so they must be caught and forwarded here.
       contents.on("before-input-event", (event, input) => {
         if (input.type !== "keyDown") return;
         const isMac = process.platform === "darwin";
@@ -964,8 +965,16 @@ export function setupWebviewCSP(): void {
         }
 
         const isReload = mod && input.key.toLowerCase() === "r" && !input.alt && !input.shift;
+        // Match the host-level guard in createWindow.ts: require the
+        // platform-correct close modifier and reject the opposite one, so
+        // Ctrl+Cmd+W isn't treated as a plain close.
+        const isCloseShortcut =
+          input.key.toLowerCase() === "w" &&
+          ((isMac && input.meta && !input.control) || (!isMac && input.control && !input.meta)) &&
+          !input.alt &&
+          !input.shift;
 
-        if (!shortcut && !isReload) return;
+        if (!shortcut && !isReload && !isCloseShortcut) return;
 
         const dialogService = getWebviewDialogService();
         const panelId = dialogService.getPanelId(contents.id);
@@ -983,6 +992,20 @@ export function setupWebviewCSP(): void {
           if (findParentWindow && !findParentWindow.isDestroyed()) {
             event.preventDefault();
             getAppWebContents(findParentWindow).send(CHANNELS.WEBVIEW_RELOAD_SHORTCUT, {
+              panelId,
+            });
+          }
+          return;
+        }
+
+        if (isCloseShortcut) {
+          // Applies to every webview-hosting panel kind (dev-preview, browser)
+          // — unlike reload, all of them need Cmd/Ctrl+W to close the panel
+          // instead of falling through to the native role:"close" accelerator,
+          // which would otherwise close the whole window (#10859).
+          if (findParentWindow && !findParentWindow.isDestroyed()) {
+            event.preventDefault();
+            getAppWebContents(findParentWindow).send(CHANNELS.WEBVIEW_CLOSE_SHORTCUT, {
               panelId,
             });
           }

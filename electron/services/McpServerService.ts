@@ -28,6 +28,7 @@ import { AuditService } from "./mcp-server/auditLog.js";
 import { TurnOutcomeService } from "./mcp-server/turnOutcomeLog.js";
 import { createRendererBridge } from "./mcp-server/rendererBridge.js";
 import { handleWaitUntilIdle, handleWaitUntilIdleBatch } from "./mcp-server/waitUntilIdle.js";
+import { handleSkillsSearch, handleSkillsLoad } from "./mcp-server/skills.js";
 import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
 import { HttpLifecycle } from "./mcp-server/httpLifecycle.js";
 import { AbusePolicy } from "./mcp-server/abusePolicy.js";
@@ -203,6 +204,8 @@ export class McpServerService {
         handleWaitUntilIdle(rawArgs, signal, options),
       handleWaitUntilIdleBatch: (rawArgs, signal, options) =>
         handleWaitUntilIdleBatch(rawArgs, signal, options),
+      handleSkillsSearch: (rawArgs) => handleSkillsSearch(rawArgs),
+      handleSkillsLoad: (rawArgs) => handleSkillsLoad(rawArgs),
       getCachedManifest: () => this.bridge.getCachedManifest(),
       getCachedManifestForWebContents: (id) => this.bridge.getCachedManifestForWebContents(id),
       clearCachedManifest: () => this.bridge.clearCache(),
@@ -346,6 +349,13 @@ export class McpServerService {
     this.persistConfig({ enabled });
     if (enabled && this._registry && !this.isRunning) {
       await this.httpLifecycle.start(this._registry);
+    } else if (enabled && !this.isRunning) {
+      const registry = getWindowRegistry();
+      if (registry) {
+        await this.httpLifecycle.start(registry);
+      } else if (wasEnabled !== enabled) {
+        this.emitRuntimeStateChange();
+      }
     } else if (!enabled && (this.isRunning || this.httpLifecycle.isStartInFlight)) {
       // `stop()` awaits any in-flight `start()` before closing, so a disable
       // that races a slow start still tears the server down instead of

@@ -24,7 +24,7 @@ export const config: AgentConfig = {
   // `--plan` flag landed in Copilot CLI v1.0.40; below this floor we'd
   // launch without the read-only guardrail.
   assistantMinVersion: "1.0.40",
-  tooltip: "GitHub's AI coding agent",
+  tooltip: "GitHub's CLI",
   usageUrl: "https://github.com/features/copilot",
   externalLinks: [{ label: "Billing settings", url: "https://github.com/settings/billing" }],
   contextWindow: 160_000,

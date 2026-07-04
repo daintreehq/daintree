@@ -154,6 +154,11 @@ import {
   getPluginAgentRegistry,
 } from "../../../shared/config/pluginAgentRegistry.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
+import {
+  searchPluginSkills,
+  loadPluginSkill,
+  clearPluginSkillRegistry,
+} from "../plugin/PluginSkillRegistry.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
@@ -181,6 +186,7 @@ type PluginManifestShape = {
     forgeProviders?: unknown[];
     fileDecorationProviders?: unknown[];
     agents?: unknown[];
+    skills?: unknown[];
   };
 };
 
@@ -239,6 +245,7 @@ afterEach(async () => {
     clearToolbarButtonRegistry();
     clearPluginMenuRegistry();
     clearForgeProviderRegistry();
+    clearPluginSkillRegistry();
     clearFileDecorationRegistry();
     clearFileDecorationImplRegistry();
     clearPluginAgentRegistryForTests();
@@ -633,6 +640,49 @@ describe("PluginService integration — agent contributions (issue #9560)", () =
     // The manifest fails strict validation (capability gate), so the plugin
     // never loads its agent into the registry.
     expect(getPluginAgentRegistry()["uncapped-agent"]).toBeUndefined();
+  });
+});
+
+describe("PluginService integration — skill contributions (#10892)", () => {
+  it("registers a manifest skill into the searchable registry and tears it down on unload", async () => {
+    const dir = await writePlugin("acme.skill-plugin", {
+      name: "acme.skill-plugin",
+      version: "1.0.0",
+      contributes: {
+        skills: [
+          {
+            id: "tdd-workflow",
+            name: "TDD Workflow",
+            path: "./skills/tdd.md",
+            triggers: ["tdd", "red-green-refactor"],
+          },
+        ],
+      },
+    });
+    await fs.mkdir(path.join(dir, "skills"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "skills", "tdd.md"),
+      "---\ndescription: Test-driven development workflow.\n---\n\n# TDD\n\nWrite a failing test first.\n",
+      "utf8"
+    );
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    // Searchable and loadable through the main-process registry the MCP tools use.
+    const found = searchPluginSkills({ query: "tdd" });
+    expect(found.skills.map((s) => s.id)).toContain("acme.skill-plugin.tdd-workflow");
+    const loaded = loadPluginSkill("acme.skill-plugin.tdd-workflow");
+    expect(loaded?.name).toBe("TDD Workflow");
+    expect(loaded?.description).toBe("Test-driven development workflow.");
+    expect(loaded?.body).toContain("Write a failing test first.");
+    expect(loaded?.body).not.toContain("---");
+
+    service.unloadPlugin("acme.skill-plugin");
+    await Promise.resolve();
+
+    expect(loadPluginSkill("acme.skill-plugin.tdd-workflow")).toBeNull();
+    expect(searchPluginSkills({ query: "tdd" }).skills).toEqual([]);
   });
 });
 

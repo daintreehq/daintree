@@ -406,6 +406,27 @@ export class ProcessDetector {
             this.onStreak = 0;
             this.pendingDetected = null;
             gatedCommitted = true;
+
+            // Anchor runtime-promoted agents once the process tree corroborates
+            // them. A plain terminal the user typed `codex`/`claude` into starts
+            // with isLaunchAnchored=false, so process-tree-absence ticks would
+            // otherwise demote it every hysteresis window. Once tree evidence
+            // (process_tree / both) confirms a real agent process, latch the
+            // anchor so only an explicit lifecycle signal (prompt-return via
+            // clearShellCommandEvidence, or PTY exit) can demote — matching the
+            // launch-anchored contract. Shell-command-only evidence is not
+            // corroboration and must not anchor. #10911
+            if (
+              !this.isLaunchAnchored &&
+              rawAgent !== null &&
+              (this.lastEvidenceSource === "process_tree" || this.lastEvidenceSource === "both")
+            ) {
+              this.setLaunchAnchored(true);
+              logIdentityDebug(
+                `[IdentityDebug] runtime-agent-anchored term=${this.terminalId.slice(-8)} ` +
+                  `agent=${rawAgent} evidence=${this.lastEvidenceSource}`
+              );
+            }
           }
         } else if (shellStickyActive) {
           // OFF direction suppressed by fresh shell evidence — hold committed

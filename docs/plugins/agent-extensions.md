@@ -106,15 +106,11 @@ See [Architecture → MCP supervisor](./architecture.md#mcp-supervisor) for how 
 
 ## Skills
 
-> **Design preview — not implemented.** None of this section is wired up yet. There is no `skills` contribution point in the manifest schema (`shared/types/plugin.ts` `contributes` block), no `skills/search` or `skills/load` MCP tools, and the built-in MCP server (`electron/services/McpServerService.ts`) exposes Daintree _action_ tools, not skills. The shapes and flows below describe the intended design so the contribution point lands consistently — do not author skills or call these tools against the current build. (The `.claude/skills` paths in `SlashCommandService` are an unrelated Claude-native slash-command feature.)
-
-Skills are markdown files a plugin contributes. The intent is for Daintree's built-in MCP server to expose them as tools, so any agent running in Daintree — through a terminal, through the orchestrated assistant, anywhere — could invoke them through the standard MCP protocol.
+Skills are markdown files a plugin contributes. Daintree's built-in MCP server exposes them as tools, so any agent running in Daintree — through a terminal, through the orchestrated assistant, anywhere — can invoke them through the standard MCP protocol. (The `.claude/skills` paths in `SlashCommandService` are an unrelated Claude-native slash-command feature.)
 
 This is the right contribution point when the extension is about **knowledge or instructions** rather than **capabilities**. A TDD workflow skill doesn't need to call APIs — it just tells the agent how to think. A Linear integration, by contrast, needs network access and belongs in an MCP server.
 
 ### Manifest
-
-Skills are not yet present in the manifest schema. The example below shows the planned shape; it is documented here as a design preview.
 
 ```json
 {
@@ -138,13 +134,11 @@ Skills are not yet present in the manifest schema. The example below shows the p
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. |
 | `name` | yes | Human label. |
 | `path` | yes | Markdown file, relative to the plugin directory. |
-| `triggers` | no | Phrase fragments that help agents discover the skill in Daintree's MCP `skills/search` tool. |
+| `triggers` | no | Phrase fragments that help agents discover the skill in Daintree's MCP `skills.search` tool. |
 
 ### Skill file format
 
-> Planned design — no parser reads this format yet (see the banner at the top of this section).
-
-Skills would use a simple frontmatter + markdown body format:
+Skills use a simple frontmatter + markdown body format:
 
 ```markdown
 ---
@@ -184,24 +178,22 @@ One feature = one Red-Green-Refactor cycle. Never skip Red — a test that's nev
 
 Everything after the frontmatter is the skill body — the text that gets injected into the agent's context when it invokes the skill.
 
-### How agents would invoke skills
+### How agents invoke skills
 
-> Planned design — these tools do not exist yet (see the banner at the top of this section).
+Daintree's built-in MCP server exposes two tools for skills:
 
-The plan is for Daintree's built-in MCP server to expose two tools for skills:
+- `skills.search(query)` — searches ids, names, triggers, and descriptions, returning matching skill IDs and summaries. Omit or pass an empty `query` to list all skills.
+- `skills.load(id)` — returns the full markdown body of a specific skill.
 
-- `skills/search(query)` — would search triggers and descriptions, returning matching skill IDs and summaries
-- `skills/load(id)` — would return the full markdown body of a specific skill
-
-Agents would use these the same way they'd use any MCP tool. A typical flow:
+Agents use these the same way they'd use any MCP tool. A typical flow:
 
 1. User says "apply TDD to this feature"
-2. Agent calls `skills/search("tdd")`
+2. Agent calls `skills.search("tdd")`
 3. Receives a match for `acme.workflows.tdd-workflow` with description
-4. Calls `skills/load("acme.workflows.tdd-workflow")`
+4. Calls `skills.load("acme.workflows.tdd-workflow")`
 5. Incorporates the markdown body into its plan
 
-This would keep Daintree's skill system compatible with any agent that speaks MCP — no Daintree-specific prompt engineering needed.
+This keeps Daintree's skill system compatible with any agent that speaks MCP — no Daintree-specific prompt engineering needed.
 
 ## When to use which
 

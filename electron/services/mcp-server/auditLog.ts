@@ -47,7 +47,7 @@ const P95_Z_SCORE_MIN_TOOLS = 5;
 
 export interface McpAuditLogStore {
   read(): unknown;
-  write(records: McpLogRecord[]): void;
+  write(records: McpLogRecord[], options?: { sync?: boolean }): void;
 }
 
 // Persists the ring in the dedicated audit-logs store so settings writes to
@@ -56,8 +56,8 @@ export interface McpAuditLogStore {
 // config.json (`mcpServer`), read via the injected config closures.
 const defaultLogStore: McpAuditLogStore = {
   read: () => auditRingStore.readAll("mcpAuditLog"),
-  write: (records) =>
-    auditRingStore.writeAll("mcpAuditLog", records, MCP_AUDIT_DEFAULT_MAX_RECORDS),
+  write: (records, options) =>
+    auditRingStore.writeAll("mcpAuditLog", records, MCP_AUDIT_DEFAULT_MAX_RECORDS, options),
 };
 
 function percentile(values: number[], p: number): number {
@@ -567,21 +567,24 @@ export class AuditService {
     this.flushTimer.unref?.();
   }
 
-  private flush(): void {
+  private flush(sync = false): void {
     if (!this.hydrated) return;
     try {
-      this.logStore.write([...this.records]);
+      this.logStore.write([...this.records], { sync });
     } catch (err) {
       console.error("[MCP] Failed to flush audit log:", err);
     }
   }
 
+  // Critical-moment flush (clear, session teardown, shutdown): persists
+  // synchronously on the main connection instead of the fire-and-forget
+  // worker path, so the snapshot is durable when this returns.
   flushNow(): void {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
-    this.flush();
+    this.flush(true);
   }
 
   /**

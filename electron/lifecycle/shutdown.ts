@@ -3,6 +3,8 @@ import { app, dialog } from "electron";
 import type { PtyClient } from "../services/PtyClient.js";
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 import { projectStore } from "../services/ProjectStore.js";
+import { persistAgentSession } from "../services/pty/agentSessionHistory.js";
+import { getAgentSessionRetentionDays } from "../services/pty/agentSessionRetention.js";
 import { getActiveAgentCount, showQuitWarning } from "../utils/quitWarning.js";
 import {
   disposeAgentAvailabilityStore,
@@ -161,14 +163,40 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
     const gracefulShutdownPromise = (async () => {
       if (!ptyClient) return;
       try {
+        // Snapshot terminal infos before the kills — info is gone once the PTY
+        // exits — so each captured agent session can be journaled below. Outside
+        // the 4s kill race; a failed snapshot just no-ops the journal step.
+        let terminalInfoById = new Map<
+          string,
+          Awaited<ReturnType<PtyClient["getAllTerminalsAsync"]>>[number]
+        >();
+        try {
+          const allTerminals = await ptyClient.getAllTerminalsAsync();
+          terminalInfoById = new Map(allTerminals.map((t) => [t.id, t]));
+        } catch {
+          // Snapshot is best-effort; journaling below skips when info is absent.
+        }
+
         const allProjects = projectStore.getAllProjects();
         const projectIds = allProjects.map((p) => p.id);
-        const allResults = await Promise.race([
-          Promise.all(projectIds.map((pid) => ptyClient.gracefulKillByProject(pid))),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("graceful shutdown timeout")), 4000)
-          ),
-        ]);
+        // Cap each project's graceful kill independently (in parallel) rather
+        // than racing the whole batch against one 4s deadline: a single slow
+        // project must not discard the captured sessions of projects that did
+        // finish in time — both the projectStore write and the resume journal
+        // below depend on those partial results. Wall-clock stays ~4s (parallel).
+        const allResults = await Promise.all(
+          projectIds.map((pid) => {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            return Promise.race([
+              ptyClient.gracefulKillByProject(pid),
+              new Promise<Array<{ id: string; agentSessionId: string | null }>>((resolve) => {
+                timer = setTimeout(() => resolve([]), 4000);
+              }),
+            ]).finally(() => {
+              if (timer) clearTimeout(timer);
+            });
+          })
+        );
 
         for (let i = 0; i < projectIds.length; i++) {
           const results = allResults[i];
@@ -185,6 +213,78 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
             }
             return state;
           });
+        }
+
+        // Journal a resume record per captured agent session, matching the
+        // trash-expiry / kill / gracefulKill close paths. Non-agent terminals
+        // and sessions with no resumable id are skipped. Branch lookups are
+        // time-boxed (200ms each, parallel over unique worktrees) so a stalled
+        // workspace-host can't push the chain past the cleanup budget (#7151).
+        const capturedAgents = allResults
+          .flat()
+          .filter((r) => r.agentSessionId)
+          .map((r) => ({ result: r, info: terminalInfoById.get(r.id) }))
+          .filter((c): c is { result: typeof c.result; info: NonNullable<typeof c.info> } =>
+            Boolean(c.info?.launchAgentId)
+          );
+
+        if (capturedAgents.length > 0) {
+          const uniqueWorktreeIds = [
+            ...new Set(
+              capturedAgents
+                .map((c) => c.info.worktreeId)
+                .filter((w): w is string => typeof w === "string" && w.length > 0)
+            ),
+          ];
+          const branchByWorktree = new Map<string, string>();
+          await Promise.all(
+            uniqueWorktreeIds.map(async (wid) => {
+              let timer: ReturnType<typeof setTimeout> | undefined;
+              try {
+                const snapshot = await Promise.race([
+                  workspaceClient ? workspaceClient.getMonitorAsync(wid) : Promise.resolve(null),
+                  new Promise<null>((resolve) => {
+                    timer = setTimeout(() => resolve(null), 200);
+                  }),
+                ]);
+                const branch = snapshot?.branch;
+                if (branch && branch !== "HEAD") branchByWorktree.set(wid, branch);
+              } catch {
+                // best-effort
+              } finally {
+                if (timer) clearTimeout(timer);
+              }
+            })
+          );
+
+          const userData = app.getPath("userData");
+          for (const { result, info } of capturedAgents) {
+            try {
+              await persistAgentSession(
+                {
+                  sessionId: result.agentSessionId as string,
+                  agentId: info.launchAgentId as string,
+                  worktreeId: info.worktreeId ?? null,
+                  // Prefer the observed task title, matching the trash-expiry
+                  // and kill close paths — except under a user lock, where the
+                  // record should read the same as the frozen live tab.
+                  title:
+                    (info.titleMode === "user"
+                      ? info.title
+                      : (info.lastObservedTitle ?? info.title)) ?? null,
+                  projectId: info.projectId ?? null,
+                  agentLaunchFlags: info.agentLaunchFlags,
+                  agentModelId: info.agentModelId,
+                  cwd: info.cwd ?? undefined,
+                  branch: info.worktreeId ? branchByWorktree.get(info.worktreeId) : undefined,
+                },
+                userData,
+                getAgentSessionRetentionDays()
+              );
+            } catch (err) {
+              console.warn("[MAIN] Failed to journal agent session on shutdown:", err);
+            }
+          }
         }
       } catch (error) {
         console.warn("[MAIN] Graceful agent shutdown incomplete:", error);
@@ -216,6 +316,19 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
       } catch {
         // Module load errors during teardown are non-fatal (PluginService may
         // never have been loaded if shutdown fired before first-interactive).
+      }
+      // Stop the DB maintenance worker BEFORE the audit flushNow() calls
+      // below. The drain wait is capped (a wedged worker must not eat the
+      // shutdown budget), so it is best-effort — shutdownDbWorker() advances
+      // the write fence afterwards, making any ring write a slow worker
+      // commits later in the shutdown window a no-op. Post-shutdown, every
+      // ring write executes synchronously on main, so the final flushNow()
+      // snapshots are durable and cannot be clobbered.
+      try {
+        const { shutdownDbWorker } = await import("../services/persistence/dbWorkerClient.js");
+        await shutdownDbWorker();
+      } catch (err) {
+        console.warn("[MAIN] DB worker shutdown failed:", err);
       }
     });
 
@@ -453,6 +566,16 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           await getPeriodicCleanupService().dispose();
         } catch (error) {
           console.warn("[MAIN] Periodic cleanup dispose failed:", error);
+        }
+
+        // Stop the opt-in plugin update checker and drain any in-flight pass
+        // (#10893) — its timers/wake listeners must not survive teardown.
+        try {
+          const { getPluginUpdateCheckService } =
+            await import("../services/PluginUpdateCheckService.js");
+          await getPluginUpdateCheckService().dispose();
+        } catch (error) {
+          console.warn("[MAIN] Plugin update check dispose failed:", error);
         }
 
         try {

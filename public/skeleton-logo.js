@@ -911,9 +911,14 @@
 
     var logoEl = document.querySelector(".skeleton-logo");
 
+    // Rewind to frame 0 immediately. Cold project switches reveal the skeleton
+    // instantly (injectSkeletonCss `instantReveal` drops the 400ms Doherty
+    // gate), so without this the baked final-frame logo is visible until the
+    // delayed draw starts, then snaps empty — a visible glitch.
+    render(fills, masks, 0);
+
     window.setTimeout(function () {
       if (!skeleton.isConnected) return;
-      render(fills, masks, 0);
       if (logoEl) logoEl.style.opacity = DRAW_OPACITY;
 
       var startTs = 0;

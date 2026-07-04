@@ -112,6 +112,49 @@ describe("serializePtyPanel — agentPresetColor (Bug: not serialized)", () => {
   });
 });
 
+// Launch env persistence (#10922): a terminal launched via a preset/recipe
+// pointing Claude Code at an alternate provider (Z.AI/GLM) must replay the same
+// provider env on restore. The serializer captures the sanitized launch env so
+// the restored session doesn't silently fall back to the default provider.
+describe("serializePtyPanel — launch env (#10922)", () => {
+  it("serializes safe provider env keys into the snapshot", () => {
+    const panel = makePanel({
+      env: {
+        ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "glm-5.2",
+      },
+    });
+    const snapshot = serializePtyPanel(panel);
+    expect(snapshot.env).toEqual({
+      ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic",
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "glm-5.2",
+    });
+  });
+
+  it("omits env entirely when the panel carries none", () => {
+    const snapshot = serializePtyPanel(makePanel());
+    expect("env" in snapshot).toBe(false);
+  });
+
+  it("strips dangerous keys and injection values, keeping safe ones", () => {
+    const panel = makePanel({
+      env: {
+        ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic",
+        PATH: "/evil/bin",
+        EVIL: "$(rm -rf /)",
+      } as Record<string, string>,
+    });
+    const snapshot = serializePtyPanel(panel);
+    expect(snapshot.env).toEqual({ ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" });
+  });
+
+  it("omits env when sanitization leaves nothing safe", () => {
+    const panel = makePanel({ env: { PATH: "/evil/bin" } as Record<string, string> });
+    const snapshot = serializePtyPanel(panel);
+    expect("env" in snapshot).toBe(false);
+  });
+});
+
 // "directing" is a renderer-only ephemeral state owned by
 // TerminalAgentStateController (#5832). Persisting it could resurrect a stuck
 // indicator on the next reload because setAgentState explicitly ignores

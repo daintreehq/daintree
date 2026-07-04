@@ -4,12 +4,7 @@ import type {
   KeybindingConflict,
   KeybindingResolutionResult,
 } from "./keybindingUtils";
-import {
-  CHORD_TIMEOUT_MS,
-  combosFieldsEqual,
-  normalizeKeyForBinding,
-  parseCombo,
-} from "./keybindingUtils";
+import { combosFieldsEqual, normalizeKeyForBinding, parseCombo } from "./keybindingUtils";
 import { DEFAULT_KEYBINDINGS } from "./defaultKeybindings";
 import { isMac } from "@/lib/platform";
 import { BUILT_IN_ACTION_IDS } from "@shared/config/actionIds";
@@ -352,14 +347,13 @@ class KeybindingService {
   }
 
   private setPendingChord(combo: string): void {
+    // No auto-cancel timeout: a pending chord (e.g. the Cmd+K command HUD)
+    // persists until it's completed, cancelled (Esc/Backspace), the window
+    // blurs, or the scope/overrides change. clearChordTimeout() is kept as a
+    // harmless no-op so any residual timeout from an earlier code path clears.
     this.clearChordTimeout();
     this.pendingChord = combo;
     this.notifyListeners();
-    this.chordTimeout = setTimeout(() => {
-      this.pendingChord = null;
-      this.chordTimeout = null;
-      this.notifyListeners();
-    }, CHORD_TIMEOUT_MS);
   }
 
   getPendingChord(): string | null {
@@ -489,7 +483,7 @@ class KeybindingService {
     // completion nor a recognized standalone, surface the attempted combo
     // so the HUD can echo it, AND consume the event so the key doesn't
     // leak through to xterm (bare key types in the terminal) or fire a
-    // side-effecting standalone action (e.g. Cmd+T → terminal.duplicate)
+    // side-effecting standalone action (e.g. Cmd+B → nav.toggleSidebar)
     // that the user only pressed as part of the cancelled chord.
     const invalidChordKey = this.pendingChord !== null && !bestMatch && !foundChordPrefix;
 

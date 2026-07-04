@@ -1,17 +1,35 @@
 // eager-import-allow: reads/writes agent session history via sync fs
-import { readFileSync } from "fs";
-import { mkdir, readFile } from "node:fs/promises";
+import { readFileSync, statSync } from "fs";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { resilientAtomicWriteFile } from "../../utils/fs.js";
-import type { AgentSessionRecord } from "../../../shared/types/ipc/agentSessionHistory.js";
+import type {
+  AgentSessionRecord,
+  AgentSessionRetentionDays,
+} from "../../../shared/types/ipc/agentSessionHistory.js";
 
 export type { AgentSessionRecord };
 
 const MAX_RECORDS_PER_WORKTREE = 50;
-const SESSION_HISTORY_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_RETENTION_DAYS = 30;
+const SESSION_HISTORY_TTL_MS = DEFAULT_RETENTION_DAYS * DAY_MS; // 30 days
+
+export { MAX_RECORDS_PER_WORKTREE, SESSION_HISTORY_TTL_MS, DEFAULT_RETENTION_DAYS };
+
 const HISTORY_FILENAME = "agent-session-history.json";
 
-export { MAX_RECORDS_PER_WORKTREE, SESSION_HISTORY_TTL_MS };
+/**
+ * Convert a retention window in days to the eviction TTL in ms. `0` (keep
+ * forever) maps to `Infinity` so the age filter never drops a record — the
+ * per-worktree cap is the only remaining bound. This module stays
+ * electron-free: retention arrives as a plain number from the caller (read from
+ * the store at the IPC/call-site layer), never read here.
+ */
+function retentionDaysToMs(retentionDays?: AgentSessionRetentionDays): number {
+  if (retentionDays === undefined) return SESSION_HISTORY_TTL_MS;
+  return retentionDays > 0 ? retentionDays * DAY_MS : Infinity;
+}
 
 function getUserDataDir(): string | null {
   return process.env.DAINTREE_USER_DATA || null;
@@ -23,13 +41,46 @@ export function getSessionHistoryPath(userData?: string): string | null {
   return path.join(dir, HISTORY_FILENAME);
 }
 
-function evictRecords(records: AgentSessionRecord[], now: number): AgentSessionRecord[] {
-  // Filter expired records
-  const fresh = records.filter((r) => now - r.savedAt < SESSION_HISTORY_TTL_MS);
+// Serialize all read-modify-write cycles through a single promise chain. Every
+// terminal close path can call persistAgentSession (trash expiry, IPC kill /
+// gracefulKill, app quit), and during app quit several fire near-simultaneously.
+// Without serialization the read-then-write would lost-update — two callers read
+// the same array, each prepends its own record, and the last write drops the
+// other. Chaining keeps every record. `.then(fn, fn)` runs the next write whether
+// the previous resolved or rejected, so one failure can't wedge the queue.
+let writeQueue: Promise<unknown> = Promise.resolve();
+function enqueueWrite<T>(fn: () => Promise<T>): Promise<T> {
+  const run = writeQueue.then(fn, fn);
+  writeQueue = run.catch(() => {});
+  return run as Promise<T>;
+}
+
+function evictRecords(
+  records: AgentSessionRecord[],
+  now: number,
+  retentionMs: number = SESSION_HISTORY_TTL_MS
+): AgentSessionRecord[] {
+  // Filter expired records (retentionMs === Infinity ⇒ never age out)
+  const fresh = records.filter((r) => now - r.savedAt < retentionMs);
+
+  // Deduplicate on sessionId, keeping the newest. Multiple close paths can fire
+  // for the same terminal (e.g. a user kill landing mid-shutdown), each writing
+  // a record with the same resumable sessionId — without this the journal would
+  // accumulate stale duplicates. Records arrive newest-first, so the first
+  // occurrence of each sessionId wins.
+  const seen = new Set<string>();
+  const deduped: AgentSessionRecord[] = [];
+  for (const r of fresh) {
+    if (r.sessionId) {
+      if (seen.has(r.sessionId)) continue;
+      seen.add(r.sessionId);
+    }
+    deduped.push(r);
+  }
 
   // Enforce per-worktree cap
   const buckets = new Map<string, AgentSessionRecord[]>();
-  for (const r of fresh) {
+  for (const r of deduped) {
     const key = r.worktreeId ?? "__global__";
     let bucket = buckets.get(key);
     if (!bucket) {
@@ -50,15 +101,92 @@ function evictRecords(records: AgentSessionRecord[], now: number): AgentSessionR
   return result;
 }
 
+/**
+ * Normalize parsed journal JSON into records, dropping the legacy `snapshot`
+ * key. The exit-snapshot feature (#10850/#10855) was removed; journals written
+ * while it was enabled still carry a `snapshot` tail on disk. Stripping it on
+ * read means no consumer can resurface removed data — notably the MCP
+ * `agentSessionHistory.list` action, whose raw result is serialized without
+ * `resultSchema` parsing — and the next `persistAgentSession`/`pruneAgentSessions`
+ * rewrite purges it from disk, so the file self-heals without a versioned migration.
+ */
+function normalizeRecords(parsed: unknown): AgentSessionRecord[] {
+  if (!Array.isArray(parsed)) return [];
+  return parsed.map((raw) => {
+    if (raw && typeof raw === "object" && "snapshot" in raw) {
+      const { snapshot: _snapshot, ...rest } = raw as Record<string, unknown>;
+      return rest as unknown as AgentSessionRecord;
+    }
+    return raw as AgentSessionRecord;
+  });
+}
+
+// In-memory cache of the parsed journal, keyed by resolved file path. The resume
+// palette calls listAgentSessions() -> readSessionHistorySync() on every open,
+// which otherwise re-reads and re-parses the whole journal (up to 50 records per
+// worktree) each time. The cache is gated on the file's stat (size + mtimeMs) so
+// a direct on-disk change (or a write from any other path) is still picked up on
+// the next read; every writer refreshes it with the array it just persisted.
+// Memory-only — rebuilt from disk on first read after boot, no cross-process
+// coordination needed (all journal I/O runs on the single main-process loop).
+interface HistoryCacheEntry {
+  records: AgentSessionRecord[];
+  size: number;
+  mtimeMs: number;
+}
+const historyCache = new Map<string, HistoryCacheEntry>();
+
+function readCache(
+  filePath: string,
+  size: number,
+  mtimeMs: number
+): AgentSessionRecord[] | undefined {
+  const entry = historyCache.get(filePath);
+  if (entry && entry.size === size && entry.mtimeMs === mtimeMs) {
+    return entry.records;
+  }
+  return undefined;
+}
+
+function writeCache(
+  filePath: string,
+  records: AgentSessionRecord[],
+  size: number,
+  mtimeMs: number
+): void {
+  historyCache.set(filePath, { records, size, mtimeMs });
+}
+
+// Refresh the cache after a write with the exact array just persisted, keyed to
+// the freshly-written file's stat so the next read is a cache hit. If the stat
+// fails, drop the entry so the next read falls back to a disk re-read.
+function refreshCacheAfterWrite(filePath: string, records: AgentSessionRecord[]): void {
+  try {
+    const s = statSync(filePath);
+    writeCache(filePath, records, s.size, s.mtimeMs);
+  } catch {
+    historyCache.delete(filePath);
+  }
+}
+
+// NOTE: on a cache hit these readers return the cached array BY REFERENCE (that
+// shared-instance reuse is the whole point — a copy on every read would defeat
+// the cache). Callers MUST treat the result as read-only; never sort/push/splice
+// it in place. The production caller, listAgentSessions(), is safe: evictRecords()
+// only reads the input and returns freshly-built arrays.
 export function readSessionHistorySync(userData?: string): AgentSessionRecord[] {
   const filePath = getSessionHistoryPath(userData);
   if (!filePath) return [];
   try {
+    const s = statSync(filePath);
+    const cached = readCache(filePath, s.size, s.mtimeMs);
+    if (cached) return cached;
     const content = readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(content);
-    if (!Array.isArray(parsed)) return [];
-    return parsed as AgentSessionRecord[];
+    const records = normalizeRecords(JSON.parse(content));
+    writeCache(filePath, records, s.size, s.mtimeMs);
+    return records;
   } catch {
+    historyCache.delete(filePath);
     return [];
   }
 }
@@ -67,54 +195,94 @@ export async function readSessionHistory(userData?: string): Promise<AgentSessio
   const filePath = getSessionHistoryPath(userData);
   if (!filePath) return [];
   try {
+    const s = await stat(filePath);
+    const cached = readCache(filePath, s.size, s.mtimeMs);
+    if (cached) return cached;
     const content = await readFile(filePath, "utf8");
-    const parsed = JSON.parse(content);
-    if (!Array.isArray(parsed)) return [];
-    return parsed as AgentSessionRecord[];
+    const records = normalizeRecords(JSON.parse(content));
+    writeCache(filePath, records, s.size, s.mtimeMs);
+    return records;
   } catch {
+    historyCache.delete(filePath);
     return [];
   }
 }
 
 export async function persistAgentSession(
   record: Omit<AgentSessionRecord, "savedAt">,
+  userData?: string,
+  retentionDays?: AgentSessionRetentionDays
+): Promise<void> {
+  const filePath = getSessionHistoryPath(userData);
+  if (!filePath) return;
+
+  await enqueueWrite(async () => {
+    const dir = path.dirname(filePath);
+    await mkdir(dir, { recursive: true });
+
+    const now = Date.now();
+    const fullRecord: AgentSessionRecord = { ...record, savedAt: now };
+
+    const existing = await readSessionHistory(userData);
+    const updated = evictRecords([fullRecord, ...existing], now, retentionDaysToMs(retentionDays));
+
+    await resilientAtomicWriteFile(filePath, JSON.stringify(updated, null, 2));
+    refreshCacheAfterWrite(filePath, updated);
+  });
+}
+
+export function listAgentSessions(
+  worktreeId?: string,
+  userData?: string,
+  retentionDays?: AgentSessionRetentionDays
+): AgentSessionRecord[] {
+  const records = readSessionHistorySync(userData);
+  const now = Date.now();
+  const fresh = evictRecords(records, now, retentionDaysToMs(retentionDays));
+
+  if (!worktreeId) return fresh;
+  return fresh.filter((r) => r.worktreeId === worktreeId);
+}
+
+/**
+ * Prune the journal to the given retention window immediately, rewriting the
+ * file through the shared write queue so it can't interleave with an in-flight
+ * persist. Used when the user shortens the retention setting — mirrors
+ * `helpAssistant`'s `pruneAuditByRetention` so a tighter privacy window takes
+ * effect at once rather than lazily on the next persist/list.
+ */
+export async function pruneAgentSessions(
+  retentionDays: AgentSessionRetentionDays,
   userData?: string
 ): Promise<void> {
   const filePath = getSessionHistoryPath(userData);
   if (!filePath) return;
 
-  const dir = path.dirname(filePath);
-  await mkdir(dir, { recursive: true });
-
-  const now = Date.now();
-  const fullRecord: AgentSessionRecord = { ...record, savedAt: now };
-
-  const existing = await readSessionHistory(userData);
-  const updated = evictRecords([fullRecord, ...existing], now);
-
-  await resilientAtomicWriteFile(filePath, JSON.stringify(updated, null, 2));
-}
-
-export function listAgentSessions(worktreeId?: string, userData?: string): AgentSessionRecord[] {
-  const records = readSessionHistorySync(userData);
-  const now = Date.now();
-  const fresh = evictRecords(records, now);
-
-  if (!worktreeId) return fresh;
-  return fresh.filter((r) => r.worktreeId === worktreeId);
+  await enqueueWrite(async () => {
+    const existing = await readSessionHistory(userData);
+    const pruned = evictRecords(existing, Date.now(), retentionDaysToMs(retentionDays));
+    await resilientAtomicWriteFile(filePath, JSON.stringify(pruned, null, 2));
+    refreshCacheAfterWrite(filePath, pruned);
+  });
 }
 
 export async function clearAgentSessions(worktreeId?: string, userData?: string): Promise<void> {
   const filePath = getSessionHistoryPath(userData);
   if (!filePath) return;
 
-  if (!worktreeId) {
-    // Clear all
-    await resilientAtomicWriteFile(filePath, "[]");
-    return;
-  }
+  // Share the write queue with persistAgentSession so a clear can't interleave
+  // with an in-flight persist's read-modify-write and resurrect a cleared record.
+  await enqueueWrite(async () => {
+    if (!worktreeId) {
+      // Clear all
+      await resilientAtomicWriteFile(filePath, "[]");
+      refreshCacheAfterWrite(filePath, []);
+      return;
+    }
 
-  const existing = await readSessionHistory(userData);
-  const filtered = existing.filter((r) => r.worktreeId !== worktreeId);
-  await resilientAtomicWriteFile(filePath, JSON.stringify(filtered, null, 2));
+    const existing = await readSessionHistory(userData);
+    const filtered = existing.filter((r) => r.worktreeId !== worktreeId);
+    await resilientAtomicWriteFile(filePath, JSON.stringify(filtered, null, 2));
+    refreshCacheAfterWrite(filePath, filtered);
+  });
 }

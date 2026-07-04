@@ -121,6 +121,8 @@ export interface TerminalState {
   agentPresetColor?: string;
   /** Original user-selected preset ID; unchanged across fallback hops */
   originalPresetId?: string;
+  /** Captured launch env replayed on restore so a session keeps its provider environment (#10922) */
+  env?: Record<string, string>;
   /** Whether this panel is currently running on a fallback preset */
   isUsingFallback?: boolean;
   /** How many fallback hops have been consumed */

@@ -10,7 +10,7 @@ export const config: AgentConfig = {
   color: "#FA500F",
   iconId: "mistral",
   supportsContextInjection: true,
-  tooltip: "Mistral's official terminal coding agent (Textual TUI)",
+  tooltip: "Mistral's CLI",
   usageUrl: "https://github.com/mistralai/mistral-vibe",
   packages: { pypi: "mistral-vibe" },
   version: {

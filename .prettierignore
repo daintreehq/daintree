@@ -22,6 +22,9 @@ yarn.lock
 *.min.js
 *.min.css
 
+# Generated API-surface snapshots (raw tsup .d.ts output — see scripts/ci/check-api-surface.mjs)
+packages/*/api-report/
+
 # Assets
 build/
 *.ico

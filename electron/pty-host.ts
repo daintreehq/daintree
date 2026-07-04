@@ -33,6 +33,11 @@ nodeV8.setHeapSnapshotNearHeapLimit(2);
 import { MessagePort } from "node:worker_threads";
 import os from "node:os";
 import { PtyManager } from "./services/PtyManager.js";
+import {
+  AnalysisWorkerPool,
+  analysisWorkersDisabled,
+  defaultAnalysisPoolSize,
+} from "./services/pty/analysis/AnalysisWorkerPool.js";
 import { PtyPool, getPtyPool, shouldEnablePtyPool } from "./services/PtyPool.js";
 import { ProcessTreeCache } from "./services/ProcessTreeCache.js";
 import { ImagePathProbe } from "./services/pty/ImagePathProbe.js";
@@ -60,6 +65,7 @@ import {
 } from "./pty-host/handlers/index.js";
 import { PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS } from "./services/pty/types.js";
 import { isSmokeTestTerminalId } from "../shared/utils/smokeTestTerminals.js";
+import { startEventLoopMonitor } from "./pty-host/eventLoopMonitor.js";
 import { SCROLLBACK_MIN } from "../shared/config/scrollback.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 import { PERF_MARKS } from "../shared/perf/marks.js";
@@ -80,6 +86,11 @@ if (!process.parentPort) {
 const port = process.parentPort as unknown as MessagePort;
 
 appendEmergencyLog(`[${new Date().toISOString()}] [START] pid=${process.pid}\n`);
+
+// Loop-lag self-measurement for the "why am I slow?" flow-control snapshot —
+// this process is where multi-terminal parse load lands, and the main
+// process's lag monitor can't see it.
+startEventLoopMonitor();
 
 // Global error handlers to prevent silent crashes
 process.on("uncaughtException", (err) => {
@@ -113,6 +124,21 @@ process.on("unhandledRejection", (reason) => {
 });
 
 const ptyManager = new PtyManager();
+
+// Analysis worker pool: moves the per-chunk analysis stack (headless xterm
+// mirror + ActivityMonitor) off this thread so the pty-host event loop only
+// does I/O (node-pty reads, batching/backpressure, forwarding). Kill switch:
+// DAINTREE_DISABLE_ANALYSIS_WORKERS=1 restores the legacy in-thread path.
+let analysisWorkerPool: AnalysisWorkerPool | null = null;
+if (!analysisWorkersDisabled()) {
+  const analysisPoolSize = defaultAnalysisPoolSize();
+  analysisWorkerPool = new AnalysisWorkerPool(analysisPoolSize);
+  ptyManager.setAnalysisWorkerPool(analysisWorkerPool);
+  console.log(`[PtyHost] Analysis worker pool enabled (max ${analysisPoolSize} workers)`);
+} else {
+  console.log("[PtyHost] Analysis workers disabled; running analysis in-thread");
+}
+
 // 1.5s base poll interval. With 2-poll hysteresis in ProcessDetector, that's
 // ~3s to commit an agent/process change. Short enough for "I just ran claude
 // and want to see the chrome flip" to feel responsive, long enough to filter
@@ -253,6 +279,48 @@ import { isLoadBearingReliabilityMetric } from "./pty-host/loadBearingMetrics.js
 // false "regression" on the first emit after the gate opens.
 let dropAccumulator = { droppedBytes: 0, dataLossCount: 0 };
 
+// Per-terminal drop attribution for the on-demand flow-control snapshot
+// ("why is this terminal slow / missing output?"). The streaming
+// `data-loss-count` gauge only carries process-wide deltas, so a support
+// bundle could see THAT bytes were dropped but not WHOSE. Bounded: entries
+// are removed on terminal exit and the map is capped by evicting the
+// oldest-drop entry — a diagnostic tally must never become its own leak.
+// Updated only at drop sites (rare by construction), so it costs nothing on
+// the healthy hot path.
+interface TerminalDropTally {
+  droppedBytes: number;
+  dropCount: number;
+  lastDropAt: number;
+}
+const MAX_DROP_TALLY_TERMINALS = 256;
+const terminalDropTallies = new Map<string, TerminalDropTally>();
+
+function recordTerminalDrop(terminalId: string, droppedBytes: number): void {
+  const existing = terminalDropTallies.get(terminalId);
+  if (existing) {
+    existing.droppedBytes += droppedBytes;
+    existing.dropCount += 1;
+    existing.lastDropAt = Date.now();
+    return;
+  }
+  if (terminalDropTallies.size >= MAX_DROP_TALLY_TERMINALS) {
+    let oldestId: string | null = null;
+    let oldestAt = Number.POSITIVE_INFINITY;
+    for (const [id, tally] of terminalDropTallies) {
+      if (tally.lastDropAt < oldestAt) {
+        oldestAt = tally.lastDropAt;
+        oldestId = id;
+      }
+    }
+    if (oldestId !== null) terminalDropTallies.delete(oldestId);
+  }
+  terminalDropTallies.set(terminalId, {
+    droppedBytes,
+    dropCount: 1,
+    lastDropAt: Date.now(),
+  });
+}
+
 /**
  * Canonical funnel for terminal reliability-metric events. Wraps the
  * `backpressureManager.emitReliabilityMetric` call (which is wired into
@@ -355,6 +423,9 @@ function getOrCreatePauseCoordinator(id: string): PtyPauseCoordinator | undefine
 // Per-window MessagePort connections for direct Renderer ↔ Pty Host communication
 const rendererConnections = new Map<number, RendererConnection>();
 const windowProjectMap = new Map<number, string | null>();
+// Per-window UI-focused terminal id (from the renderer's focusedId). Read by
+// each window's PortQueueManager/PortBatcher to prioritize the focused pane.
+const windowFocusedTerminalMap = new Map<number, string | null>();
 
 // Helper to send events to Main process
 function sendEvent(event: PtyHostEvent): void {
@@ -399,37 +470,46 @@ function createPortQueueManager(windowId: number): PortQueueManager {
     emitReliabilityMetric: (payload) =>
       emitReliabilityMetricWithTracking(payload, `port-${windowId}` as PauseSource),
     pauseToken: `port-queue-${windowId}`,
+    getFocusedTerminalId: () => windowFocusedTerminalMap.get(windowId) ?? null,
   });
 }
 
-/** Recompute activity tiers for all terminals based on union of connected windows' projects */
-function recomputeActivityTiers(): void {
-  // EXPERIMENT (hibernation teardown step 1 — #10807): never demote a
-  // switched-away/backgrounded terminal to the "background" tier. Pinning every
-  // terminal to "active" keeps the producer gate below from suppressing the
-  // visual byte stream, so background panes keep streaming live — nothing goes
-  // stale, so there is nothing to lossily resync on wake. The old logic built an
-  // `activeProjects` set from `windowProjectMap` and demoted terminals whose
-  // project wasn't active (issue #9778 handling); intentionally disabled for the
-  // experiment. See docs/HIBERNATION-REMOVAL-EXPERIMENT.md.
-  for (const terminal of ptyManager.getAll()) {
+/**
+ * Force-activate the terminals of the project that just became foreground for
+ * some window (#10857). Scoped to `nextProjectId` only — terminals belonging
+ * to other projects, or with no project, are left untouched, preserving
+ * whatever tier TerminalRendererPolicy's own "set-activity-tier" IPC last set
+ * for them instead of bouncing every terminal in every project back to the
+ * expensive 50ms poll on each project switch.
+ *
+ * Never demotes anything (`nextProjectId === null` is a no-op): the visual
+ * byte stream is unconditional regardless of tier (see the isBackgrounded
+ * gate below), so the only effect of this function is ActivityMonitor's
+ * polling cadence — demoting on switch-away would just be redundant with
+ * the renderer's own background-tier push, while skipping it here keeps the
+ * hibernation-removal invariant (#10805/#10807) intact: nothing ever goes
+ * stale, so there is nothing to lossily resync on wake.
+ */
+function recomputeActivityTiers(nextProjectId: string | null): void {
+  if (nextProjectId === null) return;
+  for (const id of ptyManager.getTerminalsForProject(nextProjectId)) {
     const tier = "active" as const;
-    backpressureManager.setActivityTier(terminal.id, tier, "recompute-activity-tiers");
-    ptyManager.setActivityMonitorTier(terminal.id, tier, 50);
+    backpressureManager.setActivityTier(id, tier, "recompute-activity-tiers");
+    ptyManager.setActivityMonitorTier(id, tier, 50);
 
-    // Reconcile the renderer's dedupe baseline. The host rewrites tiers here
-    // unilaterally, but TerminalRendererPolicy.setBackendTier dedupes outbound
-    // tier messages against its last-known tier — so without this push the
-    // renderer can believe a terminal is still "active" while the producer gate
-    // suppresses its bytes, leaving the pane frozen (issue #9778). Posted on the
-    // same per-window MessagePort as data so it stays FIFO-ordered ahead of any
-    // subsequently gated chunk. Projects are filtered exactly like the data path.
-    const termProject = terminal.projectId ?? null;
+    // Reconcile the renderer's dedupe baseline. The host rewrites the tier
+    // here unilaterally, but TerminalRendererPolicy.setBackendTier dedupes
+    // outbound tier messages against its last-known tier — so without this
+    // push the renderer can believe a terminal is still "active" while the
+    // producer gate suppresses its bytes, leaving the pane frozen (issue
+    // #9778). Posted on the same per-window MessagePort as data so it stays
+    // FIFO-ordered ahead of any subsequently gated chunk. Projects are
+    // filtered exactly like the data path.
     for (const [windowId, conn] of rendererConnections) {
       const windowProject = windowProjectMap.get(windowId) ?? null;
-      if (windowProject !== null && termProject !== windowProject) continue;
+      if (windowProject !== null && nextProjectId !== windowProject) continue;
       try {
-        conn.port.postMessage({ type: "tier-changed", id: terminal.id, tier });
+        conn.port.postMessage({ type: "tier-changed", id, tier });
       } catch {
         // Port closing between iteration and post — disconnect handles cleanup.
       }
@@ -447,8 +527,23 @@ function disconnectWindow(windowId: number, reason: string): void {
   } catch {
     // ignore
   }
+  // Batched-but-unflushed bytes die with the port — account them as data loss
+  // (they were headed to a renderer that will never receive them; the wake/
+  // restore snapshot is the recovery path). dispose() below discards the
+  // chunks without any bookkeeping of its own.
+  for (const { id, bytes } of conn.batcher.getPendingByteSnapshot()) {
+    dropAccumulator.droppedBytes += bytes;
+    dropAccumulator.dataLossCount += 1;
+    recordTerminalDrop(id, bytes);
+  }
   // Dispose batcher (drops buffered data — port is closing)
   conn.batcher.dispose();
+  // Snapshot the paused set BEFORE resumeAll: resumeAll clears the manager's
+  // pause map, and `getPausedTerminalIds()` is a live iterator over that map —
+  // iterating it after resumeAll visits nothing, leaking this window's
+  // per-source pause-tracking entries (stale `heldDurationMs` gauges for a
+  // window that no longer exists).
+  const pausedByThisWindow = [...conn.portQueueManager.getPausedTerminalIds()];
   // Release port-queue pause holds before disposing
   conn.portQueueManager.resumeAll();
   // Clear this window's per-source pause-tracking entries. Multi-source
@@ -457,7 +552,7 @@ function disconnectWindow(windowId: number, reason: string): void {
   // disconnects — `removePauseSource` keeps the entry alive while the
   // IPC path still holds. The renderer is informed via the queue
   // manager's own resume flow + tier-changed message.
-  for (const terminalId of conn.portQueueManager.getPausedTerminalIds()) {
+  for (const terminalId of pausedByThisWindow) {
     removePauseSource(terminalId, `port-${windowId}` as PauseSource);
   }
   conn.portQueueManager.dispose();
@@ -475,8 +570,12 @@ function disconnectWindow(windowId: number, reason: string): void {
   // that should forget the project context.
   if (reason === "explicit-disconnect") {
     windowProjectMap.delete(windowId);
+    windowFocusedTerminalMap.delete(windowId);
   }
-  recomputeActivityTiers();
+  // A disconnect never grows scope (no project gains a viewer), so this is
+  // intentionally a no-op today — kept as the single chokepoint all 3
+  // recompute call sites route through, for discoverability.
+  recomputeActivityTiers(null);
   console.log(`[PtyHost] Window ${windowId} disconnected (${reason})`);
 }
 
@@ -714,6 +813,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
           // metrics are gated off (mirrors the IPC at-capacity path).
           dropAccumulator.droppedBytes += byteCount;
           dropAccumulator.dataLossCount += 1;
+          recordTerminalDrop(id, byteCount);
           try {
             conn.port.postMessage({
               type: "terminal-status",
@@ -921,6 +1021,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
       // gated separately in ResourceGovernor.emitDataLossCount.
       dropAccumulator.droppedBytes += dataBytes;
       dropAccumulator.dataLossCount += 1;
+      recordTerminalDrop(id, dataBytes);
       // `ipc-cap-drop` is a data-path telemetry pulse, not a pause-source
       // transition — the funnel forwards it to the wire without touching
       // the per-source tracking map (a `suspend`/`pause-end` with `null`
@@ -1015,6 +1116,10 @@ ptyManager.on("exit", (id: string, exitCode: number, signal?: number) => {
 
   // Clean up IPC data mirror state
   ipcDataMirrorTerminals.delete(id);
+
+  // Drop-tally entry dies with the terminal — the flow-control snapshot only
+  // reports live terminals, and the map stays bounded across long sessions.
+  terminalDropTallies.delete(id);
 
   sendEvent({ type: "exit", id, exitCode, signal });
 });
@@ -1182,6 +1287,13 @@ events.on("terminal:restored", (payload) => {
   });
 });
 
+events.on("agent-session:captured", (payload) => {
+  sendEvent({
+    type: "agent-session-captured",
+    record: payload.record,
+  });
+});
+
 // Ack-driven backpressure helpers for SAB path
 function tryReplayAndResume(id: string): void {
   const segments = backpressureManager.getPendingSegments(id);
@@ -1289,7 +1401,9 @@ const hostContext: HostContext = {
   pauseCoordinators,
   rendererConnections,
   windowProjectMap,
+  windowFocusedTerminalMap,
   ipcDataMirrorTerminals,
+  analysisWorkerPool,
   get visualBuffers() {
     return visualBuffers;
   },
@@ -1329,6 +1443,13 @@ const hostContext: HostContext = {
   resumePausedTerminal,
   createPortQueueManager,
   getPausedDurationsSnapshot,
+  getDropTallySnapshot: () =>
+    Array.from(terminalDropTallies, ([terminalId, tally]) => ({
+      terminalId,
+      droppedBytes: tally.droppedBytes,
+      dropCount: tally.dropCount,
+      lastDropAt: tally.lastDropAt,
+    })),
 };
 
 const dispatchMessage = createPtyHostMessageDispatcher(hostContext);
@@ -1378,6 +1499,11 @@ function cleanup(): void {
   }
 
   ptyManager.dispose();
+
+  // Workers are persistent by design (never terminated — Electron 37+
+  // flush_tasks_ assertion); dispose only drops bookkeeping. The unref'd
+  // threads die with the process.
+  analysisWorkerPool?.dispose();
 
   // Release SharedArrayBuffer references so V8 can GC shared memory regions
   visualBuffers = [];

@@ -354,7 +354,15 @@ export function PluginDetailPane({
               </span>
               <span className={BADGE_CLASS}>{categoryLabel}</span>
               <span className={BADGE_CLASS}>{sourceLabel}</span>
-              {plugin.disabled === true && <span className={BADGE_CLASS}>Disabled</span>}
+              {plugin.blocklisted === true && (
+                <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-status-danger uppercase tracking-wide">
+                  <AlertCircle className="w-3 h-3" aria-hidden="true" />
+                  Blocked
+                </span>
+              )}
+              {plugin.blocklisted !== true && plugin.disabled === true && (
+                <span className={BADGE_CLASS}>Disabled</span>
+              )}
               {plugin.devMode && <span className={BADGE_CLASS}>Dev</span>}
               {restartRequired && (
                 <span className={`${BADGE_CLASS} text-daintree-text/50`}>Restart required</span>
@@ -463,6 +471,16 @@ export function PluginDetailPane({
 
           {plugin.manifest.authors && plugin.manifest.authors.length > 0 && (
             <PluginContributors authors={plugin.manifest.authors} />
+          )}
+
+          {plugin.blocklisted === true && (
+            <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
+              <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
+              <p className="text-[11px] text-status-danger break-words">
+                Blocked from loading:{" "}
+                {plugin.blocklistReason ?? "flagged by the Daintree blocklist"}
+              </p>
+            </div>
           )}
 
           {plugin.loadError && (

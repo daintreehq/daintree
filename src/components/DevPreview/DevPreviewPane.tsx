@@ -1488,6 +1488,18 @@ export function DevPreviewPane({
     return cleanup;
   }, [id, handleHardReload]);
 
+  // Listen for the close shortcut (Cmd/Ctrl+W) forwarded from the focused
+  // webview guest (#10859). Without this, focus inside the guest bypasses the
+  // host window's setIgnoreMenuShortcuts guard and the native role:"close"
+  // menu accelerator closes the whole window instead of just this panel.
+  useEffect(() => {
+    const cleanup = window.electron.webview.onCloseShortcut((payload) => {
+      if (payload.panelId !== id) return;
+      void actionService.dispatch("terminal.close", { terminalId: id }, { source: "keybinding" });
+    });
+    return cleanup;
+  }, [id]);
+
   // Listen for action-driven hard-reload events
   useEffect(() => {
     const handleHardReloadEvent = (e: Event) => {
@@ -2147,6 +2159,7 @@ export function DevPreviewPane({
           <ConsoleDrawer
             terminalId={consoleTerminalId}
             paneId={id}
+            projectId={currentProjectId}
             webContentsId={guestWebContentsId}
             status={status}
             isOpen={isConsoleOpen}

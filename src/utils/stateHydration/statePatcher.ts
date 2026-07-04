@@ -1,10 +1,10 @@
 import type { PanelKind, AgentState } from "@/types";
 import { coerceAgentState } from "@shared/types/agent";
 import type { BrowserHistory } from "@shared/types/browser";
-import type { PanelExitBehavior } from "@shared/types/panel";
+import type { PanelExitBehavior, PanelTitleMode } from "@shared/types/panel";
 import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
-import { getAgentConfig } from "@/config/agents";
+import { getAgentConfig, sanitizeAgentEnv } from "@/config/agents";
 import type { AgentPreset } from "@/config/agents";
 import {
   generateAgentCommand,
@@ -12,7 +12,9 @@ import {
   buildResumeLatestCommand,
   buildLaunchCommandFromFlags,
   reconcileBypassFlags,
+  reconcileInlineModeFlag,
   resolveEffectiveBypass,
+  resolveEffectiveInlineMode,
 } from "@shared/types";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
 import { isAbsolute } from "@shared/utils/path";
@@ -40,7 +42,7 @@ export interface AddTerminalArgs extends AddPanelOptionsBase {
   devServerError?: { type: string; message: string } | null;
   devServerTerminalId?: string | null;
   devPreviewConsoleOpen?: boolean;
-  devPreviewConsoleTab?: "output" | "console";
+  devPreviewConsoleTab?: "output" | "console" | "diagnostics";
   viewportPreset?: string;
   viewportRotated?: boolean;
   viewportDpr?: 1 | 2 | 3;
@@ -67,6 +69,8 @@ export interface SavedTerminalData {
   agentId?: string;
   launchAgentId?: string;
   title?: string;
+  /** Title ownership rung persisted with the snapshot — restoring it is what keeps preset/user titles pinned across restart (#10738). */
+  titleMode?: PanelTitleMode;
   cwd?: string;
   worktreeId?: string;
   location?: string;
@@ -79,7 +83,7 @@ export interface SavedTerminalData {
   createdAt?: number;
   devCommand?: string;
   devPreviewConsoleOpen?: boolean;
-  devPreviewConsoleTab?: "output" | "console";
+  devPreviewConsoleTab?: "output" | "console" | "diagnostics";
   viewportPreset?: string;
   viewportRotated?: boolean;
   viewportDpr?: 1 | 2 | 3;
@@ -92,6 +96,14 @@ export interface SavedTerminalData {
   agentPresetId?: string;
   agentPresetColor?: string;
   originalPresetId?: string;
+  /**
+   * Caller-resolved launch env captured at launch time (#10922). Preferred over
+   * live preset re-resolution on respawn so a restored session replays the same
+   * provider environment it launched with. Typed as `unknown`-valued because it
+   * is untrusted on-disk JSON — sanitized via `sanitizeAgentEnv` at the read
+   * boundary before use.
+   */
+  env?: Record<string, unknown>;
   isUsingFallback?: boolean;
   fallbackChainIndex?: number;
   /** @deprecated pre-#5459 legacy key; read-only fallback, never written. */
@@ -125,6 +137,7 @@ interface BackendTerminalData {
   kind?: PanelKind;
   launchAgentId?: string;
   title?: string;
+  titleMode?: PanelTitleMode;
   cwd: string;
   agentState?: AgentState;
   lastStateChange?: number;
@@ -145,6 +158,7 @@ interface ReconnectedTerminalData {
   kind?: PanelKind;
   launchAgentId?: string;
   title?: string;
+  titleMode?: PanelTitleMode;
   cwd?: string;
   agentState?: AgentState;
   lastStateChange?: number;
@@ -163,6 +177,7 @@ interface ReconnectedTerminalData {
 interface AgentSettingsData {
   agents?: Record<string, Record<string, unknown>>;
   globalSkipPermissions?: boolean;
+  globalUseAltScreen?: boolean;
 }
 
 export function inferAgentIdFromTitle(
@@ -261,6 +276,7 @@ export function buildArgsForBackendTerminal(
     kind: normalizePtyKind(backendTerminal.kind),
     launchAgentId,
     title: saved.title ?? backendTerminal.title,
+    titleMode: saved.titleMode ?? backendTerminal.titleMode,
     cwd,
     worktreeId: saved.worktreeId,
     location,
@@ -274,7 +290,9 @@ export function buildArgsForBackendTerminal(
     devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
     devPreviewConsoleTab:
       isDevPreview &&
-      (saved.devPreviewConsoleTab === "console" || saved.devPreviewConsoleTab === "output")
+      (saved.devPreviewConsoleTab === "console" ||
+        saved.devPreviewConsoleTab === "output" ||
+        saved.devPreviewConsoleTab === "diagnostics")
         ? saved.devPreviewConsoleTab
         : undefined,
     devPreviewScrollPosition: isDevPreview ? saved.devPreviewScrollPosition : undefined,
@@ -292,6 +310,11 @@ export function buildArgsForBackendTerminal(
       backendTerminal.originalAgentPresetId ??
       readPresetId(saved) ??
       backendTerminal.agentPresetId,
+    // Carry the captured launch env forward so a reconnect (project switch /
+    // renderer reload to a still-live PTY) re-serializes the snapshot WITH env,
+    // instead of dropping it and reintroducing the provider swap on the next
+    // full restart (#10922). Not used to spawn here — the PTY already has it.
+    env: sanitizeAgentEnv(saved.env),
     isUsingFallback: saved.isUsingFallback,
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
@@ -328,6 +351,7 @@ export function buildArgsForReconnectedFallback(
     kind: normalizePtyKind(reconnectedKind),
     launchAgentId,
     title: saved.title ?? reconnectedTerminal.title,
+    titleMode: saved.titleMode ?? reconnectedTerminal.titleMode,
     cwd,
     worktreeId: saved.worktreeId,
     location,
@@ -341,7 +365,9 @@ export function buildArgsForReconnectedFallback(
     devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
     devPreviewConsoleTab:
       isDevPreview &&
-      (saved.devPreviewConsoleTab === "console" || saved.devPreviewConsoleTab === "output")
+      (saved.devPreviewConsoleTab === "console" ||
+        saved.devPreviewConsoleTab === "output" ||
+        saved.devPreviewConsoleTab === "diagnostics")
         ? saved.devPreviewConsoleTab
         : undefined,
     devPreviewScrollPosition: isDevPreview ? saved.devPreviewScrollPosition : undefined,
@@ -359,6 +385,10 @@ export function buildArgsForReconnectedFallback(
       reconnectedTerminal.originalAgentPresetId ??
       readPresetId(saved) ??
       reconnectedTerminal.agentPresetId,
+    // Carry the captured launch env forward so a reconnect re-serializes the
+    // snapshot WITH env rather than dropping it and reintroducing the provider
+    // swap on the next full restart (#10922). Not used to spawn — PTY has it.
+    env: sanitizeAgentEnv(saved.env),
     isUsingFallback: saved.isUsingFallback,
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
@@ -428,25 +458,36 @@ export function buildArgsForRespawn(
     // once it's toggled off, and vice-versa. Strip-and-re-add against the
     // current resolution so every restart/restore replays clean flags.
     const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
+    const globalUseAltScreen = agentSettings?.globalUseAltScreen ?? false;
     const effectiveBypass = resolveEffectiveBypass(effectiveEntry, agentId, globalSkipPermissions);
+    const effectiveInline = resolveEffectiveInlineMode(effectiveEntry, agentId, globalUseAltScreen);
     const dangerousArgs = effectiveEntry.dangerousArgs as string | undefined;
     const rawPersistedFlags = presetWasStale ? undefined : saved.agentLaunchFlags;
     const hasPersistedFlags = Boolean(rawPersistedFlags && rawPersistedFlags.length > 0);
+    // Reconcile the persisted snapshot against both live resolutions (#10432 the
+    // bypass token, #10876 the `--no-alt-screen` inline flag): a snapshot must
+    // not carry a stale flag forward once the global switch or per-agent choice
+    // is flipped. Applied together so restart/restore/resume replay clean flags.
+    const reconcileFlags = (base: string[]): string[] =>
+      reconcileInlineModeFlag(
+        reconcileBypassFlags(base, agentId, effectiveBypass, dangerousArgs),
+        agentId,
+        effectiveInline
+      );
     // Reconcile only the flags actually captured: this drives the stored
     // snapshot and the from-flags rebuild, so it must NOT synthesize a flag set
     // out of nothing (that would mask the fresh-launch fallback).
     const persistedFlags = hasPersistedFlags
-      ? reconcileBypassFlags(rawPersistedFlags as string[], agentId, effectiveBypass, dangerousArgs)
+      ? reconcileFlags(rawPersistedFlags as string[])
       : rawPersistedFlags;
     reconciledLaunchFlags = persistedFlags;
-    // Resume commands prepend launch flags, so the bypass token must be injected
-    // even when no flags were captured — a session launched before bypass
-    // existed should honour global-on (#10432). Only diverges from persistedFlags
-    // in that inject-from-empty case.
+    // Resume commands prepend launch flags, so the bypass / inline tokens must be
+    // injected even when no flags were captured — a session launched before
+    // either feature existed should honour the current resolution (#10432, #10876).
+    // Only diverges from persistedFlags in that inject-from-empty case.
+    const injectedFromEmpty = reconcileFlags([]);
     const resumeFlags =
-      effectiveBypass && !hasPersistedFlags
-        ? reconcileBypassFlags([], agentId, effectiveBypass, dangerousArgs)
-        : persistedFlags;
+      !hasPersistedFlags && injectedFromEmpty.length > 0 ? injectedFromEmpty : persistedFlags;
 
     const buildFromPersistedFlags = () =>
       buildLaunchCommandFromFlags(baseCommand, agentId, persistedFlags as string[], {
@@ -467,6 +508,7 @@ export function buildArgsForRespawn(
           modelId: saved.agentModelId,
           presetArgs: preset?.args?.join(" "),
           globalSkipPermissions,
+          globalUseAltScreen,
         });
         sessionLostOnRestore = true;
       }
@@ -486,6 +528,7 @@ export function buildArgsForRespawn(
           modelId: saved.agentModelId,
           presetArgs: preset?.args?.join(" "),
           globalSkipPermissions,
+          globalUseAltScreen,
         });
         sessionLostOnRestore = true;
       }
@@ -499,8 +542,10 @@ export function buildArgsForRespawn(
   // Stale-preset split-brain: when saved.agentPresetId was set but the preset
   // no longer resolves (deleted custom preset, CCR route removed from config),
   // clear agentPresetId/agentPresetColor and strip the preset suffix from the
-  // title so the respawned panel doesn't lie about its identity — it's now
-  // running default env/command, so it should look like default.
+  // title so the respawned panel doesn't lie about its preset identity. Note the
+  // captured launch env (`env` below) is still replayed independently (#10922) —
+  // a deleted preset shouldn't silently swap a live session's provider — so the
+  // command/env are not necessarily "default" here, only the preset badge is.
   presetWasStale = isAgentPanel && presetWasStale;
   const respawnAgentPresetId = presetWasStale ? undefined : savedPresetIdForRespawn;
   const respawnAgentPresetColor = presetWasStale
@@ -509,14 +554,21 @@ export function buildArgsForRespawn(
   const respawnOriginalPresetId = presetWasStale
     ? undefined
     : (saved.originalPresetId ?? savedPresetIdForRespawn);
-  const respawnTitle = presetWasStale
-    ? (agentId ? getAgentConfig(agentId)?.name : saved.title) || saved.title
-    : saved.title;
+  // A user-locked title never contains preset branding — stripping it on a
+  // stale preset would destroy a human rename, so the lock exempts it.
+  const userLockedTitle = saved.titleMode === "user";
+  const respawnTitle =
+    presetWasStale && !userLockedTitle
+      ? (agentId ? getAgentConfig(agentId)?.name : saved.title) || saved.title
+      : saved.title;
 
   return {
     kind: respawnKind,
     launchAgentId: agentId,
     title: respawnTitle,
+    // A stale preset's pinned title was just stripped — drop the pin with it
+    // (unless the user locked the title, which the strip above exempts).
+    titleMode: presetWasStale && !userLockedTitle ? undefined : saved.titleMode,
     cwd: saved.cwd || projectRoot || "",
     worktreeId: saved.worktreeId,
     location,
@@ -539,7 +591,12 @@ export function buildArgsForRespawn(
     isUsingFallback: presetWasStale ? undefined : saved.isUsingFallback,
     fallbackChainIndex: presetWasStale ? undefined : saved.fallbackChainIndex,
     sessionLostOnRestore: sessionLostOnRestore || undefined,
-    env: presetEnv,
+    // Prefer the launch env captured in the snapshot (#10922) so the restored
+    // session replays the same provider environment (e.g. a Z.AI/GLM preset or a
+    // recipe's inline env) even when that preset/recipe no longer resolves in the
+    // current store. Falls back to live re-resolution for legacy snapshots saved
+    // before env was persisted, or when the saved env sanitizes to nothing safe.
+    env: sanitizeAgentEnv(saved.env) ?? presetEnv,
     extensionState: saved.extensionState,
     pluginId: saved.pluginId,
     restore: true,
@@ -556,6 +613,7 @@ export function buildArgsForNonPtyRecreation(
   const base: AddTerminalArgs = {
     kind,
     title: saved.title,
+    titleMode: saved.titleMode,
     cwd: resolveSavedCwd(saved.cwd, projectRoot),
     worktreeId: saved.worktreeId,
     location,
@@ -579,37 +637,10 @@ export function buildArgsForNonPtyRecreation(
   return base;
 }
 
-// Normalizes separators (backslash → forward slash) and trims trailing slashes
-// so cwd and worktree paths compare apples-to-apples on Windows, where node-pty
-// returns backslashes but simple-git returns forward slashes.
-function normalizeForComparison(p: string): string {
-  return p.replace(/\\/g, "/").replace(/\/+$/, "");
-}
-
-/**
- * Infer a worktreeId from a terminal's cwd by longest-prefix matching against the
- * worktrees list. Returns undefined when no worktree's path is a prefix of cwd.
- * Uses segment-aware matching after normalizing separators on both sides, so
- * mixed POSIX/Windows separators between cwd and worktree paths still match.
- */
-export function inferWorktreeIdFromCwd(
-  cwd: string | undefined,
-  worktrees: ReadonlyArray<{ id: string; path: string }> | undefined
-): string | undefined {
-  if (!cwd || !worktrees || worktrees.length === 0) return undefined;
-  const normalizedCwd = normalizeForComparison(cwd);
-  let best: { id: string; normalizedLength: number } | undefined;
-  for (const wt of worktrees) {
-    if (!wt.path) continue;
-    const normalizedWtPath = normalizeForComparison(wt.path);
-    if (normalizedCwd === normalizedWtPath || normalizedCwd.startsWith(normalizedWtPath + "/")) {
-      if (!best || normalizedWtPath.length > best.normalizedLength) {
-        best = { id: wt.id, normalizedLength: normalizedWtPath.length };
-      }
-    }
-  }
-  return best?.id;
-}
+// Moved to a standalone module so renderer-pure consumers (resume grouping,
+// resume launch) can use it without pulling in the hydration import graph.
+// Re-exported here for the existing hydration-side callers.
+export { inferWorktreeIdFromCwd } from "../worktreePaths";
 
 export function buildArgsForOrphanedTerminal(
   terminal: BackendTerminalData,

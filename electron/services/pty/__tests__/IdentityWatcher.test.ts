@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IdentityWatcher, type IdentityWatcherDelegate } from "../IdentityWatcher.js";
 import type { ProcessDetector } from "../../ProcessDetector.js";
+import { INITIAL_FOREGROUND_SENTINEL } from "../ForegroundProcessGroupProbe.js";
 
 interface FakeDelegateState {
   isExited: boolean;
@@ -1424,6 +1425,164 @@ describe("IdentityWatcher", () => {
       const watcher = new IdentityWatcher(delegate);
 
       expect(watcher.hasAgentUiPromptFalsePositive()).toBe(true);
+    });
+  });
+
+  describe("Codex agent-detection flap hardening (#10911)", () => {
+    function makeCommittedCodexWatcher(
+      overrides: Partial<Parameters<typeof createFakeDelegate>[0]> = {}
+    ) {
+      const inject = vi.fn();
+      const clear = vi.fn();
+      const fakeDetector = {
+        injectShellCommandEvidence: inject,
+        clearShellCommandEvidence: clear,
+      } as unknown as ProcessDetector;
+      const { delegate, state } = createFakeDelegate({
+        processDetector: fakeDetector,
+        visibleLines: ["codex", "Codex ready"],
+        cursorLine: "Codex ready",
+        ptyDescendantCount: 1,
+        // A valid foreground snapshot (child active) during commit both keeps
+        // the agent from demoting and latches sawForegroundSnapshot so a later
+        // null read is treated as a transient failure.
+        foreground: { shellPgid: 123, foregroundPgid: 456 },
+        ...overrides,
+      });
+      return { delegate, state, clear, inject };
+    }
+
+    it("does not demote on a Codex `›` composer line while the shell is idle", async () => {
+      const { delegate, state, clear } = makeCommittedCodexWatcher();
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit("codex");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(watcher.isFallbackCommitted).toBe(true);
+
+      // Foreground genuinely reports idle, but the visible tail is Codex's own
+      // composer echo — the `›` glyph must NOT count as a returned prompt.
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      state.visibleLines = ["Codex ready", "› draft a commit message"];
+      state.cursorLine = "› draft a commit message";
+      watcher.observeOutput("› draft a commit message\n");
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(clear).not.toHaveBeenCalledWith("prompt-return");
+      expect(watcher.isFallbackCommitted).toBe(true);
+      watcher.dispose();
+    });
+
+    it("still demotes on a real oh-my-zsh `➜` prompt while committed (exclusion is surgical)", async () => {
+      const { delegate, state, clear } = makeCommittedCodexWatcher();
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit("codex");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(watcher.isFallbackCommitted).toBe(true);
+
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      state.visibleLines = ["Codex ready", "➜  my-repo git:(main)"];
+      state.cursorLine = "➜  my-repo git:(main)";
+      state.ptyDescendantCount = 0;
+      watcher.observeOutput("➜  my-repo git:(main)\n");
+
+      expect(clear).toHaveBeenCalledWith("prompt-return");
+      watcher.dispose();
+    });
+
+    it("fails closed on a transient null foreground snapshot instead of demoting", async () => {
+      const { delegate, state, clear } = makeCommittedCodexWatcher();
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit("codex");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(watcher.isFallbackCommitted).toBe(true);
+
+      // Probe goes stale/null (ps timeout) right as a real-looking shell prompt
+      // scrolls by. Because the probe worked before, this is a transient window
+      // and must hold the agent rather than demote on ambiguous state.
+      state.foreground = null;
+      state.visibleLines = ["Codex ready", "user@host daintree % "];
+      state.cursorLine = "user@host daintree % ";
+      watcher.observeOutput("user@host daintree % \n");
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(clear).not.toHaveBeenCalledWith("prompt-return");
+      expect(watcher.isFallbackCommitted).toBe(true);
+      watcher.dispose();
+    });
+
+    it("falls open (legacy path) when the probe only ever returned the warm-up sentinel", async () => {
+      // Regression guard for the sentinel latch: during warm-up the probe hands
+      // back INITIAL_FOREGROUND_SENTINEL (synthetic, not a real reading). If the
+      // real `ps` probe then never resolves and returns null, the terminal must
+      // fall back to the legacy prompt path — NOT fail closed forever — because
+      // the probe was never actually confirmed to work here. #10911
+      const { delegate, state, clear } = makeCommittedCodexWatcher({
+        foreground: INITIAL_FOREGROUND_SENTINEL,
+      });
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit("codex");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(watcher.isFallbackCommitted).toBe(true);
+
+      state.foreground = null; // real probe died before ever succeeding
+      state.visibleLines = ["Codex exited", "user@host daintree % "];
+      state.cursorLine = "user@host daintree % ";
+      state.ptyDescendantCount = 0;
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(clear).toHaveBeenCalledWith("prompt-return");
+      watcher.dispose();
+    });
+
+    it("does not treat bare or numbered `›`/`❯` agent lines as a prompt while committed", async () => {
+      const { delegate, state, clear } = makeCommittedCodexWatcher();
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit("codex");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(watcher.isFallbackCommitted).toBe(true);
+
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      for (const line of [
+        "›",
+        "❯",
+        "❯ write the tests",
+        "› 1. first option",
+        "> 1. first option",
+      ]) {
+        state.visibleLines = ["Codex ready", line];
+        state.cursorLine = line;
+        watcher.observeOutput(`${line}\n`);
+      }
+      await vi.advanceTimersByTimeAsync(400);
+
+      expect(clear).not.toHaveBeenCalledWith("prompt-return");
+      expect(watcher.isFallbackCommitted).toBe(true);
+      watcher.dispose();
+    });
+
+    it("still demotes on a genuine idle shell after the agent exits", async () => {
+      const { delegate, state, clear } = makeCommittedCodexWatcher();
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit("codex");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(watcher.isFallbackCommitted).toBe(true);
+
+      // Real exit: foreground ownership returns to the shell and the child is
+      // gone. A fresh idle snapshot is authoritative — demotion must proceed.
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      state.visibleLines = ["Codex exited", "user@host daintree % "];
+      state.cursorLine = "user@host daintree % ";
+      state.ptyDescendantCount = 0;
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(clear).toHaveBeenCalledWith("prompt-return");
+      watcher.dispose();
     });
   });
 });

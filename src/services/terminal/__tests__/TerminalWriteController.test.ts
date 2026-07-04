@@ -119,19 +119,48 @@ describe("TerminalWriteController.write", () => {
     expect((managed.terminal as unknown as MockTerminal).write).not.toHaveBeenCalled();
   });
 
-  it("serialized-restore path: defers output and acks port data, never the IPC ledger", () => {
+  it("serialized-restore path: defers output without settling ANY ledger", () => {
     managed.isSerializedRestoreInProgress = true;
     controller.write("t1", "abc");
-    controller.write("t1", new Uint8Array([0x61, 0x62]));
+    controller.write("t1", new Uint8Array([0x61, 0x62]), 3);
 
-    expect(managed.deferredOutput).toEqual(["abc", new Uint8Array([0x61, 0x62])]);
-    expect(deps.acknowledgePortData).toHaveBeenNthCalledWith(1, "t1", 3, 1);
-    expect(deps.acknowledgePortData).toHaveBeenNthCalledWith(2, "t1", 2, 1);
-    // Deferred chunks are replayed through the normal path once restore
-    // finishes, which acks the IPC ledger then — acking here too would
-    // double-drain the host ledger.
+    // The batch's chunkCount travels with the deferred entry so the replay
+    // write can settle exactly the FIFO entries the batch owns.
+    expect(managed.deferredOutput).toEqual([
+      { data: "abc", chunkCount: 1 },
+      { data: new Uint8Array([0x61, 0x62]), chunkCount: 3 },
+    ]);
+    // No ledger moves at defer time. Deferred chunks are replayed through the
+    // normal path once restore finishes, and ALL bookkeeping (port-ack FIFO,
+    // IPC ledger, ingest inFlightBytes) happens on the replay write's
+    // completion. Acking here AND at replay double-debited the port-ack FIFO:
+    // each replayed chunk stole an entry belonging to a chunk that arrived
+    // after the restore, permanently inflating the host's queued-byte ledger
+    // (every later pause then degrades to its 10s safety timeout). Holding the
+    // charge also keeps the host's watermarks pacing the PTY while the restore
+    // runs, bounding mid-restore buffering without dropping bytes.
+    expect(deps.acknowledgePortData).not.toHaveBeenCalled();
     expect(deps.acknowledgeData).not.toHaveBeenCalled();
+    expect(deps.notifyWriteComplete).not.toHaveBeenCalled();
     expect((managed.terminal as unknown as MockTerminal).write).not.toHaveBeenCalled();
+  });
+
+  it("replaying a deferred batch settles its own FIFO entries exactly once", () => {
+    // End-to-end defer→replay: the ONLY acknowledgement for a deferred batch
+    // is the one its replay write produces, with the original chunkCount.
+    managed.isSerializedRestoreInProgress = true;
+    controller.write("t1", new Uint8Array([1, 2, 3]), 2);
+    expect(deps.acknowledgePortData).not.toHaveBeenCalled();
+
+    managed.isSerializedRestoreInProgress = false;
+    const [entry] = managed.deferredOutput;
+    managed.deferredOutput = [];
+    controller.write("t1", entry!.data, entry!.chunkCount);
+
+    expect(deps.acknowledgePortData).toHaveBeenCalledTimes(1);
+    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3, 2);
+    expect(deps.notifyWriteComplete).toHaveBeenCalledTimes(1);
+    expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 3);
   });
 
   it("normal path: writes to terminal, acks both data and port data, increments unseen", () => {
@@ -196,12 +225,12 @@ describe("TerminalWriteController.write", () => {
 
     it("deferred-restore path: never acks the IPC ledger even for non-ASCII strings", () => {
       // The IPC ledger is drained when the deferred chunk replays through the
-      // normal path after restore. Acking here would double-drain it. The port
-      // ack stays in UTF-16 code units (1 for the single box-drawing char).
+      // normal path after restore. Acking here would double-drain it. The
+      // port-ack FIFO is equally untouched (settled by the replay write).
       managed.isSerializedRestoreInProgress = true;
       controller.write("t1", "│");
 
-      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 1, 1);
+      expect(deps.acknowledgePortData).not.toHaveBeenCalled();
       expect(deps.acknowledgeData).not.toHaveBeenCalled();
     });
   });
@@ -219,10 +248,11 @@ describe("TerminalWriteController.write", () => {
       expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 2, 2);
     });
 
-    it("deferred-restore path: forwards the chunk count when acking held batches", () => {
+    it("deferred-restore path: preserves the chunk count on the held batch", () => {
       managed.isSerializedRestoreInProgress = true;
       controller.write("t1", new Uint8Array([1, 2]), 2);
-      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 2, 2);
+      expect(deps.acknowledgePortData).not.toHaveBeenCalled();
+      expect(managed.deferredOutput).toEqual([{ data: new Uint8Array([1, 2]), chunkCount: 2 }]);
     });
   });
 
@@ -457,6 +487,86 @@ describe("TerminalWriteController.write", () => {
       localController.write("nope", "abc");
 
       expect(onWrite).not.toHaveBeenCalled();
+    });
+  });
+
+  // A single xterm write entry parses atomically (the WriteBuffer's 12ms
+  // budget only applies between entries), so large coalesced batches must be
+  // fed as multiple bounded entries — while acks/bookkeeping stay batch-scoped
+  // on the final entry's callback.
+  describe("write slicing", () => {
+    const WRITE_SLICE_BYTES = 32 * 1024;
+
+    it("feeds a large string batch as bounded entries with one batch-scoped ack", () => {
+      const data = "x".repeat(WRITE_SLICE_BYTES * 2 + 500);
+      controller.write("t1", data, 7);
+
+      const term = managed.terminal as unknown as MockTerminal;
+      const calls = term.write.mock.calls;
+      // Invariants: more than one entry, every entry within the slice bound,
+      // reassembly is byte-identical, callback ONLY on the final entry.
+      expect(calls.length).toBeGreaterThan(1);
+      for (const call of calls) {
+        expect((call[0] as string).length).toBeLessThanOrEqual(WRITE_SLICE_BYTES);
+      }
+      expect(calls.map((c) => c[0]).join("")).toBe(data);
+      for (let i = 0; i < calls.length - 1; i++) {
+        expect(calls[i]![1]).toBeUndefined();
+      }
+      expect(typeof calls[calls.length - 1]![1]).toBe("function");
+      // Acks fire once, for the whole batch, with the original chunkCount.
+      expect(deps.acknowledgePortData).toHaveBeenCalledTimes(1);
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", data.length, 7);
+      expect(deps.notifyWriteComplete).toHaveBeenCalledTimes(1);
+      expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", data.length);
+    });
+
+    it("feeds a large Uint8Array batch as zero-copy subarray entries", () => {
+      const data = new Uint8Array(WRITE_SLICE_BYTES + 10).fill(0x61);
+      controller.write("t1", data);
+
+      const term = managed.terminal as unknown as MockTerminal;
+      expect(term.write).toHaveBeenCalledTimes(2);
+      const first = term.write.mock.calls[0]![0] as Uint8Array;
+      const second = term.write.mock.calls[1]![0] as Uint8Array;
+      expect(first.byteLength).toBe(WRITE_SLICE_BYTES);
+      expect(second.byteLength).toBe(10);
+      expect(first.buffer).toBe(data.buffer);
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", data.byteLength, 1);
+    });
+
+    it("does not split a surrogate pair at a slice boundary", () => {
+      const data = "a".repeat(WRITE_SLICE_BYTES - 1) + "\u{1F600}" + "b".repeat(8);
+      controller.write("t1", data);
+
+      const term = managed.terminal as unknown as MockTerminal;
+      const first = term.write.mock.calls[0]![0] as string;
+      expect(first.length).toBe(WRITE_SLICE_BYTES - 1);
+      const second = term.write.mock.calls[1]![0] as string;
+      expect(second.codePointAt(0)).toBe(0x1f600);
+    });
+
+    it("does not split mid-UTF-8-sequence in a binary batch", () => {
+      // 0xF0 0x9F 0x98 0x80 = 😀; place it straddling the slice boundary.
+      const data = new Uint8Array(WRITE_SLICE_BYTES + 2);
+      data.fill(0x61);
+      data.set([0xf0, 0x9f, 0x98, 0x80], WRITE_SLICE_BYTES - 2);
+
+      controller.write("t1", data);
+
+      const term = managed.terminal as unknown as MockTerminal;
+      const first = term.write.mock.calls[0]![0] as Uint8Array;
+      // Boundary backed off so the 4-byte sequence starts the next slice.
+      expect(first.byteLength).toBe(WRITE_SLICE_BYTES - 2);
+      const second = term.write.mock.calls[1]![0] as Uint8Array;
+      expect(second[0]).toBe(0xf0);
+    });
+
+    it("writes small batches as a single entry (fast path unchanged)", () => {
+      controller.write("t1", "hello");
+      const term = managed.terminal as unknown as MockTerminal;
+      expect(term.write).toHaveBeenCalledTimes(1);
+      expect(typeof term.write.mock.calls[0]![1]).toBe("function");
     });
   });
 });

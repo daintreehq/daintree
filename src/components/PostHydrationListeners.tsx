@@ -8,6 +8,7 @@ import { useDiskSpaceWarnings } from "../hooks/useDiskSpaceWarnings";
 import { useForgeTokenHealth } from "../hooks/useForgeTokenHealth";
 import { useForgeRateLimit } from "../hooks/useForgeRateLimit";
 import { useStoreUpdateListener } from "../hooks/useStoreUpdateListener";
+import { usePluginUpdateCheckListener } from "../hooks/usePluginUpdateCheckListener";
 import { useSoundPlaybackListener } from "../hooks/useSoundPlaybackListener";
 import { useRecipeFocusReload, useWorktreeDevServerStateSync } from "../hooks/app";
 
@@ -35,6 +36,7 @@ export function PostHydrationListeners() {
   useWorktreeDevServerStateSync();
   useSoundPlaybackListener();
   useStoreUpdateListener();
+  usePluginUpdateCheckListener();
 
   useEffect(() => {
     markRendererPerformance(PERF_MARKS.POST_HYDRATION_LISTENERS_MOUNT);

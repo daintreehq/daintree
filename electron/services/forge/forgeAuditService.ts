@@ -40,8 +40,8 @@ function persistConfig(patch: Record<string, unknown>): void {
 // `auditMaxRecords` stay in config.json (`forgeAudit`).
 const forgeAuditLogStore: ForgeAuditLogStore = {
   read: () => auditRingStore.readAll("forgeAuditLog"),
-  write: (records) =>
-    auditRingStore.writeAll("forgeAuditLog", records, FORGE_AUDIT_DEFAULT_MAX_RECORDS),
+  write: (records, options) =>
+    auditRingStore.writeAll("forgeAuditLog", records, FORGE_AUDIT_DEFAULT_MAX_RECORDS, options),
 };
 
 export const forgeAuditService = new ForgeAuditService(

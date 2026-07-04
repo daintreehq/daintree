@@ -132,11 +132,12 @@ export type ViewLocation = "panel";
 
 export interface ViewContribution {
   id: string;
-  name: string;
   componentPath: string;
   location: ViewLocation;
+  // Advisory only — the matching `contributes.panels` entry owns the rendered
+  // icon/name at runtime. `name`/`description` were removed (#10888) because no
+  // runtime path consumed them.
   iconId?: string;
-  description?: string;
 }
 
 /**
@@ -187,6 +188,24 @@ export interface McpServerContribution {
   command: string;
   args?: string[];
   env?: Record<string, string>;
+}
+
+/**
+ * One `contributes.skills` entry (#10892). A skill is a markdown file the plugin
+ * ships — instructions/knowledge (not executable code) that Daintree's built-in
+ * MCP server surfaces to agents through the `skills.search` / `skills.load`
+ * tools. `id` is namespaced at runtime as `{pluginId}.{id}`. `path` is a
+ * plugin-relative markdown file, validated with the same traversal guard as a
+ * view's `componentPath` and realpath-contained to the plugin dir when read.
+ * Skills carry no capability requirement — they are inert declarative content.
+ */
+export interface SkillContribution {
+  id: string;
+  name: string;
+  /** Plugin-relative path to the skill's markdown file (e.g. `./skills/tdd.md`). */
+  path: string;
+  /** Optional phrase fragments that help agents discover the skill via `skills.search`. */
+  triggers?: string[];
 }
 
 /**
@@ -351,6 +370,13 @@ export interface PluginManifest {
     commands: PluginActionContribution[];
     views: ViewContribution[];
     mcpServers: McpServerContribution[];
+    /**
+     * Plugin-contributed skills (#10892) — markdown knowledge/instruction files
+     * surfaced to agents via the built-in MCP server's `skills.search` /
+     * `skills.load` tools. Inert declarative content; no capability required.
+     * Empty unless the plugin ships skills.
+     */
+    skills: SkillContribution[];
     forgeProviders: ForgeProviderContribution[];
     fileDecorationProviders: FileDecorationContribution[];
     /**
@@ -690,6 +716,37 @@ export type PluginCheckUpdateResult =
   | { status: "invalid-id" }
   | { status: "fetch-failed"; message: string };
 
+/**
+ * One URL-installed plugin found to have an update available by the opt-in
+ * background check (#10893). A trimmed projection of the `available` variant of
+ * {@link PluginCheckUpdateResult} — enough for the inbox notification copy and
+ * the manager's "Update all" queue without re-querying.
+ */
+export interface PluginBackgroundUpdateEntry {
+  pluginId: string;
+  displayName: string;
+  version: string;
+  capabilities: PluginCapability[];
+}
+
+/**
+ * Result of a background update-check pass across all URL-installed plugins
+ * (#10893). Broadcast to renderers (and cached in main for late-subscriber
+ * hydration) only when `updates` is non-empty. `signature` is a deterministic
+ * digest of the update set so the renderer can dedupe repeated passes that
+ * surface the same set into a single inbox row.
+ */
+export interface PluginBackgroundUpdateCheckResult {
+  checkedAt: number;
+  updates: PluginBackgroundUpdateEntry[];
+  signature: string;
+}
+
+/** Opt-in state for the background update check (#10893). OFF by default. */
+export interface PluginBackgroundUpdateCheckSettings {
+  enabled: boolean;
+}
+
 export interface PluginLoadError {
   message: string;
   stack?: string;
@@ -893,6 +950,23 @@ export interface LoadedPluginInfo {
    * `PluginMcpTierAuth`; do not re-declare it anywhere else.
    */
   pluginDanger: "safe" | "confirm";
+  /**
+   * True when the plugin was refused at load time by the remote blocklist /
+   * kill-switch (#10891) — its `manifest.name` matched a blocklist entry whose
+   * version range covers `manifest.version`. Distinct from `disabled` (a
+   * user-togglable Preferences state) and `loadError` (a technical activation
+   * failure): this is a host-decided policy refusal the user cannot toggle off.
+   * A blocklisted plugin is never registered in the running set — no `activate`
+   * runs and it contributes no panels/actions — but it is still surfaced in the
+   * Plugin Manager so the block is visible.
+   */
+  blocklisted: boolean;
+  /**
+   * Human-readable explanation for the block (from the matched entry's
+   * `message`, falling back to its machine `reason`). `undefined` unless
+   * `blocklisted` is true.
+   */
+  blocklistReason?: string;
 }
 
 export interface PluginIpcContext {

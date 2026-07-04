@@ -56,6 +56,7 @@ function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo
         commands: [],
         views: [],
         mcpServers: [],
+        skills: [],
         keybindings: [],
         contextMenus: [],
         forgeProviders: [],
@@ -76,6 +77,7 @@ function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo
     updateAvailable: null,
     devMode: false,
     pluginDanger: "safe",
+    blocklisted: false,
     ...overrides,
   };
 }
@@ -279,5 +281,22 @@ describe("PluginDetailPane MCP servers tab (issue #10584)", () => {
     fireEvent.click(screen.getByRole("tab", { name: "MCP servers" }));
     expect(await screen.findByText("Demo Server")).toBeTruthy();
     expect(pluginMcpListMock).toHaveBeenCalled();
+  });
+});
+
+describe("PluginDetailPane blocklist (#10891)", () => {
+  it("shows the blocked banner with the reason in the overview", () => {
+    renderOverview(makePlugin({ blocklisted: true, blocklistReason: "Steals tokens" }));
+    expect(screen.getByText(/Blocked from loading: Steals tokens/)).toBeTruthy();
+  });
+
+  it("falls back to a generic reason when none is provided", () => {
+    renderOverview(makePlugin({ blocklisted: true }));
+    expect(screen.getByText(/flagged by the Daintree blocklist/)).toBeTruthy();
+  });
+
+  it("does not show the blocked banner for a normal plugin", () => {
+    renderOverview(makePlugin());
+    expect(screen.queryByText(/Blocked from loading/)).toBeNull();
   });
 });

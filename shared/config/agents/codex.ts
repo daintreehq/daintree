@@ -21,7 +21,7 @@ export const config: AgentConfig = {
     tier: "stable",
   },
   shortcut: "Cmd/Ctrl+Alt+X",
-  tooltip: "careful, methodical runs",
+  tooltip: "OpenAI's CLI",
   usageUrl: "https://chatgpt.com/codex/settings/usage",
   externalLinks: [{ label: "View usage", url: "https://chatgpt.com/codex/settings/usage" }],
   version: {
@@ -81,7 +81,7 @@ export const config: AgentConfig = {
     primaryPatterns: [
       // @generated:codex:primaryPatterns:start
       "[•·]\\s+[^()\\n]{2,80}\\s+\\([^)]*esc to interrupt",
-      "esc to interrupt[^)\\n]*\\)?$",
+      "esc to interrupt(?:[^)\\n]{0,20}\\)?|[^)\\n]{0,60}\\))$",
       "\\(\\d+s\\s*[·•]\\s*esc to interrupt",
       // @generated:codex:primaryPatterns:end
     ],

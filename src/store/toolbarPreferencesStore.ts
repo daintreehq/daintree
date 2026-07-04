@@ -23,6 +23,7 @@ const DEFAULT_RIGHT_BUTTONS: ToolbarButtonId[] = [
   "forge-stats",
   "notification-center",
   "copy-tree",
+  "resume-sessions",
   "command-palette",
   "settings",
   "problems",
@@ -43,7 +44,15 @@ const DEFAULT_PREFERENCES: ToolbarPreferences = {
 const FIXED_BUTTON_IDS: ToolbarButtonId[] = ["sidebar-toggle", "assistant-toggle", "portal-toggle"];
 
 function sanitizeButtonList(buttons: AnyToolbarButtonId[]): AnyToolbarButtonId[] {
-  return buttons.filter((id) => !FIXED_BUTTON_IDS.includes(id as ToolbarButtonId));
+  const filtered = buttons.filter((id) => !FIXED_BUTTON_IDS.includes(id as ToolbarButtonId));
+  // Dedupe by first occurrence. A persisted list can accumulate repeated ids —
+  // chiefly duplicate `forge-stats` when the v10 `renameForgeStats` migration
+  // collapses `github-stats` onto a list that already held `forge-stats`,
+  // compounded by shared dev-profile round-trips (#10937). Every hydration
+  // routes through here via `mergeButtonList`, and `setLeftButtons`/
+  // `setRightButtons` do too, so this is the durable, version-independent guard
+  // against duplicate pills (`merge()` runs every load; `migrate()` does not).
+  return Array.from(new Set(filtered));
 }
 
 /**
@@ -135,7 +144,13 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
           toList.splice(toIndex, 0, buttonId);
 
           return {
-            layout: { ...state.layout, leftButtons, rightButtons },
+            layout: {
+              ...state.layout,
+              // Sanitize both sides so a cross-side move onto a list that
+              // already held the id can't leave a duplicate behind (#10937).
+              leftButtons: sanitizeButtonList(leftButtons),
+              rightButtons: sanitizeButtonList(rightButtons),
+            },
           };
         }),
       toggleButtonVisibility: (buttonId, _side) =>
@@ -185,7 +200,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
     }),
     {
       name: "daintree-toolbar-preferences",
-      version: 10,
+      version: 11,
       storage: createSafeJSONStorage(),
       migrate: (persisted, version) => {
         const state = persisted as Record<string, unknown>;
@@ -356,6 +371,25 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
           }
           if (Array.isArray(layout?.rightButtons)) {
             layout.rightButtons = layout.rightButtons.map(renameForgeStats);
+          }
+        }
+        if (version < 11) {
+          // One-time heal for profiles that accumulated duplicate button ids —
+          // chiefly repeated `forge-stats` from the v10 rename landing on a list
+          // that already held one, compounded by shared dev-profile round-trips
+          // (#10937). The v10 `renameForgeStats` step above used a bare `.map()`
+          // with no dedup, unlike the v3 `renameAgentSetup` precedent. `merge()`
+          // (via `sanitizeButtonList`) already dedupes on every load; this makes
+          // the repair explicit and matches the per-version migration
+          // convention. `pinnedButtons` is a map, so its keys can't duplicate.
+          const layout = state.layout as
+            | { leftButtons?: string[]; rightButtons?: string[] }
+            | undefined;
+          const dedupe = (buttons?: string[]) =>
+            Array.isArray(buttons) ? Array.from(new Set(buttons)) : buttons;
+          if (layout) {
+            layout.leftButtons = dedupe(layout.leftButtons);
+            layout.rightButtons = dedupe(layout.rightButtons);
           }
         }
         return state as unknown as ToolbarPreferencesState;

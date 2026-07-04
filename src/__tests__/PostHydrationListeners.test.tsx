@@ -15,6 +15,7 @@ const recipeFocus = vi.fn();
 const devServerSync = vi.fn();
 const soundPlayback = vi.fn();
 const storeUpdate = vi.fn();
+const pluginUpdateCheck = vi.fn();
 const mark = vi.fn();
 
 vi.mock("@/hooks/useHibernationNotifications", () => ({
@@ -38,6 +39,9 @@ vi.mock("@/hooks/useSoundPlaybackListener", () => ({
 vi.mock("@/hooks/useStoreUpdateListener", () => ({
   useStoreUpdateListener: () => storeUpdate(),
 }));
+vi.mock("@/hooks/usePluginUpdateCheckListener", () => ({
+  usePluginUpdateCheckListener: () => pluginUpdateCheck(),
+}));
 vi.mock("@/hooks/app", () => ({
   useRecipeFocusReload: () => recipeFocus(),
   useWorktreeDevServerStateSync: () => devServerSync(),
@@ -56,6 +60,7 @@ const allHooks = [
   devServerSync,
   soundPlayback,
   storeUpdate,
+  pluginUpdateCheck,
 ];
 
 describe("PostHydrationListeners", () => {

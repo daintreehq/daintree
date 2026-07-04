@@ -1,9 +1,8 @@
 import { useMemo } from "react";
 import { RotateCcw } from "lucide-react";
-import { SettingsSwitchCard } from "../SettingsSwitchCard";
 import { SettingsChoicebox, type ChoiceboxOption } from "../SettingsChoicebox";
 import type { ScopeKind } from "./scopeUtils";
-import type { DangerousMode } from "@shared/types";
+import type { DangerousMode, InlineMode } from "@shared/types";
 
 interface BehavioralControlsProps {
   scopeKind: ScopeKind;
@@ -16,19 +15,21 @@ interface BehavioralControlsProps {
   inheritResolvesToOn: boolean;
   /** Where "Default" inherits from — "global setting" or "agent default". */
   inheritOriginLabel: string;
-  effectiveInlineMode: boolean;
-  agentDefaultInline: boolean;
+  /** Current alt-screen mode for the active scope (agent Default or preset). */
+  inlineMode: InlineMode;
+  /** Whether the inline "Default" (inherit) option resolves to inline (vs alt screen). */
+  inlineInheritResolvesToInline: boolean;
+  /** Where the inline "Default" inherits from — "global setting", "agent default", or "the agent's built-in default" (a curated registry default that shadows the global switch, #10894). */
+  inlineInheritOriginLabel: string;
   customArgsValue: string;
   customArgsPlaceholder: string;
   customArgsDescription: string;
-  inlineOverride: boolean | undefined;
   customFlagsOverride: string | undefined;
   supportsInlineMode: boolean;
   defaultDangerousArg: string;
   onDangerousModeChange: (mode: DangerousMode) => void;
-  onInlineModeChange: () => void;
+  onInlineModeChange: (mode: InlineMode) => void;
   onCustomFlagsChange: (value: string) => void;
-  onInlineOverrideReset: () => void;
   onCustomFlagsOverrideReset: () => void;
 }
 
@@ -39,19 +40,18 @@ export function BehavioralControls({
   effectiveSkipPerms,
   inheritResolvesToOn,
   inheritOriginLabel,
-  effectiveInlineMode,
-  agentDefaultInline,
+  inlineMode,
+  inlineInheritResolvesToInline,
+  inlineInheritOriginLabel,
   customArgsValue,
   customArgsPlaceholder,
   customArgsDescription,
-  inlineOverride,
   customFlagsOverride,
   supportsInlineMode,
   defaultDangerousArg,
   onDangerousModeChange,
   onInlineModeChange,
   onCustomFlagsChange,
-  onInlineOverrideReset,
   onCustomFlagsOverrideReset,
 }: BehavioralControlsProps) {
   const dangerousModeOptions = useMemo<ReadonlyArray<ChoiceboxOption<DangerousMode>>>(
@@ -66,6 +66,23 @@ export function BehavioralControls({
       { value: "off", label: "Off" },
     ],
     [inheritResolvesToOn]
+  );
+
+  // Alt-screen tri-state. Labels describe the effect ("Inline" / "Alt screen")
+  // and are decoupled from the stored `inlineMode` value polarity ("on" = inline,
+  // "off" = alt screen) so the field name and its values stay self-consistent.
+  const inlineModeOptions = useMemo<ReadonlyArray<ChoiceboxOption<InlineMode>>>(
+    () => [
+      {
+        value: "inherit",
+        label: "Default",
+        resolvedLabel: `(${inlineInheritResolvesToInline ? "Inline" : "Alt screen"})`,
+        muted: true,
+      },
+      { value: "on", label: "Inline" },
+      { value: "off", label: "Alt screen" },
+    ],
+    [inlineInheritResolvesToInline]
   );
 
   return (
@@ -98,28 +115,6 @@ export function BehavioralControls({
         <p className="text-xs text-daintree-text/40 select-text">{customArgsDescription}</p>
       </div>
 
-      {supportsInlineMode && (
-        <div id="agents-inline-mode">
-          <SettingsSwitchCard
-            variant="compact"
-            title="Inline mode"
-            subtitle={
-              scopeKind === "custom" && inlineOverride === undefined
-                ? `Using default (${agentDefaultInline ? "On" : "Off"})`
-                : "Disable fullscreen TUI for better resize handling and scrollback"
-            }
-            isEnabled={effectiveInlineMode}
-            onChange={onInlineModeChange}
-            ariaLabel={`Inline mode for ${scopeLabel}`}
-            isModified={scopeKind === "custom" && inlineOverride !== undefined}
-            onReset={scopeKind === "custom" ? onInlineOverrideReset : undefined}
-            resetAriaLabel={
-              scopeKind === "custom" ? `Reset inline mode override for ${scopeLabel}` : undefined
-            }
-          />
-        </div>
-      )}
-
       <div id="agents-skip-permissions" className="space-y-1.5">
         <SettingsChoicebox<DangerousMode>
           label="Skip permissions"
@@ -141,6 +136,24 @@ export function BehavioralControls({
           </div>
         )}
       </div>
+
+      {supportsInlineMode && (
+        <div id="agents-inline-mode" className="space-y-1.5">
+          <SettingsChoicebox<InlineMode>
+            label="Alt-screen mode"
+            description="Alt screen matches the CLI's native full-screen TUI; inline is smoother (WebGL scrollback, clean resize). Off vetoes the global setting for this scope."
+            columns={3}
+            value={inlineMode}
+            onChange={onInlineModeChange}
+            options={inlineModeOptions}
+          />
+          {inlineMode === "inherit" && (
+            <p className="text-xs text-daintree-text/40 select-text">
+              Inherited from {inlineInheritOriginLabel}
+            </p>
+          )}
+        </div>
+      )}
     </>
   );
 }

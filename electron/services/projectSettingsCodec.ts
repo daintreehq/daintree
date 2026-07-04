@@ -524,6 +524,9 @@ export function encodeEnvelope(settings: ProjectSettings): Record<string, unknow
   delete persistable.exposeDaintreeMcpToAgents;
   delete persistable.githubRemote;
   delete persistable.agentInstructions;
+  // Removed exit-snapshot feature (#10850/#10855): drop any stale opt-out flag a
+  // passthrough save payload might still carry so it never re-lands on disk.
+  delete persistable.exitSnapshotExcluded;
   delete persistable._schemaVersion;
 
   return {

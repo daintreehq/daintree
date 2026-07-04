@@ -12,7 +12,7 @@ export const config: AgentConfig = {
   // external MCP servers. The Daintree assistant overlay has nothing to
   // inject into it, so it is structurally ineligible.
   supports: false,
-  tooltip: "general code execution — runs Python, shell, and JS on the host",
+  tooltip: "Open Interpreter's CLI",
   usageUrl: "https://docs.openinterpreter.com/",
   externalLinks: [{ label: "View docs", url: "https://docs.openinterpreter.com/" }],
   packages: {

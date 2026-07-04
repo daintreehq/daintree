@@ -1,4 +1,4 @@
-import { Terminal, ILink, IBufferRange } from "@xterm/xterm";
+import { Terminal, IBufferRange } from "@xterm/xterm";
 import { isMac } from "@/lib/platform";
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
@@ -8,6 +8,7 @@ import {
   RefreshTierProvider,
   AgentStateCallback,
   PostCompleteHook,
+  TerminalLink,
   isWebGLEligibleTier,
   WRITE_BURST_DECAY_MS,
 } from "./types";
@@ -117,8 +118,19 @@ class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
   // Throttle for the interactive resource-profile override IPC (see onActiveWheel).
   private lastInteractiveOverrideRequestAt = 0;
-  private dataBuffer = new TerminalOutputIngestService((id, data, chunkCount) =>
-    this.writeToTerminal(id, data, chunkCount)
+  // Which terminal received the most recent alt-buffer wheel event, and when —
+  // drives the ingest service's background-drain hold during a scroll gesture.
+  // Uses the same decay window as the BURST tier so "gesture over" is one
+  // consistent notion across the renderer.
+  private lastActiveWheelId: string | null = null;
+  private lastActiveWheelAt = 0;
+  private dataBuffer = new TerminalOutputIngestService(
+    (id, data, chunkCount) => this.writeToTerminal(id, data, chunkCount),
+    () => usePanelStore.getState().focusedId,
+    () =>
+      this.lastActiveWheelId !== null && Date.now() - this.lastActiveWheelAt < WHEEL_BURST_DECAY_MS
+        ? this.lastActiveWheelId
+        : null
   );
   private suppressedExitUntil = new Map<string, number>();
   private unseenTracker = new TerminalUnseenOutputTracker();
@@ -134,6 +146,9 @@ class TerminalInstanceService {
   private resizeController: TerminalResizeController;
   private rendererPolicy: TerminalRendererPolicy;
   private webGLManager = new TerminalWebGLManager();
+  // Coalesces "why am I slow?" diagnostics pushes (#10910): multiple tier/create/
+  // destroy events in one turn collapse to a single main-process report.
+  private whySlowReportScheduled = false;
   private agentStateController: TerminalAgentStateController;
   private restoreController: TerminalRestoreController;
   private reflowController: TerminalReflowController;
@@ -157,7 +172,7 @@ class TerminalInstanceService {
 
     this.restoreController = new TerminalRestoreController({
       getInstance: (id) => this.instances.get(id),
-      writeData: (id, data) => this.writeToTerminal(id, data),
+      writeData: (id, data, chunkCount) => this.writeToTerminal(id, data, chunkCount),
     });
 
     this.writeController = new TerminalWriteController({
@@ -239,6 +254,10 @@ class TerminalInstanceService {
         // service helper so updateOptions/applyAgentPromotion/getOrCreate all
         // reach the same answer.
         this.applyCursorBlinkPolicy(managed);
+
+        // Tier changes shift the counts-by-tier distribution (and can flip WebGL
+        // mode via the release path above) — push a fresh diagnostics sample.
+        this.scheduleWhySlowReport();
       },
     });
 
@@ -341,6 +360,7 @@ class TerminalInstanceService {
         this.agentStateController.clearDirectingState(id, trigger),
       onUserInput: (id, data) => this.onUserInput(id, data),
       onActiveWheel: (id) => this.onActiveWheel(id),
+      onUserScrollIntent: (id) => this.onUserScrollIntent(id),
       onEnterPressed: (id) => this.onEnterPressed(id),
       updateLastObservedTitle: (id, title) =>
         usePanelStore.getState().updateLastObservedTitle(id, title),
@@ -360,6 +380,18 @@ class TerminalInstanceService {
    */
   getHoveredLinkText(id: string): string | null {
     return this.instances.get(id)?.hoveredLink?.text ?? null;
+  }
+
+  /**
+   * Returns the resolved absolute path of the currently-hovered link when it's
+   * a file link (not a URL / OSC 8 link), else null. Used by the right-click
+   * context menu to show a "Reveal in Finder" item only for genuine file
+   * paths. Distinct from {@link getHoveredLinkText}, which returns the raw
+   * matched text for any link kind.
+   */
+  getHoveredFilePath(id: string): string | null {
+    const link = this.instances.get(id)?.hoveredLink;
+    return link?.kind === "file" ? (link.absolutePath ?? null) : null;
   }
 
   /**
@@ -391,8 +423,13 @@ class TerminalInstanceService {
    * don't expose an ILink natively). activate() routes through the link
    * handler so localhost URLs hit the browser-panel path when needed.
    */
-  private makeSyntheticLink(text: string, range: IBufferRange | null, terminalId: string): ILink {
+  private makeSyntheticLink(
+    text: string,
+    range: IBufferRange | null,
+    terminalId: string
+  ): TerminalLink {
     return {
+      kind: "url",
       range: range ?? { start: { x: 0, y: 0 }, end: { x: 0, y: 0 } },
       text,
       activate: (event: MouseEvent, uri: string) => {
@@ -577,6 +614,9 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return;
 
+    this.lastActiveWheelId = id;
+    this.lastActiveWheelAt = Date.now();
+
     this.rendererPolicy.applyRendererPolicy(id, TerminalRefreshTier.BURST);
     if (managed.inputBurstTimer !== undefined) {
       clearTimeout(managed.inputBurstTimer);
@@ -587,6 +627,22 @@ class TerminalInstanceService {
       current.inputBurstTimer = undefined;
       this.rendererPolicy.applyRendererPolicy(id, current.getRefreshTier());
     }, WHEEL_BURST_DECAY_MS);
+
+    this.requestInteractiveProfileOverride();
+  }
+
+  /**
+   * Ordinary scrollback wheel/key scrolling (not mouse-reporting forwarding).
+   * Holds the resource profile off efficiency for the same reason as
+   * `onActiveWheel` — a profile downgrade mid-scroll drops the WebGL upper
+   * threshold and can force the visible terminal onto the DOM renderer right
+   * as the user is scrolling it (#10858). Unlike `onActiveWheel`, plain
+   * scrollback is client-side xterm rendering with no PTY round-trip per
+   * line, so there's no renderer-tier boost to apply here.
+   */
+  private onUserScrollIntent(id: string): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
 
     this.requestInteractiveProfileOverride();
   }
@@ -1451,7 +1507,7 @@ class TerminalInstanceService {
       this.linkHandler.openLink(url, id, event);
     };
 
-    const setHoveredLink = (link: ILink | null) => {
+    const setHoveredLink = (link: TerminalLink | null) => {
       const current = this.instances.get(id);
       if (!current) return;
       current.hoveredLink = link;
@@ -1604,11 +1660,57 @@ class TerminalInstanceService {
 
     this.notifyReadinessWaiters(id);
 
+    this.scheduleWhySlowReport();
+
     return managed;
   }
 
   get(id: string): ManagedTerminal | null {
     return this.instances.get(id) ?? null;
+  }
+
+  /**
+   * Coalesce a "why am I slow?" diagnostics push (#10910). Terminal create,
+   * destroy, and tier changes each nudge this; the actual report is deferred to a
+   * microtask so a burst (e.g. a fleet broadcast opening many panes) sends one
+   * sample, not one per pane.
+   */
+  private scheduleWhySlowReport(): void {
+    if (this.whySlowReportScheduled) return;
+    this.whySlowReportScheduled = true;
+    queueMicrotask(() => {
+      this.whySlowReportScheduled = false;
+      this.reportWhySlowDiagnostics();
+    });
+  }
+
+  /**
+   * Push this renderer's terminal WebGL mode + counts-by-refresh-tier to the
+   * main-process diagnostics cache. Best-effort: never throw into terminal
+   * lifecycle, and no-op when the preload binding is unavailable (tests).
+   */
+  private reportWhySlowDiagnostics(): void {
+    try {
+      const report = window.electron?.system?.reportTerminalRendererDiagnostics;
+      if (typeof report !== "function") return;
+      const countsByTier: Record<string, number> = {};
+      for (const managed of this.instances.values()) {
+        const tier =
+          managed.lastAppliedTier ?? managed.getRefreshTier?.() ?? TerminalRefreshTier.BACKGROUND;
+        const key = TerminalRefreshTier[tier] ?? String(tier);
+        countsByTier[key] = (countsByTier[key] ?? 0) + 1;
+      }
+      void report({
+        webglMode: this.webGLManager.getMode(),
+        wantsWebgl: this.webGLManager.getWantsSize(),
+        terminalCount: this.instances.size,
+        countsByTier,
+      }).catch(() => {
+        // Diagnostics push is fire-and-forget; a dropped sample is harmless.
+      });
+    } catch {
+      // Never let best-effort diagnostics disrupt terminal lifecycle.
+    }
   }
 
   /**
@@ -3341,6 +3443,7 @@ class TerminalInstanceService {
     managed.scrollbackRestoreState = "none";
 
     this.instances.delete(id);
+    this.scheduleWhySlowReport();
     // Keep the batch aggregate honest when a terminal is torn down mid-restore
     // (e.g. the user closes a pane while it is still pending/in-progress).
     this.notifyScrollbackRestoreListeners();

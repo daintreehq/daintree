@@ -73,7 +73,7 @@ import type {
   AgentHelpRequest,
   AgentHelpResult,
 } from "./agent.js";
-import type { AgentSessionRecord } from "./agentSessionHistory.js";
+import type { AgentSessionRecord, AgentSessionRetentionDays } from "./agentSessionHistory.js";
 import type {
   DemoScreenshotResult,
   DemoStartCapturePayload,
@@ -246,6 +246,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     trash(id: string): Promise<void>;
     restore(id: string): Promise<boolean>;
     setActivityTier(id: string, tier: PtyHostActivityTier, pollingIntervalMs?: number): void;
+    /** Report the UI-focused terminal (or null) so the pty-host can prioritize it under backpressure/batching. */
+    setFocused(id: string | null): void;
     acknowledgeData(id: string, length: number): void;
     getForProject(projectId: string): Promise<BackendTerminalInfo[]>;
     getAvailableTerminals(): Promise<BackendTerminalInfo[]>;
@@ -360,6 +362,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   system: GeneratedElectronAPI["system"] & {
     openExternal(url: string): Promise<void>;
     openPath(path: string): Promise<void>;
+    showItemInFolder(path: string): Promise<void>;
     openInEditor(payload: SystemOpenInEditorPayload & { projectId?: string }): Promise<void>;
     checkCommand(command: string): Promise<boolean>;
     checkDirectory(path: string): Promise<boolean>;
@@ -718,6 +721,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * dot-path leaf so per-agent records aren't rewritten with defaults.
      */
     setGlobal(value: boolean): Promise<AgentSettings>;
+    /**
+     * Set the global "use alt-screen mode by default" override (#10876).
+     * Persisted as a dot-path leaf so per-agent records aren't rewritten with
+     * defaults.
+     */
+    setGlobalInline(value: boolean): Promise<AgentSettings>;
     reset(agentId?: AgentId): Promise<AgentSettings>;
     /**
      * Mark the persisted store with the given schema version. Only called by
@@ -886,6 +895,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): () => void;
     /** Subscribe to reload shortcut (Cmd/Ctrl+R) forwarded from focused webview guests */
     onReloadShortcut(callback: (payload: { panelId: string }) => void): () => void;
+    /** Subscribe to close shortcut (Cmd/Ctrl+W) forwarded from focused webview guests */
+    onCloseShortcut(callback: (payload: { panelId: string }) => void): () => void;
     /** Subscribe to blocked cross-origin navigation events from webview guests */
     onNavigationBlocked(
       callback: (payload: { panelId: string; url: string; canOpenExternal: boolean }) => void
@@ -1214,7 +1225,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
           color?: string;
           dangerousEnabled?: boolean;
           customFlags?: string;
-          inlineMode?: boolean;
+          inlineMode?: boolean | "inherit" | "on" | "off";
         }>;
       }) => void
     ): () => void;
@@ -1222,6 +1233,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   agentSessionHistory: {
     list(worktreeId?: string): Promise<AgentSessionRecord[]>;
     clear(worktreeId?: string): Promise<void>;
+    getRetentionDays(): Promise<AgentSessionRetentionDays>;
+    setRetentionDays(days: AgentSessionRetentionDays): Promise<void>;
   };
   // clipboard is generated — see GeneratedElectronAPI.
   webUtils: {
@@ -1793,6 +1806,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * callback carries no data — re-pull via {@link list}. Returns a cleanup.
      */
     onProvenanceChanged(callback: (payload: Record<string, never>) => void): () => void;
+    /**
+     * Subscribe to background update-check results (#10893). Fires with the
+     * batched set of URL-installed plugins that have updates available. Returns
+     * a cleanup.
+     */
+    onBackgroundUpdateAvailable(
+      callback: (payload: import("../plugin.js").PluginBackgroundUpdateCheckResult) => void
+    ): () => void;
     /**
      * Subscribe to file-decoration invalidations. The callback fires with the
      * changed scope (and optionally the narrowed paths) — it carries no

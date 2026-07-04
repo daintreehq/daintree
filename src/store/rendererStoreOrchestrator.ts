@@ -8,12 +8,14 @@ import {
 import { useFleetArmingStore, subscribeFleetArmingPanelPruning } from "./fleetArmingStore";
 import { subscribeFleetTargetOverridesPruning } from "./fleetTargetOverridesStore";
 import { subscribeFleetFailureAutoClear } from "./fleetFailureStore";
+import { subscribeFleetRunWatcher } from "./fleetRunStore";
 import { useTerminalInputStore, unregisterInputController } from "./terminalInputStore";
 import { subscribeFleetBroadcastResult } from "@/components/Fleet/fleetRawInputBroadcast";
 import { semanticAnalysisService } from "@/services/SemanticAnalysisService";
 import { useConsoleCaptureStore } from "./consoleCaptureStore";
 import { useResourceMonitoringStore } from "./resourceMonitoringStore";
 import { useVoiceRecordingStore } from "./voiceRecordingStore";
+import { usePluginPanelBadgeStore } from "./pluginPanelBadgeStore";
 import { useLayoutUndoStore } from "./layoutUndoStore";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { useAgentSettingsStore } from "./agentSettingsStore";
@@ -33,6 +35,7 @@ import { setActiveContextAccessors } from "@/lib/notify";
 import { debounce } from "@/utils/debounce";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
 import { isPtyPanel } from "@shared/types/panel";
+import { terminalClient } from "@/clients";
 
 // Thunk form: read the live mruList at fire time, not at schedule time. A
 // snapshot captured at schedule time could be stale by the time the debounce
@@ -167,6 +170,29 @@ export function initStoreOrchestrator(): () => void {
     )
   );
 
+  // 1d. Focused-terminal signal to pty-host: report which terminal is focused
+  //     so the backend can prioritize it in per-window backpressure and output
+  //     batching (#10878). Only a PTY panel with a live PTY qualifies; focusing
+  //     a browser/dev-preview/review panel, or clearing focus, sends null so the
+  //     host stops prioritizing. Fire-and-forget; Zustand dedupes no-op fires.
+  disposables.add(
+    toDisposable(
+      usePanelStore.subscribe(
+        (state) => state.focusedId,
+        (focusedId) => {
+          let terminalId: string | null = null;
+          if (focusedId) {
+            const panel = usePanelStore.getState().panelsById[focusedId];
+            if (panel && isPtyPanel(panel) && panel.hasPty !== false) {
+              terminalId = focusedId;
+            }
+          }
+          terminalClient.setFocusedTerminal(terminalId);
+        }
+      )
+    )
+  );
+
   // 2. Background-restore reaction: when a backgrounded panel becomes
   //    focused, automatically restore it to the grid.
   disposables.add(
@@ -220,6 +246,10 @@ export function initStoreOrchestrator(): () => void {
             // would otherwise leak the `metrics` Map entry. `removePanel` is a
             // no-op when the id is absent, so the double-call is safe (#9536).
             useResourceMonitoringStore.getState().removePanel(removedId);
+            // Prune the panel's plugin badge entries (#10908). Like the
+            // resource-metrics store above this leaks otherwise: badges are
+            // keyed by panelId and nothing else drops them when a panel closes.
+            usePluginPanelBadgeStore.getState().removePanel(removedId);
             useVoiceRecordingStore.getState().clearPanelBuffer(removedId);
             // Drop the dictation lock if it was pinned to this panel — panelIds
             // are ephemeral and a stale lock would silently break routing.
@@ -347,6 +377,12 @@ export function initStoreOrchestrator(): () => void {
   //     `fleetFailureStore.ts` was never torn down and the `globalThis`
   //     registration guard mishandled re-registration under HMR (#9923).
   disposables.add(toDisposable(subscribeFleetFailureAutoClear()));
+
+  // 5e. Fleet-run watcher: drives the supervised run's `watching` phase —
+  //     refreshes per-target agent-state snapshots on panel changes and
+  //     finalizes the run (with its durable run-history append) once every
+  //     target settles. Same orchestrator-scoped lifecycle as 5a–5d (#10930).
+  disposables.add(toDisposable(subscribeFleetRunWatcher()));
 
   // 5. Availability → agent-settings re-normalization: installed/missing state
   //    is the input to `normalizeAgentSelection`, so re-run normalization any

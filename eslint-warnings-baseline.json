@@ -1,9 +1,9 @@
 {
-  "count": 1132,
+  "count": 1128,
   "byRule": {
     "@typescript-eslint/no-explicit-any": 52,
-    "@typescript-eslint/no-floating-promises": 88,
-    "@typescript-eslint/no-unsafe-type-assertion": 496,
+    "@typescript-eslint/no-floating-promises": 86,
+    "@typescript-eslint/no-unsafe-type-assertion": 495,
     "no-restricted-imports": 5,
     "no-restricted-syntax": 376,
     "no-useless-assignment": 19,
@@ -11,5 +11,5 @@
     "react-compiler/react-compiler": 15,
     "react-hooks/exhaustive-deps": 38
   },
-  "updatedAt": "2026-06-28T20:42:26.585Z"
+  "updatedAt": "2026-07-03T09:37:28.145Z"
 }

@@ -67,6 +67,8 @@ function fakeDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
     dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result: null } }),
     handleWaitUntilIdle: vi.fn(),
     handleWaitUntilIdleBatch: vi.fn(),
+    handleSkillsSearch: vi.fn(() => ({ skills: [] })),
+    handleSkillsLoad: vi.fn(),
     appendAuditRecord: vi.fn(),
     getCachedManifest: vi.fn(() => null),
     getFullToolSurface: vi.fn(() => false),
@@ -479,6 +481,68 @@ describe("sessionServer prompt handler", () => {
       }
     )._requestHandlers;
     expect(handlers.has("prompts/get")).toBe(true);
+  });
+});
+
+describe("skills.search / skills.load short-circuit (#10892)", () => {
+  it("dispatches skills.search to the injected handler, not renderer dispatch", async () => {
+    const handleSkillsSearch = vi.fn(() => ({
+      skills: [
+        { id: "acme.plugin.tdd", name: "TDD", description: "Test-driven.", triggers: ["tdd"] },
+      ],
+    }));
+    const dispatchAction = vi.fn();
+    const deps = fakeDeps({ handleSkillsSearch, dispatchAction });
+    const server = createSessionServer("session-skill-search", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name: "skills.search", arguments: { query: "tdd" } });
+
+    expect(handleSkillsSearch).toHaveBeenCalledWith({ query: "tdd" });
+    expect(dispatchAction).not.toHaveBeenCalled();
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toEqual({
+      skills: [
+        { id: "acme.plugin.tdd", name: "TDD", description: "Test-driven.", triggers: ["tdd"] },
+      ],
+    });
+  });
+
+  it("dispatches skills.load to the injected handler and returns the body", async () => {
+    const handleSkillsLoad = vi.fn(() => ({
+      id: "acme.plugin.tdd",
+      name: "TDD",
+      description: "Test-driven.",
+      body: "# TDD\n\nRed, green, refactor.",
+    }));
+    const dispatchAction = vi.fn();
+    const deps = fakeDeps({ handleSkillsLoad, dispatchAction });
+    const server = createSessionServer("session-skill-load", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, {
+      name: "skills.load",
+      arguments: { id: "acme.plugin.tdd" },
+    });
+
+    expect(handleSkillsLoad).toHaveBeenCalledWith({ id: "acme.plugin.tdd" });
+    expect(dispatchAction).not.toHaveBeenCalled();
+    expect(result.isError).not.toBe(true);
+    expect((result.structuredContent as { body: string }).body).toContain("Red, green, refactor.");
+  });
+
+  it("surfaces a handler McpError as a tool error", async () => {
+    const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
+    const handleSkillsLoad = vi.fn(() => {
+      throw new McpError(ErrorCode.InvalidParams, 'No skill found with id "x".');
+    });
+    const deps = fakeDeps({ handleSkillsLoad });
+    const server = createSessionServer("session-skill-missing", deps);
+    await server.connect(makeMockTransport());
+
+    await expect(callTool(server, { name: "skills.load", arguments: { id: "x" } })).rejects.toThrow(
+      /No skill found/
+    );
   });
 });
 

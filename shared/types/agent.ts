@@ -36,8 +36,17 @@ export function coerceAgentState(value: unknown): AgentState | undefined {
   return CANONICAL_AGENT_STATES.has(value as AgentState) ? (value as AgentState) : undefined;
 }
 
-/** Classification of why an agent is in the "waiting" state */
-export type WaitingReason = "prompt" | "question";
+/**
+ * Classification of why an agent is in the "waiting" state.
+ *
+ * - `"prompt"` — empty input prompt visible; safe to auto-drive.
+ * - `"question"` — agent asked a free-form question; verify before replying.
+ * - `"approval"` — permission/approval selector visible (tool approval, y/n
+ *   confirm, trust dialog); a specific choice is required, not free text.
+ * - `"error"` — agent settled after a blocking error (auth failure, rate
+ *   limit, network error, failed command); input may not unblock it.
+ */
+export type WaitingReason = "prompt" | "question" | "approval" | "error";
 
 export type AgentId = string;
 

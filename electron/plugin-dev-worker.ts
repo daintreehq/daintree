@@ -123,4 +123,13 @@ port.on("message", (rawMsg: unknown) => {
 
 // Announce readiness only after the message listener is attached, so the
 // parent's `start` (sent on `ready`) can never race ahead of the listener.
-post({ type: "ready" });
+//
+// `permission.present` is the spike self-check (#10890): report whether Node's
+// experimental permission model is actually active in this worker. `process`
+// only exposes `.permission` when `--permission` engaged, so its mere presence
+// is the honest signal for whether Electron honored the `execArgv` flags. On
+// Electron 42 this is expected to be `false` even when the flags were passed.
+const permissionPresent =
+  (process as { permission?: unknown }).permission !== undefined &&
+  (process as { permission?: unknown }).permission !== null;
+post({ type: "ready", permission: { present: permissionPresent } });

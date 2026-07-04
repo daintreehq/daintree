@@ -13,6 +13,8 @@ const TargetOutcomeSchema = z.object({
   title: z.string().optional(),
   status: z.enum(["fulfilled", "rejected"]),
   reason: z.string().optional(),
+  failureKind: z.enum(["permanent", "transient"]).optional(),
+  finalAgentState: z.string().optional(),
 });
 
 const RecipeAppendSchema = z.object({
@@ -47,6 +49,9 @@ const FleetAppendSchema = z.object({
   failureCount: z.number(),
   cancelled: z.boolean(),
   perTarget: z.array(TargetOutcomeSchema),
+  runId: z.string().optional(),
+  status: z.enum(["completed", "cancelled", "failed", "superseded"]).optional(),
+  isRetry: z.boolean().optional(),
 });
 
 export const RunHistoryAppendInputSchema = z.discriminatedUnion("kind", [

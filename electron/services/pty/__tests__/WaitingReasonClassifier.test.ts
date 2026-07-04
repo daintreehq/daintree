@@ -13,13 +13,114 @@ describe("classifyWaitingReason", () => {
       expect(classifyWaitingReason(lines, false)).toBe("prompt");
     });
 
-    it("returns prompt for y/n patterns (no approval classification)", () => {
-      const lines = ["Allow this tool? [y/N]"];
+    it("returns prompt for approval-like prose without a selector", () => {
+      const lines = ["Waiting for approval..."];
       expect(classifyWaitingReason(lines, false)).toBe("prompt");
     });
+  });
 
-    it("returns prompt for approval-like text", () => {
-      const lines = ["Waiting for approval..."];
+  describe("approval detection", () => {
+    it("classifies y/n confirmation prompts as approval", () => {
+      const lines = ["Allow this tool? [y/N]"];
+      expect(classifyWaitingReason(lines, false)).toBe("approval");
+    });
+
+    it("classifies Claude-style numbered edit approval as approval", () => {
+      const lines = [
+        "Do you want to make this edit to src/index.ts?",
+        "❯ 1. Yes",
+        "  2. Yes, allow all edits during this session (shift+tab)",
+        "  3. No, and tell Claude what to do differently (esc)",
+      ];
+      expect(classifyWaitingReason(lines, false)).toBe("approval");
+    });
+
+    it("classifies Gemini-style allow once/always selectors as approval", () => {
+      const lines = ["Apply this change?", "● 1. Yes, allow once", "○ 2. Yes, allow always"];
+      expect(classifyWaitingReason(lines, false)).toBe("approval");
+    });
+
+    it("classifies trust-directory dialogs as approval", () => {
+      const lines = ["Do you trust this directory?", "Trust this directory and continue"];
+      expect(classifyWaitingReason(lines, false)).toBe("approval");
+    });
+
+    it("approval beats the prompt flag — selector rows look prompt-like", () => {
+      const lines = ["Do you want to proceed?", "❯ 1. Yes", "  2. No"];
+      expect(classifyWaitingReason(lines, true)).toBe("approval");
+    });
+
+    it("approval beats question classification", () => {
+      // Ends with "?" but the selector makes it an approval, not a free-form question.
+      const lines = ["Do you want to run this command?", "(y/n)"];
+      expect(classifyWaitingReason(lines, false)).toBe("approval");
+    });
+
+    it("unmarked numbered prose lists do not classify as approval", () => {
+      // Agent final answers routinely contain numbered lists; without a
+      // cursor glyph these are prose, not a selector.
+      const lines = [
+        "Here's what I found:",
+        "1. No changes needed in the parser",
+        "2. Yes, the cache is stale — cleared it",
+        "3. Allowances in config were unused",
+        "> ",
+      ];
+      expect(classifyWaitingReason(lines, true)).toBe("prompt");
+    });
+  });
+
+  describe("error detection", () => {
+    it.each([
+      ["rate limit", "You've hit your rate limit. Try again at 3pm."],
+      ["usage limit", "Usage limit reached — resets in 2 hours"],
+      ["quota", "Quota exceeded for this billing period"],
+      ["overloaded", "API error: Overloaded. Please retry shortly."],
+      ["auth", "Authentication failed. Run /login to reauthenticate."],
+      ["invalid key", "Error: invalid API key provided"],
+      ["network", "Network error: connection refused"],
+      ["node errno", "request to https://api.example.com failed: ECONNRESET"],
+      ["missing command", "zsh: command not found: rg"],
+      ["merge conflict", "CONFLICT (content): Merge conflict in src/app.ts"],
+    ])("classifies %s messages as error", (_name, line) => {
+      expect(classifyWaitingReason([line], false)).toBe("error");
+    });
+
+    it("errors beat the prompt flag when the failure sits at the tail", () => {
+      const lines = ["Rate limit exceeded. Waiting for reset.", "> "];
+      expect(classifyWaitingReason(lines, true)).toBe("error");
+    });
+
+    it("stale errors above a settled prompt do not classify as error", () => {
+      // The error scan is bounded to the last few non-empty lines — an old
+      // failure further up must not relabel the wait as "error". The trailing
+      // "Anything else…?" line classifies as a question (suppression is
+      // scoped to the candidate lines, so the distant error doesn't veto it).
+      const lines = [
+        "Error: connection refused",
+        "Retrying with backoff…",
+        "Recovered. All checks green.",
+        "Summary written to out.md",
+        "Anything else you'd like me to do?",
+        "> ",
+      ];
+      expect(classifyWaitingReason(lines, true)).toBe("question");
+    });
+
+    it("a real question after failure output still classifies as question", () => {
+      // Suppression is scoped to the question candidates: the "failed" line
+      // sits above the candidate window, so the trailing question survives.
+      const lines = [
+        "The build failed with 3 errors.",
+        "I can fix them one at a time or rewrite the module.",
+        "Option A keeps history; option B is cleaner.",
+        "How should I proceed?",
+      ];
+      expect(classifyWaitingReason(lines, false)).toBe("question");
+    });
+
+    it("bare error:/failed lines stay prompt (precision guard)", () => {
+      const lines = ["error: expected 2 arguments", "build failed"];
       expect(classifyWaitingReason(lines, false)).toBe("prompt");
     });
   });
@@ -50,8 +151,15 @@ describe("classifyWaitingReason", () => {
       expect(classifyWaitingReason(lines, false)).toBe("prompt");
     });
 
-    it("prompt takes priority over question", () => {
+    it("question beats the prompt flag when the question sits above the input box", () => {
+      // Agents redraw their prompt chrome under the question — the question
+      // is the salient signal for whoever drives the terminal next.
       const lines = ["What file?", "$ "];
+      expect(classifyWaitingReason(lines, true)).toBe("question");
+    });
+
+    it("prose tail without a question stays prompt even with chrome rows", () => {
+      const lines = ["All checks passed.", "> "];
       expect(classifyWaitingReason(lines, true)).toBe("prompt");
     });
   });

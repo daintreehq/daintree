@@ -1,32 +1,47 @@
 import { create } from "zustand";
 import { createActionMruSlice, type ActionMruSlice } from "./slices/actionMruSlice";
-import type { ActionFrecencyEntry } from "@shared/types/actions";
+import type { ActionUsageEntry } from "@shared/types/actions";
 
 export const useActionMruStore = create<ActionMruSlice>()((...a) => ({
   ...createActionMruSlice(...a),
 }));
 
-let lastPersisted: ActionFrecencyEntry[] | null = null;
-let pendingPersist: ActionFrecencyEntry[] | null = null;
+let lastPersisted: string | null = null;
+let inFlight = false;
+// Latest snapshot observed while a write is in flight. Coalesced (only the most
+// recent is kept) and flushed once the current write settles, so rapid usage
+// updates aren't dropped — each recorded use is part of the 7-day count.
+let queued: ActionUsageEntry[] | null = null;
 
-useActionMruStore.subscribe((state) => {
-  const list: ActionFrecencyEntry[] = Array.from(state.actionFrecencyEntries.entries()).map(
-    ([id, { score, lastAccessedAt }]) => ({ id, score, lastAccessedAt })
-  );
-
-  if (JSON.stringify(list) === JSON.stringify(lastPersisted)) return;
-
-  if (pendingPersist !== null) return;
-
-  pendingPersist = list;
-
+function flush(list: ActionUsageEntry[]): void {
+  inFlight = true;
   void import("@/clients/appClient")
     .then(({ appClient }) => appClient.setState({ actionMruList: list }))
     .then(() => {
-      lastPersisted = pendingPersist!;
-      pendingPersist = null;
+      lastPersisted = JSON.stringify(list);
     })
-    .catch(() => {
-      pendingPersist = null;
+    .catch(() => {})
+    .finally(() => {
+      inFlight = false;
+      if (queued !== null) {
+        const next = queued;
+        queued = null;
+        flush(next);
+      }
     });
+}
+
+useActionMruStore.subscribe((state) => {
+  const list: ActionUsageEntry[] = Array.from(state.actionUsageEntries.entries()).map(
+    ([id, { uses }]) => ({ id, uses })
+  );
+
+  if (JSON.stringify(list) === lastPersisted) return;
+
+  if (inFlight) {
+    queued = list;
+    return;
+  }
+
+  flush(list);
 });

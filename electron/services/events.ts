@@ -270,6 +270,18 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: false,
     description: "Terminal restored from trash",
   },
+  "agent-session:captured": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: false,
+    description: "Pty-host captured a resumable session; Main must persist it",
+  },
+  "agent-session:recorded": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A close path journaled a resumable agent session",
+  },
   "terminal:activity": {
     category: "agent",
     requiresContext: false,
@@ -738,6 +750,33 @@ export type DaintreeEventMap = {
   };
 
   /**
+   * Emitted in the pty-host when trash expiry captures a resumable session,
+   * and re-emitted on the Main bus by PtyEventsBridge. Main persists the
+   * record (single journal writer — the pty-host writing the file itself
+   * would race Main's own close-path writes) and then emits
+   * `agent-session:recorded`.
+   */
+  "agent-session:captured": {
+    record: Omit<
+      import("../../shared/types/ipc/agentSessionHistory.js").AgentSessionRecord,
+      "savedAt"
+    >;
+  };
+
+  /**
+   * Emitted after a close path journals a resumable agent session (trash
+   * expiry via `agent-session:captured`, or the main-process kill /
+   * gracefulKill handlers). Resume surfaces refetch on it so a session that
+   * leaves the trash appears in the list right away.
+   */
+  "agent-session:recorded": {
+    sessionId: string;
+    worktreeId: string | null;
+    projectId: string | null;
+    timestamp: number;
+  };
+
+  /**
    * Emitted when a terminal's activity state changes (busy/idle).
    * For shell terminals, this uses process tree inspection for accuracy.
    * For agent terminals, this includes human-readable status headlines.
@@ -870,6 +909,8 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "action:dispatched",
   "terminal:trashed",
   "terminal:restored",
+  "agent-session:captured",
+  "agent-session:recorded",
   "terminal:activity",
   "terminal:status",
   "terminal:backgrounded",

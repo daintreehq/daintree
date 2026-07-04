@@ -20,6 +20,7 @@ import type {
   MenuItemContribution,
   ViewContribution,
   McpServerContribution,
+  SkillContribution,
   PluginCapability,
 } from "../../shared/types/plugin.js";
 import type {
@@ -141,17 +142,16 @@ export const CommandContributionSchema = z
   .strict();
 
 /**
- * Validate a `componentPath` before it is resolved to a `plugin://` URL and
- * handed to the renderer host's `import()` (#9229). The `plugin://` protocol
- * handler at `electron/setup/protocols.ts` is the security boundary — it
- * rejects traversal at request time via realpath containment. This check is
- * the manifest gate: it rejects an absolute path, a Windows separator, an
- * embedded URL scheme/query/fragment, a NUL, or a `..` segment at parse time
- * so the failure is a loud manifest-validation error, not a silent 404 from
- * `import('plugin://...')` later. Accepts relative POSIX paths only — a
- * leading `./` is preserved (the URL builder normalizes it).
+ * Validate a plugin-relative asset path (a view's `componentPath` #9229, or a
+ * skill's markdown `path` #10892) at the manifest gate. Realpath containment at
+ * read/request time is the security boundary (the `plugin://` protocol handler
+ * for views; `resolveContainedPath` for skills); this check rejects an absolute
+ * path, a Windows separator, an embedded URL scheme/query/fragment, a NUL, or a
+ * `..` segment at parse time so the failure is a loud manifest-validation error,
+ * not a silent 404 / read failure later. Accepts relative POSIX paths only — a
+ * leading `./` is preserved.
  */
-function isSafePluginViewComponentPath(componentPath: string): boolean {
+function isSafePluginAssetPath(componentPath: string): boolean {
   if (componentPath.startsWith("/")) return false;
   if (componentPath.includes("\\")) return false;
   if (componentPath.includes("\0")) return false;
@@ -184,14 +184,19 @@ function isSafePluginViewComponentPath(componentPath: string): boolean {
 export const ViewContributionSchema = z
   .object({
     id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
-    name: z.string().min(1),
-    componentPath: z.string().min(1).refine(isSafePluginViewComponentPath, {
+    componentPath: z.string().min(1).refine(isSafePluginAssetPath, {
       message:
         "componentPath must be a relative plugin asset path (no leading /, backslash, URL scheme, NUL, or .. segments)",
     }),
     location: z.literal("panel"),
+    // `iconId` is advisory only — the SDK `validate` command flags an
+    // unrenderable id, but at runtime the matching `contributes.panels` entry
+    // owns the rendered icon (the panels loop reads `panel.iconId`, never the
+    // view's). No `name`/`description` here: the matching panel is the single
+    // source of truth for a view's display metadata, so those fields had no
+    // runtime consumer and were removed (#10888) rather than validate a value
+    // the runtime silently ignores.
     iconId: z.string().min(1).optional(),
-    description: z.string().optional(),
   })
   .strict();
 
@@ -215,6 +220,28 @@ export const McpServerContributionSchema = z
   .strict();
 
 /**
+ * `contributes.skills` manifest entry (#10892). A skill is a plugin-shipped
+ * markdown file surfaced to agents via the built-in MCP server's
+ * `skills.search` / `skills.load` tools. `path` reuses the shared asset-path
+ * grammar guard ({@link isSafePluginAssetPath}) — the file is realpath-contained
+ * to the plugin dir at read time (`resolveContainedPath` in the skill registry),
+ * so this parse-time check only rejects the obviously-malformed shapes. Skills
+ * are inert declarative content and carry no capability requirement. Strict so
+ * unknown fields from plugin authors are rejected loudly.
+ */
+export const SkillContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    name: z.string().min(1),
+    path: z.string().min(1).refine(isSafePluginAssetPath, {
+      message:
+        "path must be a relative plugin asset path (no leading /, backslash, URL scheme, NUL, or .. segments)",
+    }),
+    triggers: z.array(z.string().min(1)).max(50).optional(),
+  })
+  .strict();
+
+/**
  * One credential input rendered into the provider's settings form. `type` is a
  * free string (`"password"` masks the input; anything else renders plain
  * text). A provider may declare several fields, but only the primary value
@@ -223,7 +250,7 @@ export const McpServerContributionSchema = z
  */
 const RESERVED_CREDENTIAL_FIELD_IDS = new Set(["__proto__", "constructor", "prototype"]);
 
-const CredentialFieldSchema = z
+export const CredentialFieldSchema = z
   .object({
     // A field id keys the entered value into a plain record at save time; a
     // reserved key (`__proto__` etc.) would resolve to the object prototype
@@ -739,7 +766,7 @@ export const PluginPanelBadgeSchema = z.discriminatedUnion("kind", [
  * `type` is optional on the string/number/boolean branch. Strict so a misspelled
  * field key surfaces as a manifest error rather than silently dropping.
  */
-export const SettingDefinitionSchema = z
+export const SettingDefinitionObjectSchema = z
   .object({
     // Constrained to the shared safe-id grammar so a declared setting id can
     // always be referenced by a `${settings:id}` token — the MCP supervisor's
@@ -764,40 +791,47 @@ export const SettingDefinitionSchema = z
     extensions: z.array(z.string().min(1)).min(1).optional(),
     secret: z.boolean().optional(),
   })
-  .strict()
-  .superRefine((val, ctx) => {
-    const effectiveType = val.secret === true ? "secret" : (val.type ?? "string");
-    if (effectiveType === "enum" && (!val.options || val.options.length === 0)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Settings of type "enum" require a non-empty options array',
-        path: ["options"],
-      });
-    }
-    if (val.min !== undefined && val.max !== undefined && val.min > val.max) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Setting min cannot be greater than max",
-        path: ["min"],
-      });
-    }
-    // `extensions` narrows the native file chooser — it is only meaningful for
-    // `type: "file"`. Reject it on every other type at the manifest gate so a
-    // misplaced filter surfaces loudly instead of silently doing nothing.
-    if (val.extensions !== undefined && effectiveType !== "file") {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Setting "extensions" is only valid for type "file"',
-        path: ["extensions"],
-      });
-    }
-  })
-  .transform((val) => {
-    if (val.secret === true && val.type !== "secret") {
-      return { ...val, type: "secret" as const };
-    }
-    return val;
-  });
+  .strict();
+
+/**
+ * The validated `contributes.settings` entry: the object base plus the
+ * cross-field refinement and the `secret → type: "secret"` normalization.
+ * The unrefined {@link SettingDefinitionObjectSchema} is exported separately so
+ * the field-consumer contract test can enumerate `.shape` without reaching
+ * through the transform wrapper.
+ */
+export const SettingDefinitionSchema = SettingDefinitionObjectSchema.superRefine((val, ctx) => {
+  const effectiveType = val.secret === true ? "secret" : (val.type ?? "string");
+  if (effectiveType === "enum" && (!val.options || val.options.length === 0)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Settings of type "enum" require a non-empty options array',
+      path: ["options"],
+    });
+  }
+  if (val.min !== undefined && val.max !== undefined && val.min > val.max) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Setting min cannot be greater than max",
+      path: ["min"],
+    });
+  }
+  // `extensions` narrows the native file chooser — it is only meaningful for
+  // `type: "file"`. Reject it on every other type at the manifest gate so a
+  // misplaced filter surfaces loudly instead of silently doing nothing.
+  if (val.extensions !== undefined && effectiveType !== "file") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Setting "extensions" is only valid for type "file"',
+      path: ["extensions"],
+    });
+  }
+}).transform((val) => {
+  if (val.secret === true && val.type !== "secret") {
+    return { ...val, type: "secret" as const };
+  }
+  return val;
+});
 
 /**
  * Per-array upper bounds for `contributes.*`. A crafted manifest with tens of
@@ -818,6 +852,7 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   commands: 200,
   views: 50,
   mcpServers: 20,
+  skills: 50,
   forgeProviders: 20,
   fileDecorationProviders: 50,
   agents: 50,
@@ -942,6 +977,10 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
               .array(McpServerContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.mcpServers)
               .default([]),
+            skills: z
+              .array(SkillContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.skills)
+              .default([]),
             forgeProviders: z
               .array(ForgeProviderContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.forgeProviders)
@@ -968,6 +1007,7 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
             commands: [],
             views: [],
             mcpServers: [],
+            skills: [],
             forgeProviders: [],
             fileDecorationProviders: [],
             agents: [],
@@ -1109,6 +1149,7 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
       reportDuplicateIds("commands", manifest.contributes.commands);
       reportDuplicateIds("views", manifest.contributes.views);
       reportDuplicateIds("mcpServers", manifest.contributes.mcpServers);
+      reportDuplicateIds("skills", manifest.contributes.skills);
       reportDuplicateIds("forgeProviders", manifest.contributes.forgeProviders);
       reportDuplicateIds("fileDecorationProviders", manifest.contributes.fileDecorationProviders);
       reportDuplicateIds("agents", manifest.contributes.agents);
@@ -1223,6 +1264,7 @@ export type {
   MenuItemContribution,
   ViewContribution,
   McpServerContribution,
+  SkillContribution,
   PluginCapability,
 };
 export type { ForgeProviderContribution, FileDecorationContribution };

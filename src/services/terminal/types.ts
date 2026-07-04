@@ -10,6 +10,20 @@ import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
 
 export type RefreshTierProvider = () => TerminalRefreshTier;
 
+/**
+ * A hovered terminal link, tagged with a structural discriminant so the
+ * right-click context menu can tell a resolved file-path link (`kind: "file"`,
+ * carrying the resolved `absolutePath`) from a plain URL / OSC 8 link
+ * (`kind: "url"`). Avoids an `instanceof FileLink` check across the addon/service
+ * module boundary. `hoveredLink` is polymorphic — real `FileLink` instances from
+ * FileLinksAddon and synthetic link objects for URLs both land here.
+ */
+export interface TerminalLink extends ILink {
+  kind: "file" | "url";
+  /** Resolved absolute path — present only when `kind === "file"`. */
+  absolutePath?: string;
+}
+
 export type AgentStateCallback = (state: AgentState) => void;
 
 export type PostCompleteHook = (output: string) => void | Promise<void>;
@@ -35,7 +49,7 @@ export interface ManagedTerminal {
   // Currently-hovered link (tracked via xterm addon hover/leave callbacks).
   // Read synchronously by the right-click context menu so it reflects the
   // same detection xterm uses for plain URLs, file paths, and OSC 8 links.
-  hoveredLink: ILink | null;
+  hoveredLink: TerminalLink | null;
   hostElement: HTMLDivElement;
   isOpened: boolean;
   listeners: Array<() => void>;
@@ -51,6 +65,20 @@ export interface ManagedTerminal {
   // Last time the reconciliation watchdog issued a repair for this terminal —
   // per-terminal cooldown so a persistently-diverging layer never repair-loops.
   lastWatchdogRepairAt?: number;
+  // Circuit breaker for the watchdog's geometry-convergence repair (#10909).
+  // The cooldown only SPACES repairs; it doesn't CAP them, so a pane whose
+  // proposeDimensions() never converges (e.g. a stable off-by-one column) would
+  // re-wrap its full scrollback every cooldown window forever. These fields bound
+  // that: count consecutive issued geometry repairs, trip after
+  // WATCHDOG_MAX_GEOMETRY_REPAIR_ATTEMPTS, and log the give-up exactly once.
+  geometryRepairAttempts?: number;
+  // Once tripped, the geometry branch stops issuing repairs (other repair layers
+  // still run). Cleared when the grid converges again or the terminal re-attaches.
+  geometryRepairGaveUp?: boolean;
+  // The attachGeneration the counter accrued under — a fresh incarnation reusing
+  // the same id must not inherit a prior instance's give-up state (mirrors the
+  // revealPendingGeneration guard).
+  geometryRepairGeneration?: number;
   // Visibility tracking
   isVisible: boolean;
   lastActiveTime: number;
@@ -171,7 +199,12 @@ export interface ManagedTerminal {
   writeChain: Promise<void>;
   restoreGeneration: number;
   isSerializedRestoreInProgress: boolean;
-  deferredOutput: Array<string | Uint8Array>;
+  // Output that arrived mid-restore, replayed once the restore settles. Each
+  // entry keeps the ingest batch's chunkCount so the replay write can settle
+  // the SAME pending port-ack FIFO entries the batch owns — the entries are
+  // deliberately NOT settled at defer time (see TerminalWriteController), so
+  // the host's flow control keeps pacing the PTY while the restore runs.
+  deferredOutput: Array<{ data: string | Uint8Array; chunkCount: number }>;
 
   // Background scrollback restore state — prevents double-restore and tracks
   // lifecycle. Restores are queued ("pending"), replay asynchronously

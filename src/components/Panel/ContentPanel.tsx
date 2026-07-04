@@ -18,7 +18,7 @@ import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 import type { ActivityState } from "@/components/Terminal/TerminalPane";
 import type { TabInfo } from "./TabButton";
 import { useDockBlockedState } from "@/components/Layout/useDockBlockedState";
-import { usePreferencesStore } from "@/store";
+import { usePreferencesStore, usePanelStore } from "@/store";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
@@ -27,6 +27,8 @@ import { useWorktreeColorMap } from "@/hooks/useWorktreeColorMap";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
+import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
+import { isPtyPanel } from "@shared/types/panel";
 
 /**
  * Base props for all panel types.
@@ -375,12 +377,20 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     [onTitleChange, titleEditing]
   );
 
-  const commitTitle = useCallback(() => {
-    titleEditing.stopEditing();
-    if (titleEditing.editingValue.trim() && titleEditing.editingValue !== title) {
-      onTitleChange?.(titleEditing.editingValue.trim());
-    }
-  }, [titleEditing, title, onTitleChange]);
+  const commitTitle = useCallback(
+    (opts?: { allowReset?: boolean }) => {
+      titleEditing.stopEditing();
+      const trimmed = titleEditing.editingValue.trim();
+      // Unchanged submit (incl. whitespace-only edits) is a no-op so an
+      // accidental Enter can't lock a stale composed title.
+      if (trimmed === title.trim()) return;
+      // Empty commit is an explicit reset to the identity-derived default —
+      // but only on Enter (allowReset); blur-empty cancels (ambiguous intent).
+      if (!trimmed && !opts?.allowReset) return;
+      onTitleChange?.(trimmed);
+    },
+    [titleEditing, title, onTitleChange]
+  );
 
   const handleTitleSave = useCallback(() => {
     // Ignore spurious blurs that happen while overlay-restoration logic is
@@ -414,8 +424,10 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   const handleTitleInputKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key === "Enter") {
+        // Don't intercept Enter while an IME composition is being committed.
+        if (e.nativeEvent.isComposing) return;
         e.preventDefault();
-        commitTitle();
+        commitTitle({ allowReset: true });
       } else if (e.key === "Escape") {
         titleEditing.stopEditing();
         titleEditing.setEditingValue(title);
@@ -560,9 +572,28 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
  */
 export const ContentPanel = forwardRef<HTMLDivElement, ContentPanelProps>(
   function ContentPanel(props, ref) {
+    // Resolve the display title once for both the header and the rename
+    // editor (WYSIWYG prefill): identity-only in the dock, task-composed in
+    // the grid. Non-pty panels keep the caller-provided title untouched, and
+    // a parent-supplied override (props.title differing from the stored panel
+    // title, e.g. the fleet scope's worktree prefix) always wins.
+    const showAgentTaskTitles = usePreferencesStore((s) => s.showAgentTaskTitles);
+    const propsTitle = props.title;
+    const composedTitle = usePanelStore((s) => {
+      const panel = s.panelsById[props.id];
+      if (!panel || !isPtyPanel(panel) || panel.title !== propsTitle) return undefined;
+      return getTerminalDisplayTitle(panel, props.location === "dock" ? "base" : "full", {
+        showTask: showAgentTaskTitles,
+      });
+    });
+    const effectiveTitle = composedTitle ?? props.title;
     return (
-      <TitleEditingProvider id={props.id} title={props.title} onTitleChange={props.onTitleChange}>
-        <ContentPanelInner {...props} ref={ref} />
+      <TitleEditingProvider
+        id={props.id}
+        title={effectiveTitle}
+        onTitleChange={props.onTitleChange}
+      >
+        <ContentPanelInner {...props} title={effectiveTitle} ref={ref} />
       </TitleEditingProvider>
     );
   }

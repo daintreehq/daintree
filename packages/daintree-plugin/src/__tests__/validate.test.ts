@@ -267,9 +267,7 @@ describe("runValidate", () => {
       engines: { daintree: ">=0.11.0" },
       contributes: {
         panels: [{ id: "main", name: "Main", iconId: "puzzle", color: "var(--x)" }],
-        views: [
-          { id: "main", name: "Main", componentPath: "src/missing-panel.js", location: "panel" },
-        ],
+        views: [{ id: "main", componentPath: "src/missing-panel.js", location: "panel" }],
       },
     });
     await fs.mkdir(path.join(tmpDir, "src"));

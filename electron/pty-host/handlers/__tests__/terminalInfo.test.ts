@@ -9,6 +9,7 @@ function createCtx(overrides: Partial<HostContext> = {}): HostContext {
   } as unknown as HostContext["ptyManager"];
 
   return {
+    analysisWorkerPool: null,
     ptyManager,
     // The mapper only touches `ptyManager`; the rest of the surface is irrelevant
     // for these tests but must satisfy the structural type.
@@ -21,6 +22,7 @@ function createCtx(overrides: Partial<HostContext> = {}): HostContext {
     pauseCoordinators: new Map(),
     rendererConnections: new Map(),
     windowProjectMap: new Map(),
+    windowFocusedTerminalMap: new Map(),
     ipcDataMirrorTerminals: new Set(),
     visualBuffers: [],
     visualSignalView: null,
@@ -36,6 +38,7 @@ function createCtx(overrides: Partial<HostContext> = {}): HostContext {
     resumePausedTerminal: vi.fn(),
     createPortQueueManager: vi.fn(),
     getPausedDurationsSnapshot: vi.fn(() => []),
+    getDropTallySnapshot: vi.fn(() => []),
     ...overrides,
   };
 }

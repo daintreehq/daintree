@@ -28,7 +28,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     trash: vi.fn(),
     restore: vi.fn(),
     killByProject: vi.fn(() => 0),
-    gracefulKill: vi.fn(async () => undefined),
+    gracefulKill: vi.fn(async () => ({ sessionId: null })),
     gracefulKillByProject: vi.fn(async () => []),
     getProjectStats: vi.fn(() => ({
       terminalCount: 0,
@@ -49,6 +49,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
   } as unknown as HostContext["ptyManager"];
 
   return {
+    analysisWorkerPool: null,
     ptyManager,
     processTreeCache: { setPollInterval: vi.fn() } as unknown as HostContext["processTreeCache"],
     terminalResourceMonitor: {
@@ -77,6 +78,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     pauseCoordinators: new Map(),
     rendererConnections: new Map(),
     windowProjectMap: new Map(),
+    windowFocusedTerminalMap: new Map(),
     ipcDataMirrorTerminals: new Set(),
     visualBuffers: [],
     visualSignalView: null,
@@ -92,6 +94,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     resumePausedTerminal: vi.fn(),
     createPortQueueManager: vi.fn(),
     getPausedDurationsSnapshot: vi.fn(() => []),
+    getDropTallySnapshot: vi.fn(() => []),
     ...overrides,
   };
 }
@@ -255,7 +258,7 @@ describe("createPtyHostMessageDispatcher", () => {
 
   it("returns a promise for handlers that perform real async work", async () => {
     const ctx = makeCtx();
-    ctx.ptyManager.gracefulKill = vi.fn(async () => "session-42");
+    ctx.ptyManager.gracefulKill = vi.fn(async () => ({ sessionId: "session-42" }));
 
     const dispatch = createPtyHostMessageDispatcher(ctx);
     const ret = dispatch({ type: "graceful-kill", id: "term-1", requestId: 7 });

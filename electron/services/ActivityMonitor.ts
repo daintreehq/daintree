@@ -35,7 +35,10 @@ import {
 import { detectCompletion } from "./pty/CompletionDetector.js";
 import { CompletionTimer } from "./pty/CompletionTimer.js";
 import { BootDetector } from "./pty/BootDetector.js";
-import { classifyWaitingReason } from "./pty/WaitingReasonClassifier.js";
+import {
+  classifyWaitingReason,
+  WAITING_REASON_SCAN_LINE_COUNT,
+} from "./pty/WaitingReasonClassifier.js";
 import { CpuHighStateTracker } from "./pty/CpuHighStateTracker.js";
 import { WaitingWatchdog } from "./pty/WaitingWatchdog.js";
 import type { WaitingReason } from "../../shared/types/agent.js";
@@ -55,6 +58,15 @@ const SIMPLE_COMPLETION_MIN_QUIET_MS = 1500;
 // snapshot — long enough for xterm's async parse of the last chunk (and any
 // resize/focus-triggered redraw) to land before a frame is latched.
 const SIMPLE_SNAPSHOT_SETTLE_MS = 1000;
+// Idle-agent polling backoff (#10906). Once a simple-output agent has settled
+// into idle and stayed silent this long, drop the polling cadence to
+// FSM_IDLE_BACKOFF_POLLING_INTERVAL_MS so a prompt sitting idle for an hour
+// stops doing per-tick strip+diff temperature work at the active 50ms rate. Any
+// onData (or busy transition) cancels the backoff and restores the visibility
+// tier's interval instantly, so detection latency is preserved — state
+// transitions are always preceded by output.
+export const FSM_IDLE_BACKOFF_SETTLE_MS = 3000;
+export const FSM_IDLE_BACKOFF_POLLING_INTERVAL_MS = 2000;
 const WORKING_INDICATOR_TTL_MS = 5000;
 const CPU_HIGH_THRESHOLD = 10;
 const CPU_LOW_THRESHOLD = 3;
@@ -258,8 +270,15 @@ export class ActivityMonitor {
   private simpleSnapshotCacheKey = 0;
   private simpleSnapshotSettleFrom = 0;
 
-  // Polling interval configuration
+  // Polling interval configuration.
+  // POLLING_INTERVAL_MS is the *currently applied* interval driving setInterval.
+  // requestedPollingIntervalMs is the visibility tier's desired cadence (50/500);
+  // while idle-backoff owns the live interval they diverge, and the wake path
+  // restores POLLING_INTERVAL_MS to requestedPollingIntervalMs (#10906).
   private POLLING_INTERVAL_MS: number;
+  private requestedPollingIntervalMs: number;
+  private fsmIdleBackoffTimer?: ReturnType<typeof setTimeout>;
+  private fsmIdleBackoffActive = false;
 
   // Tier-aware recovery thresholds (#6641). The output volume detector is now
   // sample-cadence invariant (#6666), so only the working-signal debouncer
@@ -369,6 +388,7 @@ export class ActivityMonitor {
 
     // Polling interval
     this.POLLING_INTERVAL_MS = options?.pollingIntervalMs ?? 50;
+    this.requestedPollingIntervalMs = this.POLLING_INTERVAL_MS;
 
     this.cpuTracker = new CpuHighStateTracker(this.processStateValidator, {
       cpuHighThreshold: CPU_HIGH_THRESHOLD,
@@ -544,6 +564,9 @@ export class ActivityMonitor {
         return;
       }
       this.lastDataTimestamp = now;
+      // Wake-on-data: any output means the agent is live again — restore the
+      // full polling cadence before the settle timer fires or while backed off.
+      this.cancelFsmIdleBackoff(true);
       // Boot detection runs in the simple-output path too so onBootComplete
       // (#7616) fires for real agent terminals — `simpleOutputState` is true
       // for every agent monitor built via `buildActivityMonitorOptions`.
@@ -598,6 +621,11 @@ export class ActivityMonitor {
           }
         }
       }
+      // Re-arm the idle-backoff settle timer on every idle byte so it debounces
+      // on the *last* output: a still-idle agent that emits an occasional
+      // cosmetic byte then falls silent still backs off (#10906). armFsmIdle-
+      // Backoff no-ops when the byte promoted the agent to busy (state !== idle).
+      this.armFsmIdleBackoff();
       return;
     }
 
@@ -883,10 +911,19 @@ export class ActivityMonitor {
       return;
     }
 
-    // Focus-triggered TUI redrawn during a suppression window is not new work
-    // (#8865). Skip idle→busy promotion until the window expires; lastActivity
-    // is still refreshed above so the idle timer doesn't drift.
-    if (this.state !== "busy" && result.stateHint === "busy" && !this.isFocusSuppressed(now)) {
+    // Focus-triggered TUI redraw during a suppression window is not new work
+    // (#8865), and a redraw driven by recent user input — e.g. mouse-report
+    // bytes emitted while scrolling a mouse-reporting TUI — is likewise not the
+    // agent working (#10925). Both stamp state that other promotion paths in
+    // this file already consult; skip idle→busy promotion until the windows
+    // expire. lastActivity is still refreshed above so the idle timer doesn't
+    // drift.
+    if (
+      this.state !== "busy" &&
+      result.stateHint === "busy" &&
+      !this.isFocusSuppressed(now) &&
+      !this.inputTracker.isRecentUserInput(now)
+    ) {
       this.becomeBusy({ trigger: "output" }, now);
       return;
     }
@@ -1057,6 +1094,8 @@ export class ActivityMonitor {
     // Defense-in-depth: the call site already gates on focus suppression, but
     // keep the guard so any future caller inherits it (#8865).
     if (this.isFocusSuppressed(now)) return;
+    // Direct busy promotion bypasses becomeBusy(), so cancel idle-backoff here.
+    this.cancelFsmIdleBackoff(true);
     this.lastActivityTimestamp = now;
     this.lastDataTimestamp = now;
     this.recordWorkingSignal(now);
@@ -1129,6 +1168,14 @@ export class ActivityMonitor {
     return this.focusSuppressUntil > 0 && now < this.focusSuppressUntil;
   }
 
+  // Public mirror of the private inputTracker check so the parallel
+  // agentOutputTemperature promotion paths (TerminalProcess/AnalysisSession)
+  // can gate on recent user input the same way this monitor's own paths do
+  // (#10925). Mouse-report bytes from scrolling a TUI stamp lastUserInputAt.
+  isRecentUserInput(now: number = Date.now()): boolean {
+    return this.inputTracker.isRecentUserInput(now);
+  }
+
   getState(): "busy" | "idle" {
     return this.state;
   }
@@ -1170,6 +1217,12 @@ export class ActivityMonitor {
 
     this.pollingInterval = setInterval(() => this.runPollingCycle(), this.POLLING_INTERVAL_MS);
     this.pollingInterval.unref();
+
+    // A restored/relaunched agent may start already idle (skipInitialStateEmit
+    // with a settled screen) — arm the backoff so it doesn't poll at full rate.
+    if (this.simpleOutputState && this.state === "idle") {
+      this.armFsmIdleBackoff();
+    }
   }
 
   private runPollingCycle(): void {
@@ -1518,6 +1571,9 @@ export class ActivityMonitor {
   }
 
   stopPolling(): void {
+    // Reset idle-backoff first so POLLING_INTERVAL_MS returns to the requested
+    // cadence — a later startPolling() reads it to seed the new interval.
+    this.cancelFsmIdleBackoff(false);
     if (this.pollingInterval) {
       clearInterval(this.pollingInterval);
       this.pollingInterval = undefined;
@@ -1527,24 +1583,87 @@ export class ActivityMonitor {
 
   setPollingInterval(intervalMs: number): void {
     if (this.isDisposed) return;
-    if (this.POLLING_INTERVAL_MS === intervalMs) {
+    // Guard on the *requested* cadence, not the applied one: while idle-backoff
+    // owns the live interval they differ, and a same-request no-op must not be
+    // read from the backoff value (#10906, #8998).
+    if (this.requestedPollingIntervalMs === intervalMs) {
       return;
     }
-
-    const wasPolling = this.pollingInterval !== undefined;
-    this.POLLING_INTERVAL_MS = intervalMs;
-
-    if (wasPolling && this.pollingInterval) {
-      clearInterval(this.pollingInterval);
-      this.pollingInterval = setInterval(() => this.runPollingCycle(), this.POLLING_INTERVAL_MS);
-      this.pollingInterval.unref();
-    }
+    this.requestedPollingIntervalMs = intervalMs;
 
     // The working-signal debouncer needs to track polling cadence, otherwise
     // the 1500ms delay becomes impossible to satisfy at 500ms polling (#6641).
     // The output volume detector is sample-cadence invariant (#6666) and
-    // needs no tier handling here.
+    // needs no tier handling here. Tier always tracks the visibility cadence,
+    // never the transient backoff interval (a 2000ms backoff must not classify
+    // as "background").
     this.applyTier(this.tierForInterval(intervalMs));
+
+    // While backed off, only record the request; the wake path
+    // (onData/becomeBusy) restores this cadence when activity resumes.
+    if (!this.fsmIdleBackoffActive) {
+      this.applyPollingInterval(intervalMs);
+    }
+  }
+
+  // Swaps the live polling interval. Keeps POLLING_INTERVAL_MS (the applied
+  // cadence) in sync even when no interval is currently running so a later
+  // startPolling() picks up the right value.
+  private applyPollingInterval(intervalMs: number): void {
+    this.POLLING_INTERVAL_MS = intervalMs;
+    if (this.pollingInterval !== undefined) {
+      clearInterval(this.pollingInterval);
+      this.pollingInterval = setInterval(() => this.runPollingCycle(), intervalMs);
+      this.pollingInterval.unref();
+    }
+  }
+
+  // Arms the idle-backoff settle timer for a settled simple-output agent. After
+  // FSM_IDLE_BACKOFF_SETTLE_MS of continued silence the polling cadence drops to
+  // FSM_IDLE_BACKOFF_POLLING_INTERVAL_MS. Any onData/busy transition cancels it.
+  private armFsmIdleBackoff(): void {
+    if (this.isDisposed) return;
+    // Only agents (simpleOutputState) do the per-tick temperature work this
+    // backoff exists to throttle; non-agent monitors are left untouched.
+    if (!this.simpleOutputState) return;
+    if (this.state !== "idle") return;
+    if (this.pollingInterval === undefined) return;
+    if (this.fsmIdleBackoffActive) return;
+    if (this.fsmIdleBackoffTimer !== undefined) return;
+
+    const armedAtData = this.lastDataTimestamp;
+    this.fsmIdleBackoffTimer = setTimeout(() => {
+      this.fsmIdleBackoffTimer = undefined;
+      if (this.isDisposed) return;
+      if (this.state !== "idle") return;
+      if (this.pollingInterval === undefined) return;
+      // Belt-and-suspenders: data during the settle window cancels the timer
+      // outright via cancelFsmIdleBackoff, but re-check in case a wake path
+      // moved the clock without clearing the timer.
+      if (this.lastDataTimestamp !== armedAtData) return;
+      this.fsmIdleBackoffActive = true;
+      this.applyPollingInterval(FSM_IDLE_BACKOFF_POLLING_INTERVAL_MS);
+    }, FSM_IDLE_BACKOFF_SETTLE_MS);
+    this.fsmIdleBackoffTimer.unref();
+  }
+
+  // Cancels the settle timer and, if backoff was live, leaves it. When
+  // restorePolling is true the live interval is swapped back to the visibility
+  // cadence; when false (stop/dispose) the applied-interval field is still reset
+  // to the requested cadence so a later startPolling() never restarts at the
+  // stale backoff value.
+  private cancelFsmIdleBackoff(restorePolling: boolean): void {
+    if (this.fsmIdleBackoffTimer !== undefined) {
+      clearTimeout(this.fsmIdleBackoffTimer);
+      this.fsmIdleBackoffTimer = undefined;
+    }
+    if (!this.fsmIdleBackoffActive) return;
+    this.fsmIdleBackoffActive = false;
+    if (restorePolling && !this.isDisposed) {
+      this.applyPollingInterval(this.requestedPollingIntervalMs);
+    } else {
+      this.POLLING_INTERVAL_MS = this.requestedPollingIntervalMs;
+    }
   }
 
   private recordWorkingSignal(now: number): void {
@@ -1570,6 +1689,7 @@ export class ActivityMonitor {
         trigger: "pattern",
         patternConfidence: 0.85,
       });
+      this.armFsmIdleBackoff();
     }, COMPLETION_HOLD_MS);
 
     this.onStateChange(this.terminalId, this.spawnedAt, "completed", {
@@ -1637,12 +1757,20 @@ export class ActivityMonitor {
         this.getCursorLine?.() ?? null,
         { allowHistoryScan: true }
       );
-      waitingReason = classifyWaitingReason(lines, promptResult.isPrompt);
+      // Classification scans a wider window than prompt detection: approval
+      // dialogs put the question + selector rows above the input-box chrome,
+      // outside the 6-line prompt window.
+      const reasonLines =
+        WAITING_REASON_SCAN_LINE_COUNT > this.promptDetectorConfig.promptScanLineCount
+          ? this.getVisibleLines(WAITING_REASON_SCAN_LINE_COUNT)
+          : lines;
+      waitingReason = classifyWaitingReason(reasonLines, promptResult.isPrompt);
     }
     this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
       trigger: "timeout",
       waitingReason,
     });
+    this.armFsmIdleBackoff();
   }
 
   private becomeBusyFromPattern(confidence: number, now: number): void {
@@ -1651,6 +1779,7 @@ export class ActivityMonitor {
 
   private becomeBusy(metadata: ActivityStateMetadata, now: number = Date.now()): void {
     if (this.isDisposed) return;
+    this.cancelFsmIdleBackoff(true);
     this.inputTracker.clearPendingInput();
     if (metadata.trigger === "input") {
       this.lastActivityTimestamp = now;

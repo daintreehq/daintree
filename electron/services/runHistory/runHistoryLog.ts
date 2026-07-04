@@ -59,8 +59,20 @@ function sanitizeTarget(raw: RunHistoryTargetOutcome): RunHistoryTargetOutcome {
   if (title !== undefined) out.title = title;
   const reason = clampString(raw.reason, RUN_HISTORY_REASON_MAX_LENGTH);
   if (reason !== undefined) out.reason = reason;
+  if (raw.failureKind === "permanent" || raw.failureKind === "transient") {
+    out.failureKind = raw.failureKind;
+  }
+  const finalAgentState = clampString(raw.finalAgentState, RUN_HISTORY_TITLE_MAX_LENGTH);
+  if (finalAgentState !== undefined) out.finalAgentState = finalAgentState;
   return out;
 }
+
+const FLEET_RUN_OUTCOME_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "cancelled",
+  "failed",
+  "superseded",
+]);
 
 /**
  * Pure, store-free ring buffer for durable run-history records. Persistence is
@@ -75,7 +87,10 @@ export class RunHistoryLog {
   private hydrated = false;
 
   constructor(
-    private readonly saveRecords: (records: RunHistoryRecord[]) => void,
+    private readonly saveRecords: (
+      records: RunHistoryRecord[],
+      options?: { sync?: boolean }
+    ) => void,
     private readonly readRecords: () => unknown,
     private readonly maxRecords: number = RUN_HISTORY_DEFAULT_MAX_RECORDS
   ) {}
@@ -155,6 +170,12 @@ export class RunHistoryLog {
       };
       const draftPreview = clampString(input.draftPreview, RUN_HISTORY_DRAFT_PREVIEW_MAX_LENGTH);
       if (draftPreview !== undefined) fleet.draftPreview = draftPreview;
+      const runId = clampString(input.runId, RUN_HISTORY_TITLE_MAX_LENGTH);
+      if (runId !== undefined) fleet.runId = runId;
+      if (typeof input.status === "string" && FLEET_RUN_OUTCOME_STATUSES.has(input.status)) {
+        fleet.status = input.status;
+      }
+      if (input.isRetry === true) fleet.isRetry = true;
       record = fleet;
     }
 
@@ -191,20 +212,23 @@ export class RunHistoryLog {
     this.flushTimer.unref?.();
   }
 
-  private flush(): void {
+  private flush(sync = false): void {
     if (!this.hydrated) return;
     try {
-      this.saveRecords([...this.records]);
+      this.saveRecords([...this.records], { sync });
     } catch (err) {
       console.error("[RunHistory] Failed to flush run history:", err);
     }
   }
 
+  // Critical-moment flush (clear, shutdown): persists synchronously on the
+  // main connection instead of the fire-and-forget worker path, so the
+  // snapshot is durable when this returns.
   flushNow(): void {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
-    this.flush();
+    this.flush(true);
   }
 }

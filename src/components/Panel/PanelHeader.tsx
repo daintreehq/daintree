@@ -13,7 +13,6 @@ import {
   Minimize2,
   RotateCcw,
   Grid2X2,
-  Activity,
   Plus,
   RadioTower,
   Bell,
@@ -49,11 +48,12 @@ import {
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { PanelTabList } from "./PanelTabList";
 import type { PanelKind } from "@/types";
-import { cn, getBaseTitle } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { formatShortcutForTooltip } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
+import { STATE_COLORS, STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { PluginPanelBadges } from "@/components/Panel/PluginPanelBadges";
 import { BellDot, FolderGit2 } from "@/components/icons";
@@ -259,7 +259,7 @@ function PanelHeaderComponent({
       : undefined;
 
   // Get background activity stats for Zen Mode header
-  const { activeCount, workingCount } = useBackgroundPanelStats(id, isMaximized);
+  const { activeCount, workingCount, waitingCount } = useBackgroundPanelStats(id, isMaximized);
 
   // Check if panel has dangerous launch flags
   const hasDangerousFlags = (() => {
@@ -395,8 +395,9 @@ function PanelHeaderComponent({
     prevFleetPreviewedRef.current = isFleetPreviewed;
   }, [isFleetPreviewed]);
 
-  // In dock, show shortened title without command summary for space efficiency
-  const displayTitle = location === "dock" ? getBaseTitle(title) : title;
+  // The title prop is already variant-resolved by ContentPanel (identity-only
+  // in the dock, task-composed in the grid) — render it verbatim.
+  const displayTitle = title;
 
   const handleHeaderDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
@@ -473,7 +474,7 @@ function PanelHeaderComponent({
   const getTabLabel = useCallback(
     (tabId: UniqueIdentifier) => {
       const tab = tabs?.find((t) => t.id === tabId);
-      return tab ? getBaseTitle(tab.title) : null;
+      return tab ? tab.title : null;
     },
     [tabs]
   );
@@ -601,7 +602,7 @@ function PanelHeaderComponent({
                 userChosen={!!tab.presetColor}
               />
             </span>
-            <span className="truncate">{getBaseTitle(tab.title)}</span>
+            <span className="truncate">{tab.title}</span>
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>
@@ -691,7 +692,8 @@ function PanelHeaderComponent({
                   <SortableTabButton
                     key={tab.id}
                     id={tab.id}
-                    title={getBaseTitle(tab.title)}
+                    title={tab.title}
+                    fullTitle={tab.fullTitle}
                     chrome={tab.chrome}
                     kind={tab.kind}
                     agentState={tab.agentState}
@@ -721,7 +723,8 @@ function PanelHeaderComponent({
               <TabButton
                 key={tab.id}
                 id={tab.id}
-                title={getBaseTitle(tab.title)}
+                title={tab.title}
+                fullTitle={tab.fullTitle}
                 chrome={tab.chrome}
                 kind={tab.kind}
                 agentState={tab.agentState}
@@ -906,18 +909,28 @@ function PanelHeaderComponent({
           role="status"
           aria-live="polite"
         >
-          <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider font-semibold max-w-[300px]">
+          <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider font-semibold whitespace-nowrap">
             <Grid2X2 className="w-3 h-3 shrink-0" aria-hidden="true" />
-            <span className="truncate tabular-nums inline-flex items-center gap-1">
+            <span className="tabular-nums inline-flex items-center gap-1">
               <AnimatedLabel label={String(activeCount)} textClassName="tabular-nums" /> Background
             </span>
             {workingCount > 0 && (
-              <span className="flex items-center gap-1 text-state-working tabular-nums ml-1">
-                <Activity
-                  className="w-3 h-3 animate-pulse motion-reduce:animate-none"
+              <span
+                className={cn("flex items-center gap-1 tabular-nums ml-1", STATE_COLORS.working)}
+              >
+                <STATE_ICONS.working
+                  className="w-3 h-3 animate-spin-slow motion-reduce:animate-none"
                   aria-hidden="true"
                 />
                 <AnimatedLabel label={String(workingCount)} textClassName="tabular-nums" /> working
+              </span>
+            )}
+            {waitingCount > 0 && (
+              <span
+                className={cn("flex items-center gap-1 tabular-nums ml-1", STATE_COLORS.waiting)}
+              >
+                <STATE_ICONS.waiting className="w-3 h-3" aria-hidden="true" />
+                <AnimatedLabel label={String(waitingCount)} textClassName="tabular-nums" /> waiting
               </span>
             )}
           </div>

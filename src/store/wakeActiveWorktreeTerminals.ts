@@ -251,8 +251,11 @@ async function revealUntilStable(id: string, isAborted: () => boolean): Promise<
  * re-firing as the view un-occludes) and there was no retry — leaving panes
  * garbled until clicked. Each terminal now runs through {@link revealUntilStable}
  * (retry-until-paintable + a confirm paint), bounded-concurrency so a large grid
- * stays off the long-task path. The HelpPanel already does the same per-frame
- * retry for the assistant terminal.
+ * stays off the long-task path. This sweep is the SOLE reveal-repaint owner for
+ * the Daintree Assistant terminal too — {@link collectActiveWorktreeTerminalTargets}
+ * folds its overlay terminal into the target list (#9637). HelpPanel must NOT
+ * re-add a parallel per-frame reveal cascade: a second reconcile racing this one
+ * against live PTY output corrupts xterm's line-wrap metadata (#10863).
  */
 export async function repaintActiveWorktreeTerminals(): Promise<void> {
   const targets = collectActiveWorktreeTerminalTargets();

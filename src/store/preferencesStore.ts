@@ -16,6 +16,9 @@ interface PreferencesState {
   setShowDeveloperTools: (show: boolean) => void;
   showGridAgentHighlights: boolean;
   setShowGridAgentHighlights: (show: boolean) => void;
+  /** Compose the agent's observed task title into terminal tab/header titles. */
+  showAgentTaskTitles: boolean;
+  setShowAgentTaskTitles: (show: boolean) => void;
   showDockAgentHighlights: boolean;
   setShowDockAgentHighlights: (show: boolean) => void;
   dockDensity: DockDensity;
@@ -69,6 +72,7 @@ function sanitizePersistedPreferences(
   if (!isDiffViewType(sanitized.diffViewType)) sanitized.diffViewType = "split";
   if (typeof sanitized.diffWrapLines !== "boolean") sanitized.diffWrapLines = false;
   if (typeof sanitized.diffIgnoreWhitespace !== "boolean") sanitized.diffIgnoreWhitespace = false;
+  if (typeof sanitized.showAgentTaskTitles !== "boolean") sanitized.showAgentTaskTitles = true;
 
   // A truthy non-record value here would otherwise bypass the push-confirm gate.
   const skip = sanitized.skipPushConfirmByWorktreePath;
@@ -92,6 +96,8 @@ export const usePreferencesStore = create<PreferencesState>()(
       setShowDeveloperTools: (show) => set({ showDeveloperTools: show }),
       showGridAgentHighlights: false,
       setShowGridAgentHighlights: (show) => set({ showGridAgentHighlights: show }),
+      showAgentTaskTitles: true,
+      setShowAgentTaskTitles: (show) => set({ showAgentTaskTitles: show }),
       showDockAgentHighlights: false,
       setShowDockAgentHighlights: (show) => set({ showDockAgentHighlights: show }),
       dockDensity: "normal",
@@ -137,7 +143,7 @@ export const usePreferencesStore = create<PreferencesState>()(
     {
       name: "daintree-preferences",
       storage: createSafeJSONStorage(),
-      version: 10,
+      version: 11,
       // Runs on every hydration (unlike `migrate`, which Zustand skips when the
       // persisted version matches). Closed-set normalisation lives here so a
       // corrupt-but-parseable value is clamped even at the current version.
@@ -231,6 +237,11 @@ export const usePreferencesStore = create<PreferencesState>()(
             persisted.diffIgnoreWhitespace = false;
           }
         }
+        if (version < 11 && isRecord(persisted)) {
+          if (typeof persisted.showAgentTaskTitles !== "boolean") {
+            persisted.showAgentTaskTitles = true;
+          }
+        }
         return persisted as PreferencesState;
       },
     }
@@ -241,5 +252,5 @@ registerPersistedStore({
   storeId: "preferencesStore",
   store: usePreferencesStore,
   persistedStateType:
-    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean> }",
+    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean> }",
 });

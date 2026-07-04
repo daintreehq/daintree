@@ -18,8 +18,8 @@ function readRecords(): unknown {
   return auditRingStore.readAll("runHistoryRecords");
 }
 
-function saveRecords(records: RunHistoryRecord[]): void {
-  auditRingStore.writeAll("runHistoryRecords", records, RUN_HISTORY_DEFAULT_MAX_RECORDS);
+function saveRecords(records: RunHistoryRecord[], options?: { sync?: boolean }): void {
+  auditRingStore.writeAll("runHistoryRecords", records, RUN_HISTORY_DEFAULT_MAX_RECORDS, options);
 }
 
 export const runHistoryLog = new RunHistoryLog(saveRecords, readRecords);

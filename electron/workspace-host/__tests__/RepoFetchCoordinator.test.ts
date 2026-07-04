@@ -747,6 +747,40 @@ describe("RepoFetchCoordinator", () => {
     expect(onFetchSuccess).not.toHaveBeenCalled();
   });
 
+  it("destroy() during the async commondir resolution discards the fetch and creates no state", async () => {
+    let resolveCommonDir: ((value: string | null) => void) | undefined;
+    mockGetGitCommonDir.mockImplementation(
+      () =>
+        new Promise<string | null>((res) => {
+          resolveCommonDir = res;
+        })
+    );
+    mockCreateBackgroundFetchGit.mockReturnValue(makeMockGit(() => Promise.resolve()));
+
+    const onFetchSuccess = vi.fn();
+    const coord = new RepoFetchCoordinator({ onFetchSuccess });
+
+    const inFlight = coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+    });
+    expect(resolveCommonDir).toBeDefined();
+
+    // Tear down while the commondir promise is still pending, then resolve it.
+    // The stale continuation must not repopulate the cleared state map at the
+    // fresh generation — that would let the fetch dodge the stale-generation
+    // guard and run against a destroyed coordinator.
+    coord.destroy();
+    resolveCommonDir?.("/repo/.git");
+
+    const result = await inFlight;
+    expect(result.status).toBe("skipped");
+    expect(result.skipReason).toBe("stale-generation");
+    expect(onFetchSuccess).not.toHaveBeenCalled();
+    expect(mockCreateBackgroundFetchGit).not.toHaveBeenCalled();
+    expect((coord as unknown as { states: Map<string, unknown> }).states.size).toBe(0);
+  });
+
   it("classifies native AbortError (name === 'AbortError') as transient", async () => {
     mockGetGitCommonDir.mockReturnValue("/repo/.git");
     const abortError = new Error("The operation was aborted");

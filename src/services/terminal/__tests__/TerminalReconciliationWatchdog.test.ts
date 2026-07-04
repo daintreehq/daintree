@@ -10,6 +10,7 @@ import {
 import {
   TerminalReconciliationWatchdog,
   WATCHDOG_INTERVAL_MS,
+  WATCHDOG_MAX_GEOMETRY_REPAIR_ATTEMPTS,
   WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK,
   WATCHDOG_REPAIR_COOLDOWN_MS,
   isXtermRenderPaused,
@@ -607,6 +608,132 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(deps.reconcileRevealGeometry).toHaveBeenCalledTimes(
         WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK + 1
       );
+    });
+  });
+
+  describe("geometry circuit breaker (#10909)", () => {
+    // A permanently-mismatched proposal where reconcileRevealGeometry keeps
+    // returning true (box measurable) but the grid never actually converges —
+    // the exact stable off-by-one that made the watchdog re-wrap forever.
+    function makeDivergedTerminal(): ManagedTerminal {
+      const managed = makeManaged({ isAltBuffer: true });
+      setRenderPaused(managed, false);
+      setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+      return managed;
+    }
+
+    function giveUpLogCount(): number {
+      return vi.mocked(logWarn).mock.calls.filter((c) => String(c[0]).includes("giving up")).length;
+    }
+
+    it("stops repairing and logs once after the pane fails to converge repeatedly", () => {
+      const managed = makeDivergedTerminal();
+      instances.set("t1", managed);
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      // Well past the point where the cooldown-spaced repairs would fire.
+      for (let i = 0; i < 12; i++) vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+
+      expect(deps.reconcileRevealGeometry).toHaveBeenCalledTimes(
+        WATCHDOG_MAX_GEOMETRY_REPAIR_ATTEMPTS
+      );
+      expect(managed.geometryRepairGaveUp).toBe(true);
+      expect(giveUpLogCount()).toBe(1);
+      // The logged attempt count must equal the repairs actually issued — proving
+      // the counter tracks issued repairs, not divergence detections or budget skips.
+      const giveUpLog = vi
+        .mocked(logWarn)
+        .mock.calls.find((c) => String(c[0]).includes("giving up"));
+      expect(giveUpLog?.[1]).toMatchObject({
+        attempts: vi.mocked(deps.reconcileRevealGeometry).mock.calls.length,
+      });
+
+      // Further ticks neither repair again nor re-log the give-up.
+      for (let i = 0; i < 6; i++) vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).toHaveBeenCalledTimes(
+        WATCHDOG_MAX_GEOMETRY_REPAIR_ATTEMPTS
+      );
+      expect(giveUpLogCount()).toBe(1);
+    });
+
+    it("re-arms when the grid converges again, so a self-corrected pane can repair later", () => {
+      const managed = makeDivergedTerminal();
+      instances.set("t1", managed);
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      for (let i = 0; i < 12; i++) vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(managed.geometryRepairGaveUp).toBe(true);
+
+      // Container reaches a width the grid matches — one success clears the breaker.
+      setGrid(managed, { cols: 100, rows: 40 }, { cols: 100, rows: 40 });
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(managed.geometryRepairGaveUp).toBe(false);
+      expect(managed.geometryRepairAttempts).toBe(0);
+
+      // Divergence returns — repairs resume instead of staying permanently barred.
+      vi.mocked(deps.reconcileRevealGeometry).mockClear();
+      setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-arms when the terminal re-attaches under a new attachGeneration", () => {
+      const managed = makeDivergedTerminal();
+      instances.set("t1", managed);
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      for (let i = 0; i < 12; i++) vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(managed.geometryRepairGaveUp).toBe(true);
+
+      // A fresh incarnation reusing the id must not inherit the give-up state.
+      managed.attachGeneration += 1;
+      vi.mocked(deps.reconcileRevealGeometry).mockClear();
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(managed.geometryRepairGaveUp).toBe(false);
+      expect(deps.reconcileRevealGeometry).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not count a budget-deferred tick as a repair attempt", () => {
+      const panes: ManagedTerminal[] = [];
+      for (let i = 0; i < WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK + 1; i++) {
+        const managed = makeManaged({ isAltBuffer: true });
+        setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+        instances.set(`t${i}`, managed);
+        panes.push(managed);
+      }
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      const repaired = panes[0];
+      const deferred = panes[WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK];
+      expect(repaired?.geometryRepairAttempts).toBe(1);
+      // The pane skipped purely for heavy budget was never tried — no attempt spent.
+      expect(deferred?.geometryRepairAttempts).toBe(0);
+    });
+
+    it("neither advances nor resets the breaker while a synchronized-output block stays open", () => {
+      const managed = makeManaged({ isAltBuffer: true });
+      (
+        managed.terminal as unknown as { modes: { synchronizedOutputMode: boolean } }
+      ).modes.synchronizedOutputMode = true;
+      setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+      // Seed a partial count so the assertion is breaker-specific: a synchronized
+      // block skips the whole geometry branch, so it must neither increment the
+      // count (repair path) nor clear it (convergence-reset path).
+      managed.geometryRepairAttempts = 1;
+      managed.geometryRepairGeneration = managed.attachGeneration;
+      instances.set("t1", managed);
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      for (let i = 0; i < 12; i++) vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
+      expect(managed.geometryRepairGaveUp).toBeFalsy();
+      expect(managed.geometryRepairAttempts).toBe(1);
     });
   });
 

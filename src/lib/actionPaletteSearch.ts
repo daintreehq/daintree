@@ -5,12 +5,11 @@ const CATEGORY_WEIGHT = 1.5;
 const DESCRIPTION_WEIGHT = 0.5;
 const KEYWORD_WEIGHT = 1.0;
 const MRU_BONUS_CAP = 50;
-// tanh scale: with the 14-day half-life + increment=1.0 frecency model
-// (shared/utils/frecency.ts), the steady-state score for 1x-daily use is ~20.7
-// and 2x-daily is ~41. SCALE=22 maps that heavy-use band to ~74-95% of cap
-// while keeping CONTEXT_BOOST (80) > MRU bonus > 0. Revisit if the frecency
-// half-life or increment changes.
-const MRU_SCORE_SCALE = 22;
+// tanh scale: `score` is now a rolling 7-day usage COUNT (shared/utils/actionUsage.ts),
+// so heavy use tops out around 7 (1x-daily) to 14 (2x-daily). SCALE=7.5 maps that
+// band to ~73-95% of cap while keeping CONTEXT_BOOST (80) > MRU bonus > 0. Revisit
+// if the usage window (7 days) changes.
+const MRU_SCORE_SCALE = 7.5;
 const CONTEXT_BOOST = 80;
 const GENERIC_CATEGORY = "general";
 
@@ -221,7 +220,11 @@ export function rankActionMatches<T extends SearchableAction>(
   const lowerQuery = trimmed.toLowerCase();
 
   const mruScoreById = new Map<string, number>();
-  mruList.forEach(({ id, score }) => mruScoreById.set(id, score));
+  const mruRecencyById = new Map<string, number>();
+  mruList.forEach(({ id, score, lastAccessedAt }) => {
+    mruScoreById.set(id, score);
+    mruRecencyById.set(id, lastAccessedAt);
+  });
   const boostedCategories = getBoostedCategories(context);
 
   const scored: Array<{ item: T; score: number }> = [];
@@ -238,6 +241,11 @@ export function rankActionMatches<T extends SearchableAction>(
   scored.sort((a, b) => {
     if (a.item.enabled !== b.item.enabled) return a.item.enabled ? -1 : 1;
     if (a.score !== b.score) return b.score - a.score;
+    // Usage is now an integer count, so ties are common; break them by most
+    // recent use so a recently-used-once action outranks a stale one.
+    const ra = mruRecencyById.get(a.item.id) ?? 0;
+    const rb = mruRecencyById.get(b.item.id) ?? 0;
+    if (ra !== rb) return rb - ra;
     return TITLE_COLLATOR.compare(a.item.title, b.item.title);
   });
 

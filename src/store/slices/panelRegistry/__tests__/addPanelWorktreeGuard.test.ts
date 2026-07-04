@@ -103,7 +103,6 @@ function spawnPlugin(
   addPanel: AddPanelFn,
   options: Record<string, unknown>
 ): Promise<string | null> {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- documented extension-panel spawn boundary
   return addPanel(options as Parameters<AddPanelFn>[0]);
 }
 

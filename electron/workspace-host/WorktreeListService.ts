@@ -180,35 +180,37 @@ export class WorktreeListService {
     }
   }
 
-  mapToWorktrees(rawWorktrees: RawWorktreeRecord[]): Worktree[] {
-    return rawWorktrees.map((wt) => {
-      const normalizedPath = pathResolve(wt.path);
-      let name: string;
-      if (wt.isMainWorktree) {
-        name = normalizedPath.split(/[/\\]/).pop() || "Main";
-      } else if (wt.isDetached) {
-        name = normalizedPath.split(/[/\\]/).pop() || wt.head?.substring(0, 7) || "Detached";
-      } else if (wt.branch) {
-        name = wt.branch;
-      } else {
-        name = normalizedPath.split(/[/\\]/).pop() || "Worktree";
-      }
+  mapToWorktrees(rawWorktrees: RawWorktreeRecord[]): Promise<Worktree[]> {
+    return Promise.all(
+      rawWorktrees.map(async (wt) => {
+        const normalizedPath = pathResolve(wt.path);
+        let name: string;
+        if (wt.isMainWorktree) {
+          name = normalizedPath.split(/[/\\]/).pop() || "Main";
+        } else if (wt.isDetached) {
+          name = normalizedPath.split(/[/\\]/).pop() || wt.head?.substring(0, 7) || "Detached";
+        } else if (wt.branch) {
+          name = wt.branch;
+        } else {
+          name = normalizedPath.split(/[/\\]/).pop() || "Worktree";
+        }
 
-      return {
-        id: normalizedPath,
-        path: normalizedPath,
-        name: name,
-        branch: wt.branch || undefined,
-        head: wt.head,
-        isDetached: wt.isDetached,
-        isCurrent: false,
-        isMainWorktree: wt.isMainWorktree,
-        gitDir: getGitDir(normalizedPath) || undefined,
-        isLocked: wt.isLocked,
-        lockReason: wt.lockReason,
-        isPrunable: wt.isPrunable,
-        prunableReason: wt.prunableReason,
-      };
-    });
+        return {
+          id: normalizedPath,
+          path: normalizedPath,
+          name: name,
+          branch: wt.branch || undefined,
+          head: wt.head,
+          isDetached: wt.isDetached,
+          isCurrent: false,
+          isMainWorktree: wt.isMainWorktree,
+          gitDir: (await getGitDir(normalizedPath)) || undefined,
+          isLocked: wt.isLocked,
+          lockReason: wt.lockReason,
+          isPrunable: wt.isPrunable,
+          prunableReason: wt.prunableReason,
+        };
+      })
+    );
   }
 }

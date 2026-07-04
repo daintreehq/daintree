@@ -28,8 +28,7 @@ export const config: AgentConfig = {
   // discontinued on 2026-06-18 in favour of Antigravity (`agy`). Enterprise
   // Gemini Code Assist keeps Gemini CLI. See issue #8808 and the
   // `antigravity` entry for the consumer successor.
-  tooltip:
-    "Consumer accounts replaced by Antigravity (agy); enterprise and API-key users still supported",
+  tooltip: "Google's CLI",
   version: {
     args: ["--version"],
     githubRepo: "google-gemini/gemini-cli",
@@ -85,7 +84,7 @@ export const config: AgentConfig = {
     primaryPatterns: [
       // @generated:gemini:primaryPatterns:start
       "[⠀-⣿]\\s+[^()\\n]{2,80}\\s*\\(esc to cancel",
-      "esc to cancel[^)\\n]*\\)?$",
+      "esc to cancel(?:[^)\\n]{0,20}\\)?|[^)\\n]{0,60}\\))$",
       "\\(\\d+s,?\\s*esc to cancel",
       // @generated:gemini:primaryPatterns:end
     ],

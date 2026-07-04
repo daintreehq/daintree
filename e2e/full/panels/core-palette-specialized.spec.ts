@@ -180,16 +180,16 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
     await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(before);
   });
 
-  // ── Theme Palette (Cmd+K T chord) ─────────────────────────
+  // ── Theme Palette (Cmd+K Cmd+T chord) ─────────────────────
 
   test("theme palette opens via chord and supports keyboard navigation", async () => {
     const { window } = ctx;
     await ensureWindowFocused(ctx.app);
 
-    // Two-step chord: leader (Cmd/Ctrl+K) then T.
+    // Two-step chord: leader (Cmd/Ctrl+K) then Cmd/Ctrl+T.
     await window.keyboard.press(`${mod}+K`);
     await window.waitForTimeout(120);
-    await window.keyboard.press("t");
+    await window.keyboard.press(`${mod}+t`);
 
     const dialog = window.locator(SEL.themePalette.dialog);
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });

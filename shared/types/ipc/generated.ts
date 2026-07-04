@@ -36,11 +36,23 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { worktreeId?: string | undefined }];
     result: void;
   };
+  "agent-session:get-retention": {
+    args: [];
+    result: import("./agentSessionHistory.js").AgentSessionRetentionDays;
+  };
   "agent-session:list": {
     args: [payload: { worktreeId?: string | undefined }];
     result: import("./agentSessionHistory.js").AgentSessionRecord[];
   };
+  "agent-session:set-retention": {
+    args: [days: import("./agentSessionHistory.js").AgentSessionRetentionDays];
+    result: void;
+  };
   "agent-settings:set-global": {
+    args: [value: boolean];
+    result: import("../agentSettings.js").AgentSettings;
+  };
+  "agent-settings:set-global-inline": {
     args: [value: boolean];
     result: import("../agentSettings.js").AgentSettings;
   };
@@ -223,6 +235,10 @@ export interface GeneratedIpcInvokeMap {
   "dev-preview:get-destructive-preview-sizes": {
     args: [request: import("./devPreview.js").DevPreviewDestructivePreviewSizesRequest];
     result: import("./devPreview.js").DevPreviewDestructivePreviewSizes;
+  };
+  "dev-preview:get-diagnostics": {
+    args: [__0: { panelId: string; projectId: string }];
+    result: import("./devPreview.js").DevPreviewDiagnosticsResult;
   };
   "dev-preview:get-proxy-port": {
     args: [];
@@ -891,6 +907,18 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: Record<string, import("../../config/agentRegistry.js").AgentConfig>;
   };
+  "plugin:bg-update-check-latest": {
+    args: [];
+    result: import("../plugin.js").PluginBackgroundUpdateCheckResult | null;
+  };
+  "plugin:bg-update-check-settings-get": {
+    args: [];
+    result: import("../plugin.js").PluginBackgroundUpdateCheckSettings;
+  };
+  "plugin:bg-update-check-settings-set": {
+    args: [enabled: boolean];
+    result: import("../plugin.js").PluginBackgroundUpdateCheckSettings;
+  };
   "plugin:check-for-update": {
     args: [pluginId: string];
     result: import("../plugin.js").PluginCheckUpdateResult;
@@ -1249,8 +1277,27 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../resourceProfile.js").ResourceProfileSnapshot;
   };
+  "system:get-why-slow-snapshot": {
+    args: [];
+    result: import("../whySlow.js").WhySlowSnapshot;
+  };
+  "system:report-terminal-renderer-diagnostics": {
+    args: [
+      payload: {
+        webglMode: "webgl" | "dom";
+        wantsWebgl: number;
+        terminalCount: number;
+        countsByTier: Record<string, number>;
+      },
+    ];
+    result: void;
+  };
   "system:request-interactive-override": {
     args: [durationMs: number];
+    result: void;
+  };
+  "system:show-item-in-folder": {
+    args: [payload: { path: string }];
     result: void;
   };
   "telemetry:get": {
@@ -1423,7 +1470,7 @@ export interface GeneratedIpcInvokeMap {
         command?: string | undefined;
         env?: Record<string, string> | undefined;
         title?: string | undefined;
-        titleMode?: "default" | "custom" | undefined;
+        titleMode?: "default" | "custom" | "user" | undefined;
         restore?: boolean | undefined;
         isEphemeral?: boolean | undefined;
         agentLaunchFlags?: string[] | undefined;

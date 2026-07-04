@@ -24,6 +24,7 @@ function makePortConnection(
 
 function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
   return {
+    analysisWorkerPool: null,
     ptyManager: {} as HostContext["ptyManager"],
     processTreeCache: {} as HostContext["processTreeCache"],
     terminalResourceMonitor: {} as HostContext["terminalResourceMonitor"],
@@ -52,6 +53,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     pauseCoordinators: new Map(),
     rendererConnections: new Map(),
     windowProjectMap: new Map(),
+    windowFocusedTerminalMap: new Map(),
     ipcDataMirrorTerminals: new Set(),
     visualBuffers: [],
     visualSignalView: null,
@@ -67,6 +69,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     resumePausedTerminal: vi.fn(),
     createPortQueueManager: vi.fn(),
     getPausedDurationsSnapshot: vi.fn(() => []),
+    getDropTallySnapshot: vi.fn(() => []),
     ...overrides,
   };
 }
@@ -237,6 +240,41 @@ describe("get-flow-control-snapshot handler", () => {
 
     stats.suspendCount = 99;
     expect(snapshot.stats.suspendCount).toBe(1); // detached copy
+  });
+
+  it("merges per-terminal drop tallies and unions tally-only ids", () => {
+    const ctx = makeCtx({
+      backpressureManager: {
+        terminalStatusesMap: new Map([["a", "running"]]),
+        suspendedSet: new Set(),
+        isSuspended: vi.fn(() => false),
+        getActivityTier: vi.fn(() => "active"),
+        stats: { pauseCount: 0, resumeCount: 0, suspendCount: 0, forceResumeCount: 0 },
+      } as unknown as HostContext["backpressureManager"],
+      // "dropped-only" is known ONLY to the drop tally — a terminal whose
+      // output was dropped but which never paused must still appear, or the
+      // scrollback-gap explanation is invisible in the support bundle.
+      getDropTallySnapshot: vi.fn(() => [
+        { terminalId: "a", droppedBytes: 512, dropCount: 2, lastDropAt: 1111 },
+        { terminalId: "dropped-only", droppedBytes: 64, dropCount: 1, lastDropAt: 2222 },
+      ]),
+    });
+
+    const snapshot = runSnapshot(ctx);
+    const a = snapshot.terminals.find((t) => t.terminalId === "a");
+    expect(a).toMatchObject({ droppedBytes: 512, dropCount: 2, lastDropAt: 1111 });
+    const droppedOnly = snapshot.terminals.find((t) => t.terminalId === "dropped-only");
+    expect(droppedOnly).toMatchObject({ droppedBytes: 64, dropCount: 1, lastDropAt: 2222 });
+    // A terminal with no recorded drops reports explicit zero/null, not undefined.
+    const clean = makeCtx({
+      pauseCoordinators: new Map([["t1", {} as never]]),
+    });
+    const cleanSnapshot = runSnapshot(clean);
+    expect(cleanSnapshot.terminals[0]).toMatchObject({
+      droppedBytes: 0,
+      dropCount: 0,
+      lastDropAt: null,
+    });
   });
 
   it("embeds the resource-governor snapshot verbatim", () => {

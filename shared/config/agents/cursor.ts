@@ -14,7 +14,7 @@ export const config: AgentConfig = {
   color: "#3ee6eb",
   iconId: "cursor",
   supportsContextInjection: true,
-  tooltip: "Cursor's agentic CLI",
+  tooltip: "Cursor's CLI",
   version: {
     args: ["-v"],
   },

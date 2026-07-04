@@ -34,6 +34,13 @@ vi.mock("../SystemSleepService.js", () => ({
 
 vi.mock("../persistence/db.js", () => mockDbModule);
 
+// Worker unavailable in unit tests — runDbWork executes the fallback
+// synchronously, matching the client's disabled/degraded behavior, so the
+// exact-sequence pragma assertions below hold unchanged.
+vi.mock("../persistence/dbWorkerClient.js", () => ({
+  runDbWork: vi.fn((_op: unknown, fallback: () => unknown) => Promise.resolve(fallback())),
+}));
+
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   return {
@@ -124,8 +131,8 @@ describe("DatabaseMaintenanceService adversarial", () => {
 
     expect(mockSqlite.backup).toHaveBeenCalledTimes(2);
     expect(mockSqlite.pragma.mock.calls).toEqual([
-      ["wal_checkpoint(TRUNCATE)"],
-      ["wal_checkpoint(TRUNCATE)"],
+      ["wal_checkpoint(PASSIVE)"],
+      ["wal_checkpoint(PASSIVE)"],
       ["optimize"],
       ["wal_checkpoint(TRUNCATE)"],
     ]);
@@ -195,7 +202,7 @@ describe("DatabaseMaintenanceService adversarial", () => {
 
     expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
     expect(mockSqlite.pragma.mock.calls).toEqual([
-      ["wal_checkpoint(TRUNCATE)"],
+      ["wal_checkpoint(PASSIVE)"],
       ["wal_checkpoint(PASSIVE)"],
     ]);
 

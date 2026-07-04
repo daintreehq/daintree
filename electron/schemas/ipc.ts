@@ -20,7 +20,7 @@ import type {
 
 /** Schema for a launch hint — built-in agent id or plugin-provided string. */
 const LaunchAgentIdSchema = z.union([z.enum(BUILT_IN_AGENT_IDS), z.string().min(1)]);
-const TitleModeSchema = z.enum(["default", "custom"]);
+const TitleModeSchema = z.enum(["default", "custom", "user"]);
 
 // ============================================================================
 // Terminal Entry Validation Schemas
@@ -151,6 +151,10 @@ export const TerminalSnapshotSchema = z
     agentPresetId: z.string().optional(),
     agentPresetColor: z.string().optional(),
     originalPresetId: z.string().optional(),
+    // Captured launch env replayed on restore so a session keeps its provider
+    // environment (#10922). Re-sanitized on the renderer serialize/respawn
+    // boundary; validated here only as a string map.
+    env: z.record(z.string(), z.string()).optional(),
     isUsingFallback: z.boolean().optional(),
     fallbackChainIndex: z.number().int().nonnegative().optional(),
     pluginId: z.string().optional(),
@@ -366,6 +370,18 @@ export const TerminalResizePayloadSchema = z.object({
   cols: z.number().int().positive(),
   rows: z.number().int().positive(),
 });
+
+/**
+ * Agent-session-history retention window in days. Fixed set of choices
+ * (`0` = keep forever) mirroring the privacy log-retention picker — reject any
+ * other value at the IPC boundary.
+ */
+export const AgentSessionRetentionDaysSchema = z.union([
+  z.literal(7),
+  z.literal(30),
+  z.literal(90),
+  z.literal(0),
+]);
 
 export const FileSearchPayloadSchema = z.object({
   cwd: z.string().min(1),

@@ -537,6 +537,18 @@ export function BrowserPane({
     };
   }, [id]);
 
+  // Listen for the close shortcut (Cmd/Ctrl+W) forwarded from the focused
+  // webview guest (#10859). Without this, focus inside the guest bypasses the
+  // host window's setIgnoreMenuShortcuts guard and the native role:"close"
+  // menu accelerator closes the whole window instead of just this panel.
+  useEffect(() => {
+    const cleanup = window.electron.webview.onCloseShortcut((payload) => {
+      if (payload.panelId !== id) return;
+      void actionService.dispatch("terminal.close", { terminalId: id }, { source: "keybinding" });
+    });
+    return cleanup;
+  }, [id]);
+
   // Clear crash state when the user navigates to a fresh URL. Depending on
   // crashState here would create an instant-reset loop: the effect would fire
   // the moment crashState transitions from "none" and clear it back. Track the

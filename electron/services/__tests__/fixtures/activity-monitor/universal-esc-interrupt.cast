@@ -1,0 +1,9 @@
+{"version":2,"width":120,"height":10,"timestamp":1700000000,"title":"universal-esc-interrupt"}
+[0.05,"o","CustomCLI ready\r\n"]
+[0.10,"o","> "]
+[0.40,"o","◐ Working on your request (esc to interrupt)"]
+[0.85,"o","\r◓ Working on your request (esc to interrupt · 2s)"]
+[1.30,"o","\r◑ Working on your request (esc to interrupt · 3s)"]
+[1.75,"o","\r\u001b[2K"]
+[1.85,"o","All done.\r\n"]
+[2.00,"o","\r\n> "]

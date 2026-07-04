@@ -29,13 +29,16 @@ function output(command, args) {
 
 const npmRoot = output(npmBin, ["root", "-g"]);
 const packageDir = path.join(npmRoot, "@anthropic-ai", "claude-code");
-const installScript = path.join(packageDir, "install.js");
+const installScriptNames = ["install.cjs", "install.js", "install.mjs"];
+const installScript = installScriptNames
+  .map((scriptName) => path.join(packageDir, scriptName))
+  .find((scriptPath) => existsSync(scriptPath));
 
-if (existsSync(installScript)) {
+if (installScript) {
   run(process.execPath, [installScript], { cwd: packageDir });
 } else {
   console.warn(
-    `[repair-claude-code-install] ${installScript} not found; verifying existing claude install`
+    `[repair-claude-code-install] no install script found in ${packageDir}; verifying existing claude install`
   );
 }
 
