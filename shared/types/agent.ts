@@ -48,6 +48,24 @@ export function coerceAgentState(value: unknown): AgentState | undefined {
  */
 export type WaitingReason = "prompt" | "question" | "approval" | "error";
 
+const WAITING_REASONS: ReadonlySet<WaitingReason> = new Set([
+  "prompt",
+  "question",
+  "approval",
+  "error",
+]);
+
+/**
+ * Normalise a waiting reason coming off the wire (backend snapshots bypass
+ * the zod event schema). Unknown values return undefined so callers fall
+ * back to the generic "waiting for input" presentation instead of rendering
+ * junk.
+ */
+export function coerceWaitingReason(value: unknown): WaitingReason | undefined {
+  if (typeof value !== "string") return undefined;
+  return WAITING_REASONS.has(value as WaitingReason) ? (value as WaitingReason) : undefined;
+}
+
 export type AgentId = string;
 
 /** Valid triggers for agent state changes */

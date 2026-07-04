@@ -354,6 +354,10 @@ export const createAddPanelActions = (
     const agentState = isReconnect
       ? options.agentState
       : (options.agentState ?? (isAgent ? "working" : undefined));
+    // Reason restored from the backend snapshot survives only while the
+    // resolved state is still "waiting" — mirrors the main-process rule that
+    // clears it on any other state.
+    const waitingReason = agentState === "waiting" ? options.waitingReason : undefined;
     const lastStateChange = isReconnect
       ? options.lastStateChange
       : (options.lastStateChange ?? (agentState !== undefined ? Date.now() : undefined));
@@ -390,6 +394,7 @@ export const createAddPanelActions = (
       cols: overlayDims?.cols ?? 80,
       rows: overlayDims?.rows ?? 24,
       agentState,
+      waitingReason,
       lastStateChange,
       location,
       command: options.command,
@@ -464,6 +469,13 @@ export const createAddPanelActions = (
             ? {
                 ...ptyTerminal,
                 agentState: ptyTerminal.agentState ?? existingPty?.agentState,
+                // Reason follows the effective state: keep the freshest known
+                // reason while waiting (a live event may have landed before the
+                // reconnect flush), clear it otherwise.
+                waitingReason:
+                  (ptyTerminal.agentState ?? existingPty?.agentState) === "waiting"
+                    ? (ptyTerminal.waitingReason ?? existingPty?.waitingReason)
+                    : undefined,
                 lastStateChange: ptyTerminal.lastStateChange ?? existingPty?.lastStateChange,
                 exitBehavior: ptyTerminal.exitBehavior ?? existingPty?.exitBehavior,
                 extensionState: ptyTerminal.extensionState ?? existing.extensionState,
@@ -513,6 +525,12 @@ export const createAddPanelActions = (
             ? {
                 ...ptyTerminal,
                 agentState: ptyTerminal.agentState ?? existingPty2?.agentState,
+                // Reason follows the effective state — same rule as the
+                // batched path above.
+                waitingReason:
+                  (ptyTerminal.agentState ?? existingPty2?.agentState) === "waiting"
+                    ? (ptyTerminal.waitingReason ?? existingPty2?.waitingReason)
+                    : undefined,
                 lastStateChange: ptyTerminal.lastStateChange ?? existingPty2?.lastStateChange,
                 exitBehavior: ptyTerminal.exitBehavior ?? existingPty2?.exitBehavior,
                 extensionState: ptyTerminal.extensionState ?? existing.extensionState,

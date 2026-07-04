@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { renderHook, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import type { AgentState } from "@shared/types/agent";
+import type { AgentState, WaitingReason } from "@shared/types/agent";
 import type { PanelLocation, TerminalFlowStatus } from "@shared/types/panel";
 
 interface Terminal {
@@ -9,6 +9,7 @@ interface Terminal {
   title: string;
   kind?: string;
   agentState?: AgentState;
+  waitingReason?: WaitingReason;
   stateChangeConfidence?: number;
   // FUTURE_SAB: widened to `TerminalFlowStatus` (not `PersistableFlowStatus`)
   // so the suspended-flow tests can drive the formatter with a skeleton
@@ -179,6 +180,52 @@ describe("useAccessibilityAnnouncements — agent-state announcements (#8937)", 
     const { polite, assertive } = useAnnouncerStore.getState();
     expect(polite).toBeNull();
     expect(assertive).toBeNull();
+  });
+
+  it("announces the classified waiting reason instead of the generic phrasing", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Agent A", agentState: "working" }]);
+    });
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Agent A", agentState: "waiting", waitingReason: "approval" }]);
+    });
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Agent A is waiting for approval");
+  });
+
+  it("keeps the generic waiting phrasing for the prompt fallback", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Agent A", agentState: "working" }]);
+    });
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Agent A", agentState: "waiting", waitingReason: "prompt" }]);
+    });
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Agent A is waiting for input");
   });
 
   it("announces 'completed' (unchanged behavior — regression guard)", () => {

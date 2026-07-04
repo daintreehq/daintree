@@ -357,6 +357,56 @@ describe("buildArgsForBackendTerminal", () => {
     );
     expect(result.agentState).toBe("working");
   });
+
+  it("restores the waiting reason for a waiting terminal (attention survives eviction)", () => {
+    const result = buildArgsForBackendTerminal(
+      {
+        id: "t1",
+        cwd: "/p",
+        kind: "terminal",
+        title: "Claude",
+        agentState: "waiting",
+        waitingReason: "approval",
+      },
+      { id: "t1", location: "grid" },
+      "/p"
+    );
+    expect(result.agentState).toBe("waiting");
+    expect(result.waitingReason).toBe("approval");
+  });
+
+  it("drops the waiting reason when the restored state is not waiting", () => {
+    const result = buildArgsForBackendTerminal(
+      {
+        id: "t1",
+        cwd: "/p",
+        kind: "terminal",
+        title: "Claude",
+        agentState: "working",
+        waitingReason: "approval",
+      },
+      { id: "t1", location: "grid" },
+      "/p"
+    );
+    expect(result.waitingReason).toBeUndefined();
+  });
+
+  it("drops junk waiting-reason values off the wire", () => {
+    const result = buildArgsForBackendTerminal(
+      {
+        id: "t1",
+        cwd: "/p",
+        kind: "terminal",
+        title: "Claude",
+        agentState: "waiting",
+        waitingReason: "permission" as never,
+      },
+      { id: "t1", location: "grid" },
+      "/p"
+    );
+    expect(result.agentState).toBe("waiting");
+    expect(result.waitingReason).toBeUndefined();
+  });
 });
 
 describe("buildArgsForReconnectedFallback", () => {
@@ -400,6 +450,22 @@ describe("buildArgsForReconnectedFallback", () => {
       "/p"
     );
     expect(result.agentState).toBe("working");
+  });
+
+  it("restores the waiting reason for a waiting terminal on reconnect", () => {
+    const result = buildArgsForReconnectedFallback(
+      {
+        id: "t1",
+        cwd: "/p",
+        kind: "terminal",
+        title: "Claude",
+        agentState: "waiting",
+        waitingReason: "error",
+      },
+      { id: "t1", location: "grid" },
+      "/p"
+    );
+    expect(result.waitingReason).toBe("error");
   });
 
   it("returns undefined worktreeId when saved has none", () => {

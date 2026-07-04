@@ -6,7 +6,7 @@ import type {
   ViewportPresetId,
 } from "./panel.js";
 import type { BrowserHistory } from "./browser.js";
-import type { AgentState, AgentId } from "./agent.js";
+import type { AgentState, AgentId, WaitingReason } from "./agent.js";
 import type { TerminalSpawnSource, AddPanelFocusPolicy } from "./panel.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { ActionContext } from "./actions.js";
@@ -81,6 +81,8 @@ export interface AddPanelOptionsBase {
    */
   launchAgentId?: AgentId;
   agentState?: AgentState;
+  /** Why the agent is waiting, restored from the backend snapshot on reconnect. Only meaningful when `agentState` is "waiting". */
+  waitingReason?: WaitingReason;
   lastStateChange?: number;
   /** Store command on instance but don't execute it on spawn */
   skipCommandExecution?: boolean;

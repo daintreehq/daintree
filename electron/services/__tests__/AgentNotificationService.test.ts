@@ -361,6 +361,51 @@ describe("AgentNotificationService", () => {
       );
     });
 
+    it("names the classified waiting reason in the escalation body", () => {
+      mockStore({ waitingEnabled: true });
+
+      events.emit("agent:state-changed", {
+        ...makePayload("waiting"),
+        waitingReason: "error",
+      });
+      vi.advanceTimersByTime(180_000);
+
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+        "Agent still waiting",
+        expect.stringContaining("is blocked by an error")
+      );
+    });
+
+    it("keeps the duration-flavored body for the weak prompt classification", () => {
+      mockStore({ waitingEnabled: true });
+
+      events.emit("agent:state-changed", {
+        ...makePayload("waiting"),
+        waitingReason: "prompt",
+      });
+      vi.advanceTimersByTime(180_000);
+
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+        "Agent still waiting",
+        expect.stringContaining("has been waiting for input")
+      );
+    });
+
+    it("degrades unknown wire values to the duration-flavored body", () => {
+      mockStore({ waitingEnabled: true });
+
+      events.emit("agent:state-changed", {
+        ...makePayload("waiting"),
+        waitingReason: "not-a-reason" as never,
+      });
+      vi.advanceTimersByTime(180_000);
+
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+        "Agent still waiting",
+        expect.stringContaining("has been waiting for input")
+      );
+    });
+
     it("does not fire escalation before delay elapses", () => {
       mockStore({ waitingEnabled: true });
 
@@ -624,6 +669,112 @@ describe("AgentNotificationService", () => {
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
         "Agent waiting",
         expect.stringContaining("agent-1 is waiting for input"),
+        expect.any(Object),
+        "notification:watch-navigate",
+        true
+      );
+    });
+
+    it("names the classified waiting reason in the single-agent body", () => {
+      mockStore({ waitingEnabled: true });
+
+      events.emit("agent:state-changed", {
+        ...makePayload("waiting"),
+        waitingReason: "approval",
+      });
+      vi.advanceTimersByTime(200);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agent waiting",
+        expect.stringContaining("agent-1 is waiting for approval"),
+        expect.any(Object),
+        "notification:watch-navigate",
+        true
+      );
+    });
+
+    it("falls back to the generic body for unknown wire values", () => {
+      mockStore({ waitingEnabled: true });
+
+      events.emit("agent:state-changed", {
+        ...makePayload("waiting"),
+        waitingReason: "not-a-reason" as never,
+      });
+      vi.advanceTimersByTime(200);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agent waiting",
+        expect.stringContaining("agent-1 is waiting for input"),
+        expect.any(Object),
+        "notification:watch-navigate",
+        true
+      );
+    });
+
+    it("uses the terminal's latest classification when it re-enters waiting inside the burst window", () => {
+      mockStore({ waitingEnabled: true });
+
+      events.emit("agent:state-changed", {
+        ...makePayload("waiting"),
+        waitingReason: "prompt",
+      });
+      events.emit("agent:state-changed", makePayload("working", "waiting"));
+      events.emit("agent:state-changed", {
+        ...makePayload("waiting"),
+        waitingReason: "approval",
+      });
+      vi.advanceTimersByTime(200);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agent waiting",
+        expect.stringContaining("is waiting for approval"),
+        expect.any(Object),
+        "notification:watch-navigate",
+        true
+      );
+    });
+
+    it("uses reason-specific plural copy when every burst member shares the reason", () => {
+      const appState = makeMultiTerminalAppState(3);
+      mockStore({ waitingEnabled: true, soundEnabled: true }, appState);
+      agentNotificationService.syncWatchedPanels(["term-1", "term-2", "term-3"]);
+
+      for (const i of [1, 2, 3]) {
+        events.emit("agent:state-changed", {
+          ...makePayloadFor(`term-${i}`, `agent-${i}`, "waiting"),
+          waitingReason: "approval",
+        });
+      }
+      vi.advanceTimersByTime(200);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agents waiting",
+        "3 agents waiting for approval",
+        expect.any(Object),
+        "notification:watch-navigate",
+        true
+      );
+    });
+
+    it("keeps the generic plural copy for mixed-reason bursts", () => {
+      const appState = makeMultiTerminalAppState(2);
+      mockStore({ waitingEnabled: true, soundEnabled: true }, appState);
+      agentNotificationService.syncWatchedPanels(["term-1", "term-2"]);
+
+      events.emit("agent:state-changed", {
+        ...makePayloadFor("term-1", "agent-1", "waiting"),
+        waitingReason: "approval",
+      });
+      events.emit("agent:state-changed", {
+        ...makePayloadFor("term-2", "agent-2", "waiting"),
+        waitingReason: "error",
+      });
+      vi.advanceTimersByTime(200);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agents waiting",
+        "2 agents waiting for input",
         expect.any(Object),
         "notification:watch-navigate",
         true

@@ -1,5 +1,5 @@
 import type { PanelKind, AgentState } from "@/types";
-import { coerceAgentState } from "@shared/types/agent";
+import { coerceAgentState, coerceWaitingReason, type WaitingReason } from "@shared/types/agent";
 import type { BrowserHistory } from "@shared/types/browser";
 import type { PanelExitBehavior, PanelTitleMode } from "@shared/types/panel";
 import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
@@ -132,6 +132,19 @@ function readPresetColor(saved: SavedTerminalData): string | undefined {
   return saved.agentPresetColor ?? saved.agentFlavorColor;
 }
 
+// Backend snapshots carry the waiting reason so re-created views keep their
+// attention indicators (approval/question/error) across LRU eviction and
+// reconnect. Gated on the coerced state so a stale reason never survives a
+// non-waiting restore.
+function restoredWaitingReason(t: {
+  agentState?: AgentState;
+  waitingReason?: WaitingReason;
+}): WaitingReason | undefined {
+  return coerceAgentState(t.agentState) === "waiting"
+    ? coerceWaitingReason(t.waitingReason)
+    : undefined;
+}
+
 interface BackendTerminalData {
   id: string;
   kind?: PanelKind;
@@ -140,6 +153,7 @@ interface BackendTerminalData {
   titleMode?: PanelTitleMode;
   cwd: string;
   agentState?: AgentState;
+  waitingReason?: WaitingReason;
   lastStateChange?: number;
   activityTier?: "active" | "background";
   agentSessionId?: string;
@@ -161,6 +175,7 @@ interface ReconnectedTerminalData {
   titleMode?: PanelTitleMode;
   cwd?: string;
   agentState?: AgentState;
+  waitingReason?: WaitingReason;
   lastStateChange?: number;
   activityTier?: "active" | "background";
   agentSessionId?: string;
@@ -282,6 +297,7 @@ export function buildArgsForBackendTerminal(
     location,
     existingId: backendTerminal.id,
     agentState: coerceAgentState(backendTerminal.agentState),
+    waitingReason: restoredWaitingReason(backendTerminal),
     lastStateChange: backendTerminal.lastStateChange,
     devCommand,
     browserUrl: isDevPreview ? saved.browserUrl : undefined,
@@ -357,6 +373,7 @@ export function buildArgsForReconnectedFallback(
     location,
     existingId: reconnectedTerminal.id,
     agentState: coerceAgentState(reconnectedTerminal.agentState),
+    waitingReason: restoredWaitingReason(reconnectedTerminal),
     lastStateChange: reconnectedTerminal.lastStateChange,
     devCommand,
     browserUrl: isDevPreview ? saved.browserUrl : undefined,
@@ -664,6 +681,7 @@ export function buildArgsForOrphanedTerminal(
     location: "grid",
     existingId: terminal.id,
     agentState: coerceAgentState(terminal.agentState),
+    waitingReason: restoredWaitingReason(terminal),
     lastStateChange: terminal.lastStateChange,
     agentSessionId: terminal.agentSessionId,
     agentLaunchFlags: terminal.agentLaunchFlags,

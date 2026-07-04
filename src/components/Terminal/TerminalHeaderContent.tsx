@@ -11,6 +11,10 @@ import {
 import type { ActivityState } from "./TerminalPane";
 import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
+import {
+  actionableWaitingReason,
+  WAITING_REASON_BADGE_LABEL,
+} from "@shared/utils/waitingReasonDisplay";
 import { useShallow } from "zustand/react/shallow";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { formatTokenCount } from "@/utils/formatTokenCount";
@@ -158,6 +162,7 @@ export function TerminalHeaderContent({
     lastStateChange,
     stateChangeTrigger,
     stateChangeConfidence,
+    waitingReason,
     sessionCost,
     sessionTokens,
     heldDurationMs,
@@ -171,6 +176,7 @@ export function TerminalHeaderContent({
         lastStateChange: pty?.lastStateChange,
         stateChangeTrigger: pty?.stateChangeTrigger,
         stateChangeConfidence: pty?.stateChangeConfidence,
+        waitingReason: pty?.waitingReason,
         sessionCost: pty?.sessionCost,
         sessionTokens: pty?.sessionTokens,
         heldDurationMs: pty?.heldDurationMs,
@@ -252,6 +258,13 @@ export function TerminalHeaderContent({
     const headline = activity?.headline?.trim() || `Agent ${agentState}`;
     const showConfidence = stateChangeConfidence != null && stateChangeConfidence < 1;
     const stateLabel = getEffectiveStateLabel(agentState);
+    // Specific reasons only — the classifier's `prompt` fallback stays a
+    // plain "waiting" so the chip never overclaims.
+    const chipWaitingReason =
+      agentState === "waiting" ? actionableWaitingReason(waitingReason) : null;
+    const chipAriaLabel = chipWaitingReason
+      ? `Agent state: ${stateLabel} (${WAITING_REASON_BADGE_LABEL[chipWaitingReason].toLowerCase()})`
+      : `Agent state: ${stateLabel}`;
 
     return (
       <Tooltip autoDismiss={false}>
@@ -265,7 +278,7 @@ export function TerminalHeaderContent({
                   effectiveColor
                 )}
                 role="status"
-                aria-label={`Agent state: ${stateLabel}`}
+                aria-label={chipAriaLabel}
               >
                 <StateIcon
                   className={cn(
@@ -305,6 +318,9 @@ export function TerminalHeaderContent({
             )}
             <span>
               State: {stateLabel}
+              {chipWaitingReason && (
+                <> ({WAITING_REASON_BADGE_LABEL[chipWaitingReason].toLowerCase()})</>
+              )}
               {showStateDuration && (
                 <span className="motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150">
                   {" · "}

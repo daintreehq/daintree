@@ -11,6 +11,12 @@ import type { PtyPanelData } from "@shared/types/panel";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWaitingTerminals } from "@/hooks/useTerminalSelectors";
+import {
+  actionableWaitingReason,
+  compareWaitingAttention,
+  WAITING_REASON_BADGE_LABEL,
+  waitingHeadline,
+} from "@shared/utils/waitingReasonDisplay";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
@@ -64,12 +70,16 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
   const { worktreeMap } = useWorktrees();
 
   const displayItems = useMemo((): WaitingDisplayItem[] => {
+    // Triage order, not insertion order: approvals first, then error-blocked,
+    // then questions, then plain prompts; longest-waiting first within each.
+    // Deterministic tie-breaks keep rows from reshuffling between renders.
+    const sortedTerminals = [...terminals].sort(compareWaitingAttention);
     // Build panelId -> group, applying the same location guard as
     // getPanelGroup so a stale group whose location no longer matches the
     // panel falls through to a single row instead of mis-routing setActiveTab.
     const panelToGroup = new Map<string, TabGroup>();
     const waitingByPanelId = new Map<string, PtyPanelData>();
-    for (const terminal of terminals) waitingByPanelId.set(terminal.id, terminal);
+    for (const terminal of sortedTerminals) waitingByPanelId.set(terminal.id, terminal);
     for (const group of tabGroups.values()) {
       for (const panelId of group.panelIds) {
         const panel = waitingByPanelId.get(panelId);
@@ -83,7 +93,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
     const groupBuckets = new Map<string, { group: TabGroup; waitingMembers: PtyPanelData[] }>();
     const singles: WaitingDisplaySingle[] = [];
 
-    for (const terminal of terminals) {
+    for (const terminal of sortedTerminals) {
       const group = panelToGroup.get(terminal.id);
       if (group) {
         const bucket = groupBuckets.get(group.id);
@@ -112,6 +122,16 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
     for (const single of singles) {
       items.push(single);
     }
+
+    // Interleave groups and singles by their most urgent member so a lone
+    // approval never sits below a tab group of plain prompts. Members are
+    // already sorted, so a group's first member is its representative.
+    items.sort((a, b) =>
+      compareWaitingAttention(
+        a.type === "group" ? a.waitingTerminals[0]! : a.terminal,
+        b.type === "group" ? b.waitingTerminals[0]! : b.terminal
+      )
+    );
 
     return items;
   }, [terminals, tabGroups]);
@@ -287,6 +307,9 @@ function WaitingSingleItem({
 }: WaitingSingleItemProps) {
   const agentState = terminal.agentState;
   const title = terminal.title || "Terminal";
+  // Only classifier-backed reasons earn a chip — the `prompt` fallback stays
+  // an unlabeled row so the list doesn't overclaim.
+  const reason = actionableWaitingReason(terminal.waitingReason);
 
   return (
     // The row is a div + role="button" rather than a native <button>
@@ -296,6 +319,7 @@ function WaitingSingleItem({
     <div
       data-testid="waiting-single-item"
       data-agent-state={agentState ?? "unknown"}
+      data-waiting-reason={terminal.waitingReason ?? "unknown"}
       role="button"
       tabIndex={0}
       onClick={() => onActivate(terminal, groupId)}
@@ -311,7 +335,9 @@ function WaitingSingleItem({
         "flex items-center gap-2 px-3 py-2.5 hover:bg-muted/50 focus:bg-muted/50 focus-visible:outline-2 focus-visible:outline-daintree-accent outline-hidden transition-colors group/row cursor-pointer w-full select-none",
         compact && "py-1.5 pl-1.5"
       )}
-      aria-label={`Focus ${title}`}
+      aria-label={
+        reason ? `Focus ${title} — ${waitingHeadline(reason).toLowerCase()}` : `Focus ${title}`
+      }
     >
       <div className="shrink-0 opacity-70 group-hover/row:opacity-100 transition-opacity">
         <TerminalIcon
@@ -344,6 +370,20 @@ function WaitingSingleItem({
           </span>
         )}
       </div>
+
+      {reason && (
+        <span
+          className={cn(
+            "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium",
+            reason === "error"
+              ? "bg-status-error/10 text-status-error"
+              : "bg-state-waiting/15 text-state-waiting"
+          )}
+          data-testid={`waiting-reason-badge-${terminal.id}`}
+        >
+          {WAITING_REASON_BADGE_LABEL[reason]}
+        </span>
+      )}
 
       {terminal.lastStateChange != null && (
         <LiveTimeAgo
@@ -432,29 +472,25 @@ function WaitingGroupItem({
           aria-label="Group panels"
           className="pl-5 pb-1"
         >
-          {[...waitingTerminals]
-            .sort((a, b) => {
-              const aIndex = group.panelIds.indexOf(a.id);
-              const bIndex = group.panelIds.indexOf(b.id);
-              if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
-              return 0;
-            })
-            .map((terminal) => {
-              const worktreeName = terminal.worktreeId
-                ? worktreeMap.get(terminal.worktreeId)?.name
-                : undefined;
-              return (
-                <WaitingSingleItem
-                  key={terminal.id}
-                  terminal={terminal}
-                  groupId={group.id}
-                  worktreeName={worktreeName}
-                  onActivate={onActivate}
-                  onKill={onKill}
-                  compact
-                />
-              );
-            })}
+          {/* Members arrive attention-sorted from displayItems — rendering
+              them as-is keeps the expanded group consistent with the triage
+              order that promoted the group in the first place. */}
+          {waitingTerminals.map((terminal) => {
+            const worktreeName = terminal.worktreeId
+              ? worktreeMap.get(terminal.worktreeId)?.name
+              : undefined;
+            return (
+              <WaitingSingleItem
+                key={terminal.id}
+                terminal={terminal}
+                groupId={group.id}
+                worktreeName={worktreeName}
+                onActivate={onActivate}
+                onKill={onKill}
+                compact
+              />
+            );
+          })}
         </div>
       )}
     </div>
