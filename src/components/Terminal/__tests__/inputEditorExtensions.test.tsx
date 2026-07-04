@@ -719,6 +719,91 @@ describe("fileDropChipField", () => {
     view.destroy();
   });
 
+  it("removes the clicked chip when duplicates point at the same file", () => {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({ doc: "", extensions: [fileDropChipField] }),
+    });
+
+    const text = "@/Users/test/file.ts @/Users/test/file.ts ";
+    view.dispatch({
+      changes: { from: 0, insert: text },
+      effects: [
+        addFileDropChip.of({
+          from: 0,
+          to: 20,
+          filePath: "/Users/test/file.ts",
+          fileName: "file.ts",
+        }),
+        addFileDropChip.of({
+          from: 21,
+          to: 41,
+          filePath: "/Users/test/file.ts",
+          fileName: "file.ts",
+        }),
+      ],
+    });
+
+    const removeButtons = view.dom.querySelectorAll(".cm-file-drop-chip .cm-chip-remove");
+    expect(removeButtons).toHaveLength(2);
+
+    removeButtons[1]!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+
+    const entries = view.state.field(fileDropChipField);
+    expect(entries).toHaveLength(1);
+    // The first occurrence must survive — only the clicked (second) chip goes.
+    expect(entries[0]!.from).toBe(0);
+    expect(view.state.doc.toString()).toBe("@/Users/test/file.ts ");
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it("removes the clicked chip when duplicates are directly adjacent", () => {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({ doc: "", extensions: [fileDropChipField] }),
+    });
+
+    // No separator: the first chip's end equals the second chip's start, so a
+    // closed-interval containment check would match the first entry.
+    const text = "@/Users/test/file.ts@/Users/test/file.ts";
+    view.dispatch({
+      changes: { from: 0, insert: text },
+      effects: [
+        addFileDropChip.of({
+          from: 0,
+          to: 20,
+          filePath: "/Users/test/file.ts",
+          fileName: "file.ts",
+        }),
+        addFileDropChip.of({
+          from: 20,
+          to: 40,
+          filePath: "/Users/test/file.ts",
+          fileName: "file.ts",
+        }),
+      ],
+    });
+
+    const removeButtons = view.dom.querySelectorAll(".cm-file-drop-chip .cm-chip-remove");
+    expect(removeButtons).toHaveLength(2);
+
+    removeButtons[1]!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+
+    const entries = view.state.field(fileDropChipField);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.from).toBe(0);
+    expect(view.state.doc.toString()).toBe("@/Users/test/file.ts");
+
+    view.destroy();
+    parent.remove();
+  });
+
   it("removes file chips when the entire document is cleared", () => {
     const view = makeEditorWithFileChip();
 

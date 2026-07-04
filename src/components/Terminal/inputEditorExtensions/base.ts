@@ -95,6 +95,19 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         color: c.chipColor,
         textDecoration: "underline dotted 1px",
         textUnderlineOffset: "2px",
+        // Long paths ellipsize instead of blowing out narrow panes; the hover
+        // tooltip still shows the full path.
+        maxWidth: "280px",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        verticalAlign: "bottom",
+      },
+      ".cm-chip-label": {
+        maxWidth: "180px",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
       },
       ".cm-tooltip": {
         background: "transparent",
