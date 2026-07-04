@@ -488,6 +488,16 @@ describe("system:show-item-in-folder-unconfined (out-of-root reveal recovery)", 
     expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
   });
 
+  it("rejects a non-file/non-directory node (e.g. socket/device) without revealing", async () => {
+    const target = path.join(TEST_ROOT, "etc", "socket");
+    fsMock.promises.stat.mockResolvedValue({ isFile: () => false, isDirectory: () => false });
+    const handler = getHandler(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER_UNCONFINED);
+    await expect(handler(fakeEvent, { path: target })).rejects.toMatchObject({
+      code: "INVALID_PATH",
+    });
+    expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
+  });
+
   it("reveals the realpath-resolved target, not the original path", async () => {
     const link = path.join(TEST_ROOT, "etc", "link.txt");
     const resolved = path.join(TEST_ROOT, "elsewhere", "real.txt");
@@ -513,5 +523,10 @@ describe("SystemShowItemInFolderUnconfinedPayloadSchema (null-byte guard, lesson
       path: "/etc/passwd",
     });
     expect(result.success).toBe(true);
+  });
+
+  it("rejects an empty path (.min(1))", () => {
+    const result = SystemShowItemInFolderUnconfinedPayloadSchema.safeParse({ path: "" });
+    expect(result.success).toBe(false);
   });
 });

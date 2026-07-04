@@ -74,6 +74,15 @@ export function reportFileLinkFailure(reason: string, error: unknown, absolutePa
   const coalesceKey = isOutsideRoot
     ? `${FILE_LINK_ACTIVATION_COALESCE_KEY}:outside-root`
     : FILE_LINK_ACTIVATION_COALESCE_KEY;
+  const copyPathAction = {
+    label: "Copy path",
+    onClick: () => {
+      if (!navigator.clipboard) return;
+      void navigator.clipboard.writeText(absolutePath).catch(() => {
+        /* clipboard unavailable — sticky toast is the durable surface */
+      });
+    },
+  };
   const action = isOutsideRoot
     ? {
         label: "Reveal in File Manager",
@@ -82,18 +91,20 @@ export function reportFileLinkFailure(reason: string, error: unknown, absolutePa
             logError("[FileLinksAddon] Failed to reveal out-of-root file link", revealError, {
               absolutePath,
             });
+            // The reveal was user-initiated, so a silent no-op is the wrong
+            // UX — the file may have been moved/deleted/blocked since the link
+            // was rendered. Surface the failure with Copy path as the recovery.
+            notify({
+              type: "error",
+              title: "Couldn't reveal file",
+              message: `${name} couldn't be revealed in your file manager`,
+              context: { eventKind: "uiFeedback" },
+              action: copyPathAction,
+            });
           });
         },
       }
-    : {
-        label: "Copy path",
-        onClick: () => {
-          if (!navigator.clipboard) return;
-          void navigator.clipboard.writeText(absolutePath).catch(() => {
-            /* clipboard unavailable — sticky toast is the durable surface */
-          });
-        },
-      };
+    : copyPathAction;
 
   notify({
     type: "error",

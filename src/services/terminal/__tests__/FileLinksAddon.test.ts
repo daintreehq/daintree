@@ -641,7 +641,7 @@ describe("FileLinksAddon", () => {
       expect(outsidePayload.coalesce?.key).not.toBe(invalidPayload.coalesce?.key);
     });
 
-    it("Reveal action catches a rejection without surfacing an unhandled promise", async () => {
+    it("Reveal action catches a rejection and surfaces a recovery toast", async () => {
       reportFileLinkFailure(
         "test",
         new Error(
@@ -658,8 +658,15 @@ describe("FileLinksAddon", () => {
       expect(() => payload.action?.onClick?.()).not.toThrow();
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(systemClient.showItemInFolderUnconfined).toHaveBeenCalledWith("/etc/outside.txt");
-      // Reaching here without an unhandled-rejection failure proves the catch
-      // swallowed the rejected reveal.
+      // The catch surfaced a recovery toast (Copy path) — proving the rejection
+      // was handled, not swallowed into a silent no-op.
+      expect(notify).toHaveBeenCalledTimes(2);
+      const recovery = vi.mocked(notify).mock.calls[1]?.[0] as {
+        title?: string;
+        action?: { label?: string };
+      };
+      expect(recovery.title).toBe("Couldn't reveal file");
+      expect(recovery.action?.label).toBe("Copy path");
     });
   });
 });
