@@ -28,6 +28,8 @@ import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isPtyPanel } from "@shared/types/panel";
+import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
+import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
 import { saveNormalized } from "./persistence";
 import { optimizeForDock } from "./layout";
@@ -626,6 +628,24 @@ export const createRestartActions = (
       // xterm 6.0 does not inherit `disableStdin` across instance recreation.
       terminalInstanceService.setInputLocked(id, true);
 
+      // A restart is a new incarnation of the same panel id — advance the
+      // renderer ledger so post-restart attach/detection/close events record
+      // against the respawned generation, not the killed one.
+      agentLifecycleLedger.recordLaunch(id, {
+        launchAgentId: isAgent ? currentTerminal.launchAgentId : undefined,
+        cwd: currentTerminal.cwd,
+        projectId: capturedProjectId,
+        worktreeId: currentTerminal.worktreeId,
+        worktreeSource: currentTerminal.worktreeId !== undefined ? "explicit" : undefined,
+        agentModelId: isAgent ? currentTerminal.agentModelId : undefined,
+        agentPresetId: nextAgentPresetId,
+        originalPresetId: nextOriginalPresetId ?? nextAgentPresetId,
+        agentLaunchFlags: isAgent ? nextAgentLaunchFlags : undefined,
+        env: computeEnvProvenance(restartEnv),
+        initialCols: spawnCols,
+        initialRows: spawnRows,
+      });
+
       await terminalClient.spawn({
         id,
         projectId: capturedProjectId,
@@ -772,6 +792,13 @@ export const createRestartActions = (
 
     // Terminal is not in a group - move it individually
     let movedToLocation: PanelLocation | null = null;
+
+    // A user-initiated move is explicit worktree attribution — recorded so
+    // later cwd-based inference can never silently overwrite it.
+    const ledgerGeneration = agentLifecycleLedger.currentGeneration(id);
+    if (ledgerGeneration !== undefined) {
+      agentLifecycleLedger.recordWorktreeAttribution(id, ledgerGeneration, worktreeId, "explicit");
+    }
 
     set((state) => {
       // Scrollable grid (#8805): restoring a panel always lands it in the
@@ -1124,6 +1151,23 @@ export const createRestartActions = (
       const capturedProjectId = projectStore.getState().currentProject?.id;
 
       const restartEnv = await buildRestartEnv(capturedProjectId, runtimeSettings.env, "fallback");
+
+      // A fallback hop respawns the id — new renderer ledger incarnation, with
+      // the hopped preset recorded as the active one.
+      agentLifecycleLedger.recordLaunch(id, {
+        launchAgentId: terminal.launchAgentId,
+        cwd: terminal.cwd,
+        projectId: capturedProjectId,
+        worktreeId: terminal.worktreeId,
+        worktreeSource: terminal.worktreeId !== undefined ? "explicit" : undefined,
+        agentModelId: terminal.agentModelId,
+        agentPresetId: nextPreset.id,
+        originalPresetId: originalPresetId,
+        agentLaunchFlags: nextLaunchFlags,
+        env: computeEnvProvenance(restartEnv),
+        initialCols: spawnCols,
+        initialRows: spawnRows,
+      });
 
       await terminalClient.spawn({
         id,

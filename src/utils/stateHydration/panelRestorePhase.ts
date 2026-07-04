@@ -544,11 +544,16 @@ export async function restorePanelsPhase(
         // Orphaned backend terminals no longer carry worktreeId — infer it
         // from cwd against the loaded worktrees, then fall back to the
         // active worktree so the panel still appears in the grid filter.
+        // Both are inferred attribution: the lifecycle ledger records the
+        // provenance so cwd inference can never overwrite a worktree the
+        // user explicitly chose later in this panel's life.
         const inferred = inferWorktreeIdFromCwd(terminal.cwd, worktreesForInfer ?? undefined);
         if (inferred) {
           orphanArgs.worktreeId = inferred;
+          orphanArgs.worktreeIdSource = "inferred";
         } else if (activeWorktreeId) {
           orphanArgs.worktreeId = activeWorktreeId;
+          orphanArgs.worktreeIdSource = "inferred";
         }
         const restoredTerminalId = await addPanel(orphanArgs);
 

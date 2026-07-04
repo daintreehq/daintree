@@ -78,6 +78,14 @@ export interface PtyHostSpawnOptions {
   agentPresetColor?: string;
   /** Original user-selected preset ID; unchanged across fallback hops for revert UX. */
   originalAgentPresetId?: string;
+  /**
+   * Launch generation minted by Main's lifecycle ledger (see
+   * `shared/utils/agentLifecycleLedger.ts`). Monotonic per terminal id;
+   * a respawn after a pty-host crash mints a fresh generation. The pty-host
+   * adopts it and echoes it on `agent-session-captured` so Main can dedupe
+   * session journaling exactly-once per terminal incarnation.
+   */
+  launchGeneration?: number;
 }
 
 /** Per-project terminal-workload memory, deduplicated by PID. */
@@ -421,7 +429,9 @@ export type PtyHostEvent =
   // same xterm (terminalClient.onData subscribes to both the port and IPC
   // paths on the strength of the one-visual-path invariant).
   | { type: "data-mirror"; id: string; data: string }
-  | { type: "exit"; id: string; exitCode: number; signal?: number }
+  // `launchGeneration` attributes the exit to one terminal incarnation so a
+  // stale exit arriving after a same-id respawn can't close the successor.
+  | { type: "exit"; id: string; exitCode: number; signal?: number; launchGeneration?: number }
   | { type: "error"; id: string; error: string }
   | { type: "spawn-result"; id: string; result: SpawnResult }
   | { type: "kill-by-project-result"; requestId: string; killed: number }
@@ -516,9 +526,13 @@ export type PtyHostEvent =
        * Trash expiry captured a resumable session in the pty-host. The record
        * is shipped to Main for persistence — Main is the journal's single
        * writer, so cross-process read-modify-write races on the file can't
-       * drop records, and the real retention setting applies.
+       * drop records, and the real retention setting applies. `terminalId` +
+       * `launchGeneration` key the capture to one terminal incarnation so
+       * Main's lifecycle ledger can journal it exactly once.
        */
       type: "agent-session-captured";
+      terminalId: string;
+      launchGeneration?: number;
       record: Omit<AgentSessionRecord, "savedAt">;
     }
   | { type: "terminal-pid"; id: string; pid: number }
@@ -763,6 +777,12 @@ export type SpawnErrorCode =
 export interface SpawnResult {
   success: boolean;
   id: string;
+  /**
+   * Launch generation echoed from the spawn options so a stale result
+   * arriving after a same-id respawn can't clear the successor's pending
+   * spawn entry or mis-record its ledger resolution.
+   */
+  launchGeneration?: number;
   error?: SpawnError;
 }
 

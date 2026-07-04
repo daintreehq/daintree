@@ -33,6 +33,8 @@ import { logDebug, logWarn, logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { collectPanelIdForBatch, isHydrationBatchActive } from "./hydrationBatch";
 import { addToWorktreeIndex, transferBetweenWorktreeIndex } from "./worktreeIndex";
+import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
+import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 
 // Lazy accessor to break circular dependency: addPanel -> projectStore -> panelPersistence -> addPanel.
 // Resolved on first call (after app init), then cached.
@@ -362,6 +364,30 @@ export const createAddPanelActions = (
       ? options.lastStateChange
       : (options.lastStateChange ?? (agentState !== undefined ? Date.now() : undefined));
 
+    // Stale-restore guard: a reconnect/hydration replay must never overwrite a
+    // LIVE fresh launch that already owns this id. The ledger distinguishes the
+    // two owners of an existing panel: an earlier restore pass stamped
+    // `restoredAt` (double hydration — merging the same snapshot again is
+    // idempotent and allowed), while a fresh launch did not (its metadata —
+    // launchAgentId, model, preset, env — is newer than the snapshot and the
+    // merge below would clobber it). Generation 0 = "persisted snapshot,
+    // predates every launch this session", so the rejection lands in the
+    // anomaly ring for diagnostics.
+    if (isReconnect) {
+      const preexisting = get().panelsById[id];
+      const ledgerEntry = preexisting ? agentLifecycleLedger.getEntry(id) : undefined;
+      if (
+        preexisting &&
+        ledgerEntry &&
+        ledgerEntry.closedAt === undefined &&
+        ledgerEntry.restoredAt === undefined
+      ) {
+        agentLifecycleLedger.recordRestoreApplied(id, 0);
+        logWarn("[TerminalStore] Rejected stale restore over a live launch", { id });
+        return id;
+      }
+    }
+
     // PTY-backed plugin-contributed kinds are rare today, but stamp pluginId
     // if the registry has an entry so the panel survives plugin removal.
     const ptyKindConfig = getPanelKindConfig(kind);
@@ -594,6 +620,34 @@ export const createAddPanelActions = (
       });
     }
 
+    // Mint the panel's launch generation atomically with the commit above (no
+    // await between id reservation and here). Every async completion below —
+    // env fetch, spawn IPC, attach settle — re-validates against it so a
+    // completion that outlives this incarnation (panel closed, id reused by a
+    // restart or a stale hydration replay) can never write into a successor.
+    const launchGeneration = agentLifecycleLedger.recordLaunch(id, {
+      launchAgentId,
+      cwd: options.cwd,
+      projectId: capturedProjectId,
+      worktreeId: options.worktreeId,
+      worktreeSource:
+        options.worktreeId !== undefined ? (options.worktreeIdSource ?? "explicit") : undefined,
+      agentModelId: options.agentModelId,
+      agentPresetId: options.agentPresetId,
+      originalPresetId: options.originalPresetId ?? options.agentPresetId,
+      agentLaunchFlags: options.agentLaunchFlags,
+      env: computeEnvProvenance(options.env),
+      initialCols: 80,
+      initialRows: 24,
+      spawnedBy: options.spawnedBy,
+      resumedFromSessionId: options.agentSessionId,
+    });
+    if (isReconnect) {
+      // Mark this generation as restore-born so the stale-restore guard above
+      // can tell an idempotent re-merge from a clobbering one.
+      agentLifecycleLedger.recordRestoreApplied(id, launchGeneration);
+    }
+
     // Prewarm renderer-side xterm immediately so we never drop startup output/ANSI while hidden.
     // earlyDataBuffer in terminalClient buffers any data that arrives before the
     // xterm data callback is registered, so prewarming with the pre-assigned id
@@ -807,6 +861,26 @@ export const createAddPanelActions = (
           actionContext: options.actionContext,
         });
 
+        // Reject a spawn resolution that no longer belongs to this incarnation:
+        // if a restart or hydration replay re-launched the id while our IPC was
+        // in flight, the successor owns spawnStatus now and its own resolution
+        // manages it. The ledger records the rejection as an anomaly. One
+        // carve-out: when the successor's panel is ALSO gone, the backend PTY
+        // this resolution just created has no owner at all — kill it, exactly
+        // like the orphan path below (killing the shared id is safe only when
+        // no live panel claims it).
+        if (!agentLifecycleLedger.recordSpawnResolved(id, launchGeneration, true).accepted) {
+          if (!get().panelsById[id]) {
+            terminalClient.kill(id).catch((killError) => {
+              logWarn("[TerminalStore] Compensating kill after stale spawn resolution failed", {
+                id,
+                error: killError,
+              });
+            });
+          }
+          return;
+        }
+
         // Promote spawnStatus to "ready" once the PTY is live. If the panel was
         // removed during the spawn window, issue a compensating kill to avoid
         // orphaning the freshly-spawned PTY (removePanel's kill IPC was a no-op
@@ -862,6 +936,11 @@ export const createAddPanelActions = (
         }
       } catch (error) {
         logError("[TerminalStore] Failed to spawn terminal", error);
+        // Same staleness gate as the success path: never stamp a failure onto
+        // a successor incarnation that re-launched this id mid-flight.
+        if (!agentLifecycleLedger.recordSpawnResolved(id, launchGeneration, false).accepted) {
+          return;
+        }
         const current = get().panelsById[id];
         if (!current || !isPtyPanel(current) || current.spawnStatus !== "spawning") return;
 

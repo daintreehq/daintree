@@ -6,8 +6,7 @@ import { CHANNELS } from "../../channels.js";
 import { broadcastToProjectRenderers, broadcastToRenderer } from "../../utils.js";
 import { events, type DaintreeEventMap } from "../../../services/events.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
-import { persistAgentSession } from "../../../services/pty/agentSessionHistory.js";
-import { getAgentSessionRetentionDays } from "../../../services/pty/agentSessionRetention.js";
+import { journalAgentSession } from "../../../services/pty/agentSessionJournal.js";
 import type {
   SpawnResult,
   BroadcastWriteResultPayload,
@@ -154,29 +153,17 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   // Resume records captured by the pty-host (trash expiry). Main is the
   // journal's single writer — the pty-host writing the file itself would race
   // main's own close-path writes (two processes, two write queues, one file)
-  // — so persist here with the real retention setting, then signal renderers.
+  // — so persist here through the exactly-once journal funnel, keyed by the
+  // capture's terminal generation, then signal renderers.
   const unsubSessionCaptured = events.on(
     "agent-session:captured",
     (payload: DaintreeEventMap["agent-session:captured"]) => {
-      void (async () => {
-        try {
-          const { app } = await import("electron");
-          await persistAgentSession(
-            payload.record,
-            app.getPath("userData"),
-            getAgentSessionRetentionDays()
-          );
-          // Signal AFTER the write lands so a refetch it triggers sees the record.
-          events.emit("agent-session:recorded", {
-            sessionId: payload.record.sessionId,
-            worktreeId: payload.record.worktreeId ?? null,
-            projectId: payload.record.projectId ?? null,
-            timestamp: Date.now(),
-          });
-        } catch (err) {
-          console.error("[TerminalEvents] Failed to persist captured agent session:", err);
-        }
-      })();
+      void journalAgentSession(payload.record, {
+        terminalId: payload.terminalId,
+        generation: payload.launchGeneration,
+      }).catch((err) => {
+        console.error("[TerminalEvents] Failed to persist captured agent session:", err);
+      });
     }
   );
   handlers.push(unsubSessionCaptured);

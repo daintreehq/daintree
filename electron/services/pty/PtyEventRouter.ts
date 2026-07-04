@@ -66,6 +66,17 @@ export interface PtyEventRouterCallbacks {
    * pure side effect.
    */
   onTerminalPid?: (id: string, pid: number) => void;
+  /**
+   * Optional. Fires on every `exit` event so the lifecycle ledger can record
+   * the close against the exiting incarnation's generation. Pure side effect.
+   */
+  onTerminalExit?: (id: string, exitCode: number, launchGeneration?: number) => void;
+  /**
+   * Optional. Fires on every `spawn-result` (after `pendingSpawns` cleanup on
+   * failure) so the lifecycle ledger can record spawn resolution. Pure side
+   * effect.
+   */
+  onSpawnResult?: (id: string, result: SpawnResult) => void;
 }
 
 export interface PtyEventRouterDeps {
@@ -147,6 +158,13 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
         state.pendingSpawns.delete(event.id);
       }
       state.terminalPids.delete(event.id);
+      if (callbacks.onTerminalExit) {
+        try {
+          callbacks.onTerminalExit(event.id, event.exitCode, event.launchGeneration);
+        } catch (err) {
+          deps.logWarn(`[PtyClient] onTerminalExit threw for ${event.id}: ${String(err)}`);
+        }
+      }
       emitter.emit("exit", event.id, event.exitCode, event.signal);
       return true;
     }
@@ -266,8 +284,29 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
     case "spawn-result": {
       const spawnResultEvent: { id: string; result: SpawnResult } = event;
       if (!spawnResultEvent.result.success) {
-        // Remove from pending spawns since spawn failed
-        state.pendingSpawns.delete(spawnResultEvent.id);
+        // Remove from pending spawns since spawn failed — but only when the
+        // failure belongs to the entry we still hold. A stale failure from a
+        // killed predecessor (same id, older launchGeneration) must not clear
+        // the live successor's replay entry.
+        const pending = state.pendingSpawns.get(spawnResultEvent.id);
+        const resultGeneration = spawnResultEvent.result.launchGeneration;
+        if (
+          pending === undefined ||
+          resultGeneration === undefined ||
+          pending.launchGeneration === undefined ||
+          pending.launchGeneration === resultGeneration
+        ) {
+          state.pendingSpawns.delete(spawnResultEvent.id);
+        }
+      }
+      if (callbacks.onSpawnResult) {
+        try {
+          callbacks.onSpawnResult(spawnResultEvent.id, spawnResultEvent.result);
+        } catch (err) {
+          deps.logWarn(
+            `[PtyClient] onSpawnResult threw for ${spawnResultEvent.id}: ${String(err)}`
+          );
+        }
       }
       emitter.emit("spawn-result", spawnResultEvent.id, spawnResultEvent.result);
       return true;

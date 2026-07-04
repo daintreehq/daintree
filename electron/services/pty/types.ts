@@ -104,6 +104,11 @@ export interface TerminalPublicState {
   agentPresetColor?: string;
   /** User-originally-selected preset ID; immutable across fallback hops. */
   originalAgentPresetId?: string;
+  /**
+   * Launch generation adopted from Main's lifecycle ledger at spawn. Echoed on
+   * `agent-session-captured` so Main can journal exactly-once per incarnation.
+   */
+  launchGeneration?: number;
 }
 
 /**
@@ -193,7 +198,7 @@ export interface TerminalInfo extends TerminalPublicState {
 
 export interface PtyManagerEvents {
   data: (id: string, data: string | Uint8Array) => void;
-  exit: (id: string, exitCode: number, signal?: number) => void;
+  exit: (id: string, exitCode: number, signal?: number, launchGeneration?: number) => void;
   error: (id: string, error: string) => void;
 }
 

@@ -33,6 +33,7 @@ import { TerminalRestoreController } from "./TerminalRestoreController";
 import { TerminalReflowController, forceXtermReflow } from "./TerminalReflowController";
 import { TerminalReconciliationWatchdog } from "./TerminalReconciliationWatchdog";
 import { TerminalWriteController } from "./TerminalWriteController";
+import { agentLifecycleLedger } from "./lifecycleLedger";
 import { reportFileLinkFailure } from "./FileLinksAddon";
 import {
   installTerminalBoundListeners,
@@ -1813,6 +1814,22 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     const deferredWake = managed?.pendingVisibilityWake === true;
     if (managed) managed.pendingVisibilityWake = false;
+
+    // Record the first live-attach geometry in the lifecycle ledger (once per
+    // launch generation — recordFirstAttach ignores later attaches). Pairs
+    // with the 80x24 initial dims stamped at launch so a support bundle can
+    // show whether a pane ever converged from boot geometry.
+    if (managed) {
+      const generation = agentLifecycleLedger.currentGeneration(id);
+      if (generation !== undefined) {
+        agentLifecycleLedger.recordFirstAttach(
+          id,
+          generation,
+          managed.terminal.cols,
+          managed.terminal.rows
+        );
+      }
+    }
 
     const waiters = this.attachSettledWaiters.get(id);
     if (waiters) {

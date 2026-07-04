@@ -757,6 +757,10 @@ export type DaintreeEventMap = {
    * `agent-session:recorded`.
    */
   "agent-session:captured": {
+    /** Terminal whose close produced the record — keys ledger dedupe. */
+    terminalId: string;
+    /** Launch generation of that terminal incarnation, when known. */
+    launchGeneration?: number;
     record: Omit<
       import("../../shared/types/ipc/agentSessionHistory.js").AgentSessionRecord,
       "savedAt"
