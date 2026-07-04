@@ -204,6 +204,15 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
   const resource = snapshot?.resource ?? null;
   const snapshotAgeMs = snapshot ? Math.max(0, Date.now() - snapshot.timestamp) : 0;
   const sortedReasons = resource ? sortReasonsByContribution(resource.reasons) : [];
+  const memory = snapshot?.memory ?? null;
+  const memoryWorkloads = memory?.terminalWorkloads ?? null;
+  // "Has data" = a live measurement, or retained nonzero values from a prior
+  // successful sweep. A never-sampled slice must render as "—", not a fake 0.
+  const workloadsHaveData =
+    memoryWorkloads !== null &&
+    (memoryWorkloads.available ||
+      (memoryWorkloads.ageMs !== null &&
+        (memoryWorkloads.totalMemoryMb > 0 || memoryWorkloads.processCount > 0)));
 
   return (
     <div className={cn("h-full overflow-auto p-3 text-sm text-daintree-text", className)}>
@@ -368,6 +377,49 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
               <p className="text-xs text-daintree-text/45 mt-2">
                 No terminal renderer reports yet.
               </p>
+            )}
+          </section>
+
+          {/* Memory: Daintree's own processes vs terminal descendant workloads */}
+          <section>
+            <h3 className="text-[10px] uppercase tracking-wide text-daintree-text/55 font-medium mb-2">
+              Memory
+            </h3>
+            {memory && memoryWorkloads ? (
+              <div className="flex flex-col gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <MetricTile
+                    label="Daintree app"
+                    value={memory.appMemoryMb !== null ? String(memory.appMemoryMb) : "—"}
+                    unit={memory.appMemoryMb !== null ? "MB" : undefined}
+                  />
+                  <MetricTile
+                    label="Terminal workloads"
+                    value={workloadsHaveData ? String(memoryWorkloads.totalMemoryMb) : "—"}
+                    unit={workloadsHaveData ? "MB" : undefined}
+                  />
+                  <MetricTile
+                    label="Workload processes"
+                    value={workloadsHaveData ? String(memoryWorkloads.processCount) : "—"}
+                  />
+                  <MetricTile
+                    label="Workload terminals"
+                    value={workloadsHaveData ? String(memoryWorkloads.terminalCount) : "—"}
+                  />
+                </div>
+                {!memoryWorkloads.available || memoryWorkloads.stale ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {!memoryWorkloads.available ? (
+                      <Badge tone="warn">process table unavailable</Badge>
+                    ) : null}
+                    {memoryWorkloads.stale ? (
+                      <Badge tone="warn">workload sample stale</Badge>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <p className="text-xs text-daintree-text/45">Memory attribution unavailable.</p>
             )}
           </section>
 

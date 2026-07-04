@@ -39,6 +39,15 @@ export function refreshAppMetricsSnapshot(): Electron.ProcessMetric[] {
   return metrics;
 }
 
+/**
+ * Wall-clock time of the cached sweep, or 0 when none has succeeded yet.
+ * Lets composite consumers report the true sample time instead of overstating
+ * freshness with their own read time.
+ */
+export function getAppMetricsSnapshotTimestamp(): number {
+  return cachedAt;
+}
+
 /** Drop the cached snapshot so tests with mocked metrics stay isolated. */
 export function resetAppMetricsSnapshotForTesting(): void {
   cachedMetrics = null;

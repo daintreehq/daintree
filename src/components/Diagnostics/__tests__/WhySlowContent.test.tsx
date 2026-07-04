@@ -23,6 +23,7 @@ function makeSnapshot(overrides?: Partial<WhySlowSnapshot>): WhySlowSnapshot {
     pty: null,
     worktrees: null,
     workers: null,
+    memory: null,
     ...overrides,
   };
 }
@@ -134,6 +135,93 @@ describe("WhySlowContent", () => {
 
     expect(await screen.findByText("Worker queue")).toBeTruthy();
     expect(screen.queryByText(/^degraded:/)).toBeNull();
+  });
+
+  it("renders the app vs terminal-workload memory split", async () => {
+    getWhySlowSnapshot.mockResolvedValue(
+      makeSnapshot({
+        memory: {
+          appMemoryMb: 512,
+          terminalWorkloads: {
+            available: true,
+            stale: false,
+            ageMs: 2_000,
+            totalMemoryMb: 2048,
+            processCount: 12,
+            terminalCount: 4,
+            topProjects: [],
+          },
+        },
+      })
+    );
+
+    render(<WhySlowContent />);
+
+    expect(await screen.findByText("Terminal workloads")).toBeTruthy();
+    expect(screen.getByText("512")).toBeTruthy(); // Daintree app MB
+    expect(screen.getByText("2048")).toBeTruthy(); // workload MB
+    expect(screen.getByText("12")).toBeTruthy(); // workload processes
+    expect(screen.queryByText("process table unavailable")).toBeNull();
+    expect(screen.queryByText("workload sample stale")).toBeNull();
+  });
+
+  it("flags unavailable and stale workload samples without hiding last-good totals", async () => {
+    getWhySlowSnapshot.mockResolvedValue(
+      makeSnapshot({
+        memory: {
+          appMemoryMb: null,
+          terminalWorkloads: {
+            available: false,
+            stale: true,
+            ageMs: 90_000,
+            totalMemoryMb: 3100,
+            processCount: 9,
+            terminalCount: 3,
+            topProjects: [],
+          },
+        },
+      })
+    );
+
+    render(<WhySlowContent />);
+
+    expect(await screen.findByText("process table unavailable")).toBeTruthy();
+    expect(screen.getByText("workload sample stale")).toBeTruthy();
+    // The last-good total still shows, flagged rather than zeroed.
+    expect(screen.getByText("3100")).toBeTruthy();
+  });
+
+  it("renders dashes, not zeros, when workloads were never sampled", async () => {
+    getWhySlowSnapshot.mockResolvedValue(
+      makeSnapshot({
+        memory: {
+          appMemoryMb: 512,
+          terminalWorkloads: {
+            available: false,
+            stale: false,
+            ageMs: null,
+            totalMemoryMb: 0,
+            processCount: 0,
+            terminalCount: 0,
+            topProjects: [],
+          },
+        },
+      })
+    );
+
+    render(<WhySlowContent />);
+
+    expect(await screen.findByText("process table unavailable")).toBeTruthy();
+    // A never-sampled slice must not imply a measured empty workload.
+    expect(screen.queryByText("0")).toBeNull();
+  });
+
+  it("degrades the memory section when collection failed", async () => {
+    getWhySlowSnapshot.mockResolvedValue(makeSnapshot());
+
+    render(<WhySlowContent />);
+
+    expect(await screen.findByText("Memory attribution unavailable.")).toBeTruthy();
   });
 
   it("does not start overlapping refreshes while one is in flight", async () => {

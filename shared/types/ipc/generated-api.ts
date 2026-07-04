@@ -618,6 +618,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["slash-commands:list"]["result"]>;
   };
   system: {
+    getMemorySnapshot(
+      ...args: IpcInvokeMap["system:get-memory-snapshot"]["args"]
+    ): Promise<IpcInvokeMap["system:get-memory-snapshot"]["result"]>;
     getResourceProfile(
       ...args: IpcInvokeMap["system:get-resource-profile"]["args"]
     ): Promise<IpcInvokeMap["system:get-resource-profile"]["result"]>;

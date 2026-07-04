@@ -10,7 +10,7 @@ This doc is the map for that machinery: the signals, the profile state machine a
 
 Two loops, different time constants:
 
-- **Slow loop — `ResourceProfileService`** (`electron/services/ResourceProfileService.ts`, ~818 LOC). Runs in the main process on a 30 s aligned interval. Aggregates memory, thermal, battery, CPU-speed-limit, fleet-size, and system-available-memory signals into a `pressureScore`, maps the score to a profile, applies asymmetric hysteresis, and pushes the resulting `ResourceProfileConfig` to every consumer. This is **policy** — it changes cadences and budgets, never pauses anyone.
+- **Slow loop — `ResourceProfileService`** (`electron/services/ResourceProfileService.ts`, ~818 LOC). Runs in the main process on a 30 s aligned interval. Aggregates memory, thermal, battery, CPU-speed-limit, fleet-size, system-available-memory, and terminal-workload-memory signals into a `pressureScore`, maps the score to a profile, applies asymmetric hysteresis, and pushes the resulting `ResourceProfileConfig` to every consumer. This is **policy** — it changes cadences and budgets, never pauses anyone.
 - **Fast loop — `ResourceGovernor`** (`electron/pty-host/ResourceGovernor.ts`, ~525 LOC). Runs in the **PTY host process** on a 2 s interval, watching its own V8 heap. When the heap approaches its limit it pauses terminal output (the `paused-resource-governor` flow state) and resumes when pressure clears. The profile service feeds it one input — `setResourceProfile(profile)` — which lowers the governor's thresholds under `efficiency`; otherwise the governor is autonomous.
 
 Bridging the two: a third fast path lives **inside** `ResourceProfileService` — an event-loop-lag monitor (5 s interval) that can force the whole app into `efficiency` immediately, bypassing the slow loop's hysteresis, when the JS thread is genuinely saturated.
@@ -44,6 +44,7 @@ The profile is intentionally **coarse**. There are only three states, so every c
 | CPU speed limit (macOS & Windows) | `powerMonitor` `speed-limit-change` | `+2` below 50, `+1` below 100 |
 | Active-agent fleet size | cached count from `PtyClient.getAllTerminalsAsync()`, filtered | `+3` ≥ 24, `+2` ≥ 16, `+1` ≥ 8 |
 | System-available memory | `process.getSystemMemoryInfo()` (free + purgeable on macOS, free elsewhere) | `+2` below 0.1 × RAM, `+1` below 0.2 × RAM |
+| Terminal-workload memory | cached `PtyClient.getMemoryRollup()` (descendant RSS from the pty-host `ProcessTreeCache`, PID-deduplicated, via `electron/services/memoryAccounting.ts`) | `+2` above 0.4 × RAM, `+1` above 0.25 × RAM — only from a fresh (≤ 60 s), successful process-table sweep; stale/unavailable data contributes 0. Per-tier 10% exit band. Bounded at +2 so terminal workloads alone can never latch `efficiency`. |
 
 Mapping (`ResourceProfileService.ts:669`): `score >= 3 → efficiency`, `score === 0 → performance`, otherwise `balanced`.
 
@@ -208,6 +209,7 @@ Resource governance is deliberately **quiet**. Per `CLAUDE.md`'s runtime-signal 
 | --- | --- |
 | Profile state machine, signals, lag monitor, fan-out | `electron/services/ResourceProfileService.ts` |
 | Profile config table + types | `shared/types/resourceProfile.ts` |
+| Composite memory snapshot (Electron + terminal-workload slices, freshness) | `electron/services/memoryAccounting.ts`, `shared/types/memoryAccounting.ts` |
 | PTY-host heap governor (cross-process) | `electron/pty-host/ResourceGovernor.ts` |
 | Worker-governance aggregation + trim fan-out | `electron/services/WorkerGovernanceService.ts` |
 | Worker snapshot shape + pure policy | `shared/types/workerGovernance.ts`, `shared/utils/workerGovernancePolicy.ts` |

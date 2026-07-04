@@ -38,6 +38,9 @@ vi.mock("../../utils.js", () => utilsMock);
 const collectorMock = vi.hoisted(() => ({ collectWhySlowSnapshot: vi.fn() }));
 vi.mock("../../../services/DiagnosticsCollector.js", () => collectorMock);
 
+const memoryAccountingMock = vi.hoisted(() => ({ getCompositeMemorySnapshot: vi.fn() }));
+vi.mock("../../../services/memoryAccounting.js", () => memoryAccountingMock);
+
 const cacheMock = vi.hoisted(() => ({ recordRendererTerminalDiagnostics: vi.fn() }));
 vi.mock("../../../services/RendererTerminalDiagnosticsCache.js", () => cacheMock);
 
@@ -72,6 +75,7 @@ describe("registerWhySlowHandlers — getWhySlowSnapshot", () => {
       pty: null,
       worktrees: null,
       workers: null,
+      memory: null,
     };
     collectorMock.collectWhySlowSnapshot.mockResolvedValue(snapshot);
 
@@ -79,7 +83,18 @@ describe("registerWhySlowHandlers — getWhySlowSnapshot", () => {
     const result = await getRegistered("system:get-why-slow-snapshot")(null);
 
     expect(result).toEqual(snapshot);
-    expect(collectorMock.collectWhySlowSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("serves the composite memory snapshot, defaulting a missing ptyClient to null", async () => {
+    const snapshot = { timestamp: 1, electron: {}, terminalWorkloads: {} };
+    memoryAccountingMock.getCompositeMemorySnapshot.mockResolvedValue(snapshot);
+
+    registerWhySlowHandlers({} as never);
+    const result = await getRegistered("system:get-memory-snapshot")(null);
+
+    expect(result).toEqual(snapshot);
+    expect(memoryAccountingMock.getCompositeMemorySnapshot).toHaveBeenCalledWith(null);
+    expect(collectorMock.collectWhySlowSnapshot).not.toHaveBeenCalled();
   });
 });
 

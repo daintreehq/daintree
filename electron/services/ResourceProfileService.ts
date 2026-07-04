@@ -12,6 +12,7 @@ import { getFocusThrottlePollMultiplier } from "../window/focusThrottleState.js"
 import { logInfo } from "../utils/logger.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 import { getAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
+import { getCachedMemoryRollup } from "./memoryAccounting.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import type { HibernationService } from "./HibernationService.js";
@@ -131,6 +132,28 @@ const FLEET_AGENTS_PER_GB_CRITICAL = FLEET_COUNT_CRITICAL / 16;
 const SYS_AVAILABLE_HIGH_FRACTION = 0.2;
 const SYS_AVAILABLE_LOW_FRACTION = 0.1;
 
+// Terminal-workload signal: summed RSS of every live terminal's descendant
+// tree (agent CLIs, dev servers, language servers, test runners) from the
+// pty-host memory rollup. These are the largest real consumers in Daintree
+// sessions and invisible to app.getAppMetrics(). Fractions of total RAM like
+// the other memory signals, sitting well above the app-private bands because
+// RSS double-counts shared pages across the fleet — this is a generous
+// pressure heuristic, not a unique-footprint budget. Bounded at +2 so
+// terminal workloads alone can reach `balanced` but can never latch
+// `efficiency` (score ≥ 3) without a second corroborating signal; like every
+// score input it only tunes cadences and budgets — it never pauses, kills,
+// or hibernates a live workload.
+const TERMINAL_WORKLOAD_HIGH_FRACTION = 0.4;
+const TERMINAL_WORKLOAD_LOW_FRACTION = 0.25;
+// Per-tier exit band: once a tier is engaged it releases at 90% of its entry
+// threshold, so a workload hovering at a boundary can't flap the score (and
+// with it the candidate-profile hold timers) on every 30s tick.
+const TERMINAL_WORKLOAD_EXIT_RATIO = 0.9;
+// Contributions are taken only from a successful process-table sweep newer
+// than this (2 eval ticks). A huge-but-stale reading — ps wedged, pty-host
+// unresponsive — must never hold the profile down; no measurement, no score.
+const TERMINAL_WORKLOAD_FRESH_MS = 60_000;
+
 export interface ResourceProfileDeps {
   getPtyClient: () => PtyClient | null;
   getWorkspaceClient: () => WorkspaceClient | null;
@@ -174,6 +197,21 @@ export class ResourceProfileService {
   private readonly memoryThresholdLowMb: number;
   private readonly sysMemThresholdHighMb: number;
   private readonly sysMemThresholdLowMb: number;
+  private readonly terminalWorkloadHighMb: number;
+  private readonly terminalWorkloadLowMb: number;
+  // Latest terminal-workload rollup sample; null until the first successful
+  // async refresh. Read synchronously by the scoring path, mirroring the
+  // cachedActiveAgentCount pattern.
+  private cachedTerminalWorkload: {
+    totalMemoryMb: number;
+    available: boolean;
+    sampledAt: number;
+  } | null = null;
+  // Engaged contribution tier (0/1/2) for the exit-band hysteresis.
+  private terminalWorkloadTier = 0;
+  // Monotonic generation for the workload refresh, independent of the fleet
+  // counter so neither refresh path can invalidate the other's in-flight work.
+  private workloadRefreshGeneration = 0;
   private readonly fleetCountHigh: number;
   private readonly fleetCountVeryHigh: number;
   private readonly fleetCountCritical: number;
@@ -197,6 +235,8 @@ export class ResourceProfileService {
     this.memoryThresholdLowMb = totalRamMb * LOW_FRACTION;
     this.sysMemThresholdHighMb = totalRamMb * SYS_AVAILABLE_HIGH_FRACTION;
     this.sysMemThresholdLowMb = totalRamMb * SYS_AVAILABLE_LOW_FRACTION;
+    this.terminalWorkloadHighMb = totalRamMb * TERMINAL_WORKLOAD_HIGH_FRACTION;
+    this.terminalWorkloadLowMb = totalRamMb * TERMINAL_WORKLOAD_LOW_FRACTION;
     const totalRamGb = totalRamMb / 1024;
     this.fleetCountHigh = Math.max(
       FLEET_COUNT_HIGH,
@@ -335,10 +375,15 @@ export class ResourceProfileService {
     // (or any earlier refresh in this lifecycle) will see a stale generation
     // in its .then() and drop its result.
     this.refreshGeneration += 1;
+    // Same reset for the terminal-workload sample and its hysteresis latch.
+    this.cachedTerminalWorkload = null;
+    this.terminalWorkloadTier = 0;
+    this.workloadRefreshGeneration += 1;
 
     logInfo("resource-profile-service-started", { profile: this.currentProfile });
 
     this.refreshFleetState();
+    this.refreshTerminalWorkloadState();
 
     powerMonitor.on("thermal-state-change", this.onThermalStateChange);
     powerMonitor.on("speed-limit-change", this.onSpeedLimitChange);
@@ -354,6 +399,7 @@ export class ResourceProfileService {
 
     this.evalCleanup = setAlignedInterval(() => {
       this.refreshFleetState();
+      this.refreshTerminalWorkloadState();
       this.evaluate();
     }, EVAL_INTERVAL_MS);
 
@@ -652,6 +698,42 @@ export class ResourceProfileService {
       });
   }
 
+  /**
+   * Async refresh of the terminal-workload memory sample, mirroring
+   * refreshFleetState: fire-and-forget each tick, cached result read
+   * synchronously by the scoring path. Reads through the shared rollup TTL
+   * cache in memoryAccounting so this adds at most one pty-host round-trip
+   * per 5s across all snapshot consumers.
+   */
+  private refreshTerminalWorkloadState(): void {
+    if (this.disposed) return;
+    // Under sustained event-loop saturation, skip optional async work — the
+    // cached sample is used until it ages past the freshness gate.
+    if (this.lagEscalatedActive) return;
+
+    const ptyClient = this.deps.getPtyClient();
+    if (!ptyClient) return;
+
+    this.workloadRefreshGeneration += 1;
+    const generation = this.workloadRefreshGeneration;
+
+    getCachedMemoryRollup(ptyClient)
+      .then((rollup) => {
+        if (this.disposed || rollup === null) return;
+        if (generation !== this.workloadRefreshGeneration) return;
+        this.cachedTerminalWorkload = {
+          totalMemoryMb: rollup.totalMemoryKb / 1024,
+          available: rollup.available,
+          sampledAt: rollup.sampledAt,
+        };
+      })
+      .catch(() => {
+        // A PtyClient without the rollup surface (test doubles) or an
+        // unexpected throw: leave the cache untouched — no measurement,
+        // no contribution.
+      });
+  }
+
   private countActiveAgentTerminals(terminals: ActiveAgentTerminalLike[]): number {
     let count = 0;
     for (const t of terminals) {
@@ -726,6 +808,8 @@ export class ResourceProfileService {
     this.lagPreviousElu = null;
     this.clearLagPressure();
     this.interactiveOverrideUntil = 0;
+    this.cachedTerminalWorkload = null;
+    this.terminalWorkloadTier = 0;
     this.thermalState = "unknown";
     this.isOnBattery = false;
     this.speedLimit = 100;
@@ -908,6 +992,51 @@ export class ResourceProfileService {
           detail: `system available ${Math.round(sysAvailMb)}MB`,
         });
       }
+    }
+
+    // Terminal-workload signal. Gated on a fresh, successful process-table
+    // sweep: an unavailable rollup (ps/PowerShell failed, pty-host down) or a
+    // sample past the freshness bound contributes nothing, whatever its
+    // magnitude, and drops the hysteresis latch. Tier recomputation is
+    // idempotent for a given sample, so the why-slow read path sharing this
+    // code can't skew it.
+    const workload = this.cachedTerminalWorkload;
+    // Negative age = the clock moved backwards (suspend correction, fake
+    // timers): reject as not-fresh rather than letting an old sample read as
+    // "from the future" and contribute until the clock catches up.
+    const workloadAgeMs = workload === null ? null : Date.now() - workload.sampledAt;
+    const workloadFresh =
+      workload !== null &&
+      workload.available &&
+      workload.sampledAt > 0 &&
+      workloadAgeMs !== null &&
+      workloadAgeMs >= 0 &&
+      workloadAgeMs <= TERMINAL_WORKLOAD_FRESH_MS;
+    if (workloadFresh) {
+      const workloadMb = workload.totalMemoryMb;
+      const highBar =
+        this.terminalWorkloadTier >= 2
+          ? this.terminalWorkloadHighMb * TERMINAL_WORKLOAD_EXIT_RATIO
+          : this.terminalWorkloadHighMb;
+      const lowBar =
+        this.terminalWorkloadTier >= 1
+          ? this.terminalWorkloadLowMb * TERMINAL_WORKLOAD_EXIT_RATIO
+          : this.terminalWorkloadLowMb;
+      this.terminalWorkloadTier = workloadMb > highBar ? 2 : workloadMb > lowBar ? 1 : 0;
+      if (this.terminalWorkloadTier > 0) {
+        pressureScore += this.terminalWorkloadTier;
+        reasons.push({
+          signal: "terminalWorkloads",
+          contribution: this.terminalWorkloadTier,
+          detail: `terminal workloads ${Math.round(workloadMb)}MB`,
+        });
+      }
+    } else {
+      // Hysteresis only spans consecutive fresh readings. A stale/unavailable
+      // gap drops the latch so a post-gap sample re-qualifies at the full
+      // entry threshold — otherwise a tier engaged before the gap would let a
+      // below-entry value ride the 0.9× exit band back to a higher score.
+      this.terminalWorkloadTier = 0;
     }
 
     return { pressureScore, reasons };

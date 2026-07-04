@@ -6,6 +6,10 @@ import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { logError } from "@/utils/logger";
 import type { ProcessMetricEntry, HeapStats, DiagnosticsInfo } from "@shared/types/ipc/system";
 import type { BulkProjectStatsEntry } from "@shared/types/ipc/project";
+import type {
+  CompositeMemorySnapshot,
+  TerminalWorkloadSlice,
+} from "@shared/types/memoryAccounting";
 import type { Project } from "@shared/types";
 import {
   type MemoryState,
@@ -105,23 +109,54 @@ function MemoryRow({ label, value }: { label: string; value: string }) {
 
 function MemorySummary({
   appMemoryMB,
-  workloadMB,
+  workloads,
+  lastGoodWorkloads,
   systemAvailableMB,
 }: {
   appMemoryMB: number;
-  workloadMB: number | null;
+  /** Current terminal-workload slice, or null when no snapshot has arrived. */
+  workloads: TerminalWorkloadSlice | null;
+  /** Most recent slice that was actually measured, kept across unavailable reads. */
+  lastGoodWorkloads: TerminalWorkloadSlice | null;
   systemAvailableMB: number | null;
 }) {
+  // Prefer the live measurement. On an unavailable read fall back to the
+  // retained values the pty-host kept from its last successful sweep (present
+  // even on the first open after a ps failure), then to the last slice this
+  // renderer saw measured — never a fake 0, never a silently-dropped row.
+  const measured = workloads?.available ? workloads : null;
+  const retained =
+    measured === null &&
+    workloads !== null &&
+    workloads.sampledAt > 0 &&
+    (workloads.totalMemoryMb > 0 || workloads.processCount > 0)
+      ? workloads
+      : null;
+  const shown = measured ?? retained ?? lastGoodWorkloads;
+  const workloadNote = measured?.stale
+    ? `Last sampled ${Math.max(1, Math.round((measured.ageMs ?? 0) / 1000))}s ago`
+    : measured === null && shown !== null
+      ? "Process table unavailable — showing last reading"
+      : workloads !== null && !workloads.available
+        ? "Process table unavailable"
+        : null;
+
   return (
     <div className="space-y-1">
-      <MemoryRow label="Daintree app" value={formatMemory(appMemoryMB)} />
-      {workloadMB !== null && (
-        <MemoryRow label="Terminal workloads" value={formatMemory(workloadMB)} />
+      <MemoryRow label="Daintree app memory" value={formatMemory(appMemoryMB)} />
+      {(workloads !== null || shown !== null) && (
+        <MemoryRow
+          label="Terminal workloads"
+          value={shown !== null ? formatMemory(shown.totalMemoryMb) : "Unavailable"}
+        />
+      )}
+      {workloadNote !== null && (
+        <div className="text-[9px] text-status-warning/70 leading-tight">{workloadNote}</div>
       )}
       {systemAvailableMB !== null && (
         <MemoryRow label="System available" value={formatMemory(systemAvailableMB)} />
       )}
-      {workloadMB !== null && (
+      {shown !== null && (
         <div className="text-[9px] text-daintree-text/25 leading-tight">
           Workloads = dev servers, agents, and tools your terminals launched
         </div>
@@ -165,6 +200,8 @@ function ProjectBreakdown({
 
   if (entries.length === 0) return null;
 
+  const hasEstimates = entries.some((entry) => entry.stats!.terminalMemoryMB === undefined);
+
   return (
     <div className="space-y-1">
       <div className="text-[10px] text-daintree-text/50 font-medium">Projects</div>
@@ -196,6 +233,11 @@ function ProjectBreakdown({
           );
         })}
       </div>
+      {hasEstimates && (
+        <div className="text-[9px] text-daintree-text/25 leading-tight">
+          ~ estimated from terminal count, not measured
+        </div>
+      )}
     </div>
   );
 }
@@ -253,6 +295,11 @@ export function ProjectResourceBadge() {
   const [isLoading, setIsLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [popoverData, setPopoverData] = useState<PopoverData | null>(null);
+  const [memorySnapshot, setMemorySnapshot] = useState<CompositeMemorySnapshot | null>(null);
+  // Last workload slice that was actually measured — survives unavailable
+  // reads so the popover degrades to "showing last reading" instead of
+  // dropping to a fake 0 or hiding a previously-shown row.
+  const [lastGoodWorkloads, setLastGoodWorkloads] = useState<TerminalWorkloadSlice | null>(null);
   const [popoverSampledAt, setPopoverSampledAt] = useState<number | null>(null);
   const [nowTs, setNowTs] = useState(() => Date.now());
   const [thresholds, setThresholds] = useState<MemoryThresholds>(FALLBACK_THRESHOLDS);
@@ -264,21 +311,6 @@ export function ProjectResourceBadge() {
   const trend = getTrendDirection(samples, SAMPLES_PER_MIN);
   const projectIdsKey = useMemo(() => stats.projects.map((p) => p.id).join(","), [stats.projects]);
 
-  // Sum measured terminal-tree memory across projects for the popover summary.
-  // Null when no project reported a measurement (OS table unreadable) so the
-  // row hides rather than implying a real 0.
-  const workloadMB = useMemo(() => {
-    if (!popoverData) return null;
-    let sum = 0;
-    let measured = false;
-    for (const entry of Object.values(popoverData.projectStats)) {
-      if (typeof entry.terminalMemoryMB === "number") {
-        sum += entry.terminalMemoryMB;
-        measured = true;
-      }
-    }
-    return measured ? sum : null;
-  }, [popoverData]);
   const systemAvailableMB = popoverData?.diagnosticsInfo.systemAvailableMB ?? null;
   const ageSec =
     popoverSampledAt !== null ? Math.max(0, Math.round((nowTs - popoverSampledAt) / 1000)) : null;
@@ -409,10 +441,13 @@ export function ProjectResourceBadge() {
 
     const fetchPopoverData = async () => {
       try {
-        const [processMetrics, heapStats, diagnosticsInfo] = await Promise.all([
+        const [processMetrics, heapStats, diagnosticsInfo, snapshot] = await Promise.all([
           systemClient.getProcessMetrics(),
           systemClient.getHeapStats(),
           systemClient.getDiagnosticsInfo(),
+          // Isolate a snapshot failure: the rest of the popover still updates,
+          // and the memory rows degrade to their last-good/unavailable states.
+          systemClient.getMemorySnapshot().catch(() => null),
         ]);
 
         const projectIds = projectIdsKey ? projectIdsKey.split(",") : [];
@@ -421,6 +456,13 @@ export function ProjectResourceBadge() {
 
         if (!cancelled) {
           setPopoverData({ processMetrics, heapStats, diagnosticsInfo, projectStats });
+          // A failed snapshot poll clears the live slice so old readings can't
+          // masquerade as current; last-good values still render via
+          // lastGoodWorkloads with their "showing last reading" note.
+          setMemorySnapshot(snapshot);
+          if (snapshot?.terminalWorkloads.available) {
+            setLastGoodWorkloads(snapshot.terminalWorkloads);
+          }
           setPopoverSampledAt(Date.now());
         }
       } catch (error) {
@@ -476,8 +518,13 @@ export function ProjectResourceBadge() {
           {popoverData ? (
             <>
               <MemorySummary
-                appMemoryMB={stats.totalMemoryMB}
-                workloadMB={workloadMB}
+                appMemoryMB={
+                  memorySnapshot?.electron.available
+                    ? memorySnapshot.electron.totalWorkingSetMb
+                    : stats.totalMemoryMB
+                }
+                workloads={memorySnapshot?.terminalWorkloads ?? null}
+                lastGoodWorkloads={lastGoodWorkloads}
                 systemAvailableMB={systemAvailableMB}
               />
               <ProjectBreakdown projects={stats.projects} projectStats={popoverData.projectStats} />
