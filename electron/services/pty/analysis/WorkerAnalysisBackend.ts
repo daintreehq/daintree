@@ -276,13 +276,20 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
 
   setScrollback(lines: number): boolean {
     if (this.inactive()) return false;
+    // Track the desired cap regardless of post outcome — a worker-loss
+    // rebuild re-creates the session with `currentScrollback`, so the value
+    // applies on the next generation even when this post never lands.
     this.currentScrollback = lines;
-    this.pool.post(this.spec.terminalId, {
+    // Propagate post failure (dead/disposed worker): the caller must not
+    // record a trim that never reached a live mirror.
+    return this.pool.post(this.spec.terminalId, {
       type: "set-scrollback",
       terminalId: this.spec.terminalId,
       lines,
+      // Stamp the live slot generation so the runtime can drop a trim that
+      // arrives after this slot was superseded (respawn/overflow rebuild).
+      epoch: this.feedEpoch,
     });
-    return true;
   }
 
   getViewportLines(n: number): string[] {

@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { logInfo } from "@/utils/logger";
+import { TerminalRefreshTier } from "../../../../shared/types/panel";
+import { TERMINAL_RETENTION_BUDGETS } from "../../../../shared/config/terminalRetention";
+import { getScrollbackForType, setAgentScrollbackMaxLines } from "@/utils/scrollbackConfig";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -75,6 +78,7 @@ type ScrollbackTestService = {
   instances: Map<string, unknown>;
   reduceScrollback: (id: string, targetLines: number) => void;
   restoreScrollback: (id: string) => void;
+  restoreScrollbackAllForeground: () => void;
 };
 
 function makeMockManaged(overrides: Record<string, unknown> = {}) {
@@ -85,6 +89,7 @@ function makeMockManaged(overrides: Record<string, unknown> = {}) {
       rows: 24,
       buffer: { active: { length: 3000 } },
       write: (data: string) => writtenData.push(data),
+      resize: vi.fn(),
       hasSelection: vi.fn(() => false),
     },
     type: "terminal",
@@ -259,6 +264,122 @@ describe("TerminalInstanceService - Scrollback", () => {
 
       // getScrollbackForType(true, 5000) = min(5000, max(500, floor(5000*1.5))) = 5000
       expect(managed.terminal.options.scrollback).toBe(5000);
+    });
+  });
+
+  describe("host retention budgets ↔ renderer policy contract", () => {
+    it("the host mirror caps for working/settled tiers match the renderer's agent/plain ceilings", () => {
+      // If these drift, a view-eviction restore would silently serve less
+      // history than the renderer's own xterm would have retained (working
+      // tier), or hold more than the renderer can ever display (settled).
+      // getScrollbackForType(_, 0) returns the policy's effective maxLines.
+      expect(TERMINAL_RETENTION_BUDGETS.working.mirrorScrollbackLines).toBe(
+        getScrollbackForType(true, 0)
+      );
+      expect(TERMINAL_RETENTION_BUDGETS.settled.mirrorScrollbackLines).toBe(
+        getScrollbackForType(false, 0)
+      );
+    });
+  });
+
+  describe("restoreScrollbackAllForeground (resource-profile ceiling changes)", () => {
+    afterEach(() => {
+      // Module-level policy ceiling — reset to the balanced default so the
+      // change can't leak into other tests in this file.
+      setAgentScrollbackMaxLines(5000);
+    });
+
+    function makeAgentManaged(overrides: Record<string, unknown> = {}) {
+      return makeMockManaged({
+        kind: "terminal",
+        launchAgentId: "claude",
+        lastAppliedTier: TerminalRefreshTier.FOCUSED,
+        ...overrides,
+      });
+    }
+
+    it("applies a lowered agent ceiling to foreground agent terminals", () => {
+      const managed = makeAgentManaged();
+      // Content fits inside the new ceiling → the shrink evicts nothing.
+      managed.terminal.buffer.active.length = 100;
+      service.instances.set("t1", managed);
+
+      setAgentScrollbackMaxLines(2500);
+      service.restoreScrollbackAllForeground();
+
+      expect(managed.terminal.options.scrollback).toBe(2500);
+    });
+
+    it("never touches background terminals mid-stream", () => {
+      const background = makeAgentManaged({ lastAppliedTier: TerminalRefreshTier.BACKGROUND });
+      background.terminal.options.scrollback = 500; // previously reduced
+      background.terminal.buffer.active.length = 100;
+      const foreground = makeAgentManaged();
+      foreground.terminal.buffer.active.length = 100;
+      service.instances.set("bg", background);
+      service.instances.set("fg", foreground);
+
+      setAgentScrollbackMaxLines(2500);
+      service.restoreScrollbackAllForeground();
+
+      // The background pane's deliberately-reduced scrollback stays put (the
+      // tier-upgrade path owns its restore); the foreground pane re-derives.
+      expect(background.terminal.options.scrollback).toBe(500);
+      expect(foreground.terminal.options.scrollback).toBe(2500);
+    });
+
+    it("skips hibernated terminals", () => {
+      const hibernated = makeAgentManaged({ isHibernated: true });
+      hibernated.terminal.options.scrollback = 500;
+      service.instances.set("t1", hibernated);
+
+      setAgentScrollbackMaxLines(2500);
+      service.restoreScrollbackAllForeground();
+
+      expect(hibernated.terminal.options.scrollback).toBe(500);
+    });
+
+    it("defers an evicting shrink on a scrolled-back terminal (no history yanked mid-read)", () => {
+      const managed = makeAgentManaged({ isUserScrolledBack: true });
+      // 3000 - 24 = 2976 used lines > 2500 target → the shrink would evict.
+      managed.terminal.buffer.active.length = 3000;
+      service.instances.set("t1", managed);
+
+      setAgentScrollbackMaxLines(2500);
+      service.restoreScrollbackAllForeground();
+
+      expect(managed.terminal.options.scrollback).toBe(5000);
+    });
+
+    it("defers an evicting shrink while an alt-screen TUI is active (no stateful-TUI reset)", () => {
+      const managed = makeAgentManaged({ isAltBuffer: true });
+      managed.terminal.buffer.active.length = 3000;
+      service.instances.set("t1", managed);
+
+      setAgentScrollbackMaxLines(2500);
+      service.restoreScrollbackAllForeground();
+
+      expect(managed.terminal.options.scrollback).toBe(5000);
+    });
+
+    it("only rewrites the scrollback option — never writes to or resizes the terminal (no mid-stream rewrap)", () => {
+      const shrunk = makeAgentManaged();
+      shrunk.terminal.buffer.active.length = 100;
+      const grown = makeAgentManaged();
+      grown.terminal.options.scrollback = 2500;
+      grown.terminal.buffer.active.length = 100;
+      service.instances.set("shrunk", shrunk);
+      service.instances.set("grown", grown);
+
+      setAgentScrollbackMaxLines(2500);
+      service.restoreScrollbackAllForeground();
+      setAgentScrollbackMaxLines(5000);
+      service.restoreScrollbackAllForeground();
+
+      for (const managed of [shrunk, grown]) {
+        expect(managed.writtenData).toHaveLength(0);
+        expect(managed.terminal.resize).not.toHaveBeenCalled();
+      }
     });
   });
 });

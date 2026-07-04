@@ -35,9 +35,10 @@ import { disposeTerminalSerializerService } from "./pty/TerminalSerializerServic
 import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
 import { events } from "./events.js";
 import { getGitBranch } from "../utils/gitUtils.js";
-import type { GracefulKillResult } from "../../shared/types/pty-host.js";
+import type { GracefulKillResult, TerminalRetentionState } from "../../shared/types/pty-host.js";
 import { SCROLLBACK_MIN } from "../../shared/config/scrollback.js";
 import { shouldTrimAnalysisSession } from "../../shared/utils/workerGovernancePolicy.js";
+import type { TerminalRetentionTier } from "../../shared/config/terminalRetention.js";
 
 /**
  * PtyManager - Facade for terminal process management.
@@ -129,13 +130,57 @@ export class PtyManager extends EventEmitter {
    * governor can estimate `scrollbackLines × cols × 12` bytes per terminal without
    * serializing any buffer. `cols` falls back to 80 for a freshly-spawned terminal
    * that hasn't been resized yet, so it never contributes a zero-byte estimate.
+   * `tier` carries the terminal's current retention tier (stamped `foreground`
+   * at spawn, re-tiered by coordinator sweeps) so the governor can trim
+   * state-aware: foreground terminals are skipped until critical pressure and
+   * each tier trims to its own floor.
    */
-  getTerminalBufferSizes(): Array<{ id: string; scrollbackLines: number; cols: number }> {
+  getTerminalBufferSizes(): Array<{
+    id: string;
+    scrollbackLines: number;
+    cols: number;
+    tier?: TerminalRetentionTier;
+  }> {
     return this.registry.getAll().map((terminal) => ({
       id: terminal.id,
       scrollbackLines: terminal.getCurrentScrollback(),
       cols: terminal.getPtyProcess().cols || 80,
+      tier: terminal.getRetentionTier() ?? undefined,
     }));
+  }
+
+  /** Live TerminalProcess snapshot for the retention coordinator's sweep. */
+  getAllProcesses(): TerminalProcess[] {
+    return this.registry.getAll();
+  }
+
+  isTerminalTrashed(id: string): boolean {
+    return this.registry.isInTrash(id);
+  }
+
+  /**
+   * Pressure hook for the resource governor: prune preserved exit snapshots
+   * down to `max` (oldest-first, currently-viewed snapshots still guarded).
+   * Preserved snapshots are pure retained memory with no live producer, so
+   * they are the safest reclaim before any live-terminal trim or pause.
+   */
+  prunePreservedSnapshots(max: number): void {
+    this.registry.evictPreservedSnapshots(max);
+  }
+
+  /** Retention diagnostics for one terminal (null when the id is unknown). */
+  getTerminalRetention(id: string): TerminalRetentionState | null {
+    return this.registry.get(id)?.getRetentionSnapshot() ?? null;
+  }
+
+  /** Retention diagnostics for every live terminal, for the flow-control snapshot. */
+  getAllTerminalRetention(): Array<{ terminalId: string; retention: TerminalRetentionState }> {
+    const out: Array<{ terminalId: string; retention: TerminalRetentionState }> = [];
+    for (const terminal of this.registry.getAll()) {
+      const retention = terminal.getRetentionSnapshot();
+      if (retention) out.push({ terminalId: terminal.id, retention });
+    }
+    return out;
   }
 
   /**

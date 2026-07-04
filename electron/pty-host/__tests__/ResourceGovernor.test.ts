@@ -24,6 +24,7 @@ vi.mock("../metrics.js", () => ({
 import { ResourceGovernor, type ResourceGovernorDeps } from "../ResourceGovernor.js";
 import { PtyPauseCoordinator } from "../PtyPauseCoordinator.js";
 import { metricsEnabled } from "../metrics.js";
+import { PRESSURE_MAX_PRESERVED_TERMINAL_SNAPSHOTS } from "../../../shared/config/terminalRetention.js";
 
 function createMockCoordinator() {
   const raw = { pause: vi.fn(), resume: vi.fn() };
@@ -2058,6 +2059,179 @@ describe("ResourceGovernor", () => {
     });
   });
 
+  describe("state-aware targeted trim (retention tiers)", () => {
+    it("trims heaviest safe contributors first, each to its tier's floor, and never touches foreground below critical", () => {
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["fg", "w", "s"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalBufferSizes: vi.fn().mockReturnValue([
+          // The visible/focused working agent is the HEAVIEST contributor —
+          // and must still be exempt from the non-critical targeted trim.
+          { id: "fg", scrollbackLines: 10000, cols: 200, tier: "foreground" },
+          { id: "s", scrollbackLines: 2000, cols: 80, tier: "settled" },
+          { id: "w", scrollbackLines: 5000, cols: 100, tier: "working" },
+        ]),
+        trimBuffersTargeted: vi.fn(),
+      });
+
+      mockMemoryUsage(450);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(10000);
+
+      expect(deps.trimBuffersTargeted).toHaveBeenCalledTimes(1);
+      const targets = (deps.trimBuffersTargeted as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as Map<string, number>;
+      // Heaviest-first among NON-foreground: w (5000×100×12) then s (2000×80×12).
+      expect([...targets.keys()]).toEqual(["w", "s"]);
+      // Each trims to its own tier floor, not the uniform SCROLLBACK_MIN.
+      expect(targets.get("w")).toBe(1000);
+      expect(targets.get("s")).toBe(100);
+      expect(targets.has("fg")).toBe(false);
+
+      governor.dispose();
+    });
+
+    it("skips a tiered terminal already at its floor", () => {
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["w1", "w2"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalBufferSizes: vi.fn().mockReturnValue([
+          { id: "w1", scrollbackLines: 1000, cols: 80, tier: "working" }, // at floor
+          { id: "w2", scrollbackLines: 1001, cols: 80, tier: "working" }, // one above
+        ]),
+        trimBuffersTargeted: vi.fn(),
+      });
+
+      mockMemoryUsage(450);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(10000);
+
+      expect(deps.trimBuffersTargeted).toHaveBeenCalledTimes(1);
+      const targets = (deps.trimBuffersTargeted as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as Map<string, number>;
+      expect([...targets.keys()]).toEqual(["w2"]);
+
+      governor.dispose();
+    });
+
+    it("prunes preserved snapshots to the pressure cap as part of the pre-pause reclaim", () => {
+      const { coordinator } = createMockCoordinator();
+      const prunePreservedSnapshots = vi.fn();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalBufferSizes: vi
+          .fn()
+          .mockReturnValue([{ id: "t1", scrollbackLines: 2000, cols: 80, tier: "settled" }]),
+        trimBuffersTargeted: vi.fn(),
+        prunePreservedSnapshots,
+      });
+
+      mockMemoryUsage(450);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(10000);
+
+      expect(prunePreservedSnapshots).toHaveBeenCalledTimes(1);
+      expect(prunePreservedSnapshots).toHaveBeenCalledWith(
+        PRESSURE_MAX_PRESERVED_TERMINAL_SNAPSHOTS
+      );
+
+      governor.dispose();
+    });
+
+    it("a throwing preserved-snapshot prune does not block the targeted trim", () => {
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalBufferSizes: vi
+          .fn()
+          .mockReturnValue([{ id: "t1", scrollbackLines: 2000, cols: 80, tier: "settled" }]),
+        trimBuffersTargeted: vi.fn(),
+        prunePreservedSnapshots: vi.fn().mockImplementation(() => {
+          throw new Error("registry unavailable");
+        }),
+      });
+
+      mockMemoryUsage(450);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      expect(() => vi.advanceTimersByTime(10000)).not.toThrow();
+      expect(deps.trimBuffersTargeted).toHaveBeenCalledTimes(1);
+
+      governor.dispose();
+    });
+
+    it("critical-pressure emergency trim includes foreground terminals at their tier floor", () => {
+      const { coordinator, raw } = createMockCoordinator();
+      const prunePreservedSnapshots = vi.fn();
+      const trimBuffersTargeted = vi.fn().mockImplementation(() => {
+        expect(raw.pause).toHaveBeenCalled(); // pause always precedes the trim
+      });
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["fg", "s"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalBufferSizes: vi.fn().mockReturnValue([
+          { id: "fg", scrollbackLines: 10000, cols: 200, tier: "foreground" },
+          { id: "s", scrollbackLines: 2000, cols: 80, tier: "settled" },
+        ]),
+        trimBuffersTargeted,
+        prunePreservedSnapshots,
+      });
+
+      mockMemoryUsage(490); // ≥95% raw — critical
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      expect(trimBuffersTargeted).toHaveBeenCalledTimes(1);
+      const targets = trimBuffersTargeted.mock.calls[0][0] as Map<string, number>;
+      // Heaviest-first, foreground INCLUDED at critical, trimmed to its floor.
+      expect([...targets.keys()]).toEqual(["fg", "s"]);
+      expect(targets.get("fg")).toBe(5000);
+      expect(targets.get("s")).toBe(100);
+      expect(prunePreservedSnapshots).toHaveBeenCalledWith(
+        PRESSURE_MAX_PRESERVED_TERMINAL_SNAPSHOTS
+      );
+
+      governor.dispose();
+    });
+
+    it("untiered entries keep the legacy uniform SCROLLBACK_MIN floor", () => {
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["legacy"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalBufferSizes: vi
+          .fn()
+          .mockReturnValue([{ id: "legacy", scrollbackLines: 2000, cols: 80 }]),
+        trimBuffersTargeted: vi.fn(),
+      });
+
+      mockMemoryUsage(450);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(10000);
+
+      const targets = (deps.trimBuffersTargeted as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as Map<string, number>;
+      expect(targets.get("legacy")).toBe(100);
+
+      governor.dispose();
+    });
+  });
+
   describe("targeted pre-pause trim", () => {
     it("trims only contributors above SCROLLBACK_MIN, heaviest first, leaving light terminals untouched", () => {
       const { coordinator } = createMockCoordinator();
@@ -2143,7 +2317,7 @@ describe("ResourceGovernor", () => {
       governor.dispose();
     });
 
-    it("falls back to uniform trimBuffers when the targeted trim throws", () => {
+    it("skips reclaim (no foreground-flattening uniform fallback) when the targeted trim throws, then escalates to pause", () => {
       const { coordinator } = createMockCoordinator();
       const trimBuffersTargeted = vi.fn().mockImplementation(() => {
         throw new Error("targeted trim failed");
@@ -2164,23 +2338,30 @@ describe("ResourceGovernor", () => {
       vi.advanceTimersByTime(10000);
 
       expect(trimBuffersTargeted).toHaveBeenCalledTimes(1);
-      expect(deps.trimBuffers).toHaveBeenCalledTimes(1);
-      // And it still escalates to pause on the following tick.
+      // The uniform flatten would trim foreground terminals at non-critical
+      // pressure — a throw in the targeted path must NOT degrade to it.
+      expect(deps.trimBuffers).not.toHaveBeenCalled();
+      // The pause backstop still engages on the following tick.
       vi.advanceTimersByTime(2000);
       expect(coordinator.hasToken("resource-governor")).toBe(true);
 
       governor.dispose();
     });
 
-    it("does not run the targeted trim at critical pressure (≥95%)", () => {
-      const { coordinator } = createMockCoordinator();
+    it("skips the pre-pause trim at critical pressure and runs the emergency trim after pausing", () => {
+      const { coordinator, raw } = createMockCoordinator();
+      const trimBuffersTargeted = vi.fn().mockImplementation(() => {
+        // The global pause must have engaged BEFORE any critical-path trim —
+        // at ≥95% the pause cannot wait on reclaim work.
+        expect(raw.pause).toHaveBeenCalled();
+      });
       const deps = createMockDeps({
         getTerminalIds: vi.fn().mockReturnValue(["t1"]),
         getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
         getTerminalBufferSizes: vi
           .fn()
           .mockReturnValue([{ id: "t1", scrollbackLines: 2000, cols: 80 }]),
-        trimBuffersTargeted: vi.fn(),
+        trimBuffersTargeted,
       });
 
       mockMemoryUsage(490);
@@ -2190,7 +2371,9 @@ describe("ResourceGovernor", () => {
       vi.advanceTimersByTime(2000);
 
       expect(coordinator.hasToken("resource-governor")).toBe(true);
-      expect(deps.trimBuffersTargeted).not.toHaveBeenCalled();
+      // Single trim call (the post-pause emergency trim); the uniform flatten
+      // never runs at critical.
+      expect(trimBuffersTargeted).toHaveBeenCalledTimes(1);
       expect(deps.trimBuffers).not.toHaveBeenCalled();
 
       governor.dispose();

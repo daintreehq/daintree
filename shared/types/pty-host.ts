@@ -12,6 +12,7 @@ import type { PanelKind, TerminalFlowStatus, PanelTitleMode } from "./panel.js";
 import type { ResourceProfile } from "./resourceProfile.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { AgentConfig } from "../config/agentRegistry.js";
+import type { TerminalRetentionTier } from "../config/terminalRetention.js";
 import type { AgentSessionRecord } from "./ipc/agentSessionHistory.js";
 import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js";
 import type { WorkerResourceSnapshot } from "./workerGovernance.js";
@@ -239,6 +240,39 @@ export type PtyHostRequest =
   | { type: "get-flow-control-snapshot"; requestId: string }
   | { type: "get-worker-governance-snapshot"; requestId: string };
 
+/**
+ * Estimated bytes the PTY host retains for one terminal, split by category.
+ * Mirror bytes use the `scrollbackLines × cols × 12` closed-form estimate
+ * (same convention as the buffer-memory gauge); string-backed categories are
+ * `length × 2` (UTF-16 storage). Estimates, not precise heap measures —
+ * meant for attribution ("which terminals and buffers dominate"), not
+ * accounting.
+ */
+export interface TerminalRetainedMemoryEstimate {
+  mirrorBytes: number;
+  semanticBytes: number;
+  forensicsBytes: number;
+  agentOutputBytes: number;
+  preservedSnapshotBytes: number;
+  totalBytes: number;
+}
+
+/**
+ * Retention-policy state for one terminal in a {@link FlowControlSnapshot}.
+ * `trimCount`/`lastTrimAt`/`lastTrimReason` record intentional memory
+ * retention trimming of host-side analysis buffers — this is NOT PTY output
+ * data loss (the renderer's live xterm is never touched; see
+ * `droppedBytes` on the terminal snapshot for actual output drops).
+ */
+export interface TerminalRetentionState {
+  tier: TerminalRetentionTier;
+  estimatedRetainedBytes: TerminalRetainedMemoryEstimate;
+  /** Destructive mirror-scrollback trims applied since spawn. */
+  trimCount: number;
+  lastTrimAt: number | null;
+  lastTrimReason: "tier-change" | "memory-pressure" | null;
+}
+
 /** Per-terminal flow-control state in a {@link FlowControlSnapshot}. */
 export interface FlowControlTerminalSnapshot {
   terminalId: string;
@@ -266,6 +300,14 @@ export interface FlowControlTerminalSnapshot {
   dropCount: number;
   /** Timestamp of the most recent drop, or null when nothing was dropped. */
   lastDropAt: number | null;
+  /**
+   * Retention-policy state (tier, per-category retained-memory estimate, trim
+   * history). Terminals are stamped `foreground` at spawn and re-tiered by the
+   * retention coordinator's sweeps; null only for ids known to flow-control
+   * maps but not the registry (already-removed terminals with residual drop
+   * tallies).
+   */
+  retention: TerminalRetentionState | null;
 }
 
 /** Per-transport queue-depth entry in a {@link FlowControlSnapshot}. */
