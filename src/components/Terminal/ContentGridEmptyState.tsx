@@ -88,11 +88,17 @@ export function ContentGridEmptyState({
   // watermark both read as misplaced against a centered page). ~10% smaller
   // than the pre-redesign hero. Decorative; the project's own icon wins over
   // the Daintree mark when one is set.
+  //
+  // The fallback mark rides the neutral `daintree-text` (text-primary) token,
+  // NOT the hue-carrying `tint` — so it reads as the same grey the startup
+  // skeleton's `.skeleton-logo` paints and crossfades in without a hue pop on
+  // themed setups (where `tint` carries a brand hue). Theme-aware by
+  // construction: text-primary flips with light/dark.
   const sanitizedIcon = projectIconSvg ? sanitizeSvg(projectIconSvg) : null;
   const identityMark = sanitizedIcon?.ok ? (
     <img src={svgToDataUrl(sanitizedIcon.svg)} alt="" className="h-25 w-25 object-contain" />
   ) : (
-    <DaintreeIcon className="h-25 w-25 text-tint/65" aria-hidden="true" />
+    <DaintreeIcon className="h-25 w-25 text-daintree-text/65" aria-hidden="true" />
   );
 
   return (
