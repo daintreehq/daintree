@@ -361,6 +361,22 @@ export class TerminalResizeController {
       return;
     }
 
+    // #10863 backstop at the choke point: every OUT-OF-BAND deferred resync
+    // funnels through here — setVisible, the renderer-policy foreground
+    // promotion, and the wake paths — and a grid-changing resize under a
+    // still-streaming main-buffer pane re-wraps committed scrollback beneath
+    // the CLI's cursor-relative repaint (the assistant boot corruption).
+    // Callers can't all be trusted to gate individually, so gate here: arm the
+    // reveal-pending obligation and let the reconciliation watchdog run the
+    // fresh atomic reconcile once the stream quiesces. The ResizeObserver-
+    // driven resize/applyResize flow does not pass through this method and is
+    // deliberately untouched (user-visible layout changes must keep flowing).
+    if (!managed.isAltBuffer && hasStreamingWrites(managed, Date.now())) {
+      managed.revealPendingRepair = true;
+      managed.revealPendingGeneration = managed.attachGeneration;
+      return;
+    }
+
     // Wake-time atomic resync: bypass the settled-strategy 500ms debounce so
     // xterm and the PTY agree on geometry before the next refresh paints. The
     // settled debounce coalesces rapid drag-resize bursts — wake is a single

@@ -25,7 +25,7 @@ import { TerminalParserHandler } from "./TerminalParserHandler";
 import { TerminalUnseenOutputTracker, UnseenOutputSnapshot } from "./TerminalUnseenOutputTracker";
 import { TerminalOffscreenManager } from "./TerminalOffscreenManager";
 import { TerminalLinkHandler } from "./TerminalLinkHandler";
-import { TerminalResizeController } from "./TerminalResizeController";
+import { TerminalResizeController, hasStreamingWrites } from "./TerminalResizeController";
 import { TerminalRendererPolicy } from "./TerminalRendererPolicy";
 import { TerminalWebGLManager } from "./TerminalWebGLManager";
 import { TerminalAgentStateController } from "./TerminalAgentStateController";
@@ -1131,24 +1131,45 @@ class TerminalInstanceService {
     // stays at the default 80x24 until the deferred wake re-runs after the
     // bridge has already dropped, producing the visible render-small-then-snap.
     //
-    // Unlock symmetrically with the relock in the finally below: bypass the
-    // lock whenever resize is suppressed, even if the suppression end time was
-    // already cleared (the timer can fire between switch-back and this deferred
-    // wake). Without the unlock, applyDeferredResize would no-op under the lock
-    // and geometry would stay stale.
-    const needsLockBypass = current.isResizeSuppressed === true;
-    let remainingMs = 0;
-    if (needsLockBypass) {
-      remainingMs = current.resizeSuppressionEndTime
-        ? Math.max(0, current.resizeSuppressionEndTime - Date.now())
-        : 0;
-      this.resizeController.lockResize(id, false);
-    }
-    try {
-      this.resizeController.applyDeferredResize(id);
-    } finally {
+    // EXCEPT for a STREAMING main-buffer pane whose grid would actually change
+    // (#10863's missing half): terminal.resize() re-wraps committed scrollback
+    // while an Ink-style CLI is still repainting its sticky region with
+    // cursor-relative erase math sized for the old grid — the wake-path twin of
+    // the reveal-path re-wrap reconcileGeometryFresh already defers. The
+    // assistant's cold-resume boot is the canonical victim: this sweep fires on
+    // the same switch-back that just spawned it, mid-splash. Defer the geometry
+    // sync to the reconciliation watchdog (the same revealPendingRepair
+    // obligation the sync-block defer below uses); its reveal-pending branch
+    // runs the fresh atomic reconcile once the stream quiesces. A no-change
+    // pass falls through — applyDeferredResize's cache==current early-return
+    // makes it free, and skipping it would strand the #10070 correction.
+    const gridWouldChange =
+      Number.isInteger(current.latestCols) &&
+      Number.isInteger(current.latestRows) &&
+      (current.terminal.cols !== current.latestCols ||
+        current.terminal.rows !== current.latestRows);
+    if (this.deferGridChangeForStream(current, gridWouldChange)) {
+      // Deferred to the watchdog — nothing to do here.
+    } else {
+      // Unlock symmetrically with the relock in the finally below: bypass the
+      // lock whenever resize is suppressed, even if the suppression end time was
+      // already cleared (the timer can fire between switch-back and this deferred
+      // wake). Without the unlock, applyDeferredResize would no-op under the lock
+      // and geometry would stay stale.
+      const needsLockBypass = current.isResizeSuppressed === true;
+      let remainingMs = 0;
       if (needsLockBypass) {
-        this.resizeController.lockResize(id, true, remainingMs);
+        remainingMs = current.resizeSuppressionEndTime
+          ? Math.max(0, current.resizeSuppressionEndTime - Date.now())
+          : 0;
+        this.resizeController.lockResize(id, false);
+      }
+      try {
+        this.resizeController.applyDeferredResize(id);
+      } finally {
+        if (needsLockBypass) {
+          this.resizeController.lockResize(id, true, remainingMs);
+        }
       }
     }
 
@@ -2895,10 +2916,25 @@ class TerminalInstanceService {
     // Re-measure container dimensions after wake so latestCols/latestRows
     // reflect the current window size rather than pre-hibernation cache.
     // fit() already guards against offscreen/small terminals (returns null).
-    const fitResult = this.resizeController.fit(id);
-    if (!fitResult) {
-      // Fallback: fit() returned null (terminal offscreen or container too small).
-      this.resizeController.forceImmediateResize(id);
+    //
+    // EXCEPT when the fit would CHANGE the grid of a still-streaming pane
+    // (#10863's wake-path half — same predicate as fullWakeForVisibilityRestore
+    // and reconcileGeometryFresh): fit() re-wraps committed scrollback under a
+    // CLI mid-paint — the assistant's boot splash is the canonical victim.
+    // Defer to the reconciliation watchdog via the reveal-pending obligation;
+    // a no-drift fit falls through (its resize is a no-op and the PTY
+    // re-assert is dedupe-safe). Alt-buffer and settled-strategy panes never
+    // reach here (early returns above).
+    if (this.deferGridChangeForStream(managed, this.proposalDivergesFromGrid(managed))) {
+      // Deferred to the watchdog — skip the fit.
+    } else {
+      const fitResult = this.resizeController.fit(id);
+      if (!fitResult) {
+        // Fallback: fit() returned null (terminal offscreen or container too
+        // small). PTY-only — it never re-wraps the xterm buffer, so it stays
+        // safe for a streaming pane too.
+        this.resizeController.forceImmediateResize(id);
+      }
     }
 
     // Kick the IO unpause path for standard terminals that just woke up —
@@ -3137,6 +3173,42 @@ class TerminalInstanceService {
    * guarantee a redraw (the project-switch suppression-clear, #10632) use the
    * return value to know whether the obligation still needs to be carried.
    */
+  /**
+   * True when the container proposes a grid DIFFERENT from the live xterm grid
+   * — i.e. a fit() here would actually re-wrap the buffer, not just re-assert.
+   * Shared divergence probe for the out-of-band geometry writers below.
+   */
+  private proposalDivergesFromGrid(managed: ManagedTerminal): boolean {
+    const proposal = managed.fitAddon?.proposeDimensions?.();
+    return (
+      proposal !== undefined &&
+      proposal.cols > 1 &&
+      proposal.rows > 1 &&
+      (proposal.cols !== managed.terminal.cols || proposal.rows !== managed.terminal.rows)
+    );
+  }
+
+  /**
+   * #10863's out-of-band-geometry guard, shared by every wake/reveal-path
+   * geometry writer (fullWakeForVisibilityRestore, handlePostWake,
+   * resetRenderer): a fit/deferred-resize that would CHANGE the grid of a
+   * still-streaming main-buffer pane re-wraps committed scrollback under the
+   * CLI's cursor-relative repaint — the assistant boot corruption. When that
+   * hazard is live this arms the reveal-pending obligation (the watchdog's
+   * reveal branch runs the fresh atomic reconcile once the stream quiesces)
+   * and returns true so the caller skips its geometry step. The
+   * ResizeObserver-driven applyResize path is NOT gated here — user-visible
+   * layout changes must keep flowing to the PTY.
+   */
+  private deferGridChangeForStream(managed: ManagedTerminal, gridWouldChange: boolean): boolean {
+    if (!gridWouldChange || managed.isAltBuffer || !hasStreamingWrites(managed, Date.now())) {
+      return false;
+    }
+    managed.revealPendingRepair = true;
+    managed.revealPendingGeneration = managed.attachGeneration;
+    return true;
+  }
+
   resetRenderer(id: string): boolean {
     const managed = this.instances.get(id);
     if (!managed || managed.isHibernated) return false;
@@ -3166,10 +3238,17 @@ class TerminalInstanceService {
         managed.terminal.refresh(0, managed.terminal.rows - 1);
       }
 
-      try {
-        this.resizeController.fit(id);
-      } catch (error) {
-        logError(`resetRenderer fit failed for ${id}`, error);
+      // Same #10863 guard as handlePostWake: never fit-rewrap a streaming
+      // main-buffer pane. The suppression-clear timer that drives this on
+      // project switch-back lands exactly in the assistant's cold-resume boot
+      // window; the atlas/refresh recovery above already ran, and the armed
+      // watchdog obligation converges the grid once the stream quiesces.
+      if (!this.deferGridChangeForStream(managed, this.proposalDivergesFromGrid(managed))) {
+        try {
+          this.resizeController.fit(id);
+        } catch (error) {
+          logError(`resetRenderer fit failed for ${id}`, error);
+        }
       }
     } catch (error) {
       logError(`resetRenderer failed for ${id}`, error);

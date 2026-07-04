@@ -98,6 +98,8 @@ type FullWakeTestService = {
     applyDeferredResize: (id: string) => void;
     lockResize: (id: string, locked: boolean, ms?: number) => void;
     reconcileGeometryFresh: (id: string) => boolean;
+    fit: (id: string) => { cols: number; rows: number } | null;
+    forceImmediateResize: (id: string) => void;
   };
   dataBuffer: { resumeFlush: (id: string) => void; resetForTerminal: (id: string) => void };
   webGLManager: {
@@ -969,5 +971,166 @@ describe("TerminalInstanceService.repaintForReveal grid reconcile", () => {
     expect(reconcile).not.toHaveBeenCalled();
     expect(repairAtlas).not.toHaveBeenCalled();
     expect(forceXtermReflowMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("fullWakeForVisibilityRestore streaming-quiescence gate (#10863 wake-path half)", () => {
+  let service: FullWakeTestService;
+
+  beforeEach(async () => {
+    // The service is a module singleton — spies installed by a previous test
+    // (stubPostWake) survive clearAllMocks (it clears history, not
+    // implementations). Restore first so each test starts from the real
+    // methods and installs only its own stubs.
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    forceXtermReflowMock.mockReset();
+    const imported = await import("../TerminalInstanceService");
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    service = imported.terminalInstanceService as unknown as FullWakeTestService;
+    service.instances.clear();
+  });
+
+  afterEach(() => {
+    if (service) service.instances.clear();
+  });
+
+  // The applyDeferredResize-gate tests stub the post-wake tail so jsdom's
+  // missing layout APIs (checkVisibility in fit()) can't fail them; the
+  // handlePostWake gate has its own un-stubbed test below.
+  function stubPostWake() {
+    vi.spyOn(
+      service as unknown as { handlePostWake: (id: string) => void },
+      "handlePostWake"
+    ).mockImplementation(() => {});
+  }
+
+  type StreamingFields = {
+    pendingWrites?: number;
+    lastWriteAt?: number;
+    isAltBuffer?: boolean;
+    fitAddon?: { fit: () => void; proposeDimensions?: () => { cols: number; rows: number } };
+    lastReflowAt?: number;
+  };
+
+  function streamingInstance(overrides: Partial<ManagedTerminalMock> & StreamingFields = {}) {
+    return makeInstance({
+      attachGeneration: 3,
+      ...overrides,
+    }) as ManagedTerminalMock & StreamingFields;
+  }
+
+  it("defers the geometry sync to the watchdog for a streaming main-buffer pane whose grid would change", async () => {
+    stubPostWake();
+    const id = "wake-streaming-delta";
+    const instance = streamingInstance({
+      // Grid delta: cached target disagrees with the live xterm grid.
+      latestCols: 92,
+      latestRows: 30,
+      pendingWrites: 2, // a queued batch is still parsing — mid-stream
+    });
+    service.instances.set(id, instance);
+
+    const applyDeferredResize = vi
+      .spyOn(service.resizeController, "applyDeferredResize")
+      .mockImplementation(() => {});
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    expect(applyDeferredResize).not.toHaveBeenCalled();
+    expect(instance.revealPendingRepair).toBe(true);
+    expect(instance.revealPendingGeneration).toBe(instance.attachGeneration);
+  });
+
+  it("still applies the geometry sync for a streaming pane with NO grid delta (free no-op keeps #10070 correction)", async () => {
+    stubPostWake();
+    const id = "wake-streaming-nodelta";
+    const instance = streamingInstance({ pendingWrites: 2 }); // latest == terminal grid
+    service.instances.set(id, instance);
+
+    const applyDeferredResize = vi
+      .spyOn(service.resizeController, "applyDeferredResize")
+      .mockImplementation(() => {});
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    expect(applyDeferredResize).toHaveBeenCalledWith(id);
+    expect(instance.revealPendingRepair).toBeUndefined();
+  });
+
+  it("does not defer an alt-screen pane — the alt buffer is exempt from the re-wrap hazard", async () => {
+    stubPostWake();
+    const id = "wake-streaming-alt";
+    const instance = streamingInstance({
+      latestCols: 92,
+      latestRows: 30,
+      pendingWrites: 2,
+      isAltBuffer: true,
+    });
+    service.instances.set(id, instance);
+
+    const applyDeferredResize = vi
+      .spyOn(service.resizeController, "applyDeferredResize")
+      .mockImplementation(() => {});
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    expect(applyDeferredResize).toHaveBeenCalledWith(id);
+    expect(instance.revealPendingRepair).toBeUndefined();
+  });
+
+  it("applies the geometry sync once the stream quiesces (stale lastWriteAt, no pending writes)", async () => {
+    stubPostWake();
+    const id = "wake-quiescent-delta";
+    const instance = streamingInstance({
+      latestCols: 92,
+      latestRows: 30,
+      lastWriteAt: Date.now() - 10_000, // long past REVEAL_REWRAP_QUIESCENT_MS
+    });
+    service.instances.set(id, instance);
+
+    const applyDeferredResize = vi
+      .spyOn(service.resizeController, "applyDeferredResize")
+      .mockImplementation(() => {});
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    expect(applyDeferredResize).toHaveBeenCalledWith(id);
+    expect(instance.revealPendingRepair).toBeUndefined();
+  });
+
+  it("handlePostWake itself never re-fits a streaming pane whose grid would change (the full no-geometry contract)", async () => {
+    // NO handlePostWake stub — this pins the production tail: fit() and
+    // forceImmediateResize() must not run for a streaming main-buffer pane
+    // with a real grid delta; the obligation goes to the watchdog instead.
+    const id = "wake-postwake-streaming";
+    const instance = streamingInstance({
+      pendingWrites: 2, // streaming — but latest == grid, so the fullWake gate passes through
+      fitAddon: {
+        fit: vi.fn(),
+        // The container proposes a grid different from the live one: the fit
+        // WOULD re-wrap. This is the divergence handlePostWake must defer on.
+        proposeDimensions: () => ({ cols: 92, rows: 30 }),
+      },
+    });
+    service.instances.set(id, instance);
+
+    const fit = vi.spyOn(service.resizeController, "fit").mockReturnValue(null);
+    const forceImmediateResize = vi
+      .spyOn(service.resizeController, "forceImmediateResize")
+      .mockImplementation(() => {});
+    // Paint-only tail — not part of the geometry contract under test, and its
+    // internals need real xterm/DOM plumbing jsdom mocks don't have.
+    vi.spyOn(
+      service as unknown as { maybeReflowTerminal: (managed: unknown) => void },
+      "maybeReflowTerminal"
+    ).mockImplementation(() => {});
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    expect(fit).not.toHaveBeenCalled();
+    expect(forceImmediateResize).not.toHaveBeenCalled();
+    expect(instance.revealPendingRepair).toBe(true);
+    expect(instance.revealPendingGeneration).toBe(instance.attachGeneration);
   });
 });

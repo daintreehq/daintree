@@ -342,6 +342,53 @@ describe("TerminalResizeController", () => {
     expect(resizeMock).not.toHaveBeenCalled();
   });
 
+  it("applyDeferredResize defers a grid change on a streaming main-buffer pane to the watchdog (#10863 choke point)", () => {
+    const managed = createManagedTerminal();
+    managed.latestCols = 120;
+    managed.latestRows = 40;
+    managed.pendingWrites = 2; // a queued batch is still parsing — mid-stream
+    managed.attachGeneration = 7;
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+      } as any,
+    });
+
+    controller.applyDeferredResize("term-1");
+
+    // The grid-changing resync must NOT re-wrap the streaming buffer; the
+    // obligation goes to the reconciliation watchdog instead.
+    expect(managed.terminal.resize).not.toHaveBeenCalled();
+    expect(resizeMock).not.toHaveBeenCalled();
+    expect(managed.revealPendingRepair).toBe(true);
+    expect(managed.revealPendingGeneration).toBe(7);
+  });
+
+  it("applyDeferredResize still applies a grid change on a streaming ALT-buffer pane (alt exempt from the re-wrap hazard)", () => {
+    const managed = createManagedTerminal();
+    managed.latestCols = 120;
+    managed.latestRows = 40;
+    managed.pendingWrites = 2;
+    managed.isAltBuffer = true;
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+      } as any,
+    });
+
+    controller.applyDeferredResize("term-1");
+
+    expect(managed.terminal.resize).toHaveBeenCalledWith(120, 40);
+    expect(resizeMock).toHaveBeenCalledWith("term-1", 120, 40);
+    expect(managed.revealPendingRepair).toBeUndefined();
+  });
+
   it("applyDeferredResize is a no-op when xterm dims already match latest", () => {
     const managed = createManagedTerminal();
     managed.terminal.cols = 120;

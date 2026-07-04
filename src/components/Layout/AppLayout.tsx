@@ -58,7 +58,16 @@ const LazyGlobalBannerCoordinator = lazy(() =>
 void preloadGlobalBannerCoordinator();
 
 function preloadHelpPanel() {
-  return import("../HelpPanel");
+  // Gate the panel chunk on the HybridInputBar chunk: the assistant always
+  // mounts the bar (Suspense fallback null inside HelpPanel), so a bar chunk
+  // that resolves AFTER the panel commits pops in BELOW the terminal and
+  // shrinks its host rows mid-boot — a PTY resize landing in the CLI's most
+  // fragile window (the splash→hand-off sequence). Awaiting both (not merely
+  // fetching in parallel) guarantees the bar's lazy() resolves synchronously
+  // on the panel's first render, so the terminal box is stable from first
+  // paint. A failed bar chunk degrades to no bar rather than no panel.
+  const inputBar = import("@/components/Terminal/HybridInputBar").catch(() => null);
+  return Promise.all([import("../HelpPanel"), inputBar]).then(([m]) => m);
 }
 // Named `HelpPanel` (not Lazy*) because AppLayout.sidebar.test.ts asserts on
 // the `<HelpPanel ...>` JSX shape. The render below is unconditional (panel
