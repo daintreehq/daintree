@@ -33,6 +33,7 @@ nodeV8.setHeapSnapshotNearHeapLimit(2);
 import { MessagePort } from "node:worker_threads";
 import os from "node:os";
 import { PtyManager } from "./services/PtyManager.js";
+import { TerminalRetentionCoordinator } from "./services/pty/TerminalRetentionCoordinator.js";
 import {
   AnalysisWorkerPool,
   analysisWorkersDisabled,
@@ -688,6 +689,23 @@ const resourceGovernor = new ResourceGovernor({
     };
     dropAccumulator = { droppedBytes: 0, dataLossCount: 0 };
     return snapshot;
+  },
+  prunePreservedSnapshots: (max) => ptyManager.prunePreservedSnapshots(max),
+});
+
+// Retention coordinator: stamps each terminal's retention tier from its
+// observable state (agent state, focus, activity tier, trash/preserve) and
+// applies the tier's budgets to the host-side analysis buffers. The tier
+// feeds the governor's state-aware targeted trim via getTerminalBufferSizes
+// and the flow-control diagnostics via getAllTerminalRetention.
+const retentionCoordinator = new TerminalRetentionCoordinator({
+  getTerminals: () => ptyManager.getAllProcesses(),
+  isTrashed: (id) => ptyManager.isTerminalTrashed(id),
+  isFocused: (id) => {
+    for (const focusedId of windowFocusedTerminalMap.values()) {
+      if (focusedId === id) return true;
+    }
+    return false;
   },
 });
 
@@ -1480,6 +1498,7 @@ function cleanup(): void {
   }
 
   resourceGovernor.dispose();
+  retentionCoordinator.dispose();
 
   for (const coordinator of pauseCoordinators.values()) {
     coordinator.forceReleaseAll();
@@ -1526,6 +1545,7 @@ async function initialize(): Promise<void> {
   try {
     // Start the resource governor for proactive memory monitoring
     resourceGovernor.start();
+    retentionCoordinator.start();
 
     // Start the process tree cache (shared across all terminals)
     processTreeCache.start();

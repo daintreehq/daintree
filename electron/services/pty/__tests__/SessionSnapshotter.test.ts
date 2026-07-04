@@ -20,6 +20,7 @@ interface MutableHost extends SessionSnapshotterHost {
   wasKilled: boolean;
   launchAgentId: string | undefined;
   contentEpoch: number;
+  trimEpoch: number;
   bannerMarkers: boolean;
   serializedState: string | null;
   serializedStateAsync: string | null;
@@ -48,6 +49,7 @@ function createHost(overrides: Partial<MutableHost> = {}): MutableHost {
     wasKilled: false,
     launchAgentId: undefined,
     contentEpoch: 1,
+    trimEpoch: 0,
     bannerMarkers: false,
     serializedState: "sync-state",
     serializedStateAsync: "async-state",
@@ -430,6 +432,68 @@ describe("SessionSnapshotter", () => {
       await flushMicrotasks();
 
       expect(persistAsyncMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("trim-epoch guard", () => {
+    it("drops a debounced persist whose serialize overlapped a trim, then persists the post-trim state on reschedule", async () => {
+      const host = createHost();
+      host.asyncResolved = false;
+      const snap = new SessionSnapshotter(host);
+
+      snap.schedule();
+      await vi.advanceTimersByTimeAsync(5000); // persist starts, stalls on serialize
+
+      // A retention/pressure trim lands while the serialize is in flight —
+      // the in-flight result may be mid-truncation and must not be persisted.
+      host.trimEpoch = 1;
+      host.serializedStateAsync = "possibly-truncated-state";
+      host.asyncResolve();
+      await flushMicrotasks();
+
+      expect(persistAsyncMock).not.toHaveBeenCalled();
+
+      // The guard re-marked dirty, so the finally-block reschedule captures a
+      // clean post-trim snapshot.
+      host.serializedStateAsync = "post-trim-state";
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+      expect(persistAsyncMock).toHaveBeenCalledWith("t-test", "post-trim-state");
+    });
+
+    it("does not skip when the trim epoch is unchanged across the serialize", async () => {
+      const host = createHost({ trimEpoch: 7 });
+      host.asyncResolved = false;
+      const snap = new SessionSnapshotter(host);
+
+      snap.schedule();
+      await vi.advanceTimersByTimeAsync(5000);
+      host.asyncResolve();
+      await flushMicrotasks();
+
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+      expect(persistAsyncMock).toHaveBeenCalledWith("t-test", "async-state");
+    });
+
+    it("event-driven flush discards a mid-trim serialize and leaves the epoch uncovered for a retry", async () => {
+      const host = createHost();
+      host.asyncResolved = false;
+      const snap = new SessionSnapshotter(host);
+
+      snap.flushEventDriven();
+      host.trimEpoch = 1;
+      host.asyncResolve();
+      await flushMicrotasks();
+
+      expect(persistAsyncMock).not.toHaveBeenCalled();
+
+      // lastFlushedEpoch was never stamped, so the same contentEpoch still
+      // triggers a retry once the throttle window elapses.
+      vi.advanceTimersByTime(2001);
+      snap.flushEventDriven();
+      await flushMicrotasks();
+
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
     });
   });
 

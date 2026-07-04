@@ -2,17 +2,38 @@ import type { TerminalInfo } from "./types.js";
 import { decideTerminalExitForensics } from "./terminalForensics.js";
 import { logError } from "../../utils/logger.js";
 
-const FORENSIC_BUFFER_SIZE = 4000;
+export const FORENSIC_BUFFER_SIZE = 4000;
 
 export class TerminalForensicsBuffer {
   private recentOutputBuffer = "";
   private textDecoder = new TextDecoder();
+  private maxChars = FORENSIC_BUFFER_SIZE;
+
+  /**
+   * Retention hook: cap the forensics ring per the terminal's retention tier.
+   * Lowering the cap trims the held tail immediately. Exit forensics read
+   * whatever tail is retained at exit time — live (non-archived) tiers keep
+   * the full ring so abnormal-exit diagnostics are unaffected.
+   */
+  setMaxChars(chars: number): void {
+    if (!Number.isFinite(chars) || chars < 0) return;
+    this.maxChars = Math.floor(chars);
+    // Zero disables the ring — explicit because `slice(-0)` keeps everything.
+    if (this.maxChars === 0) {
+      this.recentOutputBuffer = "";
+      return;
+    }
+    if (this.recentOutputBuffer.length > this.maxChars) {
+      this.recentOutputBuffer = this.recentOutputBuffer.slice(-this.maxChars);
+    }
+  }
 
   capture(data: string | Uint8Array): void {
+    if (this.maxChars === 0) return;
     const text = typeof data === "string" ? data : this.textDecoder.decode(data);
     this.recentOutputBuffer += text;
-    if (this.recentOutputBuffer.length > FORENSIC_BUFFER_SIZE) {
-      this.recentOutputBuffer = this.recentOutputBuffer.slice(-FORENSIC_BUFFER_SIZE);
+    if (this.recentOutputBuffer.length > this.maxChars) {
+      this.recentOutputBuffer = this.recentOutputBuffer.slice(-this.maxChars);
     }
   }
 

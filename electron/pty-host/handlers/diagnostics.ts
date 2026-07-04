@@ -3,6 +3,7 @@ import type {
   FlowControlSnapshot,
   FlowControlTerminalSnapshot,
   PtyHostWorkerGovernanceSnapshot,
+  TerminalRetentionState,
 } from "../../../shared/types/pty-host.js";
 import { getEventLoopStats } from "../eventLoopMonitor.js";
 import type { HandlerMap, HostContext } from "./types.js";
@@ -23,6 +24,7 @@ export function createDiagnosticsHandlers(ctx: HostContext): HandlerMap {
     getPauseCoordinator,
     getPausedDurationsSnapshot,
     getDropTallySnapshot,
+    ptyManager,
     sendEvent,
   } = ctx;
 
@@ -51,14 +53,26 @@ export function createDiagnosticsHandlers(ctx: HostContext): HandlerMap {
         dropTallyById.set(terminalId, tally);
       }
 
+      // Per-terminal retention attribution: which tier each terminal sits in,
+      // its per-category retained-memory estimate, and whether retention
+      // trimming has happened. This is the "who dominates host memory" half of
+      // the snapshot; the flow maps above are the "who is paused/dropping" half.
+      const retentionById = new Map<string, TerminalRetentionState>();
+      for (const { terminalId, retention } of ptyManager.getAllTerminalRetention()) {
+        retentionById.set(terminalId, retention);
+      }
+
       // Union every terminal id known to any flow-control map so a terminal
-      // that is paused/suspended/held but has no recorded status still appears.
+      // that is paused/suspended/held but has no recorded status still appears,
+      // plus every retention-stamped live terminal so memory attribution covers
+      // quiet terminals that never touched a flow-control map.
       const ids = new Set<string>();
       for (const id of backpressureManager.terminalStatusesMap.keys()) ids.add(id);
       for (const id of backpressureManager.suspendedSet) ids.add(id);
       for (const id of heldDurationById.keys()) ids.add(id);
       for (const id of pauseCoordinators.keys()) ids.add(id);
       for (const id of dropTallyById.keys()) ids.add(id);
+      for (const id of retentionById.keys()) ids.add(id);
 
       const terminals: FlowControlTerminalSnapshot[] = [];
       for (const id of ids) {
@@ -73,6 +87,7 @@ export function createDiagnosticsHandlers(ctx: HostContext): HandlerMap {
           droppedBytes: dropTally?.droppedBytes ?? 0,
           dropCount: dropTally?.dropCount ?? 0,
           lastDropAt: dropTally?.lastDropAt ?? null,
+          retention: retentionById.get(id) ?? null,
         });
       }
       terminals.sort((a, b) => a.terminalId.localeCompare(b.terminalId));

@@ -10,8 +10,29 @@ const PENDING_SEMANTIC_DATA_MAX_CHARS = 64 * 1024;
 export class SemanticBufferManager {
   private pendingSemanticData = "";
   private semanticFlushTimer: NodeJS.Timeout | null = null;
+  private maxLines = SEMANTIC_BUFFER_MAX_LINES;
 
   constructor(private terminalInfo: TerminalInfo) {}
+
+  /**
+   * Retention hook: cap the semantic line buffer per the terminal's retention
+   * tier. Lowering the cap trims the existing buffer immediately (newest lines
+   * kept); raising it only affects future accumulation.
+   */
+  setMaxLines(lines: number): void {
+    if (!Number.isFinite(lines) || lines < 0) return;
+    this.maxLines = Math.floor(lines);
+    // Zero disables the buffer entirely. Handled explicitly because
+    // `slice(-0)` is `slice(0)` — it would KEEP everything instead of nothing.
+    if (this.maxLines === 0) {
+      this.terminalInfo.semanticBuffer = [];
+      return;
+    }
+    const buffer = this.terminalInfo.semanticBuffer;
+    if (buffer.length > this.maxLines) {
+      this.terminalInfo.semanticBuffer = buffer.slice(-this.maxLines);
+    }
+  }
 
   onData(data: string): void {
     this.pendingSemanticData += data;
@@ -72,6 +93,12 @@ export class SemanticBufferManager {
 
   private updateSemanticBuffer(chunk: string): void {
     const terminal = this.terminalInfo;
+    // A zero cap means the buffer is disabled — appending and then slicing
+    // with -0 would grow it without bound.
+    if (this.maxLines === 0) {
+      if (terminal.semanticBuffer.length > 0) terminal.semanticBuffer = [];
+      return;
+    }
     const normalized = chunk.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     const lines = normalized.split("\n");
 
@@ -89,10 +116,10 @@ export class SemanticBufferManager {
         return line;
       });
 
-    terminal.semanticBuffer.push(...processedLines.slice(-SEMANTIC_BUFFER_MAX_LINES));
+    terminal.semanticBuffer.push(...processedLines.slice(-this.maxLines));
 
-    if (terminal.semanticBuffer.length > SEMANTIC_BUFFER_MAX_LINES) {
-      terminal.semanticBuffer = terminal.semanticBuffer.slice(-SEMANTIC_BUFFER_MAX_LINES);
+    if (terminal.semanticBuffer.length > this.maxLines) {
+      terminal.semanticBuffer = terminal.semanticBuffer.slice(-this.maxLines);
     }
   }
 }

@@ -6,6 +6,11 @@ import type {
 } from "../../shared/types/pty-host.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
 import { SCROLLBACK_MIN } from "../../shared/config/scrollback.js";
+import {
+  PRESSURE_MAX_PRESERVED_TERMINAL_SNAPSHOTS,
+  TERMINAL_RETENTION_BUDGETS,
+  type TerminalRetentionTier,
+} from "../../shared/config/terminalRetention.js";
 import { FdMonitor } from "./FdMonitor.js";
 import { metricsEnabled } from "./metrics.js";
 import type { PtyPauseCoordinator } from "./PtyPauseCoordinator.js";
@@ -36,9 +41,23 @@ export interface ResourceGovernorDeps {
    * Per-terminal scrollback dimensions for memory-aware ranking and targeted
    * trimming. `scrollbackLines × cols × 12` is the cheap closed-form estimate of
    * each terminal's headless-buffer footprint (3 uint32s per cell). Read at the
-   * metric tick; never serializes a buffer.
+   * metric tick; never serializes a buffer. `tier` (when stamped by the
+   * retention coordinator) makes the targeted trim state-aware: foreground
+   * terminals are exempt until critical pressure and each tier trims to its
+   * own retention floor instead of the uniform SCROLLBACK_MIN.
    */
-  getTerminalBufferSizes?: () => Array<{ id: string; scrollbackLines: number; cols: number }>;
+  getTerminalBufferSizes?: () => Array<{
+    id: string;
+    scrollbackLines: number;
+    cols: number;
+    tier?: TerminalRetentionTier;
+  }>;
+  /**
+   * Prune preserved exit snapshots down to `max` under memory pressure.
+   * Preserved snapshots are pure retained memory with no live producer —
+   * the safest reclaim, run before any live-terminal trim.
+   */
+  prunePreservedSnapshots?: (max: number) => void;
   /**
    * Targeted pre-pause reclaim: trim each listed terminal's scrollback to its
    * mapped target-line count (heaviest contributors trimmed hardest). Replaces the
@@ -345,30 +364,45 @@ export class ResourceGovernor {
     this.emitBufferMemoryGauge();
   }
 
+  /** Retention floor a pressure trim may take a terminal down to. Untiered
+   * entries (retention coordinator not wired / not yet swept) keep the legacy
+   * uniform SCROLLBACK_MIN floor. */
+  private pressureFloorFor(tier: TerminalRetentionTier | undefined): number {
+    return tier ? TERMINAL_RETENTION_BUDGETS[tier].pressureMirrorFloorLines : SCROLLBACK_MIN;
+  }
+
   /**
-   * Pre-pause buffer reclaim. Prefers the targeted path — trims only terminals
-   * whose scrollback exceeds SCROLLBACK_MIN, heaviest contributor first — so a
-   * single chatty agent's history is reclaimed without flattening every quiet
-   * terminal to 100 lines. Falls back to the uniform flatten when buffer-size
-   * attribution isn't wired (or the targeted call throws). Pure reclaim: no pause,
-   * no governor state mutation. Caller owns the one-shot `trimAttemptedForCurrentPressure`.
+   * Pre-pause buffer reclaim. Prunes preserved exit snapshots first (pure
+   * retained memory), then prefers the targeted trim path — heaviest
+   * contributor first, each terminal trimmed to its retention tier's pressure
+   * floor, and foreground (visible/focused active) terminals exempt; those are
+   * only touched by the critical-pressure emergency trim. Falls back to the
+   * uniform flatten when buffer-size attribution isn't wired (or the targeted
+   * call throws). Pure reclaim: no pause, no governor state mutation. Caller
+   * owns the one-shot `trimAttemptedForCurrentPressure`.
    */
   private performPrePauseTrim(rawPercent: number, smoothedPercent: number): void {
+    try {
+      this.deps.prunePreservedSnapshots?.(PRESSURE_MAX_PRESERVED_TERMINAL_SNAPSHOTS);
+    } catch (err) {
+      console.warn("[ResourceGovernor] preserved-snapshot prune failed:", err);
+    }
+
     if (this.deps.trimBuffersTargeted && this.deps.getTerminalBufferSizes) {
       try {
         const sizes = this.deps.getTerminalBufferSizes();
-        // Heaviest-first so the Map's insertion order (and the log) leads with the
-        // biggest contributor. All targets are SCROLLBACK_MIN today; the Map shape
-        // keeps per-terminal targets future-proof.
+        // Heaviest-first so the Map's insertion order (and the log) leads with
+        // the biggest contributor.
         const targets = new Map<string, number>();
         for (const t of sizes
-          .filter((s) => s.scrollbackLines > SCROLLBACK_MIN)
+          .filter((s) => s.tier !== "foreground")
+          .filter((s) => s.scrollbackLines > this.pressureFloorFor(s.tier))
           .sort(
             (a, b) =>
               b.scrollbackLines * b.cols * this.BYTES_PER_CELL -
               a.scrollbackLines * a.cols * this.BYTES_PER_CELL
           )) {
-          targets.set(t.id, SCROLLBACK_MIN);
+          targets.set(t.id, this.pressureFloorFor(t.tier));
         }
         if (targets.size > 0) {
           this.deps.trimBuffersTargeted(targets);
@@ -379,7 +413,13 @@ export class ResourceGovernor {
         }
         return;
       } catch (err) {
-        console.warn("[ResourceGovernor] targeted trim failed, falling back to uniform trim:", err);
+        // Do NOT fall back to the uniform flatten here: it would trim
+        // foreground terminals at non-critical pressure, breaking the
+        // retention exemption. Reclaim is lost for this tick only — if
+        // pressure persists, the next tick escalates to the global pause,
+        // which reliably stops growth without destroying any history.
+        console.warn("[ResourceGovernor] targeted trim failed; skipping reclaim this tick:", err);
+        return;
       }
     }
 
@@ -393,6 +433,40 @@ export class ResourceGovernor {
       } catch (err) {
         console.warn("[ResourceGovernor] trimBuffers failed:", err);
       }
+    }
+  }
+
+  /**
+   * Critical-pressure emergency reclaim, run AFTER the immediate global pause
+   * (the pause must not wait on anything at ≥95%). Unlike the pre-pause trim,
+   * this includes foreground terminals — at critical pressure the next
+   * allocation could OOM the host, which is strictly worse for the visible
+   * terminal than losing mirror history it can regrow. Best-effort; never
+   * throws to the pause path.
+   */
+  private performCriticalTrim(): void {
+    try {
+      this.deps.prunePreservedSnapshots?.(PRESSURE_MAX_PRESERVED_TERMINAL_SNAPSHOTS);
+      if (!this.deps.trimBuffersTargeted || !this.deps.getTerminalBufferSizes) return;
+      const targets = new Map<string, number>();
+      for (const t of this.deps
+        .getTerminalBufferSizes()
+        .filter((s) => s.scrollbackLines > this.pressureFloorFor(s.tier))
+        .sort(
+          (a, b) =>
+            b.scrollbackLines * b.cols * this.BYTES_PER_CELL -
+            a.scrollbackLines * a.cols * this.BYTES_PER_CELL
+        )) {
+        targets.set(t.id, this.pressureFloorFor(t.tier));
+      }
+      if (targets.size > 0) {
+        this.deps.trimBuffersTargeted(targets);
+        console.log(
+          `[ResourceGovernor] Critical-pressure emergency trim of ${targets.size} buffer(s) after global pause.`
+        );
+      }
+    } catch (err) {
+      console.warn("[ResourceGovernor] critical-pressure trim failed:", err);
     }
   }
 
@@ -691,6 +765,14 @@ export class ResourceGovernor {
     }
     this.deps.incrementPauseCount(pausedCount);
     console.log(`[ResourceGovernor] Paused ${pausedCount}/${ids.length} terminals`);
+
+    // Critical pressure: the pause alone stops growth but frees nothing.
+    // Reclaim retained analysis memory now — including foreground terminals,
+    // which the pre-pause targeted trim deliberately spares — so utilization
+    // can actually recede before the 10s force-resume fires.
+    if (isCritical) {
+      this.performCriticalTrim();
+    }
 
     this.deps.sendEvent({
       type: "host-throttled",
