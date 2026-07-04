@@ -304,10 +304,11 @@ describe("window show sequence", () => {
     loadRenderer("startup", "proj-1");
 
     // The project is resolved before the CSS precompute, threaded in alongside
-    // the pre-read themeConfig. The boot path must NOT pass instantReveal — the
-    // 400ms Doherty gate belongs on the initial launch (3rd arg undefined).
+    // the pre-read themeConfig. The boot path passes exactly two args — project
+    // + themeConfig — and NO instantReveal option, so the 400ms Doherty gate
+    // stays on the initial launch (toHaveBeenCalledWith already pins arity).
     expect(buildSkeletonCss).toHaveBeenCalledWith(project, expect.anything());
-    expect(buildSkeletonCss.mock.calls[0][2]).toBeUndefined();
+    expect(buildSkeletonCss.mock.calls[0]).toHaveLength(2);
     expect(readLastActiveProjectIdentity).toHaveBeenCalledWith("proj-1");
 
     const domReadyHandlers = listeners.get("dom-ready") ?? [];
