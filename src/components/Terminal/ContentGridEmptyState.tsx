@@ -108,7 +108,10 @@ export function ContentGridEmptyState({
                 <div className="mb-4">{identityMark}</div>
                 {hasProjectIdentity ? (
                   <div className="flex flex-col items-center gap-1.5 min-w-0 max-w-full">
-                    <div className="group flex items-center gap-1.5 min-w-0 max-w-full">
+                    {/* The name stays centered under the mark; the gear is
+                        pulled out of flow (absolute, just past the name) so its
+                        hidden footprint never shifts the lockup off-axis. */}
+                    <div className="group relative flex items-center min-w-0 max-w-full">
                       <h3 className="text-2xl font-semibold text-daintree-text tracking-tight truncate max-w-full">
                         {projectEmoji ? (
                           // The name outweighs the emoji — the text is the
@@ -122,7 +125,7 @@ export function ContentGridEmptyState({
                       <button
                         type="button"
                         onClick={handleOpenProjectSettings}
-                        className="shrink-0 rounded-full p-1 text-daintree-text/50 opacity-0 transition-opacity hover:bg-overlay-subtle hover:text-daintree-text group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                        className="absolute left-full top-1/2 ml-1.5 -translate-y-1/2 shrink-0 rounded-full p-1 text-daintree-text/50 opacity-0 transition-opacity hover:bg-overlay-subtle hover:text-daintree-text group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
                         aria-label="Project settings"
                       >
                         <Settings className="h-3.5 w-3.5" />
