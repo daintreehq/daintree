@@ -88,6 +88,7 @@ interface LatestState {
   activeMode: "command" | "file" | "diff" | "terminal" | "selection" | null;
   isAutocompleteOpen: boolean;
   autocompleteItems: AutocompleteItem[];
+  isResultsStale: boolean;
   selectedIndex: number;
   value: string;
   atContext: AtFileContext | null;
@@ -329,12 +330,22 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               : null;
     const isAutocompleteOpen = activeMode !== null && !disabled;
 
-    const { files: autocompleteFiles, isLoading: isAutocompleteLoading } = useFileAutocomplete({
+    const {
+      files: autocompleteFiles,
+      isLoading: isAutocompleteLoading,
+      resultsQuery: fileResultsQuery,
+    } = useFileAutocomplete({
       cwd,
       query: atContext?.queryForSearch ?? "",
       enabled: isAutocompleteOpen && activeMode === "file",
       limit: 50,
     });
+
+    // File search is debounced + async; every other mode filters synchronously.
+    // While the visible results belong to an earlier query they are "stale":
+    // rendered dimmed, and never accepted by Enter/Tab (the literal text wins).
+    const isResultsStale =
+      activeMode === "file" && fileResultsQuery !== (atContext?.queryForSearch ?? "");
 
     const { items: autocompleteCommands, isLoading: isCommandsLoading } =
       useSlashCommandAutocomplete({
@@ -368,6 +379,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         activeMode,
         isAutocompleteOpen,
         autocompleteItems,
+        isResultsStale,
         selectedIndex,
         value,
         atContext,
@@ -677,6 +689,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       setAtContext,
       setSlashContext,
       setDiffContext,
+      setTerminalContext,
+      setSelectionContext,
       setIsExpanded,
       setSelectedIndex,
     });
@@ -696,6 +710,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       setAtContext,
       setSlashContext,
       setDiffContext,
+      setTerminalContext,
+      setSelectionContext,
     });
 
     useEditorFactory({
@@ -775,8 +791,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       "--ib-accent": inputBarColors.accent,
     } as React.CSSProperties;
 
-    const isSpecialState = isVoiceActiveForPanel || isDragOverFiles;
+    const isSpecialState = isVoiceActiveForPanel || isDragOverFiles || isFleetPrimary;
 
+    // Fleet-primary uses the same amber family as FleetDraftingPill so the
+    // shell itself says "Enter broadcasts" at the point of typing.
     const specialStyle: React.CSSProperties | undefined = isVoiceActiveForPanel
       ? {
           borderColor: `color-mix(in oklab, ${inputBarColors.accent} 60%, transparent)`,
@@ -789,7 +807,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             backgroundColor: inputBarColors.shellBg,
             boxShadow: `0 0 0 1px color-mix(in oklab, ${inputBarColors.accent} 30%, transparent)`,
           }
-        : undefined;
+        : isFleetPrimary
+          ? {
+              borderColor: "color-mix(in oklab, var(--color-category-amber) 55%, transparent)",
+              backgroundColor: inputBarColors.shellBg,
+              boxShadow:
+                "0 0 0 1px color-mix(in oklab, var(--color-category-amber) 22%, transparent)",
+            }
+          : undefined;
 
     const barContent = (
       <div
@@ -810,6 +835,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               disabled && "opacity-60"
             )}
             data-voice-active={isVoiceActiveForPanel ? "true" : undefined}
+            data-fleet-armed={isFleetPrimary ? "true" : undefined}
             style={specialStyle}
             onDragEnter={handleDragEnter}
             onDragOver={handleDragOver}
@@ -824,8 +850,21 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               items={autocompleteItems}
               selectedIndex={selectedIndex}
               isLoading={isLoading}
+              isStale={isResultsStale}
               onSelect={handleAutocompleteSelect}
               style={{ left: `${menuLeftPx}px` }}
+              title={
+                activeMode === "command"
+                  ? "Commands"
+                  : activeMode === "terminal"
+                    ? "Terminal output"
+                    : activeMode === "selection"
+                      ? "Terminal selection"
+                      : activeMode === "diff"
+                        ? "Diffs"
+                        : "Files"
+              }
+              keyHint={activeMode === "command" ? "↵ run · ⇥ complete" : "↵ insert"}
               ariaLabel={
                 activeMode === "command"
                   ? "Command autocomplete"
@@ -853,8 +892,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               </div>
             )}
             {isVoiceSubmitting && (
-              <div className="absolute inset-0 z-10 flex items-center justify-center rounded-md bg-daintree-bg/80 pointer-events-none">
+              <div
+                role="status"
+                aria-live="polite"
+                className="absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-md bg-daintree-bg/80 pointer-events-none"
+              >
                 <Loader2 className="h-4 w-4 animate-spin text-daintree-accent" />
+                <span className="text-xs text-daintree-text/70">Finishing dictation…</span>
               </div>
             )}
             <button

@@ -86,4 +86,106 @@ describe("AutocompleteMenu", () => {
     expect(screen.getAllByRole("option")).toHaveLength(2);
     expect(screen.queryByRole("status")).toBeNull();
   });
+
+  it("renders a header with title and key hint when provided", () => {
+    render(
+      <AutocompleteMenu
+        isOpen={true}
+        items={[{ key: "a", label: "alpha", value: "alpha" }]}
+        selectedIndex={0}
+        onSelect={noop}
+        title="Commands"
+        keyHint="↵ run · ⇥ complete"
+        emptyMessage="No matches"
+      />
+    );
+
+    expect(screen.getByText("Commands")).toBeTruthy();
+    expect(screen.getByText("↵ run · ⇥ complete")).toBeTruthy();
+  });
+
+  it("marks the listbox busy while results are stale or loading", () => {
+    const items: AutocompleteItem[] = [{ key: "a", label: "alpha", value: "alpha" }];
+
+    const { rerender } = render(
+      <AutocompleteMenu
+        isOpen={true}
+        items={items}
+        selectedIndex={0}
+        isStale={true}
+        onSelect={noop}
+        emptyMessage="No matches"
+      />
+    );
+    expect(screen.getByRole("listbox").getAttribute("aria-busy")).toBe("true");
+
+    rerender(
+      <AutocompleteMenu
+        isOpen={true}
+        items={items}
+        selectedIndex={0}
+        isStale={false}
+        isLoading={true}
+        onSelect={noop}
+        emptyMessage="No matches"
+      />
+    );
+    expect(screen.getByRole("listbox").getAttribute("aria-busy")).toBe("true");
+
+    rerender(
+      <AutocompleteMenu
+        isOpen={true}
+        items={items}
+        selectedIndex={0}
+        isStale={false}
+        isLoading={false}
+        onSelect={noop}
+        emptyMessage="No matches"
+      />
+    );
+    expect(screen.getByRole("listbox").getAttribute("aria-busy")).toBeNull();
+  });
+
+  it("scrolls the keyboard-selected option into view as selection moves", () => {
+    const scrollSpy = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollSpy;
+    try {
+      const items: AutocompleteItem[] = [
+        { key: "a", label: "alpha", value: "alpha" },
+        { key: "b", label: "beta", value: "beta" },
+        { key: "c", label: "gamma", value: "gamma" },
+      ];
+
+      const { rerender } = render(
+        <AutocompleteMenu
+          isOpen={true}
+          items={items}
+          selectedIndex={0}
+          onSelect={noop}
+          emptyMessage="No matches"
+        />
+      );
+      const callsAfterMount = scrollSpy.mock.calls.length;
+
+      rerender(
+        <AutocompleteMenu
+          isOpen={true}
+          items={items}
+          selectedIndex={2}
+          onSelect={noop}
+          emptyMessage="No matches"
+        />
+      );
+
+      expect(scrollSpy.mock.calls.length).toBeGreaterThan(callsAfterMount);
+      expect(scrollSpy).toHaveBeenLastCalledWith({ block: "nearest" });
+    } finally {
+      if (original === undefined) {
+        delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+      } else {
+        Element.prototype.scrollIntoView = original;
+      }
+    }
+  });
 });

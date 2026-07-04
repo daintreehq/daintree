@@ -61,7 +61,19 @@ export function useAutocompleteItems({
       return autocompleteDiffItems;
     }
     if (activeMode === "file") {
-      return autocompleteFiles.map((file) => ({ key: file, label: file, value: file }));
+      // Basename first, directory as the dimmed description — scannable in a
+      // dense list and disambiguates duplicate filenames across directories.
+      return autocompleteFiles.map((file) => {
+        const sep = Math.max(file.lastIndexOf("/"), file.lastIndexOf("\\"));
+        const base = sep >= 0 ? file.slice(sep + 1) : file;
+        const dir = sep >= 0 ? file.slice(0, sep) : "";
+        return {
+          key: file,
+          label: base || file,
+          value: file,
+          description: dir || undefined,
+        };
+      });
     }
     if (activeMode === "command") {
       return autocompleteCommands;

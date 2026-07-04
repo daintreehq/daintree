@@ -36,6 +36,55 @@ describe("useAutocompleteItems", () => {
     expect(result.current.isLoading).toBe(true);
   });
 
+  it("splits file paths into basename label and directory description", () => {
+    const { result } = renderHook(() =>
+      useAutocompleteItems({
+        ...baseParams,
+        activeMode: "file",
+        autocompleteFiles: ["src/components/Button.tsx", "README.md"],
+      })
+    );
+    const [nested, root] = result.current.autocompleteItems;
+    expect(nested!.label).toBe("Button.tsx");
+    expect(nested!.description).toBe("src/components");
+    expect(nested!.value).toBe("src/components/Button.tsx");
+    expect(root!.label).toBe("README.md");
+    expect(root!.description).toBeUndefined();
+    expect(root!.value).toBe("README.md");
+  });
+
+  it("disambiguates duplicate basenames via directory descriptions", () => {
+    const { result } = renderHook(() =>
+      useAutocompleteItems({
+        ...baseParams,
+        activeMode: "file",
+        autocompleteFiles: ["src/a/index.ts", "src/b/index.ts"],
+      })
+    );
+    const items = result.current.autocompleteItems;
+    expect(items[0]!.label).toBe("index.ts");
+    expect(items[1]!.label).toBe("index.ts");
+    expect(items[0]!.description).toBe("src/a");
+    expect(items[1]!.description).toBe("src/b");
+    expect(items[0]!.key).not.toBe(items[1]!.key);
+  });
+
+  it("handles Windows separators and trailing-separator paths", () => {
+    const { result } = renderHook(() =>
+      useAutocompleteItems({
+        ...baseParams,
+        activeMode: "file",
+        autocompleteFiles: ["src\\utils\\log.ts", "src/dir/"],
+      })
+    );
+    const [win, trailing] = result.current.autocompleteItems;
+    expect(win!.label).toBe("log.ts");
+    expect(win!.description).toBe("src\\utils");
+    // Trailing separator yields an empty basename — falls back to the full path.
+    expect(trailing!.label).toBe("src/dir/");
+    expect(trailing!.value).toBe("src/dir/");
+  });
+
   it("returns diff items filtered by partial", () => {
     const { result } = renderHook(() =>
       useAutocompleteItems({

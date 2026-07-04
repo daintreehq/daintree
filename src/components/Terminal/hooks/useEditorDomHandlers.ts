@@ -9,6 +9,7 @@ interface LatestRefShape {
   disabled: boolean;
   isAutocompleteOpen: boolean;
   autocompleteItems: { key: string }[];
+  isResultsStale: boolean;
   activeMode: "command" | "file" | "diff" | "terminal" | "selection" | null;
   selectedIndex: number;
   value: string;
@@ -30,6 +31,8 @@ interface UseEditorDomHandlersParams {
   setAtContext: (value: null) => void;
   setSlashContext: (value: null) => void;
   setDiffContext: (value: null) => void;
+  setTerminalContext: (value: null) => void;
+  setSelectionContext: (value: null) => void;
 }
 
 export function useEditorDomHandlers({
@@ -45,6 +48,8 @@ export function useEditorDomHandlers({
   setAtContext,
   setSlashContext,
   setDiffContext,
+  setTerminalContext,
+  setSelectionContext,
 }: UseEditorDomHandlersParams) {
   "use no memo";
   const sendFromEditorRef = useRef(sendFromEditor);
@@ -83,7 +88,11 @@ export function useEditorDomHandlers({
             return true;
           }
           if (lastEnterKeydownNewlineRef.current) return false;
-          if (latest.isAutocompleteOpen && latest.autocompleteItems[latest.selectedIndex]) {
+          if (
+            latest.isAutocompleteOpen &&
+            !latest.isResultsStale &&
+            latest.autocompleteItems[latest.selectedIndex]
+          ) {
             event.preventDefault();
             const action = latest.activeMode === "command" ? "execute" : "insert";
             applyAutocompleteSelectionRef.current(action);
@@ -146,6 +155,8 @@ export function useEditorDomHandlers({
           setAtContext(null);
           setSlashContext(null);
           setDiffContext(null);
+          setTerminalContext(null);
+          setSelectionContext(null);
           lastEnterKeydownNewlineRef.current = false;
           handledEnterRef.current = false;
           submitAfterCompositionRef.current = false;

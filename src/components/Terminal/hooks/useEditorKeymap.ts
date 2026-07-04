@@ -3,7 +3,13 @@ import { EditorView } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
 import type { Compartment } from "@codemirror/state";
 import type { AutocompleteItem } from "../AutocompleteMenu";
-import type { AtFileContext, SlashCommandContext, AtDiffContext } from "../hybridInputParsing";
+import type {
+  AtFileContext,
+  SlashCommandContext,
+  AtDiffContext,
+  AtTerminalContext,
+  AtSelectionContext,
+} from "../hybridInputParsing";
 
 interface LatestRefShape {
   terminalId: string;
@@ -14,6 +20,7 @@ interface LatestRefShape {
   activeMode: "command" | "file" | "diff" | "terminal" | "selection" | null;
   isAutocompleteOpen: boolean;
   autocompleteItems: AutocompleteItem[];
+  isResultsStale: boolean;
   selectedIndex: number;
   value: string;
   onSendKey?: (key: string) => void;
@@ -41,6 +48,8 @@ interface UseEditorKeymapParams {
   setAtContext: Dispatch<SetStateAction<AtFileContext | null>>;
   setSlashContext: Dispatch<SetStateAction<SlashCommandContext | null>>;
   setDiffContext: Dispatch<SetStateAction<AtDiffContext | null>>;
+  setTerminalContext: Dispatch<SetStateAction<AtTerminalContext | null>>;
+  setSelectionContext: Dispatch<SetStateAction<AtSelectionContext | null>>;
   setIsExpanded: Dispatch<SetStateAction<boolean>>;
   setSelectedIndex: Dispatch<SetStateAction<number>>;
 }
@@ -77,6 +86,8 @@ export function useEditorKeymap({
   setAtContext,
   setSlashContext,
   setDiffContext,
+  setTerminalContext,
+  setSelectionContext,
   setIsExpanded,
   setSelectedIndex,
 }: UseEditorKeymapParams) {
@@ -93,7 +104,14 @@ export function useEditorKeymap({
       if (!latest) return false;
       if (isComposingRef.current) return false;
 
-      if (latest.isAutocompleteOpen && latest.autocompleteItems[latest.selectedIndex]) {
+      // Stale results (query changed since they were produced) must not be
+      // accepted by a fast Enter — fall through to the normal send path so
+      // the user's literal text wins over an outdated top match.
+      if (
+        latest.isAutocompleteOpen &&
+        !latest.isResultsStale &&
+        latest.autocompleteItems[latest.selectedIndex]
+      ) {
         const action = latest.activeMode === "command" ? "execute" : "insert";
 
         handledEnterRef.current = true;
@@ -147,6 +165,8 @@ export function useEditorKeymap({
         setAtContext(null);
         setSlashContext(null);
         setDiffContext(null);
+        setTerminalContext(null);
+        setSelectionContext(null);
         return true;
       }
 
@@ -251,6 +271,9 @@ export function useEditorKeymap({
       if (isComposingRef.current) return false;
 
       if (latest.isAutocompleteOpen && latest.autocompleteItems[latest.selectedIndex]) {
+        // Swallow Tab while results are stale — inserting an outdated match
+        // is worse than a no-op, and letting Tab through would move focus.
+        if (latest.isResultsStale) return true;
         applyAutocompleteSelection("insert");
         return true;
       }

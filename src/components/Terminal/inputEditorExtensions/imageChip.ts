@@ -37,6 +37,7 @@ class ImageChipWidget extends WidgetType {
     span.appendChild(img);
 
     const label = document.createElement("span");
+    label.className = "cm-chip-label";
     label.setAttribute("aria-hidden", "true");
     label.textContent = formatChipLabel(this.filePath);
     span.appendChild(label);
@@ -48,9 +49,18 @@ class ImageChipWidget extends WidgetType {
     removeBtn.addEventListener("mousedown", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const entry = view.state
-        .field(imageChipField, false)
-        ?.find((en) => en.filePath === this.filePath);
+      // Position-based lookup so duplicate chips for the same image remove
+      // the clicked chip, not the first occurrence (mirrors fileDropChip).
+      const entries = view.state.field(imageChipField, false);
+      if (!entries) return;
+      let pos = -1;
+      try {
+        pos = view.posAtDOM(span);
+      } catch {
+        // Widget DOM already detached — fall through to the path match.
+      }
+      const byPos = pos >= 0 ? entries.find((en) => pos >= en.from && pos < en.to) : undefined;
+      const entry = byPos ?? entries.find((en) => en.filePath === this.filePath);
       if (entry) removeChipRange(view, entry.from, entry.to);
     });
     span.appendChild(removeBtn);
