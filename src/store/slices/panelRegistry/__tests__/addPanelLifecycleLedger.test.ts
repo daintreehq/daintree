@@ -86,12 +86,32 @@ function getPtyPanel(id: string): PtyPanelData | undefined {
   return usePanelStore.getState().panelsById[id] as PtyPanelData | undefined;
 }
 
+// Drain microtasks: the spawn task chains through Promise.all (env fetch) →
+// terminalClient.spawn → set ready → waitForAttachSettled, all microtask-fast
+// under mocked IPC. Mirrors the optimisticPanelSpawn test (#5789), which uses
+// the same spawn flow and passes reliably under CI. vi.waitFor's macrotask
+// polling adds OS-scheduler jitter that can race the spawn task under load.
+async function drainMicrotasks(iterations = 100): Promise<void> {
+  for (let i = 0; i < iterations; i++) {
+    await Promise.resolve();
+  }
+}
+
 describe("addPanel lifecycle ledger", () => {
   beforeEach(async () => {
     await usePanelStore.getState().reset();
     agentLifecycleLedger.clear();
     terminalClient.spawn.mockReset().mockResolvedValue(undefined);
     terminalClient.kill.mockReset().mockResolvedValue(undefined);
+    // Explicitly reset waitForAttachSettled so the spawn task's post-ready
+    // await resolves immediately. The mock factory sets mockResolvedValue but
+    // a prior test's mockImplementation (or vitest's mock state under load)
+    // can survive into the next test if not explicitly cleared — mirrors the
+    // optimisticPanelSpawn test's beforeEach.
+    const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+    const waitForAttachSettledMock = vi.mocked(terminalInstanceService.waitForAttachSettled);
+    waitForAttachSettledMock.mockReset();
+    waitForAttachSettledMock.mockResolvedValue(undefined);
   });
 
   it("records launch facts, spawn resolution, and env provenance", async () => {
@@ -108,9 +128,8 @@ describe("addPanel lifecycle ledger", () => {
     });
 
     expect(id).toBe("term-facts");
-    await vi.waitFor(() => {
-      expect(getPtyPanel("term-facts")?.spawnStatus).toBe("ready");
-    });
+    await drainMicrotasks();
+    expect(getPtyPanel("term-facts")?.spawnStatus).toBe("ready");
 
     const entry = agentLifecycleLedger.getEntry("term-facts");
     expect(entry?.generation).toBe(1);
@@ -144,9 +163,8 @@ describe("addPanel lifecycle ledger", () => {
     expect(id).toBe("term-race");
 
     // Wait until the startup queue has issued the spawn IPC.
-    await vi.waitFor(() => {
-      expect(terminalClient.spawn).toHaveBeenCalledTimes(1);
-    });
+    await drainMicrotasks();
+    expect(terminalClient.spawn).toHaveBeenCalledTimes(1);
 
     // User closes the panel while the spawn IPC is still in flight.
     usePanelStore.getState().removePanel("term-race");
@@ -156,9 +174,8 @@ describe("addPanel lifecycle ledger", () => {
 
     // Spawn resolves late — the orphaned PTY must be compensating-killed.
     resolveSpawn();
-    await vi.waitFor(() => {
-      expect(terminalClient.kill.mock.calls.length).toBeGreaterThan(killsAtRemoval);
-    });
+    await drainMicrotasks();
+    expect(terminalClient.kill.mock.calls.length).toBeGreaterThan(killsAtRemoval);
     expect(usePanelStore.getState().panelsById["term-race"]).toBeUndefined();
   });
 
@@ -174,9 +191,8 @@ describe("addPanel lifecycle ledger", () => {
       location: "grid",
       bypassLimits: true,
     });
-    await vi.waitFor(() => {
-      expect(getPtyPanel("term-live")?.spawnStatus).toBe("ready");
-    });
+    await drainMicrotasks();
+    expect(getPtyPanel("term-live")?.spawnStatus).toBe("ready");
 
     // A hydration replay for the same id arrives late, carrying a stale
     // persisted snapshot with different launch metadata.
