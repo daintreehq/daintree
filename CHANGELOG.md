@@ -1,5 +1,79 @@
 # Changelog
 
+## [0.22.0] - 2026-07-04
+
+A terminal-reliability and session-continuity release. The rendering pipeline now prioritizes whichever terminal you're looking at under heavy multi-agent load, CPU-bound work moves off the main thread, and a family of scroll and detection bugs is fixed. Closed agent sessions are now journaled and resumable from a searchable list, the empty grid becomes a recipe-forward launcher, and user plugins gain a full lifecycle — hot enable/disable, background updates, and a startup kill-switch.
+
+### Features
+
+**Session resume & history**
+
+- Every terminal close now journals a resume record, so a closed agent session can be reopened later (#10849)
+- Browsable, searchable resume-session list in the panel palette and a dedicated launcher palette (#10851)
+- Reopen Last Closed falls back to the resume journal when no live snapshot exists (#10852)
+- Clear session history per-project or globally from settings (#10853)
+- Resumable agent sessions are exposed to automation over MCP (#10854)
+
+**Terminal**
+
+- Empty panel grid is reworked into a recipe-forward launcher with quick actions and resume shortcuts (#10930)
+- Cmd+K chord indicator becomes a searchable command HUD
+- Alt-screen mode is configurable per-agent and globally (#10876)
+- Reveal in file manager added to the file-link context menu (#10873)
+- Panel renames follow a title-ownership ladder so a user-set title survives respawn, records, and duplication (#10929)
+
+**Diagnostics & fleet**
+
+- "Why am I slow?" snapshot surfaces the current performance bottleneck on demand (#10910)
+- Dev-preview gains a diagnostics timeline, classified proxy 502s, and a Diagnostics drawer tab (#10936)
+- Fleet run supervisor keeps broadcasts supervised past submission, with richer run history and MCP visibility (#10935)
+- Review hub gains a merge-readiness rail and a read-only readiness action (#10932)
+- Transcript-driven agent-state eval harness, plus approval/error waiting reasons in state detection (#10934)
+- Zen mode header surfaces the count of agents waiting on input
+
+**Plugins**
+
+- Hot enable/disable of user plugins with no restart (#10887)
+- Background update checks and an Update all queue (#10893)
+- Startup plugin blocklist / kill-switch to disable a plugin at load (#10891)
+- Skills contribution point — plugins can ship skills (#10892)
+
+### Performance
+
+- Prioritize the focused terminal in pty-host backpressure and batching so background agents can't stall the pane you're watching (#10877, #10878, #10879, #10880, #10881)
+- Offload CPU-bound analysis, SQLite, copytree, and diff work to persistent worker-thread pools (#10920)
+- Fix PTY flow-control accounting to restore render quality under heavy output (#10933)
+- Pace headless-mirror parsing and write-buffer entries to stop scroll stalls in long sessions (#10857, #10858)
+- Speed up main-process persistence hot paths as session history grows (#10907)
+- Back off idle-agent polling and async-serialize event snapshots (#10906)
+- Stop panel status-buffer flushes fanning out into O(worktrees) recomputes every frame (#10908)
+- Batch wheel reports and throttle agent-output diffing on the render path
+
+### Bug Fixes
+
+**Terminal & agents**
+
+- Stop Codex agent-detection flapping that destroyed terminal scrollback (#10911)
+- Restored sessions keep their provider — launch env is persisted, so a resumed session no longer resumes on the wrong provider (#10922)
+- Scrolling a mouse-reporting TUI no longer flips the agent state to working (#10925)
+- Bound the reconciliation watchdog with a circuit breaker so it can't re-wrap a diverged terminal every six seconds (#10909)
+- Alt-screen mode hint no longer misattributes Grok's default to the global setting (#10894)
+- Treat private-mode CSI sequences as non-keyboard input; keep invalid slash-command drafts editable
+
+**Layout & panels**
+
+- Terminal grid no longer flickers between two layouts on resize or when adding a 7th panel (#10871)
+- Cmd+W closes just the panel, not the whole window, when a dev preview is the only panel (#10859)
+- Terminal scrollbar gutter is conditional on scroll mode, fixing the inconsistent scrollbar across panels (#10883)
+- WebGL DOM-fallback threshold holds under a resource-profile downgrade (#10858)
+- Zen mode status label no longer truncates
+- Forge toolbar pills no longer render duplicated in dev mode (#10937)
+- Assistant no longer duplicates or garbles agent output on view reveal (#10863)
+
+### Other Changes
+
+- Continue/Abort rebase buttons are dropped from the worktree card (#10921)
+
 ## [0.21.1] - 2026-06-30
 
 A follow-up to the full-screen TUI scroll work in 0.21.0. That release smoothed wheel and trackpad scrolling in mouse-reporting TUIs, but lag and stutter remained under load — most notably a "smooth at first, then slow and stays slow" case. This patch finishes the job, retuning the wheel-input path to VS Code parity.
