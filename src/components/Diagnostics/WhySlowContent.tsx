@@ -308,7 +308,19 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
                     : "default"
                 }
               />
+              <MetricTile
+                label="Worker queue"
+                value={snapshot.workers ? String(snapshot.workers.totalQueueDepth) : "—"}
+                tone={snapshot.workers && snapshot.workers.totalQueueDepth > 0 ? "warn" : "default"}
+              />
             </div>
+            {snapshot.workers && snapshot.workers.degraded.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {snapshot.workers.degraded.map((id) => (
+                  <Badge key={id} tone="warn">{`degraded: ${id}`}</Badge>
+                ))}
+              </div>
+            )}
           </section>
         </div>
       ) : (

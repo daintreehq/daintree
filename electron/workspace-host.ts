@@ -619,6 +619,27 @@ port.on("message", async (rawMsg: any) => {
         copytreeWorkerClient.cancel(request.operationId);
         break;
 
+      // Worker-governance pull: copytree worker state + this host's memory.
+      // The copytree worker is a worker_thread inside this utility process,
+      // so host-level memoryUsage() is the pool's memory attribution.
+      case "governance:snapshot": {
+        const memory = process.memoryUsage();
+        sendEvent({
+          type: "governance:snapshot-result",
+          requestId: request.requestId,
+          snapshot: {
+            timestamp: Date.now(),
+            workers: [copytreeWorkerClient.getGovernanceSnapshot()],
+            hostMemory: {
+              rssBytes: memory.rss,
+              heapUsedBytes: memory.heapUsed,
+              externalBytes: memory.external ?? 0,
+            },
+          },
+        });
+        break;
+      }
+
       case "copytree:test-config": {
         const { requestId, operationId, rootPath, options } = request;
         console.log(`[WorkspaceHost] CopyTree test-config started`);

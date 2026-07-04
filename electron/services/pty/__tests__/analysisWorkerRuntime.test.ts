@@ -61,7 +61,13 @@ describe("AnalysisWorkerRuntime", () => {
 
   it("serializes buffer content written via data messages", async () => {
     sendData("hello from the worker\r\n");
-    runtime.handleMessage({ type: "request", requestId: 1, terminalId: "t1", op: "serialize" });
+    runtime.handleMessage({
+      type: "request",
+      requestId: 1,
+      terminalId: "t1",
+      op: "serialize",
+      generation: 1,
+    });
 
     const response = await waitFor(() =>
       emitted.find((m) => m.type === "response" && m.requestId === 1)
@@ -156,6 +162,7 @@ describe("AnalysisWorkerRuntime", () => {
       requestId: 5,
       terminalId: "t1",
       op: "serialize-persistence",
+      generation: 1,
     });
     runtime.handleMessage({ type: "free", terminalId: "t1" });
 
@@ -174,8 +181,20 @@ describe("AnalysisWorkerRuntime", () => {
 
   it("keeps a chained request behind an earlier one on the same terminal", async () => {
     sendData("ordered content\r\n");
-    runtime.handleMessage({ type: "request", requestId: 11, terminalId: "t1", op: "serialize" });
-    runtime.handleMessage({ type: "request", requestId: 12, terminalId: "t1", op: "serialize" });
+    runtime.handleMessage({
+      type: "request",
+      requestId: 11,
+      terminalId: "t1",
+      op: "serialize",
+      generation: 1,
+    });
+    runtime.handleMessage({
+      type: "request",
+      requestId: 12,
+      terminalId: "t1",
+      op: "serialize",
+      generation: 1,
+    });
     runtime.handleMessage({ type: "free", terminalId: "t1" });
 
     await waitFor(() => emitted.find((m) => m.type === "response" && m.requestId === 12));
@@ -187,7 +206,13 @@ describe("AnalysisWorkerRuntime", () => {
   });
 
   it("responds with an error result for requests against unknown terminals", async () => {
-    runtime.handleMessage({ type: "request", requestId: 9, terminalId: "nope", op: "serialize" });
+    runtime.handleMessage({
+      type: "request",
+      requestId: 9,
+      terminalId: "nope",
+      op: "serialize",
+      generation: 1,
+    });
     const response = emitted.find((m) => m.type === "response" && m.requestId === 9);
     expect(response).toBeDefined();
     if (response?.type === "response") {
@@ -203,6 +228,7 @@ describe("AnalysisWorkerRuntime", () => {
       requestId: 2,
       terminalId: "t1",
       op: "final-snapshot",
+      generation: 1,
     });
 
     const response = await waitFor(() =>

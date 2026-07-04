@@ -99,6 +99,21 @@ export class PluginDevWorkerMainBridge {
   private disposed = false;
   private invokeSeq = 1;
   private readonly pendingInvokes = new Map<string, PendingInvoke>();
+
+  /** In-flight main→worker invokes — the governance "action in flight" signal. */
+  get pendingInvokeCount(): number {
+    return this.pendingInvokes.size;
+  }
+
+  /**
+   * In-flight worker→main host calls (fs, git, prompts like showQuickPick —
+   * which can legitimately sit open for a long time). Governance must treat
+   * these as live work: disposing the worker would abort the call and dismiss
+   * any visible prompt out from under the user.
+   */
+  get pendingHostCallCount(): number {
+    return this.hostCallAborts.size;
+  }
   private readonly subscriptionDisposers = new Map<string, () => void>();
   /** AbortControllers for in-flight `host-call`s, keyed by requestId. A worker
    * `host-cancel` (the caller's AbortSignal fired) aborts the matching one. */

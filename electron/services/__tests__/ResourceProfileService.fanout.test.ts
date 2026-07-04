@@ -222,6 +222,64 @@ describe("ResourceProfileService fan-out isolation", () => {
     });
   });
 
+  describe("worker-governance trim fan-out", () => {
+    it("requests a worker trim on efficiency entry, after the other consumers", () => {
+      const requestWorkerTrim = vi.fn();
+      const { deps, pty } = createDeps({ requestWorkerTrim });
+      const service = new ResourceProfileService(deps);
+
+      service._forceProfileForTesting("efficiency");
+      expect(requestWorkerTrim).toHaveBeenCalledTimes(1);
+      expect(pty.setResourceProfile).toHaveBeenCalledWith("efficiency");
+
+      // Leaving efficiency must not request another trim.
+      service._forceProfileForTesting("balanced");
+      expect(requestWorkerTrim).toHaveBeenCalledTimes(1);
+    });
+
+    it("a throwing requestWorkerTrim cannot skip the renderer broadcast", () => {
+      const { deps } = createDeps({
+        requestWorkerTrim: () => {
+          throw new Error("governance exploded");
+        },
+      });
+      const service = new ResourceProfileService(deps);
+
+      expect(() => service._forceProfileForTesting("efficiency")).not.toThrow();
+      expect(vi.mocked(broadcastToRenderer)).toHaveBeenCalledTimes(1);
+    });
+
+    it("a rejecting async requestWorkerTrim is absorbed without unhandled rejection", async () => {
+      const { deps } = createDeps({
+        requestWorkerTrim: async () => {
+          throw new Error("async governance failure");
+        },
+      });
+      const service = new ResourceProfileService(deps);
+
+      expect(() => service._forceProfileForTesting("efficiency")).not.toThrow();
+      expect(vi.mocked(broadcastToRenderer)).toHaveBeenCalledTimes(1);
+      // Let the rejection settle through the isolation .catch.
+      await new Promise((resolve) => setImmediate(resolve));
+    });
+
+    it("profile transitions never await worker cleanup — the trim is fire-and-forget", () => {
+      let resolveTrim: () => void = () => {};
+      const { deps } = createDeps({
+        requestWorkerTrim: () =>
+          new Promise<void>((resolve) => {
+            resolveTrim = resolve;
+          }),
+      });
+      const service = new ResourceProfileService(deps);
+
+      service._forceProfileForTesting("efficiency");
+      // The broadcast landed synchronously while the trim is still pending.
+      expect(vi.mocked(broadcastToRenderer)).toHaveBeenCalledTimes(1);
+      resolveTrim();
+    });
+  });
+
   describe("late-created PVM under a throwing sibling setter", () => {
     it("applyCurrentProfileTo pushes the remaining settings when an early setter throws", () => {
       const pvm = makeMockPvm();

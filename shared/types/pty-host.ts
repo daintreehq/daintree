@@ -14,6 +14,7 @@ import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { AgentConfig } from "../config/agentRegistry.js";
 import type { AgentSessionRecord } from "./ipc/agentSessionHistory.js";
 import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js";
+import type { WorkerResourceSnapshot } from "./workerGovernance.js";
 
 export type { TerminalFlowStatus };
 
@@ -235,7 +236,8 @@ export type PtyHostRequest =
    * restarted host re-syncs before any spawn replay.
    */
   | { type: "set-plugin-agent-registry"; registry: Record<string, AgentConfig> }
-  | { type: "get-flow-control-snapshot"; requestId: string };
+  | { type: "get-flow-control-snapshot"; requestId: string }
+  | { type: "get-worker-governance-snapshot"; requestId: string };
 
 /** Per-terminal flow-control state in a {@link FlowControlSnapshot}. */
 export interface FlowControlTerminalSnapshot {
@@ -317,6 +319,22 @@ export interface FlowControlSnapshot {
   resourceGovernor: ResourceGovernorSnapshot;
   /** Pty-host loop health since the previous pull; null if unmonitored. */
   eventLoop: PtyHostEventLoopStats | null;
+}
+
+/**
+ * On-demand worker-governance snapshot from the pty-host: per-slot analysis
+ * worker pool state plus the host process's own memory usage (worker_threads
+ * share the host process, so per-thread RSS does not exist — the host-level
+ * numbers are the memory story for the whole pool).
+ */
+export interface PtyHostWorkerGovernanceSnapshot {
+  timestamp: number;
+  workers: WorkerResourceSnapshot[];
+  hostMemory: {
+    rssBytes: number;
+    heapUsedBytes: number;
+    externalBytes: number;
+  };
 }
 
 /**
@@ -553,6 +571,11 @@ export type PtyHostEvent =
       type: "flow-control-snapshot";
       requestId: string;
       snapshot: FlowControlSnapshot;
+    }
+  | {
+      type: "worker-governance-snapshot";
+      requestId: string;
+      snapshot: PtyHostWorkerGovernanceSnapshot;
     };
 
 export interface FdLeakWarningPayload {

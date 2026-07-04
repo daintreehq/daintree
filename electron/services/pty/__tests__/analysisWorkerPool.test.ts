@@ -360,6 +360,100 @@ describe("AnalysisWorkerPool", () => {
     e2ePool.dispose();
   });
 
+  it("discards a worker reply stamped with a superseded generation", async () => {
+    const backend = pool.createBackend(makeSpec("t1"), makeDelegate())!;
+    const worker = workers[0];
+
+    const promise = backend.serialize();
+    const request = worker.messagesOfType("request")[0];
+    expect(request.generation).toBe(1);
+
+    // A reply echoing an older worker generation must never settle the
+    // request with its payload — it resolves empty instead.
+    worker.emit("message", {
+      type: "response",
+      requestId: request.requestId,
+      terminalId: "t1",
+      result: "STALE-CONTENT",
+      generation: 0,
+    });
+    await expect(promise).resolves.toBeNull();
+  });
+
+  it("stamps requests with the respawned worker's generation and accepts matching replies", async () => {
+    vi.useFakeTimers();
+    const backend = pool.createBackend(makeSpec("t1"), makeDelegate())!;
+    workers[0].emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(600);
+    const replacement = workers[1];
+
+    // Persistence is suppressed after a rebuild; dirty the buffer first.
+    backend.feedChunk("output", { agentLive: false });
+    const promise = backend.serialize();
+    const request = replacement.messagesOfType("request")[0];
+    expect(request.generation).toBe(2);
+
+    replacement.emit("message", {
+      type: "response",
+      requestId: request.requestId,
+      terminalId: "t1",
+      result: "FRESH",
+      generation: 2,
+    });
+    await expect(promise).resolves.toBe("FRESH");
+    vi.useRealTimers();
+  });
+
+  it("reports per-slot governance snapshots with sessions, queue depth, and hard-capped eligibility", async () => {
+    const b1 = pool.createBackend(makeSpec("t1"), makeDelegate())!;
+    pool.createBackend(makeSpec("t2"), makeDelegate());
+    pool.createBackend(makeSpec("t3"), makeDelegate());
+
+    const pending = b1.serialize();
+    const snapshots = pool.getGovernanceSnapshots();
+    expect(snapshots).toHaveLength(2);
+    expect(snapshots.every((s) => s.kind === "analysis-pool")).toBe(true);
+    expect(snapshots.every((s) => s.alive)).toBe(true);
+    // Persistent worker_threads: trim only — never dispose/restart (Electron
+    // worker-churn crash makes terminate/recreate cycles off-limits).
+    expect(
+      snapshots.every((s) => s.eligibility.trim && !s.eligibility.dispose && !s.eligibility.restart)
+    ).toBe(true);
+    expect(snapshots.reduce((sum, s) => sum + s.activeSessionCount, 0)).toBe(3);
+    expect(snapshots.reduce((sum, s) => sum + s.queueDepth, 0)).toBe(1);
+
+    const request = workers.flatMap((w) => w.messagesOfType("request"))[0];
+    workers.forEach((w) =>
+      w.emit("message", {
+        type: "response",
+        requestId: request.requestId,
+        terminalId: "t1",
+        result: null,
+        generation: request.generation,
+      })
+    );
+    await pending;
+    expect(pool.getGovernanceSnapshots().reduce((sum, s) => sum + s.queueDepth, 0)).toBe(0);
+  });
+
+  it("marks a slot dead in governance snapshots once its respawn budget is spent", async () => {
+    vi.useFakeTimers();
+    pool.createBackend(makeSpec("t1"), makeDelegate());
+    pool.createBackend(makeSpec("t2"), makeDelegate());
+
+    workers[0].emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(600);
+    workers[2].emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    const snapshots = pool.getGovernanceSnapshots();
+    const dead = snapshots.filter((s) => !s.alive);
+    expect(dead).toHaveLength(1);
+    expect(dead[0].state).toBe("dead");
+    expect(dead[0].activeSessionCount).toBe(0);
+    vi.useRealTimers();
+  });
+
   it("ignores a data-ack from a superseded generation after a fresh-slot rebuild", async () => {
     vi.useFakeTimers();
     const backend = pool.createBackend(

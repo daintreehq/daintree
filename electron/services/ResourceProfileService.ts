@@ -144,6 +144,13 @@ export interface ResourceProfileDeps {
    * fixtures and legacy callers keep compiling; absent reads as no pressure.
    */
   hasSustainedRendererSaturation?: () => boolean;
+  /**
+   * Worker-governance trim fan-out, requested once on each ENTRY into the
+   * efficiency profile (the service's own cooldown absorbs flapping). Optional
+   * so test fixtures and legacy callers keep compiling; fire-and-forget — a
+   * profile transition never awaits worker cleanup.
+   */
+  requestWorkerTrim?: () => Promise<void> | void;
 }
 
 export type { ResourceProfileSnapshot };
@@ -1090,6 +1097,21 @@ export class ResourceProfileService {
       }
       try {
         pvm.setWarmPaintGateHardTimeoutMs(config.warmPaintGateHardTimeoutMs);
+      } catch {
+        // non-critical
+      }
+    }
+
+    // Ask persistent worker subsystems to trim/drain on efficiency ENTRY.
+    // Isolated like every other consumer: a throwing (or rejecting) dep must
+    // not skip the renderer broadcast below. Downgrades and efficiency-exit
+    // transitions deliberately skip this — trims are for pressure, and undoing
+    // one is impossible anyway.
+    if (profile === "efficiency") {
+      try {
+        void Promise.resolve(this.deps.requestWorkerTrim?.()).catch(() => {
+          // non-critical
+        });
       } catch {
         // non-critical
       }

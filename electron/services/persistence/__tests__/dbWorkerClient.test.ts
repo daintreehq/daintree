@@ -285,6 +285,85 @@ describe("DbWorkerClient", () => {
     expect(worker.posted.map((msg) => msg.fence)).toEqual([0, 0]);
   });
 
+  it("reports a strictly observational governance snapshot with no action eligibility", async () => {
+    const worker = echoWorker();
+    const client = new DbWorkerClient({
+      spawnWorker: () => worker.asWorker(),
+      isDbReady: () => true,
+      isDisabled: () => false,
+    });
+
+    // Before first use: no worker, nothing eligible.
+    const before = client.getGovernanceSnapshot();
+    expect(before.alive).toBe(false);
+    expect(before.state).toBe("not-spawned");
+    expect(before.eligibility).toEqual({ trim: false, dispose: false, restart: false });
+
+    await client.run(checkpointOp, () => null);
+    const after = client.getGovernanceSnapshot();
+    expect(after.alive).toBe(true);
+    expect(after.state).toBe("running");
+    expect(after.queueDepth).toBe(0);
+    expect(after.eligibility).toEqual({ trim: false, dispose: false, restart: false });
+  });
+
+  it("snapshot collection does not touch the fence or reorder queued writes", async () => {
+    const fence = fakeFenceDb(3);
+    const worker = echoWorker();
+    const client = new DbWorkerClient({
+      spawnWorker: () => worker.asWorker(),
+      isDbReady: () => true,
+      isDisabled: () => false,
+      getMainSqlite: () => fence.handle,
+    });
+
+    const first = client.run(
+      { op: "ringWriteAll", ring: "a", records: ["1"], maxRecords: 5 },
+      () => null
+    );
+    // Snapshot between two queued writes — a pure read must not advance the
+    // fence (which would no-op the queued write) or perturb FIFO order.
+    const mid = client.getGovernanceSnapshot();
+    expect(mid.queueDepth).toBe(1);
+    const second = client.run(
+      { op: "ringWriteAll", ring: "a", records: ["2"], maxRecords: 5 },
+      () => null
+    );
+    await Promise.all([first, second]);
+
+    expect(fence.state.epoch).toBe(3);
+    expect(worker.posted.map((msg) => msg.fence)).toEqual([3, 3]);
+    expect(worker.posted.map((msg) => (msg.op === "ringWriteAll" ? msg.records[0] : ""))).toEqual([
+      "1",
+      "2",
+    ]);
+  });
+
+  it("reports degraded and shutting-down states as governance-visible but untouchable", async () => {
+    const wedged = new FakeWorker(); // never responds
+    const client = new DbWorkerClient({
+      spawnWorker: () => wedged.asWorker(),
+      isDbReady: () => true,
+      isDisabled: () => false,
+      requestTimeoutMs: 10,
+    });
+
+    await client.run(checkpointOp, () => null);
+    const degraded = client.getGovernanceSnapshot();
+    expect(degraded.state).toBe("degraded");
+    expect(degraded.eligibility).toEqual({ trim: false, dispose: false, restart: false });
+
+    const healthy = echoWorker();
+    const shuttingDown = new DbWorkerClient({
+      spawnWorker: () => healthy.asWorker(),
+      isDbReady: () => true,
+      isDisabled: () => false,
+    });
+    await shuttingDown.run(checkpointOp, () => null);
+    await shuttingDown.shutdown();
+    expect(shuttingDown.getGovernanceSnapshot().state).toBe("shutting-down");
+  });
+
   it("advances the fence when the shutdown drain times out", async () => {
     const fence = fakeFenceDb(0);
     const worker = new FakeWorker((w, msg) => {

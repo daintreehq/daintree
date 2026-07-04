@@ -185,6 +185,84 @@ describe("CopytreeWorkerClient", () => {
     ).not.toThrow();
   });
 
+  it("releases the result buffer reference the moment it transfers", async () => {
+    const { client, worker } = makeClient();
+
+    const promise = client.generate("/root", {}, undefined, "op-1");
+    expect(client.getGovernanceSnapshot().queueDepth).toBe(1);
+
+    const bigResult = { content: "X".repeat(1024), fileCount: 100 };
+    worker.emit("message", { type: "generate-result", id: "op-1", result: bigResult });
+    await expect(promise).resolves.toEqual(bigResult);
+
+    // The pending map entry (the client's only reference to the payload) is
+    // gone; a duplicate late result for the same id is an inert no-op.
+    expect(client.getGovernanceSnapshot().queueDepth).toBe(0);
+    expect(() =>
+      worker.emit("message", { type: "generate-result", id: "op-1", result: bigResult })
+    ).not.toThrow();
+    expect(client.getGovernanceSnapshot().queueDepth).toBe(0);
+  });
+
+  it("drops messages from a dead worker generation so stale results cannot land", async () => {
+    const { client, worker } = makeClient();
+
+    const promise = client.generate("/root", {}, undefined, "op-1");
+    worker.emit("exit", 3);
+    await expect(promise).rejects.toThrow("exited with code 3");
+    expect(client.getGovernanceSnapshot().queueDepth).toBe(0);
+
+    // The dead worker instance flushes a late result after the client moved
+    // on — the generation fence drops it at the listener boundary. A retried
+    // op with the SAME id (caller retry) runs on the fallback and must not be
+    // settled by the stale payload.
+    const retry = client.generate("/root", {}, undefined, "op-1");
+    worker.emit("message", {
+      type: "generate-result",
+      id: "op-1",
+      result: { content: "STALE", fileCount: 0 },
+    });
+    await expect(retry).resolves.toEqual(inlineResult);
+  });
+
+  it("cancellation drops the pending entry once the worker confirms, retaining nothing", async () => {
+    const { client, worker } = makeClient();
+
+    const promise = client.generate("/root", {}, undefined, "op-1");
+    client.cancel("op-1");
+    worker.emit("message", { type: "generate-error", id: "op-1", error: "cancelled" });
+    await expect(promise).rejects.toThrow("cancelled");
+    expect(client.getGovernanceSnapshot().queueDepth).toBe(0);
+  });
+
+  it("reports governance snapshots across the worker lifecycle", async () => {
+    const { client, worker } = makeClient();
+
+    const before = client.getGovernanceSnapshot();
+    expect(before).toMatchObject({
+      kind: "copytree-worker",
+      alive: false,
+      state: "not-spawned",
+      queueDepth: 0,
+      eligibility: { trim: false, dispose: false, restart: false },
+    });
+
+    const promise = client.generate("/root", {}, undefined, "op-1");
+    expect(client.getGovernanceSnapshot()).toMatchObject({ alive: true, state: "running" });
+    worker.emit("message", {
+      type: "generate-result",
+      id: "op-1",
+      result: { content: "", fileCount: 0 },
+    });
+    await promise;
+
+    worker.emit("exit", 1);
+    expect(client.getGovernanceSnapshot()).toMatchObject({
+      alive: false,
+      state: "fallback-pinned",
+    });
+  });
+
   it("times out a wedged worker op: rejects, drops the pending entry, posts a cancel", async () => {
     vi.useFakeTimers();
     try {

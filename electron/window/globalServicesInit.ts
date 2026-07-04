@@ -51,9 +51,11 @@ import {
   pruneHeapSnapshotsAsync,
   MAX_HEAP_SNAPSHOTS,
   logError,
+  logWarn,
 } from "../utils/logger.js";
 import { effectiveCachedProjectViews } from "../utils/cachedProjectViews.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
+import type { WorkerResourceSnapshot } from "../../shared/types/workerGovernance.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { sendToRenderer } from "../ipc/handlers.js";
@@ -670,6 +672,132 @@ export async function initGlobalServices(
     },
   });
 
+  // Worker governance — providers for every persistent worker subsystem, so
+  // diagnostics can report a bounded resource story and the efficiency profile
+  // can request safe trims. Registered BEFORE resource-profile-service so the
+  // profile service's trim dep resolves a fully-wired registry.
+  registerDeferredTask({
+    name: "worker-governance-service",
+    run: async () => {
+      const { getWorkerGovernanceService } = await import("../services/WorkerGovernanceService.js");
+      const governance = getWorkerGovernanceService();
+      governance.register({
+        name: "db-worker",
+        collect: async () => {
+          const { getDbWorkerGovernanceSnapshot } =
+            await import("../services/persistence/dbWorkerClient.js");
+          const snapshot = getDbWorkerGovernanceSnapshot();
+          return snapshot ? [snapshot] : [];
+        },
+        // Deliberately no trim: the DB worker's queue carries write ordering
+        // and the shutdown drain owns its teardown.
+      });
+      governance.register({
+        name: "plugin-workers",
+        collect: async () => {
+          const { pluginService } = await import("../services/PluginService.js");
+          return pluginService.getWorkerGovernanceSnapshots();
+        },
+        trim: async () => {
+          const { pluginService } = await import("../services/PluginService.js");
+          pluginService.disposeIdlePluginWorkers();
+        },
+      });
+      governance.register({
+        name: "pty-host",
+        collect: async () => {
+          const client = getPtyClient();
+          // No client yet = subsystem not started, nothing to report. A client
+          // whose snapshot resolves null = host down/unresponsive — surface it
+          // as a provider error rather than an empty (healthy-looking) report.
+          if (!client) return [];
+          const snapshot = await client.getWorkerGovernanceSnapshotAsync();
+          if (!snapshot) {
+            throw new Error("pty-host governance snapshot unavailable (host down or timed out)");
+          }
+          return [
+            ...snapshot.workers,
+            {
+              kind: "pty-host" as const,
+              id: "pty-host",
+              pid: null,
+              threadId: null,
+              alive: true,
+              activeSessionCount: snapshot.workers.reduce(
+                (sum, w) => sum + w.activeSessionCount,
+                0
+              ),
+              queueDepth: 0,
+              lastActivityAt: snapshot.timestamp,
+              memory: {
+                rssBytes: snapshot.hostMemory.rssBytes,
+                heapUsedBytes: snapshot.hostMemory.heapUsedBytes,
+                externalBytes: snapshot.hostMemory.externalBytes,
+              },
+              eligibility: { trim: false, dispose: false, restart: false },
+              state: "running",
+            },
+          ];
+        },
+        // No trim hook: the pty-host's idle-analysis trim rides the existing
+        // set-resource-profile push (efficiency entry) — see resourceConfig.ts.
+      });
+      governance.register({
+        name: "workspace-hosts",
+        collect: async () => {
+          const client = getWorkspaceClientRef();
+          if (!client) return [];
+          const { hosts, errors } = await client.getWorkerGovernanceSnapshotsAsync();
+          // A host that failed to answer (crashed, mid-restart) must not
+          // silently vanish from the report — synthesize an unreachable entry
+          // so diagnostics and the why-slow degraded list show it.
+          const unreachable: WorkerResourceSnapshot[] = errors.map(({ projectPath, error }) => {
+            logWarn("worker-governance-workspace-host-failed", { projectPath, error });
+            return {
+              kind: "workspace-host" as const,
+              id: `workspace-host:${projectPath}`,
+              pid: null,
+              threadId: null,
+              alive: false,
+              activeSessionCount: 0,
+              queueDepth: 0,
+              lastActivityAt: null,
+              memory: null,
+              eligibility: { trim: false, dispose: false, restart: false },
+              state: "unreachable",
+              detail: { error },
+            };
+          });
+          return unreachable.concat(
+            hosts.flatMap(({ projectPath, snapshot }) => [
+              ...snapshot.workers.map((worker) => ({
+                ...worker,
+                id: `${worker.id}:${projectPath}`,
+              })),
+              {
+                kind: "workspace-host" as const,
+                id: `workspace-host:${projectPath}`,
+                pid: null,
+                threadId: null,
+                alive: true,
+                activeSessionCount: 0,
+                queueDepth: 0,
+                lastActivityAt: snapshot.timestamp,
+                memory: {
+                  rssBytes: snapshot.hostMemory.rssBytes,
+                  heapUsedBytes: snapshot.hostMemory.heapUsedBytes,
+                  externalBytes: snapshot.hostMemory.externalBytes,
+                },
+                eligibility: { trim: false, dispose: false, restart: false },
+                state: "running",
+              },
+            ])
+          );
+        },
+      });
+    },
+  });
+
   // Must register AFTER event-loop-lag and app-metrics monitors so it can
   // read their data once its own start() fires.
   registerDeferredTask({
@@ -690,6 +818,11 @@ export async function initGlobalServices(
         getUserCachedViewLimit: () =>
           effectiveCachedProjectViews(store.get("terminalConfig")?.cachedProjectViews),
         hasSustainedRendererSaturation: () => hasSustainedRendererSaturation(),
+        requestWorkerTrim: async () => {
+          const { getWorkerGovernanceService } =
+            await import("../services/WorkerGovernanceService.js");
+          getWorkerGovernanceService().requestEfficiencyTrim();
+        },
       });
       setResourceProfileService(svc);
       svc.start();

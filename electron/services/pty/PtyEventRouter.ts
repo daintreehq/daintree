@@ -240,6 +240,10 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       broker.resolve(event.requestId, event.snapshot);
       return true;
 
+    case "worker-governance-snapshot":
+      broker.resolve(event.requestId, event.snapshot);
+      return true;
+
     case "terminal-pid":
       // Defense-in-depth: the pty-host already gates invalid PIDs, but the
       // router must never store a non-positive PID (Windows ConPTY `pid: 0`).

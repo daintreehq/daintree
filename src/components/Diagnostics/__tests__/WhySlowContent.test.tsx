@@ -22,6 +22,7 @@ function makeSnapshot(overrides?: Partial<WhySlowSnapshot>): WhySlowSnapshot {
     rendererTerminals: [],
     pty: null,
     worktrees: null,
+    workers: null,
     ...overrides,
   };
 }
@@ -71,6 +72,35 @@ describe("WhySlowContent", () => {
     expect(screen.getByText("7")).toBeTruthy(); // summed terminalCount
     expect(screen.getByText("FOCUSED: 2")).toBeTruthy(); // summed tier bucket
     expect(screen.getByText("BACKGROUND: 5")).toBeTruthy();
+  });
+
+  it("renders the worker queue depth and degraded-subsystem badges", async () => {
+    getWhySlowSnapshot.mockResolvedValue(
+      makeSnapshot({
+        workers: {
+          subsystemCount: 5,
+          aliveWorkerCount: 4,
+          totalQueueDepth: 3,
+          degraded: ["copytree-worker:/proj", "analysis-worker-1"],
+        },
+      })
+    );
+
+    render(<WhySlowContent />);
+
+    expect(await screen.findByText("Worker queue")).toBeTruthy();
+    expect(screen.getByText("3")).toBeTruthy();
+    expect(screen.getByText("degraded: copytree-worker:/proj")).toBeTruthy();
+    expect(screen.getByText("degraded: analysis-worker-1")).toBeTruthy();
+  });
+
+  it("renders a dash for the worker queue when the summary is unavailable", async () => {
+    getWhySlowSnapshot.mockResolvedValue(makeSnapshot({ workers: null }));
+
+    render(<WhySlowContent />);
+
+    expect(await screen.findByText("Worker queue")).toBeTruthy();
+    expect(screen.queryByText(/^degraded:/)).toBeNull();
   });
 
   it("does not start overlapping refreshes while one is in flight", async () => {

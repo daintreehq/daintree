@@ -141,6 +141,7 @@ export class AnalysisWorkerRuntime {
             terminalId: msg.terminalId,
             result: msg.op === "final-snapshot" ? { snapshot: null, persistence: null } : null,
             error: "no-session",
+            generation: msg.generation,
           });
           return;
         }
@@ -159,6 +160,7 @@ export class AnalysisWorkerRuntime {
               requestId: msg.requestId,
               terminalId: msg.terminalId,
               result,
+              generation: msg.generation,
             });
           },
           (error: unknown) => {
@@ -168,6 +170,7 @@ export class AnalysisWorkerRuntime {
               terminalId: msg.terminalId,
               result: msg.op === "final-snapshot" ? { snapshot: null, persistence: null } : null,
               error: formatErrorMessage(error, "analysis request failed"),
+              generation: msg.generation,
             });
           }
         );
