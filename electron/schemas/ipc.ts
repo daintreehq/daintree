@@ -511,6 +511,7 @@ export const SystemShowItemInFolderUnconfinedPayloadSchema = z.object({
     .string()
     .min(1)
     .max(4096)
+    // eslint-disable-next-line no-control-regex
     .regex(/^[^\x00]*$/, "Null bytes not allowed"),
 });
 
