@@ -68,6 +68,21 @@ describe("PaintFabricCompositor", () => {
     expect(b.focus).toHaveBeenCalledWith("t2-b");
   });
 
+  it("releases a failed claim even when the surface has become unreadable", async () => {
+    const { compositor, a, b } = makeCompositor();
+    b.getOrCreate.mockRejectedValueOnce(new Error("create boom"));
+    b.get.mockImplementation(() => {
+      throw new Error("surface is gone");
+    });
+
+    // The original create error surfaces (not the probe's), and the stale
+    // claim is released so the id routes to the default surface again.
+    await expect(compositor.getOrCreate("t1-b", undefined, {})).rejects.toThrow("create boom");
+    expect(compositor.getRegistryForTests().surfaceFor("t1-b")).toBeNull();
+    compositor.focus("t1-b");
+    expect(a.focus).toHaveBeenCalledWith("t1-b");
+  });
+
   it("keeps a live terminal placed when a failed overlapping create releases the claim", async () => {
     const { compositor, b } = makeCompositor();
 

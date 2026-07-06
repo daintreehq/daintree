@@ -174,10 +174,19 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
 
   // A failed create only releases the placement it claimed: a transfer may
   // have re-homed the id while the doomed build was still in flight, and an
-  // id-keyed release here would strip the NEW surface's ownership.
+  // id-keyed release here would strip the NEW surface's ownership. Runs
+  // inside the create's catch, so the live-instance probe must never throw —
+  // a dead surface would otherwise mask the original create error AND strand
+  // the stale placement.
   private releaseFailedClaim(id: string, surface: PaintSurface, claimed: boolean): void {
     if (!claimed) return;
-    if (surface.plane.get(id)) return;
+    let liveOnSurface = false;
+    try {
+      liveOnSurface = surface.plane.get(id) !== null;
+    } catch {
+      // Unreadable surface — nothing live worth keeping the claim for.
+    }
+    if (liveOnSurface) return;
     if (this.registry.surfaceFor(id)?.id !== surface.id) return;
     this.registry.release(id);
   }
