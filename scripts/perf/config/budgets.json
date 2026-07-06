@@ -29,6 +29,11 @@
     "PERF-031": { "p95Ms": 2400, "maxRegressionPct": 50 },
     "PERF-032": { "p95Ms": 2600, "maxRegressionPct": 15 },
     "PERF-033": { "p95Ms": 100, "maxRegressionPct": 25 },
+    "PERF-034": {
+      "p95Ms": 900,
+      "maxRegressionPct": 40,
+      "maxMetricValues": { "echoDegradationX": 30 }
+    },
 
     "PERF-040": { "p95Ms": 1400, "maxRegressionPct": 15 },
     "PERF-041": { "p95Ms": 2200, "maxRegressionPct": 15 },

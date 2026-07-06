@@ -4,7 +4,7 @@ import { allScenarios, assertMatrixCoverage, getScenariosForMode } from "../scen
 describe("perf scenario matrix", () => {
   it("covers full PERF matrix", () => {
     expect(() => assertMatrixCoverage()).not.toThrow();
-    expect(allScenarios).toHaveLength(34);
+    expect(allScenarios).toHaveLength(35);
   });
 
   it("returns mode-specific scenario sets", () => {
@@ -53,5 +53,23 @@ describe("perf scenario matrix", () => {
     // Length of "log entry 99 from agent terminal" = 32. The last write
     // is the log stream, so the last line must be the final log entry.
     expect(sample.metrics!.lastLineLength).toBeGreaterThanOrEqual(32);
+  });
+
+  it("PERF-034 parse-isolation scenario produces solo and flood echo brackets", async () => {
+    const scenario = allScenarios.find((s) => s.id === "PERF-034");
+    expect(scenario).toBeDefined();
+
+    const context = { mode: "smoke" as const, now: () => performance.now() };
+    const sample = await scenario!.run(context);
+
+    expect(sample.metrics).toBeDefined();
+    // Both brackets must have measured real write-to-parse latencies.
+    expect(sample.metrics!.soloEchoP99Ms).toBeGreaterThan(0);
+    expect(sample.metrics!.floodEchoP99Ms).toBeGreaterThan(0);
+    expect(sample.metrics!.echoDegradationX).toBeGreaterThan(0);
+    expect(Number.isFinite(sample.metrics!.echoDegradationX)).toBe(true);
+    // 12 background terminals × 30 rounds × ~1.8 KB chunks — if this shrinks,
+    // the flood stopped flooding and the degradation signal is meaningless.
+    expect(sample.metrics!.floodBytes).toBeGreaterThan(500_000);
   });
 });

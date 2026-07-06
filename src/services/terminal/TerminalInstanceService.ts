@@ -47,6 +47,8 @@ import { usePanelStore } from "@/store/panelStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import { yieldToScheduler } from "@/lib/schedulerYield";
+import { PaintFabricCompositor } from "./paintFabric/PaintFabricCompositor";
+import { isPaintFabricEnabled, PRIMARY_SURFACE_ID } from "./paintFabric/paintFabricConfig";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -3800,7 +3802,31 @@ class TerminalInstanceService {
   }
 }
 
-export const terminalInstanceService = new TerminalInstanceService();
+// The renderer-facing surface of the terminal paint plane: the public members
+// of TerminalInstanceService. PaintFabricCompositor implements this exact type,
+// so parity between the bare single-surface service and the fabric seam is
+// compile-enforced — a new public method here is a type error until the
+// compositor declares how it routes (per-terminal, group, fan-out, or sum).
+export type TerminalPaintPlane = {
+  [K in keyof TerminalInstanceService]: TerminalInstanceService[K];
+};
+
+// Construction-site seam for the paint fabric
+// (docs/architecture/terminal-paint-fabric.md). Flag off: the bare service,
+// unchanged. Flag on: the compositor fronting a single primary surface —
+// behaviorally identical at surface-count 1, and the rollback path for every
+// later phase. The primary instance stays module-visible so the E2E bridges
+// below can keep their private-state reaches on the concrete surface.
+const primaryTerminalInstanceService = new TerminalInstanceService();
+
+function createTerminalPaintPlane(): TerminalPaintPlane {
+  if (!isPaintFabricEnabled()) return primaryTerminalInstanceService;
+  return new PaintFabricCompositor({
+    surfaces: [{ id: PRIMARY_SURFACE_ID, plane: primaryTerminalInstanceService }],
+  });
+}
+
+export const terminalInstanceService: TerminalPaintPlane = createTerminalPaintPlane();
 
 // Expose terminal introspection/control bridges for E2E tests (the WebGL
 // renderer has no DOM text, so specs read the buffer through these). Gated on
@@ -3938,7 +3964,7 @@ if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
       metaKey: mac,
       ctrlKey: !mac,
     });
-    terminalInstanceService["linkHandler"].openLink(url, panelId, syntheticEvent);
+    primaryTerminalInstanceService["linkHandler"].openLink(url, panelId, syntheticEvent);
     return "ok";
   };
 
@@ -3952,7 +3978,7 @@ if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
     __daintreeGetTerminalWebGLState: (
       panelId: string
     ): { wantsSize: number; active: boolean; mode: string } | null => {
-      const webGLManager = terminalInstanceService["webGLManager"] as TerminalWebGLManager;
+      const webGLManager = primaryTerminalInstanceService["webGLManager"] as TerminalWebGLManager;
       if (!webGLManager) return null;
       return {
         wantsSize: webGLManager.getWantsSize(),
@@ -3967,7 +3993,9 @@ if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
       if (!terminalInstanceService.getInstanceForE2E(panelId)) return false;
       terminalInstanceService.applyRendererPolicy(panelId, TerminalRefreshTier.FOCUSED);
       terminalInstanceService.applyAgentPromotion(panelId, agentId);
-      return (terminalInstanceService["webGLManager"] as TerminalWebGLManager).isActive(panelId);
+      return (primaryTerminalInstanceService["webGLManager"] as TerminalWebGLManager).isActive(
+        panelId
+      );
     },
   });
 }
