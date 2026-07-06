@@ -297,11 +297,20 @@ export async function initPerWindowServices(
         /* non-critical */
       }
     });
-    ptyClient.setPortRefreshCallback(() => {
-      console.log("[MAIN] Pty Host restarted, refreshing ports...");
-      // Refresh ports for ALL registered windows — target the active view
+    ptyClient.setPortRefreshCallback((windowId) => {
+      // Called with no windowId on a full host restart (refresh every window)
+      // and with one when the PTY fabric restarts or reroutes a single
+      // window's shard — refreshing only that window keeps a shard-local
+      // recovery from re-handshaking every healthy window's terminal stream.
+      console.log(
+        windowId === undefined
+          ? "[MAIN] Pty Host restarted, refreshing ports..."
+          : `[MAIN] Pty Host shard changed for window ${windowId}, refreshing its port...`
+      );
+      // Refresh ports for the targeted windows — target the active view
       if (windowRegistry) {
         for (const wCtx of windowRegistry.all()) {
+          if (windowId !== undefined && wCtx.windowId !== windowId) continue;
           if (!wCtx.browserWindow.isDestroyed()) {
             const wc = getAppWebContents(wCtx.browserWindow);
             if (!wc.isDestroyed()) {

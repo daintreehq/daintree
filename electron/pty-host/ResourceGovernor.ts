@@ -101,23 +101,35 @@ export interface ResourceGovernorDeps {
   };
 }
 
-// Process memory budget for the combined heap + external signal. The pty-host
-// is forked with --max-old-space-size matching PtyClient's DEFAULT_CONFIG
-// memoryLimitMb (512) — keep HEAP_BUDGET_MB in sync with it. That flag bounds
-// only the V8 heap; ArrayBuffer backing stores (queued PTY output slabs,
-// xterm typed arrays) are allocated outside it and show up in
+// Process memory budget for the combined heap + external signal. The host is
+// forked with a --max-old-space-size that the parent mirrors into
+// DAINTREE_PTY_HEAP_BUDGET_MB (PtyHostLifecycle sets both from the same
+// memoryLimitMb), so the governor's budget tracks the real V8 cap: 512 on the
+// legacy singleton path, RAM-scaled per shard under the PTY fabric. That cap
+// bounds only the V8 heap; ArrayBuffer backing stores (queued PTY output
+// slabs, xterm typed arrays) are allocated outside it and show up in
 // process.memoryUsage().external, so the governor budgets them separately.
 //
 // Analysis worker_threads inherit the same execArgv, so each worker ISOLATE
-// carries its own 512MB old-space cap — HEAP_BUDGET_MB doubles as the
-// per-isolate binding constraint for the worker-heap term below. The total
-// budget stays process-scoped: it bounded all mirror buffers when they lived
-// on this thread, and it bounds the same memory now that #10920 moved them
-// into worker isolates. Deliberately independent of pool size — idle worker
+// carries its own old-space cap — HEAP_BUDGET_MB doubles as the per-isolate
+// binding constraint for the worker-heap term below. The total budget stays
+// process-scoped: it bounded all mirror buffers when they lived on this
+// thread, and it bounds the same memory now that #10920 moved them into
+// worker isolates. Deliberately independent of pool size — idle worker
 // baselines (~5-20MB each) are real process memory and count against it, so an
 // oversized DAINTREE_ANALYSIS_WORKERS override spends its own headroom.
-const HEAP_BUDGET_MB = 512;
-const EXTERNAL_HEADROOM_MB = 256;
+function resolveHeapBudgetMb(): number {
+  const raw = Number(process.env.DAINTREE_PTY_HEAP_BUDGET_MB);
+  if (Number.isFinite(raw) && raw >= 256 && raw <= 8192) return Math.floor(raw);
+  return 512;
+}
+const HEAP_BUDGET_MB = resolveHeapBudgetMb();
+// External headroom scales with the heap budget (heap/2, floor 256) so the
+// heap-vs-total ratio stays ~67% at every shard size — a fixed 256 on a
+// 2048MB fabric shard would let the heap term dominate and effectively stop
+// budgeting ArrayBuffer growth. At the legacy 512 budget this is exactly the
+// historical 256.
+const EXTERNAL_HEADROOM_MB = Math.max(256, Math.floor(HEAP_BUDGET_MB / 2));
 const TOTAL_PROCESS_BUDGET_MB = HEAP_BUDGET_MB + EXTERNAL_HEADROOM_MB;
 // Worker memory samples older than this contribute 0 to the utilization
 // signal (same stale-contributes-0 discipline as ResourceProfileService's
