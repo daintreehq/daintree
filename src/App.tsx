@@ -73,6 +73,7 @@ import {
   useThemeBrowserSettingsBridge,
   useErrorRetry,
   useActiveWorktreeSync,
+  useAgentActivityBroadcast,
 } from "./hooks/app";
 import { useResourceProfile } from "./hooks/useResourceProfile";
 import { AppLayout } from "./components/Layout";
@@ -584,6 +585,7 @@ function AppInner() {
   );
 
   const { activeWorktree, defaultTerminalCwd } = useActiveWorktreeSync();
+  useAgentActivityBroadcast();
   const resumeSession = useResumeAgentSession();
 
   const worktreePalette = useWorktreePalette({ worktrees });

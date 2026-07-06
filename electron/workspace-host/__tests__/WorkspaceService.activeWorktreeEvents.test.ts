@@ -34,6 +34,9 @@ vi.mock("../../utils/git.js", () => ({
 
 vi.mock("../../utils/gitUtils.js", () => ({
   getGitDir: vi.fn().mockReturnValue("/test/worktree/.git"),
+  // null → the post-reconcile watcher self-heal (ensureTopologyWatcherAlive)
+  // no-ops, keeping these tests focused on event ordering.
+  getGitCommonDir: vi.fn().mockResolvedValue(null),
   clearGitDirCache: vi.fn(),
   clearGitCommonDirCache: vi.fn(),
 }));

@@ -65,6 +65,14 @@ const STATUS_INITIAL_DELAY_MAX_MS = 5_000;
 // stably record absence (packed-refs, detached HEAD's branch ref) and still
 // match on the next stat pass without forcing a real git check.
 const STAT_ABSENT_SENTINEL = -1;
+// Ceiling on how long the stat pre-check may keep skipping full git-status
+// passes while the working tree is NOT covered by a recursive watcher. The
+// four statted files are all .git metadata, so pure working-tree edits (an
+// agent editing sources without staging) never perturb the baseline — without
+// this bound they would stay invisible indefinitely on git-only/unwatched
+// worktrees. Recursive-watched worktrees are exempt: their watcher observes
+// every working-tree write and forces a refresh itself.
+const FULL_STATUS_MAX_AGE_MS = 120_000;
 
 // FNV-1a 32-bit offset basis. Also the digest of an empty change list, which
 // makes it the natural initial value for `previousStateHash` (see below).
@@ -131,6 +139,11 @@ export class WorktreeMonitor {
   private _branch: string | undefined;
   private _gitDir: string | undefined;
   private _isCurrent: boolean;
+  // True while an agent is actively producing work in this worktree (set by
+  // WorkspaceService from the renderer's agent-activity broadcast). Feeds the
+  // elevation tier alongside `_isCurrent` so agent worktrees keep recursive
+  // working-tree watching while backgrounded.
+  private _agentActive: boolean = false;
   private _isMainWorktree: boolean;
 
   // State
@@ -217,6 +230,10 @@ export class WorktreeMonitor {
   // simple-git fork-exec. null = no baseline yet (first poll, or post-error).
   private lastStatBaseline: GitFileStatBaseline | null = null;
   private lastStatBaselineAt: number = 0;
+  // Timestamp of the last completed FULL status pass (one that actually ran
+  // git, not a stat-skip). Bounds how long stat-skips may mask working-tree
+  // edits on worktrees without recursive coverage (FULL_STATUS_MAX_AGE_MS).
+  private lastFullStatusAt: number = 0;
   private lastBaseDivergenceKey: string | null = null;
   private lastBaseDivergenceResult: BaseDivergence | null = null;
   private cachedCommonDir: string | null = null;
@@ -390,8 +407,8 @@ export class WorktreeMonitor {
       get isRunning() {
         return monitor._isRunning;
       },
-      get isCurrent() {
-        return monitor._isCurrent;
+      get isElevated() {
+        return monitor._isCurrent || monitor._agentActive;
       },
       get gitWatchEnabled() {
         // Combined gate: the per-view watcher budget can suppress the watcher
@@ -617,9 +634,10 @@ export class WorktreeMonitor {
     // immediately so the focused worktree gets the recursive watcher right
     // away; downgrades settle behind a short delay inside the controller to
     // absorb rapid focus toggles. Only re-derive poll cadence when the
-    // controller actually rotated synchronously.
+    // controller actually rotated synchronously. Elevation combines focus
+    // with agent activity, so losing focus while an agent works is a no-op.
     if (changed && this._isRunning && this.gitWatchEnabled) {
-      const rotatedImmediately = this.watcherController.handleFocusChange(value);
+      const rotatedImmediately = this.watcherController.handleElevationChange(this.isElevated);
       if (rotatedImmediately && this.pollingTimer) {
         clearTimeout(this.pollingTimer);
         this.pollingTimer = null;
@@ -638,6 +656,46 @@ export class WorktreeMonitor {
     // worktree that hadn't been actively fetched.
     if (changed && this._isRunning) {
       this.fetchScheduler.reschedule(true);
+    }
+  }
+
+  get isElevated(): boolean {
+    return this._isCurrent || this._agentActive;
+  }
+
+  get agentActive(): boolean {
+    return this._agentActive;
+  }
+
+  /**
+   * Marks whether an agent is actively producing work in this worktree.
+   * Elevation (focus OR agent activity) drives watcher granularity, so a
+   * background worktree with a working agent streams working-tree changes
+   * like the focused one. Both edges also force a status refresh: on start
+   * so the card baselines right away, on stop so the agent's final state
+   * lands without waiting for a poll.
+   */
+  set agentActive(value: boolean) {
+    const changed = this._agentActive !== value;
+    this._agentActive = value;
+    if (!changed || !this._isRunning) {
+      return;
+    }
+    if (this.gitWatchEnabled) {
+      const rotatedImmediately = this.watcherController.handleElevationChange(this.isElevated);
+      if (rotatedImmediately && this.pollingTimer) {
+        clearTimeout(this.pollingTimer);
+        this.pollingTimer = null;
+        this.scheduleNextPoll();
+      }
+    }
+    if (value) {
+      // Agent work incoming — reset the idle backoff so the poll fallback
+      // returns to base cadence, mirroring the focus-gain path.
+      this.pollingStrategy.recordStateChange();
+    }
+    if (this._hasInitialStatus) {
+      this.triggerRefreshIfUpdating();
     }
   }
 
@@ -969,12 +1027,13 @@ export class WorktreeMonitor {
       this.watcherController.start();
     }
 
-    // Foreground monitors run the initial git status synchronously — the
-    // user is looking at this card and expects fresh data on app launch.
+    // Elevated monitors (focused, or agent already working — e.g. a worktree
+    // the agent just created and immediately started editing) run the initial
+    // git status synchronously so the card has fresh data right away.
     // Background monitors defer through a 2-5s jitter so N monitors started
     // together don't all fork git at t=0. The fetch scheduler already has
     // its own initial jitter on a separate cadence.
-    if (this._isCurrent) {
+    if (this.isElevated) {
       await this.updateGitStatus(true);
 
       if (this._isRunning && this.pollingEnabled) {
@@ -1090,7 +1149,7 @@ export class WorktreeMonitor {
     if (this.pollingStrategy.isCircuitBreakerTripped()) {
       this.pollingStrategy.reset();
     }
-    if (this._isCurrent && this.gitWatchEnabled) {
+    if (this.isElevated && this.gitWatchEnabled) {
       const budgetReset = this.watcherController.resetRetryBudget();
       if (budgetReset) {
         this.watcherController.update();
@@ -1406,7 +1465,7 @@ export class WorktreeMonitor {
       if (this.pollQueue) {
         await this.pollQueue.add(run, {
           signal: this._pollAbortController.signal,
-          priority: this._isCurrent ? 1 : 0,
+          priority: this.isElevated ? 1 : 0,
         });
       } else {
         await run();
@@ -1448,10 +1507,11 @@ export class WorktreeMonitor {
       const queueDelayMs = Math.max(0, startTime - queuedAt);
 
       try {
-        // Force a status refresh when the active worktree lacks recursive
-        // coverage — both no-watcher and git-only modes can miss mid-edit
-        // changes that haven't reached .git/ yet.
-        const forceRefresh = this._isCurrent && this.watcherController.currentMode !== "recursive";
+        // Force a status refresh when an elevated worktree (focused or
+        // agent-active) lacks recursive coverage — both no-watcher and
+        // git-only modes can miss mid-edit changes that haven't reached
+        // .git/ yet.
+        const forceRefresh = this.isElevated && this.watcherController.currentMode !== "recursive";
         // Watchdog the whole pass: if any await inside updateGitStatus hangs
         // past the ceiling, treat it as a failure and move on rather than let
         // this monitor's loop (and, via the shared pollQueue slot, the whole
@@ -1478,7 +1538,7 @@ export class WorktreeMonitor {
     const runPoll = this.pollQueue
       ? this.pollQueue.add(() => executePoll(), {
           signal: this._pollAbortController.signal,
-          priority: this._isCurrent ? 1 : 0,
+          priority: this.isElevated ? 1 : 0,
         })
       : executePoll();
 
@@ -1584,7 +1644,22 @@ export class WorktreeMonitor {
       // The baseline only exists after the first real check, so this branch
       // is a no-op on the very first poll. Forced refreshes (watcher events,
       // user actions) always run the full check.
-      if (!forceRefresh && gitDir && this._hasInitialStatus && this.lastStatBaseline !== null) {
+      //
+      // The skip is only trustworthy for working-tree freshness while the
+      // recursive watcher covers the tree (its events force refreshes). In
+      // git-only/unwatched modes the four statted files can't reflect pure
+      // working-tree edits, so cap how long skips may stack up: past
+      // FULL_STATUS_MAX_AGE_MS the poll falls through to a real git check.
+      const skipTrustworthy =
+        this.watcherController.currentMode === "recursive" ||
+        Date.now() - this.lastFullStatusAt < FULL_STATUS_MAX_AGE_MS;
+      if (
+        !forceRefresh &&
+        gitDir &&
+        this._hasInitialStatus &&
+        this.lastStatBaseline !== null &&
+        skipTrustworthy
+      ) {
         const baselineAt = this.lastStatBaselineAt;
         const checkStartedAt = Date.now();
         try {
@@ -1842,6 +1917,9 @@ export class WorktreeMonitor {
       // baseline so the next non-forced poll falls through to a full check
       // rather than skipping against a snapshot that predates the failure.
       if (checkSucceeded && gitDir) {
+        // A full pass ran git and landed cleanly — reset the stat-skip
+        // staleness budget alongside the baseline rebuild.
+        this.lastFullStatusAt = Date.now();
         try {
           const commonDir = await this.resolveCommonDirAsync(gitDir);
           const fresh = await this.buildStatBaseline(gitDir, commonDir);

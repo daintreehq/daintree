@@ -128,6 +128,12 @@ async function handleWorktreePortRequest(
         break;
       }
 
+      case "set-agent-activity": {
+        workspaceService.setAgentActivity(msg.payload.worktreeIds);
+        result = { ok: true };
+        break;
+      }
+
       case "refresh": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         // Forward the host's bounded outcome so a watchdog-tripped refresh

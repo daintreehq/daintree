@@ -60,7 +60,7 @@ async function settle(): Promise<void> {
 
 interface MutableHost {
   isRunning: boolean;
-  isCurrent: boolean;
+  isElevated: boolean;
   gitWatchEnabled: boolean;
   gitWatchDebounceMs: number;
   worktreeId: string;
@@ -77,7 +77,7 @@ interface MutableHost {
 function makeHost(overrides: Partial<MutableHost> = {}): MutableHost {
   return {
     isRunning: true,
-    isCurrent: true,
+    isElevated: true,
     gitWatchEnabled: true,
     gitWatchDebounceMs: 300,
     worktreeId: "/test/worktree",
@@ -133,7 +133,7 @@ describe("WatcherController", () => {
 
   it("starts in recursive mode for focused worktrees", async () => {
     mockWatcherStartResult = true;
-    const host = makeHost({ isCurrent: true });
+    const host = makeHost({ isElevated: true });
     const ctrl = new WatcherController(host as WatcherControllerHost);
 
     ctrl.start();
@@ -147,7 +147,7 @@ describe("WatcherController", () => {
 
   it("starts in git-only mode for background worktrees", async () => {
     mockWatcherStartResult = true;
-    const host = makeHost({ isCurrent: false });
+    const host = makeHost({ isElevated: false });
     const ctrl = new WatcherController(host as WatcherControllerHost);
 
     ctrl.start();
@@ -162,7 +162,7 @@ describe("WatcherController", () => {
     mockRecursiveStartResult = false;
     mockGitOnlyStartResult = true;
     mockWatcherStartFiresFailure = true;
-    const host = makeHost({ isCurrent: true });
+    const host = makeHost({ isElevated: true });
     const ctrl = new WatcherController(host as WatcherControllerHost);
 
     ctrl.start();
@@ -175,7 +175,7 @@ describe("WatcherController", () => {
   it("schedules a recursive retry after a failed recursive start (focused only)", async () => {
     mockRecursiveStartResult = false;
     mockGitOnlyStartResult = true;
-    const host = makeHost({ isCurrent: true });
+    const host = makeHost({ isElevated: true });
     const ctrl = new WatcherController(host as WatcherControllerHost);
 
     ctrl.start();
@@ -191,7 +191,7 @@ describe("WatcherController", () => {
 
   it("does not fire onWatcherRecovered on a clean cold start", async () => {
     mockWatcherStartResult = true;
-    const host = makeHost({ isCurrent: true });
+    const host = makeHost({ isElevated: true });
     const ctrl = new WatcherController(host as WatcherControllerHost);
 
     ctrl.start();
@@ -204,7 +204,7 @@ describe("WatcherController", () => {
   it("fires onWatcherRecovered once when the recursive arm recovers via retry", async () => {
     mockRecursiveStartResult = false;
     mockGitOnlyStartResult = true;
-    const host = makeHost({ isCurrent: true });
+    const host = makeHost({ isElevated: true });
     const ctrl = new WatcherController(host as WatcherControllerHost);
 
     ctrl.start();
@@ -226,7 +226,7 @@ describe("WatcherController", () => {
     // so onWatcherRecovered must not fire.
     mockRecursiveStartResult = false;
     mockGitOnlyStartResult = true;
-    const host = makeHost({ isCurrent: true });
+    const host = makeHost({ isElevated: true });
     const ctrl = new WatcherController(host as WatcherControllerHost);
 
     ctrl.start();
@@ -248,7 +248,7 @@ describe("WatcherController", () => {
     // this way must still signal recovery when recursive finally arms.
     mockRecursiveStartResult = false;
     mockGitOnlyStartResult = true;
-    const host = makeHost({ isCurrent: true });
+    const host = makeHost({ isElevated: true });
     const ctrl = new WatcherController(host as WatcherControllerHost);
 
     ctrl.start();
@@ -269,7 +269,7 @@ describe("WatcherController", () => {
     mockRecursiveStartResult = false;
     mockGitOnlyStartResult = true;
     mockWatcherStartFiresFailure = true;
-    const host = makeHost({ isCurrent: true });
+    const host = makeHost({ isElevated: true });
     const ctrl = new WatcherController(host as WatcherControllerHost);
 
     ctrl.start();
@@ -288,7 +288,7 @@ describe("WatcherController", () => {
   it("does not schedule a retry for background worktrees", async () => {
     mockRecursiveStartResult = false;
     mockGitOnlyStartResult = true;
-    const host = makeHost({ isCurrent: false });
+    const host = makeHost({ isElevated: false });
     const ctrl = new WatcherController(host as WatcherControllerHost);
 
     // Background goes straight to git-only with no retry budget.
@@ -305,7 +305,7 @@ describe("WatcherController", () => {
   it("respects the WATCHER_MAX_RETRIES (5) budget", async () => {
     mockRecursiveStartResult = false;
     mockGitOnlyStartResult = true;
-    const host = makeHost({ isCurrent: true });
+    const host = makeHost({ isElevated: true });
     const ctrl = new WatcherController(host as WatcherControllerHost);
 
     ctrl.start();
@@ -324,7 +324,7 @@ describe("WatcherController", () => {
   it("update() rotates without resetting the retry budget", async () => {
     mockRecursiveStartResult = false;
     mockGitOnlyStartResult = true;
-    const host = makeHost({ isCurrent: true });
+    const host = makeHost({ isElevated: true });
     const ctrl = new WatcherController(host as WatcherControllerHost);
 
     ctrl.start();
@@ -347,7 +347,7 @@ describe("WatcherController", () => {
   it("stop(true) resets the retry budget — restart allows a full 5-retry budget", async () => {
     mockRecursiveStartResult = false;
     mockGitOnlyStartResult = true;
-    const host = makeHost({ isCurrent: true });
+    const host = makeHost({ isElevated: true });
     const ctrl = new WatcherController(host as WatcherControllerHost);
 
     // Burn 3 retries on the first run.
@@ -373,7 +373,7 @@ describe("WatcherController", () => {
   it("stop(false) preserves the retry budget — exhausted budget stays exhausted across rotation", async () => {
     mockRecursiveStartResult = false;
     mockGitOnlyStartResult = true;
-    const host = makeHost({ isCurrent: true });
+    const host = makeHost({ isElevated: true });
     const ctrl = new WatcherController(host as WatcherControllerHost);
 
     // Exhaust the entire 5-retry budget on the first run.
@@ -436,7 +436,7 @@ describe("WatcherController", () => {
 
   it("ensureState() rotates when granularity disagrees with focus", async () => {
     mockWatcherStartResult = true;
-    const host = makeHost({ isCurrent: true });
+    const host = makeHost({ isElevated: true });
     const ctrl = new WatcherController(host as WatcherControllerHost);
 
     ctrl.start();
@@ -444,7 +444,7 @@ describe("WatcherController", () => {
     await settle();
     expect(ctrl.currentMode).toBe("recursive");
 
-    host.isCurrent = false;
+    host.isElevated = false;
     ctrl.ensureState();
     await settle();
     expect(ctrl.currentMode).toBe("git-only");
@@ -536,7 +536,7 @@ describe("WatcherController", () => {
   it("clearRetryTimer() cancels the retry without disposing the watcher", async () => {
     mockRecursiveStartResult = false;
     mockGitOnlyStartResult = true;
-    const host = makeHost({ isCurrent: true });
+    const host = makeHost({ isElevated: true });
     const ctrl = new WatcherController(host as WatcherControllerHost);
 
     ctrl.start();
@@ -569,7 +569,7 @@ describe("WatcherController", () => {
   it("stop(true) cancels pending retry timers", async () => {
     mockRecursiveStartResult = false;
     mockGitOnlyStartResult = true;
-    const host = makeHost({ isCurrent: true });
+    const host = makeHost({ isElevated: true });
     const ctrl = new WatcherController(host as WatcherControllerHost);
 
     ctrl.start();
@@ -597,7 +597,7 @@ describe("WatcherController", () => {
 
   it("uses the 250ms worktree min-debounce floor", async () => {
     mockWatcherStartResult = true;
-    const host = makeHost({ isCurrent: true });
+    const host = makeHost({ isElevated: true });
     const ctrl = new WatcherController(host as WatcherControllerHost);
     ctrl.start();
     await settle();
@@ -605,17 +605,17 @@ describe("WatcherController", () => {
     expect(capturedWatcherOptions).toMatchObject({ worktreeMinDebounceMs: 250 });
   });
 
-  it("handleFocusChange(false) defers the downgrade by the settle delay", async () => {
+  it("handleElevationChange(false) defers the downgrade by the settle delay", async () => {
     mockWatcherStartResult = true;
-    const host = makeHost({ isCurrent: true });
+    const host = makeHost({ isElevated: true });
     const ctrl = new WatcherController(host as WatcherControllerHost);
     ctrl.start();
     await settle();
     expect(ctrl.currentMode).toBe("recursive");
     const startsBeforeFlip = watcherStartCallCount;
 
-    host.isCurrent = false;
-    const rotated = ctrl.handleFocusChange(false);
+    host.isElevated = false;
+    const rotated = ctrl.handleElevationChange(false);
     await settle();
 
     expect(rotated).toBe(false);
@@ -629,22 +629,22 @@ describe("WatcherController", () => {
     expect(ctrl.currentMode).toBe("git-only");
   });
 
-  it("handleFocusChange(true) cancels a pending downgrade and keeps recursive", async () => {
+  it("handleElevationChange(true) cancels a pending downgrade and keeps recursive", async () => {
     mockWatcherStartResult = true;
-    const host = makeHost({ isCurrent: true });
+    const host = makeHost({ isElevated: true });
     const ctrl = new WatcherController(host as WatcherControllerHost);
     ctrl.start();
     await settle();
     const startsBeforeFlip = watcherStartCallCount;
 
-    host.isCurrent = false;
-    ctrl.handleFocusChange(false);
+    host.isElevated = false;
+    ctrl.handleElevationChange(false);
     await settle();
 
     // Re-focus before the settle window elapses.
     await vi.advanceTimersByTimeAsync(1_500);
-    host.isCurrent = true;
-    const rotated = ctrl.handleFocusChange(true);
+    host.isElevated = true;
+    const rotated = ctrl.handleElevationChange(true);
     await settle();
 
     // Already recursive — no rotation needed.
@@ -656,17 +656,17 @@ describe("WatcherController", () => {
     expect(ctrl.currentMode).toBe("recursive");
   });
 
-  it("handleFocusChange(true) immediately upgrades a git-only watcher and reports rotation", async () => {
+  it("handleElevationChange(true) immediately upgrades a git-only watcher and reports rotation", async () => {
     mockWatcherStartResult = true;
-    const host = makeHost({ isCurrent: false });
+    const host = makeHost({ isElevated: false });
     const ctrl = new WatcherController(host as WatcherControllerHost);
     ctrl.start();
     await settle();
     expect(ctrl.currentMode).toBe("git-only");
     const startsBeforeFlip = watcherStartCallCount;
 
-    host.isCurrent = true;
-    const rotated = ctrl.handleFocusChange(true);
+    host.isElevated = true;
+    const rotated = ctrl.handleElevationChange(true);
     await settle();
 
     expect(rotated).toBe(true);
@@ -676,14 +676,14 @@ describe("WatcherController", () => {
 
   it("stop() cancels a pending downgrade timer", async () => {
     mockWatcherStartResult = true;
-    const host = makeHost({ isCurrent: true });
+    const host = makeHost({ isElevated: true });
     const ctrl = new WatcherController(host as WatcherControllerHost);
     ctrl.start();
     await settle();
     const startsBeforeFlip = watcherStartCallCount;
 
-    host.isCurrent = false;
-    ctrl.handleFocusChange(false);
+    host.isElevated = false;
+    ctrl.handleElevationChange(false);
     await settle();
     ctrl.stop(true);
 
@@ -732,18 +732,18 @@ describe("WatcherController", () => {
 
   it("ensureState() does not bypass a pending downgrade timer", async () => {
     mockWatcherStartResult = true;
-    const host = makeHost({ isCurrent: true });
+    const host = makeHost({ isElevated: true });
     const ctrl = new WatcherController(host as WatcherControllerHost);
     ctrl.start();
     await settle();
     expect(ctrl.currentMode).toBe("recursive");
     const startsBeforeFlip = watcherStartCallCount;
 
-    // Simulate WorkspaceService.updateWorktrees: set isCurrent then call
+    // Simulate WorkspaceService.updateWorktrees: set isElevated then call
     // ensureState. The downgrade timer must keep the recursive watcher
     // alive through the periodic reconciliation pass.
-    host.isCurrent = false;
-    ctrl.handleFocusChange(false);
+    host.isElevated = false;
+    ctrl.handleElevationChange(false);
     await settle();
     ctrl.ensureState();
     await settle();
@@ -757,12 +757,12 @@ describe("WatcherController", () => {
     expect(watcherStartCallCount).toBe(startsBeforeFlip + 1);
   });
 
-  it("handleFocusChange(true) starts a watcher when none exists", async () => {
+  it("handleElevationChange(true) starts a watcher when none exists", async () => {
     // Simulate: a previous start failed (mode 'none', no watcher), then
     // the user focuses this worktree via setActiveWorktree. The watcher
     // must be re-attempted, not silently skipped.
     mockWatcherStartResult = false;
-    const host = makeHost({ isCurrent: false });
+    const host = makeHost({ isElevated: false });
     const ctrl = new WatcherController(host as WatcherControllerHost);
     ctrl.start();
     await settle();
@@ -771,8 +771,8 @@ describe("WatcherController", () => {
     const startsBeforeFlip = watcherStartCallCount;
 
     mockWatcherStartResult = true;
-    host.isCurrent = true;
-    const rotated = ctrl.handleFocusChange(true);
+    host.isElevated = true;
+    const rotated = ctrl.handleElevationChange(true);
     await settle();
 
     expect(rotated).toBe(true);
@@ -801,7 +801,7 @@ describe("WatcherController", () => {
     it("resets exhausted budget so subsequent failure schedules a retry", async () => {
       mockRecursiveStartResult = false;
       mockGitOnlyStartResult = true;
-      const host = makeHost({ isCurrent: true });
+      const host = makeHost({ isElevated: true });
       const ctrl = new WatcherController(host as WatcherControllerHost);
 
       ctrl.start();
@@ -826,7 +826,7 @@ describe("WatcherController", () => {
     });
 
     it("no-ops when watcherRetryCount is zero (does not consume cap)", async () => {
-      const host = makeHost({ isCurrent: true });
+      const host = makeHost({ isElevated: true });
       const ctrl = new WatcherController(host as WatcherControllerHost);
       const result = ctrl.resetRetryBudget();
       expect(result).toBe(false);
@@ -845,7 +845,7 @@ describe("WatcherController", () => {
     it("capped at MAX_RESETS_PER_SESSION (3)", async () => {
       mockRecursiveStartResult = false;
       mockGitOnlyStartResult = true;
-      const host = makeHost({ isCurrent: true });
+      const host = makeHost({ isElevated: true });
       const ctrl = new WatcherController(host as WatcherControllerHost);
 
       ctrl.start();
@@ -872,7 +872,7 @@ describe("WatcherController", () => {
     it("clears a pending retry timer", async () => {
       mockRecursiveStartResult = false;
       mockGitOnlyStartResult = true;
-      const host = makeHost({ isCurrent: true });
+      const host = makeHost({ isElevated: true });
       const ctrl = new WatcherController(host as WatcherControllerHost);
 
       ctrl.start();
@@ -894,7 +894,7 @@ describe("WatcherController", () => {
     it("stop(true) resets both the retry budget and the session cap", async () => {
       mockRecursiveStartResult = false;
       mockGitOnlyStartResult = true;
-      const host = makeHost({ isCurrent: true });
+      const host = makeHost({ isElevated: true });
       const ctrl = new WatcherController(host as WatcherControllerHost);
 
       ctrl.start();
@@ -928,7 +928,7 @@ describe("WatcherController", () => {
     it("stop(false) preserves both the retry count and the session cap", async () => {
       mockRecursiveStartResult = false;
       mockGitOnlyStartResult = true;
-      const host = makeHost({ isCurrent: true });
+      const host = makeHost({ isElevated: true });
       const ctrl = new WatcherController(host as WatcherControllerHost);
 
       ctrl.start();

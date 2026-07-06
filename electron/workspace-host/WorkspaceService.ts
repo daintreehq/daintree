@@ -1,7 +1,7 @@
 import os from "os";
 import { randomUUID } from "node:crypto";
 import PQueue from "p-queue";
-import { existsSync } from "fs";
+import { existsSync, watch as fsWatch, type FSWatcher } from "fs";
 import { stat, readFile, access, mkdir } from "fs/promises";
 import { resolve as pathResolve, isAbsolute, dirname, basename } from "path";
 import { validateBranchName } from "../../shared/utils/pathPattern.js";
@@ -178,6 +178,14 @@ export class WorkspaceService {
   // worktree is never present here. Mutated via lruTouch/lruRemove; budget
   // enforced by applyWatcherBudget().
   private readonly backgroundGitWatcherLru = new Map<string, true>();
+  // Worktree IDs the renderer reports as having an actively working agent
+  // (via the `set-agent-activity` port action). Agent-active monitors are
+  // elevated to the recursive watcher tier and exempted from the background
+  // watcher budget, exactly like the focused worktree — the ENOSPC/EMFILE
+  // degradation path bounds the worst case on constrained kernels. Kept as a
+  // set (not per-monitor only) so worktrees discovered *after* the broadcast
+  // (e.g. an agent's own `git worktree add`) inherit the flag on creation.
+  private agentActiveWorktreeIds = new Set<string>();
   // Provider hostname-matcher table relayed from main's forge registry.
   // Empty until the first relay lands (after plugin load), so monitors start
   // unmatched and re-resolve when the table arrives or changes.
@@ -228,6 +236,13 @@ export class WorkspaceService {
   // Topology watcher — watches `.git/worktrees/` for external worktree
   // create/delete and triggers serialized reconciliation.
   private topologyWatcherSubscription = new MutableDisposable();
+  // Cheap fs.watch on the common git dir, armed only while `.git/worktrees/`
+  // doesn't exist (project with zero linked worktrees). Without it the first
+  // external `git worktree add` of a session is only discovered by the 90s
+  // safety reconcile — startTopologyWatcher() no-ops on an absent dir and
+  // nothing re-invoked it. Fires once when the dir appears, then hands off
+  // to the real parcel watcher and an immediate reconcile.
+  private topologyMetadataSentinel: FSWatcher | null = null;
   // No constructor `timeout` here: this queue's task wraps runTopologyReconcile
   // in withTimeout itself (and always resolves via its own try/catch/finally),
   // so it can never pin the single slot. A p-queue constructor timeout would
@@ -995,6 +1010,10 @@ export class WorkspaceService {
     monitor.stop();
     this.monitors.delete(id);
     this.lruRemove(id);
+    // Drop the agent-active flag with the monitor — a same-path worktree
+    // recreated later must not inherit a stale elevation. The renderer's
+    // next broadcast re-adds it if an agent really is working there.
+    this.agentActiveWorktreeIds.delete(id);
     this.recoverWatcherIfNoMonitorsRemain();
 
     clearGitDirCache(monitor.path);
@@ -1093,15 +1112,24 @@ export class WorkspaceService {
    * run AFTER any sync/focus mutation that could re-arm watchers.
    */
   private applyWatcherBudget(): void {
-    // Reconcile LRU membership against live monitors: the active worktree must
-    // never be in the pool; every other running monitor must be present.
+    // Reconcile LRU membership against live monitors: the active worktree and
+    // agent-active worktrees must never be in the pool; every other running
+    // monitor must be present.
     for (const id of [...this.backgroundGitWatcherLru.keys()]) {
-      if (!this.monitors.has(id) || id === this.activeWorktreeId) {
+      if (
+        !this.monitors.has(id) ||
+        id === this.activeWorktreeId ||
+        this.agentActiveWorktreeIds.has(id)
+      ) {
         this.backgroundGitWatcherLru.delete(id);
       }
     }
     for (const id of this.monitors.keys()) {
-      if (id !== this.activeWorktreeId && !this.backgroundGitWatcherLru.has(id)) {
+      if (
+        id !== this.activeWorktreeId &&
+        !this.agentActiveWorktreeIds.has(id) &&
+        !this.backgroundGitWatcherLru.has(id)
+      ) {
         this.backgroundGitWatcherLru.set(id, true);
       }
     }
@@ -1118,9 +1146,48 @@ export class WorkspaceService {
     if (this.activeWorktreeId) {
       this.monitors.get(this.activeWorktreeId)?.setGitWatchBudgetAllowed(true);
     }
+    // Worktrees with an actively working agent always keep theirs too —
+    // streaming those changes is the product's core loop; the watcher-failure
+    // degradation path (ENOSPC/EMFILE → git-only) bounds the worst case.
+    for (const id of this.agentActiveWorktreeIds) {
+      this.monitors.get(id)?.setGitWatchBudgetAllowed(true);
+    }
     // Grant the surviving MRU tail.
     for (let i = cutoff; i < ids.length; i++) {
       this.monitors.get(ids[i])?.setGitWatchBudgetAllowed(true);
+    }
+  }
+
+  /**
+   * Applies the renderer's agent-activity broadcast: the set of worktree IDs
+   * that currently have an agent producing work (working/directing). Elevates
+   * matching monitors to the recursive watcher tier (see
+   * `WorktreeMonitor.agentActive`) and re-runs the watcher budget so they are
+   * exempted from background eviction. The set is retained so monitors
+   * created later — including worktrees the agent itself just created —
+   * inherit the flag before their watcher first arms.
+   */
+  setAgentActivity(worktreeIds: string[]): void {
+    // Port payloads are typed but not runtime-validated; a malformed request
+    // must not silently clear every elevation (`new Set(undefined)` is empty).
+    if (!Array.isArray(worktreeIds)) return;
+    const next = new Set(worktreeIds.filter((id): id is string => typeof id === "string"));
+    const previous = this.agentActiveWorktreeIds;
+    this.agentActiveWorktreeIds = next;
+
+    let membershipChanged = false;
+    for (const [id, monitor] of this.monitors) {
+      const active = next.has(id);
+      if (monitor.agentActive !== active) {
+        monitor.agentActive = active;
+        membershipChanged = true;
+      }
+    }
+    // A worktree that left the set re-enters the LRU pool at the MRU tail
+    // (freshest) via applyWatcherBudget's membership reconcile, and newly
+    // active ones leave it — either way the budget must be re-enforced.
+    if (membershipChanged || previous.size !== next.size) {
+      this.applyWatcherBudget();
     }
   }
 
@@ -1224,9 +1291,18 @@ export class WorkspaceService {
       monitor.setGitWatchBudgetAllowed(false);
     }
 
+    // Inherit the agent-activity flag before start so a worktree the agent
+    // just created (its monitor arriving via topology reconcile after the
+    // renderer's broadcast) arms the recursive watcher and runs its initial
+    // status immediately, instead of starting as a cold background monitor.
+    if (this.agentActiveWorktreeIds.has(wt.id)) {
+      monitor.agentActive = true;
+      monitor.setGitWatchBudgetAllowed(true);
+    }
+
     this.monitors.set(wt.id, monitor);
 
-    if (isActive) {
+    if (isActive || this.agentActiveWorktreeIds.has(wt.id)) {
       this.lruRemove(wt.id);
     } else {
       this.lruTouch(wt.id);
@@ -1611,13 +1687,16 @@ export class WorkspaceService {
   }
 
   private async startTopologyWatcher(): Promise<void> {
-    if (!this.topologyWatcherEnabled) return;
+    // The pollingEnabled gate keeps a paused service dark: without it, an
+    // ensureTopologyWatcherAlive() that entered its await before the pause
+    // would arm a fresh watcher/sentinel right after stopTopologyWatcher()
+    // tore everything down. Resume re-invokes this symmetrically.
+    if (!this.topologyWatcherEnabled || !this.pollingEnabled) return;
     if (this.topologyWatcherSubscription.value) return;
 
     const generationAtStart = this.topologyWatcherGeneration;
     const metadataDir = await this.worktreeMetadataDirPath();
     if (!metadataDir) return;
-    if (!existsSync(metadataDir)) return;
     // Re-validate after the async commondir resolution: a stop (pause,
     // project switch, dispose) bumps the generation, and a concurrent start
     // that won the race either holds the subscription already or bumped the
@@ -1625,10 +1704,21 @@ export class WorkspaceService {
     if (
       generationAtStart !== this.topologyWatcherGeneration ||
       !this.topologyWatcherEnabled ||
+      !this.pollingEnabled ||
       this.topologyWatcherSubscription.value
     ) {
       return;
     }
+    if (!existsSync(metadataDir)) {
+      // No linked worktrees yet — `.git/worktrees/` is created by the first
+      // `git worktree add`. Watch for it so that add is discovered in
+      // milliseconds instead of by the 90s safety reconcile.
+      this.armTopologyMetadataSentinel(metadataDir);
+      return;
+    }
+    // The real watcher takes over from here; a sentinel left over from an
+    // earlier no-dir phase would just fire redundantly.
+    this.disarmTopologyMetadataSentinel();
 
     const generation = ++this.topologyWatcherGeneration;
     const drain = () => this.drainTopologyEventBuffer();
@@ -1688,6 +1778,71 @@ export class WorkspaceService {
       });
   }
 
+  /**
+   * Arm the fs.watch sentinel that waits for `.git/worktrees/` to appear.
+   * Non-persistent and filtered to the single directory entry, so it costs
+   * one watch handle on the common git dir. On failure (exotic filesystems,
+   * watch limits) discovery falls back to the 90s safety reconcile.
+   */
+  private armTopologyMetadataSentinel(metadataDir: string): void {
+    if (this.topologyMetadataSentinel) return;
+    const commonDir = dirname(metadataDir);
+    try {
+      const sentinel = fsWatch(commonDir, { persistent: false }, (_eventType, name) => {
+        // Only the `worktrees` entry matters — the common dir churns
+        // constantly (index, HEAD, refs). A null name can't be classified,
+        // so fall through to the existence check.
+        if (name && name.toString().replaceAll("\\", "/") !== "worktrees") return;
+        if (this.topologyMetadataSentinel !== sentinel) return;
+        if (!existsSync(metadataDir)) return;
+        this.disarmTopologyMetadataSentinel();
+        void this.startTopologyWatcher();
+        this.scheduleTopologyReconcile();
+      });
+      sentinel.on("error", () => {
+        if (this.topologyMetadataSentinel === sentinel) {
+          this.disarmTopologyMetadataSentinel();
+        }
+      });
+      this.topologyMetadataSentinel = sentinel;
+    } catch {
+      // fs.watch unavailable — the periodic safety reconcile still discovers
+      // the first worktree, just slower.
+    }
+  }
+
+  private disarmTopologyMetadataSentinel(): void {
+    if (!this.topologyMetadataSentinel) return;
+    const sentinel = this.topologyMetadataSentinel;
+    this.topologyMetadataSentinel = null;
+    try {
+      sentinel.close();
+    } catch {
+      // Stale handle on Windows — ignore.
+    }
+  }
+
+  /**
+   * Post-reconcile self-heal for the topology watcher. Two silent-death
+   * cases need it: (1) `.git/worktrees/` was deleted (last linked worktree
+   * removed) — the parcel subscription stops reporting without erroring;
+   * (2) the dir appeared while neither watcher nor sentinel was live (e.g.
+   * the sentinel failed to arm). Runs after the worktree list has been
+   * re-verified, so rebuilding here can't mask a missed event.
+   */
+  private async ensureTopologyWatcherAlive(): Promise<void> {
+    if (!this.topologyWatcherEnabled || !this.pollingEnabled) return;
+    if (this.topologyWatcherSubscription.value) {
+      const metadataDir = await this.worktreeMetadataDirPath();
+      if (!metadataDir || existsSync(metadataDir)) return;
+      // Watch root vanished — drop the dead subscription and fall through
+      // to re-arm via the sentinel path.
+      this.topologyWatcherGeneration++;
+      this.topologyWatcherSubscription.value = undefined;
+    }
+    await this.startTopologyWatcher();
+  }
+
   private stopTopologyWatcher(): void {
     // Tearing the watcher down clears the dark state — there's no longer a
     // watcher whose silence matters. Emit recovery (only if dark) so a
@@ -1697,6 +1852,7 @@ export class WorkspaceService {
     this.handleTopologyWatcherRecovered();
     this.topologyWatcherGeneration++;
     this.topologyWatcherSubscription.value = undefined;
+    this.disarmTopologyMetadataSentinel();
     if (this.topologyDebounceTimer) {
       clearTimeout(this.topologyDebounceTimer);
       this.topologyDebounceTimer = null;
@@ -1852,6 +2008,8 @@ export class WorkspaceService {
     // state is resolved — recover here rather than on watcher re-arm, since
     // re-subscribing doesn't prove the topology is current (#8516/#8558).
     this.handleTopologyWatcherRecovered();
+
+    await this.ensureTopologyWatcherAlive();
 
     // Auto-switch to main if the previously-active worktree was removed.
     // syncMonitors nulls activeWorktreeId when pruning the active monitor,
@@ -3340,6 +3498,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     }
     this.monitors.clear();
     this.backgroundGitWatcherLru.clear();
+    this.agentActiveWorktreeIds.clear();
     // Drop in-flight fetch chains and per-repo failure state — the next
     // project's monitors get a clean coordinator and stale completions are
     // discarded by the generation guard.
@@ -3473,6 +3632,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     }
     this.monitors.clear();
     this.backgroundGitWatcherLru.clear();
+    this.agentActiveWorktreeIds.clear();
     this.fetchCoordinator.destroy();
     this.authFailureConfirmedNotified.clear();
     this.pollQueue.clear();
