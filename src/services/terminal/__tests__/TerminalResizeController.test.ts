@@ -24,6 +24,7 @@ import {
   TerminalResizeController,
   getXtermCellDimensions,
   REVEAL_REWRAP_QUIESCENT_MS,
+  RESIZE_FLUSH_SYNC_BUDGET_BYTES,
   type ResizeControllerDeps,
 } from "../TerminalResizeController";
 
@@ -137,6 +138,8 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as any,
     });
 
@@ -164,6 +167,8 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as any,
     });
 
@@ -190,6 +195,8 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as any,
     });
 
@@ -222,6 +229,8 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as any,
     });
 
@@ -255,6 +264,8 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as any,
     });
 
@@ -274,6 +285,8 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal,
         resetForTerminal,
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as any,
     });
 
@@ -285,6 +298,99 @@ describe("TerminalResizeController", () => {
     expect(resizeMock).toHaveBeenCalledWith("term-1", 132, 41);
   });
 
+  describe("pre-resize flush budget", () => {
+    function makeBudgetDeps(queuedBytes: number) {
+      return {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => queuedBytes),
+        resumeFlush: vi.fn(),
+      };
+    }
+
+    it("flushes and resets when held bytes are at the budget", () => {
+      const managed = createManagedTerminal();
+      const dataBuffer = makeBudgetDeps(RESIZE_FLUSH_SYNC_BUDGET_BYTES);
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: dataBuffer as any,
+      });
+
+      controller.applyResize("term-1", 132, 41);
+
+      expect(dataBuffer.flushForTerminal).toHaveBeenCalledWith("term-1");
+      expect(dataBuffer.resetForTerminal).toHaveBeenCalledWith("term-1");
+      expect(dataBuffer.resumeFlush).not.toHaveBeenCalled();
+      expect(managed.terminal.resize).toHaveBeenCalledWith(132, 41);
+    });
+
+    it("skips the flush AND the reset past the budget, still resizes, then resumes the watermarked drain", () => {
+      // A queue-deleting reset without the flush would drop the held output —
+      // the skip path must leave the backlog queued for resumeFlush.
+      const managed = createManagedTerminal();
+      const dataBuffer = makeBudgetDeps(RESIZE_FLUSH_SYNC_BUDGET_BYTES + 1);
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: dataBuffer as any,
+      });
+
+      controller.applyResize("term-1", 132, 41);
+
+      expect(dataBuffer.flushForTerminal).not.toHaveBeenCalled();
+      expect(dataBuffer.resetForTerminal).not.toHaveBeenCalled();
+      expect(managed.terminal.resize).toHaveBeenCalledWith(132, 41);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 132, 41);
+      expect(dataBuffer.resumeFlush).toHaveBeenCalledWith("term-1");
+    });
+
+    it("resumes the drain on the skip path even when the xterm resize is settled-deferred", () => {
+      const managed = createManagedTerminal();
+      managed.launchAgentId = "codex";
+      managed.runtimeAgentId = "codex";
+      getEffectiveAgentConfigMock.mockReturnValue({
+        capabilities: { resizeStrategy: "settled" },
+      });
+      const dataBuffer = makeBudgetDeps(RESIZE_FLUSH_SYNC_BUDGET_BYTES + 1);
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: dataBuffer as any,
+      });
+
+      controller.applyResize("term-1", 132, 41);
+
+      // The settled timer owns the xterm+PTY resize, but the held backlog must
+      // not wait 500ms to start draining.
+      expect(dataBuffer.flushForTerminal).not.toHaveBeenCalled();
+      expect(dataBuffer.resumeFlush).toHaveBeenCalledWith("term-1");
+      vi.advanceTimersByTime(500);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(132, 41);
+    });
+
+    it("applies the budget on the debounced resize path", () => {
+      const managed = createManagedTerminal();
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
+      });
+      const dataBuffer = makeBudgetDeps(RESIZE_FLUSH_SYNC_BUDGET_BYTES + 1);
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: dataBuffer as any,
+      });
+
+      // Unfocused + visible + deep buffer → resize() takes the debounce path
+      // instead of applyResize.
+      managed.isFocused = false;
+      managed.terminal.buffer.active.length = 5000;
+      controller.resize("term-1", 1600, 800);
+      vi.advanceTimersByTime(200);
+
+      expect(dataBuffer.flushForTerminal).not.toHaveBeenCalled();
+      expect(dataBuffer.resetForTerminal).not.toHaveBeenCalled();
+      expect(managed.terminal.resize).toHaveBeenCalled();
+      expect(dataBuffer.resumeFlush).toHaveBeenCalledWith("term-1");
+    });
+  });
+
   it("lockResize with custom TTL expires after specified duration", () => {
     const managed = createManagedTerminal();
     const controller = new TerminalResizeController({
@@ -292,6 +398,8 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as any,
     });
 
@@ -312,6 +420,8 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as any,
     });
 
@@ -332,6 +442,8 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as any,
     });
 
@@ -354,6 +466,8 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as any,
     });
 
@@ -379,6 +493,8 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as any,
     });
 
@@ -401,6 +517,8 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as any,
     });
 
@@ -428,6 +546,8 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as any,
     });
 
@@ -465,6 +585,8 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as any,
     });
 
@@ -495,6 +617,8 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as any,
     });
 
@@ -515,6 +639,8 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as unknown as ResizeControllerDeps["dataBuffer"],
     });
 
@@ -537,6 +663,8 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as unknown as ResizeControllerDeps["dataBuffer"],
     });
 
@@ -554,6 +682,8 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as unknown as ResizeControllerDeps["dataBuffer"],
     });
 
@@ -578,6 +708,8 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as any,
     });
 
@@ -608,6 +740,8 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as any,
     });
 
@@ -631,6 +765,8 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as any,
     });
 
@@ -652,6 +788,8 @@ describe("TerminalResizeController", () => {
     const dataBuffer = {
       flushForTerminal: vi.fn(),
       resetForTerminal: vi.fn(),
+      getQueuedBytes: vi.fn(() => 0),
+      resumeFlush: vi.fn(),
     } as unknown as ResizeControllerDeps["dataBuffer"];
 
     getEffectiveAgentConfigMock.mockReturnValue({
@@ -681,6 +819,8 @@ describe("TerminalResizeController", () => {
     const dataBuffer = {
       flushForTerminal: vi.fn(),
       resetForTerminal: vi.fn(),
+      getQueuedBytes: vi.fn(() => 0),
+      resumeFlush: vi.fn(),
     } as unknown as ResizeControllerDeps["dataBuffer"];
 
     const controller = new TerminalResizeController({
@@ -799,6 +939,8 @@ describe("TerminalResizeController", () => {
       return {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as unknown as ResizeControllerDeps["dataBuffer"];
     }
 
@@ -1002,6 +1144,8 @@ describe("TerminalResizeController", () => {
       return {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
       } as unknown as ResizeControllerDeps["dataBuffer"];
     }
 
@@ -1143,6 +1287,8 @@ describe("TerminalResizeController", () => {
         dataBuffer: {
           flushForTerminal: vi.fn(),
           resetForTerminal: vi.fn(),
+          getQueuedBytes: vi.fn(() => 0),
+          resumeFlush: vi.fn(),
         } as any,
       });
     }
@@ -1302,6 +1448,8 @@ describe("TerminalResizeController", () => {
         dataBuffer: {
           flushForTerminal: vi.fn(),
           resetForTerminal: vi.fn(),
+          getQueuedBytes: vi.fn(() => 0),
+          resumeFlush: vi.fn(),
         } as any,
       });
     }
@@ -1572,7 +1720,12 @@ describe("TerminalResizeController", () => {
     function makeCtl(managed: ReturnType<typeof createManagedTerminal>) {
       return new TerminalResizeController({
         getInstance: vi.fn(() => managed),
-        dataBuffer: { flushForTerminal: vi.fn(), resetForTerminal: vi.fn() } as any,
+        dataBuffer: {
+          flushForTerminal: vi.fn(),
+          resetForTerminal: vi.fn(),
+          getQueuedBytes: vi.fn(() => 0),
+          resumeFlush: vi.fn(),
+        } as any,
       });
     }
 
