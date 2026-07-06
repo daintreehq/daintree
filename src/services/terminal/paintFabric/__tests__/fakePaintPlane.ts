@@ -17,6 +17,8 @@ export function makeFakePlane() {
     dispose: vi.fn(),
     focus: vi.fn(),
     notifyUserInput: vi.fn(),
+    notifyEnterPressed: vi.fn(),
+    clearDirectingState: vi.fn(),
     applyGlobalOptions: vi.fn(),
     suppressResizesDuringLayoutTransition: vi.fn(),
     waitForAllFullySettled: vi.fn(async () => undefined),

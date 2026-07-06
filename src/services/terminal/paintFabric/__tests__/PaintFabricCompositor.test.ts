@@ -169,6 +169,49 @@ describe("PaintFabricCompositor", () => {
     expect(listener).toHaveBeenCalledTimes(2);
   });
 
+  // Fleet broadcast bytes go terminalClient.broadcast → pty-host fan-out and
+  // never pass through this seam, so surface count cannot reorder or drop
+  // them. What the fabric routes are the per-terminal UI side-effects — each
+  // must land on the owning surface only, with the caller-side focused-origin
+  // exemption (fleetRawInputBroadcast skips notifyUserInput for the origin)
+  // expressed as simply not calling for that id.
+  it("routes broadcast side-effects per owning surface (fleet fan-out shape)", async () => {
+    const { compositor, a, b } = makeCompositor();
+    await compositor.getOrCreate("origin-a", undefined, {});
+    await compositor.getOrCreate("t1-b", undefined, {});
+    await compositor.getOrCreate("t2-a", undefined, {});
+
+    // The fleet fan-out: origin exempt from notifyUserInput, everyone gets
+    // notifyEnterPressed (matching fleetRawInputBroadcast's contract).
+    for (const id of ["t1-b", "t2-a"]) compositor.notifyUserInput(id, "x");
+    for (const id of ["origin-a", "t1-b", "t2-a"]) compositor.notifyEnterPressed(id);
+
+    expect(b.notifyUserInput).toHaveBeenCalledTimes(1);
+    expect(b.notifyUserInput).toHaveBeenCalledWith("t1-b", "x");
+    expect(a.notifyUserInput).toHaveBeenCalledTimes(1);
+    expect(a.notifyUserInput).toHaveBeenCalledWith("t2-a", "x");
+
+    expect(a.notifyEnterPressed).toHaveBeenCalledTimes(2);
+    expect(b.notifyEnterPressed).toHaveBeenCalledTimes(1);
+    expect(b.notifyEnterPressed).toHaveBeenCalledWith("t1-b");
+  });
+
+  it("keeps focus authority per-id: focus routes to the owner only", async () => {
+    const { compositor, a, b } = makeCompositor();
+    await compositor.getOrCreate("t1-b", undefined, {});
+
+    compositor.setFocused("t1-b", true);
+    compositor.focus("t1-b");
+    expect(b.setFocused).toHaveBeenCalledWith("t1-b", true);
+    expect(b.focus).toHaveBeenCalledWith("t1-b");
+    expect(a.setFocused).not.toHaveBeenCalled();
+    expect(a.focus).not.toHaveBeenCalled();
+
+    b.isFocused.mockReturnValue(true);
+    expect(compositor.isFocused("t1-b")).toBe(true);
+    expect(a.isFocused).not.toHaveBeenCalled();
+  });
+
   it("dispose fans out and clears all placements", async () => {
     const { compositor, a, b } = makeCompositor();
     await compositor.getOrCreate("t1-b", undefined, {});
