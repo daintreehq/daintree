@@ -283,6 +283,19 @@ export class AnalysisSession {
     this.headlessTerminal.options.scrollback = lines;
   }
 
+  /**
+   * Actual buffer occupancy — lines the mirror really holds (scrollback used +
+   * viewport rows), not the configured cap. Feeds the worker memory sample so
+   * the governor's targeted trim ranks by real usage. Null once freed.
+   */
+  bufferStats(): { bufferLines: number; cols: number } | null {
+    if (this.disposed || !this.headlessTerminal) return null;
+    return {
+      bufferLines: this.headlessTerminal.buffer.active.length,
+      cols: this.headlessTerminal.cols,
+    };
+  }
+
   serialize(): Promise<string | null> {
     return this.drainThen(() => this.serializeFull());
   }

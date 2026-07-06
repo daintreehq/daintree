@@ -230,12 +230,16 @@ export async function initPerWindowServices(
           utilizationPercent: payload.utilizationPercent,
           heapMb: payload.heapMb,
           externalMb: payload.externalMb,
+          workerHeapMb: payload.workerHeapMb,
+          workerExternalMb: payload.workerExternalMb,
         });
       } else {
         logInfo("pty-host-memory-warning-cleared", {
           utilizationPercent: payload.utilizationPercent,
           heapMb: payload.heapMb,
           externalMb: payload.externalMb,
+          workerHeapMb: payload.workerHeapMb,
+          workerExternalMb: payload.workerExternalMb,
         });
       }
       // Broadcast to all windows so renderer can surface the warning

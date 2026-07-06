@@ -80,10 +80,39 @@ export interface AnalysisFinalSnapshot {
   persistence: string | null;
 }
 
+/**
+ * Isolate-scoped memory self-report, posted by each analysis worker on an
+ * interval. Worker threads are separate V8 isolates, so the pty-host main
+ * thread's `process.memoryUsage()` cannot see their heap or ArrayBuffer
+ * backing stores — the headless mirror buffers (the host's dominant memory
+ * consumer, ~12 bytes/cell) are invisible to it. This sample is the only
+ * signal that lets ResourceGovernor account for that memory.
+ */
+export interface AnalysisWorkerMemorySample {
+  /** `process.memoryUsage().heapUsed` inside the worker isolate, bytes. */
+  heapUsedBytes: number;
+  /**
+   * `process.memoryUsage().external` inside the worker isolate, bytes.
+   * Includes the xterm buffer typed-array backing stores.
+   */
+  externalBytes: number;
+  /** Live AnalysisSessions on this worker at sample time. */
+  sessionCount: number;
+  /**
+   * Actual per-session buffer occupancy (lines really held, not the
+   * configured scrollback cap) so the governor's targeted trim can rank by
+   * real usage instead of assuming every buffer is full.
+   */
+  sessions: Array<{ terminalId: string; bufferLines: number; cols: number }>;
+  /** Worker-side epoch ms when the sample was taken. */
+  sampledAt: number;
+}
+
 export type AnalysisRequestResult = string | null | AnalysisFinalSnapshot;
 
 export type WorkerToHostMessage =
   | { type: "ready" }
+  | ({ type: "memory-sample" } & AnalysisWorkerMemorySample)
   | {
       /**
        * Batched flow-control ack: `bytes` of data-message payload (string

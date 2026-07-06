@@ -487,6 +487,72 @@ describe("AnalysisWorkerPool", () => {
     expect(dataMsgs[dataMsgs.length - 1].data).toBe("HELD");
     vi.useRealTimers();
   });
+
+  describe("worker memory accounting", () => {
+    const sample = (heapUsedBytes: number) => ({
+      type: "memory-sample" as const,
+      heapUsedBytes,
+      externalBytes: 5_000_000,
+      sessionCount: 1,
+      sessions: [{ terminalId: "t1", bufferLines: 480, cols: 120 }],
+      sampledAt: 111,
+    });
+
+    it("caches the latest sample per slot and exposes it with a receipt age", () => {
+      pool.createBackend(makeSpec("t1"), makeDelegate());
+      workers[0].emit("message", sample(10_000_000));
+      workers[0].emit("message", sample(20_000_000));
+
+      const accounting = pool.getMemoryAccounting();
+      expect(accounting).toHaveLength(1);
+      expect(accounting[0].alive).toBe(true);
+      expect(accounting[0].heapUsedBytes).toBe(20_000_000);
+      expect(accounting[0].externalBytes).toBe(5_000_000);
+      expect(accounting[0].sessions).toEqual([{ terminalId: "t1", bufferLines: 480, cols: 120 }]);
+      expect(Number.isFinite(accounting[0].ageMs)).toBe(true);
+    });
+
+    it("clears the sample on worker exit and fences samples from a superseded instance", async () => {
+      vi.useFakeTimers();
+      pool.createBackend(makeSpec("t1"), makeDelegate());
+      const original = workers[0];
+      original.emit("message", sample(10_000_000));
+      expect(pool.getMemoryAccounting()[0].heapUsedBytes).toBe(10_000_000);
+
+      // Exit: the isolate is gone — its memory must stop counting immediately.
+      original.emit("exit", 1);
+      expect(pool.getMemoryAccounting()[0].alive).toBe(false);
+      expect(pool.getMemoryAccounting()[0].heapUsedBytes).toBe(0);
+      expect(pool.getMemoryAccounting()[0].ageMs).toBe(Infinity);
+
+      // Respawn, then a late sample from the SUPERSEDED instance arrives — it
+      // must not be attributed to the fresh worker.
+      await vi.advanceTimersByTimeAsync(600);
+      original.emit("message", sample(99_000_000));
+      expect(pool.getMemoryAccounting()[0].heapUsedBytes).toBe(0);
+
+      // The fresh instance's own sample is accepted.
+      workers[1].emit("message", sample(30_000_000));
+      expect(pool.getMemoryAccounting()[0].heapUsedBytes).toBe(30_000_000);
+      vi.useRealTimers();
+    });
+
+    it("fills the governance snapshot memory field from the cached sample", () => {
+      pool.createBackend(makeSpec("t1"), makeDelegate());
+      const before = pool.getGovernanceSnapshots()[0];
+      expect(before.memory).toBeNull();
+      expect(before.detail?.memorySampleAgeMs).toBeNull();
+
+      workers[0].emit("message", sample(10_000_000));
+      const after = pool.getGovernanceSnapshots()[0];
+      expect(after.memory).toEqual({
+        rssBytes: null,
+        heapUsedBytes: 10_000_000,
+        externalBytes: 5_000_000,
+      });
+      expect(typeof after.detail?.memorySampleAgeMs).toBe("number");
+    });
+  });
 });
 
 describe("WorkerAnalysisBackend feed accounting", () => {

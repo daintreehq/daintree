@@ -530,14 +530,20 @@ export type PtyHostEvent =
       isWarning: boolean;
       /**
        * Utilization of the binding memory budget — the max of V8 heap against
-       * its --max-old-space-size cap and combined heap + external against the
-       * total pty-host process budget.
+       * its --max-old-space-size cap, combined heap + external (host isolate
+       * plus fresh analysis-worker isolate samples) against the total pty-host
+       * process budget, and the heaviest worker isolate's heap against the
+       * per-isolate cap.
        */
       utilizationPercent: number;
-      /** V8 heap used, MB. */
+      /** Host-isolate V8 heap used, MB. */
       heapMb?: number;
-      /** Off-heap external memory (includes all ArrayBuffer backing stores), MB. */
+      /** Host-isolate off-heap external memory (all ArrayBuffer backing stores), MB. */
       externalMb?: number;
+      /** Σ analysis-worker-isolate V8 heap (fresh samples only), MB. */
+      workerHeapMb?: number;
+      /** Σ analysis-worker-isolate external memory (fresh samples only), MB. */
+      workerExternalMb?: number;
       timestamp: number;
     }
   | {
@@ -889,6 +895,13 @@ export interface TerminalReliabilityMetricPayload {
     terminalId: string;
     scrollbackEstimateBytes: number;
     scrollbackLines: number;
+    /**
+     * Lines the mirror buffer actually holds (from the analysis worker's
+     * isolate self-report), when a fresh sample exists — the estimate is then
+     * `actualBufferLines × cols × 12` instead of assuming a full cap. Null
+     * when unreported (in-thread mode, worker just respawned).
+     */
+    actualBufferLines?: number | null;
     cols: number;
   }>;
 }
