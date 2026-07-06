@@ -54,6 +54,20 @@ describe("distributeWebglBudget", () => {
     expect(budgets.find((b) => b.surfaceId === "idle")!.upperThreshold).toBe(1);
   });
 
+  it("the ceiling is a hard total: a ceiling below the surface count zeroes the tail", () => {
+    const budgets = distributeWebglBudget(
+      [
+        { surfaceId: "a", wants: 5 },
+        { surfaceId: "b", wants: 5 },
+        { surfaceId: "c", wants: 5 },
+        { surfaceId: "d", wants: 5 },
+      ],
+      2
+    );
+    expect(budgets.map((b) => b.upperThreshold)).toEqual([1, 1, 0, 0]);
+    expect(budgets.reduce((sum, b) => sum + b.upperThreshold, 0)).toBe(2);
+  });
+
   it("every surface keeps a floor of one slot so its first hot terminal is not DOM-doomed", () => {
     const budgets = distributeWebglBudget(
       [

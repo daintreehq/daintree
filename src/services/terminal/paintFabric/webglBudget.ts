@@ -47,10 +47,11 @@ export interface SurfaceWebglBudget {
 
 /**
  * Waterfill the machine ceiling across surfaces by demand. Deterministic:
- * ties resolve in input order. Every surface receives at least 1 slot (a
- * budget of 0 would flip it to DOM permanently regardless of demand, which
- * is the whole-project degradation the fabric exists to prevent) and at most
- * PER_SURFACE_WEBGL_MAX.
+ * ties resolve in input order. Surfaces receive a floor of 1 slot in input
+ * order while the ceiling allows (a budget of 0 flips a surface to DOM
+ * permanently regardless of demand), at most PER_SURFACE_WEBGL_MAX each, and
+ * the ceiling is a hard total — a ceiling below the surface count zeroes the
+ * tail rather than exceeding it.
  */
 export function distributeWebglBudget(
   demands: SurfaceWebglDemand[],
@@ -59,8 +60,12 @@ export function distributeWebglBudget(
   if (demands.length === 0) return [];
 
   const grants = new Map<string, number>();
-  demands.forEach((demand) => grants.set(demand.surfaceId, 1));
-  let remaining = machineCeiling - demands.length;
+  let remaining = machineCeiling;
+  for (const demand of demands) {
+    const floor = remaining > 0 ? 1 : 0;
+    grants.set(demand.surfaceId, floor);
+    remaining -= floor;
+  }
 
   // Rounds of +1 grants to surfaces still under both their demand and the
   // per-surface max, until the ceiling or all demand is exhausted. Demand

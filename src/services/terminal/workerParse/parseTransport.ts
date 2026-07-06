@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { ParseAuthority, type AuthoritySnapshot } from "./parseAuthority";
 
 // The message protocol between a WorkerParseSession (main thread) and its
@@ -16,7 +17,10 @@ export type AuthorityRequest =
 
 export type AuthorityResponse =
   | { type: "snapshot"; requestId: number; snapshot: AuthoritySnapshot | null }
-  | { type: "error"; message: string };
+  // requestId present when the failure belongs to a specific snapshot
+  // request, so the session can settle that wait instead of leaving the
+  // caller (a promotion) pending until dispose.
+  | { type: "error"; message: string; requestId?: number };
 
 export interface AuthorityTransport {
   send(request: AuthorityRequest): void;
@@ -52,10 +56,18 @@ export class AuthorityEndpoint {
           this.requireAuthority().restore(request.serialized);
           return;
         case "snapshot": {
-          const snapshot = await this.requireAuthority().takeSnapshot(
-            request.boundedScrollbackLines
-          );
-          this.post({ type: "snapshot", requestId: request.requestId, snapshot });
+          try {
+            const snapshot = await this.requireAuthority().takeSnapshot(
+              request.boundedScrollbackLines
+            );
+            this.post({ type: "snapshot", requestId: request.requestId, snapshot });
+          } catch (error) {
+            this.post({
+              type: "error",
+              requestId: request.requestId,
+              message: formatErrorMessage(error, "snapshot failed"),
+            });
+          }
           return;
         }
         case "dispose":
@@ -66,7 +78,7 @@ export class AuthorityEndpoint {
     } catch (error) {
       this.post({
         type: "error",
-        message: error instanceof Error ? error.message : String(error),
+        message: formatErrorMessage(error, "parse authority request failed"),
       });
     }
   }

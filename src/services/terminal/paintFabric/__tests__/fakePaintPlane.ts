@@ -12,7 +12,7 @@ export function makeFakePlane() {
   return {
     getOrCreate: vi.fn(async (id: string) => ({ id }) as unknown as ManagedTerminal),
     prewarmTerminal: vi.fn(async (id: string) => ({ id }) as unknown as ManagedTerminal),
-    get: vi.fn((): ManagedTerminal | null => null),
+    get: vi.fn((_id: string): ManagedTerminal | null => null),
     destroy: vi.fn(),
     dispose: vi.fn(),
     focus: vi.fn(),
@@ -20,6 +20,7 @@ export function makeFakePlane() {
     notifyEnterPressed: vi.fn(),
     clearDirectingState: vi.fn(),
     applyGlobalOptions: vi.fn(),
+    updateOptions: vi.fn(),
     suppressResizesDuringLayoutTransition: vi.fn(),
     waitForAllFullySettled: vi.fn(async () => undefined),
     scheduleBatchResize: vi.fn(),

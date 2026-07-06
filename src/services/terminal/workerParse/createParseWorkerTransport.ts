@@ -10,6 +10,11 @@ export function createParseWorkerTransport(): AuthorityTransport {
   worker.onmessage = (event: MessageEvent<AuthorityResponse>) => {
     listeners.forEach((listener) => listener(event.data));
   };
+  worker.onerror = (event: ErrorEvent) => {
+    listeners.forEach((listener) =>
+      listener({ type: "error", message: event.message || "parse worker error" })
+    );
+  };
   return {
     send(request: AuthorityRequest) {
       worker.postMessage(request);

@@ -6,6 +6,7 @@ import {
   applySnapshotToMirror,
   buildMirrorApplyPayload,
   CLEAR_ALL,
+  MIRROR_RESET,
   SYNC_OUTPUT_END,
   SYNC_OUTPUT_START,
 } from "../mirrorApply";
@@ -95,9 +96,9 @@ describe("ParseAuthority + mirror apply", () => {
     mirror.terminal.dispose();
   });
 
-  it("wraps the apply payload in synchronized output around a full clear", () => {
+  it("wraps the apply payload in synchronized output around a reset + full clear", () => {
     const payload = buildMirrorApplyPayload("CONTENT");
-    expect(payload.startsWith(SYNC_OUTPUT_START + CLEAR_ALL)).toBe(true);
+    expect(payload.startsWith(SYNC_OUTPUT_START + MIRROR_RESET + CLEAR_ALL)).toBe(true);
     expect(payload.endsWith(SYNC_OUTPUT_END)).toBe(true);
     expect(payload).toContain("CONTENT");
   });
@@ -194,6 +195,148 @@ describe("WorkerParseSession", () => {
 
     session.dispose();
     mirror.terminal.dispose();
+  });
+
+  it("promotion after a bounded cadence tick still restores full fidelity", async () => {
+    const mirror = makeMirror({ rows: 10, scrollback: 5000 });
+    const mirrorTarget = {
+      write: (data: string, cb?: () => void) => mirror.terminal.write(data, cb),
+    };
+    const session = new WorkerParseSession(createInThreadTransport(), mirrorTarget, {
+      cols: 80,
+      rows: 10,
+      scrollback: 5000,
+      cadenceMs: 0,
+      boundedScrollbackLines: 50,
+    });
+
+    for (let i = 0; i < 500; i += 1) session.feed(`fidelity line ${i}\r\n`);
+    await session.tickNow();
+    await drain(mirror.terminal);
+    // The cadence mirror is truncated to the bound...
+    expect(mirror.terminal.buffer.active.length).toBeLessThanOrEqual(60);
+
+    // ...and the authority is clean now — promotion must STILL take a full
+    // snapshot (sync-point fidelity), not skip because nothing is dirty.
+    await session.promoteToInteractive();
+    await drain(mirror.terminal);
+    expect(mirror.terminal.buffer.active.length).toBeGreaterThan(400);
+    expect(bufferText(mirror.terminal)).toContain("fidelity line 0");
+
+    session.dispose();
+    mirror.terminal.dispose();
+  });
+
+  it("mirrors alternate-screen entry AND exit across snapshots", async () => {
+    const mirror = makeMirror();
+    const mirrorTarget = {
+      write: (data: string, cb?: () => void) => mirror.terminal.write(data, cb),
+    };
+    const session = new WorkerParseSession(createInThreadTransport(), mirrorTarget, {
+      cols: 80,
+      rows: 24,
+      scrollback: 1000,
+      cadenceMs: 0,
+    });
+
+    session.feed("normal content\r\n");
+    session.feed("\x1b[?1049h\x1b[2J\x1b[Halt-screen content");
+    await session.tickNow();
+    await drain(mirror.terminal);
+    expect(mirror.terminal.buffer.active.type).toBe("alternate");
+
+    // The authority leaves the alt screen; the serialize addon emits no
+    // ?1049l for a normal-buffer snapshot, so the apply prefix must reset it.
+    session.feed("\x1b[?1049l");
+    session.feed("back to normal\r\n");
+    await session.tickNow();
+    await drain(mirror.terminal);
+    expect(mirror.terminal.buffer.active.type).toBe("normal");
+    expect(bufferText(mirror.terminal)).toContain("back to normal");
+
+    session.dispose();
+    mirror.terminal.dispose();
+  });
+
+  it("does not leak stateful input modes across snapshots", async () => {
+    const mirror = makeMirror();
+    const mirrorTarget = {
+      write: (data: string, cb?: () => void) => mirror.terminal.write(data, cb),
+    };
+    const session = new WorkerParseSession(createInThreadTransport(), mirrorTarget, {
+      cols: 80,
+      rows: 24,
+      scrollback: 1000,
+      cadenceMs: 0,
+    });
+
+    session.feed("\x1b[?2004h"); // bracketed paste on
+    session.feed("with paste mode\r\n");
+    await session.tickNow();
+    await drain(mirror.terminal);
+    expect(mirror.terminal.modes.bracketedPasteMode).toBe(true);
+
+    session.feed("\x1b[?2004l"); // authority back to default
+    session.feed("without paste mode\r\n");
+    await session.tickNow();
+    await drain(mirror.terminal);
+    expect(mirror.terminal.modes.bracketedPasteMode).toBe(false);
+
+    session.dispose();
+    mirror.terminal.dispose();
+  });
+
+  it("a second promotion during the first is a no-op and both resolve", async () => {
+    const mirror = makeMirror();
+    const mirrorTarget = {
+      write: (data: string, cb?: () => void) => mirror.terminal.write(data, cb),
+    };
+    const session = new WorkerParseSession(createInThreadTransport(), mirrorTarget, {
+      cols: 80,
+      rows: 24,
+      scrollback: 1000,
+      cadenceMs: 0,
+    });
+    session.feed("content\r\n");
+    const first = session.promoteToInteractive();
+    const second = session.promoteToInteractive();
+    await expect(Promise.all([first, second])).resolves.toBeDefined();
+    expect(session.currentMode()).toBe("passthrough");
+
+    session.dispose();
+    mirror.terminal.dispose();
+  });
+
+  it("demotion re-syncs geometry before restoring the authority", async () => {
+    const requests: Array<{ type: string; cols?: number }> = [];
+    const inner = createInThreadTransport();
+    const recording = {
+      send: (request: Parameters<typeof inner.send>[0]) => {
+        requests.push({ type: request.type, cols: "cols" in request ? request.cols : undefined });
+        inner.send(request);
+      },
+      onResponse: inner.onResponse.bind(inner),
+      dispose: inner.dispose.bind(inner),
+    };
+    const mirror = { write: (_: string, cb?: () => void) => cb?.() };
+    const session = new WorkerParseSession(recording, mirror, {
+      cols: 80,
+      rows: 24,
+      scrollback: 1000,
+      cadenceMs: 0,
+    });
+
+    await session.promoteToInteractive();
+    // Resized while in passthrough — the authority hears nothing yet.
+    session.resize(100, 40);
+    expect(requests.filter((r) => r.type === "resize")).toHaveLength(0);
+
+    session.demoteToWorker("serialized-state");
+    const tail = requests.slice(-2);
+    expect(tail.map((r) => r.type)).toEqual(["resize", "restore"]);
+    expect(tail[0]!.cols).toBe(100);
+
+    session.dispose();
   });
 
   it("dispose resolves in-flight promotions instead of hanging them", async () => {

@@ -71,10 +71,11 @@ export interface PaintSurfaceDiagnostics {
 
 // requestAnimationFrame exists in every real renderer; the timeout fallback
 // keeps the coalescing path deterministic under Node-environment tests.
+const FRAME_FALLBACK_MS = 16;
 const scheduleFrame: (callback: () => void) => void =
   typeof requestAnimationFrame === "function"
     ? (callback) => void requestAnimationFrame(() => callback())
-    : (callback) => void setTimeout(callback, 16);
+    : (callback) => void setTimeout(callback, FRAME_FALLBACK_MS);
 
 // The paint fabric's thin main-thread compositor: implements the exact
 // renderer-facing surface of terminalInstanceService and routes each call to
@@ -169,6 +170,16 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     if (this.registry.surfaceFor(id) === null) {
       this.registry.place(id, surface.id);
     }
+  }
+
+  // A failed create only releases the placement it claimed: a transfer may
+  // have re-homed the id while the doomed build was still in flight, and an
+  // id-keyed release here would strip the NEW surface's ownership.
+  private releaseFailedClaim(id: string, surface: PaintSurface, claimed: boolean): void {
+    if (!claimed) return;
+    if (surface.plane.get(id)) return;
+    if (this.registry.surfaceFor(id)?.id !== surface.id) return;
+    this.registry.release(id);
   }
 
   private groupBySurface(ids: string[]): Array<{ plane: TerminalPaintPlane; ids: string[] }> {
@@ -282,15 +293,37 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
       }
     };
 
-    const live = sourceCall(() => source.plane.get(id), null);
-    if (!live) {
+    let live: ManagedTerminal | null = null;
+    let sourceUnreadable = false;
+    if (opts.bestEffortSource) {
+      try {
+        live = source.plane.get(id);
+      } catch (error) {
+        // A crashed surface cannot answer; if the fabric created this
+        // terminal (args captured), assume it was live and rebuild it on the
+        // target — the "never drop a terminal" half of retireSurface.
+        sourceUnreadable = true;
+        logWarn("Paint fabric: source surface unreadable during move", { id, error });
+      }
+    } else {
+      live = source.plane.get(id);
+    }
+
+    const args = this.createArgsById.get(id);
+    const rebuild = live !== null || (sourceUnreadable && args !== undefined);
+    if (!rebuild) {
+      // Placement-only move. Destroy on the source anyway: an in-flight
+      // getOrCreate may have claimed this id without a live instance yet, and
+      // destroy-during-create cancels that build (a no-op for unknown ids) so
+      // the old surface can never end up holding a live terminal the
+      // registry routes elsewhere.
+      sourceCall(() => source.plane.destroy(id), undefined);
       this.registry.release(id);
       this.registry.place(id, target.id);
       this.rebindSubscriptions(id, target.plane);
       return false;
     }
 
-    const args = this.createArgsById.get(id);
     if (!args) {
       throw new Error(
         `Cannot transfer terminal ${id}: it was not created through the fabric, so its creation args are unknown`
@@ -333,8 +366,12 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     if (carried?.rendererTier !== undefined) {
       target.plane.applyRendererPolicy(id, carried.rendererTier);
     }
-    if (carried?.promotedAgentId != null) {
+    // null records an explicit clearAgentPromotion — re-clear on the target,
+    // because getOrCreate with the captured launchAgentId re-promotes.
+    if (typeof carried?.promotedAgentId === "string") {
       target.plane.applyAgentPromotion(id, carried.promotedAgentId);
+    } else if (carried?.promotedAgentId === null) {
+      target.plane.clearAgentPromotion(id);
     }
     if (carried?.inputLocked !== undefined) target.plane.setInputLocked(id, carried.inputLocked);
     if (agentState !== undefined) target.plane.setAgentState(id, agentState);
@@ -458,7 +495,7 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
       this.healPlacement(id, surface);
       return managed;
     } catch (error) {
-      if (claimed && !surface.plane.get(id)) this.registry.release(id);
+      this.releaseFailedClaim(id, surface, claimed);
       throw error;
     }
   }
@@ -556,7 +593,7 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
       this.healPlacement(id, surface);
       return managed;
     } catch (error) {
-      if (claimed && !surface.plane.get(id)) this.registry.release(id);
+      this.releaseFailedClaim(id, surface, claimed);
       throw error;
     }
   }
@@ -838,11 +875,18 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.planes().forEach((plane) => plane.handleBackendRecovery());
   }
 
+  // Option updates fold into the captured create-args so a later transfer
+  // rebuilds the terminal with its CURRENT options, not its original ones.
   updateOptions(id: string, options: Partial<Terminal["options"]>): void {
+    const args = this.createArgsById.get(id);
+    if (args) args.options = { ...args.options, ...options };
     this.plane(id).updateOptions(id, options);
   }
 
   applyGlobalOptions(options: Partial<Terminal["options"]>): void {
+    for (const args of this.createArgsById.values()) {
+      args.options = { ...args.options, ...options };
+    }
     this.planes().forEach((plane) => plane.applyGlobalOptions(options));
   }
 

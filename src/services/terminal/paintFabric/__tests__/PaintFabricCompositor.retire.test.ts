@@ -78,8 +78,8 @@ describe("PaintFabricCompositor.retireSurface", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
-  it("tolerates a crashed source surface (best-effort reads) without dropping placements", async () => {
-    const { compositor, b } = makeCompositor();
+  it("rebuilds terminals from a crashed source surface instead of dropping them", async () => {
+    const { compositor, a, b } = makeCompositor();
     await compositor.getOrCreate("t1-b", undefined, {});
     b.get.mockImplementation(() => {
       throw new Error("surface is gone");
@@ -93,6 +93,18 @@ describe("PaintFabricCompositor.retireSurface", () => {
     const registry = compositor.getRegistryForTests();
     expect(registry.surfaceFor("t1-b")).not.toBeNull();
     expect(registry.surfaceFor("t1-b")!.id).not.toBe("b");
+
+    // The crashed plane could not answer get(), but the fabric created this
+    // terminal — so it is REBUILT on the sibling, not just re-pointed.
+    expect(a.getOrCreate).toHaveBeenCalledWith(
+      "t1-b",
+      undefined,
+      {},
+      undefined,
+      undefined,
+      undefined
+    );
+    expect(a.fetchAndRestore).toHaveBeenCalledWith("t1-b");
   });
 
   it("refuses to retire the default surface", async () => {

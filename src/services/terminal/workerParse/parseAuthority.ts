@@ -35,6 +35,7 @@ export class ParseAuthority {
   private generation = 0;
   private dirty = false;
   private pendingWrites = 0;
+  private lastSnapshotBounded = false;
 
   constructor(options: ParseAuthorityOptions) {
     this.terminal = new Terminal({
@@ -46,16 +47,25 @@ export class ParseAuthority {
     this.serializeAddon = new SerializeAddon();
     // The serialize addon types against the renderer Terminal but only uses
     // the buffer API both builds share; headless + serialize is the upstream
-    // pairing for exactly this server-side use.
+    // pairing for exactly this server-side use. The nominal type mismatch
+    // (renderer ITerminalAddon vs headless ITerminalAddon) forces the cast.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- cross-build xterm addon load, structurally identical interfaces
     this.terminal.loadAddon(this.serializeAddon as unknown as Parameters<Terminal["loadAddon"]>[0]);
   }
 
   write(data: string | Uint8Array): void {
     this.pendingWrites += 1;
-    this.terminal.write(data, () => {
+    try {
+      this.terminal.write(data, () => {
+        this.pendingWrites -= 1;
+        this.dirty = true;
+      });
+    } catch (error) {
+      // xterm's WriteBuffer throws past its discard watermark; roll the
+      // counter back so drain() cannot wait on a write that will never parse.
       this.pendingWrites -= 1;
-      this.dirty = true;
-    });
+      throw error;
+    }
   }
 
   resize(cols: number, rows: number): void {
@@ -88,12 +98,18 @@ export class ParseAuthority {
    * scrollback the snapshot carries (cadence ticks stay O(bound) on the
    * mirror's main thread); `undefined` serializes everything (sync points).
    * Returns null when nothing changed since the last snapshot — the cadence
-   * loop turns into a no-op for idle terminals.
+   * loop turns into a no-op for idle terminals. Exception: a FULL snapshot
+   * request after a bounded one always serializes, even when clean — the
+   * mirror's scrollback is truncated to the bound, and a sync point
+   * (promotion, reveal) exists precisely to restore full fidelity.
    */
   async takeSnapshot(boundedScrollbackLines?: number): Promise<AuthoritySnapshot | null> {
-    if (!this.dirty && this.pendingWrites === 0) return null;
+    const wantsFull = boundedScrollbackLines === undefined;
+    const clean = !this.dirty && this.pendingWrites === 0;
+    if (clean && !(wantsFull && this.lastSnapshotBounded)) return null;
     await this.drain();
     this.dirty = false;
+    this.lastSnapshotBounded = !wantsFull;
     this.generation += 1;
     const serialized = this.serializeAddon.serialize(
       boundedScrollbackLines === undefined ? undefined : { scrollback: boundedScrollbackLines }

@@ -73,15 +73,58 @@ describe("PaintFabricCompositor.transferTerminal", () => {
     expect(b.notifyUserInput).not.toHaveBeenCalled();
   });
 
-  it("does not resurrect an explicitly cleared agent promotion", async () => {
+  it("carries an explicit clearAgentPromotion: the target is re-cleared, not re-promoted", async () => {
     const { compositor, a, b } = makeCompositor();
-    await compositor.getOrCreate("t1-b", undefined, {});
+    // Created WITH a launch agent — the target's getOrCreate re-promotes from
+    // launchAgentId, so the explicit demotion must be re-applied after it.
+    await compositor.getOrCreate("t1-b", "claude", {});
     compositor.applyAgentPromotion("t1-b", "agent-x");
     compositor.clearAgentPromotion("t1-b");
 
     b.get.mockReturnValue({ id: "t1-b" } as unknown as ManagedTerminal);
     await compositor.transferTerminal("t1-b", "a");
     expect(a.applyAgentPromotion).not.toHaveBeenCalled();
+    expect(a.clearAgentPromotion).toHaveBeenCalledWith("t1-b");
+  });
+
+  it("a transfer during an in-flight create cancels the doomed build and keeps the new placement", async () => {
+    const { compositor, b } = makeCompositor();
+
+    let rejectCreate: (error: Error) => void = () => {};
+    b.getOrCreate.mockImplementationOnce(
+      () => new Promise<ManagedTerminal>((_, reject) => (rejectCreate = reject))
+    );
+    const doomed = compositor.getOrCreate("t1-b", undefined, {});
+
+    // No live instance on b yet → placement-only move, but the in-flight
+    // build on b is cancelled via destroy-during-create.
+    await compositor.transferTerminal("t1-b", "a");
+    expect(b.destroy).toHaveBeenCalledWith("t1-b");
+    expect(compositor.getRegistryForTests().surfaceFor("t1-b")!.id).toBe("a");
+
+    // The doomed create's cleanup must NOT release the placement that now
+    // belongs to surface a.
+    rejectCreate(new Error("cancelled"));
+    await expect(doomed).rejects.toThrow("cancelled");
+    expect(compositor.getRegistryForTests().surfaceFor("t1-b")!.id).toBe("a");
+  });
+
+  it("rebuilds with current options after updateOptions and applyGlobalOptions", async () => {
+    const { compositor, a, b } = makeCompositor();
+    await compositor.getOrCreate("t1-b", undefined, { fontSize: 13, scrollback: 1000 });
+    compositor.updateOptions("t1-b", { fontSize: 18 });
+    compositor.applyGlobalOptions({ fontFamily: "Hack" });
+
+    b.get.mockReturnValue({ id: "t1-b" } as unknown as ManagedTerminal);
+    await compositor.transferTerminal("t1-b", "a");
+    expect(a.getOrCreate).toHaveBeenCalledWith(
+      "t1-b",
+      undefined,
+      { fontSize: 18, scrollback: 1000, fontFamily: "Hack" },
+      undefined,
+      undefined,
+      undefined
+    );
   });
 
   it("rebinds per-id subscriptions to the target surface", async () => {
@@ -121,7 +164,9 @@ describe("PaintFabricCompositor.transferTerminal", () => {
     // Never created: routes to the default surface a, no live instance there.
     const moved = await compositor.transferTerminal("ghost", "b");
     expect(moved).toBe(false);
-    expect(a.destroy).not.toHaveBeenCalled();
+    // The source gets a defensive destroy (cancels an in-flight create; a
+    // no-op for a genuinely unknown id) but the target builds nothing.
+    expect(a.destroy).toHaveBeenCalledWith("ghost");
     expect(b.getOrCreate).not.toHaveBeenCalled();
 
     compositor.focus("ghost");

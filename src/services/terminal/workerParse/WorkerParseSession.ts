@@ -41,6 +41,8 @@ export class WorkerParseSession {
   private unsubscribe: () => void;
   private readonly cadenceMs: number;
   private readonly boundedScrollbackLines: number;
+  private cols: number;
+  private rows: number;
 
   constructor(
     private transport: AuthorityTransport,
@@ -50,6 +52,8 @@ export class WorkerParseSession {
     this.cadenceMs = options.cadenceMs ?? DEFAULT_CADENCE_MS;
     this.boundedScrollbackLines =
       options.boundedScrollbackLines ?? DEFAULT_BOUNDED_SCROLLBACK_LINES;
+    this.cols = options.cols;
+    this.rows = options.rows;
     this.unsubscribe = transport.onResponse(this.onResponse);
     transport.send({
       type: "init",
@@ -79,8 +83,14 @@ export class WorkerParseSession {
     this.transport.send({ type: "write", data });
   }
 
+  // Geometry is tracked in every mode: a passthrough-era resize must reach
+  // the authority before demotion re-seeds it, or snapshots reflow at stale
+  // cols/rows.
   resize(cols: number, rows: number): void {
-    if (this.disposed || this.mode !== "worker") return;
+    if (this.disposed) return;
+    this.cols = cols;
+    this.rows = rows;
+    if (this.mode !== "worker") return;
     this.transport.send({ type: "resize", cols, rows });
   }
 
@@ -121,6 +131,8 @@ export class WorkerParseSession {
    */
   demoteToWorker(serializedMirrorState: string): void {
     if (this.disposed || this.mode === "worker") return;
+    // Geometry first: the restore must parse at the mirror's current size.
+    this.transport.send({ type: "resize", cols: this.cols, rows: this.rows });
     this.transport.send({ type: "restore", serialized: serializedMirrorState });
     this.mode = "worker";
     this.startCadence();
@@ -145,6 +157,13 @@ export class WorkerParseSession {
       return;
     }
     logWarn("Worker parse authority error", { message: response.message });
+    // A snapshot-specific failure settles its wait (as no-snapshot) so a
+    // promotion cannot hang until dispose.
+    if (response.requestId !== undefined) {
+      const resolve = this.pendingSnapshots.get(response.requestId);
+      this.pendingSnapshots.delete(response.requestId);
+      resolve?.(null);
+    }
   };
 
   private requestSnapshot(
