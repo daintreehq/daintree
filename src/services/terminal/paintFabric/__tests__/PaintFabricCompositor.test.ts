@@ -1,33 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { PaintFabricCompositor } from "../PaintFabricCompositor";
-import type { PaintSurface } from "../PaintSurfaceRegistry";
-import type { TerminalPaintPlane } from "../../TerminalInstanceService";
 import type { ManagedTerminal } from "../../types";
-
-function makeFakePlane() {
-  return {
-    getOrCreate: vi.fn(async (id: string) => ({ id }) as unknown as ManagedTerminal),
-    prewarmTerminal: vi.fn(async (id: string) => ({ id }) as unknown as ManagedTerminal),
-    get: vi.fn((): ManagedTerminal | null => null),
-    focus: vi.fn(),
-    destroy: vi.fn(),
-    dispose: vi.fn(),
-    notifyUserInput: vi.fn(),
-    scheduleBatchResize: vi.fn(),
-    waitForAllFullySettled: vi.fn(async () => undefined),
-    applyGlobalOptions: vi.fn(),
-    getScrollbackRestorePendingCount: vi.fn(() => 0),
-    subscribeScrollbackRestoreState: vi.fn(() => vi.fn()),
-    suppressResizesDuringLayoutTransition: vi.fn(),
-  };
-}
-
-type FakePlane = ReturnType<typeof makeFakePlane>;
-
-function makeSurface(id: string): { surface: PaintSurface; plane: FakePlane } {
-  const plane = makeFakePlane();
-  return { surface: { id, plane: plane as unknown as TerminalPaintPlane }, plane };
-}
+import { makeSurface } from "./fakePaintPlane";
 
 function makeCompositor() {
   const a = makeSurface("a");
@@ -142,9 +116,9 @@ describe("PaintFabricCompositor", () => {
     await compositor.getOrCreate("t2-a", undefined, {});
     await compositor.getOrCreate("t3-b", undefined, {});
 
-    compositor.scheduleBatchResize(["t1-b", "t2-a", "t3-b", "unplaced"]);
-    expect(b.scheduleBatchResize).toHaveBeenCalledWith(["t1-b", "t3-b"]);
-    expect(a.scheduleBatchResize).toHaveBeenCalledWith(["t2-a", "unplaced"]);
+    compositor.suppressResizesDuringLayoutTransition(["t1-b", "t2-a", "t3-b", "unplaced"], 200);
+    expect(b.suppressResizesDuringLayoutTransition).toHaveBeenCalledWith(["t1-b", "t3-b"], 200);
+    expect(a.suppressResizesDuringLayoutTransition).toHaveBeenCalledWith(["t2-a", "unplaced"], 200);
   });
 
   it("groups settle waits per surface and resolves when all resolve", async () => {
@@ -169,21 +143,30 @@ describe("PaintFabricCompositor", () => {
     expect(compositor.getScrollbackRestorePendingCount()).toBe(5);
   });
 
-  it("combines cross-surface subscriptions into one unsubscribe", () => {
+  it("owns the aggregate scrollback-restore listener set: one logical change fires once", () => {
     const { compositor, a, b } = makeCompositor();
-    const unsubA = vi.fn();
-    const unsubB = vi.fn();
-    a.subscribeScrollbackRestoreState.mockReturnValue(unsubA);
-    b.subscribeScrollbackRestoreState.mockReturnValue(unsubB);
+    // The compositor subscribed one forwarder per surface at construction.
+    expect(a.subscribeScrollbackRestoreState).toHaveBeenCalledTimes(1);
+    expect(b.subscribeScrollbackRestoreState).toHaveBeenCalledTimes(1);
 
     const listener = vi.fn();
     const unsubscribe = compositor.subscribeScrollbackRestoreState(listener);
-    expect(a.subscribeScrollbackRestoreState).toHaveBeenCalledWith(listener);
-    expect(b.subscribeScrollbackRestoreState).toHaveBeenCalledWith(listener);
+    // The caller's listener is compositor-owned, never fanned to surfaces.
+    expect(a.subscribeScrollbackRestoreState).toHaveBeenCalledTimes(1);
+    expect(b.subscribeScrollbackRestoreState).toHaveBeenCalledTimes(1);
+
+    // External notify (the scheduler path): exactly once, not once per surface.
+    compositor.notifyScrollbackRestoreListeners();
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    // Plane-internal notify (destroy-during-restore path) forwards: once.
+    a.notifyScrollbackRestoreListeners();
+    expect(listener).toHaveBeenCalledTimes(2);
 
     unsubscribe();
-    expect(unsubA).toHaveBeenCalledTimes(1);
-    expect(unsubB).toHaveBeenCalledTimes(1);
+    compositor.notifyScrollbackRestoreListeners();
+    b.notifyScrollbackRestoreListeners();
+    expect(listener).toHaveBeenCalledTimes(2);
   });
 
   it("dispose fans out and clears all placements", async () => {

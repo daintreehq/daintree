@@ -11,6 +11,7 @@ import {
   TerminalLink,
   isWebGLEligibleTier,
   WRITE_BURST_DECAY_MS,
+  GRID_RESIZE_COALESCE_MS,
 } from "./types";
 import { tallyScrollbackRestoreStates } from "./scrollbackRestoreAggregate";
 import {
@@ -48,7 +49,14 @@ import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import { yieldToScheduler } from "@/lib/schedulerYield";
 import { PaintFabricCompositor } from "./paintFabric/PaintFabricCompositor";
-import { isPaintFabricEnabled, PRIMARY_SURFACE_ID } from "./paintFabric/paintFabricConfig";
+import type { PaintSurface } from "./paintFabric/PaintSurfaceRegistry";
+import { createRoundRobinPlacement } from "./paintFabric/placementPolicies";
+import {
+  isPaintFabricEnabled,
+  getPaintFabricSurfaceCount,
+  paintFabricAuxSurfaceId,
+  PRIMARY_SURFACE_ID,
+} from "./paintFabric/paintFabricConfig";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -70,11 +78,6 @@ const WEBGL_RESTORE_DEBOUNCE_MS = 100;
 // multi-terminal hide. Authoritative release paths (tier demotion, agent
 // demotion, destroy, hibernation) cancel this timer and release immediately.
 const WEBGL_HIDE_DWELL_MS = 500;
-
-// Trailing-edge window for `scheduleBatchResize`. A burst of grid open/close
-// resizes within this gap collapses into one pass — long enough to coalesce a
-// rapid close stream, short enough that survivors settle promptly after it.
-const GRID_RESIZE_COALESCE_MS = 120;
 
 // Default timeout for the restore-aware settle waits (`waitForFullySettled`,
 // `waitForAllFullySettled`). Aligned to the 30s Tier 1→3 promotion rule
@@ -1840,6 +1843,31 @@ class TerminalInstanceService {
     return this.instances.get(id);
   }
 
+  /**
+   * Per-surface WebGL pool snapshot for the E2E leak-regression bridges. Lives
+   * on the paint-plane surface (rather than a bracket-notation reach into the
+   * private `webGLManager`) so a fabric routes the read to the surface that
+   * owns the terminal — `wantsSize`/`mode` describe that surface's pool, which
+   * is the meaningful scope once each surface has its own 16-context budget.
+   */
+  getWebGLStateForE2E(id: string): { wantsSize: number; active: boolean; mode: string } {
+    return {
+      wantsSize: this.webGLManager.getWantsSize(),
+      active: this.webGLManager.isActive(id),
+      mode: this.webGLManager.getMode(),
+    };
+  }
+
+  /**
+   * E2E-only link activation. Same rationale as {@link getWebGLStateForE2E}:
+   * the link handler is per-surface state, so the bridge must route through
+   * the paint plane instead of reaching into the primary surface's private
+   * field — a terminal owned by another surface has its links there.
+   */
+  triggerTerminalLinkForE2E(id: string, url: string, event?: MouseEvent): void {
+    this.linkHandler.openLink(url, id, event);
+  }
+
   getCachedSelection(id: string): string {
     return this.cachedSelections.get(id) ?? "";
   }
@@ -2803,6 +2831,19 @@ class TerminalInstanceService {
       if (error instanceof Error && error.name === "AbortError") return;
       logError("terminal resize pass failed", error);
     });
+  }
+
+  /**
+   * Abort any in-flight chunked resize pass without starting a new one. The
+   * paint-fabric compositor uses this to give a multi-surface fabric the same
+   * pass-supersession semantics the single service has: one logical pass spans
+   * every surface, so starting a new pass must cancel stale chunked work on
+   * surfaces that have no ids in the new pass (they'd otherwise keep reflowing
+   * a survivor set that is already stale).
+   */
+  cancelActiveResizePass(): void {
+    this.resizePassAbort?.abort();
+    this.resizePassAbort = undefined;
   }
 
   private async executeResizePass(ids: string[], controller: AbortController): Promise<void> {
@@ -3813,16 +3854,31 @@ export type TerminalPaintPlane = {
 
 // Construction-site seam for the paint fabric
 // (docs/architecture/terminal-paint-fabric.md). Flag off: the bare service,
-// unchanged. Flag on: the compositor fronting a single primary surface —
-// behaviorally identical at surface-count 1, and the rollback path for every
-// later phase. The primary instance stays module-visible so the E2E bridges
-// below can keep their private-state reaches on the concrete surface.
+// unchanged. Flag on: the compositor fronting the primary surface plus any
+// configured in-process aux surfaces — behaviorally identical at
+// surface-count 1, and the rollback path for every later phase.
 const primaryTerminalInstanceService = new TerminalInstanceService();
 
 function createTerminalPaintPlane(): TerminalPaintPlane {
   if (!isPaintFabricEnabled()) return primaryTerminalInstanceService;
+  const surfaces: PaintSurface[] = [
+    { id: PRIMARY_SURFACE_ID, plane: primaryTerminalInstanceService },
+  ];
+  const surfaceCount = getPaintFabricSurfaceCount();
+  for (let index = 1; index < surfaceCount; index += 1) {
+    const aux = new TerminalInstanceService();
+    // In-process aux surfaces share the window's renderer thread, glyph atlas,
+    // and 16-WebGL-context budget with the primary — they exercise the
+    // multi-surface routing semantics, they do not add capacity. Forcing them
+    // to the DOM renderer keeps K in-process surfaces from packing the shared
+    // context budget K times over; the aggregate governor (webglBudget.ts)
+    // takes this job over once surfaces live in sibling WebContentsViews.
+    aux.setGPUHardwareAvailable(false);
+    surfaces.push({ id: paintFabricAuxSurfaceId(index), plane: aux });
+  }
   return new PaintFabricCompositor({
-    surfaces: [{ id: PRIMARY_SURFACE_ID, plane: primaryTerminalInstanceService }],
+    surfaces,
+    choosePlacement: surfaces.length > 1 ? createRoundRobinPlacement() : undefined,
   });
 }
 
@@ -3964,7 +4020,7 @@ if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
       metaKey: mac,
       ctrlKey: !mac,
     });
-    primaryTerminalInstanceService["linkHandler"].openLink(url, panelId, syntheticEvent);
+    terminalInstanceService.triggerTerminalLinkForE2E(panelId, url, syntheticEvent);
     return "ok";
   };
 
@@ -3977,15 +4033,8 @@ if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
     // and active context return to baseline after a terminal close.
     __daintreeGetTerminalWebGLState: (
       panelId: string
-    ): { wantsSize: number; active: boolean; mode: string } | null => {
-      const webGLManager = primaryTerminalInstanceService["webGLManager"] as TerminalWebGLManager;
-      if (!webGLManager) return null;
-      return {
-        wantsSize: webGLManager.getWantsSize(),
-        active: webGLManager.isActive(panelId),
-        mode: webGLManager.getMode(),
-      };
-    },
+    ): { wantsSize: number; active: boolean; mode: string } | null =>
+      terminalInstanceService.getWebGLStateForE2E(panelId),
     // Promote a plain terminal to an agent terminal on a WebGL-eligible
     // (FOCUSED) tier so the WebGL addon actually attaches. Mirrors the
     // production parser-detected promotion path without a real agent process.
@@ -3993,9 +4042,7 @@ if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
       if (!terminalInstanceService.getInstanceForE2E(panelId)) return false;
       terminalInstanceService.applyRendererPolicy(panelId, TerminalRefreshTier.FOCUSED);
       terminalInstanceService.applyAgentPromotion(panelId, agentId);
-      return (primaryTerminalInstanceService["webGLManager"] as TerminalWebGLManager).isActive(
-        panelId
-      );
+      return terminalInstanceService.getWebGLStateForE2E(panelId).active;
     },
   });
 }
