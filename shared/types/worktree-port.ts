@@ -48,6 +48,15 @@ export interface WorktreePortProtocol {
     payload: { worktreeId: string };
     result: { ok: true };
   };
+  // Full-replacement set of worktree IDs that currently have an agent
+  // actively producing work (agentState working/directing). The host elevates
+  // these monitors to the recursive watcher tier so their working-tree edits
+  // stream to the dashboard while backgrounded. Sent debounced by the
+  // renderer whenever the set changes, and re-sent after host restart.
+  "set-agent-activity": {
+    payload: { worktreeIds: string[] };
+    result: { ok: true };
+  };
   refresh: {
     payload: { worktreeId?: string };
     // `ok: false` (+ message) when the host's bounded refresh trips its overall

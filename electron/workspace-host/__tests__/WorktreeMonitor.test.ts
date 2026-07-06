@@ -1165,6 +1165,98 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
 
+    it("agentActive flip false→true upgrades a background watcher to recursive and forces a refresh", async () => {
+      mockWatcherStartResult = true;
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      await monitor.start();
+      await flushInitialStatus();
+
+      expect(capturedWatcherOptions).toMatchObject({ watchWorktree: false });
+      const startsBeforeFlip = capturedWatcherOptionsHistory.length;
+      const statusCallsBefore = mockGetWorktreeChangesWithStats.mock.calls.length;
+
+      monitor.agentActive = true;
+
+      // Immediate upgrade — an agent's edits must stream without waiting.
+      expect(capturedWatcherOptionsHistory.length).toBe(startsBeforeFlip + 1);
+      expect(capturedWatcherOptionsHistory.at(-1)).toMatchObject({ watchWorktree: true });
+
+      // Activation also forces a status refresh so the card baselines now.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockGetWorktreeChangesWithStats.mock.calls.length).toBe(statusCallsBefore + 1);
+
+      monitor.stop();
+    });
+
+    it("losing focus while an agent works keeps the recursive watcher (elevation held)", async () => {
+      mockWatcherStartResult = true;
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(ACTIVE_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      await monitor.start();
+      monitor.agentActive = true;
+      await vi.advanceTimersByTimeAsync(0);
+
+      const startsBeforeFlip = capturedWatcherOptionsHistory.length;
+      monitor.isCurrent = false;
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      // No rebuild: the working agent holds the elevation.
+      expect(capturedWatcherOptionsHistory.length).toBe(startsBeforeFlip);
+      expect(capturedWatcherOptionsHistory.at(-1)).toMatchObject({ watchWorktree: true });
+
+      monitor.stop();
+    });
+
+    it("agentActive set before start arms recursive and runs the initial status synchronously", async () => {
+      mockWatcherStartResult = true;
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      // WorkspaceService.addNewWorktreeMonitor applies the retained
+      // agent-activity set before start() — e.g. a worktree the agent itself
+      // just created.
+      monitor.agentActive = true;
+      await monitor.start();
+
+      expect(capturedWatcherOptions).toMatchObject({ watchWorktree: true });
+      // Elevated start skips the 2-5s background jitter.
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+
+      const startsBeforeFlip = capturedWatcherOptionsHistory.length;
+      monitor.agentActive = false;
+
+      // Downgrade settles behind the same delay as focus loss.
+      expect(capturedWatcherOptionsHistory.length).toBe(startsBeforeFlip);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(capturedWatcherOptionsHistory.at(-1)).toMatchObject({ watchWorktree: false });
+
+      monitor.stop();
+    });
+
     it("watcher start failure schedules retry on active worktree", async () => {
       mockWatcherStartResult = false;
       mockGetWorktreeChangesWithStats.mockResolvedValue({
@@ -3210,6 +3302,59 @@ describe("WorktreeMonitor", () => {
       // cleared the baseline so the stat pre-check can't short-circuit.
       await monitor.updateGitStatus(false);
       expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(2);
+
+      monitor.stop();
+    });
+
+    it("forces a real check once the full-status budget expires without recursive coverage", async () => {
+      vi.mocked(stat).mockResolvedValue(makeStatResult(1_000));
+      const callbacks = makeCallbacks();
+      // TEST_CONFIG has gitWatchEnabled: false — no watcher covers the
+      // working tree, the exact mode where the four statted .git files can
+      // never reflect an agent's unstaged edits.
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+
+      await monitor.start();
+      await flushInitialStatus();
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+
+      // Within the budget the skip still applies…
+      await monitor.updateGitStatus(false);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+
+      // …but once the last FULL pass ages past the ceiling, a matching
+      // baseline no longer suppresses the real git check.
+      (monitor as unknown as { lastFullStatusAt: number }).lastFullStatusAt = Date.now() - 120_001;
+      await monitor.updateGitStatus(false);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(2);
+
+      // The full pass reset the budget — the next poll skips again.
+      await monitor.updateGitStatus(false);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(2);
+
+      monitor.stop();
+    });
+
+    it("an expired full-status budget does not bypass the skip under recursive coverage", async () => {
+      vi.mocked(stat).mockResolvedValue(makeStatResult(1_000));
+      mockWatcherStartResult = true;
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(
+        { ...TEST_WORKTREE, isCurrent: true },
+        { ...TEST_CONFIG, gitWatchEnabled: true },
+        callbacks,
+        "main"
+      );
+
+      // Active monitors run the initial status synchronously in start().
+      await monitor.start();
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+
+      (monitor as unknown as { lastFullStatusAt: number }).lastFullStatusAt = Date.now() - 120_001;
+      await monitor.updateGitStatus(false);
+      // The recursive watcher observes every working-tree write and forces
+      // its own refreshes, so the stat skip stays trustworthy indefinitely.
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
 
       monitor.stop();
     });
