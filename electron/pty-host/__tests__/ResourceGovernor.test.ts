@@ -2762,5 +2762,127 @@ describe("ResourceGovernor", () => {
 
       governor.dispose();
     });
+
+    it("survives a throwing accounting dep and completes the tick on host-only signal", () => {
+      // A bad pool snapshot must not abort the whole resource tick — FD checks
+      // and the host-only memory signal still run.
+      mockMemoryUsage(400); // 400/512 = 78.1% heap-bound > 70% warning
+      const deps = createMockDeps({
+        getWorkerMemoryAccounting: vi.fn().mockImplementation(() => {
+          throw new Error("pool snapshot failed");
+        }),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      expect(() => vi.advanceTimersByTime(2000)).not.toThrow();
+
+      expect(mockCheckForLeaks).toHaveBeenCalled();
+      const event = findWarningEvent(deps);
+      expect(event?.isWarning).toBe(true);
+      expect(event?.workerHeapMb).toBe(0);
+
+      governor.dispose();
+    });
+
+    it("treats worker-isolate critical pressure as immediate critical pressure", () => {
+      const { coordinator, raw } = createMockCoordinator();
+      // Host 50MB; worker heap 500MB → 500/512 = 97.7% raw ≥ 95% critical.
+      // Critical bypasses EMA warmup AND the pre-pause trim — pause engages on
+      // the very first tick.
+      mockMemoryUsage(50);
+      const trimBuffersTargeted = vi.fn();
+      const trimBuffers = vi.fn();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([
+            { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          ]),
+        trimBuffers,
+        trimBuffersTargeted,
+        getTerminalBufferSizes: vi
+          .fn()
+          .mockReturnValue([{ id: "t1", scrollbackLines: 10000, cols: 120 }]),
+        getWorkerMemoryAccounting: vi.fn().mockReturnValue([workerSample(500, 0)]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      expect(raw.pause).toHaveBeenCalled();
+      expect(trimBuffers).not.toHaveBeenCalled();
+      expect(trimBuffersTargeted).not.toHaveBeenCalled();
+
+      governor.dispose();
+    });
+
+    it("disengages when fresh worker samples fall below the resume threshold", () => {
+      const { coordinator, raw } = createMockCoordinator();
+      mockMemoryUsage(50);
+      let workerHeapMb = 460; // engage via the per-isolate term
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([{ id: "t1", lastOutputTime: 100, lastInputTime: 100 }]),
+        getWorkerMemoryAccounting: vi
+          .fn()
+          .mockImplementation(() => [workerSample(workerHeapMb, 0)]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
+      expect(raw.pause).toHaveBeenCalled();
+
+      // Worker memory reclaimed (post-trim GC): fresh low sample → raw
+      // utilization (50+40)/768 = 11.7% < 60% resume → immediate disengage.
+      workerHeapMb = 40;
+      vi.advanceTimersByTime(2000);
+
+      expect(raw.resume).toHaveBeenCalled();
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+
+      governor.dispose();
+    });
+
+    it("holds threshold-based resume while an alive worker's sample is stale", () => {
+      const { coordinator, raw } = createMockCoordinator();
+      mockMemoryUsage(50);
+      let accounting = [workerSample(460, 0)];
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([{ id: "t1", lastOutputTime: 100, lastInputTime: 100 }]),
+        getWorkerMemoryAccounting: vi.fn().mockImplementation(() => accounting),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
+      expect(raw.pause).toHaveBeenCalled();
+
+      // The worker goes silent (parse-saturated): its stale sample contributes
+      // 0, so raw utilization reads ~6.5% — but absent evidence is not relief.
+      // Threshold-based resume must hold while an alive slot is stale.
+      accounting = [workerSample(460, 0, { ageMs: 60_000 })];
+      vi.advanceTimersByTime(2000);
+      expect(raw.resume).not.toHaveBeenCalled();
+
+      // The bounded-pause guarantee still applies: FORCE_RESUME_MS (10s,
+      // strict >) eventually force-resumes regardless of staleness — the
+      // first tick past the bound is at 12s of pause.
+      vi.advanceTimersByTime(10000);
+      expect(raw.resume).toHaveBeenCalled();
+
+      governor.dispose();
+    });
   });
 });

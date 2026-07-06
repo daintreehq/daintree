@@ -552,6 +552,30 @@ describe("AnalysisWorkerPool", () => {
       });
       expect(typeof after.detail?.memorySampleAgeMs).toBe("number");
     });
+
+    it("computes sample age from host receipt time, not the worker's sampledAt", () => {
+      vi.useFakeTimers();
+      pool.createBackend(makeSpec("t1"), makeDelegate());
+      // A wildly wrong worker-side clock must not affect the age: receipt
+      // time is the host's own clock.
+      workers[0].emit("message", { ...sample(10_000_000), sampledAt: 0 });
+
+      vi.advanceTimersByTime(3000);
+      expect(pool.getMemoryAccounting()[0].ageMs).toBe(3000);
+      vi.useRealTimers();
+    });
+
+    it("stops caching samples after pool disposal", () => {
+      pool.createBackend(makeSpec("t1"), makeDelegate());
+      workers[0].emit("message", sample(10_000_000));
+      expect(pool.getMemoryAccounting()[0].heapUsedBytes).toBe(10_000_000);
+
+      pool.dispose();
+      // A late sample from the (still-running, never-terminated) worker must
+      // not keep mutating disposed-pool state.
+      workers[0].emit("message", sample(99_000_000));
+      expect(pool.getMemoryAccounting()[0].heapUsedBytes).toBe(10_000_000);
+    });
   });
 });
 

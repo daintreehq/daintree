@@ -369,8 +369,9 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
     if (msg.type === "memory-sample") {
       // Instance fence: a sample posted by a superseded worker instance (its
       // exit raced the respawn window) must not be attributed to the fresh
-      // worker occupying the slot.
-      if (slot.worker !== worker || !slot.alive) return;
+      // worker occupying the slot. A disposed pool stops caching — its
+      // accounting is no longer consumed and must not keep mutating.
+      if (this.disposed || slot.worker !== worker || !slot.alive) return;
       const { type: _type, ...sample } = msg;
       slot.memorySample = { ...sample, receivedAt: Date.now() };
       return;

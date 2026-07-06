@@ -113,7 +113,9 @@ export interface ResourceGovernorDeps {
 // per-isolate binding constraint for the worker-heap term below. The total
 // budget stays process-scoped: it bounded all mirror buffers when they lived
 // on this thread, and it bounds the same memory now that #10920 moved them
-// into worker isolates.
+// into worker isolates. Deliberately independent of pool size — idle worker
+// baselines (~5-20MB each) are real process memory and count against it, so an
+// oversized DAINTREE_ANALYSIS_WORKERS override spends its own headroom.
 const HEAP_BUDGET_MB = 512;
 const EXTERNAL_HEADROOM_MB = 256;
 const TOTAL_PROCESS_BUDGET_MB = HEAP_BUDGET_MB + EXTERNAL_HEADROOM_MB;
@@ -274,9 +276,14 @@ export class ResourceGovernor {
     // at HEAP_BUDGET_MB, only ~67% of the total budget — so a runaway JS heap
     // must be measured against its own ceiling; worker isolates carry the same
     // per-isolate cap (inherited execArgv), so the heaviest worker's heap is a
-    // third binding constraint. max() keeps this a single continuous signal
-    // feeding one EMA, and the disengage hysteresis then requires ALL ratios
-    // to clear the resume threshold.
+    // third binding constraint. One hot isolate engaging the FLEET-wide pause
+    // is intentional: trim-first shrinks that worker's buffers, and letting it
+    // hit its cap instead would kill a persistent worker with
+    // ERR_WORKER_OUT_OF_MEMORY (the terminate/recreate class behind the
+    // Electron !flush_tasks_ crash) — a ≤FORCE_RESUME_MS bounded pause is the
+    // safer failure mode. max() keeps this a single continuous signal feeding
+    // one EMA, and the disengage hysteresis then requires ALL ratios to clear
+    // the resume threshold.
     const utilizationPercent =
       Math.max(
         combinedMb / TOTAL_PROCESS_BUDGET_MB,
@@ -384,7 +391,16 @@ export class ResourceGovernor {
       // promptly when pressure truly clears. The 85→60% hysteresis band plus
       // the REENGAGE_COOLDOWN_MS gate prevent any oscillation risk from a
       // single-tick low reading triggering an early resume.
-      const belowThreshold = utilizationPercent < resumePercent;
+      //
+      // Stale-while-alive guard: a parse-saturated worker stops posting
+      // samples, and after WORKER_SAMPLE_MAX_AGE_MS its memory contributes 0 —
+      // which can make utilization "clear" the resume threshold while the
+      // isolate is still ballooned. Absent evidence is not evidence of relief:
+      // threshold-based resume requires every alive worker's report to be
+      // fresh. The FORCE_RESUME_MS bounded-pause guarantee is unaffected, so a
+      // wedged worker can delay resume by at most the pause bound.
+      const belowThreshold =
+        utilizationPercent < resumePercent && !this.hasStaleAliveWorkerSample();
 
       if (maxPauseExceeded || belowThreshold) {
         this.disengageThrottle(combinedMb, utilizationPercent, maxPauseExceeded);
@@ -398,6 +414,25 @@ export class ResourceGovernor {
     this.emitQueueDepthGauge();
     this.emitDataLossCount();
     this.emitBufferMemoryGauge();
+  }
+
+  /**
+   * True when an alive worker slot has no fresh sample — its memory is
+   * UNKNOWN, not zero. Used to hold threshold-based resume while throttling;
+   * never blocks the force-resume bound. A never-reported slot (ageMs
+   * Infinity) counts: a just-respawned worker's memory is equally unknown.
+   */
+  private hasStaleAliveWorkerSample(): boolean {
+    if (!this.deps.getWorkerMemoryAccounting) return false;
+    try {
+      return this.deps
+        .getWorkerMemoryAccounting()
+        .some((s) => s.alive && s.ageMs > WORKER_SAMPLE_MAX_AGE_MS);
+    } catch {
+      // The accounting source failing is handled (and logged) by
+      // getFreshWorkerSamples in the same tick; don't block resume on it.
+      return false;
+    }
   }
 
   /** Fresh, alive-slot worker memory samples; the staleness policy chokepoint. */
