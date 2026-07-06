@@ -21,7 +21,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const ROOT = join(__dirname, "..");
 const MAPS_FILE = join(ROOT, "shared", "types", "ipc", "maps.ts");
-const BASELINE_FILE = join(ROOT, "ipc-handwritten-baseline.json");
+const BASELINE_FILE = join(ROOT, "scripts", "baselines", "ipc-handwritten-baseline.json");
 const UPDATE_SHRINKAGE_THRESHOLD = 0.1;
 
 const INTERFACE_MARKER = "export interface IpcInvokeMap extends GeneratedIpcInvokeMap {";

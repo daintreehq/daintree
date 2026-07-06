@@ -7,7 +7,7 @@ import { countHandWrittenEntries, checkShrinkageGuard } from "./ipc-handwritten-
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..");
 const MAPS_FILE = join(REPO_ROOT, "shared", "types", "ipc", "maps.ts");
-const BASELINE_FILE = join(REPO_ROOT, "ipc-handwritten-baseline.json");
+const BASELINE_FILE = join(REPO_ROOT, "scripts", "baselines", "ipc-handwritten-baseline.json");
 
 const HEADER = "export interface IpcInvokeMap extends GeneratedIpcInvokeMap {";
 

@@ -28,7 +28,7 @@ import { formatBudgetSummary, writeSummary } from "./budget-summary-lib.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
 const METAFILE = path.join(ROOT, "dist-electron", "eager-import-meta.json");
-const BASELINE_FILE = path.join(ROOT, "eager-import-baseline.json");
+const BASELINE_FILE = path.join(ROOT, "scripts", "baselines", "eager-import-baseline.json");
 const SUMMARY_FILE = path.join(ROOT, "dist", "import-budget-summary.md");
 const ENTRY = "electron/main.ts";
 

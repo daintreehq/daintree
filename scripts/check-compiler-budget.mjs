@@ -37,7 +37,7 @@ import { formatBudgetSummary, writeSummary } from "./budget-summary-lib.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
 const REPORT_FILE = path.join(ROOT, "dist", "compiler-bailout-report.json");
-const BASELINE_FILE = path.join(ROOT, "compiler-bailout-baseline.json");
+const BASELINE_FILE = path.join(ROOT, "scripts", "baselines", "compiler-bailout-baseline.json");
 const SUMMARY_FILE = path.join(ROOT, "dist", "compiler-budget-summary.md");
 
 const COUNT_KEYS = ["success", "skip", "error", "pipeline"];

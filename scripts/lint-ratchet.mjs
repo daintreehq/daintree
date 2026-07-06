@@ -29,7 +29,7 @@ import { dirname, join } from "path";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const ROOT = join(__dirname, "..");
-const BASELINE_FILE = join(ROOT, "eslint-warnings-baseline.json");
+const BASELINE_FILE = join(ROOT, "scripts", "baselines", "eslint-warnings-baseline.json");
 const UPDATE_SHRINKAGE_THRESHOLD = 0.1;
 
 // Test files still get linted (editor + raw `npm run lint`), but their warnings

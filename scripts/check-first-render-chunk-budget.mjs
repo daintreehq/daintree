@@ -33,7 +33,7 @@ const ROOT = path.resolve(path.dirname(__filename), "..");
 const DIST = path.join(ROOT, "dist");
 const MANIFEST_FILE = path.join(DIST, ".vite", "manifest.json");
 const SEEDS_FILE = path.join(DIST, ".vite", "first-render-seeds.json");
-const BASELINE_FILE = path.join(ROOT, "first-render-chunk-baseline.json");
+const BASELINE_FILE = path.join(ROOT, "scripts", "baselines", "first-render-chunk-baseline.json");
 const SUMMARY_FILE = path.join(DIST, "first-render-chunk-summary.md");
 
 // Seed list: every source path that is part of the renderer's first-paint
