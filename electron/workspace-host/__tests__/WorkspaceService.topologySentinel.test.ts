@@ -163,6 +163,25 @@ describe("WorkspaceService topology metadata sentinel", () => {
     expect(service["topologyMetadataSentinel"]).not.toBeNull();
   });
 
+  it("arms nothing while polling is paused (backgrounded app)", async () => {
+    mkdirSync(metadataDir);
+    service["pollingEnabled"] = false;
+
+    await service["startTopologyWatcher"]();
+    expect(service["topologyWatcherSubscription"].value).toBeUndefined();
+    expect(service["topologyMetadataSentinel"]).toBeNull();
+    expect(parcelSubscriptions).toHaveLength(0);
+
+    // The sentinel path is equally gated: absent dir + paused → no sentinel.
+    rmSync(metadataDir, { recursive: true });
+    await service["startTopologyWatcher"]();
+    expect(service["topologyMetadataSentinel"]).toBeNull();
+
+    await service["ensureTopologyWatcherAlive"]();
+    expect(service["topologyWatcherSubscription"].value).toBeUndefined();
+    expect(service["topologyMetadataSentinel"]).toBeNull();
+  });
+
   it("ensureTopologyWatcherAlive keeps a healthy subscription untouched", async () => {
     mkdirSync(metadataDir);
     await service["startTopologyWatcher"]();

@@ -287,6 +287,43 @@ describe("useAgentActivityBroadcast", () => {
     expect(requestMock).not.toHaveBeenCalled();
   });
 
+  it("port reconnect during a deactivation settle re-elevates on the fast path", async () => {
+    renderHook(() => useAgentActivityBroadcast());
+
+    act(() => {
+      setPanels([
+        { worktreeId: "/wt/a", agentState: "working" },
+        { worktreeId: "/wt/b", agentState: "working" },
+      ]);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    expect(requestMock).toHaveBeenCalledTimes(1);
+
+    // a deactivates — a 5s settle timer is now pending for the reduced set.
+    act(() => {
+      setPanels([
+        { worktreeId: "/wt/a", agentState: "completed" },
+        { worktreeId: "/wt/b", agentState: "working" },
+      ]);
+    });
+    // Host restarts mid-settle. The fresh host holds an empty set, so the
+    // still-working b is an ACTIVATION now — it must not ride out the
+    // remaining settle window unelevated.
+    act(() => {
+      readyCallback?.();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(250);
+    });
+
+    expect(requestMock).toHaveBeenCalledTimes(2);
+    expect(requestMock).toHaveBeenLastCalledWith("set-agent-activity", {
+      worktreeIds: ["/wt/b"],
+    });
+  });
+
   it("re-sends the current set when the port reconnects (host restart)", async () => {
     renderHook(() => useAgentActivityBroadcast());
 

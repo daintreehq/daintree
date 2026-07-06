@@ -644,17 +644,25 @@ describe("WorkspaceService external worktree removal", () => {
         .spyOn(service as any, "discoverAndSyncWorktrees")
         .mockResolvedValue(undefined);
 
-      service["setPollingEnabled"](false);
-
+      // Arm while enabled, then pause — the teardown races a late event from
+      // the (now dead) subscription, which must not reconcile.
       service["startTopologyWatcher"]();
       await vi.runAllTimersAsync();
+      const armedCallbacks = parcelWatcherCallbacks.length;
+      expect(armedCallbacks).toBeGreaterThan(0);
+      service["setPollingEnabled"](false);
 
-      parcelWatcherCallbacks[0]!(null, [
+      parcelWatcherCallbacks[armedCallbacks - 1]!(null, [
         { type: "delete", path: "/test/root/.git/worktrees/wt-1" },
       ]);
       await vi.advanceTimersByTimeAsync(350);
-
       expect(discoverSpy).not.toHaveBeenCalled();
+
+      // And a paused service never arms a watcher in the first place.
+      service["startTopologyWatcher"]();
+      await vi.runAllTimersAsync();
+      expect(parcelWatcherCallbacks.length).toBe(armedCallbacks);
+
       vi.useRealTimers();
     });
 

@@ -43,8 +43,23 @@ function computeBusyWorktreeIds(): string[] {
  */
 export function useAgentActivityBroadcast(): void {
   useEffect(() => {
+    // Keys are JSON-encoded sorted id arrays — collision-safe for any path
+    // characters (a newline join would let pathological ids alias a set).
+    const EMPTY_KEY = JSON.stringify([]);
+    const keyToIds = (key: string): string[] => {
+      const raw = key.startsWith("unsent:") ? key.slice("unsent:".length) : key;
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        return Array.isArray(parsed)
+          ? parsed.filter((id): id is string => typeof id === "string")
+          : [];
+      } catch {
+        return [];
+      }
+    };
+
     // The host starts every session/epoch with an empty set.
-    let lastSentKey = "";
+    let lastSentKey = EMPTY_KEY;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let timerKind: "activation" | "deactivation" | null = null;
     // The busy-set key the pending timer was scheduled for. Re-evaluations
@@ -67,7 +82,7 @@ export function useAgentActivityBroadcast(): void {
       clearTimer();
       if (disposed) return;
       const ids = computeBusyWorktreeIds();
-      const key = ids.join("\n");
+      const key = JSON.stringify(ids);
       if (key === lastSentKey) return;
       lastSentKey = key;
       window.electron.worktreePort.request("set-agent-activity", { worktreeIds: ids }).catch(() => {
@@ -100,7 +115,8 @@ export function useAgentActivityBroadcast(): void {
     };
 
     const evaluate = () => {
-      const key = computeBusyWorktreeIds().join("\n");
+      const ids = computeBusyWorktreeIds();
+      const key = JSON.stringify(ids);
       if (key === lastSentKey) {
         clearTimer();
         return;
@@ -109,15 +125,19 @@ export function useAgentActivityBroadcast(): void {
       if (timer && pendingKey === key) {
         return;
       }
-      const lastIds = new Set(lastSentKey.split("\n").filter(Boolean));
-      const hasActivation = key.split("\n").some((id) => id !== "" && !lastIds.has(id));
+      const lastIds = new Set(keyToIds(lastSentKey));
+      const hasActivation = ids.some((id) => !lastIds.has(id));
       scheduleSend(hasActivation ? "activation" : "deactivation", key);
     };
 
     const unsubscribe = usePanelStore.subscribe(evaluate);
     const offReady = window.electron.worktreePort.onReady(() => {
-      // Fresh host epoch — its agent-activity set is empty again.
-      lastSentKey = "";
+      // Fresh host epoch — its agent-activity set is empty again. Drop any
+      // pending timer too: relative to the empty host, every still-busy
+      // worktree is an activation and must go out on the fast path, not ride
+      // out the tail of a pre-restart deactivation settle.
+      lastSentKey = EMPTY_KEY;
+      clearTimer();
       evaluate();
     });
     evaluate();

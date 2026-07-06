@@ -1687,7 +1687,11 @@ export class WorkspaceService {
   }
 
   private async startTopologyWatcher(): Promise<void> {
-    if (!this.topologyWatcherEnabled) return;
+    // The pollingEnabled gate keeps a paused service dark: without it, an
+    // ensureTopologyWatcherAlive() that entered its await before the pause
+    // would arm a fresh watcher/sentinel right after stopTopologyWatcher()
+    // tore everything down. Resume re-invokes this symmetrically.
+    if (!this.topologyWatcherEnabled || !this.pollingEnabled) return;
     if (this.topologyWatcherSubscription.value) return;
 
     const generationAtStart = this.topologyWatcherGeneration;
@@ -1700,6 +1704,7 @@ export class WorkspaceService {
     if (
       generationAtStart !== this.topologyWatcherGeneration ||
       !this.topologyWatcherEnabled ||
+      !this.pollingEnabled ||
       this.topologyWatcherSubscription.value
     ) {
       return;
