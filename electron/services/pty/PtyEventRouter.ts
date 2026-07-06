@@ -324,6 +324,8 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
         utilizationPercent: event.utilizationPercent,
         heapMb: event.heapMb,
         externalMb: event.externalMb,
+        workerHeapMb: event.workerHeapMb,
+        workerExternalMb: event.workerExternalMb,
         timestamp: event.timestamp,
       });
       return true;

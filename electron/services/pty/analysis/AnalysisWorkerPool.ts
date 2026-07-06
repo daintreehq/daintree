@@ -12,6 +12,7 @@ import {
 import type {
   AnalysisRequestOp,
   AnalysisRequestResult,
+  AnalysisWorkerMemorySample,
   HostToWorkerMessage,
   WorkerToHostMessage,
 } from "../analysisWorkerProtocol.js";
@@ -82,6 +83,26 @@ interface PoolSlot {
   generation: number;
   /** Epoch ms of the last message routed at this slot; drives idle reporting. */
   lastActivityAt: number;
+  /**
+   * Latest isolate-memory self-report from this slot's worker, stamped with
+   * host receipt time. Cleared on exit/respawn so a fresh worker instance
+   * never inherits its predecessor's numbers; the message listener fences by
+   * worker instance identity so a late sample from a superseded instance
+   * cannot repopulate it.
+   */
+  memorySample: (AnalysisWorkerMemorySample & { receivedAt: number }) | null;
+}
+
+/** Host-side view of one slot's memory self-report, for the ResourceGovernor. */
+export interface WorkerMemoryAccounting {
+  slotIndex: number;
+  alive: boolean;
+  /** ms since the sample was received; Infinity when a slot has never reported. */
+  ageMs: number;
+  heapUsedBytes: number;
+  externalBytes: number;
+  sessionCount: number;
+  sessions: AnalysisWorkerMemorySample["sessions"];
 }
 
 interface PendingRequest {
@@ -199,6 +220,26 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
   }
 
   /**
+   * Per-slot isolate-memory accounting for the ResourceGovernor. Raw samples
+   * with receipt ages — the staleness policy (how old is too old) lives with
+   * the governor's other policy constants, not here. Dead slots are included
+   * with their liveness flag so the consumer can decide; a slot whose worker
+   * has never reported carries `ageMs: Infinity`.
+   */
+  getMemoryAccounting(): WorkerMemoryAccounting[] {
+    const now = Date.now();
+    return this.slots.map((slot) => ({
+      slotIndex: slot.index,
+      alive: slot.alive,
+      ageMs: slot.memorySample ? Math.max(0, now - slot.memorySample.receivedAt) : Infinity,
+      heapUsedBytes: slot.memorySample?.heapUsedBytes ?? 0,
+      externalBytes: slot.memorySample?.externalBytes ?? 0,
+      sessionCount: slot.memorySample?.sessionCount ?? 0,
+      sessions: slot.memorySample?.sessions ?? [],
+    }));
+  }
+
+  /**
    * Per-slot governance snapshots. Analysis workers are trim-eligible (their
    * sessions' scrollback can shrink) but never dispose/restart-eligible —
    * persistent worker_threads must not be terminate/recreate cycled (Electron
@@ -220,13 +261,24 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
         activeSessionCount: slot.terminals.size,
         queueDepth,
         lastActivityAt: slot.lastActivityAt,
-        memory: null,
+        // Isolate self-report (worker threads have their own V8 isolates, so
+        // per-thread heap/external IS attributable — only RSS is not).
+        memory: slot.memorySample
+          ? {
+              rssBytes: null,
+              heapUsedBytes: slot.memorySample.heapUsedBytes,
+              externalBytes: slot.memorySample.externalBytes,
+            }
+          : null,
         eligibility: { trim: true, dispose: false, restart: false },
         state: slot.alive ? "running" : "dead",
         detail: {
           respawnCount: slot.respawnCount,
           generation: slot.generation,
           idleMs: Math.max(0, now - slot.lastActivityAt),
+          memorySampleAgeMs: slot.memorySample
+            ? Math.max(0, now - slot.memorySample.receivedAt)
+            : null,
         },
       };
     });
@@ -273,6 +325,7 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
       alive: false,
       generation: 0,
       lastActivityAt: Date.now(),
+      memorySample: null,
     };
     if (!this.spawnIntoSlot(slot)) return null;
     this.slots.push(slot);
@@ -291,7 +344,10 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
     slot.alive = true;
     slot.generation++;
     slot.lastActivityAt = Date.now();
-    worker.on("message", (msg) => this.onWorkerMessage(msg));
+    // A fresh worker instance must never inherit its predecessor's memory
+    // numbers — it reports its own within one sample interval.
+    slot.memorySample = null;
+    worker.on("message", (msg) => this.onWorkerMessage(msg, slot, worker));
     worker.on("error", (err) => {
       console.error(`[AnalysisWorkerPool] Worker ${slot.index} error:`, err);
     });
@@ -309,7 +365,17 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
     return true;
   }
 
-  private onWorkerMessage(msg: WorkerToHostMessage): void {
+  private onWorkerMessage(msg: WorkerToHostMessage, slot: PoolSlot, worker: WorkerLike): void {
+    if (msg.type === "memory-sample") {
+      // Instance fence: a sample posted by a superseded worker instance (its
+      // exit raced the respawn window) must not be attributed to the fresh
+      // worker occupying the slot. A disposed pool stops caching — its
+      // accounting is no longer consumed and must not keep mutating.
+      if (this.disposed || slot.worker !== worker || !slot.alive) return;
+      const { type: _type, ...sample } = msg;
+      slot.memorySample = { ...sample, receivedAt: Date.now() };
+      return;
+    }
     if (msg.type === "response") {
       const req = this.pending.get(msg.requestId);
       if (req) {
@@ -346,6 +412,8 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
     if (this.disposed || !slot.alive) return;
     slot.alive = false;
     slot.worker = null;
+    // A dead worker's isolate is gone; its memory must stop counting.
+    slot.memorySample = null;
     console.error(
       `[AnalysisWorkerPool] Analysis worker ${slot.index} exited unexpectedly (code ${code}); ` +
         `${slot.terminals.size} terminal(s) affected`

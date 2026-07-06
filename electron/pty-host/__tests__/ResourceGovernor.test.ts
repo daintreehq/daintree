@@ -1957,8 +1957,22 @@ describe("ResourceGovernor", () => {
       >;
       expect(payload.estimatedBufferMemoryBytes).toBe(960_000 + 600_000);
       expect(payload.perTerminalBufferMemory).toEqual([
-        { terminalId: "t1", scrollbackEstimateBytes: 960_000, scrollbackLines: 1000, cols: 80 },
-        { terminalId: "t2", scrollbackEstimateBytes: 600_000, scrollbackLines: 500, cols: 100 },
+        // actualBufferLines is null without a fresh worker sample — the
+        // estimate falls back to the configured cap.
+        {
+          terminalId: "t1",
+          scrollbackEstimateBytes: 960_000,
+          scrollbackLines: 1000,
+          actualBufferLines: null,
+          cols: 80,
+        },
+        {
+          terminalId: "t2",
+          scrollbackEstimateBytes: 600_000,
+          scrollbackLines: 500,
+          actualBufferLines: null,
+          cols: 100,
+        },
       ]);
 
       governor.dispose();
@@ -2556,6 +2570,317 @@ describe("ResourceGovernor", () => {
       // Tick at t=8000: B is now 5s old (swept).
       vi.advanceTimersByTime(2000);
       expect(mockCheckForLeaks).toHaveBeenLastCalledWith(0, [2222]);
+
+      governor.dispose();
+    });
+  });
+
+  describe("worker isolate memory accounting", () => {
+    // Worker threads are separate V8 isolates: the governor's own
+    // process.memoryUsage() cannot see their heap/external, so these samples
+    // are its only visibility into the analysis mirrors (#10920 moved them
+    // off this thread). MB-denominated helpers to match mockMemoryUsage.
+    function workerSample(
+      heapMb: number,
+      externalMb: number,
+      overrides?: Partial<{
+        slotIndex: number;
+        alive: boolean;
+        ageMs: number;
+        sessions: Array<{ terminalId: string; bufferLines: number; cols: number }>;
+      }>
+    ) {
+      return {
+        slotIndex: 0,
+        alive: true,
+        ageMs: 0,
+        heapUsedBytes: heapMb * 1024 * 1024,
+        externalBytes: externalMb * 1024 * 1024,
+        sessionCount: overrides?.sessions?.length ?? 0,
+        sessions: [],
+        ...overrides,
+      };
+    }
+
+    function findWarningEvent(deps: ResourceGovernorDeps) {
+      return (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => (c[0] as Record<string, unknown>)?.type === "host-memory-warning"
+      )?.[0] as Record<string, unknown> | undefined;
+    }
+
+    it("folds fresh worker samples into utilization and attributes them on the warning event", () => {
+      // Host isolate alone: 100/768 = 13% — far below the 70% warning band.
+      // With workers: (100 + 400 + 120) / 768 = 80.7% — warning fires. This is
+      // the regression pin for the post-#10920 blindness: the same worker
+      // memory without the accounting dep produced 13% and total silence.
+      mockMemoryUsage(100);
+      const deps = createMockDeps({
+        getWorkerMemoryAccounting: vi
+          .fn()
+          .mockReturnValue([
+            workerSample(250, 60, { slotIndex: 0 }),
+            workerSample(150, 60, { slotIndex: 1 }),
+          ]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      const event = findWarningEvent(deps);
+      expect(event).toBeDefined();
+      expect(event?.isWarning).toBe(true);
+      expect(event?.workerHeapMb).toBe(400);
+      expect(event?.workerExternalMb).toBe(120);
+      expect(event?.heapMb).toBe(100);
+
+      governor.dispose();
+    });
+
+    it("ignores stale and dead-slot samples (stale contributes 0)", () => {
+      mockMemoryUsage(100);
+      const deps = createMockDeps({
+        getWorkerMemoryAccounting: vi.fn().mockReturnValue([
+          // Same magnitudes as the firing test above — only freshness/liveness differ.
+          workerSample(250, 60, { ageMs: 60_000 }),
+          workerSample(150, 60, { alive: false, slotIndex: 1 }),
+        ]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      expect(findWarningEvent(deps)).toBeUndefined();
+
+      governor.dispose();
+    });
+
+    it("engages the pause when a single worker isolate nears its own heap cap", () => {
+      const { coordinator, raw } = createMockCoordinator();
+      // Host 50MB; combined (50 + 460) / 768 = 66% — below the 85% engage
+      // threshold. But the worker isolate carries its own 512MB old-space cap
+      // (inherited execArgv): 460/512 = 89.8% — the per-isolate binding
+      // constraint must engage.
+      mockMemoryUsage(50);
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([
+            { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          ]),
+        getWorkerMemoryAccounting: vi.fn().mockReturnValue([workerSample(460, 0)]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
+
+      expect(raw.pause).toHaveBeenCalled();
+      expect(deps.sendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "host-throttled", isThrottled: true })
+      );
+
+      governor.dispose();
+    });
+
+    it("ranks targeted trims by actual buffer occupancy and skips near-empty capped buffers", () => {
+      // All three terminals share a 10000-line cap. Fresh samples say A holds
+      // 50 real lines (nothing to reclaim — must keep its cap) and B holds
+      // 9000; C is unreported (in-thread / just-respawned) and falls back to
+      // the cap estimate. Expected trim order: C (10000×80) before B (9000×80).
+      mockMemoryUsage(50);
+      const trimBuffersTargeted = vi.fn();
+      const deps = createMockDeps({
+        getTerminalBufferSizes: vi.fn().mockReturnValue([
+          { id: "a", scrollbackLines: 10000, cols: 100 },
+          { id: "b", scrollbackLines: 10000, cols: 80 },
+          { id: "c", scrollbackLines: 10000, cols: 80 },
+        ]),
+        trimBuffersTargeted,
+        getWorkerMemoryAccounting: vi.fn().mockReturnValue([
+          workerSample(460, 0, {
+            sessions: [
+              { terminalId: "a", bufferLines: 50, cols: 100 },
+              { terminalId: "b", bufferLines: 9000, cols: 80 },
+            ],
+          }),
+        ]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      // Tick 5 (post-warmup) fires the one-shot pre-pause trim.
+      vi.advanceTimersByTime(10000);
+
+      expect(trimBuffersTargeted).toHaveBeenCalledTimes(1);
+      const targets = trimBuffersTargeted.mock.calls[0][0] as Map<string, number>;
+      expect([...targets.keys()]).toEqual(["c", "b"]);
+      expect(targets.has("a")).toBe(false);
+
+      governor.dispose();
+    });
+
+    it("reports actual occupancy on the buffer-memory gauge when samples are fresh", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(true);
+      // Warning-band pressure so the gauge emits: (100+400+120)/768 = 80.7%.
+      mockMemoryUsage(100);
+      const deps = createMockDeps({
+        getTerminalBufferSizes: vi
+          .fn()
+          .mockReturnValue([{ id: "a", scrollbackLines: 10000, cols: 100 }]),
+        getWorkerMemoryAccounting: vi.fn().mockReturnValue([
+          workerSample(400, 120, {
+            sessions: [{ terminalId: "a", bufferLines: 200, cols: 100 }],
+          }),
+        ]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      const gauge = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls
+        .map((c: unknown[]) => c[0] as Record<string, unknown>)
+        .find(
+          (e) =>
+            e?.type === "terminal-reliability-metric" &&
+            (e.payload as Record<string, unknown>)?.metricType === "buffer-memory-gauge"
+        );
+      expect(gauge).toBeDefined();
+      const payload = gauge?.payload as {
+        perTerminalBufferMemory: Array<{
+          terminalId: string;
+          scrollbackEstimateBytes: number;
+          actualBufferLines: number | null;
+        }>;
+      };
+      expect(payload.perTerminalBufferMemory[0].actualBufferLines).toBe(200);
+      expect(payload.perTerminalBufferMemory[0].scrollbackEstimateBytes).toBe(200 * 100 * 12);
+
+      governor.dispose();
+    });
+
+    it("survives a throwing accounting dep and completes the tick on host-only signal", () => {
+      // A bad pool snapshot must not abort the whole resource tick — FD checks
+      // and the host-only memory signal still run.
+      mockMemoryUsage(400); // 400/512 = 78.1% heap-bound > 70% warning
+      const deps = createMockDeps({
+        getWorkerMemoryAccounting: vi.fn().mockImplementation(() => {
+          throw new Error("pool snapshot failed");
+        }),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      expect(() => vi.advanceTimersByTime(2000)).not.toThrow();
+
+      expect(mockCheckForLeaks).toHaveBeenCalled();
+      const event = findWarningEvent(deps);
+      expect(event?.isWarning).toBe(true);
+      expect(event?.workerHeapMb).toBe(0);
+
+      governor.dispose();
+    });
+
+    it("treats worker-isolate critical pressure as immediate critical pressure", () => {
+      const { coordinator, raw } = createMockCoordinator();
+      // Host 50MB; worker heap 500MB → 500/512 = 97.7% raw ≥ 95% critical.
+      // Critical bypasses EMA warmup AND the pre-pause trim — pause engages on
+      // the very first tick.
+      mockMemoryUsage(50);
+      const trimBuffersTargeted = vi.fn();
+      const trimBuffers = vi.fn();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([
+            { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          ]),
+        trimBuffers,
+        trimBuffersTargeted,
+        getTerminalBufferSizes: vi
+          .fn()
+          .mockReturnValue([{ id: "t1", scrollbackLines: 10000, cols: 120 }]),
+        getWorkerMemoryAccounting: vi.fn().mockReturnValue([workerSample(500, 0)]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      expect(raw.pause).toHaveBeenCalled();
+      expect(trimBuffers).not.toHaveBeenCalled();
+      expect(trimBuffersTargeted).not.toHaveBeenCalled();
+
+      governor.dispose();
+    });
+
+    it("disengages when fresh worker samples fall below the resume threshold", () => {
+      const { coordinator, raw } = createMockCoordinator();
+      mockMemoryUsage(50);
+      let workerHeapMb = 460; // engage via the per-isolate term
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([{ id: "t1", lastOutputTime: 100, lastInputTime: 100 }]),
+        getWorkerMemoryAccounting: vi
+          .fn()
+          .mockImplementation(() => [workerSample(workerHeapMb, 0)]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
+      expect(raw.pause).toHaveBeenCalled();
+
+      // Worker memory reclaimed (post-trim GC): fresh low sample → raw
+      // utilization (50+40)/768 = 11.7% < 60% resume → immediate disengage.
+      workerHeapMb = 40;
+      vi.advanceTimersByTime(2000);
+
+      expect(raw.resume).toHaveBeenCalled();
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+
+      governor.dispose();
+    });
+
+    it("holds threshold-based resume while an alive worker's sample is stale", () => {
+      const { coordinator, raw } = createMockCoordinator();
+      mockMemoryUsage(50);
+      let accounting = [workerSample(460, 0)];
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([{ id: "t1", lastOutputTime: 100, lastInputTime: 100 }]),
+        getWorkerMemoryAccounting: vi.fn().mockImplementation(() => accounting),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
+      expect(raw.pause).toHaveBeenCalled();
+
+      // The worker goes silent (parse-saturated): its stale sample contributes
+      // 0, so raw utilization reads ~6.5% — but absent evidence is not relief.
+      // Threshold-based resume must hold while an alive slot is stale.
+      accounting = [workerSample(460, 0, { ageMs: 60_000 })];
+      vi.advanceTimersByTime(2000);
+      expect(raw.resume).not.toHaveBeenCalled();
+
+      // The bounded-pause guarantee still applies: FORCE_RESUME_MS (10s,
+      // strict >) eventually force-resumes regardless of staleness — the
+      // first tick past the bound is at 12s of pause.
+      vi.advanceTimersByTime(10000);
+      expect(raw.resume).toHaveBeenCalled();
 
       governor.dispose();
     });

@@ -1,7 +1,19 @@
 import { setPluginAgentRegistry } from "../../../../shared/config/pluginAgentRegistry.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AnalysisSession } from "./AnalysisSession.js";
-import type { HostToWorkerMessage, WorkerToHostMessage } from "../analysisWorkerProtocol.js";
+import type {
+  AnalysisWorkerMemorySample,
+  HostToWorkerMessage,
+  WorkerToHostMessage,
+} from "../analysisWorkerProtocol.js";
+
+/**
+ * Cadence of the worker's isolate-memory self-report. Matches the
+ * ResourceGovernor's 2s check interval so the governor never acts on a signal
+ * more than one tick old. The payload is a handful of numbers plus one small
+ * entry per session — noise next to the data-path traffic.
+ */
+export const MEMORY_SAMPLE_INTERVAL_MS = 2000;
 
 /**
  * Worker-side message dispatcher. Holds the terminal-slot map and routes
@@ -22,8 +34,66 @@ export class AnalysisWorkerRuntime {
   // ALL subsequent messages for that terminal chain behind it, preserving
   // total per-terminal message order.
   private readonly barriers = new Map<string, Promise<void>>();
+  private memorySampleTimer: NodeJS.Timeout | null = null;
 
-  constructor(private readonly emit: (msg: WorkerToHostMessage) => void) {}
+  constructor(
+    private readonly emit: (msg: WorkerToHostMessage) => void,
+    /**
+     * Injectable isolate-memory reader for tests; production uses the worker's
+     * own `process.memoryUsage()`, which is isolate-scoped — the whole point
+     * of sampling here rather than on the pty-host main thread.
+     */
+    private readonly readMemory: () => { heapUsed: number; external: number } = () =>
+      process.memoryUsage()
+  ) {}
+
+  /**
+   * Isolate memory + per-session buffer occupancy at this instant. The
+   * governor on the pty-host main thread cannot observe worker-isolate memory
+   * (separate V8 isolates), so this self-report is its only visibility into
+   * the headless mirror buffers that dominate the process footprint.
+   */
+  collectMemorySample(): AnalysisWorkerMemorySample {
+    const memory = this.readMemory();
+    const sessions: AnalysisWorkerMemorySample["sessions"] = [];
+    for (const [terminalId, session] of this.sessions) {
+      const stats = session.bufferStats();
+      if (stats) {
+        sessions.push({ terminalId, bufferLines: stats.bufferLines, cols: stats.cols });
+      }
+    }
+    return {
+      heapUsedBytes: memory.heapUsed,
+      externalBytes: memory.external,
+      sessionCount: this.sessions.size,
+      sessions,
+      sampledAt: Date.now(),
+    };
+  }
+
+  /**
+   * Begin periodic memory self-reporting. The timer is unref'd so an idle
+   * worker never keeps the process alive; a saturated worker event loop delays
+   * the sample, which the host treats as staleness (stale contributes 0).
+   */
+  startMemorySampling(intervalMs: number = MEMORY_SAMPLE_INTERVAL_MS): void {
+    if (this.memorySampleTimer) return;
+    this.memorySampleTimer = setInterval(() => {
+      try {
+        this.emit({ type: "memory-sample", ...this.collectMemorySample() });
+      } catch (error) {
+        console.error("[AnalysisWorker] memory sample failed:", error);
+      }
+    }, intervalMs);
+    this.memorySampleTimer.unref?.();
+  }
+
+  stopMemorySampling(): void {
+    if (this.memorySampleTimer) {
+      clearInterval(this.memorySampleTimer);
+      this.memorySampleTimer = null;
+    }
+  }
 
   handleMessage(msg: HostToWorkerMessage): void {
     const terminalId = "terminalId" in msg ? msg.terminalId : undefined;

@@ -20,8 +20,11 @@ export type WorkerSubsystemKind =
 
 /**
  * Best-effort memory attribution. worker_threads share their parent process,
- * so per-thread RSS does not exist — thread-backed subsystems report null and
- * the owning process's usage appears on the host-level snapshot instead.
+ * so per-thread RSS does not exist (`rssBytes: null` for thread-backed
+ * subsystems) — but each worker thread IS its own V8 isolate, so heap and
+ * external memory are attributable when the worker self-reports them (the
+ * analysis pool does; see `AnalysisWorkerMemorySample`). The owning process's
+ * RSS appears on the host-level snapshot.
  */
 export interface WorkerMemoryEstimate {
   rssBytes?: number | null;

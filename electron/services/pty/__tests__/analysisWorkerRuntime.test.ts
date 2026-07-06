@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { AnalysisWorkerRuntime } from "../analysis/AnalysisWorkerRuntime.js";
 import { ANALYSIS_ACK_FLUSH_BYTES } from "../analysis/AnalysisSession.js";
 import type { WorkerToHostMessage } from "../analysisWorkerProtocol.js";
@@ -246,5 +246,58 @@ describe("AnalysisWorkerRuntime", () => {
     expect(runtime.sessionCount()).toBe(1);
     runtime.handleMessage({ type: "free", terminalId: "t1" });
     expect(runtime.sessionCount()).toBe(0);
+  });
+
+  describe("memory sampling", () => {
+    it("reports isolate memory and real buffer occupancy that grows with output", async () => {
+      // Freshly created 24-row terminal: the buffer holds only the viewport.
+      const initial = runtime.collectMemorySample();
+      expect(initial.sessionCount).toBe(1);
+      expect(initial.sessions).toEqual([{ terminalId: "t1", bufferLines: 24, cols: 80 }]);
+      expect(initial.heapUsedBytes).toBeGreaterThan(0);
+      expect(initial.externalBytes).toBeGreaterThan(0);
+
+      // 60 lines scroll ~36 rows past the viewport into scrollback — the
+      // sample must report ACTUAL occupancy, not the 1000-line cap.
+      for (let i = 0; i < 60; i++) sendData(`line ${i}\r\n`);
+      const grown = await waitFor(() => {
+        const s = runtime.collectMemorySample().sessions[0];
+        return s.bufferLines >= 60 && s.bufferLines < 1000 ? s : undefined;
+      });
+      expect(grown.cols).toBe(80);
+    });
+
+    it("excludes freed sessions from the sample", () => {
+      runtime.handleMessage({ type: "free", terminalId: "t1" });
+      const sample = runtime.collectMemorySample();
+      expect(sample.sessionCount).toBe(0);
+      expect(sample.sessions).toEqual([]);
+    });
+
+    it("emits samples on the interval until stopped, using the injected reader", () => {
+      vi.useFakeTimers();
+      const timed: WorkerToHostMessage[] = [];
+      const timedRuntime = new AnalysisWorkerRuntime(
+        (msg) => timed.push(msg),
+        () => ({ heapUsed: 7, external: 3 })
+      );
+
+      timedRuntime.startMemorySampling(2000);
+      // Re-arming while running must not double the cadence.
+      timedRuntime.startMemorySampling(2000);
+      vi.advanceTimersByTime(6100);
+
+      const samples = timed.filter((m) => m.type === "memory-sample");
+      expect(samples).toHaveLength(3);
+      if (samples[0].type === "memory-sample") {
+        expect(samples[0].heapUsedBytes).toBe(7);
+        expect(samples[0].externalBytes).toBe(3);
+      }
+
+      timedRuntime.stopMemorySampling();
+      vi.advanceTimersByTime(6000);
+      expect(timed.filter((m) => m.type === "memory-sample")).toHaveLength(3);
+      vi.useRealTimers();
+    });
   });
 });

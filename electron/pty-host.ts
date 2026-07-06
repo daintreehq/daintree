@@ -597,6 +597,11 @@ const resourceGovernor = new ResourceGovernor({
     })),
   trimBuffers: () => ptyManager.trimScrollback(SCROLLBACK_MIN),
   getTerminalBufferSizes: () => ptyManager.getTerminalBufferSizes(),
+  // Worker-isolate memory self-reports: the governor's own process.memoryUsage()
+  // cannot see the analysis workers' heaps or xterm buffer backing stores
+  // (separate V8 isolates). Empty in in-thread mode, where the base signal
+  // already covers the mirrors.
+  getWorkerMemoryAccounting: () => analysisWorkerPool?.getMemoryAccounting() ?? [],
   trimBuffersTargeted: (targets) => {
     for (const [id, targetLines] of targets) {
       try {

@@ -6,6 +6,7 @@ import type {
 } from "../../shared/types/pty-host.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
 import { SCROLLBACK_MIN } from "../../shared/config/scrollback.js";
+import type { WorkerMemoryAccounting } from "../services/pty/analysis/AnalysisWorkerPool.js";
 import { FdMonitor } from "./FdMonitor.js";
 import { metricsEnabled } from "./metrics.js";
 import type { PtyPauseCoordinator } from "./PtyPauseCoordinator.js";
@@ -46,6 +47,17 @@ export interface ResourceGovernorDeps {
    * terminals keep their history. Best-effort per terminal; never throws to caller.
    */
   trimBuffersTargeted?: (targetsByTerminalId: Map<string, number>) => void;
+  /**
+   * Isolate-memory self-reports from the analysis worker pool. Worker threads
+   * are separate V8 isolates, so this process's `process.memoryUsage()` cannot
+   * see their heap or ArrayBuffer backing stores — and the headless mirror
+   * buffers (the dominant per-terminal memory, moved into workers by #10920)
+   * live there. Without this signal the governor watches an isolate that no
+   * longer holds the memory it exists to bound. Absent/empty in in-thread
+   * analysis mode, where the mirrors live in this isolate and the base signal
+   * is already correct.
+   */
+  getWorkerMemoryAccounting?: () => WorkerMemoryAccounting[];
   getPendingBytesSnapshot?: () => {
     totalPendingBytes: number;
     perTerminal: Array<{ terminalId: string; pendingBytes: number }>;
@@ -95,9 +107,24 @@ export interface ResourceGovernorDeps {
 // only the V8 heap; ArrayBuffer backing stores (queued PTY output slabs,
 // xterm typed arrays) are allocated outside it and show up in
 // process.memoryUsage().external, so the governor budgets them separately.
+//
+// Analysis worker_threads inherit the same execArgv, so each worker ISOLATE
+// carries its own 512MB old-space cap — HEAP_BUDGET_MB doubles as the
+// per-isolate binding constraint for the worker-heap term below. The total
+// budget stays process-scoped: it bounded all mirror buffers when they lived
+// on this thread, and it bounds the same memory now that #10920 moved them
+// into worker isolates. Deliberately independent of pool size — idle worker
+// baselines (~5-20MB each) are real process memory and count against it, so an
+// oversized DAINTREE_ANALYSIS_WORKERS override spends its own headroom.
 const HEAP_BUDGET_MB = 512;
 const EXTERNAL_HEADROOM_MB = 256;
 const TOTAL_PROCESS_BUDGET_MB = HEAP_BUDGET_MB + EXTERNAL_HEADROOM_MB;
+// Worker memory samples older than this contribute 0 to the utilization
+// signal (same stale-contributes-0 discipline as ResourceProfileService's
+// terminal-workload signal). 5× the 2s sample cadence: tolerates a couple of
+// delayed ticks on a busy worker event loop without letting a wedged worker's
+// last reading steer trims/pauses forever.
+const WORKER_SAMPLE_MAX_AGE_MS = 10_000;
 
 export class ResourceGovernor {
   private readonly MEMORY_LIMIT_PERCENT = 85;
@@ -221,19 +248,48 @@ export class ResourceGovernor {
     // `external` already includes all ArrayBuffer/Buffer backing stores —
     // memory.arrayBuffers is a subset of it, so adding it would double-count.
     const externalMb = (memory.external ?? 0) / 1024 / 1024;
-    // Combined signal: V8 heap + external. Heap-only was blind to the memory
-    // this governor actually manages — queued PTY output and xterm backing
-    // stores live in external, outside the --max-old-space-size cap (#9905).
-    const combinedMb = heapUsedMb + externalMb;
+    // Worker-isolate memory. process.memoryUsage() above is isolate-scoped:
+    // it cannot see the analysis workers' heaps or their xterm buffer backing
+    // stores — the memory this governor most needs to bound since #10920
+    // moved the mirrors off this thread. Fold in fresh self-reports; stale or
+    // dead-slot samples contribute 0 (the isolate is gone, or the reading can
+    // no longer be trusted to steer trims/pauses).
+    const workerSamples = this.getFreshWorkerSamples();
+    let workerHeapMb = 0;
+    let workerExternalMb = 0;
+    let maxWorkerHeapMb = 0;
+    for (const sample of workerSamples) {
+      const sampleHeapMb = sample.heapUsedBytes / 1024 / 1024;
+      workerHeapMb += sampleHeapMb;
+      workerExternalMb += sample.externalBytes / 1024 / 1024;
+      if (sampleHeapMb > maxWorkerHeapMb) maxWorkerHeapMb = sampleHeapMb;
+    }
+    // Combined signal: V8 heap + external, across every isolate in the
+    // process. Heap-only was blind to the memory this governor actually
+    // manages — queued PTY output and xterm backing stores live in external,
+    // outside the --max-old-space-size cap (#9905) — and host-only was blind
+    // to the same memory again once it moved into worker isolates.
+    const combinedMb = heapUsedMb + externalMb + workerHeapMb + workerExternalMb;
     // Utilization is the binding constraint: heap against its own V8 cap AND
     // combined against the total process budget. The combined ratio alone can
     // never reach the engage thresholds on pure heap pressure — heap is capped
     // at HEAP_BUDGET_MB, only ~67% of the total budget — so a runaway JS heap
-    // must be measured against its own ceiling. max() keeps this a single
-    // continuous signal feeding one EMA, and the disengage hysteresis then
-    // requires BOTH ratios to clear the resume threshold.
+    // must be measured against its own ceiling; worker isolates carry the same
+    // per-isolate cap (inherited execArgv), so the heaviest worker's heap is a
+    // third binding constraint. One hot isolate engaging the FLEET-wide pause
+    // is intentional: trim-first shrinks that worker's buffers, and letting it
+    // hit its cap instead would kill a persistent worker with
+    // ERR_WORKER_OUT_OF_MEMORY (the terminate/recreate class behind the
+    // Electron !flush_tasks_ crash) — a ≤FORCE_RESUME_MS bounded pause is the
+    // safer failure mode. max() keeps this a single continuous signal feeding
+    // one EMA, and the disengage hysteresis then requires ALL ratios to clear
+    // the resume threshold.
     const utilizationPercent =
-      Math.max(combinedMb / TOTAL_PROCESS_BUDGET_MB, heapUsedMb / HEAP_BUDGET_MB) * 100;
+      Math.max(
+        combinedMb / TOTAL_PROCESS_BUDGET_MB,
+        heapUsedMb / HEAP_BUDGET_MB,
+        maxWorkerHeapMb / HEAP_BUDGET_MB
+      ) * 100;
 
     // EMA smoothing — rejects single-tick GC sawtooth spikes. Seeded with the
     // first real reading (not 0) to avoid a warmup ramp that falsely stays
@@ -255,12 +311,13 @@ export class ResourceGovernor {
     // throttle decision, so smoothing would only introduce unhelpful lag.
     const warnThreshold = this.warningThresholdPercent;
     const warnClear = this.warningClearPercent;
+    const workerCombinedMb = workerHeapMb + workerExternalMb;
     if (!this.isWarning && utilizationPercent > warnThreshold) {
       this.isWarning = true;
       console.warn(
         `[ResourceGovernor] Memory warning: ${utilizationPercent.toFixed(1)}% of process budget ` +
-          `(heap ${Math.round(heapUsedMb)}MB + external ${Math.round(externalMb)}MB, ` +
-          `threshold: ${warnThreshold}%).`
+          `(heap ${Math.round(heapUsedMb)}MB + external ${Math.round(externalMb)}MB + ` +
+          `workers ${Math.round(workerCombinedMb)}MB, threshold: ${warnThreshold}%).`
       );
       this.deps.sendEvent({
         type: "host-memory-warning",
@@ -268,13 +325,16 @@ export class ResourceGovernor {
         utilizationPercent: Math.round(utilizationPercent),
         heapMb: Math.round(heapUsedMb),
         externalMb: Math.round(externalMb),
+        workerHeapMb: Math.round(workerHeapMb),
+        workerExternalMb: Math.round(workerExternalMb),
         timestamp: Date.now(),
       });
     } else if (this.isWarning && utilizationPercent < warnClear) {
       this.isWarning = false;
       console.log(
         `[ResourceGovernor] Memory warning cleared: ${utilizationPercent.toFixed(1)}% of process budget ` +
-          `(heap ${Math.round(heapUsedMb)}MB + external ${Math.round(externalMb)}MB).`
+          `(heap ${Math.round(heapUsedMb)}MB + external ${Math.round(externalMb)}MB + ` +
+          `workers ${Math.round(workerCombinedMb)}MB).`
       );
       this.deps.sendEvent({
         type: "host-memory-warning",
@@ -282,6 +342,8 @@ export class ResourceGovernor {
         utilizationPercent: Math.round(utilizationPercent),
         heapMb: Math.round(heapUsedMb),
         externalMb: Math.round(externalMb),
+        workerHeapMb: Math.round(workerHeapMb),
+        workerExternalMb: Math.round(workerExternalMb),
         timestamp: Date.now(),
       });
     }
@@ -329,7 +391,16 @@ export class ResourceGovernor {
       // promptly when pressure truly clears. The 85→60% hysteresis band plus
       // the REENGAGE_COOLDOWN_MS gate prevent any oscillation risk from a
       // single-tick low reading triggering an early resume.
-      const belowThreshold = utilizationPercent < resumePercent;
+      //
+      // Stale-while-alive guard: a parse-saturated worker stops posting
+      // samples, and after WORKER_SAMPLE_MAX_AGE_MS its memory contributes 0 —
+      // which can make utilization "clear" the resume threshold while the
+      // isolate is still ballooned. Absent evidence is not evidence of relief:
+      // threshold-based resume requires every alive worker's report to be
+      // fresh. The FORCE_RESUME_MS bounded-pause guarantee is unaffected, so a
+      // wedged worker can delay resume by at most the pause bound.
+      const belowThreshold =
+        utilizationPercent < resumePercent && !this.hasStaleAliveWorkerSample();
 
       if (maxPauseExceeded || belowThreshold) {
         this.disengageThrottle(combinedMb, utilizationPercent, maxPauseExceeded);
@@ -346,27 +417,84 @@ export class ResourceGovernor {
   }
 
   /**
+   * True when an alive worker slot has no fresh sample — its memory is
+   * UNKNOWN, not zero. Used to hold threshold-based resume while throttling;
+   * never blocks the force-resume bound. A never-reported slot (ageMs
+   * Infinity) counts: a just-respawned worker's memory is equally unknown.
+   */
+  private hasStaleAliveWorkerSample(): boolean {
+    if (!this.deps.getWorkerMemoryAccounting) return false;
+    try {
+      return this.deps
+        .getWorkerMemoryAccounting()
+        .some((s) => s.alive && s.ageMs > WORKER_SAMPLE_MAX_AGE_MS);
+    } catch {
+      // The accounting source failing is handled (and logged) by
+      // getFreshWorkerSamples in the same tick; don't block resume on it.
+      return false;
+    }
+  }
+
+  /** Fresh, alive-slot worker memory samples; the staleness policy chokepoint. */
+  private getFreshWorkerSamples(): WorkerMemoryAccounting[] {
+    if (!this.deps.getWorkerMemoryAccounting) return [];
+    try {
+      return this.deps
+        .getWorkerMemoryAccounting()
+        .filter((s) => s.alive && s.ageMs <= WORKER_SAMPLE_MAX_AGE_MS);
+    } catch (err) {
+      console.warn("[ResourceGovernor] getWorkerMemoryAccounting failed:", err);
+      return [];
+    }
+  }
+
+  /**
+   * Actual per-terminal buffer occupancy from fresh worker samples: lines the
+   * mirror really holds rather than its configured cap. Terminals without a
+   * fresh report (in-thread mode, worker just respawned) fall back to the
+   * closed-form cap estimate at the call sites.
+   */
+  private getActualBufferLines(): Map<string, { bufferLines: number; cols: number }> {
+    const actual = new Map<string, { bufferLines: number; cols: number }>();
+    for (const sample of this.getFreshWorkerSamples()) {
+      for (const session of sample.sessions) {
+        actual.set(session.terminalId, {
+          bufferLines: session.bufferLines,
+          cols: session.cols,
+        });
+      }
+    }
+    return actual;
+  }
+
+  /**
    * Pre-pause buffer reclaim. Prefers the targeted path — trims only terminals
    * whose scrollback exceeds SCROLLBACK_MIN, heaviest contributor first — so a
    * single chatty agent's history is reclaimed without flattening every quiet
-   * terminal to 100 lines. Falls back to the uniform flatten when buffer-size
-   * attribution isn't wired (or the targeted call throws). Pure reclaim: no pause,
-   * no governor state mutation. Caller owns the one-shot `trimAttemptedForCurrentPressure`.
+   * terminal to 100 lines. Ranks by ACTUAL buffer occupancy where a fresh
+   * worker sample reports it (a capped-at-10000 terminal holding 40 lines
+   * contributes nothing and keeps its cap); the configured-cap estimate is the
+   * fallback. Falls back to the uniform flatten when buffer-size attribution
+   * isn't wired (or the targeted call throws). Pure reclaim: no pause, no
+   * governor state mutation. Caller owns the one-shot `trimAttemptedForCurrentPressure`.
    */
   private performPrePauseTrim(rawPercent: number, smoothedPercent: number): void {
     if (this.deps.trimBuffersTargeted && this.deps.getTerminalBufferSizes) {
       try {
         const sizes = this.deps.getTerminalBufferSizes();
+        const actualLines = this.getActualBufferLines();
+        const effectiveLines = (t: { id: string; scrollbackLines: number }): number =>
+          actualLines.get(t.id)?.bufferLines ?? t.scrollbackLines;
         // Heaviest-first so the Map's insertion order (and the log) leads with the
         // biggest contributor. All targets are SCROLLBACK_MIN today; the Map shape
         // keeps per-terminal targets future-proof.
         const targets = new Map<string, number>();
         for (const t of sizes
-          .filter((s) => s.scrollbackLines > SCROLLBACK_MIN)
+          .filter((s) => s.scrollbackLines > SCROLLBACK_MIN && effectiveLines(s) > SCROLLBACK_MIN)
           .sort(
             (a, b) =>
-              b.scrollbackLines * b.cols * this.BYTES_PER_CELL -
-              a.scrollbackLines * a.cols * this.BYTES_PER_CELL
+              effectiveLines(b) * b.cols * this.BYTES_PER_CELL -
+              effectiveLines(a) * a.cols * this.BYTES_PER_CELL
           )) {
           targets.set(t.id, SCROLLBACK_MIN);
         }
@@ -411,13 +539,21 @@ export class ResourceGovernor {
     const sizes = this.deps.getTerminalBufferSizes();
     if (sizes.length === 0) return;
 
+    // Prefer actual occupancy (fresh worker self-report) over the configured
+    // cap, so the gauge attributes memory to terminals that really hold it.
+    const actualLines = this.getActualBufferLines();
     const perTerminalBufferMemory = sizes
-      .map((t) => ({
-        terminalId: t.id,
-        scrollbackEstimateBytes: t.scrollbackLines * t.cols * this.BYTES_PER_CELL,
-        scrollbackLines: t.scrollbackLines,
-        cols: t.cols,
-      }))
+      .map((t) => {
+        const actual = actualLines.get(t.id);
+        return {
+          terminalId: t.id,
+          scrollbackEstimateBytes:
+            (actual?.bufferLines ?? t.scrollbackLines) * t.cols * this.BYTES_PER_CELL,
+          scrollbackLines: t.scrollbackLines,
+          actualBufferLines: actual?.bufferLines ?? null,
+          cols: t.cols,
+        };
+      })
       .sort((a, b) => b.scrollbackEstimateBytes - a.scrollbackEstimateBytes);
 
     const estimatedBufferMemoryBytes = perTerminalBufferMemory.reduce(
