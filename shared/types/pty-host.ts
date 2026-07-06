@@ -327,6 +327,24 @@ export interface FlowControlSnapshot {
   resourceGovernor: ResourceGovernorSnapshot;
   /** Pty-host loop health since the previous pull; null if unmonitored. */
   eventLoop: PtyHostEventLoopStats | null;
+  /**
+   * Per-shard breakdown when the PTY fabric is running more than one host
+   * shard. In that mode the top-level `resourceGovernor`/`eventLoop` fields
+   * carry the worst-shard view (so "PTY host lag p99" stays meaningful as a
+   * single number) and this array carries the per-shard detail. Absent on the
+   * single-host path.
+   */
+  shards?: FlowControlShardSnapshot[];
+}
+
+/** One PTY fabric shard's slice of a merged {@link FlowControlSnapshot}. */
+export interface FlowControlShardSnapshot {
+  /** Shard key: "main" for the default shard, the owning projectId otherwise. */
+  shardKey: string;
+  terminalCount: number;
+  totalPendingBytes: number;
+  resourceGovernor: ResourceGovernorSnapshot;
+  eventLoop: PtyHostEventLoopStats | null;
 }
 
 /**

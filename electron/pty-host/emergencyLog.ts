@@ -7,6 +7,16 @@ const MAX_LOG_SIZE = 1024 * 1024; // 1MB
 export function getEmergencyLogPath(): string {
   const userData = process.env.DAINTREE_USER_DATA;
   const logDir = userData ? path.join(userData, "logs") : path.join(process.cwd(), "logs");
+  // Under the PTY fabric each shard is its own process; the size-check-then-
+  // truncate rotation below is not cross-process safe, so shards get their own
+  // file. The default shard (and the legacy singleton) keeps `pty-host.log`.
+  const service = process.env.DAINTREE_PTY_SHARD_SERVICE;
+  if (service && service !== "daintree-pty-host") {
+    const suffix = service.replace(/^daintree-pty-host:?/, "").replace(/[^a-zA-Z0-9_-]/g, "");
+    if (suffix) {
+      return path.join(logDir, `pty-host-${suffix}.log`);
+    }
+  }
   return path.join(logDir, "pty-host.log");
 }
 

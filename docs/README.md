@@ -39,6 +39,7 @@ From there, follow the architecture doc nearest the surface you're changing. Eac
 | [dev-preview-event-routing.md](./architecture/dev-preview-event-routing.md) | Per-event routing audit for dev-preview lifecycle signals. |
 | [terminal-identity.md](./architecture/terminal-identity.md) | The single PTY-backed panel shape — plain vs agent terminal as runtime states. |
 | [terminal-lifecycle.md](./architecture/terminal-lifecycle.md) | Runtime lifecycle status for terminals across renderer, main, and PTY host. |
+| [pty-host-fabric.md](./architecture/pty-host-fabric.md) | Per-project PTY host shards behind `DAINTREE_PTY_FABRIC` — placement, port routing, crash isolation, idle retirement. |
 | [agent-activity-monitoring.md](./architecture/agent-activity-monitoring.md) | How a live agent terminal is judged working / waiting / completed / exited. |
 | [agent-state-tracking-strategy.md](./architecture/agent-state-tracking-strategy.md) | Why activity is tracked via passive PTY observation, and the rubric for new proposals. |
 | [resource-governance.md](./architecture/resource-governance.md) | Adaptive profiles, memory pressure, view eviction, and PTY hibernation. |
