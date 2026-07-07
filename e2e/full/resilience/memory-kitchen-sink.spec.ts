@@ -56,6 +56,11 @@ const SAMPLES_PER_ITERATION = Number(process.env.MEM_BENCH_SAMPLES ?? 3);
 const SAMPLE_GAP_MS = Number(process.env.MEM_BENCH_SAMPLE_GAP_MS ?? 2_000);
 const LABEL = process.env.MEM_BENCH_LABEL ?? "run";
 const OUT_DIR = path.join(process.cwd(), ".tmp", "perf-results", "memory-bench");
+const TEST_TIMEOUT_MS =
+  180_000 +
+  ACTIVE_SETTLE_MS +
+  SETTLE_MS +
+  Math.max(0, SAMPLES_PER_ITERATION - 1) * SAMPLE_GAP_MS * 2;
 
 type ProcessClass = "main" | "renderer" | "utility" | "gpu" | "crashpad" | "shell";
 
@@ -375,7 +380,9 @@ perfDescribe("Resilience: kitchen-sink memory benchmark", () => {
         iterations: ITERATIONS,
         scrollbackLines: SCROLLBACK_LINES,
         settleMs: SETTLE_MS,
+        activeSettleMs: ACTIVE_SETTLE_MS,
         samplesPerIteration: SAMPLES_PER_ITERATION,
+        sampleGapMs: SAMPLE_GAP_MS,
       },
       iterations: iterationResults,
       aggregates,
@@ -400,7 +407,7 @@ perfDescribe("Resilience: kitchen-sink memory benchmark", () => {
   for (let iter = 0; iter < ITERATIONS; iter++) {
     test(`iteration ${iter + 1} of ${ITERATIONS}`, async () => {
       test.slow();
-      test.setTimeout(600_000);
+      test.setTimeout(TEST_TIMEOUT_MS);
 
       // GPU on (separate GPU process, hardware compositing, WebGL terminal
       // renderer) — the production configuration. The default e2e launch path

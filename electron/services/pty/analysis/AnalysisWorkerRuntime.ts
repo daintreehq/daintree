@@ -66,9 +66,9 @@ export class AnalysisWorkerRuntime {
       process.memoryUsage(),
     /**
      * Optional idle heap compaction for this worker isolate. Fed by
-     * handleMessage (any message = activity) and checked on the memory-sample
-     * tick, so a worker whose terminals have gone quiet returns its
-     * parse-churn heap slack to the OS instead of holding it for minutes.
+     * heap-affecting messages and checked on the memory-sample tick, so a
+     * worker whose terminals have gone quiet returns its parse-churn heap
+     * slack to the OS instead of holding it for minutes.
      */
     private readonly idleHeapCompactor: IdleHeapCompactor | null = null
   ) {}
