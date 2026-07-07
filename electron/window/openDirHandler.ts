@@ -26,53 +26,65 @@ export interface OpenDirHandlerDeps {
 // App-lifetime consumer: macOS `open-file` is app-lifetime, so this wires once.
 let openDirConsumerInstalled = false;
 
+// Single serialized chain for EVERY folder open — cold-drain entries and warm
+// consumer entries alike. Opening a project mutates shared project/PVM state, so
+// concurrent opens (a rapid double-drop, or a warm drop landing mid-drain) would
+// race and leave the "last opened ends active" ordering nondeterministic. Each
+// open awaits the previous; the chain is fire-and-forget so window setup and the
+// open-file listener are never blocked.
+let openChain: Promise<void> = Promise.resolve();
+
+function enqueueOpen(task: () => Promise<void>): void {
+  openChain = openChain.then(task).catch((err) => {
+    console.error("[MAIN] Failed to open dropped folder:", err);
+  });
+}
+
 /**
  * Install the live directory consumer (idempotent). Warm folder drops route to
  * the primary window; with no live window (macOS stays alive with zero windows)
- * the folder re-queues for the next window-create / `activate` drain.
+ * the folder re-queues for the next window-create / `activate` drain. The
+ * primary-window check runs at execution time (inside the serialized task), so a
+ * window that dies between the drop and the open still re-queues.
  */
 export function installOpenDirConsumer(deps: OpenDirHandlerDeps): void {
   if (openDirConsumerInstalled) return;
   openDirConsumerInstalled = true;
   setOpenDirConsumer((dirPath) => {
-    const primary = deps.resolvePrimaryWindow();
-    if (primary && !primary.isDestroyed()) {
-      void deps
-        .openDirectory(dirPath, primary)
-        .catch((err) => console.error("[MAIN] Failed to open dropped folder:", err));
-    } else {
-      queuePendingOpenDirPath(dirPath);
-    }
+    enqueueOpen(async () => {
+      const primary = deps.resolvePrimaryWindow();
+      if (primary && !primary.isDestroyed()) {
+        await deps.openDirectory(dirPath, primary);
+      } else {
+        queuePendingOpenDirPath(dirPath);
+      }
+    });
   });
 }
 
 /**
  * Drain folders queued before a window existed, opening each in the fresh
- * window. Opens are serialized (FIFO, last opened ends active) so multiple
- * queued folders don't race on project/PVM state; the loop is fire-and-forget
- * so window setup isn't blocked. A window destroyed mid-drain re-queues the
- * remaining folders instead of silently dropping them.
+ * window. Opens are serialized with warm drops via the shared chain (FIFO, last
+ * opened ends active). A window destroyed before an open runs re-queues that
+ * folder instead of silently dropping it.
  */
 export function drainPendingOpenDirs(win: BrowserWindow, deps: OpenDirHandlerDeps): void {
   const pending = getPendingOpenDirPaths();
   if (pending.length === 0) return;
   clearPendingOpenDirPaths();
-  void (async () => {
-    for (const dirPath of pending) {
+  for (const dirPath of pending) {
+    enqueueOpen(async () => {
       if (win.isDestroyed()) {
         queuePendingOpenDirPath(dirPath);
-        continue;
+        return;
       }
-      try {
-        await deps.openDirectory(dirPath, win);
-      } catch (err) {
-        console.error("[MAIN] Failed to open dropped folder:", err);
-      }
-    }
-  })();
+      await deps.openDirectory(dirPath, win);
+    });
+  }
 }
 
-/** Test-only: reset the install-once guard between cases. */
+/** Test-only: reset the install-once guard and the open chain between cases. */
 export function _resetOpenDirConsumerForTest(): void {
   openDirConsumerInstalled = false;
+  openChain = Promise.resolve();
 }

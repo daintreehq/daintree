@@ -32,6 +32,16 @@ function makeDeps(): OpenDirHandlerDeps {
   };
 }
 
+// Opens run on a serialized async chain, so consumer/drain effects settle on a
+// microtask — wait for them rather than asserting synchronously.
+function captureConsumer(): (d: string) => void {
+  let captured: ((d: string) => void) | null = null;
+  envMock.setOpenDirConsumer.mockImplementation((c: (d: string) => void) => {
+    captured = c;
+  });
+  return (d: string) => captured!(d);
+}
+
 describe("installOpenDirConsumer (#10976)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -45,51 +55,48 @@ describe("installOpenDirConsumer (#10976)", () => {
     expect(envMock.setOpenDirConsumer).toHaveBeenCalledTimes(1);
   });
 
-  it("warm drop with a live primary window opens it in that window", () => {
+  it("warm drop with a live primary window opens it in that window", async () => {
     const primary = makeWindow();
     const deps = makeDeps();
     deps.resolvePrimaryWindow.mockReturnValue(primary);
-    let captured: ((d: string) => void) | null = null;
-    envMock.setOpenDirConsumer.mockImplementation((c: (d: string) => void) => {
-      captured = c;
-    });
+    const drop = captureConsumer();
 
     installOpenDirConsumer(deps);
-    captured!("/projects/foo");
+    drop("/projects/foo");
+    await vi.waitFor(() =>
+      expect(deps.openDirectory).toHaveBeenCalledWith("/projects/foo", primary)
+    );
 
-    expect(deps.openDirectory).toHaveBeenCalledWith("/projects/foo", primary);
     expect(envMock.queuePendingOpenDirPath).not.toHaveBeenCalled();
   });
 
-  it("warm drop with no primary window re-queues for the next drain", () => {
+  it("warm drop with no primary window re-queues for the next drain", async () => {
     const deps = makeDeps();
     deps.resolvePrimaryWindow.mockReturnValue(null);
-    let captured: ((d: string) => void) | null = null;
-    envMock.setOpenDirConsumer.mockImplementation((c: (d: string) => void) => {
-      captured = c;
-    });
+    const drop = captureConsumer();
 
     installOpenDirConsumer(deps);
-    captured!("/projects/foo");
+    drop("/projects/foo");
+    await vi.waitFor(() =>
+      expect(envMock.queuePendingOpenDirPath).toHaveBeenCalledWith("/projects/foo")
+    );
 
     expect(deps.openDirectory).not.toHaveBeenCalled();
-    expect(envMock.queuePendingOpenDirPath).toHaveBeenCalledWith("/projects/foo");
   });
 
-  it("warm drop with a destroyed primary window re-queues", () => {
+  it("warm drop with a destroyed primary window re-queues", async () => {
     const destroyed = makeWindow(true);
     const deps = makeDeps();
     deps.resolvePrimaryWindow.mockReturnValue(destroyed);
-    let captured: ((d: string) => void) | null = null;
-    envMock.setOpenDirConsumer.mockImplementation((c: (d: string) => void) => {
-      captured = c;
-    });
+    const drop = captureConsumer();
 
     installOpenDirConsumer(deps);
-    captured!("/projects/foo");
+    drop("/projects/foo");
+    await vi.waitFor(() =>
+      expect(envMock.queuePendingOpenDirPath).toHaveBeenCalledWith("/projects/foo")
+    );
 
     expect(deps.openDirectory).not.toHaveBeenCalled();
-    expect(envMock.queuePendingOpenDirPath).toHaveBeenCalledWith("/projects/foo");
   });
 
   it("a failed open is caught and logged, not thrown", async () => {
@@ -97,14 +104,11 @@ describe("installOpenDirConsumer (#10976)", () => {
     const deps = makeDeps();
     deps.openDirectory.mockRejectedValue(new Error("boom"));
     deps.resolvePrimaryWindow.mockReturnValue(primary);
-    let captured: ((d: string) => void) | null = null;
-    envMock.setOpenDirConsumer.mockImplementation((c: (d: string) => void) => {
-      captured = c;
-    });
+    const drop = captureConsumer();
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     installOpenDirConsumer(deps);
-    captured!("/projects/foo");
+    drop("/projects/foo");
     await vi.waitFor(() => expect(errSpy).toHaveBeenCalled());
 
     errSpy.mockRestore();
@@ -150,15 +154,15 @@ describe("drainPendingOpenDirs (#10976)", () => {
       .mockResolvedValue(undefined);
 
     drainPendingOpenDirs(win, deps);
-    await Promise.resolve();
-    // First open pending; the second must not have started yet.
-    expect(deps.openDirectory).toHaveBeenCalledTimes(1);
+    // First open pending; the second must not have started yet. waitFor is safe
+    // here because task 2 is blocked behind task 1's unresolved open.
+    await vi.waitFor(() => expect(deps.openDirectory).toHaveBeenCalledTimes(1));
 
     resolveFirst!();
     await vi.waitFor(() => expect(deps.openDirectory).toHaveBeenCalledTimes(2));
   });
 
-  it("re-queues remaining folders if the window is destroyed mid-drain", async () => {
+  it("re-queues remaining folders if the window is destroyed before each open", async () => {
     envMock.getPendingOpenDirPaths.mockReturnValue(["/a", "/b"]);
     const destroyed = makeWindow(true);
     const deps = makeDeps();
@@ -184,5 +188,35 @@ describe("drainPendingOpenDirs (#10976)", () => {
     expect(deps.openDirectory).toHaveBeenCalledWith("/a", win);
     expect(deps.openDirectory).toHaveBeenCalledWith("/b", win);
     errSpy.mockRestore();
+  });
+
+  it("warm drop mid-drain is serialized after the queued folders (no race)", async () => {
+    // Two queued cold-launch folders [/a, /b]; while /a is pending, a warm drop
+    // /c arrives via the consumer. All three must open in order a, b, c on the
+    // shared chain — the consumer does not jump ahead of the drain.
+    envMock.getPendingOpenDirPaths.mockReturnValue(["/a", "/b"]);
+    const win = makeWindow();
+    const primary = makeWindow();
+    let resolveA: (() => void) | null = null;
+    const deps = makeDeps();
+    deps.openDirectory
+      .mockImplementationOnce(() => new Promise<void>((resolve) => (resolveA = resolve)))
+      .mockResolvedValue(undefined);
+    deps.resolvePrimaryWindow.mockReturnValue(primary);
+    const drop = captureConsumer();
+    installOpenDirConsumer(deps);
+
+    drainPendingOpenDirs(win, deps);
+    await vi.waitFor(() => expect(deps.openDirectory).toHaveBeenCalledTimes(1));
+    // /a is pending; warm-drop /c now — it must NOT open before /b.
+    drop("/c");
+    await Promise.resolve();
+    expect(deps.openDirectory).toHaveBeenCalledTimes(1);
+
+    resolveA!();
+    await vi.waitFor(() => expect(deps.openDirectory).toHaveBeenCalledTimes(3));
+    expect(deps.openDirectory).toHaveBeenNthCalledWith(1, "/a", win);
+    expect(deps.openDirectory).toHaveBeenNthCalledWith(2, "/b", win);
+    expect(deps.openDirectory).toHaveBeenNthCalledWith(3, "/c", primary);
   });
 });
