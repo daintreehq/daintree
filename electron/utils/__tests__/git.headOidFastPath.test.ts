@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { mkdtempSync, mkdirSync, renameSync, rmSync, writeFileSync } from "fs";
 import { promises as fs } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -190,10 +190,16 @@ describe("HEAD OID filesystem fast path", () => {
     expect(revParseCalls()).toHaveLength(1);
 
     // Replace the directory at the same path — new inode invalidates the
-    // cached static info, so the next pass must re-spawn rev-parse.
+    // cached static info, so the next pass must re-spawn rev-parse. The
+    // replacement is created WHILE the original still exists (two live
+    // directories can never share an inode) and then renamed into place;
+    // rm-then-mkdir would let ext4 reuse the freed inode and flake (the
+    // cache would still validate and skip the second rev-parse).
+    const replacement = `${root}-replacement`;
+    mkdirSync(replacement, { recursive: true });
+    makeMainRepo(replacement, OID_A);
     rmSync(root, { recursive: true, force: true });
-    mkdirSync(root, { recursive: true });
-    makeMainRepo(root, OID_A);
+    renameSync(replacement, root);
     clearGitDirCache(root);
 
     await getWorktreeChangesWithStats(root, true);
