@@ -927,10 +927,26 @@ export function runDeferredStoreBackup(): void {
   task?.();
 }
 
+/**
+ * True when no config.json existed on disk when initializeStore() ran — a
+ * brand-new install (or wiped profile). The migration runner uses this to
+ * stamp the latest schema version directly instead of replaying the full
+ * migration chain against an empty store, which costs one atomic config
+ * write per migration on the boot-critical path. Defaults to false so any
+ * ambiguous state (in-memory fallback, unresolved path) takes the safe
+ * migrate-everything route.
+ */
+let storeWasFreshAtBoot = false;
+
+export function wasStoreFreshAtBoot(): boolean {
+  return storeWasFreshAtBoot;
+}
+
 export function initializeStore(options: typeof storeOptions = storeOptions): Store<StoreSchema> {
   if (storeInstance) return storeInstance;
 
   const configPath = resolveConfigPath(options.cwd);
+  storeWasFreshAtBoot = configPath !== null && !fs.existsSync(configPath);
 
   const preflight = configPath ? preflightValidateConfig(configPath) : null;
   if (preflight?.status === "corrupt") {
@@ -988,6 +1004,11 @@ export function initializeStore(options: typeof storeOptions = storeOptions): St
   } catch (error) {
     console.warn("[Store] Failed to initialize electron-store, using in-memory fallback:", error);
     pendingSettingsRecovery = { kind: "reset-to-defaults" };
+    // An unreadable/unwritable config path can look "fresh" (existsSync false)
+    // while real data still exists on disk. The in-memory fallback is an
+    // ambiguous state — never let it claim the fresh-install migration
+    // fast path.
+    storeWasFreshAtBoot = false;
     const fallback = createInMemoryFallback();
     storeInstance = fallback;
     return fallback;
@@ -998,6 +1019,7 @@ export function _resetStoreInstance(): void {
   storeInstance = undefined;
   storeValueCache = null;
   deferredBackupTask = null;
+  storeWasFreshAtBoot = false;
 }
 
 export function _peekStoreInstance(): Store<StoreSchema> | undefined {

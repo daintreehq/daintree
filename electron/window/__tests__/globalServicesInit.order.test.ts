@@ -10,6 +10,8 @@ const registeredTaskRuns = new Map<string, () => unknown>();
 const setMcpRegistry = vi.hoisted(() => vi.fn());
 let migrationCurrentVersion = 1;
 let migrationShouldThrow = false;
+let storeFreshAtBoot = false;
+const migrationRunCalls = vi.hoisted(() => ({ count: 0 }));
 let mockLogRetentionDays: number | undefined = 30;
 const { pruneOldLogs, pruneOldLogsAsync, pruneHeapSnapshots, pruneHeapSnapshotsAsync } = vi.hoisted(
   () => ({
@@ -61,6 +63,7 @@ vi.mock("../../services/StoreMigrations.js", () => ({
       return migrationCurrentVersion;
     }
     async runMigrations(): Promise<void> {
+      migrationRunCalls.count += 1;
       if (migrationShouldThrow) {
         throw new Error("test-migration-failure");
       }
@@ -77,7 +80,9 @@ vi.mock("../../store.js", () => ({
       }
       return {};
     }),
+    set: vi.fn(),
   },
+  wasStoreFreshAtBoot: vi.fn(() => storeFreshAtBoot),
 }));
 
 vi.mock("../../utils/logger.js", () => ({
@@ -284,6 +289,7 @@ import { initGlobalServices } from "../globalServicesInit.js";
 import { getGlobalServicesInitialized, setGlobalServicesInitialized } from "../serviceRefs.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
 import { app } from "electron";
+import { store } from "../../store.js";
 
 describe("initGlobalServices task ordering", () => {
   beforeEach(() => {
@@ -309,6 +315,8 @@ describe("initGlobalServices task ordering", () => {
     (app.exit as ReturnType<typeof vi.fn>).mockReset();
     migrationCurrentVersion = 1;
     migrationShouldThrow = false;
+    storeFreshAtBoot = false;
+    migrationRunCalls.count = 0;
     mockLogRetentionDays = 30;
     setGlobalServicesInitialized(false);
   });
@@ -714,6 +722,31 @@ describe("initGlobalServices task ordering", () => {
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
     const result = await initGlobalServices(fakeRegistry);
     expect(result).toBe("ok");
+  });
+
+  it("fresh install stamps the latest schema version without running the migration chain", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    migrationCurrentVersion = 0;
+    storeFreshAtBoot = true;
+
+    const result = await initGlobalServices(fakeRegistry);
+
+    expect(result).toBe("ok");
+    expect(migrationRunCalls.count).toBe(0);
+    expect(store.set).toHaveBeenCalledWith("_schemaVersion", 1);
+  });
+
+  it("existing profile at version 0 still runs the migration chain", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    vi.mocked(store.set).mockClear();
+    migrationCurrentVersion = 0;
+    storeFreshAtBoot = false;
+
+    const result = await initGlobalServices(fakeRegistry);
+
+    expect(result).toBe("ok");
+    expect(migrationRunCalls.count).toBe(1);
+    expect(store.set).not.toHaveBeenCalledWith("_schemaVersion", 1);
   });
 
   it("returns 'exit-requested' and calls app.exit(1) when migrations throw", async () => {

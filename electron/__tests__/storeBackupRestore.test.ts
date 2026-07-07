@@ -19,6 +19,7 @@ import {
   consumePendingSettingsRecovery,
   _resetPendingSettingsRecovery,
   _resetStoreInstance,
+  wasStoreFreshAtBoot,
 } from "../store.js";
 
 describe("Store backup/restore helpers", () => {
@@ -313,6 +314,39 @@ describe("initializeStore", () => {
     expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(lastGood);
     // …and recovery state should reflect the silent reset
     expect(consumePendingSettingsRecovery()).toEqual({ kind: "reset-to-defaults" });
+  });
+
+  describe("wasStoreFreshAtBoot", () => {
+    it("is true on first launch (no config.json)", () => {
+      initializeStore(testOptions(tempDir));
+      expect(wasStoreFreshAtBoot()).toBe(true);
+    });
+
+    it("is false when a config.json exists", () => {
+      fs.writeFileSync(path.join(tempDir, "config.json"), JSON.stringify({ _schemaVersion: 5 }));
+      initializeStore(testOptions(tempDir));
+      expect(wasStoreFreshAtBoot()).toBe(false);
+    });
+
+    it("is false when the config existed but was corrupt (quarantine/reset path)", () => {
+      fs.writeFileSync(path.join(tempDir, "config.json"), "not valid json", "utf8");
+      initializeStore(testOptions(tempDir));
+      // The file held (possibly recoverable) user data — the migration
+      // fast path must not treat this boot as a fresh install.
+      expect(wasStoreFreshAtBoot()).toBe(false);
+    });
+
+    it("is false on the in-memory fallback path even when the path looked fresh", () => {
+      initializeStore(testOptions("/nonexistent/\0/path"));
+      expect(wasStoreFreshAtBoot()).toBe(false);
+    });
+
+    it("is cleared by _resetStoreInstance()", () => {
+      initializeStore(testOptions(tempDir));
+      expect(wasStoreFreshAtBoot()).toBe(true);
+      _resetStoreInstance();
+      expect(wasStoreFreshAtBoot()).toBe(false);
+    });
   });
 
   it("refreshes backup when conf merges new defaults into a valid config (app upgrade scenario)", () => {
