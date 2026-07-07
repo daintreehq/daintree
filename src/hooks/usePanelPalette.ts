@@ -10,6 +10,7 @@ import {
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import type { WorktreeSnapshot } from "@shared/types";
 import { useProjectStore } from "@/store/projectStore";
 import { usePaletteStore } from "@/store/paletteStore";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
@@ -78,6 +79,8 @@ const PANEL_FUSE_OPTIONS: IFuseOptions<PanelKindOption> = {
 
 export const MORE_AGENTS_PANEL_ID = "more-agents";
 
+const EMPTY_WORKTREES: Map<string, WorktreeSnapshot> = new Map();
+
 export function usePanelPalette(): UsePanelPaletteReturn {
   const userRegistry = useUserAgentRegistryStore((state) => state.registry);
   const availability = useCliAvailabilityStore((state) => state.availability);
@@ -90,8 +93,13 @@ export function usePanelPalette(): UsePanelPaletteReturn {
   // Journal fetch gated on open; refreshed live when a close path journals a
   // new record, so a just-expired session appears without reopening.
   const { sessions: resumeSessions } = useAgentSessionRecords(paletteIsOpen);
-  // Live per-view worktree map: drives stale-entry detection and location labels.
-  const worktrees = useWorktreeStore((state) => state.worktrees);
+  // Per-view worktree map: drives stale-entry detection and location labels.
+  // Open-gated like the journal fetch — this hook is always mounted in App,
+  // and a live map subscription re-rendered the whole App on every
+  // worktree-map identity change while the palette was closed.
+  const worktrees = useWorktreeStore((state) =>
+    paletteIsOpen ? state.worktrees : EMPTY_WORKTREES
+  );
   // Scope the browsable resume list to the current project's own history.
   const currentProjectId = useProjectStore((state) => state.currentProject?.id ?? null);
   // Re-render when a plugin loads/unloads mid-session so agent icon/name/color

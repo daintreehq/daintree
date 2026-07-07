@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { renderHook, act } from "@testing-library/react";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { usePanelStore } from "@/store/panelStore";
 
 const { useWorktreeStoreMock } = vi.hoisted(() => ({
@@ -24,6 +24,7 @@ vi.mock("@/store", async () => {
 });
 
 import { useQuickSwitcher } from "../useQuickSwitcher";
+import { usePaletteStore } from "@/store/paletteStore";
 
 type MockWorktreeState = {
   worktrees: Map<string, unknown>;
@@ -98,6 +99,14 @@ describe("useQuickSwitcher MRU prune", () => {
   beforeEach(() => {
     usePanelStore.setState({ panelsById: {}, panelIds: [], mruList: [] });
     useWorktreeStoreMock.mockReset();
+    // Panel/worktree subscriptions (and therefore pruning) are gated on the
+    // palette being open — these tests exercise the hydration guards, so run
+    // them against an open palette.
+    usePaletteStore.setState({ activePaletteId: "quick-switcher" });
+  });
+
+  afterEach(() => {
+    usePaletteStore.setState({ activePaletteId: null });
   });
 
   it("does not prune while the item set is empty (panels still hydrating) (#9922)", () => {
