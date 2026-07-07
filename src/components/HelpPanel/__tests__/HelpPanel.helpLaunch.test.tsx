@@ -2298,7 +2298,11 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
     // …the persisted hibernate entry is dropped so a stop can't be resumed…
     expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
     // …and, unlike + New session, no fresh agent is launched.
-    expect(mockDispatch).not.toHaveBeenCalledWith("agent.launch", expect.anything(), expect.anything());
+    expect(mockDispatch).not.toHaveBeenCalledWith(
+      "agent.launch",
+      expect.anything(),
+      expect.anything()
+    );
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
     // Stop ends the session but keeps the panel open (it is not "hide").
     expect(helpPanelState.setOpen).not.toHaveBeenCalledWith(false);
@@ -2353,7 +2357,11 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
     expect(mockRevokeSession).toHaveBeenCalledWith("sess-bound");
     expect(helpPanelState.clearTerminal).toHaveBeenCalled();
     expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
-    expect(mockDispatch).not.toHaveBeenCalledWith("agent.launch", expect.anything(), expect.anything());
+    expect(mockDispatch).not.toHaveBeenCalledWith(
+      "agent.launch",
+      expect.anything(),
+      expect.anything()
+    );
     // Confirmed stop keeps the panel open — restart is one click away.
     expect(helpPanelState.setOpen).not.toHaveBeenCalledWith(false);
   });

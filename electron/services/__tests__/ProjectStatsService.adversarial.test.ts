@@ -162,9 +162,21 @@ describe("ProjectStatsService adversarial", () => {
     availabilityMock.isHelpTerminal.mockImplementation((id: string) => id === "help-1");
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
       // The assistant help terminal — a real agent PTY, but tooling-internal.
-      { id: "help-1", projectId: "p1", kind: "terminal", launchAgentId: "daintree-assistant", agentState: "waiting" },
+      {
+        id: "help-1",
+        projectId: "p1",
+        kind: "terminal",
+        launchAgentId: "daintree-assistant",
+        agentState: "waiting",
+      },
       // A genuine user agent — must still count.
-      { id: "t-2", projectId: "p1", kind: "terminal", launchAgentId: "claude", agentState: "working" },
+      {
+        id: "t-2",
+        projectId: "p1",
+        kind: "terminal",
+        launchAgentId: "claude",
+        agentState: "working",
+      },
     ]);
     // PTY host counts both PTYs (it has no help awareness).
     ptyClient.getProjectStats.mockResolvedValue({ projectId: "p1", terminalCount: 2 });
@@ -190,8 +202,20 @@ describe("ProjectStatsService adversarial", () => {
     projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
     availabilityMock.isHelpTerminal.mockImplementation((id: string) => id === "help-p1");
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
-      { id: "help-p1", projectId: "p1", kind: "terminal", launchAgentId: "daintree-assistant", agentState: "idle" },
-      { id: "t-p2", projectId: "p2", kind: "terminal", launchAgentId: "claude", agentState: "working" },
+      {
+        id: "help-p1",
+        projectId: "p1",
+        kind: "terminal",
+        launchAgentId: "daintree-assistant",
+        agentState: "idle",
+      },
+      {
+        id: "t-p2",
+        projectId: "p2",
+        kind: "terminal",
+        launchAgentId: "claude",
+        agentState: "working",
+      },
     ]);
     ptyClient.getProjectStats.mockImplementation(async (id: string) => ({
       projectId: id,
@@ -225,7 +249,13 @@ describe("ProjectStatsService adversarial", () => {
     projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
     availabilityMock.isHelpTerminal.mockImplementation((id: string) => id === "help-1");
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
-      { id: "help-1", projectId: "p1", kind: "terminal", launchAgentId: "daintree-assistant", agentState: "idle" },
+      {
+        id: "help-1",
+        projectId: "p1",
+        kind: "terminal",
+        launchAgentId: "daintree-assistant",
+        agentState: "idle",
+      },
     ]);
     // Stats lag: main process sees the help PTY but the host reports 0.
     ptyClient.getProjectStats.mockResolvedValue({ projectId: "p1", terminalCount: 0 });
@@ -249,7 +279,13 @@ describe("ProjectStatsService adversarial", () => {
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
       // Trashed → the PTY host already excludes it from terminalCount, so it
       // must not be subtracted (double-counting would drive processCount negative).
-      { id: "help-trashed", projectId: "p1", isTrashed: true, kind: "terminal", agentState: "idle" },
+      {
+        id: "help-trashed",
+        projectId: "p1",
+        isTrashed: true,
+        kind: "terminal",
+        agentState: "idle",
+      },
       // No live PTY → likewise not part of terminalCount.
       { id: "help-nopty", projectId: "p1", hasPty: false, kind: "terminal", agentState: "idle" },
     ]);
