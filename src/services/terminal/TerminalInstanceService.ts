@@ -82,6 +82,10 @@ const WEBGL_RESTORE_DEBOUNCE_MS = 100;
 // demotion, destroy, hibernation) cancel this timer and release immediately.
 const WEBGL_HIDE_DWELL_MS = 500;
 
+// Poll interval while the worker-ingest engage barrier waits for the normal
+// pipeline (ingest queue + pending xterm writes) to quiesce (#10960).
+const WORKER_INGEST_DRAIN_POLL_MS = 10;
+
 // Default timeout for the restore-aware settle waits (`waitForFullySettled`,
 // `waitForAllFullySettled`). Aligned to the 30s Tier 1→3 promotion rule
 // (CLAUDE.md "Runtime Signals"): a settle that hasn't completed within 30s has
@@ -3760,7 +3764,7 @@ class TerminalInstanceService {
           }
           if (Date.now() > deadline) return false;
           this.dataBuffer.resumeFlush(id);
-          await new Promise((resolve) => setTimeout(resolve, 10));
+          await new Promise((resolve) => setTimeout(resolve, WORKER_INGEST_DRAIN_POLL_MS));
         }
       },
       requestHostRestore: () => {

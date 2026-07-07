@@ -1303,9 +1303,10 @@ export class PtyClient extends EventEmitter {
       return;
     }
     try {
-      shard.lifecycle.child.postMessage({ type: "connect-terminal-port", windowId, id: terminalId }, [
-        port,
-      ]);
+      shard.lifecycle.child.postMessage(
+        { type: "connect-terminal-port", windowId, id: terminalId },
+        [port]
+      );
     } catch (error) {
       console.error("[PtyClient] Failed to forward worker-ingest MessagePort to Pty Host:", error);
       try {

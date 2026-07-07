@@ -605,9 +605,7 @@ describe("worker-ingest dedicated ports (#10960)", () => {
 
   it("connect-terminal-port stores a disengaged per-terminal connection and starts the port", () => {
     const h = makeWorkerIngestHarness();
-    h.handlers["connect-terminal-port"]({ windowId: 1, id: "term-1" }, [
-      h.dedicatedPort,
-    ] as never);
+    h.handlers["connect-terminal-port"]({ windowId: 1, id: "term-1" }, [h.dedicatedPort] as never);
 
     const conn = h.ctx.terminalWorkerConnections.get(1)?.get("term-1");
     expect(conn).toBeDefined();
@@ -617,9 +615,7 @@ describe("worker-ingest dedicated ports (#10960)", () => {
 
   it("acks arriving on the dedicated port debit the per-terminal queue ledger", () => {
     const h = makeWorkerIngestHarness();
-    h.handlers["connect-terminal-port"]({ windowId: 1, id: "term-1" }, [
-      h.dedicatedPort,
-    ] as never);
+    h.handlers["connect-terminal-port"]({ windowId: 1, id: "term-1" }, [h.dedicatedPort] as never);
 
     h.dedicatedPort.emit("message", { data: { type: "ack", id: "term-1", bytes: 64 } });
 
@@ -629,9 +625,7 @@ describe("worker-ingest dedicated ports (#10960)", () => {
 
   it("engage flips routing and answers with the marker on the WINDOW port; release posts the sentinel on the dedicated port", () => {
     const h = makeWorkerIngestHarness();
-    h.handlers["connect-terminal-port"]({ windowId: 1, id: "term-1" }, [
-      h.dedicatedPort,
-    ] as never);
+    h.handlers["connect-terminal-port"]({ windowId: 1, id: "term-1" }, [h.dedicatedPort] as never);
     h.handlers["connect-port"]({ windowId: 1 }, [h.windowPort] as never);
 
     h.windowPort.emit("message", { data: { type: "worker-ingest-engage", id: "term-1" } });
@@ -653,16 +647,12 @@ describe("worker-ingest dedicated ports (#10960)", () => {
 
     h.windowPort.emit("message", { data: { type: "worker-ingest-engage", id: "ghost" } });
 
-    expect(
-      h.windowPort.posted.some((msg) => msg.type === "worker-ingest-engaged")
-    ).toBe(false);
+    expect(h.windowPort.posted.some((msg) => msg.type === "worker-ingest-engaged")).toBe(false);
   });
 
   it("the dedicated port's close event tears down only that (window, terminal) pair", () => {
     const h = makeWorkerIngestHarness();
-    h.handlers["connect-terminal-port"]({ windowId: 1, id: "term-1" }, [
-      h.dedicatedPort,
-    ] as never);
+    h.handlers["connect-terminal-port"]({ windowId: 1, id: "term-1" }, [h.dedicatedPort] as never);
 
     h.dedicatedPort.emit("close");
 
@@ -671,9 +661,7 @@ describe("worker-ingest dedicated ports (#10960)", () => {
 
   it("a replacement port for the same terminal disconnects the previous one first", () => {
     const h = makeWorkerIngestHarness();
-    h.handlers["connect-terminal-port"]({ windowId: 1, id: "term-1" }, [
-      h.dedicatedPort,
-    ] as never);
+    h.handlers["connect-terminal-port"]({ windowId: 1, id: "term-1" }, [h.dedicatedPort] as never);
     const replacement = makeNodePort();
     h.handlers["connect-terminal-port"]({ windowId: 1, id: "term-1" }, [replacement] as never);
 

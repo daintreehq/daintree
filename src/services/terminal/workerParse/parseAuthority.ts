@@ -10,9 +10,12 @@ import * as serializeAddonModule from "@xterm/addon-serialize";
 // the namespace's `default`; bundlers expose them directly. Pick whichever
 // shape is present.
 function pickExport<T>(ns: object, name: string): T {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- CJS/ESM interop shim: the namespace shape is loader-dependent
   const direct = (ns as Record<string, unknown>)[name];
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- caller pins T to the module's own export type
   if (direct) return direct as T;
   const viaDefault = ((ns as { default?: Record<string, unknown> }).default ?? {})[name];
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- caller pins T to the module's own export type
   if (viaDefault) return viaDefault as T;
   throw new Error(`xterm module is missing the '${name}' export`);
 }
@@ -74,8 +77,8 @@ export class ParseAuthority {
     // the buffer API both builds share; headless + serialize is the upstream
     // pairing for exactly this server-side use. The nominal type mismatch
     // (renderer ITerminalAddon vs headless ITerminalAddon) forces the cast.
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- cross-build xterm addon load, structurally identical interfaces
     this.terminal.loadAddon(
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- cross-build xterm addon load, structurally identical interfaces
       this.serializeAddon as unknown as Parameters<HeadlessTerminal["loadAddon"]>[0]
     );
   }

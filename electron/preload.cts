@@ -369,43 +369,40 @@ ipcRenderer.on("terminal-port", (event, payload: { token: string }) => {
 // main world requested this port via IPC invoke and holds the matching token,
 // so its listener is guaranteed live — forward straight through. The main
 // thread never reads the port; it re-transfers it into the parse worker.
-ipcRenderer.on(
-  "terminal-worker-port",
-  (event, payload: { token: string; terminalId: string }) => {
-    if (window.top !== window) return;
+ipcRenderer.on("terminal-worker-port", (event, payload: { token: string; terminalId: string }) => {
+  if (window.top !== window) return;
 
-    const port = event.ports?.[0];
-    if (!port) return;
+  const port = event.ports?.[0];
+  if (!port) return;
 
-    if (!isAllowedTerminalPortTarget()) {
-      console.error(
-        "[Preload] Refusing to forward worker-ingest MessagePort to untrusted origin:",
-        window.location.href
-      );
-      try {
-        port.close();
-      } catch {
-        // Port may already be closed.
-      }
-      return;
-    }
-
-    if (!payload?.token || !payload?.terminalId) {
-      try {
-        port.close();
-      } catch {
-        // Port may already be closed.
-      }
-      return;
-    }
-
-    window.postMessage(
-      { type: "terminal-worker-port", token: payload.token, terminalId: payload.terminalId },
-      window.location.origin,
-      [port]
+  if (!isAllowedTerminalPortTarget()) {
+    console.error(
+      "[Preload] Refusing to forward worker-ingest MessagePort to untrusted origin:",
+      window.location.href
     );
+    try {
+      port.close();
+    } catch {
+      // Port may already be closed.
+    }
+    return;
   }
-);
+
+  if (!payload?.token || !payload?.terminalId) {
+    try {
+      port.close();
+    } catch {
+      // Port may already be closed.
+    }
+    return;
+  }
+
+  window.postMessage(
+    { type: "terminal-worker-port", token: payload.token, terminalId: payload.terminalId },
+    window.location.origin,
+    [port]
+  );
+});
 
 // ── Worktree Port Client (Phase 1) ──────────────────────────────────────────
 // New dedicated port for worktree data with request/response correlation.

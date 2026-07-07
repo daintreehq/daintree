@@ -18,6 +18,7 @@ import type {
 import { PERF_MARKS } from "@shared/perf/marks";
 import { logDebug, logWarn } from "@/utils/logger";
 import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 let messagePort: MessagePort | null = null;
 let expectedToken: string | null = null;
@@ -552,9 +553,10 @@ export const terminalClient = {
    */
   releaseWorkerIngestPort: (id: string): void => {
     settleWorkerPortRequest(id, null);
-    void window.electron.terminal.releaseWorkerIngestPort(id).catch(() => {
-      // Main-side cleanup is best-effort; the host's port-close handler is
-      // the backstop.
+    // Main-side cleanup is best-effort; the host's port-close handler is the
+    // backstop.
+    safeFireAndForget(window.electron.terminal.releaseWorkerIngestPort(id), {
+      context: "release worker ingest port",
     });
   },
 

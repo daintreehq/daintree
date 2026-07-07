@@ -2,11 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { Terminal } from "@xterm/headless";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { ParseAuthority } from "../parseAuthority";
-import {
-  AuthorityEndpoint,
-  IngestPortConsumer,
-  createInThreadTransport,
-} from "../parseTransport";
+import { AuthorityEndpoint, IngestPortConsumer, createInThreadTransport } from "../parseTransport";
 import type {
   AuthorityRequest,
   AuthorityResponse,
@@ -203,7 +199,13 @@ describe("WorkerParseSession initial seed", () => {
     const session = new WorkerParseSession(
       createInThreadTransport(),
       { write: (data, cb) => mirror.terminal.write(data, cb) },
-      { cols: 80, rows: 24, scrollback: 1000, cadenceMs: 0, initialSerializedState: "seeded-content\r\n" }
+      {
+        cols: 80,
+        rows: 24,
+        scrollback: 1000,
+        cadenceMs: 0,
+        initialSerializedState: "seeded-content\r\n",
+      }
     );
     session.feed("fed-later\r\n");
     await session.promoteToInteractive();

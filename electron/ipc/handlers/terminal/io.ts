@@ -332,7 +332,10 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     return distributeTerminalWorkerPortToView(win, wctx, ctx.event.sender, ptyClient, id);
   };
 
-  const handleTerminalReleaseWorkerIngestPort = async (ctx: IpcContext, id: string): Promise<void> => {
+  const handleTerminalReleaseWorkerIngestPort = async (
+    ctx: IpcContext,
+    id: string
+  ): Promise<void> => {
     if (typeof id !== "string" || !id) return;
     const win = ctx.senderWindow;
     const wctx = win ? deps.windowRegistry?.getByWindowId(win.id) : undefined;

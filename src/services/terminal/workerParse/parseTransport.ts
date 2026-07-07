@@ -158,6 +158,7 @@ export class IngestPortConsumer {
   constructor(private deps: IngestPortConsumerDeps) {}
 
   handlePortMessage(message: unknown): void {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- wire message; every branch below re-validates field types before use
     const msg = message as IngestPortMessage;
     if (!msg || typeof msg !== "object") return;
     if (msg.type === "data" && typeof msg.id === "string" && typeof msg.bytes === "number") {

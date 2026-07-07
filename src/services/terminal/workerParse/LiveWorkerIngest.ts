@@ -99,7 +99,11 @@ export class LiveWorkerIngest {
     this.wantWorker = workerMode;
     this.chain = this.chain
       .then(async () => {
-        while (!this.disposedFlag && !this.fallbackLatched && this.wantWorker !== this.workerActive) {
+        while (
+          !this.disposedFlag &&
+          !this.fallbackLatched &&
+          this.wantWorker !== this.workerActive
+        ) {
           if (this.wantWorker) {
             await this.engageOnce();
           } else {
