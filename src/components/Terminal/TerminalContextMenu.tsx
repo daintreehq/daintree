@@ -9,7 +9,7 @@ import { useWorktrees } from "@/hooks/useWorktrees";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 import { actionService } from "@/services/ActionService";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { panelKindHasPty, panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import {
   isBrowserPanel,
   isDevPreviewPanel,
@@ -543,6 +543,9 @@ export function TerminalContextMenu({
         </ContextMenuItem>
       )}
       <ContextMenuItem
+        // Move-to-grid is always safe; move-to-dock only for kinds the dock
+        // renders (PTY + dockable non-PTY like file panels).
+        disabled={currentLocation === "grid" && !panelKindIsDockable(terminal.kind ?? "terminal")}
         onSelect={() => handleAction(currentLocation === "grid" ? "move-to-dock" : "move-to-grid")}
       >
         {currentLocation === "grid" ? (

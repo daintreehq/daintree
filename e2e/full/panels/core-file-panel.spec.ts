@@ -190,4 +190,34 @@ test.describe.serial("Core: File viewer panel (dialog + panel)", () => {
     const result = await dispatchAction(ctx.window, "file.read", { path: "spec.md" });
     expect(JSON.stringify(result)).toContain("Markdown E2E Spec");
   });
+
+  test("file panel moves to the dock, previews from the chip, and restores to the grid", async () => {
+    const panel = ctx.window
+      .locator(SEL.panel.gridPanel)
+      .filter({ has: ctx.window.locator('[data-testid="file-pane-body"]') })
+      .first();
+
+    // The docked panel stays mounted in the offscreen parking container, so
+    // count GRID membership rather than total pane instances.
+    const gridFilePanels = ctx.window
+      .locator(SEL.panel.gridPanel)
+      .filter({ has: ctx.window.locator('[data-testid="file-pane-body"]') });
+
+    await panel.locator('[data-testid="panel-move-to-dock"]').click();
+    await expect(gridFilePanels).toHaveCount(2, { timeout: T_MEDIUM });
+
+    // The chip carries the file name; clicking opens the dock popover with the
+    // panel's live content relocated into it.
+    const chip = ctx.window.locator("[data-dock-item]", { hasText: "spec.md" });
+    await expect(chip).toBeVisible({ timeout: T_MEDIUM });
+    await chip.click();
+    await expect(
+      ctx.window.locator('[data-dock-portal-target] [data-testid="file-pane-body"]')
+    ).toBeVisible({ timeout: T_LONG });
+
+    // Double-click restores the panel to the grid.
+    await chip.dblclick();
+    await expect(gridFilePanels).toHaveCount(3, { timeout: T_MEDIUM });
+    await expect(chip).not.toBeVisible({ timeout: T_MEDIUM });
+  });
 });

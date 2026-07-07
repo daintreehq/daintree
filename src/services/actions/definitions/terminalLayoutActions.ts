@@ -5,7 +5,7 @@ import { computeGridColumns } from "@/lib/terminalLayout";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
 export function registerTerminalLayoutActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -29,10 +29,10 @@ export function registerTerminalLayoutActions(
         if (!terminal) {
           return;
         }
-        // Dock rendering is PTY-only (see ContentDock + DockPanelOffscreenContainer).
-        // Reject browser / dev-preview / review panels so they don't silently
+        // Dock membership is capability-gated (PTY kinds + dockable non-PTY
+        // kinds like file panels). Reject the rest so they don't silently
         // disappear into a dock slot that won't render them.
-        if (!panelKindHasPty(terminal.kind)) {
+        if (!panelKindIsDockable(terminal.kind ?? "terminal")) {
           return;
         }
 
@@ -266,6 +266,9 @@ export function registerTerminalLayoutActions(
       if (terminal.location === "dock") {
         state.moveTerminalToGrid(focusedId);
       } else {
+        // Same dockability gate as terminal.moveToDock — a non-dockable kind
+        // toggled dockward would strand invisibly.
+        if (!panelKindIsDockable(terminal.kind ?? "terminal")) return;
         state.moveTerminalToDock(focusedId);
         state.openDockTerminal(focusedId);
       }
