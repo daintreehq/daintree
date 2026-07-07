@@ -3730,14 +3730,37 @@ class TerminalInstanceService {
         };
       },
       ackDiverted: (data) => {
-        // One host chunk per diverted callback: settle exactly one port-ack
-        // FIFO entry (using the host's queued byte count), and the IPC ledger
-        // for string chunks (only strings travel the IPC path — mirrors
-        // TerminalWriteController's ackBytes rule).
-        const bytes = typeof data === "string" ? data.length : data.byteLength;
-        terminalClient.acknowledgePortData(id, bytes, 1);
+        // Delivery source is encoded in the chunk type (the same invariant
+        // TerminalWriteController's ackBytes rule rests on): port chunks are
+        // always Uint8Array, IPC chunks always strings. Settle exactly one
+        // port-ack FIFO entry per port chunk; never let an IPC chunk shift a
+        // port entry — that would prematurely ack a port chunk still queued.
         if (typeof data === "string") {
           terminalClient.acknowledgeData(id, utf8ByteLength(data));
+        } else {
+          terminalClient.acknowledgePortData(id, data.byteLength, 1);
+        }
+      },
+      drainPendingWrites: async () => {
+        // Quiesce the normal pipeline before the engage serialize: queued
+        // ingest chunks, in-flight xterm writes, and serialized-restore
+        // deferrals all still land on the mirror through the write controller
+        // — the serialize must happen after them or they vanish at the next
+        // snapshot apply. Diversion is already on, so no new inflow.
+        const deadline = Date.now() + 5000;
+        for (;;) {
+          const current = this.instances.get(id);
+          if (!current) return false;
+          if (
+            this.dataBuffer.getQueuedBytes(id) === 0 &&
+            (current.pendingWrites ?? 0) === 0 &&
+            !current.isSerializedRestoreInProgress
+          ) {
+            return true;
+          }
+          if (Date.now() > deadline) return false;
+          this.dataBuffer.resumeFlush(id);
+          await new Promise((resolve) => setTimeout(resolve, 10));
         }
       },
       requestHostRestore: () => {

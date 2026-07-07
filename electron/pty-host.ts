@@ -709,6 +709,15 @@ const resourceGovernor = new ResourceGovernor({
       totalPendingBytes += port.totalPendingBytes;
       perTerminal.push(...port.perTerminal);
     }
+    // Dedicated worker-ingest queues (#10960) hold in-flight bytes too — a
+    // stalled worker must not be invisible to the reliability gauge.
+    for (const perWindow of terminalWorkerConnections.values()) {
+      for (const conn of perWindow.values()) {
+        const port = conn.portQueueManager.getQueueSnapshot();
+        totalPendingBytes += port.totalPendingBytes;
+        perTerminal.push(...port.perTerminal);
+      }
+    }
     return { totalPendingBytes, perTerminal };
   },
   getThroughputSnapshot: () => {
@@ -759,6 +768,16 @@ const resourceGovernor = new ResourceGovernor({
       const port = conn.portQueueManager.getQueueSnapshot();
       for (const { terminalId, pendingBytes } of port.perTerminal) {
         if (pendingBytes > 0) out.push({ terminalId, layer: "port", pendingBytes });
+      }
+    }
+    // Dedicated worker-ingest queues (#10960) share the "port" layer — same
+    // transport, per-terminal scope.
+    for (const perWindow of terminalWorkerConnections.values()) {
+      for (const conn of perWindow.values()) {
+        const port = conn.portQueueManager.getQueueSnapshot();
+        for (const { terminalId, pendingBytes } of port.perTerminal) {
+          if (pendingBytes > 0) out.push({ terminalId, layer: "port", pendingBytes });
+        }
       }
     }
     return out;

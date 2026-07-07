@@ -340,6 +340,7 @@ function makeLiveHarness(options: { auto?: boolean; markerEnabled?: boolean } = 
     mirror: { write: (data, cb) => mirror.terminal.write(data, cb) },
     serializeMirror: () => mirror.serializeAddon.serialize(),
     getGeometry: () => ({ cols: 80, rows: 24, scrollback: 1000 }),
+    drainPendingWrites: async () => true,
     ackDiverted: vi.fn(),
     requestHostRestore: vi.fn(),
     onDidFallback: vi.fn(),

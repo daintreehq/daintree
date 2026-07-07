@@ -321,6 +321,14 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     const win = ctx.senderWindow;
     const wctx = win ? deps.windowRegistry?.getByWindowId(win.id) : undefined;
     if (!win || !wctx) return null;
+    // Ownership gate: the terminal must exist and belong to the sender's
+    // project. The host's per-window project filter already starves a foreign
+    // dedicated port of bytes; this refuses to mint one in the first place.
+    const info = await ptyClient.getTerminalAsync(id);
+    if (!info) return null;
+    if (info.projectId != null && ctx.projectId != null && info.projectId !== ctx.projectId) {
+      return null;
+    }
     return distributeTerminalWorkerPortToView(win, wctx, ctx.event.sender, ptyClient, id);
   };
 

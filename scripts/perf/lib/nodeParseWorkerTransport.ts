@@ -15,12 +15,22 @@ export function createNodeParseWorkerTransport(): AuthorityTransport {
     execArgv: ["--import", "tsx"],
   });
   const listeners = new Set<(response: AuthorityResponse) => void>();
+  let disposed = false;
   worker.on("message", (response: AuthorityResponse) => {
     listeners.forEach((listener) => listener(response));
   });
   worker.on("error", (error: Error) => {
     listeners.forEach((listener) =>
       listener({ type: "error", message: error.message || "node parse worker error" })
+    );
+  });
+  // An exit without an error event (loader failure, OOM kill) must still
+  // settle pending snapshot waits, or a session awaiting tickNow hangs the
+  // perf run forever.
+  worker.on("exit", (code: number) => {
+    if (disposed) return;
+    listeners.forEach((listener) =>
+      listener({ type: "error", message: `node parse worker exited (code ${code})` })
     );
   });
   return {
@@ -32,6 +42,7 @@ export function createNodeParseWorkerTransport(): AuthorityTransport {
       return () => listeners.delete(listener);
     },
     dispose() {
+      disposed = true;
       worker.postMessage({ type: "dispose" } satisfies AuthorityRequest);
       listeners.clear();
       void worker.terminate();

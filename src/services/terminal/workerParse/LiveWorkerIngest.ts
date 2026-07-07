@@ -20,6 +20,15 @@ export interface LiveWorkerIngestDeps {
   serializeMirror(): string;
   getGeometry(): { cols: number; rows: number; scrollback: number };
   /**
+   * Quiesce the NORMAL ingest pipeline (TerminalOutputIngestService queue +
+   * TerminalWriteController pending writes + any serialized-restore deferral)
+   * before the engage serialize. Chunks still queued upstream of the mirror
+   * would otherwise land on it after the authority seeds — and vanish at the
+   * next snapshot apply. Diversion is already on when this runs, so the queue
+   * only shrinks. Resolves false if it cannot quiesce (engage falls back).
+   */
+  drainPendingWrites(): Promise<boolean>;
+  /**
    * Settle a diverted chunk's ledgers immediately (one port-ack FIFO entry +
    * the IPC ledger for string chunks). Diverted chunks land on the mirror via
    * session buffering/replay, so TerminalWriteController's ack sites never see
@@ -193,6 +202,17 @@ export class LiveWorkerIngest {
           await this.fallbackNow("no dedicated port");
           return;
         }
+        const quiesced = await this.deps.drainPendingWrites();
+        if (!quiesced && !this.disposedFlag) {
+          try {
+            port.close();
+          } catch {
+            // already closed
+          }
+          transport.dispose();
+          await this.fallbackNow("pre-engage ingest drain timeout");
+          return;
+        }
         await this.drainMirror();
         if (this.disposedFlag) {
           try {
@@ -218,8 +238,14 @@ export class LiveWorkerIngest {
         this.transport = transport;
         this.session = session;
       } else {
-        // Re-engage: same drain-then-serialize discipline before the authority
-        // re-seeds from the mirror.
+        // Re-engage: same quiesce-then-drain-then-serialize discipline before
+        // the authority re-seeds from the mirror.
+        const quiesced = await this.deps.drainPendingWrites();
+        if (this.disposedFlag) return;
+        if (!quiesced) {
+          await this.fallbackNow("pre-engage ingest drain timeout");
+          return;
+        }
         await this.drainMirror();
         if (this.disposedFlag) return;
         this.session.demoteToWorker(this.deps.serializeMirror());
