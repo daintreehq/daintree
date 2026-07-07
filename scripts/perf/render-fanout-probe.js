@@ -44,6 +44,12 @@
     var stack = [root.current];
     while (stack.length > 0) {
       var fiber = stack.pop();
+      // Subtree pruning (mirrors React DevTools): when React bails out above a
+      // subtree it reuses the existing child fibers wholesale, so the child
+      // pointer matches the alternate's — nothing below rendered this commit.
+      // Without this check, retained fibers still carrying PerformedWork from
+      // OLDER commits are re-counted on every walk (~1000x over-count).
+      var descend = fiber.alternate === null || fiber.child !== fiber.alternate.child;
       if ((fiber.flags & PERFORMED_WORK) !== 0 && COMPONENT_TAGS[fiber.tag] === true) {
         renders++;
         var self = fiber.actualDuration || 0;
@@ -59,7 +65,9 @@
         entry.n++;
         entry.ms += self;
       }
-      for (var c = fiber.child; c !== null; c = c.sibling) stack.push(c);
+      if (descend) {
+        for (var c = fiber.child; c !== null; c = c.sibling) stack.push(c);
+      }
     }
 
     if (renders > 0) {

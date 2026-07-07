@@ -975,6 +975,10 @@ export default defineConfig(({ command, mode }) => {
     base: "./",
     build: {
       target: "chrome148",
+      // Bench builds skip minification so the render-fanout probe reports
+      // readable component names (only explicit displayNames survive the
+      // minifier). Never set for shipped builds.
+      ...(process.env.DAINTREE_RENDER_PROBE === "1" ? { minify: false } : {}),
       modulePreload: { polyfill: false },
       outDir: "dist",
       emptyOutDir: true,
