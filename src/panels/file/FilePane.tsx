@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Copy, ExternalLink, FileText, RefreshCw, Search } from "lucide-react";
-import type { MarkdownViewMode } from "@shared/types/panel";
-import { isMarkdownPanel } from "@shared/types/panel";
+import { Check, Copy, ExternalLink, FileText, RefreshCw, Search, WrapText } from "lucide-react";
+import type { FileViewMode } from "@shared/types/panel";
+import { isFilePanel } from "@shared/types/panel";
 import type { FileReadErrorCode } from "@shared/types/ipc/files";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import type { TabInfo } from "@/components/Panel/TabButton";
-import { MarkdownViewer } from "@/components/Markdown/MarkdownViewer";
+import { MarkdownViewer, type MarkdownViewerHandle } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
+import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
@@ -20,13 +21,14 @@ import { filesClient } from "@/clients/filesClient";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isClientAppError } from "@/utils/clientAppError";
 import { logError } from "@/utils/logger";
 import { cn } from "@/lib/utils";
 
-export interface MarkdownPaneProps extends BasePanelProps {
+export interface FilePaneProps extends BasePanelProps {
   tabs?: TabInfo[];
   onTabClick?: (tabId: string) => void;
   onTabClose?: (tabId: string) => void;
@@ -58,8 +60,8 @@ interface PickerResult {
   absolutePath: string;
 }
 
-/** Debounced .md file search over the panel's root — the empty-state picker. */
-function useMarkdownFileSearch(rootPath: string, query: string): PickerResult[] {
+/** Debounced file search over the panel's root — the empty-state picker. */
+function useFileSearch(rootPath: string, query: string): PickerResult[] {
   const [results, setResults] = useState<PickerResult[]>([]);
 
   useEffect(() => {
@@ -70,21 +72,22 @@ function useMarkdownFileSearch(rootPath: string, query: string): PickerResult[] 
     let cancelled = false;
     const timer = setTimeout(() => {
       filesClient
-        // The files:search IPC schema caps limit at 100.
-        .search({ cwd: rootPath, query: query || ".md", limit: 100 })
+        // The files:search IPC schema caps limit at 100; an empty query
+        // lists the first files alphabetically.
+        .search({ cwd: rootPath, query, limit: 100 })
         .then(({ files }) => {
           if (cancelled) return;
           const root = toForwardSlashes(rootPath).replace(/\/$/, "");
           setResults(
             files
-              .filter((f) => !f.endsWith("/") && isMarkdownFilePath(f))
+              .filter((f) => !f.endsWith("/"))
               .slice(0, 50)
               .map((relativePath) => ({ relativePath, absolutePath: `${root}/${relativePath}` }))
           );
         })
         .catch((err) => {
           if (!cancelled) setResults([]);
-          logError("[MarkdownPane] file search failed", err);
+          logError("[FilePane] file search failed", err);
         });
     }, SEARCH_DEBOUNCE_MS);
     return () => {
@@ -99,10 +102,13 @@ function useMarkdownFileSearch(rootPath: string, query: string): PickerResult[] 
 function ToolbarIconButton({
   label,
   onClick,
+  pressed,
   children,
 }: {
   label: string;
   onClick: () => void;
+  /** Renders the button as a toggle with a pressed state. */
+  pressed?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -112,7 +118,13 @@ function ToolbarIconButton({
           type="button"
           onClick={onClick}
           aria-label={label}
-          className="p-1 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border"
+          aria-pressed={pressed}
+          className={cn(
+            "p-1 rounded transition-colors",
+            pressed
+              ? "bg-daintree-border text-daintree-text"
+              : "text-muted-foreground hover:text-daintree-text hover:bg-daintree-border"
+          )}
         >
           {children}
         </button>
@@ -122,7 +134,7 @@ function ToolbarIconButton({
   );
 }
 
-export function MarkdownPane({
+export function FilePane({
   id,
   title,
   isFocused,
@@ -140,21 +152,25 @@ export function MarkdownPane({
   onTabClose,
   onTabRename,
   onAddTab,
-}: MarkdownPaneProps) {
+}: FilePaneProps) {
   const panel = usePanelStore(
     useCallback(
       (state) => {
         const candidate = state.panelsById[id];
-        return candidate && isMarkdownPanel(candidate) ? candidate : undefined;
+        return candidate && isFilePanel(candidate) ? candidate : undefined;
       },
       [id]
     )
   );
-  const setMarkdownViewMode = usePanelStore((state) => state.setMarkdownViewMode);
-  const setMarkdownFilePath = usePanelStore((state) => state.setMarkdownFilePath);
+  const setFileViewMode = usePanelStore((state) => state.setFileViewMode);
+  const setFilePanelPath = usePanelStore((state) => state.setFilePanelPath);
+  const markdownWrapLines = usePreferencesStore((state) => state.markdownWrapLines);
+  const setMarkdownWrapLines = usePreferencesStore((state) => state.setMarkdownWrapLines);
 
-  const filePath = panel?.markdownFilePath;
-  const viewMode: MarkdownViewMode = panel?.markdownViewMode ?? "rendered";
+  const filePath = panel?.filePath;
+  const isMarkdown = filePath !== undefined && isMarkdownFilePath(filePath);
+  // "rendered" is a markdown-only mode; other files always view as source.
+  const viewMode: FileViewMode = isMarkdown ? (panel?.fileViewMode ?? "source") : "source";
 
   const worktreePath = useWorktreeStore(
     useCallback(
@@ -181,6 +197,8 @@ export function MarkdownPane({
   const [pathCopied, setPathCopied] = useState(false);
   const requestRef = useRef(0);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const markdownViewerRef = useRef<MarkdownViewerHandle>(null);
+  const codeViewerRef = useRef<CodeViewerHandle>(null);
 
   useEffect(() => {
     return () => {
@@ -230,7 +248,7 @@ export function MarkdownPane({
     loadFile(false);
   }, [loadFile]);
 
-  // Agents rewrite specs while the user reads them: silently re-read when the
+  // Agents rewrite files while the user reads them: silently re-read when the
   // pane regains focus or the app window returns to the foreground.
   const wasFocusedRef = useRef(isFocused);
   useEffect(() => {
@@ -247,6 +265,18 @@ export function MarkdownPane({
     return () => window.removeEventListener("focus", handleWindowFocus);
   }, [loadState, loadFile]);
 
+  // Route Cmd+F to the source view's find bar while this pane is focused
+  // (no-op in rendered markdown, matching the dialog).
+  useEffect(() => {
+    if (!isFocused) return;
+    const handleFindInPanel = () => {
+      markdownViewerRef.current?.openSearch();
+      codeViewerRef.current?.openSearch();
+    };
+    window.addEventListener("daintree:find-in-panel", handleFindInPanel);
+    return () => window.removeEventListener("daintree:find-in-panel", handleFindInPanel);
+  }, [isFocused]);
+
   const handleCopyPath = useCallback(() => {
     if (!filePath) return;
     navigator.clipboard
@@ -257,19 +287,19 @@ export function MarkdownPane({
         if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
         copyTimeoutRef.current = setTimeout(() => setPathCopied(false), COPY_FEEDBACK_MS);
       })
-      .catch((err) => logError("[MarkdownPane] copy path failed", err));
+      .catch((err) => logError("[FilePane] copy path failed", err));
   }, [filePath]);
 
   const handleOpenInEditor = useCallback(() => {
     if (!filePath) return;
     actionService
       .dispatch("file.openInEditor", { path: filePath }, { source: "user" })
-      .catch((err) => logError("[MarkdownPane] openInEditor failed", err));
+      .catch((err) => logError("[FilePane] openInEditor failed", err));
   }, [filePath]);
 
   const [pickerQuery, setPickerQuery] = useState("");
   const pickerRoot = worktreePath || projectPath;
-  const pickerResults = useMarkdownFileSearch(filePath ? "" : pickerRoot, pickerQuery);
+  const pickerResults = useFileSearch(filePath ? "" : pickerRoot, pickerQuery);
 
   const fileName = filePath ? filePath.split(/[/\\]/).filter(Boolean).pop() : undefined;
   // A user-locked rename outranks the derived file name (title layering: the
@@ -282,14 +312,16 @@ export function MarkdownPane({
 
   const toolbar = filePath ? (
     <div className="flex items-center gap-2 px-2 py-1 border-b border-daintree-border bg-surface-panel">
-      <SegmentedToggle<MarkdownViewMode>
-        options={[
-          { value: "rendered", label: "Rendered" },
-          { value: "source", label: "Source" },
-        ]}
-        value={viewMode}
-        onChange={(mode) => setMarkdownViewMode(id, mode)}
-      />
+      {isMarkdown && (
+        <SegmentedToggle<FileViewMode>
+          options={[
+            { value: "source", label: "Source" },
+            { value: "rendered", label: "Rendered" },
+          ]}
+          value={viewMode}
+          onChange={(mode) => setFileViewMode(id, mode)}
+        />
+      )}
       <span
         className="min-w-0 flex-1 truncate text-xs text-muted-foreground font-mono"
         title={filePath}
@@ -297,6 +329,15 @@ export function MarkdownPane({
         {displayPath}
       </span>
       <div className="flex items-center gap-0.5 shrink-0">
+        {isMarkdown && viewMode === "source" && (
+          <ToolbarIconButton
+            label="Wrap long lines"
+            pressed={markdownWrapLines}
+            onClick={() => setMarkdownWrapLines(!markdownWrapLines)}
+          >
+            <WrapText className="w-3.5 h-3.5" />
+          </ToolbarIconButton>
+        )}
         <ToolbarIconButton label="Refresh" onClick={() => loadFile(false)}>
           <RefreshCw className="w-3.5 h-3.5" />
         </ToolbarIconButton>
@@ -317,7 +358,7 @@ export function MarkdownPane({
     <ContentPanel
       id={id}
       title={displayTitle}
-      kind="markdown"
+      kind="file"
       isFocused={isFocused}
       isMaximized={isMaximized}
       location={location}
@@ -335,18 +376,18 @@ export function MarkdownPane({
       onTabRename={onTabRename}
       onAddTab={onAddTab}
     >
-      <div className="flex-1 min-h-0 overflow-auto bg-daintree-bg" data-testid="markdown-pane-body">
+      <div className="flex-1 min-h-0 overflow-auto bg-daintree-bg" data-testid="file-pane-body">
         {!filePath && (
           <div className="flex h-full w-full flex-col items-center justify-center gap-4 p-6">
             <EmptyState
               variant="zero-data"
               scale="canvas"
               icon={<FileText className="h-6 w-6" />}
-              title="Open a markdown file"
+              title="Open a file"
               description={
                 pickerRoot
-                  ? "Search the project's markdown files, or click a .md path in any terminal."
-                  : "Open a project, then search its markdown files here."
+                  ? "Search the project's files, or click a file path in any terminal."
+                  : "Open a project, then search its files here."
               }
             />
             {pickerRoot && (
@@ -356,10 +397,10 @@ export function MarkdownPane({
                   <input
                     value={pickerQuery}
                     onChange={(e) => setPickerQuery(e.target.value)}
-                    placeholder="Search markdown files"
-                    aria-label="Search markdown files"
+                    placeholder="Search files"
+                    aria-label="Search files"
                     className="w-full bg-transparent text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden"
-                    data-testid="markdown-file-search"
+                    data-testid="file-pane-search"
                   />
                 </div>
                 <div className="max-h-56 overflow-y-auto flex flex-col" role="listbox">
@@ -369,9 +410,9 @@ export function MarkdownPane({
                       type="button"
                       role="option"
                       aria-selected={false}
-                      onClick={() => setMarkdownFilePath(id, result.absolutePath)}
+                      onClick={() => setFilePanelPath(id, result.absolutePath)}
                       className="text-left px-2 py-1.5 rounded text-xs font-mono truncate text-muted-foreground transition-colors hover:text-daintree-text hover:bg-daintree-border"
-                      data-testid="markdown-file-result"
+                      data-testid="file-pane-result"
                     >
                       {result.relativePath}
                     </button>
@@ -384,7 +425,7 @@ export function MarkdownPane({
 
         {filePath && loadState === "loading" && (
           <div className="p-4 space-y-3">
-            <Skeleton label="Loading markdown file">
+            <Skeleton label="Loading file">
               <SkeletonBone className="h-5 w-1/3" />
               <SkeletonText lines={12} />
             </Skeleton>
@@ -405,15 +446,27 @@ export function MarkdownPane({
           </div>
         )}
 
-        {filePath && loadState === "loaded" && content !== null && (
-          <MarkdownViewer
-            content={content}
-            filePath={filePath}
-            rootPath={effectiveRootPath}
-            viewMode={viewMode}
-            className={cn(viewMode === "source" && "min-h-full")}
-          />
-        )}
+        {filePath &&
+          loadState === "loaded" &&
+          content !== null &&
+          (isMarkdown ? (
+            <MarkdownViewer
+              ref={markdownViewerRef}
+              content={content}
+              filePath={filePath}
+              rootPath={effectiveRootPath}
+              viewMode={viewMode}
+              wrapLines={markdownWrapLines}
+              className={cn(viewMode === "source" && "min-h-full")}
+            />
+          ) : (
+            <CodeViewer
+              ref={codeViewerRef}
+              content={content}
+              filePath={filePath}
+              className="min-h-full"
+            />
+          ))}
       </div>
     </ContentPanel>
   );

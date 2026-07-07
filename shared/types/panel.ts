@@ -569,21 +569,25 @@ export interface ReviewPanelData extends BasePanelData {
   kind: "review";
 }
 
-/** View mode shared by the markdown viewer surfaces (panel + dialog). */
-export type MarkdownViewMode = "rendered" | "source";
+/**
+ * View mode shared by the file viewer surfaces (panel + dialog). "rendered"
+ * only applies to markdown files; every other file renders as source.
+ */
+export type FileViewMode = "rendered" | "source";
 
 /**
- * Markdown panel — read-only viewer for a markdown file in a grid cell.
- * `markdownFilePath` is absolute; the effective read root is resolved at
- * render time (the panel's worktree when the file is inside one, else the
- * file's parent directory) so worktree renames don't strand the panel.
+ * File panel — read-only viewer for a repo file in a grid cell. Markdown
+ * files additionally get a rendered-document mode. `filePath` is absolute;
+ * the effective read root is resolved at render time (the panel's worktree
+ * when the file is inside one, else the file's parent directory) so worktree
+ * renames don't strand the panel.
  */
-export interface MarkdownPanelData extends BasePanelData {
-  kind: "markdown";
-  /** Absolute path of the markdown file being viewed; absent = picker empty state */
-  markdownFilePath?: string;
-  /** Active view mode. Absent defaults to "rendered". */
-  markdownViewMode?: MarkdownViewMode;
+export interface FilePanelData extends BasePanelData {
+  kind: "file";
+  /** Absolute path of the file being viewed; absent = picker empty state */
+  filePath?: string;
+  /** Active view mode. Absent defaults to "source". */
+  fileViewMode?: FileViewMode;
 }
 
 export type PanelInstance =
@@ -591,7 +595,7 @@ export type PanelInstance =
   | BrowserPanelData
   | DevPreviewPanelData
   | ReviewPanelData
-  | MarkdownPanelData;
+  | FilePanelData;
 
 export function isPtyPanel(panel: PanelInstance | TerminalInstance): panel is PtyPanelData {
   const kind = panel.kind ?? "terminal";
@@ -619,12 +623,10 @@ export function isReviewPanel(panel: PanelInstance | TerminalInstance): panel is
   return kind === "review";
 }
 
-export function isMarkdownPanel(
-  panel: PanelInstance | TerminalInstance
-): panel is MarkdownPanelData {
+export function isFilePanel(panel: PanelInstance | TerminalInstance): panel is FilePanelData {
   const kind = panel.kind ?? "terminal";
 
-  return kind === "markdown";
+  return kind === "file";
 }
 
 /**

@@ -418,7 +418,7 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "file.view",
   "file.read",
   "file.openInEditor",
-  "markdown.openPanel",
+  "file.openPanel",
 
   "copyTree.generate",
   "copyTree.generateAndCopyFile",

@@ -4,7 +4,7 @@ export const PANEL_KIND_BRAND_COLORS = {
   browser: "var(--theme-category-blue)",
   "dev-preview": "var(--theme-category-teal)",
   review: "var(--theme-category-violet)",
-  markdown: "var(--theme-category-amber)",
+  file: "var(--theme-category-amber)",
   plugin: "var(--theme-category-orange)",
 } as const;
 

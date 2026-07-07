@@ -1,8 +1,112 @@
+/* Rendered-markdown document theme. Imported by MarkdownDocument.tsx, so it
+   ships with the lazy markdown chunk.
+
+   Everything in this file is intentionally UNLAYERED: the typography plugin
+   emits `.prose` inside @layer utilities, and layered rules lose to unlayered
+   author styles no matter their specificity or order. Wrapping these rules in
+   any @layer block would silently hand the colors back to the plugin's
+   light-theme defaults (that regression shipped once — dark-on-dark text). */
+
+.markdown-document {
+  /* Typography-plugin palette remapped to theme tokens so rendered markdown
+     follows the active theme in both polarities. */
+  --tw-prose-body: var(--color-daintree-text);
+  --tw-prose-headings: var(--color-text-primary);
+  --tw-prose-lead: color-mix(in oklab, var(--color-daintree-text) 80%, transparent);
+  --tw-prose-links: var(--color-daintree-accent);
+  --tw-prose-bold: var(--color-text-primary);
+  --tw-prose-counters: color-mix(in oklab, var(--color-daintree-text) 60%, transparent);
+  --tw-prose-bullets: color-mix(in oklab, var(--color-daintree-text) 40%, transparent);
+  --tw-prose-hr: var(--color-daintree-border);
+  --tw-prose-quotes: color-mix(in oklab, var(--color-daintree-text) 85%, transparent);
+  --tw-prose-quote-borders: var(--color-daintree-border);
+  --tw-prose-captions: color-mix(in oklab, var(--color-daintree-text) 60%, transparent);
+  --tw-prose-kbd: var(--color-daintree-text);
+  --tw-prose-code: var(--color-daintree-text);
+  --tw-prose-pre-code: var(--color-daintree-text);
+  --tw-prose-pre-bg: color-mix(in oklab, var(--color-daintree-sidebar) 60%, transparent);
+  --tw-prose-th-borders: var(--color-daintree-border);
+  --tw-prose-td-borders: color-mix(in oklab, var(--color-daintree-border) 60%, transparent);
+
+  /* Document scale: prose sizes are em-based, so one font-size tunes the
+     whole hierarchy to the app's 14px reading surfaces. The measure caps
+     line length for comfortable reading in maximized panels and dialogs. */
+  font-size: 0.875rem;
+  max-width: 48rem;
+  margin-inline: auto;
+}
+
+.markdown-document :where(h1, h2, h3, h4) {
+  font-weight: 600;
+}
+
+.markdown-document :where(h1, h2) {
+  letter-spacing: -0.01em;
+  border-bottom: 1px solid color-mix(in oklab, var(--color-daintree-border) 70%, transparent);
+  padding-bottom: 0.3em;
+}
+
+.markdown-document :where(h1, h2, h3, h4, h5, h6):first-child {
+  margin-top: 0;
+}
+
+/* Inline code chips (fence bodies keep the pre treatment below). */
+.markdown-document :where(code):not(:where(pre *)) {
+  background: color-mix(in oklab, var(--color-daintree-sidebar) 60%, transparent);
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-xs);
+  font-size: 0.85em;
+  font-family: var(--font-mono);
+  font-weight: 400;
+  border: 1px solid color-mix(in oklab, var(--color-daintree-border) 50%, transparent);
+}
+
+.markdown-document :where(code):not(:where(pre *))::before,
+.markdown-document :where(code):not(:where(pre *))::after {
+  content: none;
+}
+
+.markdown-document :where(pre) {
+  border: 1px solid var(--color-daintree-border);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-mono);
+}
+
+/* kbd: chip treatment; kills the plugin's --tw-prose-kbd-shadows box-shadow,
+   the one prose token that can't take a theme color (it wants an RGB triplet). */
+.markdown-document :where(kbd) {
+  background: color-mix(in oklab, var(--color-daintree-sidebar) 60%, transparent);
+  border: 1px solid color-mix(in oklab, var(--color-daintree-border) 50%, transparent);
+  border-radius: var(--radius-xs);
+  box-shadow: none;
+  font-family: var(--font-mono);
+}
+
+/* GFM tables: full grid, GitHub-style header row. */
+.markdown-document :where(table) {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.markdown-document :where(th) {
+  text-align: left;
+  font-weight: 600;
+  background: color-mix(in oklab, var(--color-daintree-sidebar) 40%, transparent);
+}
+
+.markdown-document :where(th, td) {
+  padding: 0.375rem 0.75rem;
+  border: 1px solid color-mix(in oklab, var(--color-daintree-border) 80%, transparent);
+}
+
+.markdown-document :where(del) {
+  opacity: 0.6;
+}
+
 /* Rendered-markdown code fences reuse the diff viewer's refractor token
    palette so highlighting reads identically across the two surfaces.
    DiffViewer.css is the source of truth for these color assignments — keep
-   the two blocks in sync when the palette changes. Imported by
-   MarkdownDocument.tsx, so it ships with the lazy markdown chunk. */
+   the two blocks in sync when the palette changes. */
 
 /* refractor grammars tag tokens with bare class names that collide with
    Tailwind display utilities (`table`, `hidden`, `block`, …). Syntax tokens

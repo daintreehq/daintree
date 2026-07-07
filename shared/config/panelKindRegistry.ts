@@ -14,7 +14,7 @@ export const BUILT_IN_PANEL_KINDS = [
   "browser",
   "dev-preview",
   "review",
-  "markdown",
+  "file",
 ] as const;
 
 /** Built-in panel kinds — derived from `BUILT_IN_PANEL_KINDS` */
@@ -223,20 +223,20 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     // than handing focus to the first grid terminal in the worktree.
     policy: { dockFallbackTarget: "previous-focused" },
   },
-  markdown: {
-    id: "markdown",
-    name: "Markdown",
+  file: {
+    id: "file",
+    name: "File Viewer",
     iconId: "file-text",
-    color: PANEL_KIND_BRAND_COLORS.markdown,
+    color: PANEL_KIND_BRAND_COLORS.file,
     hasPty: false,
     canRestart: false,
     canConvert: false,
     usesTerminalUi: false,
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
-    searchAliases: ["md", "readme", "docs", "spec", "document", "viewer"],
+    searchAliases: ["file", "md", "markdown", "readme", "docs", "spec", "document", "viewer"],
     firstRenderRestore: true,
-    lazyImportPath: "src/panels/markdown/MarkdownPane.tsx",
+    lazyImportPath: "src/panels/file/FilePane.tsx",
     // Reading surface like review: focus returns to what the user was last
     // reading when the panel leaves the grid.
     policy: { dockFallbackTarget: "previous-focused" },

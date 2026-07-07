@@ -1,5 +1,5 @@
 import type { BuiltInPanelKind, PanelKind, ViewportPresetId } from "@/types";
-import type { MarkdownViewMode } from "@shared/types/panel";
+import type { FileViewMode } from "@shared/types/panel";
 import type { AddTerminalArgs, SavedTerminalData } from "@/utils/stateHydration/statePatcher";
 import { VIEWPORT_PRESETS } from "@/panels/dev-preview/viewportPresets";
 
@@ -12,8 +12,8 @@ function sanitizeViewportPreset(value: string | undefined): ViewportPresetId | u
     : undefined;
 }
 
-/** Coerce a persisted markdown view mode, dropping unknown on-disk values. */
-function sanitizeMarkdownViewMode(value: string | undefined): MarkdownViewMode | undefined {
+/** Coerce a persisted file view mode, dropping unknown on-disk values. */
+function sanitizeFileViewMode(value: string | undefined): FileViewMode | undefined {
   return value === "rendered" || value === "source" ? value : undefined;
 }
 
@@ -50,9 +50,11 @@ const BUILT_IN_DESERIALIZERS = {
     };
   },
   review: null,
-  markdown: (saved) => ({
-    markdownFilePath: saved.markdownFilePath,
-    markdownViewMode: sanitizeMarkdownViewMode(saved.markdownViewMode),
+  // Legacy markdown* fields: written by the short-lived "markdown" panel kind
+  // this kind generalized from (inferKind maps the old kind string here).
+  file: (saved) => ({
+    filePath: saved.filePath ?? saved.markdownFilePath,
+    fileViewMode: sanitizeFileViewMode(saved.fileViewMode ?? saved.markdownViewMode),
   }),
 } as const satisfies Record<BuiltInPanelKind, PanelKindDeserializer | null>;
 

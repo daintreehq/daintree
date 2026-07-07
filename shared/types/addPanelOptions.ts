@@ -4,7 +4,7 @@ import type {
   PanelExitBehavior,
   PanelTitleMode,
   ViewportPresetId,
-  MarkdownViewMode,
+  FileViewMode,
 } from "./panel.js";
 import type { BrowserHistory } from "./browser.js";
 import type { AgentState, AgentId, WaitingReason } from "./agent.js";
@@ -220,13 +220,13 @@ export interface ReviewPanelOptions extends AddPanelOptionsBase {
   kind: "review";
 }
 
-/** Options for creating a markdown viewer panel */
-export interface MarkdownPanelOptions extends AddPanelOptionsBase {
-  kind: "markdown";
-  /** Absolute path of the markdown file to view */
-  markdownFilePath?: string;
-  /** Initial view mode; defaults to "rendered" */
-  markdownViewMode?: MarkdownViewMode;
+/** Options for creating a file viewer panel */
+export interface FilePanelOptions extends AddPanelOptionsBase {
+  kind: "file";
+  /** Absolute path of the file to view */
+  filePath?: string;
+  /** Initial view mode; defaults to "source" (rendered applies to markdown only) */
+  fileViewMode?: FileViewMode;
 }
 
 /**
@@ -249,4 +249,4 @@ export type AddPanelOptions =
   | BrowserPanelOptions
   | DevPreviewPanelOptions
   | ReviewPanelOptions
-  | MarkdownPanelOptions;
+  | FilePanelOptions;

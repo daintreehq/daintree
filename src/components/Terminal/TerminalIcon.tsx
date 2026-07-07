@@ -88,8 +88,8 @@ export function TerminalIcon({
     );
   }
 
-  // Markdown panes get a file-text icon
-  if (kind === "markdown" || resolvedChrome.iconId === "file-text") {
+  // File panes get a file-text icon
+  if (kind === "file" || resolvedChrome.iconId === "file-text") {
     return withIconMarker(
       <FileText {...finalProps} className={cn(finalProps.className, "text-category-amber")} />
     );

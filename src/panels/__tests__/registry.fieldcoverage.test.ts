@@ -3,7 +3,7 @@ import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
 import type {
   BrowserPanelData,
   BuiltInPanelKind,
-  MarkdownPanelData,
+  FilePanelData,
   PanelExitBehavior,
 } from "@shared/types/panel";
 import type { BrowserHistory } from "@shared/types/browser";
@@ -193,9 +193,9 @@ const DEV_PREVIEW_FIELD_CLASSIFICATION = {
   lastActiveAt: false,
 } as const satisfies Record<keyof DevPreviewSerializeInput, boolean>;
 
-// ── Markdown field classification ────────────────────────────────────
+// ── File field classification ────────────────────────────────────────
 
-const MARKDOWN_FIELD_CLASSIFICATION = {
+const FILE_FIELD_CLASSIFICATION = {
   // BasePanelData — persisted by the base serialization layer
   id: false,
   kind: false,
@@ -206,14 +206,14 @@ const MARKDOWN_FIELD_CLASSIFICATION = {
   isVisible: false,
   extensionState: false,
   pluginId: false,
-  // MarkdownPanelData persisted fields
-  markdownFilePath: true,
-  markdownViewMode: true,
+  // FilePanelData persisted fields
+  filePath: true,
+  fileViewMode: true,
   // BasePanelData carrier-bookkeeping timestamps — written by the base
   // serialization layer in panelToSnapshot, not per-kind serializers.
   createdAt: false,
   lastActiveAt: false,
-} as const satisfies Record<keyof MarkdownPanelData, boolean>;
+} as const satisfies Record<keyof FilePanelData, boolean>;
 
 // ── Built-in kind exhaustiveness ─────────────────────────────────────
 
@@ -222,7 +222,7 @@ const BUILT_IN_KINDS = [
   "browser",
   "dev-preview",
   "review",
-  "markdown",
+  "file",
 ] as const satisfies readonly BuiltInPanelKind[];
 
 // Compile-time exhaustiveness pin: if a new BuiltInPanelKind is added and not
@@ -354,20 +354,20 @@ const savedBrowser: SavedTerminalData = {
   browserConsoleOpen: false,
 };
 
-const markdownFixture: MarkdownPanelData = {
-  id: "panel-markdown",
+const fileFixture: FilePanelData = {
+  id: "panel-file",
   title: "Panel",
   location: "grid",
-  kind: "markdown",
-  markdownFilePath: "/home/project/docs/spec.md",
-  markdownViewMode: "source",
+  kind: "file",
+  filePath: "/home/project/docs/spec.md",
+  fileViewMode: "source",
 };
 
-const savedMarkdown: SavedTerminalData = {
-  id: "panel-markdown",
-  kind: "markdown",
-  markdownFilePath: "/home/project/docs/spec.md",
-  markdownViewMode: "source",
+const savedFile: SavedTerminalData = {
+  id: "panel-file",
+  kind: "file",
+  filePath: "/home/project/docs/spec.md",
+  fileViewMode: "source",
 };
 
 const savedDevPreview: SavedTerminalData = {
@@ -435,12 +435,9 @@ describe("panel serializer field coverage", () => {
     );
   });
 
-  it("markdown serializer covers every persisted markdown field", () => {
-    const output = getPanelKindConfig("markdown")!.serialize!(markdownFixture) as Record<
-      string,
-      unknown
-    >;
-    assertCovers("markdown serializer", output, persistedKeys(MARKDOWN_FIELD_CLASSIFICATION));
+  it("file serializer covers every persisted file field", () => {
+    const output = getPanelKindConfig("file")!.serialize!(fileFixture) as Record<string, unknown>;
+    assertCovers("file serializer", output, persistedKeys(FILE_FIELD_CLASSIFICATION));
   });
 });
 
@@ -485,22 +482,34 @@ describe("panel deserializer field coverage", () => {
     expect(getDeserializer("review")).toBeUndefined();
   });
 
-  it("markdown deserializer covers every persisted markdown field", () => {
-    const deserializer = getDeserializer("markdown");
-    expect(deserializer, "markdown deserializer must be registered").toBeDefined();
-    const output = deserializer!(savedMarkdown) as Record<string, unknown>;
-    assertCovers("markdown deserializer", output, persistedKeys(MARKDOWN_FIELD_CLASSIFICATION));
+  it("file deserializer covers every persisted file field", () => {
+    const deserializer = getDeserializer("file");
+    expect(deserializer, "file deserializer must be registered").toBeDefined();
+    const output = deserializer!(savedFile) as Record<string, unknown>;
+    assertCovers("file deserializer", output, persistedKeys(FILE_FIELD_CLASSIFICATION));
   });
 
-  it("markdown deserializer drops unknown persisted view modes", () => {
-    const deserializer = getDeserializer("markdown")!;
+  it("file deserializer drops unknown persisted view modes", () => {
+    const deserializer = getDeserializer("file")!;
     const output = deserializer({
-      id: "panel-markdown",
-      kind: "markdown",
-      markdownFilePath: "/home/project/docs/spec.md",
-      markdownViewMode: "sideways",
+      id: "panel-file",
+      kind: "file",
+      filePath: "/home/project/docs/spec.md",
+      fileViewMode: "sideways",
     });
-    expect(output.markdownViewMode).toBeUndefined();
-    expect(output.markdownFilePath).toBe("/home/project/docs/spec.md");
+    expect(output.fileViewMode).toBeUndefined();
+    expect(output.filePath).toBe("/home/project/docs/spec.md");
+  });
+
+  it("file deserializer reads legacy markdown panel fields", () => {
+    const deserializer = getDeserializer("file")!;
+    const output = deserializer({
+      id: "panel-file",
+      kind: "file",
+      markdownFilePath: "/home/project/docs/spec.md",
+      markdownViewMode: "rendered",
+    });
+    expect(output.filePath).toBe("/home/project/docs/spec.md");
+    expect(output.fileViewMode).toBe("rendered");
   });
 });
