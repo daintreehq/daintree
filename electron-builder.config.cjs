@@ -212,6 +212,27 @@ module.exports = async function () {
         NSPrefersDisplaySafeAreaCompatibilityMode: false,
         NSMicrophoneUsageDescription:
           "Daintree uses the microphone for voice dictation into terminal inputs.",
+        // Accept folders dropped on the Dock icon / "Open With" so macOS Launch
+        // Services delivers them to the `open-file` handler, which opens them as
+        // projects (#10976). `public.folder` is the Finder-facing folder UTI (not
+        // the abstract `public.directory`); Viewer/Alternate registers as a
+        // non-default handler so Finder keeps opening folders itself. electron-
+        // builder concatenates this with the `.dntr` `fileAssociations` entry
+        // above into one CFBundleDocumentTypes array (PR #8035), so neither is
+        // clobbered. Gated on CSC_LINK for the same Launch-Services-pollution
+        // guard — unsigned dev builds skip it.
+        ...(process.env.CSC_LINK
+          ? {
+              CFBundleDocumentTypes: [
+                {
+                  CFBundleTypeName: "Folder",
+                  CFBundleTypeRole: "Viewer",
+                  LSHandlerRank: "Alternate",
+                  LSItemContentTypes: ["public.folder"],
+                },
+              ],
+            }
+          : {}),
       },
       target: [
         { target: "dmg", arch: ["arm64", "x64", "universal"] },

@@ -10,6 +10,7 @@ const fsMock = vi.hoisted(() => ({
   writeFileSync: vi.fn(),
   readFileSync: vi.fn<(p: string, enc: string) => string>(),
   unlinkSync: vi.fn(),
+  statSync: vi.fn<(p: string) => { isDirectory: () => boolean }>(),
 }));
 
 const electronMock = vi.hoisted(() => ({
@@ -43,6 +44,7 @@ vi.mock("fs", () => ({
     writeFileSync: fsMock.writeFileSync,
     readFileSync: fsMock.readFileSync,
     unlinkSync: fsMock.unlinkSync,
+    statSync: fsMock.statSync,
   },
   existsSync: fsMock.existsSync,
   readdirSync: fsMock.readdirSync,
@@ -52,6 +54,7 @@ vi.mock("fs", () => ({
   writeFileSync: fsMock.writeFileSync,
   readFileSync: fsMock.readFileSync,
   unlinkSync: fsMock.unlinkSync,
+  statSync: fsMock.statSync,
 }));
 
 vi.mock("electron", () => electronMock);
@@ -1098,6 +1101,8 @@ describe("macOS open-file handler", () => {
     Object.defineProperty(process, "platform", { value: "darwin", writable: true });
     process.argv = ["electron", "main.js"];
     fsMock.existsSync.mockReturnValue(false);
+    // A normal `.dntr` file routes as a file (stat succeeds, not a directory).
+    fsMock.statSync.mockReturnValue({ isDirectory: () => false });
   });
 
   afterEach(() => {
@@ -1181,5 +1186,178 @@ describe("macOS open-file handler", () => {
     const snapshot = env.getPendingOpenFilePaths();
     snapshot.push("/injected.dntr");
     expect(env.getPendingOpenFilePaths()).toEqual(["/a.dntr"]);
+  });
+});
+
+describe("macOS open-file directory routing (#10976)", () => {
+  type OpenFileEvent = { preventDefault: () => void };
+  type OpenFileHandler = (event: OpenFileEvent, filePath: string) => void;
+
+  function getOpenFileHandler(): OpenFileHandler | undefined {
+    const call = electronMock.app.on.mock.calls.find((c) => c[0] === "open-file");
+    return call?.[1] as OpenFileHandler | undefined;
+  }
+
+  function mockStatDirectory(dirPath: string): void {
+    fsMock.statSync.mockImplementation(((p: string) => ({
+      isDirectory: () => p === dirPath,
+    })) as (p: string) => { isDirectory: () => boolean });
+  }
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.resetAllMocks();
+    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+    process.argv = ["electron", "main.js"];
+    fsMock.existsSync.mockReturnValue(false);
+    // Default: nothing is a directory (a `.dntr` file routes as a file).
+    fsMock.statSync.mockReturnValue({ isDirectory: () => false });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+    process.argv = originalArgv;
+  });
+
+  it("routes a directory to the directory queue, not the plugin queue", async () => {
+    const env = await import("../environment.js");
+    const handler = getOpenFileHandler()!;
+    fsMock.statSync.mockReturnValue({ isDirectory: () => true });
+    handler({ preventDefault: vi.fn() }, "/projects/foo");
+
+    expect(env.getPendingOpenDirPaths()).toEqual(["/projects/foo"]);
+    expect(env.getPendingOpenFilePaths()).toEqual([]);
+  });
+
+  it("queues multiple directories in FIFO order", async () => {
+    const env = await import("../environment.js");
+    const handler = getOpenFileHandler()!;
+    fsMock.statSync.mockReturnValue({ isDirectory: () => true });
+    handler({ preventDefault: vi.fn() }, "/a");
+    handler({ preventDefault: vi.fn() }, "/b");
+    expect(env.getPendingOpenDirPaths()).toEqual(["/a", "/b"]);
+  });
+
+  it("clearPendingOpenDirPaths empties the directory queue", async () => {
+    const env = await import("../environment.js");
+    const handler = getOpenFileHandler()!;
+    fsMock.statSync.mockReturnValue({ isDirectory: () => true });
+    handler({ preventDefault: vi.fn() }, "/a");
+    env.clearPendingOpenDirPaths();
+    expect(env.getPendingOpenDirPaths()).toEqual([]);
+  });
+
+  it("routes to the directory consumer instead of queueing once one is set", async () => {
+    const env = await import("../environment.js");
+    const handler = getOpenFileHandler()!;
+    const consumer = vi.fn();
+    env.setOpenDirConsumer(consumer);
+    fsMock.statSync.mockReturnValue({ isDirectory: () => true });
+    handler({ preventDefault: vi.fn() }, "/live/folder");
+
+    expect(consumer).toHaveBeenCalledWith("/live/folder");
+    expect(env.getPendingOpenDirPaths()).toEqual([]);
+  });
+
+  it("deduplicates identical queued directories before a window exists", async () => {
+    const env = await import("../environment.js");
+    const handler = getOpenFileHandler()!;
+    fsMock.statSync.mockReturnValue({ isDirectory: () => true });
+    handler({ preventDefault: vi.fn() }, "/dup");
+    handler({ preventDefault: vi.fn() }, "/dup");
+    expect(env.getPendingOpenDirPaths()).toEqual(["/dup"]);
+  });
+
+  it("queuePendingOpenDirPath deduplicates when re-queuing from the consumer", async () => {
+    const env = await import("../environment.js");
+    env.queuePendingOpenDirPath("/requeue");
+    env.queuePendingOpenDirPath("/requeue");
+    expect(env.getPendingOpenDirPaths()).toEqual(["/requeue"]);
+  });
+
+  it("calls preventDefault for directories too", async () => {
+    await import("../environment.js");
+    const handler = getOpenFileHandler()!;
+    fsMock.statSync.mockReturnValue({ isDirectory: () => true });
+    const event = { preventDefault: vi.fn() };
+    handler(event, "/projects/foo");
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it("routes a file (non-directory) through the plugin queue, not the directory queue", async () => {
+    const env = await import("../environment.js");
+    const handler = getOpenFileHandler()!;
+    fsMock.statSync.mockReturnValue({ isDirectory: () => false });
+    handler({ preventDefault: vi.fn() }, "/plugin.dntr");
+
+    expect(env.getPendingOpenFilePaths()).toEqual(["/plugin.dntr"]);
+    expect(env.getPendingOpenDirPaths()).toEqual([]);
+  });
+
+  it("treats a stat failure as a file so the plugin error route is preserved", async () => {
+    const env = await import("../environment.js");
+    const handler = getOpenFileHandler()!;
+    fsMock.statSync.mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    handler({ preventDefault: vi.fn() }, "/vanished.dntr");
+
+    expect(env.getPendingOpenFilePaths()).toEqual(["/vanished.dntr"]);
+    expect(env.getPendingOpenDirPaths()).toEqual([]);
+  });
+
+  it("routes a mixed burst of dir + file to the correct queues", async () => {
+    const env = await import("../environment.js");
+    const handler = getOpenFileHandler()!;
+    mockStatDirectory("/projects/foo");
+    handler({ preventDefault: vi.fn() }, "/projects/foo");
+    handler({ preventDefault: vi.fn() }, "/plugin.dntr");
+
+    expect(env.getPendingOpenDirPaths()).toEqual(["/projects/foo"]);
+    expect(env.getPendingOpenFilePaths()).toEqual(["/plugin.dntr"]);
+  });
+
+  it("getPendingOpenDirPaths returns a copy so caller mutation is isolated", async () => {
+    const env = await import("../environment.js");
+    const handler = getOpenFileHandler()!;
+    fsMock.statSync.mockReturnValue({ isDirectory: () => true });
+    handler({ preventDefault: vi.fn() }, "/a");
+    const snapshot = env.getPendingOpenDirPaths();
+    snapshot.push("/injected");
+    expect(env.getPendingOpenDirPaths()).toEqual(["/a"]);
+  });
+
+  it("stat failure routes to the file consumer even when a dir consumer is set", async () => {
+    // Locks the invariant: stat decides before any consumer sees the path, so a
+    // vanished/permission-denied path can never reach the directory route.
+    const env = await import("../environment.js");
+    const handler = getOpenFileHandler()!;
+    const dirConsumer = vi.fn();
+    const fileConsumer = vi.fn();
+    env.setOpenDirConsumer(dirConsumer);
+    env.setOpenFileConsumer(fileConsumer);
+    fsMock.statSync.mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    handler({ preventDefault: vi.fn() }, "/vanished.dntr");
+
+    expect(fileConsumer).toHaveBeenCalledWith("/vanished.dntr");
+    expect(dirConsumer).not.toHaveBeenCalled();
+    expect(env.getPendingOpenDirPaths()).toEqual([]);
+  });
+
+  it("routes a .dntr path that is actually a directory to the dir queue (stat wins over extension)", async () => {
+    const env = await import("../environment.js");
+    const handler = getOpenFileHandler()!;
+    fsMock.statSync.mockImplementation(((p: string) => ({
+      isDirectory: () => p === "/odd/plugin.dntr",
+    })) as (p: string) => {
+      isDirectory: () => boolean;
+    });
+    handler({ preventDefault: vi.fn() }, "/odd/plugin.dntr");
+    handler({ preventDefault: vi.fn() }, "/real.dntr");
+
+    expect(env.getPendingOpenDirPaths()).toEqual(["/odd/plugin.dntr"]);
+    expect(env.getPendingOpenFilePaths()).toEqual(["/real.dntr"]);
   });
 });
