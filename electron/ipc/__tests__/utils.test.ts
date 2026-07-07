@@ -57,6 +57,7 @@ import {
   typedSend,
   checkRateLimit,
   waitForRateLimitSlot,
+  waitForBurstRateLimitSlot,
   drainRateLimitQueues,
   armRestoreQuota,
   consumeRestoreQuota,
@@ -712,6 +713,107 @@ describe("waitForRateLimitSlot (leaky bucket, 2-arg)", () => {
     const before = Date.now();
     await waitForRateLimitSlot("lb-reset", 5_000);
     expect(Date.now()).toBe(before);
+  });
+});
+
+describe("waitForBurstRateLimitSlot (token bucket)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    _resetRateLimitQueuesForTest();
+  });
+
+  afterEach(() => {
+    _resetRateLimitQueuesForTest();
+    vi.useRealTimers();
+  });
+
+  it("releases up to the burst allowance instantly, then spaces at the interval", async () => {
+    const INTERVAL = 1_000;
+    const BURST = 6;
+    const resolvedAt: number[] = [];
+    const start = Date.now();
+
+    const promises = Array.from({ length: BURST + 2 }, (_, i) =>
+      waitForBurstRateLimitSlot("tb-burst", INTERVAL, BURST).then(() => {
+        resolvedAt.push(Date.now() - start);
+        return i;
+      })
+    );
+
+    await vi.advanceTimersByTimeAsync(0);
+    // Exactly the burst allowance passes with zero wait — not one more.
+    expect(resolvedAt).toEqual(Array.from({ length: BURST }, () => 0));
+
+    // Callers beyond the burst drain at the leaky-bucket cadence.
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+    expect(resolvedAt).toEqual([...Array.from({ length: BURST }, () => 0), INTERVAL]);
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+    expect(resolvedAt).toEqual([...Array.from({ length: BURST }, () => 0), INTERVAL, 2 * INTERVAL]);
+
+    await Promise.all(promises);
+  });
+
+  it("re-banks burst capacity while idle instead of releasing more than the burst", async () => {
+    const INTERVAL = 1_000;
+    const BURST = 3;
+
+    // Exhaust the burst.
+    for (let i = 0; i < BURST; i++) {
+      await waitForBurstRateLimitSlot("tb-refill", INTERVAL, BURST);
+    }
+
+    // One interval of idle re-banks exactly one slot.
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+    const afterRefill = Date.now();
+    await waitForBurstRateLimitSlot("tb-refill", INTERVAL, BURST);
+    expect(Date.now()).toBe(afterRefill);
+
+    // The very next caller has no banked slot and must wait a full interval.
+    const resolved: number[] = [];
+    const p = waitForBurstRateLimitSlot("tb-refill", INTERVAL, BURST).then(() => {
+      resolved.push(Date.now() - afterRefill);
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(resolved).toEqual([]);
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+    expect(resolved).toEqual([INTERVAL]);
+    await p;
+  });
+
+  it("burst of 1 behaves exactly like the plain leaky bucket", async () => {
+    const INTERVAL = 2_000;
+    await waitForBurstRateLimitSlot("tb-one", INTERVAL, 1);
+
+    const resolved: number[] = [];
+    const start = Date.now();
+    const p = waitForBurstRateLimitSlot("tb-one", INTERVAL, 1).then(() => {
+      resolved.push(Date.now() - start);
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(resolved).toEqual([]);
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+    expect(resolved).toEqual([INTERVAL]);
+    await p;
+  });
+
+  it("rejects pending callers past MAX_QUEUE_DEPTH like the leaky bucket", async () => {
+    const INTERVAL = 1_000;
+    const BURST = 2;
+    const pending: Promise<void>[] = [];
+    // Burst passes instantly (no pending count) …
+    for (let i = 0; i < BURST; i++) {
+      await waitForBurstRateLimitSlot("tb-overflow", INTERVAL, BURST);
+    }
+    // … then 50 waiting callers fill the queue.
+    for (let i = 0; i < 50; i++) {
+      pending.push(waitForBurstRateLimitSlot("tb-overflow", INTERVAL, BURST));
+    }
+    await expect(waitForBurstRateLimitSlot("tb-overflow", INTERVAL, BURST)).rejects.toThrow(
+      "Spawn queue full"
+    );
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await Promise.all(pending);
   });
 });
 

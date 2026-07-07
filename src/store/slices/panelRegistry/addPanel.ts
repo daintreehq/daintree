@@ -30,6 +30,7 @@ import {
   DOCK_PREWARM_HEIGHT_PX,
 } from "./helpers";
 import { logDebug, logWarn, logError } from "@/utils/logger";
+import { markRendererPerformance } from "@/utils/performance";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { collectPanelIdForBatch, isHydrationBatchActive } from "./hydrationBatch";
 import { addToWorktreeIndex, transferBetweenWorktreeIndex } from "./worktreeIndex";
@@ -111,8 +112,26 @@ function estimateOverlayGridDims(fontSize: number): { cols: number; rows: number
 class TerminalStartupQueue {
   private readonly tasks: Array<() => Promise<void>> = [];
   private isDraining = false;
+  private reservations = 0;
+
+  /** True when an enqueued task would start immediately (single-launch fast path). */
+  get isIdle(): boolean {
+    return this.tasks.length === 0 && !this.isDraining && this.reservations === 0;
+  }
+
+  /**
+   * Claim a pending slot between the synchronous eager-attach decision and
+   * the (post-await) enqueue. Concurrent addPanel calls — a recipe's
+   * Promise.allSettled burst — would otherwise all observe an idle queue and
+   * every panel would stamp eagerAttach, realizing many xterms in the same
+   * frame (the exact burst #5789 gates against). Released on enqueue.
+   */
+  reserve(): void {
+    this.reservations++;
+  }
 
   enqueue(task: () => Promise<void>): void {
+    if (this.reservations > 0) this.reservations--;
     this.tasks.push(task);
     void this.drain();
   }
@@ -405,6 +424,18 @@ export const createAddPanelActions = (
         ? estimateOverlayGridDims(getTerminalAppearanceSnapshot().fontSize)
         : null;
 
+    // Single active-grid launches mount their visible xterm immediately
+    // (TerminalPane skips the spawnStatus gate), overlapping xterm.open()
+    // and the first fit with the env fetch + spawn IPC below. Decided at
+    // commit time — the flag must be in the first committed panel record
+    // because TerminalPane reads it on first render. Burst spawns (queue
+    // busy) keep the gate so panels realize one at a time (#5789).
+    const eagerAttach =
+      !isReconnect && location === "grid" && isInActiveWorktree && terminalStartupQueue.isIdle;
+    // Every non-reconnect PTY panel reaches the enqueue below (prewarm and
+    // dock-wake failures are caught), so each reserve pairs with one enqueue.
+    if (!isReconnect) terminalStartupQueue.reserve();
+
     const terminal = {
       id,
       kind,
@@ -453,8 +484,9 @@ export const createAddPanelActions = (
       // Caller-resolved launch env captured so a restored session replays the
       // SAME provider environment it launched with (#10922). This is the
       // launcher's merged env (agent global + preset/recipe + caller layers); the
-      // ambient global/project env is still re-fetched fresh at spawn time below
-      // and layered UNDER this, so only the launch-resolved layer is frozen here.
+      // ambient global/project env is fetched when the panel is added (the
+      // prefetch below, overlapping prewarm and any queue wait) and layered
+      // UNDER this, so only the launch-resolved layer is frozen here.
       ...(options.env && { env: options.env }),
       isUsingFallback: options.isUsingFallback,
       fallbackChainIndex: options.fallbackChainIndex,
@@ -467,6 +499,7 @@ export const createAddPanelActions = (
       removeOnExit: options.removeOnExit,
       startedAt: Date.now(),
       spawnStatus,
+      ...(eagerAttach && { eagerAttach: true }),
       // Preserve the saved `lastActiveAt` from the snapshot so the
       // post-hydration focus picker in `useAppHydration` can pick
       // the active worktree's most-recently-focused panel (#9933).
@@ -620,6 +653,8 @@ export const createAddPanelActions = (
       });
     }
 
+    markRendererPerformance("agentlaunch.committed", { id });
+
     // Mint the panel's launch generation atomically with the commit above (no
     // await between id reservation and here). Every async completion below —
     // env fetch, spawn IPC, attach settle — re-validates against it so a
@@ -647,6 +682,51 @@ export const createAddPanelActions = (
       // can tell an idempotent re-merge from a clobbering one.
       agentLifecycleLedger.recordRestoreApplied(id, launchGeneration);
     }
+
+    // Start the ambient env fetch now so its IPC round-trips overlap the
+    // prewarm below and any queue wait, instead of serializing ahead of the
+    // spawn IPC inside the startup task. Same merge semantics as before —
+    // global env under project env under the caller's launch env. The
+    // promise never rejects (every branch resolves a fallback), so an
+    // early-returning startup task cannot leave an unhandled rejection.
+    const spawnEnvPromise: Promise<Record<string, string> | undefined> = (() => {
+      if (isReconnect) return Promise.resolve(options.env);
+      try {
+        return Promise.all([
+          globalEnvClient.get().catch((error: unknown) => {
+            logWarn("[TerminalStore] Failed to fetch global environment variables", { error });
+            return {} as Record<string, string>;
+          }),
+          capturedProjectId
+            ? projectClient.getSettings(capturedProjectId).then(
+                (s) => s?.environmentVariables ?? ({} as Record<string, string>),
+                (error: unknown) => {
+                  logWarn("[TerminalStore] Failed to fetch project environment variables", {
+                    error,
+                  });
+                  return {} as Record<string, string>;
+                }
+              )
+            : Promise.resolve({} as Record<string, string>),
+        ]).then(
+          ([globalEnvVars, projectEnvVars]) => {
+            const hasGlobal = Object.keys(globalEnvVars).length > 0;
+            const hasProject = Object.keys(projectEnvVars).length > 0;
+            if (hasGlobal || hasProject) {
+              return { ...globalEnvVars, ...projectEnvVars, ...options.env };
+            }
+            return options.env;
+          },
+          (error: unknown) => {
+            logWarn("[TerminalStore] Failed to fetch environment variables", { error });
+            return options.env;
+          }
+        );
+      } catch (error) {
+        logWarn("[TerminalStore] Failed to fetch environment variables", { error });
+        return Promise.resolve(options.env);
+      }
+    })();
 
     // Prewarm renderer-side xterm immediately so we never drop startup output/ANSI while hidden.
     // earlyDataBuffer in terminalClient buffers any data that arrives before the
@@ -733,6 +813,7 @@ export const createAddPanelActions = (
     } catch (error) {
       logWarn("[TerminalStore] Failed to prewarm terminal", { id, error });
     }
+    markRendererPerformance("agentlaunch.prewarmed", { id });
 
     // Determine if terminal should start backgrounded:
     // 1. Dock terminals are always backgrounded (offscreen)
@@ -791,37 +872,12 @@ export const createAddPanelActions = (
     terminalStartupQueue.enqueue(async () => {
       const _p0 = get().panelsById[id];
       if (!_p0 || !isPtyPanel(_p0) || _p0.spawnStatus !== "spawning") return;
+      markRendererPerformance("agentlaunch.task-start", { id });
 
       try {
-        let mergedEnv: Record<string, string> | undefined = options.env;
-        try {
-          const [globalEnvVars, projectEnvVars] = await Promise.all([
-            globalEnvClient.get().catch((error: unknown) => {
-              logWarn("[TerminalStore] Failed to fetch global environment variables", { error });
-              return {} as Record<string, string>;
-            }),
-            capturedProjectId
-              ? projectClient.getSettings(capturedProjectId).then(
-                  (s) => s?.environmentVariables ?? ({} as Record<string, string>),
-                  (error: unknown) => {
-                    logWarn("[TerminalStore] Failed to fetch project environment variables", {
-                      error,
-                    });
-                    return {} as Record<string, string>;
-                  }
-                )
-              : Promise.resolve({} as Record<string, string>),
-          ]);
+        const mergedEnv = await spawnEnvPromise;
 
-          const hasGlobal = Object.keys(globalEnvVars).length > 0;
-          const hasProject = Object.keys(projectEnvVars).length > 0;
-          if (hasGlobal || hasProject) {
-            mergedEnv = { ...globalEnvVars, ...projectEnvVars, ...options.env };
-          }
-        } catch (error) {
-          logWarn("[TerminalStore] Failed to fetch environment variables", { error });
-        }
-
+        markRendererPerformance("agentlaunch.env-ready", { id });
         const _p1 = get().panelsById[id];
         if (!_p1 || !isPtyPanel(_p1) || _p1.spawnStatus !== "spawning") return;
 
@@ -860,6 +916,8 @@ export const createAddPanelActions = (
           // consumes it for that agent and ignores it otherwise.
           actionContext: options.actionContext,
         });
+
+        markRendererPerformance("agentlaunch.spawn-ipc-resolved", { id });
 
         // Reject a spawn resolution that no longer belongs to this incarnation:
         // if a restart or hydration replay re-launched the id while our IPC was
@@ -907,6 +965,7 @@ export const createAddPanelActions = (
             });
           });
         } else {
+          if (mountedPanel) markRendererPerformance("agentlaunch.ready", { id });
           // Recover the attach-during-spawn race: a fit that ran while the
           // spawn IPC was in flight had its PTY resize dropped (no terminal
           // existed yet), which would strand the CLI at the spawn dims while

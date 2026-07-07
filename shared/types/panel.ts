@@ -477,6 +477,15 @@ export interface PtyPanelData extends BasePanelData {
    */
   spawnStatus?: "spawning" | "ready" | "missing-cli" | "failed";
   /**
+   * Live-only render hint: mount the visible xterm immediately instead of
+   * waiting for spawnStatus to flip "ready". Stamped at creation for a
+   * single active-grid launch (startup queue idle), where realizing the
+   * xterm concurrently with the spawn IPC shaves the round-trip off the
+   * time-to-visible path. Burst spawns (queue non-idle) stay gated so many
+   * panels never realize in the same frame. Never serialized.
+   */
+  eagerAttach?: boolean;
+  /**
    * Original user-selected preset ID. Set on first spawn, never overwritten
    * when a fallback activates. Used to display "was {original} → {active}".
    */

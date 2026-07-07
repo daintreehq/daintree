@@ -19,6 +19,7 @@ const { mockGetCurrentProject, mockGetProjectById, mockGetProjectSettings } = vi
 }));
 
 const waitForRateLimitSlotMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const waitForBurstRateLimitSlotMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const consumeRestoreQuotaMock = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock("../../../../services/ProjectStore.js", () => ({
@@ -57,6 +58,7 @@ type SafeParseable = {
 
 vi.mock("../../../utils.js", () => ({
   waitForRateLimitSlot: waitForRateLimitSlotMock,
+  waitForBurstRateLimitSlot: waitForBurstRateLimitSlotMock,
   consumeRestoreQuota: consumeRestoreQuotaMock,
   typedHandle: (channel: string, handler: unknown) => {
     ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
@@ -641,20 +643,12 @@ describe("terminal spawn shell-injection hardening (#6065)", () => {
 
       // Lock the security-critical inner script template against structural
       // regressions. The shell path must be single-quoted and the user command
-      // must appear verbatim between the trap markers.
-      if (process.platform === "darwin") {
-        expect(spawnArgs.args[0]).toBe("-c");
-        expect(spawnArgs.args[1]).toContain("sleep 0.05");
-        expect(spawnArgs.args[1]).toContain("exec '/bin/zsh' -lic");
-        expect(spawnArgs.args[1]).toContain("trap : INT");
-        expect(spawnArgs.args[1]).toContain(command);
-        expect(spawnArgs.args[1]).toContain("trap - INT");
-      } else {
-        expect(spawnArgs.args).toEqual([
-          "-lic",
-          `trap : INT\n${command}\ntrap - INT\nexec '/bin/zsh' -l`,
-        ]);
-      }
+      // must appear verbatim between the trap markers. macOS and Linux share
+      // the direct -lic form (the macOS sleep-deferral wrapper is gone).
+      expect(spawnArgs.args).toEqual([
+        "-lic",
+        `trap : INT\n${command}\ntrap - INT\nexec '/bin/zsh' -l`,
+      ]);
     }
   );
 
@@ -678,11 +672,7 @@ describe("terminal spawn shell-injection hardening (#6065)", () => {
       );
 
       const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-      if (process.platform === "darwin") {
-        expect(spawnArgs.args[1]).toContain("exec '/tmp/o'\\''hare/zsh' -lic");
-      } else {
-        expect(spawnArgs.args[1]).toContain("exec '/tmp/o'\\''hare/zsh' -l");
-      }
+      expect(spawnArgs.args[1]).toContain("exec '/tmp/o'\\''hare/zsh' -l");
     }
   );
 });
@@ -697,6 +687,7 @@ describe("terminal spawn rate limiting (#5352)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     waitForRateLimitSlotMock.mockResolvedValue(undefined);
+    waitForBurstRateLimitSlotMock.mockResolvedValue(undefined);
     consumeRestoreQuotaMock.mockReturnValue(false);
     ptyClient = {
       spawn: vi.fn(),
@@ -708,23 +699,23 @@ describe("terminal spawn rate limiting (#5352)", () => {
     mockGetProjectSettings.mockResolvedValue({});
   });
 
-  it("uses the leaky-bucket form so batch spawns drain at a smooth 1/sec cadence", async () => {
+  it("uses the burst token bucket so interactive bursts pass instantly and batches drain at 1/sec", async () => {
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
 
     const handler = getSpawnHandler();
     await handler({} as Electron.IpcMainInvokeEvent, { cols: 80, rows: 24 });
 
-    // Exactly ("terminalSpawn", 1_000) — 2 args, not 3. The 3-arg overload
-    // silently picks the sliding-window implementation and reintroduces the
-    // every-10-terminals stall described in #5352.
-    expect(waitForRateLimitSlotMock).toHaveBeenCalledWith("terminalSpawn", 1_000);
-    expect(waitForRateLimitSlotMock.mock.calls[0]).toHaveLength(2);
+    // The burst variant keeps the leaky-bucket cadence after the burst —
+    // NOT the sliding-window overload, whose every-10-terminals stall #5352
+    // ruled out for batch spawns.
+    expect(waitForBurstRateLimitSlotMock).toHaveBeenCalledWith("terminalSpawn", 1_000, 6);
+    expect(waitForRateLimitSlotMock).not.toHaveBeenCalled();
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
   });
 
   it("rejects without calling ptyClient.spawn when the rate-limit slot rejects", async () => {
-    waitForRateLimitSlotMock.mockRejectedValueOnce(new Error("Spawn queue full"));
+    waitForBurstRateLimitSlotMock.mockRejectedValueOnce(new Error("Spawn queue full"));
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
@@ -753,7 +744,7 @@ describe("terminal spawn rate limiting (#5352)", () => {
       } as unknown as Parameters<typeof handler>[1]
     );
 
-    expect(waitForRateLimitSlotMock).not.toHaveBeenCalled();
+    expect(waitForBurstRateLimitSlotMock).not.toHaveBeenCalled();
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
   });
 });

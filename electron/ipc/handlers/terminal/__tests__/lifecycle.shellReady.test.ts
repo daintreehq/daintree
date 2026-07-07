@@ -37,6 +37,7 @@ type SafeParseable = {
 
 vi.mock("../../../utils.js", () => ({
   waitForRateLimitSlot: vi.fn(async () => {}),
+  waitForBurstRateLimitSlot: vi.fn(async () => {}),
   consumeRestoreQuota: vi.fn(() => false),
   typedHandle: (channel: string, handler: unknown) => {
     ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>

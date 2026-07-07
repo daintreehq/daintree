@@ -6,7 +6,7 @@ import crypto from "crypto";
 import os from "os";
 import { z } from "zod";
 import { CHANNELS } from "../../channels.js";
-import { waitForRateLimitSlot, consumeRestoreQuota } from "../../utils.js";
+import { waitForBurstRateLimitSlot, consumeRestoreQuota } from "../../utils.js";
 import { defineIpcNamespace, op, opValidated } from "../../define.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import type * as McpServerServiceModule from "../../../services/McpServerService.js";
@@ -111,7 +111,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
 
     const bypassedRateLimit = validatedOptions.restore === true && consumeRestoreQuota();
     if (!bypassedRateLimit) {
-      await waitForRateLimitSlot("terminalSpawn", 1_000);
+      // Burst-tolerant token bucket: a user launching several agents
+      // back-to-back (fleet launch, "up to 4 in parallel" MCP guidance) gets
+      // up to 6 instant spawns, then the schedule falls back to the smooth
+      // 1/sec leaky-bucket cadence that #5352 chose for batch spawns — the
+      // sliding-window overload and its every-N-terminals stall stay out.
+      await waitForBurstRateLimitSlot("terminalSpawn", 1_000, 6);
     }
 
     const cols = Math.max(1, Math.min(500, Math.floor(validatedOptions.cols) || 80));

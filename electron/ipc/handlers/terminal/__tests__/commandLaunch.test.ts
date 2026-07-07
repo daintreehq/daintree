@@ -119,15 +119,17 @@ describe("buildCommandLaunchShell", () => {
       expect(result?.args[1]).toContain("exec '/bin/zsh' -l");
     });
 
-    it("defers the macOS interactive shell with a sleep wrapper", () => {
+    it("launches macOS through the same direct -lic form as Linux (no sleep wrapper)", () => {
       setPlatform("darwin");
 
       const result = buildCommandLaunchShell("claude", "/bin/zsh");
 
       expect(result).not.toBeNull();
-      expect(result?.args[0]).toBe("-c");
-      expect(result?.args[1]).toContain("sleep 0.05");
-      expect(result?.args[1]).toContain("exec '/bin/zsh'");
+      expect(result?.args[0]).toBe("-lic");
+      expect(result?.args[1]).not.toContain("sleep");
+      expect(result?.args[1]).toContain("trap : INT");
+      expect(result?.args[1]).toContain("claude");
+      expect(result?.args[1]).toContain("exec '/bin/zsh' -l");
     });
 
     it("uses -i -c for plain /bin/sh on Linux", () => {
