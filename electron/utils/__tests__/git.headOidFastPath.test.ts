@@ -136,6 +136,19 @@ describe("HEAD OID filesystem fast path", () => {
     expect(revParseCalls()).toHaveLength(1);
   });
 
+  it("rejects a malformed HEAD refname instead of resolving it as a path", async () => {
+    const gitDir = join(root, ".git");
+    mkdirSync(join(gitDir, "refs", "heads"), { recursive: true });
+    // Path traversal that escapes refs/heads/ — rev-parse would reject the
+    // refname, so the fast path must fall back, not read .git/ORIG_HEAD.
+    writeFileSync(join(gitDir, "HEAD"), "ref: refs/heads/../../ORIG_HEAD\n");
+    writeFileSync(join(gitDir, "ORIG_HEAD"), `${OID_B}\n`);
+
+    await getWorktreeChangesWithStats(root, true);
+    await getWorktreeChangesWithStats(root, true);
+    expect(revParseCalls()).toHaveLength(2);
+  });
+
   it("keeps spawning rev-parse when HEAD points at a ref that exists nowhere (unborn branch)", async () => {
     const gitDir = join(root, ".git");
     mkdirSync(join(gitDir, "refs", "heads"), { recursive: true });

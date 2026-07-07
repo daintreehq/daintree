@@ -88,7 +88,11 @@ function extractSubcommand(args: readonly string[]): string {
  * Count every async git subprocess spawned in this process. Idempotent.
  * ChildProcess.prototype.spawn is the single funnel for child_process.spawn,
  * exec, execFile, and fork, so both simple-git (spawn) and gitUtils
- * (execFile) are captured.
+ * (execFile) are captured. The counter is process-global: measurement
+ * windows are only meaningful because the harness runs scenarios strictly
+ * sequentially and the git-pipeline scenarios stop their monitors before
+ * returning — a scenario that leaked background git activity would bleed
+ * into later windows.
  */
 export function installGitSpawnCounter(): void {
   if (counterInstalled) return;
@@ -99,7 +103,9 @@ export function installGitSpawnCounter(): void {
   const original = proto.spawn;
   proto.spawn = function (this: ChildProcess, options: { file?: string; args?: string[] }) {
     const file = options?.file ?? "";
-    if (file === "git" || file.endsWith("/git") || file.toLowerCase().endsWith("git.exe")) {
+    const base = file.slice(Math.max(file.lastIndexOf("/"), file.lastIndexOf("\\")) + 1);
+    const baseName = base.toLowerCase();
+    if (baseName === "git" || baseName === "git.exe") {
       spawnEvents.push({
         atMs: performance.now(),
         subcommand: extractSubcommand(options?.args ?? [file]),

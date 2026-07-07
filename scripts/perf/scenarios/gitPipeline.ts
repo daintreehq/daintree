@@ -47,7 +47,6 @@ interface ScalingHarness {
 let scalingHarness: ScalingHarness | null = null;
 let soloMonitor: WorktreeMonitor | null = null;
 let dirtyMonitor: WorktreeMonitor | null = null;
-let stormMonitor: WorktreeMonitor | null = null;
 let stormFlip = 0;
 
 async function getScalingHarness(): Promise<ScalingHarness> {
@@ -207,45 +206,58 @@ export const gitPipelineScenarios: PerfScenario[] = [
     warmups: 1,
     async run() {
       const fixture = getGitPipelineFixture();
-      if (!stormMonitor) {
-        stormMonitor = await createMonitorHarness(fixture.stormPath, "storm-base", {
-          isCurrent: true,
-          gitWatchEnabled: true,
-        });
-        await stormMonitor.start();
+      // Fresh monitor per iteration, stopped in the finally: the recursive
+      // parcel watcher is a live native handle, and leaking it would distort
+      // any scenario running after this one in the same harness process.
+      const monitor = await createMonitorHarness(fixture.stormPath, "storm-base", {
+        isCurrent: true,
+        gitWatchEnabled: true,
+      });
+      try {
+        await monitor.start();
         // The recursive parcel-watcher subscription arms asynchronously;
-        // give it a moment so the first storm doesn't race the arm.
+        // give it a moment so the storm doesn't race the arm.
         await sleep(500);
-      }
 
-      const target = fixture.stormBranches[stormFlip % 2];
-      stormFlip += 1;
+        const target = fixture.stormBranches[stormFlip % 2];
+        stormFlip += 1;
 
-      const mark = gitSpawnMark();
-      checkoutStormBranch(target);
-      const checkoutDoneAt = performance.now();
+        const mark = gitSpawnMark();
+        checkoutStormBranch(target);
+        const checkoutDoneAt = performance.now();
 
-      let window = gitSpawnsSince(mark);
-      const deadline = checkoutDoneAt + STORM_TIMEOUT_MS;
-      // Quiescent = at least one pipeline reaction observed AND no git spawn
-      // for STORM_SETTLE_MS (longer than any debounce/cooldown chain).
-      while (performance.now() < deadline) {
-        await sleep(50);
-        window = gitSpawnsSince(mark);
-        if (window.lastAtMs !== null && performance.now() - window.lastAtMs > STORM_SETTLE_MS) {
-          break;
+        let window = gitSpawnsSince(mark);
+        const deadline = checkoutDoneAt + STORM_TIMEOUT_MS;
+        // Quiescent = at least one pipeline reaction observed AND no git spawn
+        // for STORM_SETTLE_MS (longer than any debounce/cooldown chain).
+        while (performance.now() < deadline) {
+          await sleep(50);
+          window = gitSpawnsSince(mark);
+          if (window.lastAtMs !== null && performance.now() - window.lastAtMs > STORM_SETTLE_MS) {
+            break;
+          }
         }
-      }
 
-      const lastActivityAt = window.lastAtMs ?? checkoutDoneAt;
-      const durationMs = Math.max(0, lastActivityAt - checkoutDoneAt);
-      return {
-        durationMs,
-        metrics: {
-          gitSpawns: window.count,
-          statusPasses: window.bySubcommand["status"] ?? 0,
-        },
-      };
+        if (window.lastAtMs === null) {
+          // Fail closed: a watcher that never reacted must not read as a
+          // perfect zero-cost sample. The deadline blows the p95 budget.
+          return {
+            durationMs: STORM_TIMEOUT_MS,
+            metrics: { gitSpawns: 0, statusPasses: 0 },
+            notes: "no pipeline reaction observed before the storm deadline",
+          };
+        }
+
+        return {
+          durationMs: Math.max(0, window.lastAtMs - checkoutDoneAt),
+          metrics: {
+            gitSpawns: window.count,
+            statusPasses: window.bySubcommand["status"] ?? 0,
+          },
+        };
+      } finally {
+        monitor.stop();
+      }
     },
   },
 ];
