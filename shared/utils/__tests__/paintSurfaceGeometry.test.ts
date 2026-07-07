@@ -50,9 +50,7 @@ describe("boundingBox", () => {
   });
 
   it("computes the band covering all pane rects", () => {
-    expect(boundingBox([rect(10, 20, 30, 40), rect(50, 0, 10, 10)])).toEqual(
-      rect(10, 0, 50, 60)
-    );
+    expect(boundingBox([rect(10, 20, 30, 40), rect(50, 0, 10, 10)])).toEqual(rect(10, 0, 50, 60));
   });
 });
 

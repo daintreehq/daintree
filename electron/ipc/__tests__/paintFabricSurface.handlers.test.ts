@@ -291,8 +291,8 @@ describe("registerPaintFabricSurfaceHandlers", () => {
     expect(wc.send).toHaveBeenCalledWith(CHANNELS.PAINT_SURFACE_WEBGL_THRESHOLDS, payload);
 
     manager.getWebContents.mockReturnValue(null);
-    await expect(
-      invoke(CHANNELS.PAINT_SURFACE_APPLY_WEBGL_THRESHOLDS, payload)
-    ).rejects.toThrow(/Unknown surface/);
+    await expect(invoke(CHANNELS.PAINT_SURFACE_APPLY_WEBGL_THRESHOLDS, payload)).rejects.toThrow(
+      /Unknown surface/
+    );
   });
 });

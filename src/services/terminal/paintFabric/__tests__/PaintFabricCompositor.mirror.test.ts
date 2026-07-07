@@ -15,7 +15,9 @@ function makeCompositor() {
   const compositor = new PaintFabricCompositor({
     surfaces: [local.surface, view.surface],
     choosePlacement: (terminalId, registry) =>
-      registry.surfaces().find((s) => s.id === (terminalId.startsWith("v-") ? "view-1" : "local")) ??
+      registry
+        .surfaces()
+        .find((s) => s.id === (terminalId.startsWith("v-") ? "view-1" : "local")) ??
       registry.defaultSurface(),
   });
   return { compositor, local: local.plane, view: view.plane };

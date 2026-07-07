@@ -1311,7 +1311,9 @@ function buildElectronApi(): ElectronAPI {
       // Surface-view side of the webglBudget apply step: the surface renderer
       // subscribes and applies granted thresholds to its TerminalWebGLManager.
       onWebglThresholds: (
-        callback: (payload: import("../shared/types/paintFabricSurface.js").SurfaceWebglThresholds) => void
+        callback: (
+          payload: import("../shared/types/paintFabricSurface.js").SurfaceWebglThresholds
+        ) => void
       ) => _typedOn(CHANNELS.PAINT_SURFACE_WEBGL_THRESHOLDS, callback),
     },
 

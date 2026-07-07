@@ -94,8 +94,7 @@ export class SurfacePortBroker {
     port1.on("close", handlePortClose);
 
     // A destroyed webContents never re-brokers — forget its context too.
-    const handleWcDestroyed = () =>
-      this.releaseSurfacePort(surfaceId, { forgetContext: true });
+    const handleWcDestroyed = () => this.releaseSurfacePort(surfaceId, { forgetContext: true });
     const handleWcNavigation = (
       details: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>
     ) => {

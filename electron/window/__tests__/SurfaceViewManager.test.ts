@@ -221,9 +221,7 @@ describe("SurfaceViewManager.createSurface", () => {
   it("rejects duplicate surface ids", async () => {
     const setup = createManager();
     await createSurface(setup, "surface-aux-1");
-    await expect(setup.manager.createSurface("surface-aux-1")).rejects.toThrow(
-      /already exists/
-    );
+    await expect(setup.manager.createSurface("surface-aux-1")).rejects.toThrow(/already exists/);
   });
 
   it("cleans up when the load fails", async () => {

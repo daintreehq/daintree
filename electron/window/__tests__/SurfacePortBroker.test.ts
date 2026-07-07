@@ -138,10 +138,7 @@ describe("SurfacePortBroker.brokerSurfacePort", () => {
       "p1",
       "/proj"
     );
-    expect(ptyClient.connectMessagePort).toHaveBeenCalledWith(
-      connectionId,
-      madeChannels[0]!.port2
-    );
+    expect(ptyClient.connectMessagePort).toHaveBeenCalledWith(connectionId, madeChannels[0]!.port2);
     const registerOrder = ptyClient.registerAuxConnectionContext.mock.invocationCallOrder[0]!;
     const connectOrder = ptyClient.connectMessagePort.mock.invocationCallOrder[0]!;
     expect(registerOrder).toBeLessThan(connectOrder);

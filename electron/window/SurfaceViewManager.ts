@@ -134,11 +134,7 @@ export class SurfaceViewManager {
 
     // Unique per surface AND per creation (nonce): a retired surface id that
     // gets re-created must not reuse the old in-memory session.
-    const partition = surfaceViewPartition(
-      this.win.id,
-      surfaceId,
-      randomBytes(8).toString("hex")
-    );
+    const partition = surfaceViewPartition(this.win.id, surfaceId, randomBytes(8).toString("hex"));
     const ses = session.fromPartition(partition);
     // protocol.handle() only covers the default session — every custom
     // partition needs the app:// and daintree-file:// handlers registered.
@@ -447,9 +443,7 @@ export class SurfaceViewManager {
       const onPreloadError = (_event: Electron.Event, _preloadPath: string, error: Error) =>
         settle(() => reject(error ?? new Error("Surface preload script failed")));
       const onProcessGone = (_event: Electron.Event, details: Electron.RenderProcessGoneDetails) =>
-        settle(() =>
-          reject(new Error(`Surface renderer gone during load: ${details.reason}`))
-        );
+        settle(() => reject(new Error(`Surface renderer gone during load: ${details.reason}`)));
 
       wc.once("did-finish-load", onFinish);
       wc.once("did-fail-load", onFail);

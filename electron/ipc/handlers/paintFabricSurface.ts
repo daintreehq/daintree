@@ -130,9 +130,7 @@ export function registerPaintFabricSurfaceHandlers(deps: HandlerDependencies): (
             // module load and must stay off this module's eager import graph.
             const { projectStore } = await import("../../services/ProjectStore.js");
             const projectPath = ctx.projectId
-              ? (projectStore.getProjectById(ctx.projectId)?.path ??
-                wctx.projectPath ??
-                undefined)
+              ? (projectStore.getProjectById(ctx.projectId)?.path ?? wctx.projectPath ?? undefined)
               : (wctx.projectPath ?? undefined);
             try {
               ensureBroker(wctx).brokerSurfacePort({
