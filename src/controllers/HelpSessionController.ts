@@ -1042,7 +1042,7 @@ export class HelpSessionController {
    *
    * Synchronous write order before the first `await` (preserving #6951):
    *   1. Capture live state + bump _launchGen.
-   *   2. If `replaceExisting`, remove existing panel and revoke prior sessions.
+   *   2. If `replaceExisting`, revoke prior sessions then remove the panel.
    *   3. If `requestedId`, set `_pendingNewTerminalId` synchronously, then
    *      write the reservation via `setTerminal(reservedId, agentId, null)`.
    *   4. Only then enter the async provision/dispatch sequence.
