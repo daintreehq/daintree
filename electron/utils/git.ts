@@ -351,11 +351,13 @@ export async function getLatestTrackedFileMtime(worktreePath: string): Promise<n
 }
 
 // Static per-worktree facts consumed by every status pass: the realpath'd
-// `--show-toplevel` and `realpath(cwd)`. Both are immutable while the same
-// directory inode backs `cwd`, so entries are validated against the (dev,
-// ino) captured at resolution time — a worktree deleted and recreated at the
-// same path self-invalidates without any explicit hook. Eliminates the
-// per-pass `rev-parse HEAD --show-toplevel` subprocess (the OID comes from
+// `--show-toplevel` and `realpath(cwd)`. Entries are validated against the
+// (dev, ino) captured at resolution time, so a worktree deleted and
+// recreated at the same path self-invalidates without any explicit hook.
+// Inode identity is a proxy, not proof — a symlink ancestor retargeted at a
+// bind-mount of the same inode would keep a stale realpath — but no product
+// worktree flow produces that shape. Eliminates the per-pass
+// `rev-parse HEAD --show-toplevel` subprocess (the OID comes from
 // resolveHeadOidFromFs below); any ambiguity falls back to the subprocess.
 interface WorktreeStaticInfo {
   gitRoot: string;
@@ -392,6 +394,27 @@ export function __clearWorktreeStaticCacheForTesting(): void {
 // SHA-1 or SHA-256 object id.
 const OID_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
+// Characters git forbids anywhere in a refname (check-ref-format), plus the
+// "@{" sequence. Segment rules handled separately below.
+// eslint-disable-next-line no-control-regex
+const REF_FORBIDDEN_RE = /[\x00-\x20~^:?*[\\\x7f]|@\{/;
+
+/**
+ * Conservative `git check-ref-format` subset. A refname that fails here is
+ * never resolved as a filesystem path — the caller falls back to the
+ * subprocess, which applies git's exact rules. Prevents a malformed HEAD
+ * (e.g. `ref: refs/heads/../../ORIG_HEAD`) from escaping the refs tree and
+ * returning an OID rev-parse would have rejected.
+ */
+function isSafeRefName(refName: string): boolean {
+  if (REF_FORBIDDEN_RE.test(refName)) return false;
+  if (refName.endsWith(".") || refName.includes("..")) return false;
+  for (const segment of refName.split("/")) {
+    if (!segment || segment.startsWith(".") || segment.endsWith(".lock")) return false;
+  }
+  return true;
+}
+
 async function resolveCommonDirForGitDir(gitDir: string): Promise<string> {
   const cached = COMMON_DIR_CACHE.get(gitDir);
   if (cached !== undefined) return cached;
@@ -418,7 +441,10 @@ async function resolvePackedRef(commonDir: string, refName: string): Promise<str
   } catch {
     return null;
   }
-  const cacheKey = `${packedPath}:${stat.mtimeMs}:${stat.size}`;
+  // ino participates because git replaces packed-refs via rename: a rewrite
+  // within the same mtime granularity window (coarse-timestamp filesystems)
+  // with an identical size would otherwise serve the stale map.
+  const cacheKey = `${packedPath}:${stat.ino}:${stat.mtimeMs}:${stat.size}`;
   let refs = PACKED_REFS_CACHE.get(cacheKey);
   if (!refs) {
     try {
@@ -466,8 +492,9 @@ async function resolveHeadOidFromFs(cwd: string): Promise<string | null> {
   if (!head.startsWith("ref:")) return null;
   const refName = head.slice(4).trim();
   // Only refs/heads/* are shared through the common dir; anything else
-  // (refs/bisect, per-worktree refs) keeps the subprocess path.
-  if (!refName.startsWith("refs/heads/")) return null;
+  // (refs/bisect, per-worktree refs) keeps the subprocess path. Malformed
+  // refnames are rejected rather than resolved as paths.
+  if (!refName.startsWith("refs/heads/") || !isSafeRefName(refName)) return null;
   const commonDir = await resolveCommonDirForGitDir(gitDir);
   try {
     const loose = (await fs.readFile(resolve(commonDir, refName), "utf-8")).trim();
@@ -552,19 +579,18 @@ export async function getWorktreeChangesWithStats(
 
       // Fast path: with the static facts (toplevel, realpath) cached for this
       // exact directory inode AND an unambiguous fs-resolved HEAD OID, the
-      // `rev-parse HEAD --show-toplevel` subprocess is redundant. Kicked off
-      // before the status spawn so the metadata reads overlap it.
+      // `rev-parse HEAD --show-toplevel` subprocess is redundant. Resolved
+      // AFTER the status spawn so the OID is sampled at the same point in the
+      // pass as the subprocess it replaces — keeping the (unavoidable,
+      // pre-existing) mid-pass HEAD-move race window identical to before.
       const staticEntry = WORKTREE_STATIC_CACHE.get(cwd);
       const staticInfo =
         staticEntry && staticEntry.dev === cwdStat.dev && staticEntry.ino === cwdStat.ino
           ? staticEntry
           : undefined;
-      const fsOidPromise: Promise<string | null> = staticInfo
-        ? resolveHeadOidFromFs(cwd)
-        : Promise.resolve(null);
 
       const status: StatusResult = await git.status();
-      const fsOid = await fsOidPromise;
+      const fsOid = staticInfo ? await resolveHeadOidFromFs(cwd) : null;
 
       let headOid: string;
       let gitRoot: string;
