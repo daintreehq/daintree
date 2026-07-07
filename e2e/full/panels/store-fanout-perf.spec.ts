@@ -26,14 +26,29 @@ import { T_LONG } from "../../helpers/timeouts";
 //
 // Opt-in only — a measurement harness for local A/B runs, never a CI gate
 // (perf budgets deliberately stay out of PR CI pre-1.0).
+//
+// Machines running PARALLEL e2e sessions (agent fleets): every launchApp
+// reaps stray e2e Electrons machine-wide via
+// `pkill -f "node_modules/electron.*daintree-e2e"`, which kills a long
+// benchmark run mid-flight. Immunize this run by pointing it at an Electron
+// dist clone outside node_modules (official electron override):
+//   cp -Rc node_modules/electron/dist .bench-electron/dist   # APFS clone
+//   ELECTRON_OVERRIDE_DIST_PATH=$PWD/.bench-electron/dist RUN_PERF_STORE_FANOUT=1 ...
+// Leaked bench apps then need manual cleanup: pkill -f ".bench-electron".
 const SCALES = (process.env.PERF_STORE_FANOUT_SCALES ?? "1,5,20,50")
   .split(",")
   .map((s) => Math.max(1, Math.floor(Number(s.trim()))))
   .filter((n) => Number.isFinite(n) && n > 0);
 const TICKS = Math.max(3, Math.floor(Number(process.env.PERF_STORE_FANOUT_TICKS) || 15));
-const CHANGE_TICKS = Math.max(3, Math.floor(Number(process.env.PERF_STORE_FANOUT_CHANGE_TICKS) || 10));
+const CHANGE_TICKS = Math.max(
+  3,
+  Math.floor(Number(process.env.PERF_STORE_FANOUT_CHANGE_TICKS) || 10)
+);
 const FLIP_CYCLES = Math.max(2, Math.floor(Number(process.env.PERF_STORE_FANOUT_FLIP_CYCLES) || 5));
-const STREAM_SECONDS = Math.max(3, Math.floor(Number(process.env.PERF_STORE_FANOUT_STREAM_SECONDS) || 10));
+const STREAM_SECONDS = Math.max(
+  3,
+  Math.floor(Number(process.env.PERF_STORE_FANOUT_STREAM_SECONDS) || 10)
+);
 const OUT_PATH = process.env.PERF_STORE_FANOUT_OUT ?? "";
 
 const READY_TOKEN = "FAKE_CLAUDE_READY";
@@ -85,7 +100,10 @@ function fmtRow(name: string, events: EventSample[]): string {
   );
 }
 
-function topComponents(events: EventSample[], limit = 12): Array<{ name: string; n: number; ms: number }> {
+function topComponents(
+  events: EventSample[],
+  limit = 12
+): Array<{ name: string; n: number; ms: number }> {
   const merged = new Map<string, { n: number; ms: number }>();
   for (const e of events) {
     for (const [name, v] of Object.entries(e.byComponent)) {
@@ -125,7 +143,8 @@ function prepareFixture(scale: number): Fixture {
   writeFileSync(path.join(dir, "README.md"), `# store-fanout-${scale}\n`);
   writeFileSync(
     path.join(dir, "package.json"),
-    JSON.stringify({ name: `store-fanout-${scale}`, version: "1.0.0", private: true }, null, 2) + "\n"
+    JSON.stringify({ name: `store-fanout-${scale}`, version: "1.0.0", private: true }, null, 2) +
+      "\n"
   );
 
   const fakeBinDir = path.join(dir, ".e2e-bin");
@@ -312,10 +331,7 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
 
         // Deterministic focus across scales: the main worktree is active, so
         // the visible grid panel (and flip target) is always main's agent.
-        await page.evaluate(
-          (id) => (window as any).electron.worktree.setActive(id),
-          mainWt.id
-        );
+        await page.evaluate((id) => (window as any).electron.worktree.setActive(id), mainWt.id);
         await page.waitForTimeout(1_000);
 
         // The active worktree's agent is the one we flip; find its grid panel.
@@ -387,7 +403,12 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
         // ── Ambient noise floor: 10s with nothing happening ──
         await probeStart();
         await page.waitForTimeout(10_000);
-        const ambient = (await probeStop()) as Array<{ t: number; renders: number; selfMs: number; byComponent: any }>;
+        const ambient = (await probeStop()) as Array<{
+          t: number;
+          renders: number;
+          selfMs: number;
+          byComponent: any;
+        }>;
         const ambientCommits = ambient.length;
         const ambientRenders = ambient.reduce((a, c) => a + c.renders, 0);
 
@@ -397,10 +418,7 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
         const quietWindows: Array<{ t0: number; t1: number }> = [];
         for (let k = 0; k < TICKS; k++) {
           const t0 = await page.evaluate(() => performance.now());
-          await page.evaluate(
-            (id) => (window as any).electron.worktree.refresh(id),
-            mainWt.id
-          );
+          await page.evaluate((id) => (window as any).electron.worktree.refresh(id), mainWt.id);
           await page.waitForTimeout(450);
           const t1 = await page.evaluate(() => performance.now());
           quietWindows.push({ t0, t1 });
@@ -417,10 +435,7 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
           if (k % 2 === 0) writeFileSync(churnFile, `dirty ${k}\n`);
           else rmSync(churnFile, { force: true });
           const t0 = await page.evaluate(() => performance.now());
-          await page.evaluate(
-            (id) => (window as any).electron.worktree.refresh(id),
-            mainWt.id
-          );
+          await page.evaluate((id) => (window as any).electron.worktree.refresh(id), mainWt.id);
           await page.waitForTimeout(500);
           const t1 = await page.evaluate(() => performance.now());
           changeWindows.push({ t0, t1 });
@@ -503,30 +518,22 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
         results.push(scaleResult);
 
         console.log(`──── store fanout @ ${scale} worktree(s), ${launched.length} agents ────`);
-        console.log(
-          `ambient (10s quiet): commits=${ambientCommits} renders=${ambientRenders}`
-        );
+        console.log(`ambient (10s quiet): commits=${ambientCommits} renders=${ambientRenders}`);
         for (const w of scaleResult.workloads) console.log(fmtRow(w.name, w.events));
         for (const w of scaleResult.workloads) {
           const top = topComponents(w.events, 8);
           if (top.length > 0) {
             console.log(
-              `top ${w.name}: ` +
-                top
-                  .map((t) => `${t.name}×${t.n}(${t.ms.toFixed(1)}ms)`)
-                  .join(" ")
+              `top ${w.name}: ` + top.map((t) => `${t.name}×${t.n}(${t.ms.toFixed(1)}ms)`).join(" ")
             );
           }
         }
 
         // Reliability invariants only — fanout itself is reported, not gated.
-        expect(flips.length, "observed both flip directions").toBeGreaterThanOrEqual(
-          FLIP_CYCLES
+        expect(flips.length, "observed both flip directions").toBeGreaterThanOrEqual(FLIP_CYCLES);
+        expect(tickQuiet.length + tickChange.length, "all git ticks completed").toBe(
+          TICKS + CHANGE_TICKS
         );
-        expect(
-          tickQuiet.length + tickChange.length,
-          "all git ticks completed"
-        ).toBe(TICKS + CHANGE_TICKS);
       } finally {
         if (ctx?.app) await closeApp(ctx.app);
         fixture.cleanup();
