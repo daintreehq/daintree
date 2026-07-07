@@ -2,6 +2,7 @@ import { parseSpawnError } from "../index.js";
 import type { AgentEvent } from "../../services/AgentStateMachine.js";
 import type { SpawnResult } from "../../../shared/types/pty-host.js";
 import type { HandlerMap, HostContext } from "./types.js";
+import { markHostPerformance } from "../../utils/hostPerformance.js";
 
 /** A PTY PID is usable only once it is a positive integer. */
 function isValidPid(pid: number | undefined): pid is number {
@@ -44,6 +45,7 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
 
   return {
     spawn: (msg) => {
+      markHostPerformance("agentlaunch.host-spawn:start", { terminalId: msg.id });
       let spawnResult: SpawnResult;
       try {
         // Remove stale coordinator before spawn (handles ID respawn)
@@ -109,6 +111,10 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
         }
       }
 
+      markHostPerformance("agentlaunch.host-spawn:end", {
+        terminalId: msg.id,
+        success: spawnResult.success,
+      });
       sendEvent({ type: "spawn-result", id: msg.id, result: spawnResult });
     },
 

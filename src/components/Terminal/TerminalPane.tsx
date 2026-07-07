@@ -456,6 +456,7 @@ function TerminalPaneComponent({
         exitBehavior: pty?.exitBehavior,
         isTrashedOrRemoved: terminal?.location === "trash" || terminal === undefined,
         spawnStatus: pty?.spawnStatus,
+        eagerAttach: pty?.eagerAttach ?? false,
         sessionLostOnRestore: pty?.sessionLostOnRestore ?? false,
       };
     })
@@ -468,6 +469,7 @@ function TerminalPaneComponent({
     exitBehavior,
     isTrashedOrRemoved,
     spawnStatus,
+    eagerAttach,
     sessionLostOnRestore,
   } = terminalState;
   // Fleet-scope mounts pass `isInputLocked: true` to render the panel as a
@@ -1411,7 +1413,7 @@ function TerminalPaneComponent({
             detail={getPanelCliDetail() ?? { state: "missing", resolvedPath: null, via: null }}
             onRunAnyway={handleRunAnyway}
           />
-        ) : spawnStatus === "spawning" ? (
+        ) : spawnStatus === "spawning" && !eagerAttach ? (
           <TerminalStartupPlaceholder agentId={agentId} onCancel={() => onClose()} />
         ) : spawnStatus === "failed" ? (
           <div className="flex-1 min-h-0 bg-daintree-bg flex items-center justify-center">

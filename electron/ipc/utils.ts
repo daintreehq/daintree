@@ -208,7 +208,24 @@ export async function waitForRateLimitSlot(
   return waitForSlidingWindowSlot(key, maxCallsOrInterval, windowMs);
 }
 
-async function waitForLeakyBucketSlot(key: string, intervalMs: number): Promise<void> {
+/**
+ * Token-bucket variant of the leaky bucket: `burst` callers may pass with no
+ * wait after an idle stretch, then sustained callers drain at one per
+ * `intervalMs` (identical to the leaky bucket). A burst allowance of 1 IS the
+ * leaky bucket. Use for interactive operations where a small user-driven
+ * burst (e.g. launching several agents back-to-back) must not serialize onto
+ * the sustained cadence, while runaway automation still hits the same
+ * long-run rate.
+ */
+export async function waitForBurstRateLimitSlot(
+  key: string,
+  intervalMs: number,
+  burst: number
+): Promise<void> {
+  return waitForLeakyBucketSlot(key, intervalMs, burst);
+}
+
+async function waitForLeakyBucketSlot(key: string, intervalMs: number, burst = 1): Promise<void> {
   if (intervalMs <= 0) return;
 
   const state = getOrCreateLeakyState(key);
@@ -226,8 +243,14 @@ async function waitForLeakyBucketSlot(key: string, intervalMs: number): Promise<
   // concurrent callers each claim a unique sequential slot. If this advance
   // happened after an await, two simultaneous callers could both read the
   // same `nextAvailableMs` and end up scheduled for the same instant.
+  //
+  // The burst allowance banks idle time: clamping the reserved slot from
+  // below at `now - (burst - 1) * intervalMs` lets up to `burst` reservations
+  // land at-or-before `now` (zero wait) before the schedule pushes into the
+  // future, after which callers space out at `intervalMs` exactly like the
+  // plain leaky bucket.
   const now = Date.now();
-  const slotMs = Math.max(now, state.nextAvailableMs);
+  const slotMs = Math.max(now - (Math.max(1, burst) - 1) * intervalMs, state.nextAvailableMs);
   state.nextAvailableMs = slotMs + intervalMs;
   const waitMs = slotMs - now;
 

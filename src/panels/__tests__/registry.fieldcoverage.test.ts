@@ -73,6 +73,8 @@ const PTY_FIELD_CLASSIFICATION = {
   sessionTokens: false,
   spawnError: false,
   spawnStatus: false,
+  // Live-only render hint for single-launch eager xterm mount; never persisted.
+  eagerAttach: false,
   activityHeadline: false,
   activityStatus: false,
   activityType: false,

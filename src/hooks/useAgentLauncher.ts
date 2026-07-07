@@ -12,6 +12,7 @@ import { isElectronAvailable } from "./useElectron";
 import { systemClient } from "@/clients";
 import { useHomeDir } from "@/hooks/app/useHomeDir";
 import { logError, logWarn } from "@/utils/logger";
+import { markRendererPerformance } from "@/utils/performance";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -302,6 +303,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       // useRef avoids the react batching window that useState would have.
       if (launchingAgentsRef.current.has(agentId)) return null;
       launchingAgentsRef.current.add(agentId);
+      markRendererPerformance("agentlaunch.begin", { agentId });
 
       try {
         const targetWorktreeId = launchOptions?.worktreeId ?? activeWorktreeId;
@@ -677,6 +679,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         }
 
         try {
+          markRendererPerformance("agentlaunch.addpanel", { agentId });
           const terminalId = await addPanel(options);
           if (!terminalId) return null;
           const rawLocation = usePanelStore.getState().panelsById[terminalId]?.location ?? "grid";
