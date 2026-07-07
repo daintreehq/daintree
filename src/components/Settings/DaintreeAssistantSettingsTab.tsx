@@ -6,6 +6,7 @@ import {
   Check,
   ChevronRight,
   Copy,
+  FolderOpen,
   KeyRound,
   Moon,
   RefreshCw,
@@ -23,6 +24,7 @@ import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { actionService } from "@/services/ActionService";
+import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsInput } from "./SettingsInput";
@@ -670,6 +672,10 @@ export function DaintreeAssistantSettingsTab() {
     void actionService.dispatch("app.settings.openTab", { tab: "agents" }, { source: "user" });
   };
 
+  const handleOpenCommandsFolder = () => {
+    void actionService.dispatch("help.openCommandsFolder", undefined, { source: "user" });
+  };
+
   const handleCopyConfig = async () => {
     try {
       const snippet = await window.electron.mcpServer.getConfigSnippet();
@@ -858,6 +864,35 @@ export function DaintreeAssistantSettingsTab() {
             </div>
           </div>
         )}
+      </SettingsSection>
+
+      {/* Custom commands */}
+      <SettingsSection
+        icon={FolderOpen}
+        title="Custom commands"
+        description="Add your own commands and skills to every assistant session."
+      >
+        <div className="flex items-start gap-3">
+          <div className="flex-1 text-xs text-daintree-text/70 leading-relaxed select-text">
+            Files in <code className="font-mono text-[11px]">~/.daintree/assistant</code> are copied
+            into each new assistant session. Claude Code picks up{" "}
+            <code className="font-mono text-[11px]">.claude/commands</code> and{" "}
+            <code className="font-mono text-[11px]">.claude/skills</code>; Codex picks up{" "}
+            <code className="font-mono text-[11px]">.agents/skills</code>; Copilot reads both skill
+            trees. A per-project variant in{" "}
+            <code className="font-mono text-[11px]">&lt;project&gt;/.daintree/assistant</code> takes
+            precedence and can be committed to git.
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleOpenCommandsFolder}
+            className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text shrink-0"
+          >
+            <FolderOpen className="w-4 h-4" />
+            Open folder
+          </Button>
+        </div>
       </SettingsSection>
 
       {/* Hibernation */}

@@ -576,6 +576,10 @@ export interface GeneratedIpcInvokeMap {
     args: [terminalId: string];
     result: void;
   };
+  "help:open-assistant-content-folder": {
+    args: [];
+    result: { path: string; opened: boolean } | null;
+  };
   "help:peek-pending-hibernation": {
     args: [projectId: string];
     result: { agentId: string; agentSessionId: string; cwd: string; panelWasOpen: boolean } | null;

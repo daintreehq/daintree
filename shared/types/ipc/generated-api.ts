@@ -195,6 +195,9 @@ export interface GeneratedElectronAPI {
     markTerminal(
       ...args: IpcInvokeMap["help:mark-terminal"]["args"]
     ): Promise<IpcInvokeMap["help:mark-terminal"]["result"]>;
+    openAssistantContentFolder(
+      ...args: IpcInvokeMap["help:open-assistant-content-folder"]["args"]
+    ): Promise<IpcInvokeMap["help:open-assistant-content-folder"]["result"]>;
     peekPendingHibernation(
       ...args: IpcInvokeMap["help:peek-pending-hibernation"]["args"]
     ): Promise<IpcInvokeMap["help:peek-pending-hibernation"]["result"]>;

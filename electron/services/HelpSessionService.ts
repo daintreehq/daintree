@@ -15,6 +15,7 @@ import type { HelpAssistantTier } from "../../shared/types/ipc/maps.js";
 import type { ActionContext } from "../../shared/types/actions.js";
 import type { PtyClient } from "./PtyClient.js";
 import { ASSISTANT_SCRATCH_ENV_VAR, getScratchDirForSession } from "./AssistantScratchService.js";
+import { syncAssistantContent } from "./AssistantContentMirror.js";
 import type { PendingHelpHibernationStore } from "./PendingHelpHibernationStore.js";
 
 // Narrow type so the test suite (and any future caller) can satisfy this
@@ -611,6 +612,25 @@ export class HelpSessionService {
       );
     }
     await fs.chmod(sessionPath, 0o700).catch(() => {});
+
+    // Mirror user-authored commands/skills from ~/.daintree/assistant and
+    // <project>/.daintree/assistant into the session dir so the launched CLI
+    // discovers them through its native cwd-scoped mechanisms. Runs after the
+    // template copy and unconditionally — the template hash gate doesn't
+    // cover user content, which changes independently of app version.
+    // Non-fatal: a broken user file must never block the assistant launch.
+    try {
+      await syncAssistantContent({
+        sessionPath,
+        projectPath: input.projectPath,
+        agentId: input.agentId,
+      });
+    } catch (err) {
+      console.warn(
+        "[HelpSessionService] User content sync failed; launching without custom commands:",
+        err
+      );
+    }
 
     // Per-session scratch dir under `userData/assistant-scratch/<instanceId>/`.
     // Cleared on every app start by `AssistantScratchService`. Created
