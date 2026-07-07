@@ -13,6 +13,10 @@ export interface WorkerParseSessionOptions {
   // Scrollback lines carried per cadence snapshot — bounds the main-thread
   // apply cost per tick. Sync points (promote) always take a full snapshot.
   boundedScrollbackLines?: number;
+  // Seed the fresh authority from existing mirror content (live attach: the
+  // terminal already has state the worker never saw). Same restore message
+  // demoteToWorker uses, just at construction time.
+  initialSerializedState?: string;
 }
 
 export const DEFAULT_CADENCE_MS = 250;
@@ -35,7 +39,7 @@ export class WorkerParseSession {
   private disposed = false;
   private nextRequestId = 1;
   private pendingSnapshots = new Map<number, (snapshot: AuthoritySnapshot | null) => void>();
-  private pendingInteractive: string[] = [];
+  private pendingInteractive: Array<string | Uint8Array> = [];
   private cadenceTimer: ReturnType<typeof setInterval> | undefined;
   private tickInFlight = false;
   private unsubscribe: () => void;
@@ -61,6 +65,9 @@ export class WorkerParseSession {
       rows: options.rows,
       scrollback: options.scrollback,
     });
+    if (options.initialSerializedState !== undefined && options.initialSerializedState !== "") {
+      transport.send({ type: "restore", serialized: options.initialSerializedState });
+    }
     this.startCadence();
   }
 
@@ -68,7 +75,7 @@ export class WorkerParseSession {
     return this.mode;
   }
 
-  feed(data: string): void {
+  feed(data: string | Uint8Array): void {
     if (this.disposed) return;
     if (this.mode === "passthrough") {
       this.mirror.write(data);
@@ -156,6 +163,8 @@ export class WorkerParseSession {
       resolve?.(response.snapshot);
       return;
     }
+    // Live-ingest responses belong to the ingest controller, not the session.
+    if (response.type === "port-drained" || response.type === "ingest-port-closed") return;
     logWarn("Worker parse authority error", { message: response.message });
     // A snapshot-specific failure settles its wait (as no-snapshot) so a
     // promotion cannot hang until dispose.

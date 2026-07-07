@@ -283,6 +283,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onTrashed(callback: (data: { id: string; expiresAt: number }) => void): () => void;
     onRestored(callback: (data: { id: string }) => void): () => void;
     forceResume(id: string): Promise<void>;
+    /**
+     * Mint a dedicated worker-ingest MessagePort for this terminal (issue
+     * #10960). Resolves with the handshake token; the port itself arrives via
+     * a `terminal-worker-port` window message carrying the same token.
+     */
+    requestWorkerIngestPort(id: string): Promise<{ token: string } | null>;
+    releaseWorkerIngestPort(id: string): Promise<void>;
     onStatus(callback: (data: TerminalStatusPayload) => void): () => void;
     onReliabilityMetric(callback: (data: TerminalReliabilityMetricPayload) => void): () => void;
     onResourceMetrics(

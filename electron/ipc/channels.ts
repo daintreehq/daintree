@@ -50,6 +50,8 @@ export const CHANNELS = {
   TERMINAL_GET_INFO: "terminal:get-info",
   TERMINAL_ACKNOWLEDGE_DATA: "terminal:acknowledge-data",
   TERMINAL_FORCE_RESUME: "terminal:force-resume",
+  TERMINAL_REQUEST_WORKER_INGEST_PORT: "terminal:request-worker-ingest-port",
+  TERMINAL_RELEASE_WORKER_INGEST_PORT: "terminal:release-worker-ingest-port",
   TERMINAL_GRACEFUL_KILL: "terminal:graceful-kill",
   TERMINAL_STATUS: "terminal:status",
   TERMINAL_SEND_KEY: "terminal:send-key",

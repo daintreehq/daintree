@@ -4,6 +4,8 @@ export type PauseToken =
   | "ipc-queue"
   | "port-queue"
   | `port-queue-${number}`
+  // Dedicated worker-ingest queue for one (window, terminal) pair (#10960).
+  | `port-queue-worker-${number}-${string}`
   | "system-sleep";
 
 export class PtyPauseCoordinator {

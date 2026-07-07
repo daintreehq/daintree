@@ -62,6 +62,7 @@ import {
   createPtyHostMessageDispatcher,
   type HostContext,
   type RendererConnection,
+  type TerminalWorkerConnection,
 } from "./pty-host/handlers/index.js";
 import { PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS } from "./services/pty/types.js";
 import { isSmokeTestTerminalId } from "../shared/utils/smokeTestTerminals.js";
@@ -185,7 +186,7 @@ let throughputAccumulator = new Map<string, { totalBytes: number; packetCount: n
 // also records its own start time so the renderer-facing `heldDurationMs`
 // reflects the oldest still-held start (the user-meaningful "how long has
 // this been paused?" answer).
-type PauseSource = "sab" | "ipc" | `port-${number}`;
+type PauseSource = "sab" | "ipc" | `port-${number}` | `port-worker-${number}`;
 interface PauseSourceEntry {
   startTime: number;
 }
@@ -422,6 +423,10 @@ function getOrCreatePauseCoordinator(id: string): PtyPauseCoordinator | undefine
 
 // Per-window MessagePort connections for direct Renderer ↔ Pty Host communication
 const rendererConnections = new Map<number, RendererConnection>();
+// Dedicated worker-ingest ports (issue #10960), keyed windowId → terminalId.
+// Engaged entries take over that terminal's output routing for that window;
+// everything else in the window stays on the shared per-window port.
+const terminalWorkerConnections = new Map<number, Map<string, TerminalWorkerConnection>>();
 const windowProjectMap = new Map<number, string | null>();
 // Per-window UI-focused terminal id (from the renderer's focusedId). Read by
 // each window's PortQueueManager/PortBatcher to prioritize the focused pane.
@@ -474,6 +479,27 @@ function createPortQueueManager(windowId: number): PortQueueManager {
   });
 }
 
+// Per-(window, terminal) queue manager for a dedicated worker-ingest port.
+// Same watermark/pause machinery as the window queue, scoped to one terminal;
+// a worker-ingested terminal is BACKGROUND-tier by definition, so it never
+// claims the focused-terminal exemption.
+function createTerminalWorkerPortQueueManager(
+  windowId: number,
+  terminalId: string
+): PortQueueManager {
+  return new PortQueueManager({
+    getTerminal: (id) => ptyManager.getTerminal(id),
+    getPauseCoordinator,
+    sendEvent,
+    metricsEnabled,
+    emitTerminalStatus: (...args) => backpressureManager.emitTerminalStatus(...args),
+    emitReliabilityMetric: (payload) =>
+      emitReliabilityMetricWithTracking(payload, `port-worker-${windowId}` as PauseSource),
+    pauseToken: `port-queue-worker-${windowId}-${terminalId}`,
+    getFocusedTerminalId: () => null,
+  });
+}
+
 /**
  * Force-activate the terminals of the project that just became foreground for
  * some window (#10857). Scoped to `nextProjectId` only — terminals belonging
@@ -517,8 +543,63 @@ function recomputeActivityTiers(nextProjectId: string | null): void {
   }
 }
 
+/**
+ * Disconnect one dedicated worker-ingest port and clean up its resources.
+ * Mirrors disconnectWindow's teardown discipline at (window, terminal) scope:
+ * batched-but-unflushed bytes are accounted as data loss (the wake/restore
+ * snapshot is the recovery path), pause holds release before disposal, and
+ * the port itself is closed — never left to GC (#6283).
+ */
+function disconnectTerminalWorkerPort(windowId: number, terminalId: string, reason: string): void {
+  const perWindow = terminalWorkerConnections.get(windowId);
+  const conn = perWindow?.get(terminalId);
+  if (!perWindow || !conn) return;
+
+  try {
+    conn.port.removeListener("message", conn.handler);
+  } catch {
+    // ignore
+  }
+  for (const { id, bytes } of conn.batcher.getPendingByteSnapshot()) {
+    dropAccumulator.droppedBytes += bytes;
+    dropAccumulator.dataLossCount += 1;
+    recordTerminalDrop(id, bytes);
+  }
+  conn.batcher.dispose();
+  const pausedByThisPort = [...conn.portQueueManager.getPausedTerminalIds()];
+  conn.portQueueManager.resumeAll();
+  for (const pausedId of pausedByThisPort) {
+    removePauseSource(pausedId, `port-worker-${windowId}` as PauseSource);
+  }
+  conn.portQueueManager.dispose();
+  try {
+    conn.port.close();
+  } catch {
+    // ignore
+  }
+
+  perWindow.delete(terminalId);
+  if (perWindow.size === 0) {
+    terminalWorkerConnections.delete(windowId);
+  }
+  console.log(
+    `[PtyHost] Worker-ingest port disconnected for terminal ${terminalId} (window ${windowId}, ${reason})`
+  );
+}
+
 /** Disconnect a window's renderer port and clean up its resources */
 function disconnectWindow(windowId: number, reason: string): void {
+  // Dedicated worker-ingest ports die with the window connection — routing
+  // for them is meaningless once the window port is gone, and a leaked
+  // producer port queues unboundedly (#6283). Runs before the early return:
+  // dedicated entries can outlive a window port that failed first.
+  const workerConns = terminalWorkerConnections.get(windowId);
+  if (workerConns) {
+    for (const terminalId of [...workerConns.keys()]) {
+      disconnectTerminalWorkerPort(windowId, terminalId, `window-${reason}`);
+    }
+  }
+
   const conn = rendererConnections.get(windowId);
   if (!conn) return;
 
@@ -628,6 +709,15 @@ const resourceGovernor = new ResourceGovernor({
       totalPendingBytes += port.totalPendingBytes;
       perTerminal.push(...port.perTerminal);
     }
+    // Dedicated worker-ingest queues (#10960) hold in-flight bytes too — a
+    // stalled worker must not be invisible to the reliability gauge.
+    for (const perWindow of terminalWorkerConnections.values()) {
+      for (const conn of perWindow.values()) {
+        const port = conn.portQueueManager.getQueueSnapshot();
+        totalPendingBytes += port.totalPendingBytes;
+        perTerminal.push(...port.perTerminal);
+      }
+    }
     return { totalPendingBytes, perTerminal };
   },
   getThroughputSnapshot: () => {
@@ -678,6 +768,16 @@ const resourceGovernor = new ResourceGovernor({
       const port = conn.portQueueManager.getQueueSnapshot();
       for (const { terminalId, pendingBytes } of port.perTerminal) {
         if (pendingBytes > 0) out.push({ terminalId, layer: "port", pendingBytes });
+      }
+    }
+    // Dedicated worker-ingest queues (#10960) share the "port" layer — same
+    // transport, per-terminal scope.
+    for (const perWindow of terminalWorkerConnections.values()) {
+      for (const conn of perWindow.values()) {
+        const port = conn.portQueueManager.getQueueSnapshot();
+        for (const { terminalId, pendingBytes } of port.perTerminal) {
+          if (pendingBytes > 0) out.push({ terminalId, layer: "port", pendingBytes });
+        }
       }
     }
     return out;
@@ -788,10 +888,18 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
         terminalInfo !== undefined &&
         Date.now() - terminalInfo.lastInputTime < PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS;
       const saturated: RendererConnection[] = [];
-      for (const { conn } of targets) {
-        if (conn.batcher.write(id, chunk, byteCount, owned, interactive)) {
+      for (const { windowId, conn } of targets) {
+        // An engaged worker-ingest terminal routes to its dedicated port —
+        // bytes land in the renderer's parse worker without touching its main
+        // thread. Exactly one sink per (window, terminal): the window port is
+        // never written for an engaged terminal, so nothing double-delivers.
+        const workerConn = terminalWorkerConnections.get(windowId)?.get(id);
+        const sink = workerConn?.engaged ? workerConn : conn;
+        if (sink.batcher.write(id, chunk, byteCount, owned, interactive)) {
           visualWritten = true;
         } else {
+          // The data-loss pulse rides the WINDOW port either way — the
+          // renderer's terminal-status subscribers only listen there.
           saturated.push(conn);
         }
       }
@@ -1120,6 +1228,18 @@ ptyManager.on(
       }
       conn.portQueueManager.clearQueue(id);
     }
+    // Dedicated worker-ingest ports for this terminal die with it. Flush the
+    // final batched bytes to the worker first — the exit message races the
+    // last output otherwise — then tear the connection down.
+    for (const [windowId, perWindow] of terminalWorkerConnections) {
+      if (!perWindow.has(id)) continue;
+      try {
+        perWindow.get(id)!.batcher.flushTerminal(id);
+      } catch {
+        // Port may already be closed — safe to ignore
+      }
+      disconnectTerminalWorkerPort(windowId, id, "terminal-exit");
+    }
 
     // Clean up IPC data mirror state
     ipcDataMirrorTerminals.delete(id);
@@ -1410,6 +1530,7 @@ const hostContext: HostContext = {
   packetFramer,
   pauseCoordinators,
   rendererConnections,
+  terminalWorkerConnections,
   windowProjectMap,
   windowFocusedTerminalMap,
   ipcDataMirrorTerminals,
@@ -1448,10 +1569,12 @@ const hostContext: HostContext = {
   getPauseCoordinator,
   getOrCreatePauseCoordinator,
   disconnectWindow,
+  disconnectTerminalWorkerPort,
   recomputeActivityTiers,
   tryReplayAndResume,
   resumePausedTerminal,
   createPortQueueManager,
+  createTerminalWorkerPortQueueManager,
   getPausedDurationsSnapshot,
   getDropTallySnapshot: () =>
     Array.from(terminalDropTallies, ([terminalId, tally]) => ({

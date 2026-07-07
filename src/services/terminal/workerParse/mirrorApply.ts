@@ -24,7 +24,7 @@ export function buildMirrorApplyPayload(serialized: string): string {
 }
 
 export interface MirrorTarget {
-  write(data: string, callback?: () => void): void;
+  write(data: string | Uint8Array, callback?: () => void): void;
 }
 
 export function applySnapshotToMirror(
