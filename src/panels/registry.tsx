@@ -31,6 +31,7 @@ import { serializeDevPreview } from "./dev-preview/serializer";
 import { createDevPreviewDefaults } from "./dev-preview/defaults";
 import { serializeReview } from "./review/serializer";
 import { createReviewDefaults } from "./review/defaults";
+import { ReviewPaneSkeleton } from "./review/ReviewPaneSkeleton";
 import { serializeFile } from "./file/serializer";
 import { createFileDefaults } from "./file/defaults";
 
@@ -75,6 +76,10 @@ const LazyFilePane = lazy(() => import("./file/FilePane").then((m) => ({ default
 // TerminalPane is intentionally NOT lazy/wrapped: it is the hottest panel kind,
 // open/close must feel instant, and a Suspense skeleton + 150ms fade on every
 // mount is a visible regression for a live text surface.
+// Each fallback mirrors its kind's real chrome (dev-preview shares the browser
+// silhouette because its pane renders the same BrowserToolbar), and all bones
+// pulse immediately — React's ~300ms fallback throttle already serves the
+// anti-flicker gate (#9040 note in useDeferredLoading.ts).
 function BrowserPaneWrapper(props: ComponentProps<typeof LazyBrowserPane>) {
   return (
     <ErrorBoundary variant="component" componentName="BrowserPane">
@@ -102,7 +107,7 @@ function DevPreviewPaneWrapper(props: ComponentProps<typeof LazyDevPreviewPane>)
 function ReviewPaneWrapper(props: ComponentProps<typeof LazyReviewPane>) {
   return (
     <ErrorBoundary variant="component" componentName="ReviewPane">
-      <Suspense fallback={<BrowserPaneSkeleton label="Loading review panel" />}>
+      <Suspense fallback={<ReviewPaneSkeleton />}>
         <ContentFadeIn className="flex flex-col h-full w-full">
           <LazyReviewPane {...props} />
         </ContentFadeIn>
