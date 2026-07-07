@@ -227,6 +227,7 @@ export function FilePane({
   onTitleChange,
   onMinimize,
   onRestore,
+  showRestoreControl,
   tabs,
   onTabClick,
   onTabClose,
@@ -468,6 +469,7 @@ export function FilePane({
       onTitleChange={onTitleChange}
       onMinimize={onMinimize}
       onRestore={onRestore}
+      showRestoreControl={showRestoreControl}
       toolbar={toolbar}
       tabs={tabs}
       onTabClick={onTabClick}
