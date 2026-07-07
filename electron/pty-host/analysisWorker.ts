@@ -1,5 +1,6 @@
 import { parentPort } from "node:worker_threads";
 import { AnalysisWorkerRuntime } from "../services/pty/analysis/AnalysisWorkerRuntime.js";
+import { IdleHeapCompactor, resolveExposedGc } from "../services/pty/analysis/idleHeapCompactor.js";
 import type { HostToWorkerMessage } from "../services/pty/analysisWorkerProtocol.js";
 
 if (!parentPort) {
@@ -7,7 +8,11 @@ if (!parentPort) {
 }
 
 const port = parentPort;
-const runtime = new AnalysisWorkerRuntime((msg) => port.postMessage(msg));
+const runtime = new AnalysisWorkerRuntime(
+  (msg) => port.postMessage(msg),
+  undefined,
+  new IdleHeapCompactor(resolveExposedGc())
+);
 
 port.on("message", (msg: HostToWorkerMessage) => {
   runtime.handleMessage(msg);

@@ -1,6 +1,7 @@
 import { setPluginAgentRegistry } from "../../../../shared/config/pluginAgentRegistry.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AnalysisSession } from "./AnalysisSession.js";
+import type { IdleHeapCompactor } from "./idleHeapCompactor.js";
 import type {
   AnalysisWorkerMemorySample,
   HostToWorkerMessage,
@@ -14,6 +15,24 @@ import type {
  * entry per session — noise next to the data-path traffic.
  */
 export const MEMORY_SAMPLE_INTERVAL_MS = 2000;
+
+/**
+ * Message types that count as heap activity for idle compaction — the ops
+ * that feed the mirror buffers or (de)allocate sessions. Metadata ticks
+ * (process-state, agent-context, polling config, focus/input notifies) are
+ * excluded deliberately: a monitored-but-quiet agent terminal receives them
+ * on a timer forever, and counting those would keep its worker from ever
+ * compacting.
+ */
+const HEAP_ACTIVITY_MESSAGE_TYPES: ReadonlySet<HostToWorkerMessage["type"]> = new Set([
+  "create",
+  "data",
+  "prelude",
+  "resize",
+  "request",
+  "free",
+  "set-scrollback",
+]);
 
 /**
  * Worker-side message dispatcher. Holds the terminal-slot map and routes
@@ -44,7 +63,14 @@ export class AnalysisWorkerRuntime {
      * of sampling here rather than on the pty-host main thread.
      */
     private readonly readMemory: () => { heapUsed: number; external: number } = () =>
-      process.memoryUsage()
+      process.memoryUsage(),
+    /**
+     * Optional idle heap compaction for this worker isolate. Fed by
+     * heap-affecting messages and checked on the memory-sample tick, so a
+     * worker whose terminals have gone quiet returns its parse-churn heap
+     * slack to the OS instead of holding it for minutes.
+     */
+    private readonly idleHeapCompactor: IdleHeapCompactor | null = null
   ) {}
 
   /**
@@ -84,6 +110,7 @@ export class AnalysisWorkerRuntime {
       } catch (error) {
         console.error("[AnalysisWorker] memory sample failed:", error);
       }
+      this.idleHeapCompactor?.maybeCompact();
     }, intervalMs);
     this.memorySampleTimer.unref?.();
   }
@@ -96,6 +123,9 @@ export class AnalysisWorkerRuntime {
   }
 
   handleMessage(msg: HostToWorkerMessage): void {
+    if (this.idleHeapCompactor && HEAP_ACTIVITY_MESSAGE_TYPES.has(msg.type)) {
+      this.idleHeapCompactor.noteActivity();
+    }
     const terminalId = "terminalId" in msg ? msg.terminalId : undefined;
     if (terminalId === undefined) {
       void this.runSafe(msg);
