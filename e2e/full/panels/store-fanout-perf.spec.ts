@@ -224,7 +224,13 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
       const fixture = prepareFixture(scale);
       let ctx: AppContext | undefined;
       try {
+        // enableWebgl keeps the GPU process out-of-process (and matches
+        // production rendering). The local-macOS default of --disable-gpu
+        // --in-process-gpu makes a compositor fault under sustained terminal
+        // streaming fatal to the whole app — observed as a mid-flip
+        // "graceful shutdown" cascade that killed the measured view.
         ctx = await launchApp({
+          enableWebgl: true,
           env: {
             PATH: `${fixture.fakeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
             DAINTREE_CLI_PATH_PREPEND: fixture.fakeBinDir,
@@ -329,6 +335,16 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
         const queueSettleMs = Math.max(5_000, (scale - 6) * 1_100 + 4_000);
         await page.waitForTimeout(queueSettleMs);
 
+        // Reload sentinel: a renderer crash/reload mid-scale reinstalls a fresh
+        // probe and silently truncates captured commits — fail loudly instead.
+        await page.evaluate(() => {
+          (window as any).__FANOUT_SESSION_MARKER__ = true;
+        });
+        const assertNoReload = async (where: string) => {
+          const alive = await page.evaluate(() => !!(window as any).__FANOUT_SESSION_MARKER__);
+          expect(alive, `renderer view survived without reload (${where})`).toBe(true);
+        };
+
         const ptyWrite = async (data: string) => {
           await page.evaluate(
             ([id, payload]) => (window as any).electron.terminal.write(id, payload),
@@ -418,21 +434,23 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
         // working->waiting rides the ~8s idle debounce. Both directions are
         // bracketed around the observed data-agent-state attribute change.
         const flips: EventSample[] = [];
+        // Node-side polling with short evaluates (~±100ms flip-time precision,
+        // well within the ±500ms attribution brackets). A single long-running
+        // in-page evaluate would die unrecoverably if the view reloads.
         const waitForState = async (state: string, timeoutMs: number): Promise<number> => {
-          const flipAt = await page.evaluate(
-            async ([panelId, want, timeout]) => {
-              const el = document.querySelector(`[data-panel-id="${panelId}"]`);
-              if (!el) return -1;
-              const deadline = performance.now() + Number(timeout);
-              while (performance.now() < deadline) {
-                if (el.getAttribute("data-agent-state") === want) return performance.now();
-                await new Promise((r) => requestAnimationFrame(r));
-              }
-              return -1;
-            },
-            [flipPanelId!, state, String(timeoutMs)] as const
-          );
-          return flipAt as number;
+          const deadline = Date.now() + timeoutMs;
+          while (Date.now() < deadline) {
+            const found = await page.evaluate(
+              ([panelId, want]) => {
+                const el = document.querySelector(`[data-panel-id="${panelId}"]`);
+                return el?.getAttribute("data-agent-state") === want ? performance.now() : -1;
+              },
+              [flipPanelId!, state] as const
+            );
+            if (found > 0) return found;
+            await page.waitForTimeout(100);
+          }
+          return -1;
         };
 
         await probeStart();
@@ -468,6 +486,7 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
         const streamCommits = (await probeStop()) as any[];
         await ptyWrite(`${IDLE_TOKEN}\r`);
         const stream = [collectWindow(streamCommits, streamT0, streamT1)];
+        await assertNoReload("after workloads");
 
         const scaleResult: ScaleResult = {
           scale,
