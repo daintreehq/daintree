@@ -72,6 +72,7 @@ import { buildMenuPreloadBindings } from "./ipc/handlers/menu.preload.js";
 import { buildCliPreloadBindings } from "./ipc/handlers/cli.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
+import { buildPaintFabricSurfacePreloadBindings } from "./ipc/handlers/paintFabricSurface.preload.js";
 import { buildWebviewNavigationPreloadBindings } from "./ipc/handlers/webviewNavigation.preload.js";
 import { buildWebviewCapturePreloadBindings } from "./ipc/handlers/webviewCapture.preload.js";
 import { buildWorktreeConfigPreloadBindings } from "./ipc/handlers/worktreeConfig.preload.js";
@@ -223,6 +224,13 @@ const rawInstanceRole =
   process.argv.find((a) => a.startsWith(INSTANCE_ROLE_ARG))?.slice(INSTANCE_ROLE_ARG.length) ??
   process.env.DAINTREE_INSTANCE_ROLE;
 const instanceRole: "attended" | "worker" = rawInstanceRole === "worker" ? "worker" : "attended";
+
+// Paint-fabric surface-host role (Phase 1V): a non-null value is the surface
+// id and makes src/main.tsx mount the minimal surface-host root instead of
+// the full app shell. Threaded via additionalArguments like the instance role.
+const SURFACE_HOST_ARG = "--daintree-surface-host=";
+const surfaceHostId: string | null =
+  process.argv.find((a) => a.startsWith(SURFACE_HOST_ARG))?.slice(SURFACE_HOST_ARG.length) ?? null;
 
 const E2E_MODE_ARG = "--daintree-e2e-mode";
 const E2E_SKIP_FIRST_RUN_DIALOGS_ARG = "--daintree-e2e-skip-first-run-dialogs";
@@ -1296,6 +1304,16 @@ function buildElectronApi(): ElectronAPI {
 
     // Editor API
     editor: buildEditorConfigPreloadBindings(_unwrappingInvoke),
+
+    // Paint-fabric surface views (Phase 1V substrate)
+    paintSurface: {
+      ...buildPaintFabricSurfacePreloadBindings(_unwrappingInvoke),
+      // Surface-view side of the webglBudget apply step: the surface renderer
+      // subscribes and applies granted thresholds to its TerminalWebGLManager.
+      onWebglThresholds: (
+        callback: (payload: import("../shared/types/paintFabricSurface.js").SurfaceWebglThresholds) => void
+      ) => _typedOn(CHANNELS.PAINT_SURFACE_WEBGL_THRESHOLDS, callback),
+    },
 
     // System API
     system: {
@@ -3237,6 +3255,13 @@ if (initialProjectId) {
 // never need to null-guard the global.
 contextBridge.exposeInMainWorld("__DAINTREE_INSTANCE_ROLE__", {
   role: instanceRole,
+});
+
+// Surface-host role for paint-fabric surface views (Phase 1V). Exposed
+// unconditionally with null for ordinary views so consumers never null-guard
+// the global itself.
+contextBridge.exposeInMainWorld("__DAINTREE_SURFACE_HOST__", {
+  surfaceId: surfaceHostId,
 });
 
 // Flush the per-view preload evaluation cost (#9770). Runs at preload bottom —

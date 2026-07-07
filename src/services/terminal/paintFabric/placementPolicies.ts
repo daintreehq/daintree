@@ -1,5 +1,5 @@
 import type { Terminal } from "@xterm/xterm";
-import type { PaintSurface, PaintSurfaceRegistry } from "./PaintSurfaceRegistry";
+import { surfaceKind, type PaintSurface, type PaintSurfaceRegistry } from "./PaintSurfaceRegistry";
 
 // What the compositor knows about a terminal at claim time. Policies use it
 // to cluster (atlas key from font/theme) and to schedule (hot/cold from the
@@ -100,6 +100,36 @@ export function createBoundedKScheduler(
       return leastLoadedPlacement(terminalId, registry, context);
     }
     return packCold(terminalId, registry, context);
+  };
+}
+
+// Phase 1V geometry constraint: a view-hosted surface owns a rectangular
+// window region exclusively (no per-pixel input pass-through between stacked
+// views), so it can only host a terminal whose grid pane lies inside a band
+// the surface owns. Local surfaces are always hostable — they share the
+// window's DOM. Wraps any inner policy: an inner choice that violates the
+// constraint falls back to the least-loaded hostable surface, degrading to
+// the default surface (always local today) so placement never fails.
+export function createGeometryConstrainedPlacement(
+  inner: PlacementPolicy,
+  canHost: (surfaceId: string, terminalId: string, context?: PlacementContext) => boolean
+): PlacementPolicy {
+  return (terminalId, registry, context) => {
+    const hostable = (surface: PaintSurface): boolean =>
+      surfaceKind(surface) === "local" || canHost(surface.id, terminalId, context);
+    const chosen = inner(terminalId, registry, context);
+    if (hostable(chosen)) return chosen;
+    let best: PaintSurface | null = null;
+    let bestCount = Number.POSITIVE_INFINITY;
+    for (const surface of registry.surfaces()) {
+      if (!hostable(surface)) continue;
+      const count = registry.placementCount(surface.id);
+      if (count < bestCount) {
+        best = surface;
+        bestCount = count;
+      }
+    }
+    return best ?? registry.defaultSurface();
   };
 }
 

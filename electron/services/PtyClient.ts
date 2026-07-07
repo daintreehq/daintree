@@ -1683,6 +1683,23 @@ export class PtyClient extends EventEmitter {
     this.scheduleIdleSweep();
   }
 
+  /**
+   * Register the project context for an auxiliary renderer connection (a
+   * paint-fabric surface view's synthetic connection id) WITHOUT the
+   * window-activation side effects of setActiveProject: no global
+   * active-project change, no pool warming — the owning window already did
+   * both. The context is what connectMessagePort uses to derive the owning
+   * shard and what it replays to the host after a port replace, so it must be
+   * registered before the surface's port connects.
+   */
+  registerAuxConnectionContext(
+    connectionId: number,
+    projectId: string | null,
+    projectPath?: string
+  ): void {
+    this.windowProjectContexts.set(connectionId, { projectId, projectPath, mode: "active" });
+  }
+
   onProjectSwitch(windowId: number, projectId: string, projectPath?: string): void {
     this.activeProjectId = projectId;
     this.windowProjectContexts.set(windowId, { projectId, projectPath, mode: "switch" });

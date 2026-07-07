@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createWebglBudgetApplier,
   distributeWebglBudget,
   PER_SURFACE_WEBGL_MAX,
   WEBGL_BUDGET_HYSTERESIS_GAP,
@@ -109,5 +110,61 @@ describe("distributeWebglBudget", () => {
     // Odd remainder goes to the first surface in input order.
     expect(budgets[0]!.upperThreshold).toBe(8);
     expect(budgets[1]!.upperThreshold).toBe(7);
+  });
+});
+
+describe("createWebglBudgetApplier", () => {
+  const budget = (surfaceId: string, upper: number) => ({
+    surfaceId,
+    upperThreshold: upper,
+    lowerThreshold: Math.max(0, upper - 2),
+  });
+
+  it("pushes each surface's grant and dedupes unchanged re-applies", async () => {
+    const pushed: string[] = [];
+    const applier = createWebglBudgetApplier((b) => {
+      pushed.push(`${b.surfaceId}:${b.upperThreshold}`);
+    });
+
+    await applier.apply([budget("a", 8), budget("b", 4)]);
+    expect(pushed).toEqual(["a:8", "b:4"]);
+
+    // Same grant → no IPC. Changed grant → pushed again.
+    const second = await applier.apply([budget("a", 8), budget("b", 6)]);
+    expect(pushed).toEqual(["a:8", "b:4", "b:6"]);
+    expect(second.applied.map((b) => b.surfaceId)).toEqual(["b"]);
+  });
+
+  it("isolates a failed push and retries it on the next apply", async () => {
+    let failB = true;
+    const pushed: string[] = [];
+    const applier = createWebglBudgetApplier((b) => {
+      if (b.surfaceId === "b" && failB) throw new Error("view gone");
+      pushed.push(b.surfaceId);
+    });
+
+    const first = await applier.apply([budget("a", 8), budget("b", 4), budget("c", 2)]);
+    // b failed but a and c still applied.
+    expect(pushed).toEqual(["a", "c"]);
+    expect(first.failed).toHaveLength(1);
+    expect(first.failed[0]!.surfaceId).toBe("b");
+
+    // The failure was not memoized — the next apply retries b only.
+    failB = false;
+    const second = await applier.apply([budget("a", 8), budget("b", 4), budget("c", 2)]);
+    expect(pushed).toEqual(["a", "c", "b"]);
+    expect(second.failed).toEqual([]);
+  });
+
+  it("forget() drops the memo so a re-created surface gets a fresh push", async () => {
+    const pushed: string[] = [];
+    const applier = createWebglBudgetApplier((b) => {
+      pushed.push(b.surfaceId);
+    });
+
+    await applier.apply([budget("a", 8)]);
+    applier.forget("a");
+    await applier.apply([budget("a", 8)]);
+    expect(pushed).toEqual(["a", "a"]);
   });
 });

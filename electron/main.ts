@@ -261,6 +261,10 @@ if (!gotTheLock) {
     setMainWindow(win);
     const ctx = windowRegistry.register(win, { projectPath: initialProjectPath ?? undefined });
     windowRegistry.registerAppViewWebContents(ctx.windowId, appView.webContents.id);
+    // Paint-fabric surface views load the same preload as project views; the
+    // paintSurface IPC namespace builds its per-window manager lazily and
+    // reads the path from here.
+    ctx.services.preloadDirname = __dirname;
 
     const pvm = new ProjectViewManager(win, {
       dirname: __dirname,

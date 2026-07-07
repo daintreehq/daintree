@@ -10,7 +10,7 @@ import { GRID_RESIZE_COALESCE_MS } from "../types";
 import type { UnseenOutputSnapshot } from "../TerminalUnseenOutputTracker";
 import type { TerminalPaintPlane } from "../TerminalInstanceService";
 import { logWarn } from "@/utils/logger";
-import { PaintSurfaceRegistry, type PaintSurface } from "./PaintSurfaceRegistry";
+import { PaintSurfaceRegistry, surfaceKind, type PaintSurface } from "./PaintSurfaceRegistry";
 import {
   defaultSurfacePlacement,
   type PlacementContext,
@@ -61,6 +61,23 @@ interface CarriedTerminalState {
   inputLocked?: boolean;
 }
 
+// Compositor-side mirror of the sync-read half of TerminalPaintPlane for
+// terminals owned by view-hosted surfaces. Synchronous methods (`get`,
+// `captureBufferText`, `getAgentState`, `isFocused`, `fit`, `resize`) cannot
+// cross a process boundary — there is no sync renderer↔renderer IPC — so the
+// compositor answers them from this mirror instead of splitting the interface
+// (the load-bearing Phase 1V decision, recorded in
+// docs/architecture/terminal-paint-fabric.md). Written on control paths and
+// via applyMirrorPatch (the surface view's state push), never per output
+// chunk.
+export interface TerminalSyncMirror {
+  agentState?: AgentState;
+  focused?: boolean;
+  bufferText?: string;
+}
+
+export type TerminalSyncMirrorPatch = Partial<TerminalSyncMirror>;
+
 export interface PaintSurfaceDiagnostics {
   surfaceId: string;
   isDefault: boolean;
@@ -106,6 +123,7 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
   private subscriptionsById = new Map<string, Set<TrackedSubscription>>();
   private createArgsById = new Map<string, CapturedCreateArgs>();
   private carriedStateById = new Map<string, CarriedTerminalState>();
+  private syncMirrorsById = new Map<string, TerminalSyncMirror>();
   private scrollbackRestoreAggregateListeners = new Set<() => void>();
   private surfaceForwarderUnsubs = new Map<string, () => void>();
   private gridResizeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -254,6 +272,7 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     }
     this.createArgsById.delete(id);
     this.carriedStateById.delete(id);
+    this.syncMirrorsById.delete(id);
   }
 
   private carried(id: string): CarriedTerminalState {
@@ -263,6 +282,52 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
       this.carriedStateById.set(id, state);
     }
     return state;
+  }
+
+  private owningSurface(id: string): PaintSurface {
+    return this.registry.surfaceFor(id) ?? this.registry.defaultSurface();
+  }
+
+  private isViewOwned(id: string): boolean {
+    return surfaceKind(this.owningSurface(id)) === "view";
+  }
+
+  private mirror(id: string): TerminalSyncMirror {
+    let mirror = this.syncMirrorsById.get(id);
+    if (!mirror) {
+      mirror = {};
+      this.syncMirrorsById.set(id, mirror);
+    }
+    return mirror;
+  }
+
+  /**
+   * State-push entry point for view-hosted surfaces: the surface renderer
+   * reports control-path state changes (agent state, focus, buffer snapshot)
+   * and the compositor folds them into the sync-read mirror so the sync half
+   * of TerminalPaintPlane keeps answering without crossing the process
+   * boundary. Skips undefined fields so a partial patch never erases known
+   * state. Tolerant of unplaced ids — a patch may race a transfer.
+   */
+  applyMirrorPatch(id: string, patch: TerminalSyncMirrorPatch): void {
+    const mirror = this.mirror(id);
+    if (patch.agentState !== undefined) mirror.agentState = patch.agentState;
+    if (patch.focused !== undefined) mirror.focused = patch.focused;
+    if (patch.bufferText !== undefined) mirror.bufferText = patch.bufferText;
+  }
+
+  getMirrorForTests(id: string): TerminalSyncMirror | undefined {
+    return this.syncMirrorsById.get(id);
+  }
+
+  private readAgentState(surface: PaintSurface, id: string): AgentState | undefined {
+    if (surfaceKind(surface) === "view") return this.syncMirrorsById.get(id)?.agentState;
+    return surface.plane.getAgentState(id);
+  }
+
+  private readFocused(surface: PaintSurface, id: string): boolean {
+    if (surfaceKind(surface) === "view") return this.syncMirrorsById.get(id)?.focused ?? false;
+    return surface.plane.isFocused(id);
   }
 
   /**
@@ -303,8 +368,14 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     };
 
     let live: ManagedTerminal | null = null;
+    let assumeLive = false;
     let sourceUnreadable = false;
-    if (opts.bestEffortSource) {
+    if (surfaceKind(source) === "view") {
+      // No ManagedTerminal exists across a process boundary, so a view-hosted
+      // source cannot answer a liveness probe; if the fabric created this
+      // terminal, treat it as live and rebuild it on the target.
+      assumeLive = this.createArgsById.has(id);
+    } else if (opts.bestEffortSource) {
       try {
         live = source.plane.get(id);
       } catch (error) {
@@ -319,7 +390,7 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     }
 
     const args = this.createArgsById.get(id);
-    const rebuild = live !== null || (sourceUnreadable && args !== undefined);
+    const rebuild = live !== null || assumeLive || (sourceUnreadable && args !== undefined);
     if (!rebuild) {
       // Placement-only move. Destroy on the source anyway: an in-flight
       // getOrCreate may have claimed this id without a live instance yet, and
@@ -339,8 +410,8 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
       );
     }
 
-    const agentState = sourceCall(() => source.plane.getAgentState(id), undefined);
-    const focused = sourceCall(() => source.plane.isFocused(id), false);
+    const agentState = sourceCall(() => this.readAgentState(source, id), undefined);
+    const focused = sourceCall(() => this.readFocused(source, id), false);
     sourceCall(() => source.plane.destroy(id), undefined);
     this.registry.release(id);
     this.registry.place(id, target.id);
@@ -384,6 +455,14 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     }
     if (carried?.inputLocked !== undefined) target.plane.setInputLocked(id, carried.inputLocked);
     if (agentState !== undefined) target.plane.setAgentState(id, agentState);
+    // Keep the sync-read mirror consistent with the new owner: a view-hosted
+    // target answers sync reads from the mirror, so seed it with the state
+    // the move carried; a local target is authoritative, so the mirror drops.
+    if (surfaceKind(target) === "view") {
+      this.applyMirrorPatch(id, { agentState, focused });
+    } else {
+      this.syncMirrorsById.delete(id);
+    }
     this.rebindSubscriptions(id, target.plane);
     if (focused) {
       target.plane.setFocused(id, true);
@@ -608,10 +687,14 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
   }
 
   get(id: string): ManagedTerminal | null {
+    // A view-hosted surface has no live ManagedTerminal in this process —
+    // callers needing state go through the mirror-backed sync reads instead.
+    if (this.isViewOwned(id)) return null;
     return this.plane(id).get(id);
   }
 
   getInstanceForE2E(id: string): ManagedTerminal | undefined {
+    if (this.isViewOwned(id)) return undefined;
     return this.plane(id).getInstanceForE2E(id);
   }
 
@@ -652,6 +735,10 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
   }
 
   attach(id: string, container: HTMLElement): ManagedTerminal | null {
+    // DOM attachment cannot cross views: a view-hosted terminal's geometry
+    // flows through the surface-view bounds protocol
+    // (shared/types/paintFabricSurface.ts), not a container element.
+    if (this.isViewOwned(id)) return null;
     return this.plane(id).attach(id, container);
   }
 
@@ -660,6 +747,7 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
   }
 
   detach(id: string, container: HTMLElement | null): void {
+    if (this.isViewOwned(id)) return;
     this.plane(id).detach(id, container);
   }
 
@@ -668,6 +756,9 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
   }
 
   fit(id: string): { cols: number; rows: number } | null {
+    // Sync geometry cannot cross a process boundary; view-hosted surfaces
+    // size their terminals from the bounds protocol on their side.
+    if (this.isViewOwned(id)) return null;
     return this.plane(id).fit(id);
   }
 
@@ -689,6 +780,7 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     height: number,
     options?: { immediate?: boolean }
   ): { cols: number; rows: number } | null {
+    if (this.isViewOwned(id)) return null;
     return this.plane(id).resize(id, width, height, options);
   }
 
@@ -814,6 +906,7 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
   }
 
   setAgentState(id: string, state: AgentState): void {
+    if (this.isViewOwned(id)) this.mirror(id).agentState = state;
     this.plane(id).setAgentState(id, state);
   }
 
@@ -832,7 +925,7 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
   }
 
   getAgentState(id: string): AgentState | undefined {
-    return this.plane(id).getAgentState(id);
+    return this.readAgentState(this.owningSurface(id), id);
   }
 
   addAgentStateListener(id: string, callback: AgentStateCallback): () => void {
@@ -842,6 +935,11 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
   }
 
   captureBufferText(id: string, maxChars?: number): string {
+    if (this.isViewOwned(id)) {
+      // Tail-truncate to match the bare service's bottom-up capture window.
+      const text = this.syncMirrorsById.get(id)?.bufferText ?? "";
+      return maxChars !== undefined && maxChars >= 0 ? text.slice(-maxChars) : text;
+    }
     return this.plane(id).captureBufferText(id, maxChars);
   }
 
@@ -865,11 +963,12 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
   }
 
   setFocused(id: string, isFocused: boolean): void {
+    if (this.isViewOwned(id)) this.mirror(id).focused = isFocused;
     this.plane(id).setFocused(id, isFocused);
   }
 
   isFocused(id: string): boolean {
-    return this.plane(id).isFocused(id);
+    return this.readFocused(this.owningSurface(id), id);
   }
 
   focus(id: string): void {
@@ -976,6 +1075,7 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.subscriptionsById.clear();
     this.createArgsById.clear();
     this.carriedStateById.clear();
+    this.syncMirrorsById.clear();
     this.scrollbackRestoreAggregateListeners.clear();
   }
 

@@ -375,6 +375,20 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["os-dnd:get-state"]["args"]
     ): Promise<IpcInvokeMap["os-dnd:get-state"]["result"]>;
   };
+  paintSurface: {
+    applyWebglThresholds(
+      ...args: IpcInvokeMap["paint-surface:apply-webgl-thresholds"]["args"]
+    ): Promise<IpcInvokeMap["paint-surface:apply-webgl-thresholds"]["result"]>;
+    createSurface(
+      ...args: IpcInvokeMap["paint-surface:create"]["args"]
+    ): Promise<IpcInvokeMap["paint-surface:create"]["result"]>;
+    destroySurface(
+      ...args: IpcInvokeMap["paint-surface:destroy"]["args"]
+    ): Promise<IpcInvokeMap["paint-surface:destroy"]["result"]>;
+    setSurfaceBounds(
+      ...args: IpcInvokeMap["paint-surface:set-bounds"]["args"]
+    ): Promise<IpcInvokeMap["paint-surface:set-bounds"]["result"]>;
+  };
   plugin: {
     activateForView(
       ...args: IpcInvokeMap["plugin:activate-for-view"]["args"]

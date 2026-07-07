@@ -1379,6 +1379,10 @@ export interface IpcEventMap {
   "worktree:remove": { worktreeId: string };
   "worktree:activated": { worktreeId: string };
 
+  // Paint-fabric surface views (Phase 1V): main → surface-view push carrying
+  // the webglBudget waterfill grant for that surface.
+  "paint-surface:webgl-thresholds": import("../paintFabricSurface.js").SurfaceWebglThresholds;
+
   // Terminal events
   "terminal:data": [id: string, data: string | Uint8Array];
   "terminal:exit": [id: string, exitCode: number];

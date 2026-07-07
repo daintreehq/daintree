@@ -14,6 +14,13 @@ export function isPaintFabricEnabled(): boolean {
   return getDaintreeEnv("DAINTREE_PAINT_FABRIC") === "1";
 }
 
+// Narrower opt-in for hosting aux surfaces in sibling WebContentsViews
+// (Phase 1V substrate). Nested inside the master switch so view hosting can
+// be pinned off independently while the substrate lands front by front.
+export function isPaintFabricViewHostingEnabled(): boolean {
+  return isPaintFabricEnabled() && getDaintreeEnv("DAINTREE_PAINT_FABRIC_VIEWS") === "1";
+}
+
 export const PRIMARY_SURFACE_ID = "surface-primary";
 
 // Ceiling on in-process surfaces. In-process surfaces exist to exercise and

@@ -843,6 +843,27 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: boolean | undefined;
   };
+  "paint-surface:apply-webgl-thresholds": {
+    args: [payload: { surfaceId: string; upperThreshold: number; lowerThreshold: number }];
+    result: void;
+  };
+  "paint-surface:create": {
+    args: [payload: { surfaceId: string }];
+    result: import("../paintFabricSurface.js").CreateSurfaceViewResult;
+  };
+  "paint-surface:destroy": {
+    args: [payload: { surfaceId: string }];
+    result: void;
+  };
+  "paint-surface:set-bounds": {
+    args: [
+      payload: {
+        surfaceId: string;
+        bounds: { x: number; y: number; width: number; height: number };
+      },
+    ];
+    result: void;
+  };
   "plugin-capability:resolve-consent": {
     args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityResolveConsentInput];
     result: void;

@@ -92,6 +92,13 @@ export const CHANNELS = {
   EDITOR_SET_CONFIG: "editor:set-config",
   EDITOR_DISCOVER: "editor:discover",
 
+  PAINT_SURFACE_CREATE: "paint-surface:create",
+  PAINT_SURFACE_DESTROY: "paint-surface:destroy",
+  PAINT_SURFACE_SET_BOUNDS: "paint-surface:set-bounds",
+  PAINT_SURFACE_APPLY_WEBGL_THRESHOLDS: "paint-surface:apply-webgl-thresholds",
+  // Main → surface-view push carrying the webglBudget waterfill grant.
+  PAINT_SURFACE_WEBGL_THRESHOLDS: "paint-surface:webgl-thresholds",
+
   SYSTEM_OPEN_EXTERNAL: "system:open-external",
   SYSTEM_OPEN_PATH: "system:open-path",
   SYSTEM_SHOW_ITEM_IN_FOLDER: "system:show-item-in-folder",

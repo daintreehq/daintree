@@ -1,11 +1,24 @@
 import type { TerminalPaintPlane } from "../TerminalInstanceService";
 
+// How a surface is hosted. "local" surfaces live in this renderer and answer
+// the plane's synchronous methods directly. "view" surfaces live in a sibling
+// WebContentsView (their own process, GPU budget, and glyph atlas — Phase 1V),
+// so their sync reads are answered from compositor-side mirrors and their
+// geometry flows through the bounds protocol instead of DOM attach.
+export type PaintSurfaceKind = "local" | "view";
+
 // A render surface in the paint fabric. Phase 0 has exactly one (the local
 // in-view TerminalInstanceService); later phases add sibling WebContentsView
 // surfaces and worker-parse surfaces behind the same shape.
 export interface PaintSurface {
   readonly id: string;
   readonly plane: TerminalPaintPlane;
+  // Defaults to "local" when absent — every pre-1V construction site.
+  readonly kind?: PaintSurfaceKind;
+}
+
+export function surfaceKind(surface: PaintSurface): PaintSurfaceKind {
+  return surface.kind ?? "local";
 }
 
 // Bookkeeping for the fabric's load-bearing invariant: a terminal is owned by

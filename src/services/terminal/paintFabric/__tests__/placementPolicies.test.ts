@@ -6,16 +6,22 @@ import {
   computeBoundedSurfaceCount,
   createAtlasClusteringPlacement,
   createBoundedKScheduler,
+  createGeometryConstrainedPlacement,
   createRoundRobinPlacement,
   leastLoadedPlacement,
   mostLoadedPlacement,
 } from "../placementPolicies";
+import type { PaintSurfaceKind } from "../PaintSurfaceRegistry";
 
-function makeRegistry(ids: string[]): PaintSurfaceRegistry {
+function makeRegistry(ids: Array<string | [string, PaintSurfaceKind]>): PaintSurfaceRegistry {
   const registry = new PaintSurfaceRegistry();
-  ids.forEach((id, index) =>
-    registry.registerSurface({ id, plane: {} as TerminalPaintPlane }, { isDefault: index === 0 })
-  );
+  ids.forEach((entry, index) => {
+    const [id, kind] = typeof entry === "string" ? [entry, undefined] : entry;
+    registry.registerSurface(
+      { id, plane: {} as TerminalPaintPlane, ...(kind ? { kind } : {}) },
+      { isDefault: index === 0 }
+    );
+  });
   return registry;
 }
 
@@ -99,5 +105,36 @@ describe("placementPolicies", () => {
     expect(computeBoundedSurfaceCount({ cpuCores: 16, deviceMemoryGb: 8, maxSurfaces: 4 })).toBe(2);
     // Never below one surface, however small the machine.
     expect(computeBoundedSurfaceCount({ cpuCores: 2, deviceMemoryGb: 2, maxSurfaces: 4 })).toBe(1);
+  });
+
+  it("geometry constraint keeps an inner choice that can host the terminal", () => {
+    const registry = makeRegistry(["local", ["view-1", "view"]]);
+    const policy = createGeometryConstrainedPlacement(
+      (_, reg) => reg.surfaceById("view-1")!,
+      () => true
+    );
+    expect(policy("t1", registry).id).toBe("view-1");
+  });
+
+  it("geometry constraint re-homes to the least-loaded hostable surface", () => {
+    const registry = makeRegistry(["local", ["view-1", "view"], ["view-2", "view"]]);
+    registry.place("t1", "local");
+    const policy = createGeometryConstrainedPlacement(
+      (_, reg) => reg.surfaceById("view-1")!,
+      (surfaceId) => surfaceId === "view-2"
+    );
+    // Inner picked view-1, which owns no band for this pane; view-2 does and
+    // is emptier than the local surface.
+    expect(policy("t2", registry).id).toBe("view-2");
+  });
+
+  it("geometry constraint never blocks local surfaces and degrades to the default", () => {
+    const registry = makeRegistry(["local", ["view-1", "view"]]);
+    const policy = createGeometryConstrainedPlacement(
+      (_, reg) => reg.surfaceById("view-1")!,
+      () => false
+    );
+    // No view surface owns a band → the local (default) surface hosts.
+    expect(policy("t1", registry).id).toBe("local");
   });
 });
