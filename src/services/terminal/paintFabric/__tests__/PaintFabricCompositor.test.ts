@@ -1,33 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { PaintFabricCompositor } from "../PaintFabricCompositor";
-import type { PaintSurface } from "../PaintSurfaceRegistry";
-import type { TerminalPaintPlane } from "../../TerminalInstanceService";
 import type { ManagedTerminal } from "../../types";
-
-function makeFakePlane() {
-  return {
-    getOrCreate: vi.fn(async (id: string) => ({ id }) as unknown as ManagedTerminal),
-    prewarmTerminal: vi.fn(async (id: string) => ({ id }) as unknown as ManagedTerminal),
-    get: vi.fn((): ManagedTerminal | null => null),
-    focus: vi.fn(),
-    destroy: vi.fn(),
-    dispose: vi.fn(),
-    notifyUserInput: vi.fn(),
-    scheduleBatchResize: vi.fn(),
-    waitForAllFullySettled: vi.fn(async () => undefined),
-    applyGlobalOptions: vi.fn(),
-    getScrollbackRestorePendingCount: vi.fn(() => 0),
-    subscribeScrollbackRestoreState: vi.fn(() => vi.fn()),
-    suppressResizesDuringLayoutTransition: vi.fn(),
-  };
-}
-
-type FakePlane = ReturnType<typeof makeFakePlane>;
-
-function makeSurface(id: string): { surface: PaintSurface; plane: FakePlane } {
-  const plane = makeFakePlane();
-  return { surface: { id, plane: plane as unknown as TerminalPaintPlane }, plane };
-}
+import { makeSurface } from "./fakePaintPlane";
 
 function makeCompositor() {
   const a = makeSurface("a");
@@ -94,6 +68,21 @@ describe("PaintFabricCompositor", () => {
     expect(b.focus).toHaveBeenCalledWith("t2-b");
   });
 
+  it("releases a failed claim even when the surface has become unreadable", async () => {
+    const { compositor, a, b } = makeCompositor();
+    b.getOrCreate.mockRejectedValueOnce(new Error("create boom"));
+    b.get.mockImplementation(() => {
+      throw new Error("surface is gone");
+    });
+
+    // The original create error surfaces (not the probe's), and the stale
+    // claim is released so the id routes to the default surface again.
+    await expect(compositor.getOrCreate("t1-b", undefined, {})).rejects.toThrow("create boom");
+    expect(compositor.getRegistryForTests().surfaceFor("t1-b")).toBeNull();
+    compositor.focus("t1-b");
+    expect(a.focus).toHaveBeenCalledWith("t1-b");
+  });
+
   it("keeps a live terminal placed when a failed overlapping create releases the claim", async () => {
     const { compositor, b } = makeCompositor();
 
@@ -142,9 +131,9 @@ describe("PaintFabricCompositor", () => {
     await compositor.getOrCreate("t2-a", undefined, {});
     await compositor.getOrCreate("t3-b", undefined, {});
 
-    compositor.scheduleBatchResize(["t1-b", "t2-a", "t3-b", "unplaced"]);
-    expect(b.scheduleBatchResize).toHaveBeenCalledWith(["t1-b", "t3-b"]);
-    expect(a.scheduleBatchResize).toHaveBeenCalledWith(["t2-a", "unplaced"]);
+    compositor.suppressResizesDuringLayoutTransition(["t1-b", "t2-a", "t3-b", "unplaced"], 200);
+    expect(b.suppressResizesDuringLayoutTransition).toHaveBeenCalledWith(["t1-b", "t3-b"], 200);
+    expect(a.suppressResizesDuringLayoutTransition).toHaveBeenCalledWith(["t2-a", "unplaced"], 200);
   });
 
   it("groups settle waits per surface and resolves when all resolve", async () => {
@@ -169,21 +158,73 @@ describe("PaintFabricCompositor", () => {
     expect(compositor.getScrollbackRestorePendingCount()).toBe(5);
   });
 
-  it("combines cross-surface subscriptions into one unsubscribe", () => {
+  it("owns the aggregate scrollback-restore listener set: one logical change fires once", () => {
     const { compositor, a, b } = makeCompositor();
-    const unsubA = vi.fn();
-    const unsubB = vi.fn();
-    a.subscribeScrollbackRestoreState.mockReturnValue(unsubA);
-    b.subscribeScrollbackRestoreState.mockReturnValue(unsubB);
+    // The compositor subscribed one forwarder per surface at construction.
+    expect(a.subscribeScrollbackRestoreState).toHaveBeenCalledTimes(1);
+    expect(b.subscribeScrollbackRestoreState).toHaveBeenCalledTimes(1);
 
     const listener = vi.fn();
     const unsubscribe = compositor.subscribeScrollbackRestoreState(listener);
-    expect(a.subscribeScrollbackRestoreState).toHaveBeenCalledWith(listener);
-    expect(b.subscribeScrollbackRestoreState).toHaveBeenCalledWith(listener);
+    // The caller's listener is compositor-owned, never fanned to surfaces.
+    expect(a.subscribeScrollbackRestoreState).toHaveBeenCalledTimes(1);
+    expect(b.subscribeScrollbackRestoreState).toHaveBeenCalledTimes(1);
+
+    // External notify (the scheduler path): exactly once, not once per surface.
+    compositor.notifyScrollbackRestoreListeners();
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    // Plane-internal notify (destroy-during-restore path) forwards: once.
+    a.notifyScrollbackRestoreListeners();
+    expect(listener).toHaveBeenCalledTimes(2);
 
     unsubscribe();
-    expect(unsubA).toHaveBeenCalledTimes(1);
-    expect(unsubB).toHaveBeenCalledTimes(1);
+    compositor.notifyScrollbackRestoreListeners();
+    b.notifyScrollbackRestoreListeners();
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  // Fleet broadcast bytes go terminalClient.broadcast → pty-host fan-out and
+  // never pass through this seam, so surface count cannot reorder or drop
+  // them. What the fabric routes are the per-terminal UI side-effects — each
+  // must land on the owning surface only, with the caller-side focused-origin
+  // exemption (fleetRawInputBroadcast skips notifyUserInput for the origin)
+  // expressed as simply not calling for that id.
+  it("routes broadcast side-effects per owning surface (fleet fan-out shape)", async () => {
+    const { compositor, a, b } = makeCompositor();
+    await compositor.getOrCreate("origin-a", undefined, {});
+    await compositor.getOrCreate("t1-b", undefined, {});
+    await compositor.getOrCreate("t2-a", undefined, {});
+
+    // The fleet fan-out: origin exempt from notifyUserInput, everyone gets
+    // notifyEnterPressed (matching fleetRawInputBroadcast's contract).
+    for (const id of ["t1-b", "t2-a"]) compositor.notifyUserInput(id, "x");
+    for (const id of ["origin-a", "t1-b", "t2-a"]) compositor.notifyEnterPressed(id);
+
+    expect(b.notifyUserInput).toHaveBeenCalledTimes(1);
+    expect(b.notifyUserInput).toHaveBeenCalledWith("t1-b", "x");
+    expect(a.notifyUserInput).toHaveBeenCalledTimes(1);
+    expect(a.notifyUserInput).toHaveBeenCalledWith("t2-a", "x");
+
+    expect(a.notifyEnterPressed).toHaveBeenCalledTimes(2);
+    expect(b.notifyEnterPressed).toHaveBeenCalledTimes(1);
+    expect(b.notifyEnterPressed).toHaveBeenCalledWith("t1-b");
+  });
+
+  it("keeps focus authority per-id: focus routes to the owner only", async () => {
+    const { compositor, a, b } = makeCompositor();
+    await compositor.getOrCreate("t1-b", undefined, {});
+
+    compositor.setFocused("t1-b", true);
+    compositor.focus("t1-b");
+    expect(b.setFocused).toHaveBeenCalledWith("t1-b", true);
+    expect(b.focus).toHaveBeenCalledWith("t1-b");
+    expect(a.setFocused).not.toHaveBeenCalled();
+    expect(a.focus).not.toHaveBeenCalled();
+
+    b.isFocused.mockReturnValue(true);
+    expect(compositor.isFocused("t1-b")).toBe(true);
+    expect(a.isFocused).not.toHaveBeenCalled();
   });
 
   it("dispose fans out and clears all placements", async () => {

@@ -293,6 +293,14 @@ export const INCREMENTAL_RESTORE_CONFIG = {
   indicatorThresholdBytes: 262144,
 } as const;
 
+// Trailing-edge window for `scheduleBatchResize`. A burst of grid open/close
+// resizes within this gap collapses into one pass — long enough to coalesce a
+// rapid close stream, short enough that survivors settle promptly after it.
+// Lives here (not in TerminalInstanceService) so the paint-fabric compositor
+// can coalesce its cross-surface pass on identical timing without importing
+// the service module it is imported by.
+export const GRID_RESIZE_COALESCE_MS = 120;
+
 /**
  * Tiers eligible for a live WebGL context: the user is actively looking at
  * the terminal (FOCUSED), it just received a typing burst (BURST), or it is

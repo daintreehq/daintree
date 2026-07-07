@@ -15,3 +15,28 @@ export function isPaintFabricEnabled(): boolean {
 }
 
 export const PRIMARY_SURFACE_ID = "surface-primary";
+
+// Ceiling on in-process surfaces. In-process surfaces exist to exercise and
+// prove the multi-surface routing semantics (placement, rebinding, transfer,
+// pass cancellation) — they share the window's renderer thread, glyph atlas,
+// and 16-WebGL-context budget, so they add correctness coverage, not
+// capacity. Capacity (own GPU budget, own parse thread) arrives when a
+// surface is hosted by a sibling WebContentsView. Four is enough to surface
+// every K>1 routing hazard without letting a stray env value spawn dozens of
+// full TerminalInstanceService stacks.
+export const MAX_PAINT_FABRIC_SURFACES = 4;
+
+// Surface count for the fabric while it is flag-on. Defaults to 1 (the
+// primary surface only — byte-identical routing to Phase 0). Values above 1
+// are a dev/test capability for validating cross-surface invariants in a
+// live window before the WebContentsView surface host lands.
+export function getPaintFabricSurfaceCount(): number {
+  const raw = getDaintreeEnv("DAINTREE_PAINT_FABRIC_SURFACES");
+  const parsed = raw === undefined ? Number.NaN : Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.min(Math.max(parsed, 1), MAX_PAINT_FABRIC_SURFACES);
+}
+
+export function paintFabricAuxSurfaceId(index: number): string {
+  return `surface-aux-${index}`;
+}

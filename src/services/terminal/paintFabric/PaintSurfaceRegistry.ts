@@ -93,6 +93,18 @@ export class PaintSurfaceRegistry {
     return this.surfacesById.get(surfaceId) ?? null;
   }
 
+  surfaceById(surfaceId: string): PaintSurface | null {
+    return this.surfacesById.get(surfaceId) ?? null;
+  }
+
+  placementsFor(surfaceId: string): string[] {
+    const terminalIds: string[] = [];
+    for (const [terminalId, ownerId] of this.placements) {
+      if (ownerId === surfaceId) terminalIds.push(terminalId);
+    }
+    return terminalIds;
+  }
+
   placementCount(surfaceId: string): number {
     let count = 0;
     for (const ownerId of this.placements.values()) {

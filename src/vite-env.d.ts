@@ -6,6 +6,7 @@ interface ImportMetaEnv {
   readonly DAINTREE_VERBOSE?: string;
   readonly DAINTREE_DISABLE_FOCUSED_DRAIN_PRIORITY?: string;
   readonly DAINTREE_PAINT_FABRIC?: string;
+  readonly DAINTREE_PAINT_FABRIC_SURFACES?: string;
 }
 
 interface ImportMeta {
