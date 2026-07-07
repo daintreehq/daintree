@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PtyPanelData, TabGroup } from "@shared/types/panel";
+import type { PanelInstance, PtyPanelData, TabGroup } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -114,6 +114,34 @@ describe("dock ↔ grid transitions", () => {
       expect(updated!.location).toBe("dock");
       expect(updated!.isVisible).toBe(false);
       expect(updated!.runtimeStatus).toBe("background");
+    });
+
+    it("moves a file panel to the dock and back without PTY-only fields", () => {
+      usePanelStore.setState((state) => ({
+        panelsById: {
+          ...state.panelsById,
+          "file-1": {
+            id: "file-1",
+            kind: "file",
+            title: "spec.md",
+            location: "grid",
+            isVisible: true,
+            filePath: "/repo/spec.md",
+          } as PanelInstance,
+        },
+        panelIds: [...state.panelIds, "file-1"],
+      }));
+
+      usePanelStore.getState().moveTerminalToDock("file-1");
+      let updated = usePanelStore.getState().panelsById["file-1"];
+      expect(updated!.location).toBe("dock");
+      expect(updated!.isVisible).toBe(false);
+
+      const moved = usePanelStore.getState().moveTerminalToGrid("file-1");
+      expect(moved).toBe(true);
+      updated = usePanelStore.getState().panelsById["file-1"];
+      expect(updated!.location).toBe("grid");
+      expect(updated!.isVisible).toBe(true);
     });
   });
 

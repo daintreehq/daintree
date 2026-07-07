@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PtyPanelData } from "@shared/types/panel";
+import type { FilePanelData, PtyPanelData } from "@shared/types/panel";
 import type { TabGroup } from "@/types";
 import { buildDockRenderItems } from "../dockRenderItems";
 
@@ -25,7 +25,42 @@ function group(panelIds: string[], activeTabId = panelIds[0] ?? ""): TabGroup {
   };
 }
 
+function filePanel(id: string): FilePanelData {
+  return {
+    id,
+    title: id,
+    kind: "file",
+    location: "dock",
+    isVisible: false,
+    filePath: `/repo/${id}.md`,
+  } as FilePanelData;
+}
+
 describe("buildDockRenderItems", () => {
+  it("renders a docked file panel as a standalone chip", () => {
+    const items = buildDockRenderItems([], () => [], null, [filePanel("spec")]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.panels[0]?.kind).toBe("file");
+    expect(items[0]?.group.panelIds).toEqual(["spec"]);
+  });
+
+  it("renders a file panel standalone even when its stored group only resolves PTY panels", () => {
+    // A grid tab group containing a terminal and a file panel moved to the
+    // dock: groups resolve PTY-only, so the file panel falls through to the
+    // flat membership list and must not vanish.
+    const items = buildDockRenderItems(
+      [group(["term-1", "spec"], "term-1")],
+      () => [terminal("term-1")],
+      null,
+      [terminal("term-1"), filePanel("spec")]
+    );
+
+    expect(items).toHaveLength(2);
+    expect(items[0]?.group.panelIds).toEqual(["term-1"]);
+    expect(items[1]?.panels[0]?.id).toBe("spec");
+  });
+
   it("drops stale groups whose panels no longer resolve to dock terminals", () => {
     const items = buildDockRenderItems([group(["closed-panel"])], () => []);
 
