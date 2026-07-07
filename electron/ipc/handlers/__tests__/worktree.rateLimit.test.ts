@@ -6,6 +6,7 @@ const ipcMainMock = vi.hoisted(() => ({
 }));
 
 const waitForRateLimitSlotMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const waitForBurstRateLimitSlotMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const checkRateLimitMock = vi.hoisted(() => vi.fn());
 
 vi.mock("electron", () => ({
@@ -53,6 +54,7 @@ vi.mock("../../utils.js", () => {
   return {
     checkRateLimit: checkRateLimitMock,
     waitForRateLimitSlot: waitForRateLimitSlotMock,
+    waitForBurstRateLimitSlot: waitForBurstRateLimitSlotMock,
     typedHandle,
     typedHandleWithContext,
     typedHandleValidated: (
@@ -159,19 +161,19 @@ describe("worktree rate limiting", () => {
   });
 
   describe("worktree:create", () => {
-    it("calls waitForRateLimitSlot with dedicated key and parameters", async () => {
+    it("calls waitForBurstRateLimitSlot with dedicated key, interval, and burst allowance", async () => {
       const handler = getInvokeHandler(CHANNELS.WORKTREE_CREATE);
       await handler({} as never, {
         rootPath: "/test/project",
         options: { baseBranch: "main", newBranch: "feat-1", path: "/test/worktrees/feat-1" },
       });
 
-      expect(waitForRateLimitSlotMock).toHaveBeenCalledWith("worktreeCreate", 1_000);
+      expect(waitForBurstRateLimitSlotMock).toHaveBeenCalledWith("worktreeCreate", 1_000, 30);
       expect(mockWorktreeService.createWorktree).toHaveBeenCalled();
     });
 
     it("rejects without calling createWorktree when rate limit slot rejects", async () => {
-      waitForRateLimitSlotMock.mockRejectedValueOnce(new Error("Spawn queue full"));
+      waitForBurstRateLimitSlotMock.mockRejectedValueOnce(new Error("Spawn queue full"));
       const handler = getInvokeHandler(CHANNELS.WORKTREE_CREATE);
 
       await expect(

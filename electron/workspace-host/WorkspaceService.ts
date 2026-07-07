@@ -41,10 +41,12 @@ import { WorktreeListService } from "./WorktreeListService.js";
 import { PRIntegrationService, type PRIntegrationCallbacks } from "./PRIntegrationService.js";
 import { RepoFetchCoordinator } from "./RepoFetchCoordinator.js";
 import { waitForPathExists } from "../utils/fs.js";
+import { markHostPerformance } from "../utils/hostPerformance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import {
   parseCheckedOutBranches,
   nextAvailableBranchName,
+  isBranchAlreadyExistsError,
   ensureNoteFile,
   assertWorktreePathContained,
 } from "./worktreeUtils.js";
@@ -281,6 +283,12 @@ export class WorkspaceService {
   // are no-ops while paused/disabled via scheduleTopologyReconcile's guards.
   private periodicSafetyTimer: ReturnType<typeof setInterval> | null = null;
   private readonly inFlightWorktreeCreates = new Map<string, Promise<string>>();
+  // Per-repo create chain: distinct creates on the same root run strictly
+  // one-at-a-time, back to back. This enforces the no-concurrent-`git worktree
+  // add` property (#5098 git lock contention) at the actual git boundary, so
+  // the IPC layer's rate limit can grant a burst allowance without wall-clock
+  // pacing every create 1s apart.
+  private readonly createWorktreeQueues = new Map<string, Promise<unknown>>();
 
   /**
    * Host-run identity, minted once per WorkspaceService instance — i.e. once
@@ -2378,7 +2386,7 @@ export class WorkspaceService {
       return;
     }
 
-    const createPromise = this.performCreateWorktree(rootPath, options);
+    const createPromise = this.enqueueCreateWorktree(rootPath, options);
     this.inFlightWorktreeCreates.set(createKey, createPromise);
 
     try {
@@ -2401,6 +2409,21 @@ export class WorkspaceService {
         this.inFlightWorktreeCreates.delete(createKey);
       }
     }
+  }
+
+  private enqueueCreateWorktree(rootPath: string, options: CreateWorktreeOptions): Promise<string> {
+    const queueKey = this.normalizeCreateWorktreeKeyPath(pathResolve(rootPath));
+    const prev = this.createWorktreeQueues.get(queueKey) ?? Promise.resolve();
+    const run = prev.then(() => this.performCreateWorktree(rootPath, options));
+    // A failed create must not poison the chain for the next caller.
+    const tail = run.catch(() => {});
+    this.createWorktreeQueues.set(queueKey, tail);
+    void tail.then(() => {
+      if (this.createWorktreeQueues.get(queueKey) === tail) {
+        this.createWorktreeQueues.delete(queueKey);
+      }
+    });
+    return run;
   }
 
   private getCreateWorktreeInFlightKey(rootPath: string, options: CreateWorktreeOptions): string {
@@ -2428,6 +2451,7 @@ export class WorkspaceService {
     // absoluteCreatePath is block-scoped to the try.
     let pendingCreateKey: string | null = null;
     try {
+      markHostPerformance("wtcreate.host-start", { branch: options.newBranch });
       const git = await createHardenedGit(rootPath);
       const { baseBranch, path } = options;
       let { newBranch } = options;
@@ -2467,27 +2491,69 @@ export class WorkspaceService {
         await mkdir(parentDir, { recursive: true });
       }
 
-      // #6463: when not explicitly reusing a branch, guard against a stale
-      // local branch with the same name. Without this, `git worktree add -b`
-      // hits "fatal: a branch named '...' already exists" whenever a previous
-      // worktree was deleted but its branch was kept. Two recoveries:
-      // (a) branch exists but is not checked out anywhere → reuse it (drop
-      //     -b, switch to the useExistingBranch arg form);
-      // (b) branch is live in another worktree → suffix -2/-3/... and create
-      //     a fresh branch.
-      // Inlined (not behind a helper) so the happy-path microtask timing
-      // matches the pre-fix behavior — the next await is still the worktree
-      // add, not a wrapper-promise resolution.
-      if (!useExistingBranch) {
-        let localBranches: string[] = [];
-        try {
-          localBranches = (await git.branchLocal()).all;
-        } catch {
-          // Best-effort: if branch listing fails, fall through and let the
-          // actual worktree command surface its own error.
-        }
+      // Mark the metadata-subdir basename pending so the watcher event our own
+      // `git worktree add` produces is recognized and dropped — without
+      // blanket-suppressing concurrent external `git worktree remove` events.
+      pendingCreateKey = this.topologyMetadataKey(absoluteCreatePath);
+      this.topologyMarkPending(pendingCreateKey, this.topologyPendingCreate);
 
-        if (localBranches.includes(newBranch)) {
+      // `--end-of-options` after the subcommand flags so any leading-dash ref
+      // or path that slipped past validation is treated as positional.
+      const addReusingBranch = () =>
+        git.raw(["worktree", "add", "--end-of-options", path, newBranch]);
+      // --no-track: local-base branches shouldn't auto-track a local ref even
+      // when the user has branch.autoSetupMerge=always. Skipping tracking also
+      // avoids a .git/config.lock acquisition, cutting contention under bulk
+      // creation. PR-mode (fromRemote) keeps --track — ahead/behind badges
+      // at WorktreeMonitor.ts:1092 depend on @{u} resolving.
+      const addNewBranch = () =>
+        git.raw([
+          "worktree",
+          "add",
+          "-b",
+          newBranch,
+          fromRemote ? "--track" : "--no-track",
+          "--end-of-options",
+          path,
+          baseBranch,
+        ]);
+
+      markHostPerformance("wtcreate.git-add:start", { branch: newBranch });
+      if (useExistingBranch) {
+        await addReusingBranch();
+      } else {
+        try {
+          await addNewBranch();
+        } catch (addError) {
+          // #6463: a stale local branch with the same name makes `worktree add
+          // -b` fail with "a branch named '...' already exists" whenever a
+          // previous worktree was deleted but its branch was kept. That add
+          // failure is atomic — git refuses before creating the directory or
+          // registering any worktree metadata — so collision detection rides
+          // the add itself instead of charging every create a pre-flight
+          // `git branchLocal` spawn. Recovery outcomes are unchanged:
+          // (a) branch exists but is not checked out anywhere → reuse it (drop
+          //     -b, switch to the useExistingBranch arg form);
+          // (b) branch is live in another worktree → suffix -2/-3/... and
+          //     create a fresh branch.
+          if (!isBranchAlreadyExistsError(addError)) throw addError;
+
+          // The failed add produced no watcher event to suppress; release the
+          // pending mark while the recovery probes run so an external create
+          // of the same basename in this window isn't silently dropped, then
+          // re-mark just before the retry add below.
+          this.topologyClearPending(pendingCreateKey);
+
+          let localBranches: string[];
+          try {
+            localBranches = (await git.branchLocal()).all;
+          } catch {
+            // Can't inspect branches to recover; surface the original git
+            // failure (same outcome as the old pre-flight, whose listing
+            // failure fell through to this add error).
+            throw addError;
+          }
+
           let checkedOut = new Set<string>();
           let listFailed = false;
           try {
@@ -2505,57 +2571,21 @@ export class WorkspaceService {
           // a fresh tracking branch is created.
           const canReuse = !listFailed && !fromRemote && !checkedOut.has(newBranch);
 
+          this.topologyMarkPending(pendingCreateKey, this.topologyPendingCreate);
           if (canReuse) {
             useExistingBranch = true;
             // The -b path tracks baseBranch; reuse drops that. Stale local
             // branches typically retain their original config, so this is
             // the right tradeoff vs. failing the user-visible create.
             fromRemote = false;
+            await addReusingBranch();
           } else {
             newBranch = nextAvailableBranchName(newBranch, new Set(localBranches));
+            await addNewBranch();
           }
         }
       }
-
-      // `--end-of-options` after the subcommand flags so any leading-dash ref
-      // or path that slipped past validation is treated as positional.
-
-      // Mark the metadata-subdir basename pending so the watcher event our own
-      // `git worktree add` produces is recognized and dropped — without
-      // blanket-suppressing concurrent external `git worktree remove` events.
-      pendingCreateKey = this.topologyMetadataKey(absoluteCreatePath);
-      this.topologyMarkPending(pendingCreateKey, this.topologyPendingCreate);
-
-      if (useExistingBranch) {
-        await git.raw(["worktree", "add", "--end-of-options", path, newBranch]);
-      } else if (fromRemote) {
-        await git.raw([
-          "worktree",
-          "add",
-          "-b",
-          newBranch,
-          "--track",
-          "--end-of-options",
-          path,
-          baseBranch,
-        ]);
-      } else {
-        // --no-track: local-base branches shouldn't auto-track a local ref even
-        // when the user has branch.autoSetupMerge=always. Skipping tracking also
-        // avoids a .git/config.lock acquisition, cutting contention under bulk
-        // creation. PR-mode (fromRemote) keeps --track — ahead/behind badges
-        // at WorktreeMonitor.ts:1092 depend on @{u} resolving.
-        await git.raw([
-          "worktree",
-          "add",
-          "-b",
-          newBranch,
-          "--no-track",
-          "--end-of-options",
-          path,
-          baseBranch,
-        ]);
-      }
+      markHostPerformance("wtcreate.git-add:end", { branch: newBranch });
 
       const absolutePath = isAbsolute(path) ? pathResolve(path) : pathResolve(rootPath, path);
       // 500ms is ample: git returns after the directory exists; the polling
@@ -2567,6 +2597,7 @@ export class WorkspaceService {
         initialRetryDelayMs: 50,
         maxRetryDelayMs: 800,
       });
+      markHostPerformance("wtcreate.path-verified", { branch: newBranch });
 
       // Build the Worktree object directly from known inputs instead of
       // shelling out to `git worktree list --porcelain` — the per-create list
@@ -2598,6 +2629,7 @@ export class WorkspaceService {
       // We bypass syncMonitors here because syncMonitors treats its array as
       // authoritative and would remove every other non-main monitor.
       await this.addNewWorktreeMonitor(createdWorktree, isActive, true);
+      markHostPerformance("wtcreate.monitor-registered", { branch: newBranch });
 
       // Monitor is registered. Drop the pending entry now: any still-buffered
       // create event for this name will be matched by the next drain (the
@@ -2700,6 +2732,7 @@ export class WorkspaceService {
           details: stack,
         });
       });
+      markHostPerformance("wtcreate.host-end", { branch: newBranch });
       return canonicalWorktreeId;
     } catch (error) {
       // Create failed — drop any pending entry so a real external change to
@@ -2821,6 +2854,7 @@ export class WorkspaceService {
     // is block-scoped to the try.
     let pendingDeleteKey: string | null = null;
     try {
+      markHostPerformance("wtdelete.host-start", { worktreeId });
       const monitor = this.monitors.get(worktreeId);
       if (!monitor) {
         // Replay path: the monitor was cleaned up by the original successful
@@ -2919,7 +2953,9 @@ export class WorkspaceService {
           // `--end-of-options` so a leading-dash worktree path is treated as
           // positional rather than parsed as a flag.
           args.push("--end-of-options", monitor.path);
+          markHostPerformance("wtdelete.git-remove:start", { worktreeId });
           const removeResult = await this.removeGitWorktreeWithRetry(this.git, args, monitor.path);
+          markHostPerformance("wtdelete.git-remove:end", { worktreeId });
           if (removeResult === "stale") {
             try {
               await this.git.raw(["worktree", "prune"]);
@@ -2994,6 +3030,7 @@ export class WorkspaceService {
       // a second delete — the operation completed once, the renderer just
       // missed the live ack.
       if (mutationId) this.recordAcknowledgedMutation(mutationId);
+      markHostPerformance("wtdelete.host-end", { worktreeId });
       this.sendEvent({ type: "delete-worktree-result", requestId, success: true });
     } catch (error) {
       // Delete failed — drop any pending entry so a real external change to
