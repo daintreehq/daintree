@@ -56,8 +56,20 @@ export function distributePortsToView(
   }
 
   if (win && !win.isDestroyed() && !targetWc.isDestroyed()) {
-    targetWc.postMessage("terminal-port-token", { token: handshakeToken });
-    targetWc.postMessage("terminal-port", { token: handshakeToken }, [port1]);
+    try {
+      targetWc.postMessage("terminal-port-token", { token: handshakeToken });
+      targetWc.postMessage("terminal-port", { token: handshakeToken }, [port1]);
+    } catch (error) {
+      // A reloading frame can be disposed while its WebContents still reports
+      // alive, so postMessage throws despite the isDestroyed() checks. Keep
+      // the pair wired: closing port1 would fire the pty-host's port-close
+      // teardown and sever the connection just re-established; onViewReady
+      // re-brokers a fresh pair once the frame finishes reloading.
+      console.warn(
+        `[portDistribution] Failed to deliver terminal MessagePort to window ${ctx.windowId}; awaiting re-broker:`,
+        error
+      );
+    }
   }
 }
 
@@ -90,7 +102,19 @@ export function distributeTerminalWorkerPortToView(
   ports.set(terminalId, { rendererPort: port1, ptyHostPort: port2 });
 
   ptyClient.connectTerminalMessagePort(ctx.windowId, terminalId, port2);
-  targetWc.postMessage("terminal-worker-port", { token, terminalId }, [port1]);
+  try {
+    targetWc.postMessage("terminal-worker-port", { token, terminalId }, [port1]);
+  } catch (error) {
+    // Same disposed-frame race as above. Worker ports are lazy and
+    // best-effort, so a failed delivery releases the pair immediately —
+    // the renderer's request timeout mints a fresh one on re-engage.
+    console.warn(
+      `[portDistribution] Failed to deliver worker MessagePort for terminal ${terminalId} in window ${ctx.windowId}; releasing pair:`,
+      error
+    );
+    releaseTerminalWorkerPort(ctx, ptyClient, terminalId);
+    return null;
+  }
   return { token };
 }
 

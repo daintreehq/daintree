@@ -311,19 +311,26 @@ export async function initPerWindowServices(
       if (windowRegistry) {
         for (const wCtx of windowRegistry.all()) {
           if (windowId !== undefined && wCtx.windowId !== windowId) continue;
-          if (!wCtx.browserWindow.isDestroyed()) {
-            const wc = getAppWebContents(wCtx.browserWindow);
-            if (!wc.isDestroyed()) {
-              distributePortsToView(wCtx.browserWindow, wCtx, wc, ptyClient);
-              try {
-                wc.send(CHANNELS.EVENTS_PUSH, {
-                  name: "terminal:backend-ready",
-                  payload: undefined,
-                });
-              } catch {
-                // Silently ignore send failures during window disposal.
+          // One window's failure must not abort the refresh for the rest —
+          // the caller (respawnPendingForShard) still has respawn replay,
+          // data-mirror re-enable, and global config replay to run.
+          try {
+            if (!wCtx.browserWindow.isDestroyed()) {
+              const wc = getAppWebContents(wCtx.browserWindow);
+              if (!wc.isDestroyed()) {
+                distributePortsToView(wCtx.browserWindow, wCtx, wc, ptyClient);
+                try {
+                  wc.send(CHANNELS.EVENTS_PUSH, {
+                    name: "terminal:backend-ready",
+                    payload: undefined,
+                  });
+                } catch {
+                  // Silently ignore send failures during window disposal.
+                }
               }
             }
+          } catch (error) {
+            console.error(`[MAIN] Failed to refresh PTY port for window ${wCtx.windowId}:`, error);
           }
         }
       }
