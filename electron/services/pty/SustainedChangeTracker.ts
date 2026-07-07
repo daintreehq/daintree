@@ -308,7 +308,7 @@ const COLLAPSIBLE_FILL_CHARS = new Set([
   "▔",
 ]);
 
-function isCollapsibleFillText(text: string): boolean {
+export function isCollapsibleFillText(text: string): boolean {
   if (COLLAPSIBLE_FILL_CHARS.has(text)) {
     return true;
   }

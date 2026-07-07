@@ -91,7 +91,7 @@ import {
   readCursorLine,
   readLastNLines,
   readVisibleActivityLines,
-  readVisibleActivitySnapshot,
+  ViewportSnapshotCache,
 } from "./analysis/headlessViewport.js";
 import type { AnalysisFinalSnapshot } from "./analysisWorkerProtocol.js";
 import { TerminalExitObservers, type TerminalExitArgs } from "./TerminalExitObservers.js";
@@ -191,6 +191,11 @@ export class TerminalProcess {
   private sessionSnapshotter!: SessionSnapshotter;
   private readonly agentOutputTemperature = new AgentActivityTemperature();
   private agentOutputContentSnapshot: VisibleContentSnapshot | undefined;
+  // In-thread analysis only (worker mode has no local headless mirror).
+  // Shared by the monitor's polling cycle and noteAgentOutputActivity so the
+  // full-viewport extract+hash runs once per parse, not once per consumer per
+  // tick (PERF-035).
+  private readonly viewportSnapshotCache = new ViewportSnapshotCache();
   // -Infinity so the first comparison is never throttled regardless of where
   // the clock starts (fake test clocks sit at 0).
   private lastAgentOutputNoteAt = Number.NEGATIVE_INFINITY;
@@ -596,6 +601,7 @@ export class TerminalProcess {
 
     this.terminalInfo.headlessTerminal = headlessTerminal;
     this.terminalInfo.serializeAddon = serializeAddon;
+    this.viewportSnapshotCache.attach(headlessTerminal);
     this.restoreSessionIfPresent(headlessTerminal);
 
     return new InThreadAnalysisBackend(this.createInThreadAnalysisHost());
@@ -613,6 +619,9 @@ export class TerminalProcess {
       setScrollback: (lines) => {
         if (!this.terminalInfo.headlessTerminal) return false;
         this.terminalInfo.headlessTerminal.options.scrollback = lines;
+        // A scrollback shrink can trim the buffer; viewport-relative reads
+        // should not trust a snapshot taken before the trim.
+        this.viewportSnapshotCache.invalidate();
         return true;
       },
       readViewportLines: (n) => readLastNLines(this.terminalInfo.headlessTerminal, n),
@@ -780,6 +789,7 @@ export class TerminalProcess {
     const terminal = this.terminalInfo;
     this.agentOutputTemperature.reset();
     this.agentOutputContentSnapshot = undefined;
+    this.viewportSnapshotCache.detach();
     if (!terminal.headlessTerminal) {
       return;
     }
@@ -1499,7 +1509,7 @@ export class TerminalProcess {
   }
 
   getVisibleActivitySnapshot(n: number): VisibleContentSnapshot | undefined {
-    return readVisibleActivitySnapshot(this.terminalInfo.headlessTerminal, n);
+    return this.viewportSnapshotCache.read(this.terminalInfo.headlessTerminal, n);
   }
 
   getCursorLine(): string | null {
@@ -2019,6 +2029,10 @@ export class TerminalProcess {
       terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
       headlessMirrorScheduler.enqueue(this.id, terminal.headlessTerminal, data, () => {
         terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
+        // Invalidate before noteAgentOutputActivity reads the viewport: xterm
+        // fires per-write callbacks before the onWriteParsed event the cache
+        // subscribes to, and a stale hit here would diff a pre-parse snapshot.
+        this.viewportSnapshotCache.invalidate();
         this.noteAgentOutputActivity();
       });
     } else {
