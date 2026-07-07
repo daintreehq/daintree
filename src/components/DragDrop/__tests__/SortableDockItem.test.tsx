@@ -172,6 +172,56 @@ describe("SortableDockItem", () => {
     expect(dispose).toHaveBeenCalledTimes(1);
   });
 
+  it("registers only once across re-renders despite churning listeners identity and array refs", () => {
+    // The useSortable mock returns a fresh `listeners` object on every render,
+    // mirroring how the real shared DndContext re-creates listeners on every
+    // drag frame. Combined with a fresh `groupPanelIds` array reference (same
+    // ids), the registration must NOT re-fire — a re-fire would re-render
+    // DockPanelOffscreenContainer on every drag frame app-wide.
+    mockState = { isDragging: false };
+    const dispose = vi.fn();
+    const registerDragHandle = vi.fn(() => dispose);
+    const ctx: DockPanelContextValue = {
+      moveToDestination: vi.fn(),
+      registerDragHandle,
+    };
+    const { rerender } = render(
+      <DockPanelContext.Provider value={ctx}>
+        <SortableDockItem
+          terminal={terminal}
+          sourceIndex={0}
+          groupId="g1"
+          groupPanelIds={["t2", "t3"]}
+        >
+          <div />
+        </SortableDockItem>
+      </DockPanelContext.Provider>
+    );
+    expect(registerDragHandle).toHaveBeenCalledTimes(1);
+
+    // Re-render twice with a NEW array reference holding the SAME ids and a
+    // changed sourceIndex (forces a real re-render + fresh mock listeners).
+    for (const idx of [1, 2]) {
+      rerender(
+        <DockPanelContext.Provider value={ctx}>
+          <SortableDockItem
+            terminal={terminal}
+            sourceIndex={idx}
+            groupId="g1"
+            groupPanelIds={["t2", "t3"]}
+          >
+            <div />
+          </SortableDockItem>
+        </DockPanelContext.Provider>
+      );
+    }
+
+    // The joined id-key ("t2,t3") is unchanged, so the id set never changed —
+    // still a single registration, no dispose.
+    expect(registerDragHandle).toHaveBeenCalledTimes(1);
+    expect(dispose).not.toHaveBeenCalled();
+  });
+
   it("renders no insertion indicator when idle", () => {
     mockState = { isDragging: false };
     const { container } = render(

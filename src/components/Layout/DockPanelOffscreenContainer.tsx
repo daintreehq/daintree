@@ -45,9 +45,9 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
   // here (keyed by panel id, or every member id for a group) so the portaled
   // panel body — a React sibling of the sortable — can consume it. Same ref +
   // state-snapshot shape as `wrappers` above: the ref is authoritative, state
-  // snapshots it so render never reads the ref. Registration happens once per
-  // dock item mount (dnd-kit's listeners/setActivatorNodeRef are referentially
-  // stable), so this does not re-render on drag frames.
+  // snapshots it so render never reads the ref. SortableDockItem registers a
+  // STABLE handle proxy (see its comment), so this map mutates only on dock-item
+  // mount/unmount — never on drag frames despite dnd-kit churning listeners.
   const dragHandlesRef = useRef<Map<string, DragHandleContextValue>>(new Map());
   const [dragHandles, setDragHandles] = useState<Map<string, DragHandleContextValue>>(
     () => new Map()

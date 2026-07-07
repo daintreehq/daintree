@@ -307,6 +307,60 @@ describe("DockPanelOffscreenContainer drag-handle bridge (#10990)", () => {
     expect(panel.getAttribute("data-has-listeners")).toBe("true");
   });
 
+  it("keeps a parked group member empty while a different member is active (gate ≠ 'any active')", () => {
+    // Two panels registered under one shared group handle; only panel-1 is
+    // active. The active member lights up; the parked member must NOT — else a
+    // parked header would claim the group's shared setActivatorNodeRef.
+    setPanels([makePanel({ id: "panel-1" }), makePanel({ id: "panel-2" })]);
+    mockState.activeDockTerminalId = "panel-1";
+    renderWithRegister();
+
+    const groupHandle = {
+      listeners: { onPointerDown: vi.fn(), onKeyDown: vi.fn() },
+      setActivatorNodeRef: vi.fn(),
+    };
+    act(() => {
+      capturedRegister!(["panel-1", "panel-2"], groupHandle);
+    });
+
+    const active = document.querySelector('[data-testid="docked-panel"][data-pid="panel-1"]')!;
+    const parked = document.querySelector('[data-testid="docked-panel"][data-pid="panel-2"]')!;
+    expect(active.getAttribute("data-has-listeners")).toBe("true");
+    expect(parked.getAttribute("data-has-listeners")).toBe("false");
+    expect(parked.getAttribute("data-has-activator")).toBe("false");
+  });
+
+  it("flips the header's listeners off on popover close WITHOUT remounting the panel node", () => {
+    mockState.activeDockTerminalId = "panel-1";
+    const { rerender } = renderWithRegister();
+
+    const handle = {
+      listeners: { onPointerDown: vi.fn(), onKeyDown: vi.fn() },
+      setActivatorNodeRef: vi.fn(),
+    };
+    act(() => {
+      capturedRegister!(["panel-1"], handle);
+    });
+    const openNode = document.querySelector('[data-testid="docked-panel"]')!;
+    expect(openNode.getAttribute("data-has-listeners")).toBe("true");
+
+    // Close the popover (active id clears); the provider element type never
+    // toggles, so only the context value flips empty — same portaled node.
+    mockState.activeDockTerminalId = null;
+    act(() => {
+      rerender(
+        <DockPanelOffscreenContainer>
+          <CaptureRegister />
+        </DockPanelOffscreenContainer>
+      );
+    });
+
+    const closedNode = document.querySelector('[data-testid="docked-panel"]')!;
+    expect(closedNode).toBe(openNode); // no remount — xterm subtree preserved
+    expect(closedNode.getAttribute("data-has-listeners")).toBe("false");
+    expect(closedNode.getAttribute("data-has-activator")).toBe("false");
+  });
+
   it("a stale disposer does not clear a newer registration for the same id", () => {
     mockState.activeDockTerminalId = "panel-1";
     renderWithRegister();

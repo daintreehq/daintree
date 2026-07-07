@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { m } from "framer-motion";
@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { UI_ANIMATION_DURATION, DRAG_GHOST_OPACITY, DRAG_GHOST_EASING } from "@/lib/animationUtils";
 import type { PanelInstance } from "@shared/types/panel";
 import type { DragData } from "./DndProvider";
-import { DragHandleProvider } from "./DragHandleContext";
+import { DragHandleProvider, type DragHandleContextValue } from "./DragHandleContext";
 import { useDockPanelDragHandleRegistration } from "@/components/Layout/dockPanelPortalContext";
 
 interface SortableDockItemProps {
@@ -77,10 +77,35 @@ export function SortableDockItem({
   // so a fresh `groupPanelIds` array on an unrelated render doesn't re-fire this.
   const registerDragHandle = useDockPanelDragHandleRegistration();
   const dragHandleIdKey = groupPanelIds?.join(",");
+
+  // dnd-kit re-creates `listeners` on every shared-DndContext render — which is
+  // effectively every drag frame anywhere in the app (DndProvider churns
+  // placeholder/over state, and its inline sensor options defeat useSensor
+  // memoization). Registering the raw `{ listeners, setActivatorNodeRef }` would
+  // make this effect re-fire and re-render DockPanelOffscreenContainer on every
+  // such frame — the exact drag-perf regression this dock path is hardened
+  // against. So keep the latest handle in a ref and register a STABLE proxy that
+  // reads through it, keyed only on the (stable) id set. The bridged header
+  // re-reads the proxy each time it opens, so it always sees live listeners.
+  const handleRef = useRef<DragHandleContextValue>({ listeners, setActivatorNodeRef });
+  useEffect(() => {
+    handleRef.current = { listeners, setActivatorNodeRef };
+  });
+  const bridgedHandle = useMemo<DragHandleContextValue>(
+    () => ({
+      get listeners() {
+        return handleRef.current.listeners;
+      },
+      get setActivatorNodeRef() {
+        return handleRef.current.setActivatorNodeRef;
+      },
+    }),
+    []
+  );
   useEffect(() => {
     const ids = dragHandleIdKey ? dragHandleIdKey.split(",") : [terminal.id];
-    return registerDragHandle(ids, { listeners, setActivatorNodeRef });
-  }, [registerDragHandle, terminal.id, dragHandleIdKey, listeners, setActivatorNodeRef]);
+    return registerDragHandle(ids, bridgedHandle);
+  }, [registerDragHandle, terminal.id, dragHandleIdKey, bridgedHandle]);
 
   const style = {
     transform: CSS.Transform.toString(transform),
