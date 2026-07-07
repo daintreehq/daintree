@@ -126,8 +126,6 @@ export function cancelContextInjection(): void {
 
 export function useContextInjection(targetTerminalId?: string): UseContextInjectionReturn {
   const [error, setError] = useState<string | null>(null);
-  const focusedId = usePanelStore((state) => state.focusedId);
-  const panelsById = usePanelStore((state) => state.panelsById);
   const addError = useErrorStore((state) => state.addError);
   const removeError = useErrorStore((state) => state.removeError);
 
@@ -226,7 +224,12 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
 
   const inject = useCallback(
     async (worktreeId: string, terminalId?: string, selectedPaths?: string[]) => {
-      const activeTerminal = terminalId || focusedId;
+      // Read focus/panel state at call time instead of holding reactive
+      // subscriptions: this hook is mounted in App AND in every TerminalPane,
+      // and a live `panelsById` selector re-rendered all of them on every
+      // panel-map identity change (each agent-state flip and each rAF status
+      // flush). getState() is also fresher than a render-captured snapshot.
+      const activeTerminal = terminalId || usePanelStore.getState().focusedId;
 
       if (!activeTerminal) {
         setError("No terminal selected");
@@ -239,7 +242,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         return;
       }
 
-      let terminal = panelsById[activeTerminal];
+      let terminal = usePanelStore.getState().panelsById[activeTerminal];
       if (!terminal) {
         setError(`Terminal not found: ${activeTerminal}`);
         return;
@@ -458,7 +461,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         }
       }
     },
-    [focusedId, panelsById, addError, removeError]
+    [addError, removeError]
   );
 
   const cancel = useCallback(() => {
