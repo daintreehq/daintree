@@ -6,6 +6,7 @@ import type { ProcessTreeCache } from "../../ProcessTreeCache.js";
 import type { DetectionResult } from "../../ProcessDetector.js";
 import { makeAgentResult, makeNoAgentResult } from "../../ProcessDetector.js";
 import { events } from "../../events.js";
+import { DEFAULT_SCROLLBACK } from "../types.js";
 
 vi.mock("node-pty", () => {
   return { spawn: vi.fn() };
@@ -507,16 +508,14 @@ describe("TerminalProcess.handleAgentDetection — polling loop teardown", () =>
 });
 
 // Issue #5776: spawn-sealed agent behaviours on runtime-promoted panels.
-// Plain terminals spawned with kind="terminal" inherit DEFAULT_SCROLLBACK (1k);
-// when runtime detection sees an agent appear, the headless detection buffer
-// must grow to AGENT_SCROLLBACK (10k) so the buffer carries enough history for
-// the agent's longer output. Cold agent terminals already start at 10k and
-// must be untouched.
+// Every PTY starts at DEFAULT_SCROLLBACK (the tiered agent-vs-plain split was
+// retired); the invariant under test is that runtime agent detection never
+// changes the headless mirror's scrollback, in either direction.
 describe("TerminalProcess.handleAgentDetection — runtime promotion scrollback", () => {
   it("plain terminal starts at DEFAULT_SCROLLBACK and agent detection does not change it", () => {
     const terminal = createPlainTerminal();
     try {
-      expect(getScrollback(terminal)).toBe(10000);
+      expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
 
       callHandleAgentDetection(
         terminal,
@@ -524,7 +523,7 @@ describe("TerminalProcess.handleAgentDetection — runtime promotion scrollback"
         getSpawnedAt(terminal)
       );
 
-      expect(getScrollback(terminal)).toBe(10000);
+      expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
     } finally {
       terminal.dispose();
     }
@@ -538,14 +537,14 @@ describe("TerminalProcess.handleAgentDetection — runtime promotion scrollback"
         makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
         getSpawnedAt(terminal)
       );
-      expect(getScrollback(terminal)).toBe(10000);
+      expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
 
       callHandleAgentDetection(
         terminal,
         makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
         getSpawnedAt(terminal)
       );
-      expect(getScrollback(terminal)).toBe(10000);
+      expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
     } finally {
       terminal.dispose();
     }
@@ -555,7 +554,7 @@ describe("TerminalProcess.handleAgentDetection — runtime promotion scrollback"
     const terminal = createAgentTerminal();
     try {
       // Cold-spawned agent already starts at AGENT_SCROLLBACK.
-      expect(getScrollback(terminal)).toBe(10000);
+      expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
 
       callHandleAgentDetection(
         terminal,
@@ -563,7 +562,7 @@ describe("TerminalProcess.handleAgentDetection — runtime promotion scrollback"
         getSpawnedAt(terminal)
       );
 
-      expect(getScrollback(terminal)).toBe(10000);
+      expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
     } finally {
       terminal.dispose();
     }
@@ -572,9 +571,9 @@ describe("TerminalProcess.handleAgentDetection — runtime promotion scrollback"
   it("growScrollback never shrinks", () => {
     const terminal = createAgentTerminal();
     try {
-      expect(getScrollback(terminal)).toBe(10000);
-      terminal.growScrollback(5000);
-      expect(getScrollback(terminal)).toBe(10000);
+      expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
+      terminal.growScrollback(Math.floor(DEFAULT_SCROLLBACK / 2));
+      expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
     } finally {
       terminal.dispose();
     }
@@ -588,14 +587,14 @@ describe("TerminalProcess.handleAgentDetection — runtime promotion scrollback"
         makeAgentResult({ agentType: "claude" as const, processIconId: "claude" }),
         getSpawnedAt(terminal)
       );
-      expect(getScrollback(terminal)).toBe(10000);
+      expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
 
       callHandleAgentDetection(
         terminal,
         makeAgentResult({ agentType: "gemini" as const, processIconId: "gemini" }),
         getSpawnedAt(terminal)
       );
-      expect(getScrollback(terminal)).toBe(10000);
+      expect(getScrollback(terminal)).toBe(DEFAULT_SCROLLBACK);
     } finally {
       terminal.dispose();
     }

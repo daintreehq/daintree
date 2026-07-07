@@ -5,6 +5,7 @@ import {
   unfreezeWebContents,
   throttleCpuWebContents,
   unthrottleCpuWebContents,
+  purgeMemoryWebContents,
 } from "../webContentsLifecycle.js";
 
 interface MockDebugger {
@@ -281,6 +282,60 @@ describe("webContentsLifecycle", () => {
     it("never throws when wc.debugger is missing entirely (unthrottle)", async () => {
       const wc = { isDestroyed: vi.fn(() => false) } as unknown as Electron.WebContents;
       await expect(unthrottleCpuWebContents(wc)).resolves.toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("purgeMemoryWebContents", () => {
+    it("sends the pressure notification before the HeapProfiler GC sequence", async () => {
+      const wc = createMockWc();
+      await purgeMemoryWebContents(wc as unknown as Electron.WebContents);
+      const methods = wc.debugger.sendCommand.mock.calls.map((c: unknown[]) => c[0]);
+      expect(methods).toEqual([
+        "Memory.simulatePressureNotification",
+        "HeapProfiler.enable",
+        "HeapProfiler.collectGarbage",
+        "HeapProfiler.disable",
+      ]);
+      expect(wc.debugger.sendCommand.mock.calls[0][1]).toEqual({ level: "critical" });
+    });
+
+    it("never sends Memory.forciblyPurgeJavaScriptMemory (SIGSEGVs throttled hidden views)", async () => {
+      const wc = createMockWc();
+      await purgeMemoryWebContents(wc as unknown as Electron.WebContents);
+      const methods = wc.debugger.sendCommand.mock.calls.map((c: unknown[]) => c[0]);
+      expect(methods).not.toContain("Memory.forciblyPurgeJavaScriptMemory");
+    });
+
+    it("skips entirely when Windows E2E disables cached-view CDP throttles", async () => {
+      vi.stubEnv("DAINTREE_E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE", "1");
+      const wc = createMockWc();
+      await purgeMemoryWebContents(wc as unknown as Electron.WebContents);
+      expect(wc.debugger.attach).not.toHaveBeenCalled();
+      expect(wc.debugger.sendCommand).not.toHaveBeenCalled();
+    });
+
+    it("returns early when wc is destroyed", async () => {
+      const wc = createMockWc({ destroyed: true });
+      await purgeMemoryWebContents(wc as unknown as Electron.WebContents);
+      expect(wc.debugger.sendCommand).not.toHaveBeenCalled();
+    });
+
+    it("swallows expected CDP errors silently", async () => {
+      const wc = createMockWc();
+      wc.debugger.sendCommand.mockRejectedValueOnce(new Error("Target closed"));
+      await expect(
+        purgeMemoryWebContents(wc as unknown as Electron.WebContents)
+      ).resolves.toBeUndefined();
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it("warns once for an unexpected CDP error", async () => {
+      const wc = createMockWc();
+      wc.debugger.sendCommand.mockRejectedValueOnce(new Error("boom"));
+      await expect(
+        purgeMemoryWebContents(wc as unknown as Electron.WebContents)
+      ).resolves.toBeUndefined();
       expect(warnSpy).toHaveBeenCalledTimes(1);
     });
   });

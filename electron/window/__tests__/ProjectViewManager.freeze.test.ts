@@ -118,6 +118,7 @@ vi.mock("../../services/ProjectStore.js", () => ({
 }));
 
 vi.mock("../../utils/webContentsLifecycle.js", () => ({
+  purgeMemoryWebContents: vi.fn().mockResolvedValue(undefined),
   freezeWebContents: vi.fn().mockResolvedValue(undefined),
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
   throttleCpuWebContents: vi.fn().mockResolvedValue(undefined),
@@ -126,7 +127,11 @@ vi.mock("../../utils/webContentsLifecycle.js", () => ({
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { events } from "../../services/events.js";
-import { freezeWebContents, unfreezeWebContents } from "../../utils/webContentsLifecycle.js";
+import {
+  freezeWebContents,
+  unfreezeWebContents,
+  purgeMemoryWebContents,
+} from "../../utils/webContentsLifecycle.js";
 import {
   registerCachedViewWebContents,
   unregisterCachedViewWebContents,
@@ -631,5 +636,79 @@ describe("ProjectViewManager — memory sampler jitter", () => {
 
     vi.advanceTimersByTime(30_000);
     expect(sample).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("ProjectViewManager — cached-view memory purge", () => {
+  let manager: ProjectViewManager;
+  let win: ReturnType<typeof createMockWindow>;
+  let initialWc: ReturnType<typeof createMockWebContents>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    nextWebContentsId = 100;
+    win = createMockWindow();
+    manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 3,
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+    });
+    (manager as unknown as { waitForPaint: () => Promise<string> }).waitForPaint = () =>
+      Promise.resolve("signal");
+    initialWc = createMockWebContents();
+    const initialView = { webContents: initialWc, setBounds: vi.fn() };
+    manager.registerInitialView(initialView as never, "proj-a", "/path/a");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("purges a cached view only after the delay elapses", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    expect(vi.mocked(purgeMemoryWebContents)).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(19_999);
+    expect(vi.mocked(purgeMemoryWebContents)).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(vi.mocked(purgeMemoryWebContents)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(purgeMemoryWebContents)).toHaveBeenCalledWith(initialWc);
+  });
+
+  it("re-purges a long-cached view on the periodic interval", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    vi.advanceTimersByTime(20_000);
+    expect(vi.mocked(purgeMemoryWebContents)).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(60_000);
+    expect(vi.mocked(purgeMemoryWebContents)).toHaveBeenCalledTimes(2);
+    expect(
+      vi
+        .mocked(purgeMemoryWebContents)
+        .mock.calls.every((c) => c[0] === (initialWc as unknown as Electron.WebContents))
+    ).toBe(true);
+  });
+
+  it("never purges a view that was reactivated before the delay", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    vi.advanceTimersByTime(10_000);
+
+    await manager.switchTo("proj-a", "/path/a");
+    vi.advanceTimersByTime(120_000);
+
+    expect(vi.mocked(purgeMemoryWebContents)).not.toHaveBeenCalledWith(initialWc);
+  });
+
+  it("stops purging once the view is torn down", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    vi.advanceTimersByTime(20_000);
+    expect(vi.mocked(purgeMemoryWebContents)).toHaveBeenCalledTimes(1);
+
+    initialWc.isDestroyed.mockReturnValue(true);
+    vi.advanceTimersByTime(120_000);
+    expect(vi.mocked(purgeMemoryWebContents)).toHaveBeenCalledTimes(1);
   });
 });

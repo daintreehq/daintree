@@ -145,10 +145,15 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
-// V8 tuning for renderer processes: heap limits and GC exposure
+// V8 tuning for renderer processes: heap limits and GC exposure.
+// Semi-space 16 MB: the young generation commits up to ~2× the semi-space per
+// renderer, and with one renderer per project view the slack multiplies. 64 MB
+// (up to ~128 MB committed nursery per view under terminal streaming) bought
+// scavenge frequency we don't need — terminal churn is short-lived garbage
+// with a tiny live set, so scavenges stay sub-millisecond at 16 MB.
 app.commandLine.appendSwitch(
   "js-flags",
-  "--max-old-space-size=768 --max-semi-space-size=64 --expose-gc"
+  "--max-old-space-size=768 --max-semi-space-size=16 --expose-gc"
 );
 
 // Allow autoplay without user gesture (voice input, media panels).

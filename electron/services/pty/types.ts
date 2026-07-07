@@ -277,11 +277,13 @@ export const WRITE_MAX_CHUNK_SIZE = 50;
 export const WRITE_INTERVAL_MS = 5;
 
 // Scrollback configuration
-// All PTY panels get a generous scrollback; there is no "agent tier" scrollback
-// decision any more. The headless analysis buffer is small because only recent
-// output is needed for state detection; the renderer-visible scrollback is
-// larger so long agent runs don't truncate.
-export const DEFAULT_SCROLLBACK = 10000;
+// All PTY panels get the same scrollback; there is no "agent tier" scrollback
+// decision any more. Capped at the renderer's hard display ceiling (AGENT_POLICY
+// maxLines in src/utils/scrollbackConfig.ts — 5000 even for "unlimited") so the
+// headless analysis mirror never retains lines no renderer can show and no
+// consumer can read (terminal.getOutput caps at 1000). At ~12 bytes/cell this
+// halves the worst-case mirror cost per terminal versus the previous 10000.
+export const DEFAULT_SCROLLBACK = 5000;
 
 // Preserved-snapshot eviction (issue #10839)
 // Agent terminals that exit cleanly retain their full serialized scrollback

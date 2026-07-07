@@ -35,6 +35,7 @@ import {
   startEventLoopLagMonitor,
   startProcessMemoryMonitor,
 } from "../utils/performance.js";
+import { startMainIdleHeapCompaction } from "../services/mainHeapCompaction.js";
 import {
   startAppMetricsMonitor,
   hasSustainedRendererSaturation,
@@ -373,6 +374,13 @@ export async function initGlobalServices(
       if (process.env.DAINTREE_PERF_CAPTURE === "1" && !getStopProcessMemoryMonitor()) {
         setStopProcessMemoryMonitor(startProcessMemoryMonitor());
       }
+    },
+  });
+
+  registerDeferredTask({
+    name: "main-idle-heap-compaction",
+    run: () => {
+      startMainIdleHeapCompaction();
     },
   });
 
