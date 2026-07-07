@@ -21,6 +21,15 @@ export function isPaintFabricViewHostingEnabled(): boolean {
   return isPaintFabricEnabled() && getDaintreeEnv("DAINTREE_PAINT_FABRIC_VIEWS") === "1";
 }
 
+// Independent kill switch for live worker-parse ingest (Phase 4 wiring): a
+// dedicated per-terminal MessagePort is transferred into the parse worker so
+// pty-host bytes bypass the main thread for BACKGROUND-tier terminals. Gated
+// separately from DAINTREE_PAINT_FABRIC so enabling the fabric never silently
+// turns on the worker ingest path, and vice versa.
+export function isPaintFabricWorkerIngestEnabled(): boolean {
+  return getDaintreeEnv("DAINTREE_PAINT_FABRIC_WORKER_INGEST") === "1";
+}
+
 export const PRIMARY_SURFACE_ID = "surface-primary";
 
 // Ceiling on in-process surfaces. In-process surfaces exist to exercise and

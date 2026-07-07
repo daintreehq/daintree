@@ -208,6 +208,10 @@ export type PtyHostRequest =
       visualSignalBuffer: SharedArrayBuffer;
     }
   | { type: "connect-port"; windowId: number }
+  // Dedicated per-terminal worker-ingest ports (issue #10960): the port rides
+  // the postMessage transfer list, exactly like connect-port.
+  | { type: "connect-terminal-port"; windowId: number; id: string }
+  | { type: "disconnect-terminal-port"; windowId: number; id: string }
   | { type: "get-terminal-info"; id: string; requestId: string }
   | { type: "force-resume"; id: string }
   | { type: "acknowledge-data"; id: string; byteCount: number }
@@ -931,7 +935,15 @@ export interface TerminalReliabilityMetricPayload {
 export type RendererToPtyHostMessage =
   | { type: "write"; id: string; data: string; traceId?: string }
   | { type: "resize"; id: string; cols: number; rows: number }
-  | { type: "ack"; id: string; bytes: number };
+  | { type: "ack"; id: string; bytes: number }
+  // Worker-ingest routing control (issue #10960). `engage` flips the host's
+  // routing for this terminal from the window port to its dedicated worker
+  // port; the host answers with `worker-ingest-engaged` on the window port,
+  // FIFO behind the final window-routed chunk. `release` flips routing back
+  // and posts the `ingest-detached` sentinel (carrying `drainId`) on the
+  // dedicated port, FIFO behind the final worker-routed chunk.
+  | { type: "worker-ingest-engage"; id: string }
+  | { type: "worker-ingest-release"; id: string; drainId: number };
 
 /**
  * Messages sent from Pty Host → Renderer via MessagePort (direct channel).
@@ -963,6 +975,15 @@ export type PtyHostToRendererMessage =
       type: "tier-changed";
       id: string;
       tier: "active" | "background";
+    }
+  // Engage-barrier marker (issue #10960): the host switched this terminal's
+  // routing to its dedicated worker port. Rides the window port FIFO behind
+  // the final window-routed chunk (window batcher flushed first), so on
+  // receipt the renderer knows every pre-switch byte has been relayed to the
+  // worker and can activate direct port ingest.
+  | {
+      type: "worker-ingest-engaged";
+      id: string;
     }
   | {
       type: "terminal-status";

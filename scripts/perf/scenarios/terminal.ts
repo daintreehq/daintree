@@ -8,6 +8,15 @@ import {
 } from "../lib/workloads";
 import { percentile } from "../lib/stats";
 import { INCREMENTAL_RESTORE_CONFIG } from "../../../src/services/terminal/types";
+import { WorkerParseSession } from "../../../src/services/terminal/workerParse/WorkerParseSession";
+import { createNodeParseWorkerTransport } from "../lib/nodeParseWorkerTransport";
+
+// PERF-034's worker-ingest mode (issue #10960). Read from process.env directly:
+// the perf harness runs under tsx (no Vite import.meta.env), and the renderer's
+// env helper is renderer-scoped.
+function isWorkerIngestPerfMode(): boolean {
+  return process.env.DAINTREE_PAINT_FABRIC_WORKER_INGEST === "1";
+}
 
 const BURST_CHUNKS = makeTerminalChunks(6000, 96);
 const SUSTAINED_CHUNKS = makeTerminalChunks(3500, 180);
@@ -205,6 +214,87 @@ export const terminalScenarios: PerfScenario[] = [
       const BACKGROUND_TERMINALS = 12;
       const ROUNDS = 30;
       const ECHO_PAYLOAD = "k"; // one keystroke echoed back
+
+      // Worker-ingest mode (DAINTREE_PAINT_FABRIC_WORKER_INGEST=1): the same
+      // deterministic workload, but each background terminal's parse runs in a
+      // real node worker_thread behind a WorkerParseSession — the live path's
+      // isolation, minus Electron plumbing. echoDegradationX must shrink here;
+      // with the gate off this scenario is byte-identical to the committed
+      // baseline below.
+      if (isWorkerIngestPerfMode()) {
+        const focused = await createHeadlessTerminal({ cols: 120, rows: 30, scrollback: 1000 });
+        const mirrors: Array<Awaited<ReturnType<typeof createHeadlessTerminal>>> = [];
+        const sessions: WorkerParseSession[] = [];
+        for (let i = 0; i < BACKGROUND_TERMINALS; i += 1) {
+          const mirror = await createHeadlessTerminal({ cols: 120, rows: 30, scrollback: 1000 });
+          mirrors.push(mirror);
+          sessions.push(
+            new WorkerParseSession(
+              createNodeParseWorkerTransport(),
+              { write: (data, callback) => mirror.write(data, callback) },
+              // cadenceMs 0: ticks run manually as the per-round drain barrier,
+              // keeping every round's measurement deterministic.
+              { cols: 120, rows: 30, scrollback: 1000, cadenceMs: 0 }
+            )
+          );
+        }
+
+        try {
+          // Worker boot barrier: a snapshot round-trip per session proves the
+          // thread is up and its parser loaded. Without this, the solo bracket
+          // below overlaps 12 threads still compiling xterm — inflating solo
+          // latency and flattering the degradation ratio.
+          await Promise.all(sessions.map((session) => session.tickNow()));
+
+          const echoOnce = (): Promise<number> =>
+            new Promise<number>((resolve) => {
+              const start = performance.now();
+              focused.write(ECHO_PAYLOAD, () => resolve(performance.now() - start));
+            });
+
+          const soloLatencies: number[] = [];
+          for (let round = 0; round < ROUNDS; round += 1) {
+            soloLatencies.push(await echoOnce());
+          }
+
+          const streams = mirrors.map((_, index) => makeTerminalChunks(ROUNDS, 1800 + index * 16));
+
+          let floodBytes = 0;
+          const floodLatencies: number[] = [];
+          for (let round = 0; round < ROUNDS; round += 1) {
+            for (let t = 0; t < BACKGROUND_TERMINALS; t += 1) {
+              const chunk = streams[t]![round]!;
+              floodBytes += chunk.length;
+              sessions[t]!.feed(chunk);
+            }
+            // Echo is enqueued while all 12 worker feeds are in flight — the
+            // whole point: background parse now rides sibling threads, so the
+            // focused write should queue behind (nearly) nothing.
+            floodLatencies.push(await echoOnce());
+            // Drain barrier: a snapshot resolves only after the authority has
+            // parsed every byte fed before it (endpoint FIFO + drain), and the
+            // bounded apply also charges the mirror repaint to this round.
+            await Promise.all(sessions.map((session) => session.tickNow()));
+          }
+
+          const soloP99 = percentile(soloLatencies, 99);
+          const floodP99 = percentile(floodLatencies, 99);
+
+          return {
+            durationMs: -1,
+            metrics: {
+              soloEchoP99Ms: soloP99,
+              floodEchoP99Ms: floodP99,
+              echoDegradationX: soloP99 > 0 ? floodP99 / soloP99 : 0,
+              floodBytes,
+            },
+          };
+        } finally {
+          sessions.forEach((session) => session.dispose());
+          focused.dispose();
+          mirrors.forEach((mirror) => mirror.dispose());
+        }
+      }
 
       const focused = await createHeadlessTerminal({ cols: 120, rows: 30, scrollback: 1000 });
       const background: Array<Awaited<ReturnType<typeof createHeadlessTerminal>>> = [];

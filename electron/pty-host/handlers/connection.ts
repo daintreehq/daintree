@@ -12,11 +12,14 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
   const {
     ptyManager,
     rendererConnections,
+    terminalWorkerConnections,
     windowProjectMap,
     windowFocusedTerminalMap,
     disconnectWindow,
+    disconnectTerminalWorkerPort,
     recomputeActivityTiers,
     createPortQueueManager,
+    createTerminalWorkerPortQueueManager,
     sendEvent,
   } = ctx;
 
@@ -116,6 +119,43 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
           ) {
             perWindowQueueManager.removeBytes(portMsg.id, portMsg.bytes);
             perWindowQueueManager.tryResume(portMsg.id);
+          } else if (portMsg.type === "worker-ingest-engage" && typeof portMsg.id === "string") {
+            const workerConn = terminalWorkerConnections.get(windowId)?.get(portMsg.id);
+            if (workerConn) {
+              workerConn.engaged = true;
+              // The engaged marker must land FIFO behind the final
+              // window-routed chunk — flush what the window batcher still
+              // holds for this terminal before posting it.
+              perWindowBatcher.flushTerminal(portMsg.id);
+              receivedPort.postMessage({ type: "worker-ingest-engaged", id: portMsg.id });
+            } else {
+              // No dedicated port connected — never engage. The renderer's
+              // engage timeout falls the terminal back to the main-thread path.
+              console.warn(
+                `[PtyHost] worker-ingest-engage without a dedicated port for terminal ${portMsg.id} (window ${windowId})`
+              );
+            }
+          } else if (
+            portMsg.type === "worker-ingest-release" &&
+            typeof portMsg.id === "string" &&
+            typeof portMsg.drainId === "number"
+          ) {
+            const workerConn = terminalWorkerConnections.get(windowId)?.get(portMsg.id);
+            if (workerConn) {
+              workerConn.engaged = false;
+              // Sentinel rides the dedicated port FIFO behind the final
+              // worker-routed chunk (dedicated batcher flushed first).
+              workerConn.batcher.flushTerminal(portMsg.id);
+              try {
+                workerConn.port.postMessage({
+                  type: "ingest-detached",
+                  drainId: portMsg.drainId,
+                });
+              } catch {
+                // Dedicated port closing — the worker's port-close signal
+                // drives the renderer's fallback instead.
+              }
+            }
           } else {
             console.warn("[PtyHost] Unknown or invalid MessagePort message type:", portMsg.type);
           }
@@ -141,6 +181,107 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
         batcher: perWindowBatcher,
       });
       console.log(`[PtyHost] MessagePort listener installed for window ${windowId}`);
+    },
+
+    // Dedicated worker-ingest port for one (window, terminal) pair (issue
+    // #10960). Mirrors connect-port's queue/batcher machinery at per-terminal
+    // scope; starts disengaged — routing flips only on the renderer's
+    // worker-ingest-engage, once the far end is already attached to the worker.
+    "connect-terminal-port": (msg, ports) => {
+      const windowId: number | undefined = msg.windowId;
+      const terminalId: string | undefined = msg.id;
+      if (typeof windowId !== "number" || typeof terminalId !== "string") {
+        console.warn("[PtyHost] connect-terminal-port missing windowId/id, ignoring");
+        return;
+      }
+      if (!ports || ports.length === 0) {
+        console.warn("[PtyHost] connect-terminal-port message received but no ports provided");
+        return;
+      }
+
+      const receivedPort = ports[0] as MessagePort;
+      const existing = terminalWorkerConnections.get(windowId)?.get(terminalId);
+      if (existing?.port === receivedPort) {
+        try {
+          receivedPort.start();
+        } catch {
+          // ignore
+        }
+        return;
+      }
+      if (existing) {
+        disconnectTerminalWorkerPort(windowId, terminalId, "port-replace");
+      }
+
+      const queueManager = createTerminalWorkerPortQueueManager(windowId, terminalId);
+      const batcher = new PortBatcher({
+        portQueueManager: queueManager,
+        // A worker-ingested terminal is BACKGROUND-tier by definition — no
+        // focused-terminal acceleration on this port.
+        getFocusedTerminalId: () => null,
+        postMessage: (id, data, bytes) => {
+          // Structured clone, no transfer list — same MessagePortMain
+          // constraint as the per-window batcher above.
+          receivedPort.postMessage({ type: "data", id, data, bytes });
+        },
+        onError: (error: unknown, failedBatches: PortBatcherFailedBatch[]) => {
+          console.warn(
+            `[PtyHost] Worker-ingest port postMessage failed for terminal ${terminalId} (window ${windowId}); falling back to IPC and disconnecting:`,
+            error
+          );
+          for (const batch of failedBatches) {
+            if (batch.bytes <= 0) continue;
+            sendEvent({ type: "data", id: batch.id, data: batchDataToString(batch.data) });
+          }
+          disconnectTerminalWorkerPort(windowId, terminalId, "postMessage-error");
+        },
+      });
+      receivedPort.start();
+
+      const handler = (event: MessageEvent) => {
+        const portMsg = event?.data ? event.data : event;
+        if (!portMsg || typeof portMsg !== "object") return;
+        try {
+          // The worker only ever acks on this port (after the authority
+          // parses the chunk) — writes/resizes stay on the window port.
+          if (
+            portMsg.type === "ack" &&
+            typeof portMsg.id === "string" &&
+            typeof portMsg.bytes === "number"
+          ) {
+            queueManager.removeBytes(portMsg.id, portMsg.bytes);
+            queueManager.tryResume(portMsg.id);
+          }
+        } catch (error) {
+          console.error("[PtyHost] Error handling worker-ingest port message:", error);
+        }
+      };
+      receivedPort.on("message", handler);
+
+      receivedPort.on("close", () => {
+        const current = terminalWorkerConnections.get(windowId)?.get(terminalId);
+        if (current?.port === receivedPort) {
+          disconnectTerminalWorkerPort(windowId, terminalId, "port-close");
+        }
+      });
+
+      let perWindow = terminalWorkerConnections.get(windowId);
+      if (!perWindow) {
+        perWindow = new Map();
+        terminalWorkerConnections.set(windowId, perWindow);
+      }
+      perWindow.set(terminalId, {
+        port: receivedPort,
+        handler,
+        portQueueManager: queueManager,
+        batcher,
+        engaged: false,
+      });
+    },
+
+    "disconnect-terminal-port": (msg) => {
+      if (typeof msg.windowId !== "number" || typeof msg.id !== "string") return;
+      disconnectTerminalWorkerPort(msg.windowId, msg.id, "explicit-disconnect");
     },
 
     "set-focused-terminal": (msg) => {

@@ -1469,9 +1469,17 @@ export interface GeneratedIpcInvokeMap {
     args: [terminalIds: string[]];
     result: Record<string, import("./terminal.js").TerminalReconnectResult>;
   };
+  "terminal:release-worker-ingest-port": {
+    args: [id: string];
+    result: void;
+  };
   "terminal:replay-history": {
     args: [__0: { terminalId: string; maxLines: number }];
     result: { replayed: number };
+  };
+  "terminal:request-worker-ingest-port": {
+    args: [id: string];
+    result: { token: string } | null;
   };
   "terminal:restart-service": {
     args: [];

@@ -1,5 +1,30 @@
-import { Terminal } from "@xterm/headless";
-import { SerializeAddon } from "@xterm/addon-serialize";
+import type { Terminal as HeadlessTerminal } from "@xterm/headless";
+import type { SerializeAddon as SerializeAddonInstance } from "@xterm/addon-serialize";
+import * as xtermHeadlessModule from "@xterm/headless";
+import * as serializeAddonModule from "@xterm/addon-serialize";
+
+// This module runs under three loaders: Vite (renderer Worker bundle), vitest,
+// and a plain node worker_thread via tsx (perf harness). xterm ships a
+// webpack-CJS build whose dynamic re-export loop defeats Node's
+// cjs-module-lexer, so under the worker_thread the named exports live only on
+// the namespace's `default`; bundlers expose them directly. Pick whichever
+// shape is present.
+function pickExport<T>(ns: object, name: string): T {
+  const direct = (ns as Record<string, unknown>)[name];
+  if (direct) return direct as T;
+  const viaDefault = ((ns as { default?: Record<string, unknown> }).default ?? {})[name];
+  if (viaDefault) return viaDefault as T;
+  throw new Error(`xterm module is missing the '${name}' export`);
+}
+
+const Terminal = pickExport<typeof import("@xterm/headless").Terminal>(
+  xtermHeadlessModule,
+  "Terminal"
+);
+const SerializeAddon = pickExport<typeof import("@xterm/addon-serialize").SerializeAddon>(
+  serializeAddonModule,
+  "SerializeAddon"
+);
 
 // Phase 4 of the paint fabric: the off-main-thread parse authority.
 //
@@ -30,8 +55,8 @@ export interface AuthoritySnapshot {
 }
 
 export class ParseAuthority {
-  private terminal: Terminal;
-  private serializeAddon: SerializeAddon;
+  private terminal: HeadlessTerminal;
+  private serializeAddon: SerializeAddonInstance;
   private generation = 0;
   private dirty = false;
   private pendingWrites = 0;
@@ -50,15 +75,22 @@ export class ParseAuthority {
     // pairing for exactly this server-side use. The nominal type mismatch
     // (renderer ITerminalAddon vs headless ITerminalAddon) forces the cast.
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- cross-build xterm addon load, structurally identical interfaces
-    this.terminal.loadAddon(this.serializeAddon as unknown as Parameters<Terminal["loadAddon"]>[0]);
+    this.terminal.loadAddon(
+      this.serializeAddon as unknown as Parameters<HeadlessTerminal["loadAddon"]>[0]
+    );
   }
 
-  write(data: string | Uint8Array): void {
+  // `onParsed` fires from xterm's write-completion callback — the moment the
+  // bytes are actually parsed into canonical state. The live ingest path acks
+  // the pty-host from it (flow control must track parse completion, not
+  // message receipt).
+  write(data: string | Uint8Array, onParsed?: () => void): void {
     this.pendingWrites += 1;
     try {
       this.terminal.write(data, () => {
         this.pendingWrites -= 1;
         this.dirty = true;
+        onParsed?.();
       });
     } catch (error) {
       // xterm's WriteBuffer throws past its discard watermark; roll the

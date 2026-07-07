@@ -33,6 +33,15 @@ export interface WindowServices {
   preloadDirname?: string;
   surfaceViewManager?: SurfaceViewManager;
   surfacePortBroker?: SurfacePortBroker;
+  /**
+   * Dedicated worker-ingest port pairs keyed by terminal id (issue #10960).
+   * The pty-host end is neutered once transferred; both refs are kept so an
+   * untransferred pair (host down) can still be closed deterministically.
+   */
+  terminalWorkerPorts?: Map<
+    string,
+    { rendererPort: MessagePortMain; ptyHostPort: MessagePortMain }
+  >;
 }
 
 export interface WindowContext {

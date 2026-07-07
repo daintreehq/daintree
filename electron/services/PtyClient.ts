@@ -1285,6 +1285,46 @@ export class PtyClient extends EventEmitter {
     }
   }
 
+  /**
+   * Forward a dedicated worker-ingest MessagePort (issue #10960) to the shard
+   * that owns the terminal — routed by terminal, not by window, so PTY-fabric
+   * placement stays correct when a window views terminals on another shard.
+   * No pending-port queue across host restarts: the renderer's engage timeout
+   * falls back and re-requests lazily, so an undeliverable port just closes.
+   */
+  connectTerminalMessagePort(windowId: number, terminalId: string, port: MessagePortMain): void {
+    const shard = this.shardForTerminal(terminalId);
+    if (!shard.lifecycle.child) {
+      try {
+        port.close();
+      } catch {
+        // ignore
+      }
+      return;
+    }
+    try {
+      shard.lifecycle.child.postMessage({ type: "connect-terminal-port", windowId, id: terminalId }, [
+        port,
+      ]);
+    } catch (error) {
+      console.error("[PtyClient] Failed to forward worker-ingest MessagePort to Pty Host:", error);
+      try {
+        port.close();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  /** Tear down one dedicated worker-ingest port on the owning shard. */
+  disconnectTerminalMessagePort(windowId: number, terminalId: string): void {
+    this.shardForTerminal(terminalId).send({
+      type: "disconnect-terminal-port",
+      windowId,
+      id: terminalId,
+    });
+  }
+
   /** Notify the owning shard that a window's MessagePort should be disconnected */
   disconnectMessagePort(windowId: number): void {
     for (const shard of this.shards.values()) {

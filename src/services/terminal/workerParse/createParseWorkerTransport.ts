@@ -23,6 +23,10 @@ export function createParseWorkerTransport(): AuthorityTransport {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    attachIngestPort(port: MessagePort) {
+      // The port rides the transfer list; the main thread never reads it.
+      worker.postMessage({ type: "attach-port" } satisfies AuthorityRequest, [port]);
+    },
     dispose() {
       worker.postMessage({ type: "dispose" } satisfies AuthorityRequest);
       listeners.clear();

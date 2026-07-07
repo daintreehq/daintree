@@ -2,7 +2,7 @@ import { session, type BrowserWindow } from "electron";
 import type { HandlerDependencies } from "../ipc/types.js";
 import { sendToRenderer } from "../ipc/handlers.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
-import { distributePortsToView } from "./portDistribution.js";
+import { distributePortsToView, releaseAllTerminalWorkerPorts } from "./portDistribution.js";
 import { resolveInitialColorSchemeId } from "./skeletonCss.js";
 import { resolveAppTheme } from "../../shared/theme/index.js";
 import { PtyClient } from "../services/PtyClient.js";
@@ -382,6 +382,7 @@ export async function initPerWindowServices(
       if (pty) {
         pty.disconnectMessagePort(ctx.windowId);
       }
+      releaseAllTerminalWorkerPorts(ctx, pty);
       if (ctx.services.activeRendererPort) {
         try {
           ctx.services.activeRendererPort.close();

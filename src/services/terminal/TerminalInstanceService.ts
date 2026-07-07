@@ -53,10 +53,13 @@ import type { PaintSurface } from "./paintFabric/PaintSurfaceRegistry";
 import { createRoundRobinPlacement } from "./paintFabric/placementPolicies";
 import {
   isPaintFabricEnabled,
+  isPaintFabricWorkerIngestEnabled,
   getPaintFabricSurfaceCount,
   paintFabricAuxSurfaceId,
   PRIMARY_SURFACE_ID,
 } from "./paintFabric/paintFabricConfig";
+import { LiveWorkerIngest } from "./workerParse/LiveWorkerIngest";
+import { createParseWorkerTransport } from "./workerParse/createParseWorkerTransport";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -169,6 +172,11 @@ class TerminalInstanceService {
   private reconciliationWatchdog: TerminalReconciliationWatchdog;
   private writeController: TerminalWriteController;
   private unsubTierChanged: (() => void) | null = null;
+  // Live worker-parse ingest (issue #10960), gated by
+  // DAINTREE_PAINT_FABRIC_WORKER_INGEST. One controller per terminal that has
+  // ever gone BACKGROUND while the gate is on; disposed with the terminal.
+  private workerIngest = new Map<string, LiveWorkerIngest>();
+  private unsubWorkerIngestEngaged: (() => void) | null = null;
 
   constructor() {
     if (canAutoInitializeTerminalIngest()) {
@@ -272,6 +280,8 @@ class TerminalInstanceService {
         // Tier changes shift the counts-by-tier distribution (and can flip WebGL
         // mode via the release path above) — push a fresh diagnostics sample.
         this.scheduleWhySlowReport();
+
+        this.applyWorkerIngestPolicy(id, tier, managed);
       },
     });
 
@@ -1675,6 +1685,16 @@ class TerminalInstanceService {
 
     const unsubData = terminalClient.onData(id, (data: string | Uint8Array) => {
       if (this.dataBuffer.isPolling()) return;
+      // Worker-ingest diversion (issue #10960): while a terminal is in (or
+      // transitioning through) worker mode, main-thread chunks route into the
+      // controller — it acks them immediately and lands them on the mirror
+      // through the session's zero-loss buffering, never through the write
+      // controller.
+      const ingest = this.workerIngest.get(id);
+      if (ingest?.shouldDivert()) {
+        ingest.feedDiverted(data);
+        return;
+      }
       this.dataBuffer.bufferData(id, data);
     });
     listeners.push(unsubData);
@@ -3637,6 +3657,109 @@ class TerminalInstanceService {
     return this.webGLManager.isActive(id);
   }
 
+  /**
+   * Tier-driven worker-ingest policy (issue #10960): BACKGROUND demotes the
+   * terminal's parse into a worker via its dedicated pty-host port; any other
+   * tier (FOCUSED/BURST, and VISIBLE — a visible pane repainting at snapshot
+   * cadence would be a UX regression) promotes back to the main-thread path
+   * through the zero-loss release barrier. No-op unless
+   * DAINTREE_PAINT_FABRIC_WORKER_INGEST=1.
+   */
+  private applyWorkerIngestPolicy(
+    id: string,
+    tier: TerminalRefreshTier,
+    managed: ManagedTerminal
+  ): void {
+    if (!isPaintFabricWorkerIngestEnabled()) return;
+    if (tier === TerminalRefreshTier.BACKGROUND) {
+      // Hibernated terminals drop output entirely; an alt-buffer TUI repaints
+      // its whole viewport constantly, and snapshot cadence handles that fine —
+      // no exclusion needed beyond hibernation.
+      if (managed.isHibernated) return;
+      let ingest = this.workerIngest.get(id);
+      if (!ingest) {
+        ingest = this.createWorkerIngest(id, managed);
+        this.workerIngest.set(id, ingest);
+      }
+      ingest.setDesired(true);
+    } else {
+      this.workerIngest.get(id)?.setDesired(false);
+    }
+  }
+
+  private createWorkerIngest(id: string, managed: ManagedTerminal): LiveWorkerIngest {
+    if (!this.unsubWorkerIngestEngaged) {
+      this.unsubWorkerIngestEngaged = terminalClient.onWorkerIngestEngaged((terminalId) => {
+        this.workerIngest.get(terminalId)?.handleEngaged();
+      });
+    }
+
+    const utf8ByteLength = (data: string): number => new TextEncoder().encode(data).byteLength;
+
+    const ingest = new LiveWorkerIngest({
+      id,
+      requestPort: () => terminalClient.requestWorkerIngestPort(id),
+      releasePort: () => terminalClient.releaseWorkerIngestPort(id),
+      sendEngage: () => terminalClient.sendWorkerIngestEngage(id),
+      sendRelease: (drainId) => terminalClient.sendWorkerIngestRelease(id, drainId),
+      createTransport: () => createParseWorkerTransport(),
+      mirror: {
+        write: (data, callback) => {
+          const current = this.instances.get(id);
+          if (!current || current.isHibernated) {
+            callback?.();
+            return;
+          }
+          // Direct write — snapshot applies and replays are pre-acked, so the
+          // write controller's ack bookkeeping must never see them. Unseen
+          // tracking still counts each repaint as output activity.
+          this.unseenTracker.incrementUnseen(id, current.isUserScrolledBack);
+          current.terminal.write(data, callback);
+        },
+      },
+      serializeMirror: () => {
+        const current = this.instances.get(id);
+        return current?.serializeAddon.serialize() ?? "";
+      },
+      getGeometry: () => {
+        const current = this.instances.get(id);
+        return {
+          cols: current?.terminal.cols ?? 80,
+          rows: current?.terminal.rows ?? 24,
+          scrollback: current?.terminal.options.scrollback ?? 1000,
+        };
+      },
+      ackDiverted: (data) => {
+        // One host chunk per diverted callback: settle exactly one port-ack
+        // FIFO entry (using the host's queued byte count), and the IPC ledger
+        // for string chunks (only strings travel the IPC path — mirrors
+        // TerminalWriteController's ackBytes rule).
+        const bytes = typeof data === "string" ? data.length : data.byteLength;
+        terminalClient.acknowledgePortData(id, bytes, 1);
+        if (typeof data === "string") {
+          terminalClient.acknowledgeData(id, utf8ByteLength(data));
+        }
+      },
+      requestHostRestore: () => {
+        safeFireAndForget(this.restoreController.fetchAndRestore(id), {
+          context: "worker-ingest fallback restore",
+        });
+      },
+      onDidFallback: (reason) => {
+        logWarn("Worker ingest fell back to main-thread parse", { id, reason });
+      },
+    });
+
+    // Geometry follows the mirror in every mode so demotion re-seeds at the
+    // right size (session forwards resizes only while in worker mode).
+    const resizeDisposable = managed.terminal.onResize(({ cols, rows }) =>
+      ingest.resize(cols, rows)
+    );
+    managed.listeners.push(() => resizeDisposable.dispose());
+
+    return ingest;
+  }
+
   destroy(id: string): void {
     // Cancel an in-flight creation for this id: if the panel is torn down while
     // getOrCreate is still awaiting setupTerminalAddons, the instance isn't in
@@ -3702,6 +3825,14 @@ class TerminalInstanceService {
     this.resizeController.clearResizeJob(managed);
     this.resizeController.clearResizeLock(id);
     this.resizeController.clearSettledTimer(id);
+    // Worker ingest dies with the terminal: dispose terminates the Worker and
+    // closes the dedicated port on every teardown path (kill/trash/project
+    // close/LRU eviction) — a leaked producer port queues unboundedly (#6283).
+    const ingest = this.workerIngest.get(id);
+    if (ingest) {
+      ingest.dispose();
+      this.workerIngest.delete(id);
+    }
     // Renderer-side destroy without a prior kill (project close, LRU
     // eviction of an exited terminal) must still drain the port-ack FIFO
     // before the held queue is wiped (#9910). kill/gracefulKill/trash clear
@@ -3802,6 +3933,8 @@ class TerminalInstanceService {
     this.stopPolling();
     this.unsubTierChanged?.();
     this.unsubTierChanged = null;
+    this.unsubWorkerIngestEngaged?.();
+    this.unsubWorkerIngestEngaged = null;
     // Abort any in-flight chunked resize pass so its yielded continuation
     // doesn't resume against a torn-down service.
     this.resizePassAbort?.abort();

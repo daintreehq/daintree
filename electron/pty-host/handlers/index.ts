@@ -9,7 +9,13 @@ import { createTerminalIOHandlers } from "./terminalIO.js";
 import { createTerminalQueryHandlers } from "./terminalQueries.js";
 import type { HandlerMap, HostContext, PtyHostHandler } from "./types.js";
 
-export type { HandlerMap, HostContext, PtyHostHandler, RendererConnection } from "./types.js";
+export type {
+  HandlerMap,
+  HostContext,
+  PtyHostHandler,
+  RendererConnection,
+  TerminalWorkerConnection,
+} from "./types.js";
 export { mapTerminalInfo, narrowDetectedAgentId } from "./terminalInfo.js";
 
 /**

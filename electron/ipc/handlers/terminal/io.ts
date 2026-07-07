@@ -5,7 +5,11 @@
 import { ipcMain } from "electron";
 import { z } from "zod";
 import { CHANNELS } from "../../channels.js";
-import type { HandlerDependencies } from "../../types.js";
+import type { HandlerDependencies, IpcContext } from "../../types.js";
+import {
+  distributeTerminalWorkerPortToView,
+  releaseTerminalWorkerPort,
+} from "../../../window/portDistribution.js";
 import type { TerminalResizePayload } from "../../../types/index.js";
 import { TerminalResizePayloadSchema } from "../../../schemas/ipc.js";
 import type { PtyHostActivityTier } from "../../../../shared/types/pty-host.js";
@@ -300,11 +304,49 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     }
   };
 
+  // Dedicated worker-ingest port lifecycle (issue #10960). The invoke returns
+  // the handshake token; the port itself arrives on the sender's WebContents
+  // via `terminal-worker-port` postMessage — invoke results can't carry
+  // transferables.
+  const handleTerminalRequestWorkerIngestPort = async (
+    ctx: IpcContext,
+    id: string
+  ): Promise<{ token: string } | null> => {
+    if (typeof id !== "string" || !id) {
+      throw new AppError({
+        code: "VALIDATION",
+        message: "Invalid terminal ID: must be a non-empty string",
+      });
+    }
+    const win = ctx.senderWindow;
+    const wctx = win ? deps.windowRegistry?.getByWindowId(win.id) : undefined;
+    if (!win || !wctx) return null;
+    return distributeTerminalWorkerPortToView(win, wctx, ctx.event.sender, ptyClient, id);
+  };
+
+  const handleTerminalReleaseWorkerIngestPort = async (ctx: IpcContext, id: string): Promise<void> => {
+    if (typeof id !== "string" || !id) return;
+    const win = ctx.senderWindow;
+    const wctx = win ? deps.windowRegistry?.getByWindowId(win.id) : undefined;
+    if (!wctx) return;
+    releaseTerminalWorkerPort(wctx, ptyClient, id);
+  };
+
   const namespace = defineIpcNamespace({
     name: "terminalIo",
     ops: {
       submit: op(CHANNELS.TERMINAL_SUBMIT, handleTerminalSubmit),
       forceResume: op(CHANNELS.TERMINAL_FORCE_RESUME, handleTerminalForceResume),
+      requestWorkerIngestPort: op(
+        CHANNELS.TERMINAL_REQUEST_WORKER_INGEST_PORT,
+        handleTerminalRequestWorkerIngestPort,
+        { withContext: true }
+      ),
+      releaseWorkerIngestPort: op(
+        CHANNELS.TERMINAL_RELEASE_WORKER_INGEST_PORT,
+        handleTerminalReleaseWorkerIngestPort,
+        { withContext: true }
+      ),
     },
   });
   handlers.push(namespace.register());
