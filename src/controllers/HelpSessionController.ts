@@ -1382,9 +1382,12 @@ export class HelpSessionController {
     previousSessionId: string | null,
     options: { revokePending: boolean }
   ): void {
-    usePanelStore.getState().removePanel(existingTerminalId);
+    // Revoke the bearer(s) BEFORE removing the panel: removePanel fires the PTY
+    // kill IPC, so revoking first ensures any in-flight MCP call 401s before the
+    // teardown reaches the host (#7522), rather than racing the kill.
     revokeHelpSession(previousSessionId);
     if (options.revokePending) this._revokePendingSession();
+    usePanelStore.getState().removePanel(existingTerminalId);
     useHelpPanelStore.getState().clearTerminal();
     useHelpPanelStore.getState().clearFigures();
     this.clearMcpActivity();

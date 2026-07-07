@@ -2300,6 +2300,8 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
     // …and, unlike + New session, no fresh agent is launched.
     expect(mockDispatch).not.toHaveBeenCalledWith("agent.launch", expect.anything(), expect.anything());
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
+    // Stop ends the session but keeps the panel open (it is not "hide").
+    expect(helpPanelState.setOpen).not.toHaveBeenCalledWith(false);
   });
 
   it("shows the Stop assistant confirm when the agent is working (no teardown yet)", () => {
@@ -2352,6 +2354,55 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
     expect(helpPanelState.clearTerminal).toHaveBeenCalled();
     expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
     expect(mockDispatch).not.toHaveBeenCalledWith("agent.launch", expect.anything(), expect.anything());
+    // Confirmed stop keeps the panel open — restart is one click away.
+    expect(helpPanelState.setOpen).not.toHaveBeenCalledWith(false);
+  });
+
+  it("aborts a relaunch in flight so a late-settling dispatch never binds a fresh session", async () => {
+    // Regression: user hits Stop while a + New session relaunch is mid-flight.
+    // endSession() bumps the launch generation so the superseded _executeLaunch
+    // bails at its post-dispatch gen-check instead of binding the fresh session.
+    setupBoundTerminal({ agentState: "idle", conversationTouched: false });
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "sess-fresh",
+      sessionPath: "/sessions/fresh",
+      token: "tok-fresh",
+      tier: "action",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    let resolveDispatch: (value: unknown) => void = () => {};
+    mockDispatch.mockImplementation(
+      () =>
+        new Promise((r) => {
+          resolveDispatch = r;
+        })
+    );
+
+    const { container } = render(<HelpPanel width={380} />);
+    // Start the relaunch (idle + untouched → immediate, no confirm); dispatch hangs.
+    await act(async () => {
+      fireEvent.click(container.querySelector('button[aria-label="Start new session"]')!);
+    });
+    const reservedId = (mockDispatch.mock.calls[0]?.[1] as { requestedId?: string } | undefined)
+      ?.requestedId;
+    expect(reservedId).toMatch(/^terminal-/);
+    (helpPanelState.setTerminal as ReturnType<typeof vi.fn>).mockClear();
+
+    // Stop the assistant while the relaunch is still provisioning.
+    await act(async () => {
+      fireEvent.click(container.querySelector('button[aria-label="Stop Daintree Assistant"]')!);
+    });
+
+    // The hung dispatch finally resolves with the reserved terminal.
+    await act(async () => {
+      resolveDispatch({ ok: true, result: { terminalId: reservedId } });
+    });
+
+    // The superseded launch bailed: it never bound the fresh session and cleaned
+    // up the orphaned terminal instead.
+    expect(helpPanelState.setTerminal).not.toHaveBeenCalledWith(reservedId, "claude", "sess-fresh");
+    expect(panelStoreState.removePanel).toHaveBeenCalledWith(reservedId);
   });
 });
 

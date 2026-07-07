@@ -554,6 +554,32 @@ describe("HelpSessionController — endSession (Stop assistant, #10989)", () => 
     expect(ctrl.getSnapshot().phase).toBe("idle");
   });
 
+  it("revokes the bearer before killing the PTY (revoke-before-kill, #7522)", () => {
+    const ctrl = new HelpSessionController();
+    bindLiveSession();
+
+    ctrl.endSession();
+
+    // removePanel fires the PTY kill IPC; the revoke must be dispatched first so
+    // an in-flight MCP call 401s before teardown reaches the host.
+    const revokeOrder = (window.electron.help.revokeSession as ReturnType<typeof vi.fn>).mock
+      .invocationCallOrder[0];
+    const removeOrder = (panelStoreState.removePanel as ReturnType<typeof vi.fn>).mock
+      .invocationCallOrder[0];
+    expect(revokeOrder).toBeLessThan(removeOrder);
+  });
+
+  it("revokes a reserved-but-uncommitted bearer even when no terminal is bound", () => {
+    const ctrl = new HelpSessionController();
+    ctrl["_pendingSessionId"] = "sess-pending";
+
+    ctrl.endSession();
+
+    expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-pending");
+    expect(panelStoreState.removePanel).not.toHaveBeenCalled();
+    expect(ctrl["_pendingSessionId"]).toBeNull();
+  });
+
   it("aborts an in-flight launch by bumping the gen and clearing the guard", () => {
     const ctrl = new HelpSessionController();
     ctrl["_patch"]({ phase: "provisioning" });

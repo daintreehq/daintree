@@ -204,10 +204,16 @@ describe("ProjectStatsService adversarial", () => {
 
     const [, payload] = broadcastMock.mock.calls.at(-1) as [
       string,
-      { p1: { processCount: number }; p2: { processCount: number; activeAgentCount: number } },
+      {
+        p1: { processCount: number; activeAgentCount: number; waitingAgentCount: number };
+        p2: { processCount: number; activeAgentCount: number };
+      },
     ];
-    // p1's only PTY is the help terminal → 1 − 1 = 0.
+    // p1's only PTY is the help terminal → 1 − 1 = 0, and it never surfaces in
+    // the agent counts.
     expect(payload.p1.processCount).toBe(0);
+    expect(payload.p1.activeAgentCount).toBe(0);
+    expect(payload.p1.waitingAgentCount).toBe(0);
     // p2 is untouched — its help count is 0.
     expect(payload.p2.processCount).toBe(1);
     expect(payload.p2.activeAgentCount).toBe(1);
