@@ -36,6 +36,11 @@ import { initForgeBridge } from "./workspace-host/forgeBridge.js";
 import { fanoutEventToWorktreePorts } from "./workspace-host/worktreePortFanout.js";
 import { PERF_MARKS } from "../shared/perf/marks.js";
 import { markHostPerformance } from "./utils/hostPerformance.js";
+import {
+  IdleHeapCompactor,
+  resolveExposedGc,
+  IDLE_HEAP_COMPACT_CHECK_INTERVAL_MS,
+} from "./services/pty/analysis/idleHeapCompactor.js";
 
 // First user-code statement after all imports settle. ESM hoists native
 // module dlopen (better-sqlite3 via WorkspaceService, @parcel/watcher) ahead
@@ -311,8 +316,21 @@ process.on("unhandledRejection", (reason) => {
   setImmediate(() => process.exit(1));
 });
 
+// Idle heap compaction for this isolate: git polling churns transient strings
+// and diff/status structures every cycle, and a utility process has nothing
+// driving V8's idle memory reducer, so committed-but-free heap pages linger
+// for minutes after a burst (same problem the pty-host compactor fixes).
+// Activity = any inbound request or outbound event; the latch inside the
+// compactor means at most one compacting GC per quiet period.
+const idleHeapCompactor = new IdleHeapCompactor(resolveExposedGc());
+const idleHeapCompactTimer = setInterval(() => {
+  idleHeapCompactor.maybeCompact();
+}, IDLE_HEAP_COMPACT_CHECK_INTERVAL_MS);
+idleHeapCompactTimer.unref?.();
+
 // Helper to send events to Main process (and directly to renderers for spontaneous events)
 function sendEvent(event: WorkspaceHostEvent): void {
+  idleHeapCompactor.noteActivity();
   try {
     port.postMessage(event);
   } catch (error) {
@@ -362,6 +380,7 @@ const forgeBridge = initForgeBridge(sendEvent);
 
 // Handle requests from Main
 port.on("message", async (rawMsg: any) => {
+  idleHeapCompactor.noteActivity();
   const msg =
     rawMsg && typeof rawMsg === "object" && "data" in rawMsg
       ? (rawMsg as { data: unknown }).data

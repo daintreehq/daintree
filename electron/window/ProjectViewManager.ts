@@ -55,6 +55,7 @@ import {
   unfreezeWebContents,
   throttleCpuWebContents,
   unthrottleCpuWebContents,
+  purgeMemoryWebContents,
 } from "../utils/webContentsLifecycle.js";
 import { ACTIVE_AGENT_STATES, type AgentState } from "../../shared/types/agent.js";
 import {
@@ -112,6 +113,14 @@ const DEFAULT_WARM_PAINT_GATE_HARD_TIMEOUT_MS = 1_500;
  * sample period without a new timer.
  */
 const CACHED_VIEW_MEMORY_SAMPLE_INTERVAL_MS = 30_000;
+
+// Cached-view memory purge cadence. The delay keeps the likely next-switch
+// target (a just-cached view) fully warm so fast switch-back pays nothing;
+// the interval re-purges long-cached views whose background work (agent
+// output, worktree events) keeps re-accumulating garbage. Purge is per-target
+// CDP — the active view is never touched.
+const CACHED_VIEW_PURGE_DELAY_MS = 20_000;
+const CACHED_VIEW_PURGE_INTERVAL_MS = 60_000;
 
 type ViewState = "loading" | "active" | "cached";
 
@@ -172,6 +181,11 @@ interface ViewEntry {
   state: ViewState;
   crashTimestamps: number[];
   cleanupHandlers: () => void;
+  /**
+   * Delayed/periodic CDP memory purge while cached (see schedulePurge).
+   * Cleared on activation and teardown so a live view is never purged.
+   */
+  purgeTimer?: NodeJS.Timeout;
   /**
    * Cold-start preload (`preload.cts`) evaluation cost in ms, self-reported by
    * the view's preload via PERF_FLUSH_RENDERER_MARKS (#9770). Set once per view
@@ -1453,6 +1467,37 @@ export class ProjectViewManager {
       ) {
         void freezeWebContents(webContents);
       }
+
+      this.schedulePurge(current, CACHED_VIEW_PURGE_DELAY_MS);
+    }
+  }
+
+  /**
+   * Delayed + periodic memory purge for a cached view. The renderer-side
+   * `requestIdleCallback(gc)` above is best-effort inside a throttled
+   * renderer; this is the guaranteed main-side counterpart (works throttled
+   * or frozen) and additionally purges Blink's discardable caches. Purging
+   * does not stop timers, ports, or agent output processing — it only drops
+   * reclaimable memory — so it is safe for cached views with live agents.
+   */
+  private schedulePurge(entry: ViewEntry, delayMs: number): void {
+    this.clearPurgeTimer(entry);
+    const timer = setTimeout(() => {
+      const live = this.views.get(entry.projectId);
+      if (live !== entry || entry.state !== "cached") return;
+      const wc = entry.view.webContents;
+      if (!wc || wc.isDestroyed()) return;
+      void purgeMemoryWebContents(wc);
+      this.schedulePurge(entry, CACHED_VIEW_PURGE_INTERVAL_MS);
+    }, delayMs);
+    timer.unref?.();
+    entry.purgeTimer = timer;
+  }
+
+  private clearPurgeTimer(entry: ViewEntry): void {
+    if (entry.purgeTimer) {
+      clearTimeout(entry.purgeTimer);
+      entry.purgeTimer = undefined;
     }
   }
 
@@ -1504,6 +1549,8 @@ export class ProjectViewManager {
   }
 
   private activateView(entry: ViewEntry, insertBehind = false): void {
+    // A view being activated must never take a scheduled cache purge.
+    this.clearPurgeTimer(entry);
     registerAppView(this.win, entry.view);
 
     // Restore visibility BEFORE unfreezing: deactivateEntry() called
@@ -2151,6 +2198,8 @@ export class ProjectViewManager {
   private cleanupEntry(projectId: string): void {
     const entry = this.views.get(projectId);
     if (!entry) return;
+
+    this.clearPurgeTimer(entry);
 
     // Detach persistent webContents listeners before close() so any queued
     // event (did-finish-load, render-process-gone, etc.) cannot fire against

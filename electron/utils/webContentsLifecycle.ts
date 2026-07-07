@@ -91,3 +91,32 @@ export function throttleCpuWebContents(wc: Electron.WebContents): Promise<void> 
 export function unthrottleCpuWebContents(wc: Electron.WebContents): Promise<void> {
   return setCpuThrottlingRate(wc, ACTIVE_VIEW_CPU_THROTTLE_RATE);
 }
+
+/**
+ * Compact a cached renderer's V8 heap, main-side over CDP (works even when
+ * the renderer is CPU-throttled — the renderer-side `window.gc()` idle
+ * callback cannot make that guarantee). `HeapProfiler.collectGarbage` is the
+ * DevTools "collect garbage" button: a full last-resort GC that compacts and
+ * returns committed-but-free pages, while leaving JIT code, WebGL contexts,
+ * and compositor state intact. Do NOT swap in the Memory-domain purges here:
+ * both `Memory.forciblyPurgeJavaScriptMemory` and
+ * `Memory.simulatePressureNotification` SIGSEGV a CPU-throttled hidden
+ * WebContentsView on Electron 42/Chromium 148 (measured: exit code 11,
+ * reproducibly, seconds after the command lands). Per-target, so the active
+ * view is untouched. Shares the Windows-CI e2e opt-out with the CPU throttle:
+ * both ride the same debugger session Playwright owns there.
+ */
+export async function purgeMemoryWebContents(wc: Electron.WebContents): Promise<void> {
+  if (getIsE2EDisableCachedViewCpuThrottle()) return;
+  if (wc.isDestroyed()) return;
+  try {
+    ensureAttached(wc);
+    await wc.debugger.sendCommand("HeapProfiler.enable");
+    await wc.debugger.sendCommand("HeapProfiler.collectGarbage");
+    await wc.debugger.sendCommand("HeapProfiler.disable");
+  } catch (err) {
+    const message = formatErrorMessage(err, "CDP memory purge failed");
+    if (EXPECTED_CDP_ERRORS.some((s) => message.includes(s))) return;
+    console.warn("[webContentsLifecycle] purgeMemoryWebContents failed:", message);
+  }
+}

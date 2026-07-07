@@ -206,6 +206,7 @@ vi.mock("../rendererConsoleCapture.js", () => ({
 }));
 
 vi.mock("../../utils/webContentsLifecycle.js", () => ({
+  purgeMemoryWebContents: vi.fn().mockResolvedValue(undefined),
   freezeWebContents: vi.fn().mockResolvedValue(undefined),
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
   throttleCpuWebContents: vi.fn().mockResolvedValue(undefined),

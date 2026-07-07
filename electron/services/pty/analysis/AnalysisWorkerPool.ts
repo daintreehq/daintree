@@ -129,7 +129,13 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
   constructor(
     private readonly size: number = defaultAnalysisPoolSize(),
     private readonly spawnWorker: () => WorkerLike = () => {
-      const worker = new Worker(resolveAnalysisWorkerPath());
+      // Young-generation cap only (maps to --max-semi-space-size): headless
+      // xterm parsing churns short-lived strings, so an uncapped nursery
+      // commits slack pages per worker isolate. No old-gen cap — exceeding a
+      // resourceLimits old-gen budget terminates the worker.
+      const worker = new Worker(resolveAnalysisWorkerPath(), {
+        resourceLimits: { maxYoungGenerationSizeMb: 8 },
+      });
       worker.unref();
       return worker;
     }

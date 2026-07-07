@@ -334,6 +334,11 @@ export class PtyHostLifecycle {
         // utility process CWD (homedir).
         execArgv: [
           `--max-old-space-size=${this.config.memoryLimitMb}`,
+          // Cap the young generation: PTY relay churns short-lived strings with
+          // a tiny live set, so an uncapped nursery (V8 scales it with machine
+          // RAM) just commits slack pages per shard. 8 MB keeps scavenges
+          // sub-millisecond at this allocation profile.
+          "--max-semi-space-size=8",
           `--diagnostic-dir=${app.getPath("logs")}`,
           "--report-exclude-env",
         ],
