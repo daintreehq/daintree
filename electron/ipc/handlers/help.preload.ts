@@ -2,6 +2,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 
 export const HELP_METHOD_CHANNELS = {
   getFolderPath: "help:get-folder-path",
+  openAssistantContentFolder: "help:open-assistant-content-folder",
   markTerminal: "help:mark-terminal",
   unmarkTerminal: "help:unmark-terminal",
   provisionSession: "help:provision-session",

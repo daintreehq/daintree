@@ -451,6 +451,7 @@ export const BUILT_IN_ACTION_IDS = [
   // -- helpActions --
   "help.gettingStarted.show",
   "help.displayImage",
+  "help.openCommandsFolder",
 
   // -- uiActions --
   "ui.sidebar.resetWidth",

@@ -1,3 +1,4 @@
+import { shell } from "electron";
 import { defineIpcNamespace, op } from "../define.js";
 import { HELP_METHOD_CHANNELS } from "./help.preload.js";
 import type * as HelpServiceModule from "../../services/HelpService.js";
@@ -26,6 +27,33 @@ async function getHelpSessionService(): Promise<typeof HelpSessionServiceModule>
 async function handleGetFolderPath(): Promise<string | null> {
   const HelpService = await getHelpService();
   return HelpService.getHelpFolderPath();
+}
+
+/**
+ * Scaffolds the global assistant content folder (~/.daintree/assistant —
+ * README plus the .claude/.agents layout) and opens it in the OS file
+ * manager. Returns null when scaffolding failed; otherwise the path plus
+ * whether `shell.openPath` actually opened it (a broken file-manager
+ * association fails silently apart from its error string), so the renderer
+ * can tell the user where the folder is instead of showing nothing.
+ */
+async function handleOpenAssistantContentFolder(): Promise<{
+  path: string;
+  opened: boolean;
+} | null> {
+  const { ensureAssistantContentDir } = await import("../../services/AssistantContentMirror.js");
+  let dir: string;
+  try {
+    dir = await ensureAssistantContentDir();
+  } catch (err) {
+    console.warn("[help] Failed to prepare the assistant content folder:", err);
+    return null;
+  }
+  const openError = await shell.openPath(dir);
+  if (openError) {
+    console.warn("[help] Failed to open the assistant content folder:", openError);
+  }
+  return { path: dir, opened: openError === "" };
 }
 
 function handleMarkTerminal(terminalId: string): void {
@@ -199,6 +227,10 @@ export const helpNamespace = defineIpcNamespace({
   name: "help",
   ops: {
     getFolderPath: op(HELP_METHOD_CHANNELS.getFolderPath, handleGetFolderPath),
+    openAssistantContentFolder: op(
+      HELP_METHOD_CHANNELS.openAssistantContentFolder,
+      handleOpenAssistantContentFolder
+    ),
     markTerminal: op(HELP_METHOD_CHANNELS.markTerminal, handleMarkTerminal),
     unmarkTerminal: op(HELP_METHOD_CHANNELS.unmarkTerminal, handleUnmarkTerminal),
     provisionSession: op(HELP_METHOD_CHANNELS.provisionSession, handleProvisionSession, {

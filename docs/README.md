@@ -89,6 +89,7 @@ The plugin sub-index links onward to getting-started, manifest reference, contri
 | [brand/digital-ecology.md](./brand/digital-ecology.md) | The "digital ecology" brand metaphor that guides illustration and icon choices. |
 | [sound-design.md](./sound-design.md) | How notification earcons are procedurally synthesized, and how to add new ones. |
 | [voice-input.md](./voice-input.md) | The voice dictation / streaming transcription pipeline across both processes. |
+| [assistant-custom-commands.md](./assistant-custom-commands.md) | User-authored commands/skills for assistant sessions — source folders, per-agent mapping, sync mechanics. |
 
 ## Companion pairs
 

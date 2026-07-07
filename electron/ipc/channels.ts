@@ -515,6 +515,7 @@ export const CHANNELS = {
 
   // Help workspace channels
   HELP_GET_FOLDER_PATH: "help:get-folder-path",
+  HELP_OPEN_ASSISTANT_CONTENT_FOLDER: "help:open-assistant-content-folder",
   HELP_MARK_TERMINAL: "help:mark-terminal",
   HELP_UNMARK_TERMINAL: "help:unmark-terminal",
   HELP_PROVISION_SESSION: "help:provision-session",
