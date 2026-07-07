@@ -2244,6 +2244,117 @@ describe("HelpPanel — + New session destructive reset", () => {
   });
 });
 
+describe("HelpPanel — Stop assistant (end session, #10989)", () => {
+  function setupBoundTerminal(opts: {
+    agentState?: string;
+    conversationTouched?: boolean;
+    sessionId?: string | null;
+  }) {
+    projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.agentId = "claude";
+    helpPanelState.sessionId = opts.sessionId ?? "sess-bound";
+    helpPanelState.conversationTouched = opts.conversationTouched ?? false;
+    panelStoreState.panelsById = {
+      "term-1": {
+        id: "term-1",
+        kind: "terminal",
+        spawnStatus: "ready",
+        cwd: "/help",
+        title: "Claude",
+        command: "claude",
+        location: "dock",
+        agentState: opts.agentState ?? "idle",
+      },
+    };
+  }
+
+  it("hides the stop button when there is no live terminal", () => {
+    helpPanelState.terminalId = null;
+    helpPanelState.agentId = null;
+    const { container } = render(<HelpPanel width={380} />);
+    expect(container.querySelector('button[aria-label="Stop Daintree Assistant"]')).toBeNull();
+  });
+
+  it("keeps the stop button distinct from the hide button", () => {
+    setupBoundTerminal({ agentState: "idle" });
+    const { container } = render(<HelpPanel width={380} />);
+    expect(container.querySelector('button[aria-label="Stop Daintree Assistant"]')).toBeTruthy();
+    expect(container.querySelector('button[aria-label="Hide Daintree Assistant"]')).toBeTruthy();
+  });
+
+  it("ends immediately without a confirm and does NOT relaunch when idle and untouched", () => {
+    setupBoundTerminal({ agentState: "idle", conversationTouched: false });
+
+    const { container, queryByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(container.querySelector('button[aria-label="Stop Daintree Assistant"]')!);
+
+    expect(queryByTestId("confirm-dialog")).toBeNull();
+    // Teardown ran…
+    expect(panelStoreState.removePanel).toHaveBeenCalledWith("term-1");
+    expect(mockRevokeSession).toHaveBeenCalledWith("sess-bound");
+    expect(helpPanelState.clearTerminal).toHaveBeenCalled();
+    expect(helpPanelState.clearFigures).toHaveBeenCalled();
+    // …the persisted hibernate entry is dropped so a stop can't be resumed…
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    // …and, unlike + New session, no fresh agent is launched.
+    expect(mockDispatch).not.toHaveBeenCalledWith("agent.launch", expect.anything(), expect.anything());
+    expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
+  });
+
+  it("shows the Stop assistant confirm when the agent is working (no teardown yet)", () => {
+    setupBoundTerminal({ agentState: "working", conversationTouched: false });
+
+    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(container.querySelector('button[aria-label="Stop Daintree Assistant"]')!);
+
+    expect(panelStoreState.removePanel).not.toHaveBeenCalled();
+    expect(helpPanelState.clearTerminal).not.toHaveBeenCalled();
+    expect(getByTestId("dialog-title").textContent).toBe("Stop assistant?");
+    expect(getByTestId("dialog-confirm").textContent).toBe("Stop assistant");
+    expect(getByTestId("dialog-description").textContent).toContain(
+      "the conversation will be discarded"
+    );
+  });
+
+  it("shows the confirm when the conversation has been touched even while idle", () => {
+    setupBoundTerminal({ agentState: "idle", conversationTouched: true });
+
+    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(container.querySelector('button[aria-label="Stop Daintree Assistant"]')!);
+
+    expect(panelStoreState.removePanel).not.toHaveBeenCalled();
+    expect(getByTestId("dialog-title").textContent).toBe("Stop assistant?");
+  });
+
+  it("keeps the session intact when the user cancels the confirm", () => {
+    setupBoundTerminal({ agentState: "working" });
+
+    const { container, getByTestId, queryByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(container.querySelector('button[aria-label="Stop Daintree Assistant"]')!);
+    fireEvent.click(getByTestId("dialog-cancel"));
+
+    expect(queryByTestId("confirm-dialog")).toBeNull();
+    expect(panelStoreState.removePanel).not.toHaveBeenCalled();
+    expect(mockRevokeSession).not.toHaveBeenCalled();
+    expect(helpPanelState.clearTerminal).not.toHaveBeenCalled();
+  });
+
+  it("tears down and does not relaunch when the user confirms the stop", () => {
+    setupBoundTerminal({ agentState: "working", conversationTouched: true });
+
+    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(container.querySelector('button[aria-label="Stop Daintree Assistant"]')!);
+    fireEvent.click(getByTestId("dialog-confirm"));
+
+    expect(panelStoreState.removePanel).toHaveBeenCalledWith("term-1");
+    expect(mockRevokeSession).toHaveBeenCalledWith("sess-bound");
+    expect(helpPanelState.clearTerminal).toHaveBeenCalled();
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    expect(mockDispatch).not.toHaveBeenCalledWith("agent.launch", expect.anything(), expect.anything());
+  });
+});
+
 // The footer pinned-context indicator is a quiet, neutral ambient signal — it
 // never paints the row red or parks a destructive "Start new session" button
 // just because no live grid terminal remains (#10792). Closing every grid

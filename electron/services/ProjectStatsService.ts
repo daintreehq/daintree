@@ -2,6 +2,7 @@ import { CHANNELS } from "../ipc/channels.js";
 import { typedBroadcast } from "../ipc/utils.js";
 import { events } from "./events.js";
 import { projectStore } from "./ProjectStore.js";
+import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { ProjectStatusMap } from "../../shared/types/ipc/project.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../utils/lifecycle.js";
@@ -143,14 +144,36 @@ export class ProjectStatsService {
       if (this.generation !== gen) return;
 
       const agentCounts = new Map<string, { active: number; waiting: number }>();
+      // Per-project count of Daintree Assistant "help" PTYs. The PTY host tallies
+      // them into `terminalCount`, but the assistant is tooling-internal — it must
+      // be netted out of `processCount` and never appear in the agent counts the
+      // switcher shows (#10989).
+      const helpProcessCounts = new Map<string, number>();
       for (const id of projectIds) {
         agentCounts.set(id, { active: 0, waiting: 0 });
+        helpProcessCounts.set(id, 0);
       }
+      const availability = getAgentAvailabilityStore();
       for (const terminal of allTerminals) {
         if (!terminal.projectId) continue;
         const counts = agentCounts.get(terminal.projectId);
         if (!counts) continue;
         if (terminal.isTrashed) continue;
+
+        // The assistant help terminal is a real PTY but tooling-internal: skip it
+        // for the agent counts, and — when it's a live PTY the host actually
+        // counted (mirroring TerminalRegistry.getProjectStats: non-exited,
+        // non-trashed) — record it so `processCount` can subtract it below.
+        if (availability.isHelpTerminal(terminal.id)) {
+          if (terminal.hasPty !== false) {
+            helpProcessCounts.set(
+              terminal.projectId,
+              (helpProcessCounts.get(terminal.projectId) ?? 0) + 1
+            );
+          }
+          continue;
+        }
+
         if (terminal.kind === "dev-preview") continue;
         if (terminal.hasPty === false) continue;
         // Runtime identity wins; launch intent is only a boot-window fallback
@@ -173,8 +196,11 @@ export class ProjectStatsService {
         if (entry.status === "fulfilled") {
           const [id, ptyStats] = entry.value;
           const counts = agentCounts.get(id) ?? { active: 0, waiting: 0 };
+          const helpCount = helpProcessCounts.get(id) ?? 0;
           statusMap[id] = {
-            processCount: ptyStats.terminalCount,
+            // Net out the assistant help PTY the host counted but the switcher
+            // must not show; clamp in case stats momentarily lag (#10989).
+            processCount: Math.max(0, ptyStats.terminalCount - helpCount),
             activeAgentCount: counts.active,
             waitingAgentCount: counts.waiting,
           };

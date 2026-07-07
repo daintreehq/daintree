@@ -1,4 +1,4 @@
-import { ChevronRight, CircleHelp, Plus } from "lucide-react";
+import { ChevronRight, CircleHelp, CircleStop, Plus } from "lucide-react";
 import { SpinnerCircle, HollowCircle, InteractingCircle } from "@/components/icons";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { cn } from "@/lib/utils";
@@ -58,7 +58,9 @@ function AssistantHeaderStateIndicator({
 interface HelpPanelHeaderProps {
   agentState: AgentState | null | undefined;
   canStartNewSession: boolean;
+  canEndSession: boolean;
   onNewSession: () => void;
+  onEndSession: () => void;
   onOpenDocs: () => void;
   onClose: () => void;
   isFocused?: boolean;
@@ -67,7 +69,9 @@ interface HelpPanelHeaderProps {
 export function HelpPanelHeader({
   agentState,
   canStartNewSession,
+  canEndSession,
   onNewSession,
+  onEndSession,
   onOpenDocs,
   onClose,
   isFocused = false,
@@ -111,6 +115,16 @@ export function HelpPanelHeader({
           aria-label="Start new session"
         >
           <Plus className="w-3.5 h-3.5" />
+        </button>
+      )}
+      {canEndSession && (
+        <button
+          type="button"
+          onClick={onEndSession}
+          className="p-1 rounded-[var(--radius-sm)] text-daintree-text/50 hover:text-daintree-text hover:bg-tint/8 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          aria-label="Stop Daintree Assistant"
+        >
+          <CircleStop className="w-3.5 h-3.5" />
         </button>
       )}
       <button
