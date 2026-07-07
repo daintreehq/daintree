@@ -46,6 +46,7 @@ function createMockWebContents(options?: { autoFinishLoad?: boolean }) {
         if (idx >= 0) list.splice(idx, 1);
       }
     }),
+    setWindowOpenHandler: vi.fn(),
     _fire(event: string, ...args: unknown[]) {
       const onceList = onceHandlers.get(event);
       const onceHandler = onceList?.shift();
@@ -86,8 +87,11 @@ vi.mock("electron", () => {
   };
 });
 
+const applyDaintreeAppCspToSession = vi.hoisted(() => vi.fn());
+
 vi.mock("../../setup/protocols.js", () => ({
   registerProtocolsForSession: vi.fn(),
+  applyDaintreeAppCspToSession,
   getDistPath: vi.fn(() => "/dist"),
 }));
 
@@ -136,17 +140,20 @@ interface Setup {
   manager: SurfaceViewManager;
   win: ReturnType<typeof createMockWindow>;
   crashes: SurfaceViewCrashReport[];
+  readySurfaces: string[];
 }
 
 function createManager(): Setup {
   const win = createMockWindow();
   const crashes: SurfaceViewCrashReport[] = [];
+  const readySurfaces: string[] = [];
   const manager = new SurfaceViewManager({
     win: win as unknown as Electron.BrowserWindow,
     dirname: "/app",
     onCrash: (report) => crashes.push(report),
+    onSurfaceReady: (surfaceId) => readySurfaces.push(surfaceId),
   });
-  return { manager, win, crashes };
+  return { manager, win, crashes, readySurfaces };
 }
 
 async function createSurface(setup: Setup, surfaceId: string): Promise<MockWc> {
@@ -230,6 +237,28 @@ describe("SurfaceViewManager.createSurface", () => {
     await expect(pending).rejects.toThrow(/load failed/);
     expect(setup.manager.hasSurface("surface-aux-1")).toBe(false);
     expect(wc.close).toHaveBeenCalled();
+  });
+
+  it("settles an in-flight create immediately when the surface is destroyed mid-load", async () => {
+    const setup = createManager();
+    const wc = createMockWebContents({ autoFinishLoad: false });
+    wcQueue.push(wc);
+    const pending = setup.manager.createSurface("surface-aux-1");
+    await Promise.resolve();
+
+    await setup.manager.destroySurface("surface-aux-1");
+    await expect(pending).rejects.toThrow(/destroyed during load/);
+    expect(setup.manager.hasSurface("surface-aux-1")).toBe(false);
+  });
+
+  it("hardens the surface renderer: CSP applied, child windows denied", async () => {
+    const setup = createManager();
+    const wc = await createSurface(setup, "surface-aux-1");
+
+    expect(applyDaintreeAppCspToSession).toHaveBeenCalled();
+    expect(wc.setWindowOpenHandler).toHaveBeenCalledTimes(1);
+    const openHandler = wc.setWindowOpenHandler.mock.calls[0]![0] as () => { action: string };
+    expect(openHandler()).toEqual({ action: "deny" });
   });
 });
 
@@ -337,6 +366,18 @@ describe("SurfaceViewManager crash recovery", () => {
     wc._fire("unresponsive");
     expect(wc.forcefullyCrashRenderer).toHaveBeenCalledTimes(1);
     expect(wc.reload).not.toHaveBeenCalled();
+  });
+
+  it("announces readiness after a post-create load so the port re-brokers, not on the initial load", async () => {
+    const setup = createManager();
+    const wc = await createSurface(setup, "surface-aux-1");
+    expect(setup.readySurfaces).toEqual([]);
+
+    // Crash → auto-reload → the reloaded renderer finishes loading.
+    wc._fire("render-process-gone", {}, { reason: "crashed", exitCode: 1 });
+    await flushImmediates();
+    wc._fire("did-finish-load");
+    expect(setup.readySurfaces).toEqual(["surface-aux-1"]);
   });
 });
 

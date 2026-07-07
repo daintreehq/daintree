@@ -110,6 +110,13 @@ export function createBoundedKScheduler(
 // window's DOM. Wraps any inner policy: an inner choice that violates the
 // constraint falls back to the least-loaded hostable surface, degrading to
 // the default surface (always local today) so placement never fails.
+//
+// Composition caveat for STATEFUL inner policies (atlas clustering): the
+// inner policy commits its sticky state (atlas key → surface) before this
+// wrapper can veto the choice, so wrap the clustering policy's
+// `chooseForNewKey` with the geometry constraint instead of wrapping the
+// clustering policy itself — otherwise a vetoed pick still records the
+// unhostable surface for the key.
 export function createGeometryConstrainedPlacement(
   inner: PlacementPolicy,
   canHost: (surfaceId: string, terminalId: string, context?: PlacementContext) => boolean

@@ -172,6 +172,47 @@ describe("SurfacePortBroker.brokerSurfacePort", () => {
     expect(broker.connectionIdFor("s1")).toBe(second);
   });
 
+  it("releases the pty-host connection when port delivery to the renderer fails", () => {
+    const { broker, ptyClient, wc } = makeBroker();
+    wc.postMessage.mockImplementation(() => {
+      throw new Error("Render frame was disposed");
+    });
+
+    expect(() =>
+      broker.brokerSurfacePort({ surfaceId: "s1", wc: wc as never, projectId: "p1" })
+    ).toThrow(/disposed/);
+    // The half-open connection must not survive: pty-host disconnected and
+    // ports closed.
+    expect(ptyClient.disconnectMessagePort).toHaveBeenCalledTimes(1);
+    expect((madeChannels[0]!.port1 as MockPort).close).toHaveBeenCalled();
+    expect(broker.connectionIdFor("s1")).toBeNull();
+  });
+
+  it("rebrokerFromLast reuses the last broker's project context after a reload", () => {
+    const { broker, ptyClient, wc } = makeBroker();
+    broker.brokerSurfacePort({
+      surfaceId: "s1",
+      wc: wc as never,
+      projectId: "p1",
+      projectPath: "/proj",
+    });
+    // Reload navigation released the port.
+    wc._fire("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+    expect(broker.connectionIdFor("s1")).toBeNull();
+
+    const reconnected = broker.rebrokerFromLast("s1", wc as never);
+    expect(reconnected).not.toBeNull();
+    expect(ptyClient.registerAuxConnectionContext).toHaveBeenLastCalledWith(
+      reconnected,
+      "p1",
+      "/proj"
+    );
+    expect(broker.connectionIdFor("s1")).toBe(reconnected);
+
+    // A surface never brokered has no context to reuse.
+    expect(broker.rebrokerFromLast("never-brokered", wc as never)).toBeNull();
+  });
+
   it("throws when the pty client is unavailable or the webContents is destroyed", () => {
     const wc = makeMockWc();
     const noPty = new SurfacePortBroker(() => null);

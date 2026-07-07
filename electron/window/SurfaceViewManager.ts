@@ -21,7 +21,11 @@ import { WebContentsView, session } from "electron";
 import path from "path";
 import { randomBytes } from "crypto";
 import type { BrowserWindow } from "electron";
-import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js";
+import {
+  registerProtocolsForSession,
+  applyDaintreeAppCspToSession,
+  getDistPath,
+} from "../setup/protocols.js";
 import { getDevServerUrl } from "../../shared/config/devServer.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
 import {
@@ -52,6 +56,9 @@ interface SurfaceViewEntry {
   bounds: SurfaceViewBounds | null;
   crashTimestamps: number[];
   cleanupHandlers: () => void;
+  // Settles an in-flight loadSurface promise immediately on destroy so a
+  // destroyed surface never leaves the create call hanging on the timeout.
+  cancelLoad: (() => void) | null;
   state: SurfaceViewState;
 }
 
@@ -67,12 +74,19 @@ export interface SurfaceViewManagerDeps {
    * paint surface never loads the project views' recovery page.
    */
   onCrash?: (report: SurfaceViewCrashReport) => void;
+  /**
+   * Fires when a surface finishes loading again AFTER its initial create
+   * (crash reload, navigation). The reload tore down the renderer context
+   * that held the surface's pty-host port, so the caller re-brokers here.
+   */
+  onSurfaceReady?: (surfaceId: string) => void;
 }
 
 export class SurfaceViewManager {
   private readonly win: BrowserWindow;
   private readonly dirname: string;
   private readonly onCrash?: (report: SurfaceViewCrashReport) => void;
+  private readonly onSurfaceReady?: (surfaceId: string) => void;
   private entries = new Map<string, SurfaceViewEntry>();
   private disposed = false;
 
@@ -80,6 +94,7 @@ export class SurfaceViewManager {
     this.win = deps.win;
     this.dirname = deps.dirname;
     this.onCrash = deps.onCrash;
+    this.onSurfaceReady = deps.onSurfaceReady;
   }
 
   surfaceCount(): number {
@@ -131,6 +146,10 @@ export class SurfaceViewManager {
     if (distPath) {
       registerProtocolsForSession(ses, distPath);
     }
+    // The partition stays classified "unknown" so security.ts's
+    // session-created hook default-locks its permissions; the app CSP half of
+    // the project-view hardening is applied explicitly here.
+    applyDaintreeAppCspToSession(ses);
 
     const view = new WebContentsView({
       webPreferences: {
@@ -161,6 +180,7 @@ export class SurfaceViewManager {
       bounds: null,
       crashTimestamps: [],
       cleanupHandlers: () => {},
+      cancelLoad: null,
       state: "loading",
     };
     this.entries.set(surfaceId, entry);
@@ -232,6 +252,14 @@ export class SurfaceViewManager {
     entry.state = "destroyed";
     this.entries.delete(surfaceId);
 
+    // Settle an in-flight create immediately instead of leaving it to the
+    // load timeout.
+    try {
+      entry.cancelLoad?.();
+    } catch (error) {
+      console.error("[SurfaceViewManager] cancelLoad threw during destroy:", error);
+    }
+
     // Listener detach must precede close(): close() does not remove JS
     // listeners, and a queued Chromium event landing after teardown would
     // read torn-down state (#6085).
@@ -281,6 +309,22 @@ export class SurfaceViewManager {
       if (!isTrustedRendererUrl(url)) {
         event.preventDefault();
       }
+    };
+
+    const handleWillRedirect = (event: Electron.Event, url: string) => {
+      if (!isTrustedRendererUrl(url)) {
+        event.preventDefault();
+      }
+    };
+
+    const handleDidFinishLoad = () => {
+      const current = this.entries.get(surfaceId);
+      if (!current || current.state !== "ready") return;
+      // Only post-create loads reach here (the initial load settles via
+      // loadSurface before state flips to "ready"): a reload replaced the
+      // renderer context that held the surface's pty-host port, so the
+      // owner must re-broker.
+      this.onSurfaceReady?.(surfaceId);
     };
 
     const handleRenderProcessGone = (
@@ -343,7 +387,12 @@ export class SurfaceViewManager {
       liveWc.forcefullyCrashRenderer();
     };
 
+    // A paint surface never opens child windows.
+    wc.setWindowOpenHandler(() => ({ action: "deny" }));
+
     wc.on("will-navigate", handleWillNavigate);
+    wc.on("will-redirect", handleWillRedirect);
+    wc.on("did-finish-load", handleDidFinishLoad);
     wc.on("render-process-gone", handleRenderProcessGone);
     wc.on("unresponsive", handleUnresponsive);
 
@@ -355,6 +404,8 @@ export class SurfaceViewManager {
       if (cleaned) return;
       cleaned = true;
       wc.removeListener("will-navigate", handleWillNavigate);
+      wc.removeListener("will-redirect", handleWillRedirect);
+      wc.removeListener("did-finish-load", handleDidFinishLoad);
       wc.removeListener("render-process-gone", handleRenderProcessGone);
       wc.removeListener("unresponsive", handleUnresponsive);
     };
@@ -377,8 +428,12 @@ export class SurfaceViewManager {
         settled = true;
         clearTimeout(timeout);
         cleanup();
+        entry.cancelLoad = null;
         fn();
       };
+
+      entry.cancelLoad = () =>
+        settle(() => reject(new Error("Surface view destroyed during load")));
 
       const timeout = setTimeout(() => {
         settle(() => reject(new Error("Surface view load timed out")));

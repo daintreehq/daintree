@@ -48,6 +48,12 @@ export interface BrokerSurfacePortOptions {
 
 export class SurfacePortBroker {
   private entries = new Map<string, BrokeredSurfacePort>();
+  // Survives releaseSurfacePort so a post-reload re-broker can reuse the
+  // surface's project context without a fresh IPC round-trip.
+  private lastOptionsBySurfaceId = new Map<
+    string,
+    { projectId: string | null; projectPath?: string }
+  >();
 
   constructor(private readonly getPtyClient: () => PtyClient | null) {}
 
@@ -109,11 +115,36 @@ export class SurfacePortBroker {
         wc.removeListener("did-start-navigation", handleWcNavigation);
       },
     });
+    this.lastOptionsBySurfaceId.set(surfaceId, { projectId, projectPath });
 
-    wc.postMessage("terminal-port-token", { token: handshakeToken });
-    wc.postMessage("terminal-port", { token: handshakeToken }, [port1]);
+    // A failed delivery must not leave a live pty-host connection with no
+    // renderer holding the other end of the pair.
+    try {
+      wc.postMessage("terminal-port-token", { token: handshakeToken });
+      wc.postMessage("terminal-port", { token: handshakeToken }, [port1]);
+    } catch (error) {
+      this.releaseSurfacePort(surfaceId);
+      throw error;
+    }
 
     return connectionId;
+  }
+
+  /**
+   * Re-broker after a surface view reload using the context of the last
+   * successful broker (a reload releases the port via did-start-navigation,
+   * but the surface's project never changed). Returns null when this surface
+   * was never brokered.
+   */
+  rebrokerFromLast(surfaceId: string, wc: Electron.WebContents): number | null {
+    const last = this.lastOptionsBySurfaceId.get(surfaceId);
+    if (!last) return null;
+    return this.brokerSurfacePort({
+      surfaceId,
+      wc,
+      projectId: last.projectId,
+      projectPath: last.projectPath,
+    });
   }
 
   releaseSurfacePort(surfaceId: string): void {
@@ -149,5 +180,6 @@ export class SurfacePortBroker {
     for (const surfaceId of Array.from(this.entries.keys())) {
       this.releaseSurfacePort(surfaceId);
     }
+    this.lastOptionsBySurfaceId.clear();
   }
 }

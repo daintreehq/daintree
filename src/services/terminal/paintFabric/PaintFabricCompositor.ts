@@ -198,6 +198,11 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
   // the stale placement.
   private releaseFailedClaim(id: string, surface: PaintSurface, claimed: boolean): void {
     if (!claimed) return;
+    // A view-hosted surface cannot answer the liveness probe synchronously,
+    // so err on the side of keeping the claim: a stale placement self-heals
+    // on the next create (healPlacement), while releasing a live view-owned
+    // terminal's placement would strand it routing to the default surface.
+    if (surfaceKind(surface) === "view") return;
     let liveOnSurface = false;
     try {
       liveOnSurface = surface.plane.get(id) !== null;
@@ -307,9 +312,12 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
    * and the compositor folds them into the sync-read mirror so the sync half
    * of TerminalPaintPlane keeps answering without crossing the process
    * boundary. Skips undefined fields so a partial patch never erases known
-   * state. Tolerant of unplaced ids — a patch may race a transfer.
+   * state. Patches for ids not currently view-owned are dropped — a stale
+   * push racing a transfer/destroy must not resurrect mirror state the local
+   * plane (or nobody) now owns.
    */
   applyMirrorPatch(id: string, patch: TerminalSyncMirrorPatch): void {
+    if (!this.isViewOwned(id)) return;
     const mirror = this.mirror(id);
     if (patch.agentState !== undefined) mirror.agentState = patch.agentState;
     if (patch.focused !== undefined) mirror.focused = patch.focused;
@@ -428,8 +436,11 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     } catch (error) {
       // The terminal now exists nowhere; drop the placement so the caller's
       // retry (a fresh getOrCreate) claims cleanly instead of routing to a
-      // surface that never built it.
+      // surface that never built it. The mirror drops with it — stale
+      // agent/focus/buffer state must not answer for a terminal that no
+      // longer exists anywhere.
       this.registry.release(id);
+      this.syncMirrorsById.delete(id);
       throw error;
     }
 
@@ -554,11 +565,18 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.plane(id).notifyEnterPressed(id);
   }
 
+  // The remaining sync reads return documented safe defaults for view-owned
+  // terminals: hover/selection are DOM-local concerns the surface view
+  // handles on its own side, and renderer-internal flags (hibernation, WebGL
+  // activity, alt-buffer) read as inactive until the wiring front extends the
+  // mirror to carry the ones that prove load-bearing cross-view.
   getHoveredLinkText(id: string): string | null {
+    if (this.isViewOwned(id)) return null;
     return this.plane(id).getHoveredLinkText(id);
   }
 
   getHoveredFilePath(id: string): string | null {
+    if (this.isViewOwned(id)) return null;
     return this.plane(id).getHoveredFilePath(id);
   }
 
@@ -707,6 +725,7 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
   }
 
   getCachedSelection(id: string): string {
+    if (this.isViewOwned(id)) return "";
     return this.plane(id).getCachedSelection(id);
   }
 
@@ -743,6 +762,7 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
   }
 
   getAttachGeneration(id: string): number {
+    if (this.isViewOwned(id)) return 0;
     return this.plane(id).getAttachGeneration(id);
   }
 
@@ -917,10 +937,12 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
   }
 
   getAltBufferState(id: string): boolean {
+    if (this.isViewOwned(id)) return false;
     return this.plane(id).getAltBufferState(id);
   }
 
   getSynchronizedOutputMode(id: string): boolean | null {
+    if (this.isViewOwned(id)) return null;
     return this.plane(id).getSynchronizedOutputMode(id);
   }
 
@@ -936,9 +958,13 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
 
   captureBufferText(id: string, maxChars?: number): string {
     if (this.isViewOwned(id)) {
-      // Tail-truncate to match the bare service's bottom-up capture window.
+      // Match the bare service's boundary semantics: default capture window
+      // of 20000 chars (TerminalInstanceService.captureBufferText), nothing
+      // for a non-positive budget, tail-truncated like the bottom-up scan.
+      const limit = maxChars ?? 20_000;
+      if (limit <= 0) return "";
       const text = this.syncMirrorsById.get(id)?.bufferText ?? "";
-      return maxChars !== undefined && maxChars >= 0 ? text.slice(-maxChars) : text;
+      return text.slice(-limit);
     }
     return this.plane(id).captureBufferText(id, maxChars);
   }
@@ -1049,10 +1075,12 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
   }
 
   isHibernated(id: string): boolean {
+    if (this.isViewOwned(id)) return false;
     return this.plane(id).isHibernated(id);
   }
 
   isWebGLActive(id: string): boolean {
+    if (this.isViewOwned(id)) return false;
     return this.plane(id).isWebGLActive(id);
   }
 

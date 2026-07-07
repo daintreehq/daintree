@@ -83,6 +83,18 @@ export function registerPaintFabricSurfaceHandlers(deps: HandlerDependencies): (
             `[paintSurface] surface ${report.surfaceId} ${report.disposition} (${report.reason})`
           );
         },
+        onSurfaceReady: (surfaceId) => {
+          // A reload replaced the renderer context that held the surface's
+          // pty-host port (the navigation released it) — re-broker with the
+          // context of the last successful broker.
+          const wc = wctx.services.surfaceViewManager?.getWebContents(surfaceId);
+          if (!wc) return;
+          try {
+            wctx.services.surfacePortBroker?.rebrokerFromLast(surfaceId, wc);
+          } catch (error) {
+            console.warn(`[paintSurface] re-broker after reload failed for ${surfaceId}:`, error);
+          }
+        },
       });
     }
     return wctx.services.surfaceViewManager;
@@ -108,15 +120,34 @@ export function registerPaintFabricSurfaceHandlers(deps: HandlerDependencies): (
 
           // Direct pty-host port for the new surface: bytes flow pty-host ↔
           // surface view under a synthetic connection id, never through the
-          // compositor or the primary view.
+          // compositor or the primary view. Resolve projectPath from the
+          // sender's CURRENT project — WindowContext.projectPath is only
+          // seeded at window registration and goes stale across project
+          // switches.
           const wc = manager.getWebContents(payload.surfaceId);
           if (wc && deps.ptyClient) {
-            ensureBroker(wctx).brokerSurfacePort({
-              surfaceId: payload.surfaceId,
-              wc,
-              projectId: ctx.projectId,
-              projectPath: wctx.projectPath ?? undefined,
-            });
+            // Lazy import: the projectStore singleton does sync fs work at
+            // module load and must stay off this module's eager import graph.
+            const { projectStore } = await import("../../services/ProjectStore.js");
+            const projectPath = ctx.projectId
+              ? (projectStore.getProjectById(ctx.projectId)?.path ??
+                wctx.projectPath ??
+                undefined)
+              : (wctx.projectPath ?? undefined);
+            try {
+              ensureBroker(wctx).brokerSurfacePort({
+                surfaceId: payload.surfaceId,
+                wc,
+                projectId: ctx.projectId,
+                projectPath,
+              });
+            } catch (error) {
+              // Creation is atomic: a surface without a deliverable port is
+              // useless, so tear the view down rather than hand back a
+              // half-alive surface.
+              await manager.destroySurface(payload.surfaceId);
+              throw error;
+            }
           }
           return result;
         },
@@ -156,8 +187,13 @@ export function registerPaintFabricSurfaceHandlers(deps: HandlerDependencies): (
           }
           // The webglBudget waterfill's apply step: push the granted
           // thresholds into the surface view's renderer, where the
-          // surface-side TerminalWebGLManager applies them.
-          wc.send(CHANNELS.PAINT_SURFACE_WEBGL_THRESHOLDS, payload);
+          // surface-side TerminalWebGLManager applies them. send can race
+          // view destruction between the isDestroyed check and the call.
+          try {
+            wc.send(CHANNELS.PAINT_SURFACE_WEBGL_THRESHOLDS, payload);
+          } catch {
+            throw new Error(`Surface view unavailable: ${payload.surfaceId}`);
+          }
         },
         { withContext: true }
       ),

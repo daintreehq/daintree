@@ -69,12 +69,17 @@ vi.mock("../../window/SurfacePortBroker.js", () => ({
   SurfacePortBroker: function SurfacePortBroker() {
     const instance = {
       brokerSurfacePort: vi.fn(() => 1073741825),
+      rebrokerFromLast: vi.fn(),
       releaseSurfacePort: vi.fn(),
       dispose: vi.fn(),
     };
     brokerInstances.push(instance);
     return instance;
   },
+}));
+
+vi.mock("../../services/ProjectStore.js", () => ({
+  projectStore: { getProjectById: vi.fn(() => ({ path: "/proj-live" })) },
 }));
 
 import { registerPaintFabricSurfaceHandlers } from "../handlers/paintFabricSurface.js";
@@ -174,14 +179,33 @@ describe("registerPaintFabricSurfaceHandlers", () => {
     manager.getWebContents.mockReturnValue({ id: 42 });
     await invoke(CHANNELS.PAINT_SURFACE_CREATE, { surfaceId: "s2" });
     const broker = brokerInstances[0] as FakeBroker;
+    // projectPath resolves from the sender's CURRENT project at call time,
+    // not the registration-time WindowContext.projectPath.
     expect(broker.brokerSurfacePort).toHaveBeenCalledWith({
       surfaceId: "s2",
       wc: { id: 42 },
       projectId: "p1",
-      projectPath: "/proj",
+      projectPath: "/proj-live",
     });
     // The manager is per-window: the second create reused it.
     expect(managerInstances).toHaveLength(1);
+  });
+
+  it("destroys the just-created surface when port brokering fails", async () => {
+    const { invoke, wctx } = makeHarness();
+    await invoke(CHANNELS.PAINT_SURFACE_CREATE, { surfaceId: "s1" });
+    const manager = wctx.services.surfaceViewManager as unknown as FakeManager;
+    manager.getWebContents.mockReturnValue({ id: 42 });
+    await invoke(CHANNELS.PAINT_SURFACE_CREATE, { surfaceId: "s2" });
+    const broker = brokerInstances[0] as FakeBroker;
+    broker.brokerSurfacePort.mockImplementation(() => {
+      throw new Error("delivery failed");
+    });
+
+    await expect(invoke(CHANNELS.PAINT_SURFACE_CREATE, { surfaceId: "s3" })).rejects.toThrow(
+      /delivery failed/
+    );
+    expect(manager.destroySurface).toHaveBeenCalledWith("s3");
   });
 
   it("throws when the sender has no window or the window is unregistered", async () => {

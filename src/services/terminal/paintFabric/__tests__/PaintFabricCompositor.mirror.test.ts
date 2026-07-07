@@ -46,6 +46,24 @@ describe("PaintFabricCompositor sync-read mirrors", () => {
     compositor.applyMirrorPatch("v-1", { bufferText: "0123456789" });
 
     expect(compositor.captureBufferText("v-1", 4)).toBe("6789");
+    // Boundary semantics match the bare service: nothing for a non-positive
+    // budget (`slice(-0)` would otherwise return the full text).
+    expect(compositor.captureBufferText("v-1", 0)).toBe("");
+    expect(compositor.captureBufferText("v-1", -5)).toBe("");
+  });
+
+  it("drops mirror patches for ids not currently view-owned", async () => {
+    const { compositor } = makeCompositor();
+    // Unplaced id → default (local) surface owns it → patch dropped.
+    compositor.applyMirrorPatch("ghost", { agentState: "working" });
+    expect(compositor.getMirrorForTests("ghost")).toBeUndefined();
+
+    // Destroyed view-owned terminal: a late patch must not resurrect state.
+    await compositor.getOrCreate("v-1", undefined, {});
+    compositor.applyMirrorPatch("v-1", { agentState: "working" });
+    compositor.destroy("v-1");
+    compositor.applyMirrorPatch("v-1", { agentState: "working" });
+    expect(compositor.getMirrorForTests("v-1")).toBeUndefined();
   });
 
   it("defaults view-owned reads when no mirror state has arrived", async () => {
@@ -92,6 +110,34 @@ describe("PaintFabricCompositor sync-read mirrors", () => {
     expect(compositor.getInstanceForE2E("v-1")).toBeUndefined();
     expect(compositor.fit("v-1")).toBeNull();
     expect(compositor.resize("v-1", 800, 600)).toBeNull();
+  });
+
+  it("answers the remaining sync reads with safe defaults for view-owned terminals", async () => {
+    const { compositor } = makeCompositor();
+    await compositor.getOrCreate("v-1", undefined, {});
+
+    expect(compositor.getHoveredLinkText("v-1")).toBeNull();
+    expect(compositor.getHoveredFilePath("v-1")).toBeNull();
+    expect(compositor.getCachedSelection("v-1")).toBe("");
+    expect(compositor.getAttachGeneration("v-1")).toBe(0);
+    expect(compositor.getAltBufferState("v-1")).toBe(false);
+    expect(compositor.getSynchronizedOutputMode("v-1")).toBeNull();
+    expect(compositor.isHibernated("v-1")).toBe(false);
+    expect(compositor.isWebGLActive("v-1")).toBe(false);
+  });
+
+  it("drops the mirror when a transfer fails after the source was destroyed", async () => {
+    const { compositor, local, view } = makeCompositor();
+    await compositor.getOrCreate("v-1", undefined, {});
+    compositor.applyMirrorPatch("v-1", { agentState: "working", bufferText: "state" });
+    local.getOrCreate.mockRejectedValueOnce(new Error("target build failed"));
+
+    await expect(compositor.transferTerminal("v-1", "local")).rejects.toThrow(
+      /target build failed/
+    );
+    // The terminal exists nowhere; stale mirror state must not answer for it.
+    expect(compositor.getMirrorForTests("v-1")).toBeUndefined();
+    expect(view.destroy).toHaveBeenCalledWith("v-1");
   });
 
   it("routes DOM attach/detach to the bounds protocol (no-op) for view-owned terminals", async () => {
