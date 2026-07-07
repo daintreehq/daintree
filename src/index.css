@@ -1880,6 +1880,13 @@ body,
     transition: none !important;
   }
 
+  /* Grid-rows expand/collapse reveals (filter sections et al.) — height
+   * interpolation is spatial motion; the content still snaps open/closed.
+   * WCAG 2.3.3. */
+  [data-animated-reveal] {
+    transition: none !important;
+  }
+
   *:focus-visible {
     transition: none !important;
   }
