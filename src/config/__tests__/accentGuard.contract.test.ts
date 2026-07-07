@@ -174,6 +174,7 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Diagnostics/TelemetryContent.tsx",
     "src/components/Fleet/FleetArmingRibbon.tsx",
     "src/components/KeyboardShortcuts/SettingsShortcutCapture.tsx",
+    "src/components/Layout/DockedFilePanelItem.tsx",
     "src/components/Layout/DockedTabGroup.tsx",
     "src/components/Layout/DockedTerminalItem.tsx",
     "src/components/Layout/Sidebar.tsx",
