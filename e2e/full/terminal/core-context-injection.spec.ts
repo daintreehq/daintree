@@ -129,6 +129,17 @@ test.describe.serial("Core: Context Injection", () => {
     expect(panelId).toBeTruthy();
 
     const panel = getPanelById(window, panelId);
+    await expect
+      .poll(
+        async () => {
+          const terminals = await window.evaluate(() =>
+            (window as any).electron.terminal.getAllTerminals()
+          );
+          return terminals.some((terminal: { id: string }) => terminal.id === panelId);
+        },
+        { timeout: T_LONG, message: "Terminal should be registered before context injection" }
+      )
+      .toBe(true);
 
     // Inject context into terminal via preload API
     const injectResult: any = await window.evaluate(

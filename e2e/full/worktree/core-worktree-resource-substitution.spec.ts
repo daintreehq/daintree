@@ -195,30 +195,42 @@ test.describe.serial("Full: Worktree Resource Substitution", () => {
     fs.writeFileSync(wtConfigPath, JSON.stringify(config, null, 2));
 
     await ensureWindowFocused(ctx.app);
-    await window.keyboard.press(`${mod}+Shift+P`);
-    let palette = window.locator(SEL.actionPalette.dialog);
-    await expect(palette).toBeVisible({ timeout: T_MEDIUM });
-    await palette.locator(SEL.actionPalette.searchInput).fill("Provision Resource");
-    let option = palette.locator('[role="option"]').filter({ hasText: /Provision Resource/i });
-    await expect(option.first()).toBeVisible({ timeout: T_SHORT });
-    await option.first().click();
-    const confirmBtn = window.locator('button:has-text("Confirm")');
-    if (await confirmBtn.isVisible({ timeout: T_SHORT }).catch(() => false)) {
-      await confirmBtn.click();
-    }
+    await window.evaluate(async () => {
+      const dispatch = (
+        window as unknown as {
+          __daintreeDispatchAction?: (actionId: string, args?: unknown) => Promise<unknown>;
+        }
+      ).__daintreeDispatchAction;
+      if (!dispatch) throw new Error("__daintreeDispatchAction is not installed");
+      await dispatch("worktree.resource.provision");
+    });
 
     // Provision is idempotent — a no-op when the resource is already ready — so the
-    // helper script may not re-run. Wait for the action to dispatch (palette closes),
-    // then assert the real behavior below: the rewritten connect command's templated
-    // {{branch}}/{{worktree_path}} are substituted in the spawned terminal.
-    await expect(palette).toBeHidden({ timeout: T_MEDIUM });
+    // helper script may not re-run. Wait for the host to ingest the rewritten
+    // config before dispatching Connect; otherwise Connect can read the previous
+    // resourceConnectCommand from the renderer store. Match by branch instead of
+    // exact path because Windows may report the same worktree path with different
+    // separators across git output and the host snapshot.
+    await expect
+      .poll(
+        async () =>
+          window.evaluate(
+            async ({ branch }) => {
+              const states = await window.electron.worktree.getAll();
+              return states.find((state) => state.branch === branch)?.resourceConnectCommand ?? "";
+            },
+            { branch: BRANCH }
+          ),
+        { timeout: T_LONG, message: "Updated resource connect command should be visible" }
+      )
+      .toContain("BRANCH=");
 
     const countBefore = await getGridPanelCount(window);
     await window.keyboard.press(`${mod}+Shift+P`);
-    palette = window.locator(SEL.actionPalette.dialog);
+    const palette = window.locator(SEL.actionPalette.dialog);
     await expect(palette).toBeVisible({ timeout: T_MEDIUM });
     await palette.locator(SEL.actionPalette.searchInput).fill("Connect to Resource");
-    option = palette.locator('[role="option"]').filter({ hasText: /Connect to Resource/i });
+    const option = palette.locator('[role="option"]').filter({ hasText: /Connect to Resource/i });
     await expect(option.first()).toBeVisible({ timeout: T_SHORT });
     await option.first().click();
 

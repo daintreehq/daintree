@@ -20,6 +20,8 @@ import { measureMainMemory } from "../helpers/stress";
 
 const WARMUP_CYCLES = 2;
 const CHURN_CYCLES = 10;
+const FILE_OPS_RATE_LIMIT_WINDOW_MS = 10_000;
+const FILE_OPS_RATE_LIMIT_MAX_CALLS = 5;
 // Each cycle runs a full plugin unload/reload cascade, a copytree generation,
 // and a terminal open/close. Retained result buffers or leaked analysis
 // sessions compound per cycle, so a real leak clears these caps easily; the
@@ -93,6 +95,10 @@ async function generateContext(window: AppContext["window"], worktreeId: string)
   expect(result?.content?.length).toBeGreaterThan(0);
 }
 
+async function waitForFileOpsRateLimitWindow(window: AppContext["window"]): Promise<void> {
+  await window.waitForTimeout(FILE_OPS_RATE_LIMIT_WINDOW_MS + 250);
+}
+
 let ctx: AppContext;
 let fixtureCleanup: (() => void) | undefined;
 
@@ -127,6 +133,7 @@ test.describe.serial("Nightly: Worker governance memory bounds", () => {
         await openAndCloseTerminal(window);
         await window.waitForTimeout(500);
       }
+      await waitForFileOpsRateLimitWindow(window);
       await window.waitForTimeout(2000);
     });
 
@@ -141,6 +148,9 @@ test.describe.serial("Nightly: Worker governance memory bounds", () => {
         await togglePluginOffOn(window);
         await generateContext(window, worktreeId);
         await openAndCloseTerminal(window);
+        if ((i + 1) % FILE_OPS_RATE_LIMIT_MAX_CALLS === 0 && i + 1 < CHURN_CYCLES) {
+          await waitForFileOpsRateLimitWindow(window);
+        }
         await window.waitForTimeout(300);
       }
     });

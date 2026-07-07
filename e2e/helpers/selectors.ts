@@ -136,7 +136,7 @@ export const SEL = {
   },
   dock: {
     container: "#dock-container",
-    rail: '[role="toolbar"][aria-label="Docked terminals"]',
+    rail: '[role="toolbar"][aria-label="Docked panels"]',
     chip: "[data-dock-item]",
     chipByTitle: (title: string) => `[data-dock-item][aria-label^="${title}"]`,
     tablist: '[role="tablist"][aria-label="Dock panel tabs"]',

@@ -185,6 +185,30 @@ describe("worktree rate limiting", () => {
 
       expect(mockWorktreeService.createWorktree).not.toHaveBeenCalled();
     });
+
+    it("coalesces identical concurrent create requests before consuming a second rate-limit slot", async () => {
+      let resolveCreate!: (worktreeId: string) => void;
+      mockWorktreeService.createWorktree.mockReturnValueOnce(
+        new Promise<string>((resolve) => {
+          resolveCreate = resolve;
+        })
+      );
+      const handler = getInvokeHandler(CHANNELS.WORKTREE_CREATE);
+      const payload = {
+        rootPath: "/test/project",
+        options: { baseBranch: "main", newBranch: "feat-1", path: "/test/worktrees/feat-1" },
+      };
+
+      const first = handler({} as never, payload);
+      const second = handler({} as never, payload);
+      await Promise.resolve();
+
+      expect(waitForBurstRateLimitSlotMock).toHaveBeenCalledTimes(1);
+      expect(mockWorktreeService.createWorktree).toHaveBeenCalledTimes(1);
+
+      resolveCreate("wt-1");
+      await expect(Promise.all([first, second])).resolves.toEqual(["wt-1", "wt-1"]);
+    });
   });
 
   describe("other handlers still use checkRateLimit", () => {

@@ -41,6 +41,20 @@ test.describe.serial("Core: Worktree Session Bulk", () => {
     await sessionsTrigger.click();
   }
 
+  async function expectWorktreeSessionSummary(count: number) {
+    const { window } = ctx;
+    const featureCard = window.locator(SEL.worktree.card(FEATURE));
+    await expect
+      .poll(
+        async () => {
+          const text = (await featureCard.textContent()) ?? "";
+          return text.replace(/\s+/g, "").toLowerCase();
+        },
+        { timeout: T_LONG }
+      )
+      .toContain(`${count}active`);
+  }
+
   async function expectSessionsItemCount(name: string | RegExp, count: number) {
     const { window } = ctx;
     const item = window.getByRole("menuitem", { name });
@@ -72,17 +86,20 @@ test.describe.serial("Core: Worktree Session Bulk", () => {
 
     await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(3);
     await expect.poll(() => getDockPanelCount(window), { timeout: T_LONG }).toBe(0);
+    await expectWorktreeSessionSummary(3);
   });
 
   test("dock all sessions", async () => {
     const { window } = ctx;
 
+    await expectWorktreeSessionSummary(3);
     await openSessionsSubmenu();
     await expectSessionsItemCount(/Dock All/, 3);
     await clickSessionsItem(/Dock All/);
 
     await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(0);
     await expect.poll(() => getDockPanelCount(window), { timeout: T_LONG }).toBe(3);
+    await expectWorktreeSessionSummary(3);
   });
 
   test("maximize all sessions", async () => {
@@ -90,6 +107,7 @@ test.describe.serial("Core: Worktree Session Bulk", () => {
 
     await window.waitForTimeout(T_SETTLE);
 
+    await expectWorktreeSessionSummary(3);
     await openSessionsSubmenu();
     await expectSessionsItemCount(/Maximize All/, 3);
     await clickSessionsItem(/Maximize All/);

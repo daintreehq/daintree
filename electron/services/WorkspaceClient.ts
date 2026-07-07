@@ -41,6 +41,17 @@ const STATES_INFLIGHT_COALESCE_WINDOW_MS = 150;
 
 export type CopyTreeProgressCallback = (progress: CopyTreeProgress) => void;
 
+function dedupeSnapshotsById(states: WorktreeSnapshot[]): WorktreeSnapshot[] {
+  const seen = new Set<string>();
+  const deduped: WorktreeSnapshot[] = [];
+  for (const state of states) {
+    if (seen.has(state.id)) continue;
+    seen.add(state.id);
+    deduped.push(state);
+  }
+  return deduped;
+}
+
 export class WorkspaceClient extends EventEmitter {
   private isDisposed = false;
   private pool: WorkspaceHostPool;
@@ -445,15 +456,17 @@ export class WorkspaceClient extends EventEmitter {
         });
       })
     );
-    return results
-      .filter(
-        (
-          r
-        ): r is PromiseFulfilledResult<{
-          states: WorktreeSnapshot[];
-        }> => r.status === "fulfilled"
-      )
-      .flatMap((r) => r.value.states);
+    return dedupeSnapshotsById(
+      results
+        .filter(
+          (
+            r
+          ): r is PromiseFulfilledResult<{
+            states: WorktreeSnapshot[];
+          }> => r.status === "fulfilled"
+        )
+        .flatMap((r) => r.value.states)
+    );
   }
 
   async getMonitorAsync(worktreeId: string): Promise<WorktreeSnapshot | null> {

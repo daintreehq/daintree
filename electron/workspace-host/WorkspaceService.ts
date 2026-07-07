@@ -2,7 +2,7 @@ import os from "os";
 import { randomUUID } from "node:crypto";
 import PQueue from "p-queue";
 import { existsSync, watch as fsWatch, type FSWatcher } from "fs";
-import { stat, readFile, access, mkdir } from "fs/promises";
+import { stat, readFile, access, mkdir, realpath } from "fs/promises";
 import { resolve as pathResolve, isAbsolute, dirname, basename } from "path";
 import { validateBranchName } from "../../shared/utils/pathPattern.js";
 import { generateProjectId, settingsFilePath } from "../services/projectStorePaths.js";
@@ -2598,21 +2598,22 @@ export class WorkspaceService {
         maxRetryDelayMs: 800,
       });
       markHostPerformance("wtcreate.path-verified", { branch: newBranch });
+      const canonicalPath = await realpath(absolutePath).catch(() => absolutePath);
 
       // Build the Worktree object directly from known inputs instead of
       // shelling out to `git worktree list --porcelain` — the per-create list
       // was O(N²) across batches. Fields match WorktreeListService.mapToWorktrees
       // output for a freshly-created, attached, non-main worktree.
       const createdWorktree: Worktree = {
-        id: absolutePath,
-        path: absolutePath,
+        id: canonicalPath,
+        path: canonicalPath,
         name: newBranch,
         branch: newBranch,
         head: undefined,
         isDetached: false,
         isCurrent: false,
         isMainWorktree: false,
-        gitDir: (await getGitDir(absolutePath)) || undefined,
+        gitDir: (await getGitDir(canonicalPath)) || undefined,
       };
       const canonicalWorktreeId = createdWorktree.id;
       const isActive = canonicalWorktreeId === this.activeWorktreeId;
@@ -2713,11 +2714,11 @@ export class WorkspaceService {
         // doesn't return a stale cached snapshot that excludes the new worktree.
         this.listService.invalidateCache(pathResolve(rootPath));
 
-        await this.lifecycleService.copyDaintreeDir(rootPath, absolutePath);
+        await this.lifecycleService.copyDaintreeDir(rootPath, canonicalPath);
 
         void this.runLifecycleSetup(
           canonicalWorktreeId,
-          absolutePath,
+          canonicalPath,
           rootPath,
           options.provisionResource ?? options.worktreeMode === "remote-worker"
         );

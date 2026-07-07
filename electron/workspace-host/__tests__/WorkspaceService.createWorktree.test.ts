@@ -250,6 +250,35 @@ describe("WorkspaceService.createWorktree", () => {
     expect(listSpy).not.toHaveBeenCalled();
   });
 
+  it("uses the real path as the created worktree id", async () => {
+    const fsPromisesModule = await import("fs/promises");
+    const requestId = "test-request-realpath";
+    const rootPath = path.resolve("/test/repo");
+    const requestedPath = path.resolve("/test/worktree");
+    const expectedRealPath = path.resolve("/test/canonical-worktree");
+
+    vi.mocked(fsPromisesModule.realpath).mockImplementation((p: any) =>
+      Promise.resolve(String(p) === requestedPath ? expectedRealPath : String(p))
+    );
+
+    await service.createWorktree(requestId, rootPath, {
+      baseBranch: "main",
+      newBranch: "feature/realpath",
+      path: requestedPath,
+    });
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId,
+        success: true,
+        worktreeId: expectedRealPath,
+      })
+    );
+    expect(service["monitors"].has(expectedRealPath)).toBe(true);
+    expect(service["monitors"].has(requestedPath)).toBe(false);
+  });
+
   it("coalesces concurrent duplicate create requests while the first git add is in flight", async () => {
     const expectedWorktreePath = path.resolve("/test/worktree-duplicate");
     const options = {

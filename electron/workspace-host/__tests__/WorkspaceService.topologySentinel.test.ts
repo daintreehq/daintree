@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
 import { mkdtempSync, mkdirSync, rmSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, normalize } from "path";
 import type { WorkspaceService } from "../WorkspaceService.js";
 
 // Real fs.watch drives the sentinel; only the parcel watcher (native FSEvents
@@ -121,7 +121,7 @@ describe("WorkspaceService topology metadata sentinel", () => {
       },
       { timeout: 5000, interval: 25 }
     );
-    expect(parcelSubscriptions[0]!.dir).toBe(metadataDir);
+    expect(normalize(parcelSubscriptions[0]!.dir)).toBe(normalize(metadataDir));
     expect(service["topologyMetadataSentinel"]).toBeNull();
   });
 

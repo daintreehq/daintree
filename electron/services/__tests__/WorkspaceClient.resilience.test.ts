@@ -335,6 +335,38 @@ describe("WorkspaceClient multi-process manager", () => {
       expect(result).toHaveLength(2);
       expect(result.map((s) => s.id)).toEqual(["wt-a", "wt-b"]);
     });
+
+    it("dedupes snapshots by id when no-window fallback sees the same worktree twice", async () => {
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
+
+      const load2 = client.loadProject("/project-b", 2);
+      await readyAndResolveLoad(1);
+      await load2;
+
+      const statesPromise = client.getAllStatesAsync();
+      await tick();
+
+      const reqA = h(0).getLastRequest()!;
+      const reqB = h(1).getLastRequest()!;
+      h(0).resolveRequest(reqA.requestId, {
+        states: [
+          { id: "wt-shared", name: "Shared", branch: "race-wt" },
+          { id: "wt-a", name: "A" },
+        ],
+      });
+      h(1).resolveRequest(reqB.requestId, {
+        states: [
+          { id: "wt-shared", name: "Shared duplicate", branch: "race-wt" },
+          { id: "wt-b", name: "B" },
+        ],
+      });
+
+      const result = await statesPromise;
+      expect(result.map((s) => s.id)).toEqual(["wt-shared", "wt-a", "wt-b"]);
+      expect(result.filter((s) => s.id === "wt-shared")).toHaveLength(1);
+    });
   });
 
   describe("singleflight cache", () => {
