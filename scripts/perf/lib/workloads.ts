@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { applyXtermReflowFastpath } from "../../../shared/utils/xtermReflowFastpath";
 
 export interface PanelState {
   id: string;
@@ -442,16 +443,22 @@ export interface HeadlessTerminalConfig {
  * we set the option explicitly — otherwise `\n` advances the cursor down
  * one line WITHOUT returning to column 0, which spirals the cursor and
  * makes representative log-stream writes misbehave.
+ *
+ * The reflow fastpath is applied exactly as the app applies it at every
+ * terminal creation site, so the scenarios measure what production runs.
+ * A/B against the unpatched core: DAINTREE_DISABLE_XTERM_REFLOW_FASTPATH=1.
  */
 export async function createHeadlessTerminal(
   config: HeadlessTerminalConfig
 ): Promise<import("@xterm/headless").Terminal> {
   const { Terminal } = await import("@xterm/headless");
-  return new Terminal({
+  const terminal = new Terminal({
     cols: config.cols,
     rows: config.rows,
     scrollback: config.scrollback ?? 5000,
     allowProposedApi: true,
     convertEol: true,
   });
+  applyXtermReflowFastpath(terminal);
+  return terminal;
 }

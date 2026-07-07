@@ -7,6 +7,7 @@ import unicode11 from "@xterm/addon-unicode11";
 const { Unicode11Addon } = unicode11;
 
 import { getEffectiveAgentConfig } from "../../../../shared/config/agentRegistry.js";
+import { applyXtermReflowFastpath } from "../../../../shared/utils/xtermReflowFastpath.js";
 import type { AgentState } from "../../../../shared/types/agent.js";
 import { ActivityMonitor, type ProcessStateValidator } from "../../ActivityMonitor.js";
 import { buildActivityMonitorOptions, buildPatternConfig } from "../terminalActivityPatterns.js";
@@ -106,6 +107,7 @@ export class AnalysisSession {
       scrollback: spec.scrollback,
       allowProposedApi: true,
     });
+    applyXtermReflowFastpath(terminal);
     terminal.loadAddon(new Unicode11Addon());
     terminal.unicode.activeVersion = "11";
     const serializeAddon = new SerializeAddon();

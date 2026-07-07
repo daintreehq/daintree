@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { allScenarios, assertMatrixCoverage, getScenariosForMode } from "../scenarios";
+import { getConstructedReflowTerminalCount } from "../lib/reflowFixture";
 
 describe("perf scenario matrix", () => {
   it("covers full PERF matrix", () => {
     expect(() => assertMatrixCoverage()).not.toThrow();
-    expect(allScenarios).toHaveLength(41);
+    expect(allScenarios).toHaveLength(44);
+  });
+
+  it("importing the resize/reflow scenario module constructs no terminals", () => {
+    // Lazy-fixture rule: fixture setup happens on first run()/warmup, never
+    // at import. This must run before the PERF-112 execution test below.
+    expect(getConstructedReflowTerminalCount()).toBe(0);
   });
 
   it("returns mode-specific scenario sets", () => {
@@ -98,5 +105,35 @@ describe("perf scenario matrix", () => {
     // 12 background terminals × 30 rounds × ~1.8 KB chunks — if this shrinks,
     // the flood stopped flooding and the degradation signal is meaningless.
     expect(sample.metrics!.floodBytes).toBeGreaterThan(500_000);
+  });
+
+  it("PERF-112 keeps the over-budget reveal flat with respect to backlog size", async () => {
+    const scenario = allScenarios.find((s) => s.id === "PERF-112");
+    expect(scenario).toBeDefined();
+
+    const context = { mode: "ci" as const, now: () => performance.now() };
+    let sample = await scenario!.run(context);
+
+    expect(sample.metrics).toBeDefined();
+    let metrics = sample.metrics!;
+    // Bounded arm parses ~768 KiB inside resize()'s flushSync — must be a real bracket.
+    expect(metrics.revealBlockingMsSmallBacklog).toBeGreaterThan(0);
+    // Over-budget arm resizes on an empty write buffer, then drains ~4 MiB.
+    expect(metrics.drainMsLargeBacklog).toBeGreaterThan(0);
+    // The drained backlog actually parsed at the new grid (scrollback-capped).
+    expect(metrics.parsedLinesLargeBacklog).toBeGreaterThan(4_000);
+    // Golden value pins the seeded generator's byte output — content drift
+    // must be a conscious edit (and a new constant), never an accident.
+    expect(metrics.backlogChecksum).toBe(835_845_091);
+
+    // The incident invariant: a 4 MiB backlog must NOT block the reveal like
+    // a flushed one — a bypassed budget gate lands at ~5x deterministically.
+    // One retry absorbs a scheduler/GC spike in the single-sample bracket;
+    // the perf harness gates the iteration-averaged metric separately.
+    if ((metrics.largeToSmallBlockingRatio ?? Infinity) >= 3) {
+      sample = await scenario!.run(context);
+      metrics = sample.metrics!;
+    }
+    expect(metrics.largeToSmallBlockingRatio).toBeLessThan(3);
   });
 });

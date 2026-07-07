@@ -11,23 +11,9 @@ const RESIZE_DEBOUNCE_MS = 100;
 const RESIZE_LOCK_TTL_MS = 5000;
 const SETTLED_RESIZE_DELAY_MS = 500;
 
-/**
- * Max held ingest bytes a resize may force-flush into xterm synchronously.
- * `terminal.resize()` parses xterm's ENTIRE write buffer in one unyielding
- * main-thread task before reflowing (`CoreTerminal.resize` →
- * `WriteBuffer.flushSync`), so the pre-resize `flushForTerminal` — which
- * deliberately bypasses the ingest in-flight watermark — must stay bounded. A
- * project view hidden for minutes accumulates its agents' entire output in
- * the ingest queue (hidden-page timer throttling stalls xterm's parse pump
- * while MessagePort chunks keep arriving), and the reveal-time
- * ResizeObserver resize then detonated that backlog as a 45-60s renderer
- * lockup (2026-07-06: UI dead, MCP dispatches through the active view timing
- * out). Past this budget the backlog skips the flush and drains watermarked
- * at the new grid instead — the same wrap outcome as output arriving just
- * after a resize, without the synchronous parse; the PTY SIGWINCH repaint
- * corrects any TUI framing either way.
- */
-export const RESIZE_FLUSH_SYNC_BUDGET_BYTES = 1024 * 1024;
+import { exceedsResizeFlushSyncBudget, RESIZE_FLUSH_SYNC_BUDGET_BYTES } from "./resizeFlushBudget";
+
+export { RESIZE_FLUSH_SYNC_BUDGET_BYTES };
 
 /** Narrow structural type for the private xterm.js internals we access. */
 interface XtermCoreRenderDimensions {
@@ -540,7 +526,7 @@ export class TerminalResizeController {
    */
   private flushHeldBytesBeforeResize(id: string): boolean {
     const queuedBytes = this.deps.dataBuffer.getQueuedBytes(id);
-    if (queuedBytes > RESIZE_FLUSH_SYNC_BUDGET_BYTES) {
+    if (exceedsResizeFlushSyncBudget(queuedBytes)) {
       logWarn(
         `[TerminalResizeController] ${id}: ${queuedBytes} held ingest bytes exceed the pre-resize flush budget — draining watermarked at the new grid instead`
       );

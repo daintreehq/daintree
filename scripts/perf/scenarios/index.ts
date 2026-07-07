@@ -11,6 +11,7 @@ import { projectSwitchScenarios } from "./projectSwitch";
 import { migrationScenarios } from "./migrations";
 import { idleWindowScenarios } from "./idleWindow";
 import { gitPipelineScenarios } from "./gitPipeline";
+import { resizeReflowScenarios } from "./resizeReflow";
 
 export const allScenarios: PerfScenario[] = [
   ...startupScenarios,
@@ -25,6 +26,7 @@ export const allScenarios: PerfScenario[] = [
   ...migrationScenarios,
   ...idleWindowScenarios,
   ...gitPipelineScenarios,
+  ...resizeReflowScenarios,
 ];
 
 export function getScenariosForMode(mode: PerfMode): PerfScenario[] {
@@ -74,6 +76,9 @@ export function assertMatrixCoverage(): void {
     "PERF-102",
     "PERF-103",
     "PERF-104",
+    "PERF-110",
+    "PERF-111",
+    "PERF-112",
   ]);
 
   const actualIds = new Set(allScenarios.map((scenario) => scenario.id));

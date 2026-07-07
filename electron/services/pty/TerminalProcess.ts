@@ -9,6 +9,7 @@ const { SerializeAddon } = serialize;
 import unicode11 from "@xterm/addon-unicode11";
 const { Unicode11Addon } = unicode11;
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
+import { applyXtermReflowFastpath } from "../../../shared/utils/xtermReflowFastpath.js";
 import { ProcessDetector, type DetectionResult } from "../ProcessDetector.js";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
 import type { ImagePathProbe } from "./ImagePathProbe.js";
@@ -583,6 +584,7 @@ export class TerminalProcess {
       scrollback: this._scrollback,
       allowProposedApi: true,
     });
+    applyXtermReflowFastpath(headlessTerminal);
     // SynchronizedFrameAnalyzer reads cell.width from this buffer; without
     // Unicode 11 widths, emoji and CJK rows would mis-report column counts.
     headlessTerminal.loadAddon(new Unicode11Addon());
