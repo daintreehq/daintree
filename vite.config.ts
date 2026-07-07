@@ -355,6 +355,12 @@ function renderFanoutProbePlugin(state: ImportMapBuildState): Plugin {
     apply: "build",
     transformIndexHtml() {
       if (process.env.DAINTREE_RENDER_PROBE !== "1") return;
+      // Loud on purpose: a globally exported DAINTREE_RENDER_PROBE=1 would
+      // otherwise silently turn a packaging build into a bench build
+      // (inline probe + profiling react-dom + no minification).
+      console.warn(
+        "[render-fanout-probe] BENCH BUILD: inlining render probe, profiling react-dom, minify off — never ship this build"
+      );
       const source = readFileSync(
         path.join(process.cwd(), "scripts", "perf", "render-fanout-probe.js"),
         "utf8"

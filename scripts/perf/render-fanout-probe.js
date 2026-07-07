@@ -17,8 +17,11 @@
   // react-reconciler ReactFiberFlags.PerformedWork — set on a fiber only when
   // its render function actually ran this commit (bailouts keep it clear).
   var PERFORMED_WORK = 0b1;
-  // WorkTags that execute user component code: FunctionComponent,
-  // ClassComponent, ForwardRef, MemoComponent, SimpleMemoComponent.
+  // WorkTags counted as renders: FunctionComponent, ClassComponent,
+  // ForwardRef, MemoComponent, SimpleMemoComponent. Deliberately component
+  // fibers only — ContextConsumer (tag 9) render props and host/provider/
+  // fragment wrappers are excluded, so "renders" reads as "component
+  // functions/classes that executed".
   var COMPONENT_TAGS = { 0: true, 1: true, 11: true, 14: true, 15: true };
 
   var capturing = false;
@@ -54,9 +57,13 @@
         renders++;
         var self = fiber.actualDuration || 0;
         for (var child = fiber.child; child !== null; child = child.sibling) {
-          // Subtract only children that rendered this commit — bailed-out
-          // children retain stale actualDuration from earlier commits.
-          if ((child.flags & PERFORMED_WORK) !== 0) self -= child.actualDuration || 0;
+          // Subtract every child's actualDuration (mirrors react-dom's own
+          // profiler semantics): a rendered fiber reconciles all its children,
+          // so each child is a fresh clone whose actualDuration is either 0
+          // (bailed) or this commit's time — including non-component wrappers
+          // (providers/fragments) that carry rendered-descendant time which
+          // would otherwise be double-attributed to this fiber's self time.
+          self -= child.actualDuration || 0;
         }
         if (self < 0) self = 0;
         selfMs += self;

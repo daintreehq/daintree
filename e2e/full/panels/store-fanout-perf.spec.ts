@@ -137,6 +137,21 @@ interface Fixture {
 // workload exercises the real output->activity->status-buffer path.
 function prepareFixture(scale: number): Fixture {
   const dir = mkdtempSync(path.join(tmpdir(), `daintree-e2e-store-fanout-${scale}-`));
+  try {
+    return buildFixture(scale, dir);
+  } catch (error) {
+    // A failed git/chmod step would otherwise leak the temp repo and the
+    // sibling worktree root.
+    rmSync(path.join(path.dirname(dir), path.basename(dir) + "-worktrees"), {
+      recursive: true,
+      force: true,
+    });
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function buildFixture(scale: number, dir: string): Fixture {
   git("init -b main", dir);
   git('config user.email "test@daintree.dev"', dir);
   git('config user.name "Daintree Test"', dir);
@@ -186,9 +201,13 @@ function prepareFixture(scale: number): Fixture {
       "const shutdown = () => { stopWork(); clearInterval(keepAlive); process.exit(0); };",
       "process.stdin.on('data', (chunk) => {",
       "  const input = String(chunk);",
-      "  if (input.includes(WORK)) startWork();",
-      "  else if (input.includes(IDLE)) stopWork();",
+      "  const wi = input.lastIndexOf(WORK);",
+      "  const ii = input.lastIndexOf(IDLE);",
+      "  if (wi >= 0 && wi > ii) startWork();",
+      "  else if (ii >= 0) stopWork();",
       "});",
+      "process.stdin.on('end', shutdown);",
+      "process.stdin.on('close', shutdown);",
       "process.on('SIGINT', shutdown);",
       "process.on('SIGTERM', shutdown);",
       "",
@@ -230,7 +249,9 @@ function prepareFixture(scale: number): Fixture {
   return { dir, worktreeDirs, fakeBinDir, cleanup };
 }
 
-const perfDescribe = process.env.RUN_PERF_STORE_FANOUT ? test.describe.serial : test.describe.skip;
+// Exact-value gate: "0"/"false" must not enable a multi-minute benchmark.
+const perfDescribe =
+  process.env.RUN_PERF_STORE_FANOUT === "1" ? test.describe.serial : test.describe.skip;
 
 perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", () => {
   const results: ScaleResult[] = [];
@@ -469,26 +490,38 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
         };
 
         await probeStart();
-        const flipWindows: Array<{ t0: number; t1: number; ok: boolean }> = [];
+        const flipWindows: Array<{ t0: number; t1: number; ok: boolean; direction: string }> = [];
         for (let cycle = 0; cycle < FLIP_CYCLES; cycle++) {
           // -> working (fast)
           const tSend = await page.evaluate(() => performance.now());
           await ptyWrite(`${WORK_TOKEN}\r`);
           const tWorking = await waitForState("working", 20_000);
           await page.waitForTimeout(400);
-          flipWindows.push({ t0: tSend, t1: tWorking + 400, ok: tWorking > 0 });
+          flipWindows.push({
+            t0: tSend,
+            t1: tWorking + 400,
+            ok: tWorking > 0,
+            direction: "working",
+          });
 
           // -> waiting (debounced). Bracket around the observed flip so the
           // ~8s debounce dead-time doesn't pollute the sample.
           await ptyWrite(`${IDLE_TOKEN}\r`);
           const tWaiting = await waitForState("waiting", 40_000);
           await page.waitForTimeout(400);
-          flipWindows.push({ t0: tWaiting - 600, t1: tWaiting + 400, ok: tWaiting > 0 });
+          flipWindows.push({
+            t0: tWaiting - 600,
+            t1: tWaiting + 400,
+            ok: tWaiting > 0,
+            direction: "waiting",
+          });
         }
         const flipCommits = (await probeStop()) as any[];
         for (const w of flipWindows) {
           if (w.ok) flips.push(collectWindow(flipCommits, w.t0, w.t1));
         }
+        const okWorkingFlips = flipWindows.filter((w) => w.direction === "working" && w.ok).length;
+        const okWaitingFlips = flipWindows.filter((w) => w.direction === "waiting" && w.ok).length;
 
         // ── Workload: stream — one agent streams for STREAM_SECONDS ──
         await ptyWrite(`${WORK_TOKEN}\r`);
@@ -530,7 +563,13 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
         }
 
         // Reliability invariants only — fanout itself is reported, not gated.
-        expect(flips.length, "observed both flip directions").toBeGreaterThanOrEqual(FLIP_CYCLES);
+        // Per-direction so a failed WORK write can't be masked by the panel
+        // already sitting in waiting when the IDLE wait polls it.
+        expect(okWorkingFlips, "every ->working flip observed").toBe(FLIP_CYCLES);
+        expect(
+          okWaitingFlips,
+          "->waiting flips observed (one debounce straggler allowed)"
+        ).toBeGreaterThanOrEqual(FLIP_CYCLES - 1);
         expect(tickQuiet.length + tickChange.length, "all git ticks completed").toBe(
           TICKS + CHANGE_TICKS
         );
