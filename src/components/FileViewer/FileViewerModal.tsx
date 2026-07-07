@@ -4,6 +4,10 @@ import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { DiffViewer } from "@/components/Worktree/DiffViewer";
 import { CodeViewer } from "./CodeViewer";
 import type { CodeViewerHandle } from "./CodeViewer";
+import { MarkdownViewer } from "@/components/Markdown/MarkdownViewer";
+import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
+import { FILE_READ_ERROR_MESSAGES } from "./fileReadErrors";
+import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { filesClient } from "@/clients/filesClient";
 import { actionService } from "@/services/ActionService";
 import {
@@ -15,6 +19,7 @@ import {
   ChevronRight,
   ChevronUp,
   ChevronDown,
+  PanelRight,
   Pilcrow,
   Search,
   WrapText,
@@ -60,11 +65,12 @@ export interface FileViewerModalProps {
   onNavigateFile?: (delta: -1 | 1) => void;
 }
 
-type ViewMode = "view" | "diff";
+type ViewMode = "view" | "diff" | "rendered";
 type LoadState = "loading" | "loaded" | "error" | "image" | "svg";
 
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"]);
 const SVG_EXTENSION = "svg";
+const COPY_FEEDBACK_MS = 2000;
 
 function isImageFile(filePath: string): boolean {
   const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
@@ -77,44 +83,6 @@ function isSvgFile(filePath: string): boolean {
 
 function buildDaintreeFileUrl(filePath: string, rootPath: string): string {
   return `daintree-file://load?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
-}
-
-interface SegmentedToggleOption<T extends string> {
-  value: T;
-  label: string;
-  disabled?: boolean;
-}
-
-function SegmentedToggle<T extends string>({
-  options,
-  value,
-  onChange,
-}: {
-  options: SegmentedToggleOption<T>[];
-  value: T;
-  onChange: (value: T) => void;
-}) {
-  return (
-    <div className="flex bg-daintree-sidebar rounded p-0.5 shrink-0">
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          onClick={() => onChange(option.value)}
-          disabled={option.disabled}
-          aria-pressed={value === option.value}
-          className={cn(
-            "px-2.5 py-1 text-xs font-medium rounded transition-colors",
-            value === option.value
-              ? "bg-daintree-border text-daintree-text"
-              : "text-muted-foreground hover:text-daintree-text disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
-          )}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  );
 }
 
 function IconToggle({
@@ -175,16 +143,6 @@ function revealMatchInCenteredSplit(match: HTMLElement): void {
   bar.scrollLeft = Math.min(target, bar.scrollWidth - bar.clientWidth);
 }
 
-const ERROR_MESSAGES: Record<FileReadErrorCode, string> = {
-  BINARY_FILE: "Binary file — cannot display",
-  FILE_TOO_LARGE: "File too large to display (> 500 KB)",
-  LFS_POINTER: "Git LFS pointer — run `git lfs pull` to download the file contents",
-  NOT_FOUND: "File no longer exists",
-  OUTSIDE_ROOT: "File is outside the project root",
-  INVALID_PATH: "Invalid file path",
-  PERMISSION: "Permission denied — you don't have access to this file",
-};
-
 export function FileViewerModal({
   isOpen,
   filePath,
@@ -212,10 +170,14 @@ export function FileViewerModal({
     : filePath.substring(0, Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"))) || "/";
 
   const hasDiff = Boolean(diff && diff.trim() && diff !== "NO_CHANGES" && diff !== "ERROR");
+  const markdownFile = !isImageFile(filePath) && isMarkdownFilePath(filePath);
   const [mode, setMode] = useState<ViewMode>(() => {
     if (isImageFile(filePath)) return "view";
     if (defaultMode) return defaultMode;
-    return hasDiff && !initialLine ? "diff" : "view";
+    if (hasDiff && !initialLine) return "diff";
+    // Markdown reads rendered by default; an explicit line target implies source.
+    if (isMarkdownFilePath(filePath) && !initialLine) return "rendered";
+    return "view";
   });
   const [content, setContent] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
@@ -229,9 +191,11 @@ export function FileViewerModal({
   const diffIgnoreWhitespace = usePreferencesStore((s) => s.diffIgnoreWhitespace);
   const setDiffIgnoreWhitespace = usePreferencesStore((s) => s.setDiffIgnoreWhitespace);
   const [diffCopied, setDiffCopied] = useState(false);
+  const [pathCopied, setPathCopied] = useState(false);
   const [sanitizedSvg, setSanitizedSvg] = useState<string | null>(null);
   const requestRef = useRef(0);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pathCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMountedRef = useRef(true);
   const codeViewerRef = useRef<CodeViewerHandle>(null);
   const hasSwitchedToDiffRef = useRef(false);
@@ -274,6 +238,7 @@ export function FileViewerModal({
     return () => {
       isMountedRef.current = false;
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      if (pathCopyTimeoutRef.current) clearTimeout(pathCopyTimeoutRef.current);
     };
   }, []);
 
@@ -286,13 +251,16 @@ export function FileViewerModal({
       setErrorCode(null);
       setDisplayErrorMessage(null);
       setDiffCopied(false);
+      setPathCopied(false);
       setSanitizedSvg(null);
       requestRef.current++;
       hasSwitchedToDiffRef.current = false;
       currentHunkIndexRef.current = -1;
       setSearchOpen(false);
       setSearchQuery("");
-      const nextMode = defaultMode ?? (hasDiff && !initialLine ? "diff" : "view");
+      const nextMode =
+        defaultMode ??
+        (hasDiff && !initialLine ? "diff" : markdownFile && !initialLine ? "rendered" : "view");
       setMode(nextMode);
       return;
     }
@@ -303,6 +271,13 @@ export function FileViewerModal({
     setDisplayErrorMessage(null);
     hasSwitchedToDiffRef.current = false;
     currentHunkIndexRef.current = -1;
+
+    // Stepping between files (onNavigateFile) keeps the modal open, so a mode
+    // the new file can't render must be clamped: "rendered" is only valid for
+    // markdown files.
+    setMode((current) =>
+      current === "rendered" && !markdownFile ? (hasDiff ? "diff" : "view") : current
+    );
 
     if (imageFile && !svgFile) {
       setLoadState("image");
@@ -370,6 +345,32 @@ export function FileViewerModal({
       .catch((err) => logError("[FileViewerModal] openImageViewer failed", err));
   }, [filePath]);
 
+  const handleCopyPath = useCallback(() => {
+    navigator.clipboard
+      .writeText(filePath)
+      .then(() => {
+        if (!isMountedRef.current) return;
+        useAnnouncerStore.getState().announce("Path copied");
+        setPathCopied(true);
+        if (pathCopyTimeoutRef.current) clearTimeout(pathCopyTimeoutRef.current);
+        pathCopyTimeoutRef.current = setTimeout(() => {
+          if (isMountedRef.current) setPathCopied(false);
+        }, COPY_FEEDBACK_MS);
+      })
+      .catch((err) => logError("[FileViewerModal] copy path failed", err));
+  }, [filePath]);
+
+  const handleOpenAsPanel = useCallback(() => {
+    actionService
+      .dispatch(
+        "markdown.openPanel",
+        { path: filePath, rootPath: effectiveRootPath },
+        { source: "user" }
+      )
+      .catch((err) => logError("[FileViewerModal] openAsPanel failed", err));
+    onClose();
+  }, [filePath, effectiveRootPath, onClose]);
+
   const handleCopyDiff = useCallback(async () => {
     if (!hasDiff || !diff) return;
     try {
@@ -380,7 +381,7 @@ export function FileViewerModal({
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
       copyTimeoutRef.current = setTimeout(() => {
         if (isMountedRef.current) setDiffCopied(false);
-      }, 2000);
+      }, COPY_FEEDBACK_MS);
     } catch {
       // Silently fail
     }
@@ -406,7 +407,7 @@ export function FileViewerModal({
     const handleFindInPanel = () => {
       if (mode === "view") {
         codeViewerRef.current?.openSearch();
-      } else if (hasDiff) {
+      } else if (mode === "diff" && hasDiff) {
         setSearchOpen(true);
         requestAnimationFrame(() => searchInputRef.current?.focus());
       }
@@ -830,12 +831,20 @@ export function FileViewerModal({
             </TooltipContent>
           </Tooltip>
 
-          {/* Show view/diff toggle only when both are potentially available */}
-          {hasDiff && !imageFile && (canShowView || loadState !== "loading") && (
+          {/* Mode toggle: markdown files get Rendered/Source (plus Diff when
+              available); other files keep the original View/Diff pair. */}
+          {(hasDiff || markdownFile) && !imageFile && (canShowView || loadState !== "loading") && (
             <SegmentedToggle
               options={[
-                { value: "view" as ViewMode, label: "View", disabled: !canShowView },
-                { value: "diff" as ViewMode, label: "Diff" },
+                ...(markdownFile
+                  ? [{ value: "rendered" as ViewMode, label: "Rendered", disabled: !canShowView }]
+                  : []),
+                {
+                  value: "view" as ViewMode,
+                  label: markdownFile ? "Source" : "View",
+                  disabled: !canShowView,
+                },
+                ...(hasDiff ? [{ value: "diff" as ViewMode, label: "Diff" }] : []),
               ]}
               value={mode}
               onChange={setMode}
@@ -860,6 +869,42 @@ export function FileViewerModal({
               <TooltipContent side="bottom">
                 {diffCopied ? "Copied!" : "Copy diff to clipboard"}
               </TooltipContent>
+            </Tooltip>
+          )}
+
+          {/* Copy path — agent workflows paste file paths back into prompts */}
+          {!imageFile && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={handleCopyPath}
+                  aria-label={pathCopied ? "Copied!" : "Copy file path"}
+                  className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border"
+                >
+                  {pathCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {pathCopied ? "Copied!" : "Copy file path"}
+              </TooltipContent>
+            </Tooltip>
+          )}
+
+          {markdownFile && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={handleOpenAsPanel}
+                  aria-label="Open as panel"
+                  className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border"
+                  data-testid="file-viewer-open-as-panel"
+                >
+                  <PanelRight className="w-4 h-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Open as panel</TooltipContent>
             </Tooltip>
           )}
 
@@ -919,7 +964,7 @@ export function FileViewerModal({
             </div>
           )}
 
-          {!isImageMode && mode === "view" && (
+          {!isImageMode && (mode === "view" || mode === "rendered") && (
             <>
               {loadState === "loading" && (
                 <div className="p-4 space-y-3">
@@ -933,7 +978,7 @@ export function FileViewerModal({
               {loadState === "error" && (displayErrorMessage || errorCode) && (
                 <div className="flex flex-col items-center justify-center h-64 gap-3">
                   <p className="text-sm text-muted-foreground">
-                    {displayErrorMessage ?? (errorCode ? ERROR_MESSAGES[errorCode] : "")}
+                    {displayErrorMessage ?? (errorCode ? FILE_READ_ERROR_MESSAGES[errorCode] : "")}
                   </p>
                   {imageFile ? (
                     <button
@@ -957,25 +1002,34 @@ export function FileViewerModal({
                 </div>
               )}
 
-              {loadState === "loaded" && content !== null && (
-                <>
-                  {metadata && (
-                    <div
-                      data-testid="file-viewer-metadata"
-                      className="px-3 py-1 border-b border-daintree-border text-xs text-muted-foreground font-mono"
-                    >
-                      {metadata.lineCount} lines · {metadata.sizeLabel} · UTF-8
-                    </div>
-                  )}
-                  <CodeViewer
-                    ref={codeViewerRef}
+              {loadState === "loaded" &&
+                content !== null &&
+                (mode === "rendered" && markdownFile ? (
+                  <MarkdownViewer
                     content={content}
                     filePath={filePath}
-                    initialLine={initialLine}
-                    className="min-h-[300px]"
+                    rootPath={effectiveRootPath}
+                    viewMode="rendered"
                   />
-                </>
-              )}
+                ) : (
+                  <>
+                    {metadata && (
+                      <div
+                        data-testid="file-viewer-metadata"
+                        className="px-3 py-1 border-b border-daintree-border text-xs text-muted-foreground font-mono"
+                      >
+                        {metadata.lineCount} lines · {metadata.sizeLabel} · UTF-8
+                      </div>
+                    )}
+                    <CodeViewer
+                      ref={codeViewerRef}
+                      content={content}
+                      filePath={filePath}
+                      initialLine={initialLine}
+                      className="min-h-[300px]"
+                    />
+                  </>
+                ))}
             </>
           )}
 

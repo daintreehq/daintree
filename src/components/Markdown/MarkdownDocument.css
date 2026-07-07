@@ -1,0 +1,76 @@
+/* Rendered-markdown code fences reuse the diff viewer's refractor token
+   palette so highlighting reads identically across the two surfaces.
+   DiffViewer.css is the source of truth for these color assignments — keep
+   the two blocks in sync when the palette changes. Imported by
+   MarkdownDocument.tsx, so it ships with the lazy markdown chunk. */
+
+/* refractor grammars tag tokens with bare class names that collide with
+   Tailwind display utilities (`table`, `hidden`, `block`, …). Syntax tokens
+   are always inline; pin them so a Markdown table inside a fence can't
+   balloon into stacked table boxes. Same reset as DiffViewer.css. */
+.markdown-document .token {
+  display: inline;
+}
+
+.markdown-document .token.comment,
+.markdown-document .token.prolog,
+.markdown-document .token.doctype,
+.markdown-document .token.cdata {
+  color: var(--color-syntax-comment);
+}
+
+.markdown-document .token.punctuation {
+  color: var(--color-syntax-punctuation);
+}
+
+.markdown-document .token.property,
+.markdown-document .token.tag,
+.markdown-document .token.boolean,
+.markdown-document .token.number,
+.markdown-document .token.constant,
+.markdown-document .token.symbol {
+  color: var(--color-syntax-number);
+}
+
+.markdown-document .token.selector,
+.markdown-document .token.attr-name,
+.markdown-document .token.string,
+.markdown-document .token.char,
+.markdown-document .token.builtin {
+  color: var(--color-syntax-string);
+}
+
+.markdown-document .token.operator,
+.markdown-document .token.entity,
+.markdown-document .token.url,
+.markdown-document .language-css .token.string,
+.markdown-document .style .token.string {
+  color: var(--color-syntax-operator);
+}
+
+.markdown-document .token.atrule,
+.markdown-document .token.attr-value,
+.markdown-document .token.keyword {
+  color: var(--color-syntax-keyword);
+}
+
+.markdown-document .token.function,
+.markdown-document .token.class-name {
+  color: var(--color-syntax-function);
+}
+
+.markdown-document .token.regex,
+.markdown-document .token.important,
+.markdown-document .token.variable {
+  color: var(--color-syntax-number);
+}
+
+/* GFM task-list items: the checkbox replaces the list marker. */
+.markdown-document li:has(> input[type="checkbox"]) {
+  list-style: none;
+}
+
+.markdown-document li > input[type="checkbox"] {
+  margin-right: 0.5em;
+  accent-color: var(--color-daintree-accent);
+}

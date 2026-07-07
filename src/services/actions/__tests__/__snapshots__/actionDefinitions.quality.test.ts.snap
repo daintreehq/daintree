@@ -1296,6 +1296,25 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "files",
     "danger": "safe",
     "dangerRationale": undefined,
+    "description": "Read a text file's contents (UTF-8, 500 KB limit). Args: \`path\` (required) — absolute or repo-relative file path; \`rootPath\` (optional) — root used to resolve a relative \`path\` (defaults to the current project root). Only files inside the current project or one of its worktrees are readable — anything else errors. Returns { content }. Errors: BINARY_FILE, FILE_TOO_LARGE (> 500 KB), LFS_POINTER, NOT_FOUND, PERMISSION, outside-project paths. Use \`markdown.openPanel\` to display a markdown file to the user instead of reading it.",
+    "examples": [
+      {
+        "args": {
+          "path": "docs/spec.md",
+        },
+        "description": "Read a repo-relative file's contents",
+      },
+    ],
+    "id": "file.read",
+    "keywords": undefined,
+    "kind": "query",
+    "requiresArgs": true,
+    "title": "Read File",
+  },
+  {
+    "category": "files",
+    "danger": "safe",
+    "dangerRationale": undefined,
     "description": "Reveal a file or directory in the OS file manager (Finder on macOS, Explorer on Windows, the default file manager on Linux) with the item selected. Args: \`path\` (required) — absolute file or directory path. Reveals only; it never opens or launches the item. Errors when the path is missing, outside your project roots, or no longer exists.",
     "examples": undefined,
     "id": "file.showItemInFolder",
@@ -2605,6 +2624,33 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "kind": "command",
     "requiresArgs": true,
     "title": "Set Verbose Logging",
+  },
+  {
+    "category": "files",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Open a markdown file in a markdown viewer panel in the grid (rendered document with a Rendered/Source toggle). Args: \`path\` (required) — absolute or repo-relative markdown file path; \`rootPath\` (optional) — root used to resolve a relative \`path\` (defaults to the current project root); \`viewMode\` (optional) — 'rendered' (default) or 'source'. Reuses a panel already showing the same file instead of opening a duplicate. Returns { panelId }. Use \`file.read\` to read a file's content without displaying it.",
+    "examples": [
+      {
+        "args": {
+          "path": "docs/spec.md",
+        },
+        "description": "Open a repo-relative markdown file as a rendered panel",
+      },
+    ],
+    "id": "markdown.openPanel",
+    "keywords": [
+      "markdown",
+      "viewer",
+      "preview",
+      "md",
+      "readme",
+      "spec",
+      "document",
+    ],
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Open Markdown Panel",
   },
   {
     "category": "app",

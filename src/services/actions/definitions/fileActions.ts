@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { systemClient } from "@/clients";
+import { filesClient } from "@/clients/filesClient";
 import { useProjectStore } from "@/store";
+import { isAbsolute, isPathInside, join, normalize } from "@shared/utils/path";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 
 const viewArgsSchema = z.object({
@@ -38,6 +40,16 @@ const openDiffArgsSchema = z.object({
     .describe("Git status of the path; defaults to `modified` when omitted."),
 });
 
+const readArgsSchema = z.object({
+  path: z.string().min(1).describe("Absolute or repo-relative file path to read."),
+  rootPath: z
+    .string()
+    .optional()
+    .describe(
+      "Repository root used to resolve a relative `path` (a worktree `path` from `worktree.list`). Defaults to the current project root."
+    ),
+});
+
 const openInEditorArgsSchema = z.object({
   path: z.string(),
   line: z.number().int().positive().optional(),
@@ -52,7 +64,7 @@ const showItemInFolderArgsSchema = z.object({
   path: z.string().min(1),
 });
 
-export function registerFileActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
+export function registerFileActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("file.view", () => ({
     id: "file.view",
     title: "View File",
@@ -80,6 +92,54 @@ export function registerFileActions(actions: ActionRegistry, _callbacks: ActionC
           detail: { path, rootPath, line, col },
         })
       );
+    },
+  }));
+
+  actions.set("file.read", () => ({
+    id: "file.read",
+    title: "Read File",
+    description:
+      "Read a text file's contents (UTF-8, 500 KB limit). Args: `path` (required) — absolute or repo-relative file path; `rootPath` (optional) — root used to resolve a relative `path` (defaults to the current project root). Only files inside the current project or one of its worktrees are readable — anything else errors. Returns { content }. Errors: BINARY_FILE, FILE_TOO_LARGE (> 500 KB), LFS_POINTER, NOT_FOUND, PERMISSION, outside-project paths. Use `markdown.openPanel` to display a markdown file to the user instead of reading it.",
+    category: "files",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: readArgsSchema,
+    resultSchema: z.object({ content: z.string() }),
+    mcpOutputSchema: true,
+    examples: [
+      {
+        args: { path: "docs/spec.md" },
+        description: "Read a repo-relative file's contents",
+      },
+    ],
+    run: async (args: unknown) => {
+      const { path, rootPath } = readArgsSchema.parse(args);
+      const projectPath = useProjectStore.getState().currentProject?.path;
+      const resolutionRoot = rootPath ?? projectPath;
+      if (!isAbsolute(path) && !resolutionRoot) {
+        throw new Error("No project open — pass an absolute `path` or a `rootPath`");
+      }
+      const absolutePath = isAbsolute(path)
+        ? normalize(path)
+        : normalize(join(resolutionRoot!, path));
+      // Hard containment: this action is on the MCP/assistant surface, so it
+      // must never become an arbitrary-file read. Reads are only allowed
+      // inside the current project or one of its worktrees — the containment
+      // root is a known root, never derived from the target path.
+      const knownRoots = [
+        ...(projectPath ? [projectPath] : []),
+        ...callbacks.getWorktrees().flatMap((worktree) => (worktree.path ? [worktree.path] : [])),
+      ];
+      const containingRoot = knownRoots.find((root) => isPathInside(absolutePath, root));
+      if (!containingRoot) {
+        throw new Error("Path is outside the current project and its worktrees");
+      }
+      const { content } = await filesClient.read({
+        path: absolutePath,
+        rootPath: containingRoot,
+      });
+      return { content };
     },
   }));
 

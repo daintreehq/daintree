@@ -4,6 +4,7 @@ import type {
   PanelExitBehavior,
   PanelTitleMode,
   ViewportPresetId,
+  MarkdownViewMode,
 } from "./panel.js";
 import type { BrowserHistory } from "./browser.js";
 import type { AgentState, AgentId, WaitingReason } from "./agent.js";
@@ -219,6 +220,15 @@ export interface ReviewPanelOptions extends AddPanelOptionsBase {
   kind: "review";
 }
 
+/** Options for creating a markdown viewer panel */
+export interface MarkdownPanelOptions extends AddPanelOptionsBase {
+  kind: "markdown";
+  /** Absolute path of the markdown file to view */
+  markdownFilePath?: string;
+  /** Initial view mode; defaults to "rendered" */
+  markdownViewMode?: MarkdownViewMode;
+}
+
 /**
  * Options for extension-provided panel kinds.
  *
@@ -238,4 +248,5 @@ export type AddPanelOptions =
   | TerminalPanelOptions
   | BrowserPanelOptions
   | DevPreviewPanelOptions
-  | ReviewPanelOptions;
+  | ReviewPanelOptions
+  | MarkdownPanelOptions;

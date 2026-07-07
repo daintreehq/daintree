@@ -82,6 +82,23 @@ export function normalize(input: string): string {
   return joined || ".";
 }
 
+/**
+ * True when `child` (after normalization) is `parent` itself or nested under
+ * it. Comparison is separator-normalized and purely lexical — callers that
+ * need symlink-safe containment must realpath first (the files IPC handler
+ * and daintree-file:// protocol both do).
+ */
+export function isPathInside(child: string, parent: string): boolean {
+  const normalizedChild = normalize(child);
+  const normalizedParent = normalize(parent);
+  if (normalizedChild === "." || normalizedParent === ".") return false;
+  if (normalizedChild === normalizedParent) return true;
+  const parentWithSlash = normalizedParent.endsWith("/")
+    ? normalizedParent
+    : `${normalizedParent}/`;
+  return normalizedChild.startsWith(parentWithSlash);
+}
+
 export function basename(input: string): string {
   const normalized = normalize(input);
   if (

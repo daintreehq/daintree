@@ -12,6 +12,7 @@ import { registerForgeActions } from "./definitions/forgeActions";
 import { registerGitActions } from "./definitions/gitActions";
 import { registerIntrospectionActions } from "./definitions/introspectionActions";
 import { registerLogActions } from "./definitions/logActions";
+import { registerMarkdownActions } from "./definitions/markdownActions";
 import { registerNavigationActions } from "./definitions/navigationActions";
 import { registerNotificationsActions } from "./definitions/notificationsActions";
 import { registerPanelActions } from "./definitions/panelActions";
@@ -76,6 +77,7 @@ export function createActionDefinitions(
   registerDiagnosticsActions(actions, callbacks);
   registerWorkflowActions(actions, callbacks);
   registerFileActions(actions, callbacks);
+  registerMarkdownActions(actions, callbacks);
   registerVoiceActions(actions);
   registerActionActions(actions);
 
