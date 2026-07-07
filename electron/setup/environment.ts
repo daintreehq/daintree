@@ -771,6 +771,14 @@ if (isSmokeTest) {
 const _pendingOpenFilePaths: string[] = [];
 let _openFileConsumer: ((filePath: string) => void) | null = null;
 
+// Directories dropped on the Dock icon / picked via "Open With" open as
+// projects (#10976), not as `.dntr` plugin archives. They need a live window
+// for `handleDirectoryOpen`, so they get a separate queue + consumer drained
+// at window-creation time (mirroring `pendingCliPath`), independent of the
+// `.dntr` plugin drain in `activateOpenFileInstaller`.
+const _pendingOpenDirPaths: string[] = [];
+let _openDirConsumer: ((dirPath: string) => void) | null = null;
+
 /** Snapshot (copy) of paths queued before the installer was activated. */
 export function getPendingOpenFilePaths(): string[] {
   return [..._pendingOpenFilePaths];
@@ -788,12 +796,52 @@ export function setOpenFileConsumer(consumer: ((filePath: string) => void) | nul
   _openFileConsumer = consumer;
 }
 
+/** Snapshot (copy) of directories queued before a window existed to open them. */
+export function getPendingOpenDirPaths(): string[] {
+  return [..._pendingOpenDirPaths];
+}
+
+export function clearPendingOpenDirPaths(): void {
+  _pendingOpenDirPaths.length = 0;
+}
+
+/**
+ * Install the live directory consumer for `open-file` folder drops. Once set,
+ * incoming folders route to it instead of the pre-window queue. Pass `null` to
+ * detach.
+ */
+export function setOpenDirConsumer(consumer: ((dirPath: string) => void) | null): void {
+  _openDirConsumer = consumer;
+}
+
+/** Re-queue a directory the live consumer had no window for; dedupes bursts. */
+export function queuePendingOpenDirPath(dirPath: string): void {
+  if (!_pendingOpenDirPaths.includes(dirPath)) {
+    _pendingOpenDirPaths.push(dirPath);
+  }
+}
+
 if (process.platform === "darwin") {
   app.on("open-file", (event, filePath) => {
     // Required: without preventDefault, Chromium's default handling may try to
     // navigate the focused window to the file path.
     event.preventDefault();
-    if (_openFileConsumer) {
+    // Folders branch off before any consumer sees the path so the plugin
+    // installer never receives a directory (#10976). A stat failure (missing
+    // path) leaves isDirectory false → file route, preserving `.dntr` error surfacing.
+    let isDirectory = false;
+    try {
+      isDirectory = fs.statSync(filePath).isDirectory();
+    } catch {
+      // Missing path or stat failure — isDirectory stays false.
+    }
+    if (isDirectory) {
+      if (_openDirConsumer) {
+        _openDirConsumer(filePath);
+      } else {
+        queuePendingOpenDirPath(filePath);
+      }
+    } else if (_openFileConsumer) {
       _openFileConsumer(filePath);
     } else if (!_pendingOpenFilePaths.includes(filePath)) {
       // Dedup: a burst of `open -a Daintree same.dntr` before activation
