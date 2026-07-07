@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store";
 import type { PanelInstance } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import {
   getPanelKindDefinition,
@@ -125,6 +126,7 @@ export const GridPanel = React.memo(function GridPanel({
   // so the parent can pass a stable callback reference.
   const composedOnAddTab = useMemo<(() => void) | undefined>(() => {
     if (isFleetScope) return undefined;
+    if (terminal && !canDuplicatePanelKind(terminal.kind)) return undefined;
     if (onAddTab) return onAddTab;
     if (onAddTabForPanel && terminal) {
       return () => {

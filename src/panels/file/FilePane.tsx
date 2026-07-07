@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Copy, ExternalLink, FileText, RefreshCw, Search, WrapText } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Check, ExternalLink, FileText, RefreshCw, Search, WrapText } from "lucide-react";
 import type { FileViewMode } from "@shared/types/panel";
 import { isFilePanel } from "@shared/types/panel";
 import type { FileReadErrorCode } from "@shared/types/ipc/files";
@@ -48,6 +48,88 @@ function isUnderRoot(filePath: string, rootPath: string): boolean {
   if (!rootPath) return false;
   const root = toForwardSlashes(rootPath).replace(/\/$/, "") + "/";
   return toForwardSlashes(filePath).startsWith(root);
+}
+
+let measureContext: CanvasRenderingContext2D | null = null;
+
+function measureTextWidth(text: string, font: string): number {
+  measureContext ??= document.createElement("canvas").getContext("2d");
+  if (!measureContext) return text.length * 8;
+  measureContext.font = font;
+  return measureContext.measureText(text).width;
+}
+
+/**
+ * Width-fitted middle truncation: keeps as many characters from the front and
+ * the back as actually fit the element, collapsing the middle with a single
+ * ellipsis. The basename is reserved first so the file name always survives.
+ * Re-fits on resize; measurement uses canvas measureText with the element's
+ * own computed font, so no layout thrash.
+ */
+function useFittedPath(fullText: string | undefined): {
+  spanRef: React.RefObject<HTMLElement | null>;
+  display: string | undefined;
+} {
+  const spanRef = useRef<HTMLElement | null>(null);
+  const [display, setDisplay] = useState<string | undefined>(fullText);
+
+  useLayoutEffect(() => {
+    const el = spanRef.current;
+    if (!el || fullText === undefined) {
+      setDisplay(fullText);
+      return;
+    }
+
+    const fit = () => {
+      const style = getComputedStyle(el);
+      const font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      const available =
+        el.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      if (available <= 0) {
+        // Not measurable (hidden/zero-width): show the new text rather than a
+        // stale fit of the previous path; CSS truncate is the backstop.
+        setDisplay(fullText);
+        return;
+      }
+      if (measureTextWidth(fullText, font) <= available) {
+        setDisplay(fullText);
+        return;
+      }
+      const slashIdx = fullText.lastIndexOf("/");
+      const basename = slashIdx >= 0 ? fullText.slice(slashIdx) : fullText;
+      const head = fullText.slice(0, fullText.length - basename.length);
+      const build = (kept: number) => {
+        const front = Math.ceil(kept / 2);
+        const back = kept - front;
+        return `${head.slice(0, front)}…${back > 0 ? head.slice(head.length - back) : ""}${basename}`;
+      };
+      // Binary search the most head characters that still fit.
+      let lo = 0;
+      let hi = head.length;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (measureTextWidth(build(mid), font) <= available) lo = mid;
+        else hi = mid - 1;
+      }
+      const candidate = build(lo);
+      if (measureTextWidth(candidate, font) <= available) {
+        setDisplay(candidate);
+        return;
+      }
+      // Very narrow pane: prefer the bare file name over "…/file.md"; if even
+      // that overflows, CSS truncate is the backstop.
+      const bare = basename.startsWith("/") ? basename.slice(1) : basename;
+      setDisplay(measureTextWidth(`…${basename}`, font) <= available ? `…${basename}` : bare);
+    };
+
+    fit();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(fit);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [fullText]);
+
+  return { spanRef, display };
 }
 
 type LoadState = "idle" | "loading" | "loaded" | "error";
@@ -120,10 +202,8 @@ function ToolbarIconButton({
           aria-label={label}
           aria-pressed={pressed}
           className={cn(
-            "p-1 rounded transition-colors",
-            pressed
-              ? "bg-daintree-border text-daintree-text"
-              : "text-muted-foreground hover:text-daintree-text hover:bg-daintree-border"
+            "toolbar-icon-button p-1.5 rounded",
+            pressed ? "text-daintree-text" : "text-daintree-text/60"
           )}
         >
           {children}
@@ -172,10 +252,11 @@ export function FilePane({
   // "rendered" is a markdown-only mode; other files always view as source.
   const viewMode: FileViewMode = isMarkdown ? (panel?.fileViewMode ?? "source") : "source";
 
+  const worktreeId = panel?.worktreeId;
   const worktreePath = useWorktreeStore(
     useCallback(
-      (state) => (panel?.worktreeId ? (state.worktrees.get(panel.worktreeId)?.path ?? "") : ""),
-      [panel?.worktreeId]
+      (state) => (worktreeId ? (state.worktrees.get(worktreeId)?.path ?? "") : ""),
+      [worktreeId]
     )
   );
   const projectPath = useProjectStore((state) => state.currentProject?.path ?? "");
@@ -308,10 +389,11 @@ export function FilePane({
   const displayPath =
     filePath && isUnderRoot(filePath, pickerRoot)
       ? toForwardSlashes(filePath).slice(toForwardSlashes(pickerRoot).replace(/\/$/, "").length + 1)
-      : filePath;
+      : filePath && toForwardSlashes(filePath);
+  const { spanRef: pathSpanRef, display: fittedPath } = useFittedPath(displayPath);
 
   const toolbar = filePath ? (
-    <div className="flex items-center gap-2 px-2 py-1 border-b border-daintree-border bg-surface-panel">
+    <div className="flex items-center gap-1.5 px-2 py-1.5 bg-surface border-b border-overlay">
       {isMarkdown && (
         <SegmentedToggle<FileViewMode>
           options={[
@@ -322,33 +404,50 @@ export function FilePane({
           onChange={(mode) => setFileViewMode(id, mode)}
         />
       )}
-      <span
-        className="min-w-0 flex-1 truncate text-xs text-muted-foreground font-mono"
-        title={filePath}
-      >
-        {displayPath}
-      </span>
-      <div className="flex items-center gap-0.5 shrink-0">
+      {/* Path pill — mirrors the browser toolbar's address field. Click copies
+          the absolute path; the middle collapses to fit the available width
+          while the file name always survives. */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={handleCopyPath}
+            aria-label="Copy file path"
+            className="relative flex items-center min-w-0 flex-1 group/path"
+          >
+            {pathCopied ? (
+              <Check className="absolute left-2 w-3.5 h-3.5 text-status-success pointer-events-none" />
+            ) : (
+              <FileText
+                aria-hidden="true"
+                className="absolute left-2 w-3.5 h-3.5 text-daintree-text/40 pointer-events-none"
+              />
+            )}
+            <span
+              ref={pathSpanRef}
+              className="w-full pl-7 pr-2 py-1 text-left text-xs font-mono rounded bg-daintree-bg border border-overlay text-daintree-text/70 truncate transition-colors group-hover/path:border-border-strong group-hover/path:text-daintree-text"
+            >
+              {fittedPath}
+            </span>
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{pathCopied ? "Copied!" : "Click to copy"}</TooltipContent>
+      </Tooltip>
+      <div className="ml-auto flex items-center gap-1.5 shrink-0">
         {isMarkdown && viewMode === "source" && (
           <ToolbarIconButton
             label="Wrap long lines"
             pressed={markdownWrapLines}
             onClick={() => setMarkdownWrapLines(!markdownWrapLines)}
           >
-            <WrapText className="w-3.5 h-3.5" />
+            <WrapText className="w-4 h-4" />
           </ToolbarIconButton>
         )}
         <ToolbarIconButton label="Refresh" onClick={() => loadFile(false)}>
-          <RefreshCw className="w-3.5 h-3.5" />
-        </ToolbarIconButton>
-        <ToolbarIconButton
-          label={pathCopied ? "Copied!" : "Copy file path"}
-          onClick={handleCopyPath}
-        >
-          {pathCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+          <RefreshCw className="w-4 h-4" />
         </ToolbarIconButton>
         <ToolbarIconButton label="Open in editor" onClick={handleOpenInEditor}>
-          <ExternalLink className="w-3.5 h-3.5" />
+          <ExternalLink className="w-4 h-4" />
         </ToolbarIconButton>
       </div>
     </div>
