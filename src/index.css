@@ -2561,7 +2561,8 @@ body[data-performance-mode="true"] .surface-stale {
 /* The global wildcard above kills the shimmer animation but the ::after
  * pseudo-element still paints its static gradient stripe — hide it.
  */
-body[data-performance-mode="true"] .animate-skeleton-shimmer::after {
+body[data-performance-mode="true"] .animate-skeleton-shimmer::after,
+body[data-performance-mode="true"] .pulse-skeleton-shimmer::after {
   display: none !important;
 }
 
