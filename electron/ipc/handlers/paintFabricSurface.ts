@@ -158,7 +158,9 @@ export function registerPaintFabricSurfaceHandlers(deps: HandlerDependencies): (
         destroySchema,
         async (ctx, payload): Promise<void> => {
           const wctx = resolveWindowContext(ctx);
-          wctx.services.surfacePortBroker?.releaseSurfacePort(payload.surfaceId);
+          wctx.services.surfacePortBroker?.releaseSurfacePort(payload.surfaceId, {
+            forgetContext: true,
+          });
           await wctx.services.surfaceViewManager?.destroySurface(payload.surfaceId);
         },
         { withContext: true }

@@ -93,7 +93,9 @@ export class SurfacePortBroker {
     const handlePortClose = () => this.releaseSurfacePort(surfaceId);
     port1.on("close", handlePortClose);
 
-    const handleWcDestroyed = () => this.releaseSurfacePort(surfaceId);
+    // A destroyed webContents never re-brokers — forget its context too.
+    const handleWcDestroyed = () =>
+      this.releaseSurfacePort(surfaceId, { forgetContext: true });
     const handleWcNavigation = (
       details: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>
     ) => {
@@ -123,7 +125,7 @@ export class SurfacePortBroker {
       wc.postMessage("terminal-port-token", { token: handshakeToken });
       wc.postMessage("terminal-port", { token: handshakeToken }, [port1]);
     } catch (error) {
-      this.releaseSurfacePort(surfaceId);
+      this.releaseSurfacePort(surfaceId, { forgetContext: true });
       throw error;
     }
 
@@ -147,7 +149,17 @@ export class SurfacePortBroker {
     });
   }
 
-  releaseSurfacePort(surfaceId: string): void {
+  /**
+   * Release a surface's pty-host connection. The remembered project context
+   * survives by default (a reload releases and then re-brokers); pass
+   * `forgetContext` on terminal paths — surface destroy, webContents gone,
+   * failed initial delivery — so contexts don't accumulate across
+   * create/destroy cycles.
+   */
+  releaseSurfacePort(surfaceId: string, options?: { forgetContext?: boolean }): void {
+    if (options?.forgetContext) {
+      this.lastOptionsBySurfaceId.delete(surfaceId);
+    }
     const entry = this.entries.get(surfaceId);
     if (!entry) return;
     this.entries.delete(surfaceId);

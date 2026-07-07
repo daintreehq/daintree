@@ -126,6 +126,39 @@ describe("PaintFabricCompositor sync-read mirrors", () => {
     expect(compositor.isWebGLActive("v-1")).toBe(false);
   });
 
+  it("releases a failed first create's claim on a view surface", async () => {
+    const { compositor, view } = makeCompositor();
+    view.getOrCreate.mockRejectedValueOnce(new Error("boot failed"));
+
+    await expect(compositor.getOrCreate("v-1", undefined, {})).rejects.toThrow(/boot failed/);
+    // Nothing keeps routing to a terminal that never existed; the next
+    // create claims cleanly.
+    expect(compositor.getRegistryForTests().surfaceFor("v-1")).toBeNull();
+  });
+
+  it("keeps the claim when an overlapping create already succeeded on the view surface", async () => {
+    const { compositor, view } = makeCompositor();
+    let rejectFirst!: (error: Error) => void;
+    view.getOrCreate
+      .mockImplementationOnce(
+        () =>
+          new Promise<ManagedTerminal>((_, reject) => {
+            rejectFirst = reject;
+          })
+      )
+      .mockImplementationOnce(async (id: string) => ({ id }) as unknown as ManagedTerminal);
+
+    const first = compositor.getOrCreate("v-1", undefined, {});
+    const second = compositor.getOrCreate("v-1", undefined, {});
+    await second;
+    rejectFirst(new Error("aborted"));
+    await expect(first).rejects.toThrow(/aborted/);
+
+    // The sibling's success marked the id live in the compositor ledger, so
+    // the failed claimant must not strip the live terminal's placement.
+    expect(compositor.getRegistryForTests().surfaceFor("v-1")?.id).toBe("view-1");
+  });
+
   it("drops the mirror when a transfer fails after the source was destroyed", async () => {
     const { compositor, local, view } = makeCompositor();
     await compositor.getOrCreate("v-1", undefined, {});

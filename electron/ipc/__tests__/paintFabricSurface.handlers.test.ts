@@ -272,7 +272,7 @@ describe("registerPaintFabricSurfaceHandlers", () => {
     const broker = brokerInstances[0] as FakeBroker;
 
     await invoke(CHANNELS.PAINT_SURFACE_DESTROY, { surfaceId: "s2" });
-    expect(broker.releaseSurfacePort).toHaveBeenCalledWith("s2");
+    expect(broker.releaseSurfacePort).toHaveBeenCalledWith("s2", { forgetContext: true });
     expect(manager.destroySurface).toHaveBeenCalledWith("s2");
     const releaseOrder = broker.releaseSurfacePort.mock.invocationCallOrder[0]!;
     const destroyOrder = manager.destroySurface.mock.invocationCallOrder[0]!;

@@ -182,10 +182,13 @@ describe("SurfacePortBroker.brokerSurfacePort", () => {
       broker.brokerSurfacePort({ surfaceId: "s1", wc: wc as never, projectId: "p1" })
     ).toThrow(/disposed/);
     // The half-open connection must not survive: pty-host disconnected and
-    // ports closed.
+    // ports closed. The failed delivery is terminal, so no context lingers
+    // for a re-broker.
     expect(ptyClient.disconnectMessagePort).toHaveBeenCalledTimes(1);
     expect((madeChannels[0]!.port1 as MockPort).close).toHaveBeenCalled();
     expect(broker.connectionIdFor("s1")).toBeNull();
+    wc.postMessage.mockReset();
+    expect(broker.rebrokerFromLast("s1", wc as never)).toBeNull();
   });
 
   it("rebrokerFromLast reuses the last broker's project context after a reload", () => {
@@ -242,7 +245,7 @@ describe("SurfacePortBroker teardown paths", () => {
     expect(broker.connectionIdFor("s1")).toBeNull();
   });
 
-  it("releases when the surface webContents is destroyed", () => {
+  it("releases when the surface webContents is destroyed and forgets its context", () => {
     const { broker, ptyClient, wc } = makeBroker();
     const connectionId = broker.brokerSurfacePort({
       surfaceId: "s1",
@@ -253,6 +256,8 @@ describe("SurfacePortBroker teardown paths", () => {
     wc._fire("destroyed");
     expect(ptyClient.disconnectMessagePort).toHaveBeenCalledWith(connectionId);
     expect(broker.connectionIdFor("s1")).toBeNull();
+    // A destroyed view never re-brokers.
+    expect(broker.rebrokerFromLast("s1", wc as never)).toBeNull();
   });
 
   it("releases on real navigation but not same-document navigation", () => {

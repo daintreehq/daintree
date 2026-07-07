@@ -124,6 +124,11 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
   private createArgsById = new Map<string, CapturedCreateArgs>();
   private carriedStateById = new Map<string, CarriedTerminalState>();
   private syncMirrorsById = new Map<string, TerminalSyncMirror>();
+  // Compositor-side liveness ledger: ids whose create resolved on SOME
+  // surface and that haven't been destroyed since. This is the evidence
+  // releaseFailedClaim uses for view surfaces, whose planes cannot answer a
+  // synchronous liveness probe across the process boundary.
+  private liveTerminalIds = new Set<string>();
   private scrollbackRestoreAggregateListeners = new Set<() => void>();
   private surfaceForwarderUnsubs = new Map<string, () => void>();
   private gridResizeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -198,16 +203,19 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
   // the stale placement.
   private releaseFailedClaim(id: string, surface: PaintSurface, claimed: boolean): void {
     if (!claimed) return;
-    // A view-hosted surface cannot answer the liveness probe synchronously,
-    // so err on the side of keeping the claim: a stale placement self-heals
-    // on the next create (healPlacement), while releasing a live view-owned
-    // terminal's placement would strand it routing to the default surface.
-    if (surfaceKind(surface) === "view") return;
     let liveOnSurface = false;
-    try {
-      liveOnSurface = surface.plane.get(id) !== null;
-    } catch {
-      // Unreadable surface — nothing live worth keeping the claim for.
+    if (surfaceKind(surface) === "view") {
+      // A view-hosted plane cannot answer a synchronous liveness probe, so
+      // consult the compositor's own ledger: an overlapping create that
+      // already succeeded marked the id live (and a still-in-flight one will
+      // re-record ownership via healPlacement after this release).
+      liveOnSurface = this.liveTerminalIds.has(id);
+    } else {
+      try {
+        liveOnSurface = surface.plane.get(id) !== null;
+      } catch {
+        // Unreadable surface — nothing live worth keeping the claim for.
+      }
     }
     if (liveOnSurface) return;
     if (this.registry.surfaceFor(id)?.id !== surface.id) return;
@@ -278,6 +286,7 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.createArgsById.delete(id);
     this.carriedStateById.delete(id);
     this.syncMirrorsById.delete(id);
+    this.liveTerminalIds.delete(id);
   }
 
   private carried(id: string): CarriedTerminalState {
@@ -380,9 +389,10 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     let sourceUnreadable = false;
     if (surfaceKind(source) === "view") {
       // No ManagedTerminal exists across a process boundary, so a view-hosted
-      // source cannot answer a liveness probe; if the fabric created this
-      // terminal, treat it as live and rebuild it on the target.
-      assumeLive = this.createArgsById.has(id);
+      // source cannot answer a liveness probe; the compositor's own ledger
+      // (marked on create success, cleared on destroy) decides whether the
+      // move is a rebuild or placement-only.
+      assumeLive = this.liveTerminalIds.has(id);
     } else if (opts.bestEffortSource) {
       try {
         live = source.plane.get(id);
@@ -436,11 +446,12 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     } catch (error) {
       // The terminal now exists nowhere; drop the placement so the caller's
       // retry (a fresh getOrCreate) claims cleanly instead of routing to a
-      // surface that never built it. The mirror drops with it — stale
-      // agent/focus/buffer state must not answer for a terminal that no
-      // longer exists anywhere.
+      // surface that never built it. The mirror and liveness ledger drop
+      // with it — stale agent/focus/buffer state must not answer for a
+      // terminal that no longer exists anywhere.
       this.registry.release(id);
       this.syncMirrorsById.delete(id);
+      this.liveTerminalIds.delete(id);
       throw error;
     }
 
@@ -599,6 +610,7 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     try {
       const managed = await surface.plane.prewarmTerminal(id, launchAgentId, options, params);
       this.healPlacement(id, surface);
+      this.liveTerminalIds.add(id);
       return managed;
     } catch (error) {
       this.releaseFailedClaim(id, surface, claimed);
@@ -697,6 +709,7 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
         getCwd
       );
       this.healPlacement(id, surface);
+      this.liveTerminalIds.add(id);
       return managed;
     } catch (error) {
       this.releaseFailedClaim(id, surface, claimed);
@@ -1104,6 +1117,7 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.createArgsById.clear();
     this.carriedStateById.clear();
     this.syncMirrorsById.clear();
+    this.liveTerminalIds.clear();
     this.scrollbackRestoreAggregateListeners.clear();
   }
 
