@@ -1,5 +1,5 @@
-import { dirname, resolve } from "path";
-import { promises as fs } from "fs";
+import { dirname, isAbsolute, resolve } from "path";
+import { promises as fs, type Stats } from "fs";
 import type { SimpleGit, StatusResult } from "simple-git";
 import type { FileChangeDetail, GitStatus, WorktreeChanges } from "../types/index.js";
 import { WorktreeRemovedError, toGitOperationError } from "./errorTypes.js";
@@ -7,6 +7,7 @@ import { logWarn, logError } from "./logger.js";
 import { Cache } from "./cache.js";
 import { createHardenedGit, createWslHardenedGit } from "./hardenedGit.js";
 import type { WslGitInvocation } from "./hardenedGit.js";
+import { getGitDir } from "./gitUtils.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 const GIT_WORKTREE_CHANGES_CACHE = new Cache<string, WorktreeChanges>({
@@ -349,6 +350,134 @@ export async function getLatestTrackedFileMtime(worktreePath: string): Promise<n
   }
 }
 
+// Static per-worktree facts consumed by every status pass: the realpath'd
+// `--show-toplevel` and `realpath(cwd)`. Both are immutable while the same
+// directory inode backs `cwd`, so entries are validated against the (dev,
+// ino) captured at resolution time — a worktree deleted and recreated at the
+// same path self-invalidates without any explicit hook. Eliminates the
+// per-pass `rev-parse HEAD --show-toplevel` subprocess (the OID comes from
+// resolveHeadOidFromFs below); any ambiguity falls back to the subprocess.
+interface WorktreeStaticInfo {
+  gitRoot: string;
+  realCwd: string;
+  dev: number;
+  ino: number;
+}
+
+const WORKTREE_STATIC_CACHE = new Cache<string, WorktreeStaticInfo>({
+  maxSize: 100,
+  defaultTTL: Number.POSITIVE_INFINITY,
+});
+
+// The `commondir` pointer inside a linked worktree's git dir is immutable for
+// the life of that git dir, and its absence (main worktree) is stable too.
+const COMMON_DIR_CACHE = new Cache<string, string>({
+  maxSize: 100,
+  defaultTTL: Number.POSITIVE_INFINITY,
+});
+
+// Parsed packed-refs keyed by (path, mtimeMs, size) — reparsed only when the
+// file actually changes. Small maxSize: one live entry per repo.
+const PACKED_REFS_CACHE = new Cache<string, Map<string, string>>({
+  maxSize: 8,
+  defaultTTL: 300_000,
+});
+
+export function __clearWorktreeStaticCacheForTesting(): void {
+  WORKTREE_STATIC_CACHE.clear();
+  COMMON_DIR_CACHE.clear();
+  PACKED_REFS_CACHE.clear();
+}
+
+// SHA-1 or SHA-256 object id.
+const OID_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+async function resolveCommonDirForGitDir(gitDir: string): Promise<string> {
+  const cached = COMMON_DIR_CACHE.get(gitDir);
+  if (cached !== undefined) return cached;
+  try {
+    const content = (await fs.readFile(resolve(gitDir, "commondir"), "utf-8")).trim();
+    const result = content ? (isAbsolute(content) ? content : resolve(gitDir, content)) : gitDir;
+    COMMON_DIR_CACHE.set(gitDir, result);
+    return result;
+  } catch (error) {
+    // ENOENT is the stable "main worktree" shape and safe to cache; any other
+    // error is treated as transient and retried on the next pass.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      COMMON_DIR_CACHE.set(gitDir, gitDir);
+    }
+    return gitDir;
+  }
+}
+
+async function resolvePackedRef(commonDir: string, refName: string): Promise<string | null> {
+  const packedPath = resolve(commonDir, "packed-refs");
+  let stat: Stats;
+  try {
+    stat = await fs.stat(packedPath);
+  } catch {
+    return null;
+  }
+  const cacheKey = `${packedPath}:${stat.mtimeMs}:${stat.size}`;
+  let refs = PACKED_REFS_CACHE.get(cacheKey);
+  if (!refs) {
+    try {
+      const content = await fs.readFile(packedPath, "utf-8");
+      refs = new Map();
+      for (const line of content.split("\n")) {
+        // Skip the header and peeled-tag (^<oid>) lines.
+        if (!line || line.startsWith("#") || line.startsWith("^")) continue;
+        const spaceIdx = line.indexOf(" ");
+        if (spaceIdx <= 0) continue;
+        const oid = line.slice(0, spaceIdx);
+        if (!OID_RE.test(oid)) continue;
+        const packedRefName = line.slice(spaceIdx + 1).trim();
+        // Only refs/heads/* are ever queried; dropping tags/remotes keeps the
+        // cached map small on repos with tens of thousands of refs.
+        if (!packedRefName.startsWith("refs/heads/")) continue;
+        refs.set(packedRefName, oid);
+      }
+      PACKED_REFS_CACHE.set(cacheKey, refs);
+    } catch {
+      return null;
+    }
+  }
+  return refs.get(refName) ?? null;
+}
+
+/**
+ * Resolve the current HEAD commit OID from `.git` metadata files — the same
+ * resolution `git rev-parse HEAD` performs for the common shapes — without a
+ * subprocess. Returns `null` whenever the answer is not unambiguous
+ * (missing/malformed HEAD, a ref outside `refs/heads/`, an unborn branch,
+ * packed-refs anomalies); callers must then fall back to the subprocess,
+ * which preserves exact git semantics.
+ */
+async function resolveHeadOidFromFs(cwd: string): Promise<string | null> {
+  const gitDir = await getGitDir(cwd, { cache: true, logErrors: false });
+  if (!gitDir) return null;
+  let head: string;
+  try {
+    head = (await fs.readFile(resolve(gitDir, "HEAD"), "utf-8")).trim();
+  } catch {
+    return null;
+  }
+  if (OID_RE.test(head)) return head; // detached HEAD carries the OID directly
+  if (!head.startsWith("ref:")) return null;
+  const refName = head.slice(4).trim();
+  // Only refs/heads/* are shared through the common dir; anything else
+  // (refs/bisect, per-worktree refs) keeps the subprocess path.
+  if (!refName.startsWith("refs/heads/")) return null;
+  const commonDir = await resolveCommonDirForGitDir(gitDir);
+  try {
+    const loose = (await fs.readFile(resolve(commonDir, refName), "utf-8")).trim();
+    return OID_RE.test(loose) ? loose : null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
+  }
+  return resolvePackedRef(commonDir, refName);
+}
+
 export interface GetWorktreeChangesOptions {
   forceRefresh?: boolean;
   cacheTTL?: number;
@@ -405,8 +534,11 @@ export async function getWorktreeChangesWithStats(
 
   const fetchPromise = (async () => {
     const MAX_FILES_FOR_NUMSTAT = 100;
+    // stat instead of access: the (dev, ino) pair doubles as the validity
+    // check for the static-info cache below. Error mapping is unchanged.
+    let cwdStat: Stats;
     try {
-      await fs.access(cwd);
+      cwdStat = await fs.stat(cwd);
     } catch (accessError) {
       const nodeError = accessError as NodeJS.ErrnoException;
       if (nodeError.code === "ENOENT") {
@@ -417,27 +549,59 @@ export async function getWorktreeChangesWithStats(
 
     try {
       const git: SimpleGit = await gitForChanges(cwd, options);
+
+      // Fast path: with the static facts (toplevel, realpath) cached for this
+      // exact directory inode AND an unambiguous fs-resolved HEAD OID, the
+      // `rev-parse HEAD --show-toplevel` subprocess is redundant. Kicked off
+      // before the status spawn so the metadata reads overlap it.
+      const staticEntry = WORKTREE_STATIC_CACHE.get(cwd);
+      const staticInfo =
+        staticEntry && staticEntry.dev === cwdStat.dev && staticEntry.ino === cwdStat.ino
+          ? staticEntry
+          : undefined;
+      const fsOidPromise: Promise<string | null> = staticInfo
+        ? resolveHeadOidFromFs(cwd)
+        : Promise.resolve(null);
+
       const status: StatusResult = await git.status();
+      const fsOid = await fsOidPromise;
 
-      // Consolidate rev-parse into a single spawn; HEAD may not exist in empty
-      // repos — fall back to a solo --show-toplevel call when it doesn't.
-      const revParsePromise = git
-        .raw(["rev-parse", "HEAD", "--show-toplevel"])
-        .then((output) => {
-          const lines = output.trim().split("\n");
-          return { headOid: lines[0]?.trim() ?? "", toplevelRaw: lines[1]?.trim() ?? "" };
-        })
-        .catch(async () => {
-          const toplevelRaw = await git.revparse(["--show-toplevel"]);
-          return { headOid: "", toplevelRaw };
+      let headOid: string;
+      let gitRoot: string;
+      let realCwd: string;
+      if (staticInfo && fsOid !== null) {
+        headOid = fsOid;
+        gitRoot = staticInfo.gitRoot;
+        realCwd = staticInfo.realCwd;
+      } else {
+        // Consolidate rev-parse into a single spawn; HEAD may not exist in
+        // empty repos — fall back to a solo --show-toplevel call when it
+        // doesn't.
+        const revParsed = await git
+          .raw(["rev-parse", "HEAD", "--show-toplevel"])
+          .then((output) => {
+            const lines = output.trim().split("\n");
+            return { headOid: lines[0]?.trim() ?? "", toplevelRaw: lines[1]?.trim() ?? "" };
+          })
+          .catch(async () => {
+            const toplevelRaw = await git.revparse(["--show-toplevel"]);
+            return { headOid: "", toplevelRaw };
+          });
+        headOid = revParsed.headOid;
+        gitRoot = await fs.realpath(revParsed.toplevelRaw.trim());
+        realCwd = await fs.realpath(cwd);
+        WORKTREE_STATIC_CACHE.set(cwd, {
+          gitRoot,
+          realCwd,
+          dev: cwdStat.dev,
+          ino: cwdStat.ino,
         });
+      }
 
-      // Resolve rev-parse first so we can skip the log spawn when HEAD is
-      // unchanged. The log output is a pure function of the HEAD OID, so the
-      // cache self-invalidates on every commit, amend, reset, or checkout.
-      // On cache miss we spawn the log and store the result; empty-repo
-      // paths yield headOid="" and are not cached (always spawn).
-      const { toplevelRaw, headOid } = await revParsePromise;
+      // The log output is a pure function of the HEAD OID, so the cache
+      // self-invalidates on every commit, amend, reset, or checkout. On cache
+      // miss we spawn the log and store the result; empty-repo paths yield
+      // headOid="" and are not cached (always spawn).
       const cachedLog = headOid ? LAST_COMMIT_LOG_CACHE.get(headOid) : undefined;
       const logOutput =
         cachedLog !== undefined
@@ -446,8 +610,6 @@ export async function getWorktreeChangesWithStats(
       if (headOid && cachedLog === undefined) {
         LAST_COMMIT_LOG_CACHE.set(headOid, logOutput);
       }
-
-      const gitRoot = await fs.realpath(toplevelRaw.trim());
 
       let lastCommitMessage: string | undefined;
       let lastCommitTimestampMs: number | undefined;
@@ -746,7 +908,7 @@ export async function getWorktreeChangesWithStats(
 
       const tracking = status.tracking && status.tracking.length > 0 ? status.tracking : null;
       const result: WorktreeChanges = {
-        worktreeId: await fs.realpath(cwd),
+        worktreeId: realCwd,
         rootPath: gitRoot,
         changes,
         changedFileCount: changes.length,
