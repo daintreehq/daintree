@@ -96,7 +96,7 @@ function ModeChip({ label, isVisible, id }: ModeChipProps) {
       className={cn(
         "inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[var(--radius-sm)]",
         "bg-overlay-subtle text-xs text-daintree-text/70 select-none shrink-0 origin-left",
-        "transition-[opacity,transform] motion-reduce:transition-opacity motion-reduce:scale-100",
+        "transition-[opacity,scale] motion-reduce:transition-opacity motion-reduce:scale-100",
         isVisible ? "opacity-100 scale-100" : "opacity-0 scale-95"
       )}
       style={{

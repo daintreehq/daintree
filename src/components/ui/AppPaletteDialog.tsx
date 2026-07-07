@@ -205,7 +205,10 @@ export function AppPaletteDialog({
         tabIndex={-1}
         className={cn(
           "w-full max-w-xl mx-4 bg-surface-dialog border border-border-default rounded-[var(--radius-xl)] shadow-[var(--theme-shadow-dialog)] overflow-hidden origin-top",
-          "transition-[opacity,transform]",
+          // Tailwind v4 scale-* emits the individual `scale` property, which
+          // `transform` in a transition list does NOT cover — the palette
+          // zoom only animates when `scale` is listed explicitly.
+          "transition-[opacity,scale]",
           "motion-reduce:transition-opacity motion-reduce:scale-100",
           isVisible ? "opacity-100 scale-100" : "opacity-0 scale-[0.96]",
           className

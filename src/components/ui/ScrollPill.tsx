@@ -40,8 +40,11 @@ export const ScrollPill = forwardRef<HTMLButtonElement, ScrollPillProps>(
           "bg-daintree-bg/90 border border-daintree-border/40 text-daintree-text shadow-[var(--theme-shadow-floating)]",
           "text-xs font-medium cursor-pointer",
           "hover:bg-daintree-bg hover:border-daintree-border/60",
-          "transition-[opacity,transform] duration-150",
-          "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
+          // Tailwind v4 translate-* emits the individual `translate` property,
+          // which `transform` in a transition list does NOT cover — list it
+          // explicitly or the slide snaps and only the fade animates.
+          "transition-[opacity,translate] duration-150",
+          "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:translate-none",
           "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1",
           isVisible ? "opacity-100 translate-y-0" : hiddenTransform,
           className
