@@ -11,6 +11,7 @@ import {
   SYNC_OUTPUT_START,
 } from "../mirrorApply";
 import { createInThreadTransport } from "../parseTransport";
+import type { AuthorityResponse, AuthorityTransport } from "../parseTransport";
 import { WorkerParseSession } from "../WorkerParseSession";
 
 function makeMirror(options: { cols?: number; rows?: number; scrollback?: number } = {}) {
@@ -350,5 +351,33 @@ describe("WorkerParseSession", () => {
     const promotion = session.promoteToInteractive();
     session.dispose();
     await expect(promotion).resolves.toBeUndefined();
+  });
+
+  it("a requestId-less worker crash settles in-flight promotions instead of hanging them", async () => {
+    // A whole-worker crash surfaces as an error response with NO requestId
+    // (transport onerror, or a non-snapshot endpoint failure). With `send` a
+    // no-op the snapshot request never gets a reply, so the promotion is stuck
+    // awaiting requestSnapshot until the crash settles it.
+    let notify: ((response: AuthorityResponse) => void) | undefined;
+    const transport: AuthorityTransport = {
+      send: () => {},
+      onResponse: (listener) => {
+        notify = listener;
+        return () => {};
+      },
+      dispose: () => {},
+    };
+    const mirror = { write: (_: string, cb?: () => void) => cb?.() };
+    const session = new WorkerParseSession(transport, mirror, {
+      cols: 80,
+      rows: 24,
+      scrollback: 1000,
+      cadenceMs: 0,
+    });
+    const promotion = session.promoteToInteractive();
+    notify?.({ type: "error", message: "parse worker error" });
+    await expect(promotion).resolves.toBeUndefined();
+
+    session.dispose();
   });
 });

@@ -163,7 +163,14 @@ export class WorkerParseSession {
       const resolve = this.pendingSnapshots.get(response.requestId);
       this.pendingSnapshots.delete(response.requestId);
       resolve?.(null);
+      return;
     }
+    // A requestId-less error is a whole-worker crash (transport onerror, or a
+    // non-snapshot endpoint failure): no single wait owns it, so settle every
+    // in-flight snapshot (as no-snapshot) exactly as dispose() does — otherwise
+    // a promote()/tick() awaiting requestSnapshot hangs forever.
+    for (const resolve of this.pendingSnapshots.values()) resolve(null);
+    this.pendingSnapshots.clear();
   };
 
   private requestSnapshot(
