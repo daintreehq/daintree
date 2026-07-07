@@ -4,7 +4,7 @@ import { allScenarios, assertMatrixCoverage, getScenariosForMode } from "../scen
 describe("perf scenario matrix", () => {
   it("covers full PERF matrix", () => {
     expect(() => assertMatrixCoverage()).not.toThrow();
-    expect(allScenarios).toHaveLength(35);
+    expect(allScenarios).toHaveLength(40);
   });
 
   it("returns mode-specific scenario sets", () => {
