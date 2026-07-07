@@ -360,6 +360,23 @@ export async function initPerWindowServices(
   // Per-window cleanup: ports, portalManager, eventBuffer
   ctx.cleanup.add(
     toDisposable(() => {
+      // Paint-fabric surface views: release their pty-host connections first
+      // (the broker disconnects each synthetic connection id), then tear down
+      // the sibling WebContentsViews.
+      if (ctx.services.surfacePortBroker) {
+        try {
+          ctx.services.surfacePortBroker.dispose();
+        } catch (error) {
+          console.error("[perWindowInit] SurfacePortBroker dispose failed:", error);
+        }
+        ctx.services.surfacePortBroker = undefined;
+      }
+      if (ctx.services.surfaceViewManager) {
+        ctx.services.surfaceViewManager.dispose().catch((error) => {
+          console.error("[perWindowInit] SurfaceViewManager dispose failed:", error);
+        });
+        ctx.services.surfaceViewManager = undefined;
+      }
       // Notify PTY host to disconnect this window's port before closing it
       const pty = getPtyClient();
       if (pty) {

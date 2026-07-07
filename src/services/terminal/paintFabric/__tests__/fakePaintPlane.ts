@@ -1,5 +1,6 @@
 import { vi } from "vitest";
-import type { PaintSurface } from "../PaintSurfaceRegistry";
+import type { AgentState } from "@/types";
+import type { PaintSurface, PaintSurfaceKind } from "../PaintSurfaceRegistry";
 import type { TerminalPaintPlane } from "../../TerminalInstanceService";
 import type { ManagedTerminal } from "../../types";
 
@@ -44,7 +45,7 @@ export function makeFakePlane() {
     registerPostCompleteHook: vi.fn(() => vi.fn()),
     unregisterPostCompleteHook: vi.fn(),
     fetchAndRestore: vi.fn(async () => true),
-    getAgentState: vi.fn(() => undefined),
+    getAgentState: vi.fn((): AgentState | undefined => undefined),
     isFocused: vi.fn(() => false),
     setAgentState: vi.fn(),
     setFocused: vi.fn(),
@@ -58,12 +59,23 @@ export function makeFakePlane() {
     getWebGLStateForE2E: vi.fn(() => ({ wantsSize: 0, active: false, mode: "webgl" })),
     triggerTerminalLinkForE2E: vi.fn(),
     getInstanceForE2E: vi.fn(() => undefined),
+    captureBufferText: vi.fn(() => ""),
+    attach: vi.fn((): ManagedTerminal | null => null),
+    detach: vi.fn(),
+    fit: vi.fn((): { cols: number; rows: number } | null => null),
+    resize: vi.fn((): { cols: number; rows: number } | null => null),
   };
 }
 
 export type FakePlane = ReturnType<typeof makeFakePlane>;
 
-export function makeSurface(id: string): { surface: PaintSurface; plane: FakePlane } {
+export function makeSurface(
+  id: string,
+  kind?: PaintSurfaceKind
+): { surface: PaintSurface; plane: FakePlane } {
   const plane = makeFakePlane();
-  return { surface: { id, plane: plane as unknown as TerminalPaintPlane }, plane };
+  return {
+    surface: { id, plane: plane as unknown as TerminalPaintPlane, ...(kind ? { kind } : {}) },
+    plane,
+  };
 }

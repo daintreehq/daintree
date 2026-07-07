@@ -203,6 +203,13 @@ export interface NotificationSettings {
  * positional-arg `demo` namespace, etc.).
  */
 export interface ElectronAPI extends GeneratedElectronAPI {
+  // Invoke methods are generated; onWebglThresholds is the hand-wired push
+  // listener for the webglBudget apply step (surface-view side).
+  paintSurface: GeneratedElectronAPI["paintSurface"] & {
+    onWebglThresholds(
+      callback: (payload: import("../paintFabricSurface.js").SurfaceWebglThresholds) => void
+    ): () => void;
+  };
   worktree: {
     getAll(): Promise<WorktreeState[]>;
     refresh(worktreeId?: string): Promise<void>;

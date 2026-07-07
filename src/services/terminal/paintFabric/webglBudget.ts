@@ -94,3 +94,52 @@ export function distributeWebglBudget(
     };
   });
 }
+
+export interface WebglBudgetApplyResult {
+  applied: SurfaceWebglBudget[];
+  failed: Array<{ surfaceId: string; error: unknown }>;
+}
+
+export interface WebglBudgetApplier {
+  apply(budgets: SurfaceWebglBudget[]): Promise<WebglBudgetApplyResult>;
+  // A retired surface's memo must drop so a re-created surface with the same
+  // id gets a fresh push instead of being deduped against a dead view.
+  forget(surfaceId: string): void;
+}
+
+/**
+ * The Phase 1V apply step: pushes each surface's granted thresholds through
+ * the injected transport (an IPC call into the surface's WebContentsView,
+ * where the surface-side TerminalWebGLManager applies them). Deduplicates
+ * against the last successfully-applied values so a recompute that grants the
+ * same budget costs no IPC, and isolates failures per surface — one dead view
+ * never blocks its siblings' budgets. Failed pushes are not memoized, so the
+ * next apply retries them.
+ */
+export function createWebglBudgetApplier(
+  push: (budget: SurfaceWebglBudget) => Promise<void> | void
+): WebglBudgetApplier {
+  const lastApplied = new Map<string, string>();
+  return {
+    async apply(budgets: SurfaceWebglBudget[]): Promise<WebglBudgetApplyResult> {
+      const applied: SurfaceWebglBudget[] = [];
+      const failed: Array<{ surfaceId: string; error: unknown }> = [];
+      for (const budget of budgets) {
+        const key = `${budget.upperThreshold}/${budget.lowerThreshold}`;
+        if (lastApplied.get(budget.surfaceId) === key) continue;
+        try {
+          await push(budget);
+        } catch (error) {
+          failed.push({ surfaceId: budget.surfaceId, error });
+          continue;
+        }
+        lastApplied.set(budget.surfaceId, key);
+        applied.push(budget);
+      }
+      return { applied, failed };
+    },
+    forget(surfaceId: string): void {
+      lastApplied.delete(surfaceId);
+    },
+  };
+}
