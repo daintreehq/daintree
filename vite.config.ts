@@ -340,6 +340,44 @@ function inlineSkeletonScriptsPlugin(state: ImportMapBuildState): Plugin {
   };
 }
 
+// Bench builds only (DAINTREE_RENDER_PROBE=1, `npm run build:e2e:bench`):
+// inlines scripts/perf/render-fanout-probe.js as a classic <head> script so
+// the React DevTools hook it installs exists before any deferred module
+// script evaluates react-dom. Classic-inline is the only placement that
+// guarantees that ordering regardless of chunking; a src/ module import would
+// also be vulnerable to sideEffects-based tree-shaking. The script hash rides
+// state.skeletonScriptHashes so the meta CSP and the HTTP-header sidecar both
+// allow it. Never active for shipped builds — the env var is only set by the
+// bench build script.
+function renderFanoutProbePlugin(state: ImportMapBuildState): Plugin {
+  return {
+    name: "render-fanout-probe",
+    apply: "build",
+    transformIndexHtml() {
+      if (process.env.DAINTREE_RENDER_PROBE !== "1") return;
+      const source = readFileSync(
+        path.join(process.cwd(), "scripts", "perf", "render-fanout-probe.js"),
+        "utf8"
+      );
+      if (source.includes("</script>")) {
+        throw new Error(
+          '[render-fanout-probe] scripts/perf/render-fanout-probe.js contains "</script>" and cannot be inlined'
+        );
+      }
+      state.skeletonScriptHashes.push(
+        `'sha256-${createHash("sha256").update(source, "utf8").digest("base64")}'`
+      );
+      return [
+        {
+          tag: "script",
+          injectTo: "head-prepend" as const,
+          children: source,
+        },
+      ];
+    },
+  };
+}
+
 // `HOST_IMPORTMAP_SPECIFIERS` (imported from @daintreehq/plugin-vite above) is
 // the set of specifiers exposed to externalized plugin bundles. In production
 // each bare specifier points at the same `vendor-react` chunk because Rolldown
@@ -916,6 +954,11 @@ export default defineConfig(({ command, mode }) => {
       // transformIndexHtml hooks (registration order), and the CSP transform
       // reads the skeleton hashes this plugin stores in shared state.
       inlineSkeletonScriptsPlugin(importMapState),
+      // Bench-only (no-op unless DAINTREE_RENDER_PROBE=1). Must sit between
+      // inlineSkeletonScriptsPlugin (buildStart resets the hash list) and
+      // cspTransformPlugin (reads it) — all three use default-order
+      // transformIndexHtml hooks, so registration order is execution order.
+      renderFanoutProbePlugin(importMapState),
       cspTransformPlugin(importMapState),
       compilerReportPlugin,
       rendererBundleSizePlugin(),
@@ -1119,6 +1162,14 @@ export default defineConfig(({ command, mode }) => {
     },
     resolve: {
       alias: {
+        // Bench builds (DAINTREE_RENDER_PROBE=1, see build:bench) swap in the
+        // profiling react-dom bundle so the render-fanout probe
+        // (src/utils/renderFanoutProbe.ts) gets per-fiber actualDuration.
+        // Production semantics are otherwise identical (no StrictMode
+        // double-render); never set for shipped builds.
+        ...(process.env.DAINTREE_RENDER_PROBE === "1"
+          ? { "react-dom/client": "react-dom/profiling" }
+          : {}),
         "@": path.resolve(__dirname, "./src"),
         "@shared": path.resolve(__dirname, "./shared"),
         // refractor/core eagerly imports parse-entities, whose browser-condition
