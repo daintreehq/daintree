@@ -1828,6 +1828,11 @@ export interface IpcEventMap {
   // visibilitychange/resume ran while the view was still occluded, where
   // Chromium culls the paint, so it can fail to stick until the user clicks.
   "app:view-revealed": void;
+  // Fired by ProjectViewManager the moment it re-attaches a cached view (warm
+  // switch). A detached setVisible(false) view receives no visibilitychange or
+  // resume event on reattach, so this is the renderer's deterministic trigger
+  // to run the wake fan-out whose completion releases the warm paint gate.
+  "app:view-warm-activated": void;
   "app:view-cached": void;
 
   // Privacy events

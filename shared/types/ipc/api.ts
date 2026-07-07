@@ -455,6 +455,17 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * visibilitychange/resume ran while the view was still occluded.
      */
     onViewRevealed(callback: () => void): () => void;
+    /**
+     * Subscribe to the warm-activation wake signal. Main fires this the moment
+     * it re-attaches a cached view behind the anti-flash bridge (or reveals it
+     * directly when there is no bridge). A detached `setVisible(false)` view
+     * never receives `visibilitychange`/`resume` on reattach, so without this
+     * explicit trigger the wake fan-out — and the `notifyWarmViewPainted` gate
+     * release it ends with — only ran when Chromium happened to emit a
+     * lifecycle event (the Efficiency-profile freeze path), and every other
+     * warm swap stalled until the warm paint gate's hard timeout.
+     */
+    onViewWarmActivated(callback: () => void): () => void;
     onViewCached(callback: () => void): () => void;
   };
   // menu is generated — see GeneratedElectronAPI.

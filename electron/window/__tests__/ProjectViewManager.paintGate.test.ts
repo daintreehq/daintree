@@ -813,6 +813,54 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
   });
 
+  it("warm reactivation sends the wake trigger to the cached view while the bridge is up", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+
+    const firstSwitch = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+    manager.signalViewPainted(incomingWc.id);
+    await firstSwitch;
+
+    win.contentView.removeChildView.mockClear();
+    initialWc.send.mockClear();
+
+    const switchBack = manager.switchTo("proj-a", "/path/a");
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+
+    // The explicit wake trigger is the renderer's only reliable signal to run
+    // its wake fan-out (a detached setVisible(false) view gets no
+    // visibilitychange/resume on reattach), so it must arrive while the bridge
+    // is still up — before the gate resolves — or the fan-out that releases
+    // the gate never runs and every warm swap rides the hard timeout.
+    expect(
+      initialWc.send.mock.calls.filter(([c]) => c === CHANNELS.APP_VIEW_WARM_ACTIVATED)
+    ).toHaveLength(1);
+    expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+    manager.signalWarmViewPainted(initialWc.id);
+    await switchBack;
+    expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not send the warm wake trigger on a cold switch", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+
+    const switchPromise = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+    manager.signalViewPainted(incomingWc.id);
+    await switchPromise;
+
+    // Cold-started renderers drive their own boot-time wake; the warm trigger
+    // targeting them would be meaningless (no cached terminals to refit).
+    expect(
+      incomingWc.send.mock.calls.filter(([c]) => c === CHANNELS.APP_VIEW_WARM_ACTIVATED)
+    ).toHaveLength(0);
+  });
+
   it("warm bridge falls through to the hard timeout when no warm signal arrives", async () => {
     vi.useFakeTimers();
     try {

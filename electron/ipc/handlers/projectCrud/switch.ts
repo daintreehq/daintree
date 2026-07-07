@@ -8,6 +8,7 @@ import { scratchStore } from "../../../services/ScratchStore.js";
 import { ProjectSwitchService } from "../../../services/ProjectSwitchService.js";
 import { broadcastProjectSwitchUpdates } from "../../projectSwitchBroadcast.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+import { logInfo } from "../../../utils/logger.js";
 import {
   sanitizeTerminals,
   sanitizeTerminalSizes,
@@ -144,6 +145,13 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
   return () => handlers.forEach((cleanup) => cleanup());
 }
 
+// Monotonic per-window switch epoch. A swap-failure restore (below) is
+// deferred until the failed target's early worktree load settles; by then a
+// newer switch may own the window, and restoring the old mapping would
+// clobber it. Bumped at every activateProjectView entry; the restore only
+// runs if its epoch is still current.
+const windowSwitchEpochs = new Map<number, number>();
+
 const pendingOutgoingPersists = new Map<string, Promise<void>>();
 
 function trackOutgoingPersist(projectId: string | null, persist: Promise<void>): void {
@@ -221,8 +229,79 @@ async function activateProjectView(
   project: Project,
   options: ActivateOptions
 ): Promise<void> {
+  const activateStart = performance.now();
+  const senderWindow = getWindowForWebContents(event.sender);
+  const windowId = senderWindow?.id ?? deps.mainWindow?.id;
+
+  let switchEpoch = 0;
+  if (windowId !== undefined) {
+    switchEpoch = (windowSwitchEpochs.get(windowId) ?? 0) + 1;
+    windowSwitchEpochs.set(windowId, switchEpoch);
+  }
+
+  // Start the workspace-host git load CONCURRENTLY with the view swap. The two
+  // have no data dependency (loadProject takes explicit path + windowId), and
+  // running them serially added the full load — several hundred ms when the
+  // target's host is cold (spawn + worktree enumeration) — to every switch's
+  // resolve time. Window-routed worktree sends already target the incoming
+  // view for the whole swap (registerAppView flips at attach), so an early
+  // windowToProject flip routes to the right renderer. Failures are NOT
+  // surfaced here: the await below owns forward-fail (#8400). Reopen requires
+  // the host to be resumed BEFORE loadProject so it is ready to accept
+  // worktree IPC from the newly-active view.
+  let loadWorktrees: Promise<void> | null = null;
+  if (deps.worktreeService && windowId !== undefined) {
+    if (options.resumeWorkspace) {
+      deps.worktreeService.resumeProject(project.path);
+    }
+    loadWorktrees = deps.worktreeService.loadProject(project.path, windowId);
+    // Observed at the await below; without this a load rejection while the
+    // swap is still in flight would be an unhandled rejection.
+    loadWorktrees.catch(() => {});
+  }
+
   // Multi-view path: swap WebContentsViews instead of resetting stores
-  const { view, isNew } = await pvm.switchTo(projectId, project.path);
+  let swapResult: { view: Electron.WebContentsView; isNew: boolean };
+  try {
+    swapResult = await pvm.switchTo(projectId, project.path);
+  } catch (error) {
+    // The swap failed and rolled back to the previous view, but the early
+    // loadProject may have already pointed windowToProject at the failed
+    // target — the exact cross-project contamination loadProject exists to
+    // prevent. Once the failed load settles (and only if no newer switch has
+    // claimed the window since), re-point the mapping at the still-visible
+    // previous project (cheap for its warm host); with no previous project to
+    // restore (first switch from the welcome view, or the previous project
+    // was deleted mid-switch) release the window's mapping entirely, undoing
+    // the early load's attachment.
+    if (loadWorktrees && deps.worktreeService && windowId !== undefined) {
+      const worktreeService = deps.worktreeService;
+      const previousPath = (() => {
+        const previousId = projectStore.getCurrentProjectId();
+        return previousId ? projectStore.getProjectById(previousId)?.path : undefined;
+      })();
+      void loadWorktrees
+        .catch(() => {})
+        .then(() => {
+          if (windowSwitchEpochs.get(windowId) !== switchEpoch) return undefined;
+          if (previousPath === project.path) return undefined; // mapping already correct
+          if (previousPath) {
+            return worktreeService.loadProject(previousPath, windowId);
+          }
+          worktreeService.unregisterWindow(windowId);
+          return undefined;
+        })
+        .catch((restoreError) => {
+          console.error(
+            `${options.logPrefix} Failed to restore worktree mapping after swap failure:`,
+            restoreError
+          );
+        });
+    }
+    throw error;
+  }
+  const { view, isNew } = swapResult;
+  const swapMs = Math.round(performance.now() - activateStart);
 
   // Mutually exclusive with scratch: switching to a project clears any
   // active scratch pointer + notifies renderers so palette/UI state stays
@@ -274,15 +353,6 @@ async function activateProjectView(
     });
   }
 
-  // Reopen requires the workspace host to be resumed BEFORE loadProject so
-  // the host is ready to accept worktree IPC from the newly-active view.
-  if (options.resumeWorkspace && deps.worktreeService) {
-    deps.worktreeService.resumeProject(project.path);
-  }
-
-  const senderWindow = getWindowForWebContents(event.sender);
-  const windowId = senderWindow?.id ?? deps.mainWindow?.id;
-
   // Notify the PTY host of the active project and distribute a fresh
   // MessagePort to the reactivated view BEFORE the worktree git load. On warm
   // switches `loadProject` below can take several hundred ms (prune/list/status
@@ -318,13 +388,14 @@ async function activateProjectView(
     }
   }
 
-  // Always call loadProject so the WorkspaceClient's windowToProject
-  // mapping points to the correct project.  Without this, reactivating a
-  // cached view leaves the mapping pointing at the *previous* project,
-  // causing sendToEntryWindows to route the old project's IPC events to
-  // the newly-active view (cross-project worktree contamination).
+  // Settle the worktree load started alongside the swap. Calling loadProject
+  // on every switch keeps the WorkspaceClient's windowToProject mapping
+  // pointing at the correct project — without it, reactivating a cached view
+  // leaves the mapping on the *previous* project, causing sendToEntryWindows
+  // to route the old project's IPC events to the newly-active view
+  // (cross-project worktree contamination).
   if (deps.worktreeService) {
-    if (windowId !== undefined) {
+    if (loadWorktrees && windowId !== undefined) {
       // Forward-fail: the view swap already committed to the new project, so a
       // load failure surfaces as a Tier 3 recovery banner rather than reverting
       // (#8400). Send a targeted status to *this* view only (broadcastToRenderer
@@ -332,7 +403,7 @@ async function activateProjectView(
       // stale banner when a previously-failed view is reactivated successfully.
       let worktreeLoadError: string | null = null;
       try {
-        await deps.worktreeService.loadProject(project.path, windowId);
+        await loadWorktrees;
 
         // Always attach a direct MessagePort.  For new views this is the
         // first port; for cached views it re-establishes the relay after a
@@ -363,4 +434,14 @@ async function activateProjectView(
       deps.windowRegistry.registerAppViewWebContents(senderWindow.id, view.webContents.id);
     }
   }
+
+  // Switch-settle telemetry: `swapMs` is the view swap (reveal path), the
+  // remainder to `totalMs` is the post-swap tail — now dominated by however
+  // much of the concurrent worktree load outlived the swap.
+  logInfo("projectswitch.settled", {
+    projectId,
+    isNew,
+    swapMs,
+    totalMs: Math.round(performance.now() - activateStart),
+  });
 }

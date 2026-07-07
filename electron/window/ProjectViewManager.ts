@@ -508,6 +508,17 @@ export class ProjectViewManager {
             hardMs: warmHardMs,
           }
         );
+        // Deterministic wake trigger: a detached + setVisible(false) cached
+        // view never gets `visibilitychange`, and `resume` only fires when the
+        // Efficiency profile actually froze it — so on most reactivations the
+        // renderer had NO signal to run its wake fan-out and the warm gate sat
+        // until the hard timeout (~1.5s per warm switch). Main knows exactly
+        // when it re-attaches a cached view, so tell the renderer directly;
+        // the visibility/resume listeners remain as fallbacks. Sent after the
+        // gate is armed so the wake's completion signal can't slip past it.
+        if (!cached.view.webContents.isDestroyed()) {
+          cached.view.webContents.send(CHANNELS.APP_VIEW_WARM_ACTIVATED);
+        }
         const gateResult = await warmGate;
         if (gateResult === "hard-timeout") {
           logWarn("projectview.warmpaintgate.hardtimeout", {
@@ -530,6 +541,12 @@ export class ProjectViewManager {
         // No outgoing view to bridge through (e.g. first-run with no welcome
         // view) — nothing to flash past, so reveal the cached view immediately.
         this.activateView(cached);
+        // Same deterministic wake trigger as the bridged path: the reattach
+        // emits no visibility/resume event, so the terminals' refit/repaint
+        // fan-out needs an explicit signal here too.
+        if (!cached.view.webContents.isDestroyed()) {
+          cached.view.webContents.send(CHANNELS.APP_VIEW_WARM_ACTIVATED);
+        }
       }
 
       const visibleMs = Math.round(performance.now() - warmStart);
