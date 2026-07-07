@@ -148,9 +148,7 @@ export const BUILT_IN_ACTION_IDS = [
   "file.openInEditor",
   "file.openImageViewer",
   "file.showItemInFolder",
-
-  // -- markdownActions --
-  "markdown.openPanel",
+  "file.openPanel",
 
   // -- slashCommandsActions --
   "slashCommands.list",

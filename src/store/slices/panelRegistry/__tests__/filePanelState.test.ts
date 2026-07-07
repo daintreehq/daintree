@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import type { PanelInstance, MarkdownPanelData } from "@shared/types/panel";
+import type { PanelInstance, FilePanelData } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -48,24 +48,24 @@ vi.mock("../../../persistence/panelPersistence", () => ({
 
 const { usePanelStore } = await import("../../../panelStore");
 
-function seedMarkdownPanel(overrides: Partial<MarkdownPanelData> = {}): void {
+function seedFilePanel(overrides: Partial<FilePanelData> = {}): void {
   usePanelStore.setState({
     panelsById: {
-      "md-1": {
-        id: "md-1",
-        kind: "markdown",
-        title: "Markdown",
+      "file-1": {
+        id: "file-1",
+        kind: "file",
+        title: "File",
         location: "grid",
-        markdownFilePath: "/repo/docs/spec.md",
-        markdownViewMode: "rendered",
+        filePath: "/repo/docs/spec.md",
+        fileViewMode: "source",
         ...overrides,
       } as PanelInstance,
     },
-    panelIds: ["md-1"],
+    panelIds: ["file-1"],
   });
 }
 
-describe("markdown panel state setters", () => {
+describe("file panel state setters", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
@@ -95,37 +95,37 @@ describe("markdown panel state setters", () => {
     vi.useRealTimers();
   });
 
-  it("setMarkdownViewMode updates the panel and triggers persistence", () => {
-    seedMarkdownPanel();
+  it("setFileViewMode updates the panel and triggers persistence", () => {
+    seedFilePanel();
 
-    usePanelStore.getState().setMarkdownViewMode("md-1", "source");
+    usePanelStore.getState().setFileViewMode("file-1", "rendered");
 
-    const stored = usePanelStore.getState().panelsById["md-1"] as MarkdownPanelData | undefined;
-    expect(stored?.markdownViewMode).toBe("source");
+    const stored = usePanelStore.getState().panelsById["file-1"] as FilePanelData | undefined;
+    expect(stored?.fileViewMode).toBe("rendered");
     expect(saveMock).toHaveBeenCalled();
   });
 
-  it("setMarkdownViewMode is a no-op when the mode is unchanged (default rendered)", () => {
-    seedMarkdownPanel({ markdownViewMode: undefined });
-    const before = usePanelStore.getState().panelsById["md-1"];
+  it("setFileViewMode is a no-op when the mode is unchanged (default source)", () => {
+    seedFilePanel({ fileViewMode: undefined });
+    const before = usePanelStore.getState().panelsById["file-1"];
 
-    usePanelStore.getState().setMarkdownViewMode("md-1", "rendered");
+    usePanelStore.getState().setFileViewMode("file-1", "source");
 
-    expect(usePanelStore.getState().panelsById["md-1"]).toBe(before);
+    expect(usePanelStore.getState().panelsById["file-1"]).toBe(before);
     expect(saveMock).not.toHaveBeenCalled();
   });
 
-  it("setMarkdownFilePath swaps the file and triggers persistence", () => {
-    seedMarkdownPanel();
+  it("setFilePanelPath swaps the file and triggers persistence", () => {
+    seedFilePanel();
 
-    usePanelStore.getState().setMarkdownFilePath("md-1", "/repo/README.md");
+    usePanelStore.getState().setFilePanelPath("file-1", "/repo/README.md");
 
-    const stored = usePanelStore.getState().panelsById["md-1"] as MarkdownPanelData | undefined;
-    expect(stored?.markdownFilePath).toBe("/repo/README.md");
+    const stored = usePanelStore.getState().panelsById["file-1"] as FilePanelData | undefined;
+    expect(stored?.filePath).toBe("/repo/README.md");
     expect(saveMock).toHaveBeenCalled();
   });
 
-  it("both setters refuse to touch non-markdown panels", () => {
+  it("both setters refuse to touch non-file panels", () => {
     usePanelStore.setState({
       panelsById: {
         "term-1": {
@@ -142,8 +142,8 @@ describe("markdown panel state setters", () => {
     });
     const before = usePanelStore.getState().panelsById["term-1"];
 
-    usePanelStore.getState().setMarkdownViewMode("term-1", "source");
-    usePanelStore.getState().setMarkdownFilePath("term-1", "/repo/README.md");
+    usePanelStore.getState().setFileViewMode("term-1", "rendered");
+    usePanelStore.getState().setFilePanelPath("term-1", "/repo/README.md");
 
     expect(usePanelStore.getState().panelsById["term-1"]).toBe(before);
     expect(saveMock).not.toHaveBeenCalled();

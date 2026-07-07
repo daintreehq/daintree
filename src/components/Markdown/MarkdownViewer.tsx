@@ -1,11 +1,11 @@
 import { forwardRef, lazy, Suspense, useImperativeHandle, useRef } from "react";
-import type { MarkdownViewMode } from "@shared/types/panel";
+import type { FileViewMode } from "@shared/types/panel";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
 
 // The rendered document pulls react-markdown + remark-gfm; keep that weight
-// out of the first-paint chunk (MarkdownPane is a firstRenderRestore seed).
+// out of the first-paint chunk (FilePane is a firstRenderRestore seed).
 const LazyMarkdownDocument = lazy(() =>
   import("./MarkdownDocument").then((m) => ({ default: m.MarkdownDocument }))
 );
@@ -21,9 +21,11 @@ export interface MarkdownViewerProps {
   filePath: string;
   /** Containment root for image loads and relative links */
   rootPath: string;
-  viewMode: MarkdownViewMode;
+  viewMode: FileViewMode;
   /** Source-mode only: line to scroll to and highlight */
   initialLine?: number;
+  /** Source-mode only: soft-wrap long lines */
+  wrapLines?: boolean;
   className?: string;
 }
 
@@ -33,7 +35,10 @@ export interface MarkdownViewerProps {
  * component, so the two surfaces can't drift.
  */
 export const MarkdownViewer = forwardRef<MarkdownViewerHandle, MarkdownViewerProps>(
-  function MarkdownViewer({ content, filePath, rootPath, viewMode, initialLine, className }, ref) {
+  function MarkdownViewer(
+    { content, filePath, rootPath, viewMode, initialLine, wrapLines, className },
+    ref
+  ) {
     const codeViewerRef = useRef<CodeViewerHandle>(null);
 
     useImperativeHandle(
@@ -51,6 +56,7 @@ export const MarkdownViewer = forwardRef<MarkdownViewerHandle, MarkdownViewerPro
           content={content}
           filePath={filePath}
           initialLine={initialLine}
+          wrapLines={wrapLines}
           className={cn("min-h-[300px]", className)}
         />
       );

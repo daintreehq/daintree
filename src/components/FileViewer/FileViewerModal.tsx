@@ -175,8 +175,7 @@ export function FileViewerModal({
     if (isImageFile(filePath)) return "view";
     if (defaultMode) return defaultMode;
     if (hasDiff && !initialLine) return "diff";
-    // Markdown reads rendered by default; an explicit line target implies source.
-    if (isMarkdownFilePath(filePath) && !initialLine) return "rendered";
+    // Markdown also opens as source; Rendered is an explicit step.
     return "view";
   });
   const [content, setContent] = useState<string | null>(null);
@@ -190,6 +189,8 @@ export function FileViewerModal({
   const setDiffWrapLines = usePreferencesStore((s) => s.setDiffWrapLines);
   const diffIgnoreWhitespace = usePreferencesStore((s) => s.diffIgnoreWhitespace);
   const setDiffIgnoreWhitespace = usePreferencesStore((s) => s.setDiffIgnoreWhitespace);
+  const markdownWrapLines = usePreferencesStore((s) => s.markdownWrapLines);
+  const setMarkdownWrapLines = usePreferencesStore((s) => s.setMarkdownWrapLines);
   const [diffCopied, setDiffCopied] = useState(false);
   const [pathCopied, setPathCopied] = useState(false);
   const [sanitizedSvg, setSanitizedSvg] = useState<string | null>(null);
@@ -258,9 +259,7 @@ export function FileViewerModal({
       currentHunkIndexRef.current = -1;
       setSearchOpen(false);
       setSearchQuery("");
-      const nextMode =
-        defaultMode ??
-        (hasDiff && !initialLine ? "diff" : markdownFile && !initialLine ? "rendered" : "view");
+      const nextMode = defaultMode ?? (hasDiff && !initialLine ? "diff" : "view");
       setMode(nextMode);
       return;
     }
@@ -363,13 +362,18 @@ export function FileViewerModal({
   const handleOpenAsPanel = useCallback(() => {
     actionService
       .dispatch(
-        "markdown.openPanel",
-        { path: filePath, rootPath: effectiveRootPath },
+        "file.openPanel",
+        {
+          path: filePath,
+          rootPath: effectiveRootPath,
+          // Carry the mode the user is already reading in into the panel.
+          ...(markdownFile && { viewMode: mode === "rendered" ? "rendered" : "source" }),
+        },
         { source: "user" }
       )
       .catch((err) => logError("[FileViewerModal] openAsPanel failed", err));
     onClose();
-  }, [filePath, effectiveRootPath, onClose]);
+  }, [filePath, effectiveRootPath, markdownFile, mode, onClose]);
 
   const handleCopyDiff = useCallback(async () => {
     if (!hasDiff || !diff) return;
@@ -836,14 +840,14 @@ export function FileViewerModal({
           {(hasDiff || markdownFile) && !imageFile && (canShowView || loadState !== "loading") && (
             <SegmentedToggle
               options={[
-                ...(markdownFile
-                  ? [{ value: "rendered" as ViewMode, label: "Rendered", disabled: !canShowView }]
-                  : []),
                 {
                   value: "view" as ViewMode,
                   label: markdownFile ? "Source" : "View",
                   disabled: !canShowView,
                 },
+                ...(markdownFile
+                  ? [{ value: "rendered" as ViewMode, label: "Rendered", disabled: !canShowView }]
+                  : []),
                 ...(hasDiff ? [{ value: "diff" as ViewMode, label: "Diff" }] : []),
               ]}
               value={mode}
@@ -891,7 +895,7 @@ export function FileViewerModal({
             </Tooltip>
           )}
 
-          {markdownFile && (
+          {!imageFile && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
@@ -1026,6 +1030,7 @@ export function FileViewerModal({
                       content={content}
                       filePath={filePath}
                       initialLine={initialLine}
+                      wrapLines={markdownFile && markdownWrapLines}
                       className="min-h-[300px]"
                     />
                   </>
@@ -1164,7 +1169,7 @@ export function FileViewerModal({
       {/* Slim footer toolbar: navigation + diff display controls (Kaleidoscope-
           style bottom stepper). Rendered whenever there's something to put in
           it — file stepping in either mode, diff controls in diff mode. */}
-      {(canStepFiles || (mode === "diff" && hasDiff)) && (
+      {(canStepFiles || (mode === "diff" && hasDiff) || (markdownFile && mode === "view")) && (
         <div className="flex items-center justify-between gap-3 px-4 py-1.5 border-t border-border-strong bg-surface-panel shrink-0">
           <div className="flex items-center gap-1 min-w-0">
             {canStepFiles && (
@@ -1249,6 +1254,15 @@ export function FileViewerModal({
           )}
 
           <div className="flex items-center gap-2">
+            {markdownFile && mode === "view" && (
+              <IconToggle
+                pressed={markdownWrapLines}
+                label="Wrap long lines"
+                onToggle={() => setMarkdownWrapLines(!markdownWrapLines)}
+              >
+                <WrapText className="w-4 h-4" />
+              </IconToggle>
+            )}
             {mode === "diff" && hasDiff && (
               <>
                 <IconToggle

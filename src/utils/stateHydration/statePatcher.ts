@@ -1,7 +1,7 @@
 import type { PanelKind, AgentState } from "@/types";
 import { coerceAgentState, coerceWaitingReason, type WaitingReason } from "@shared/types/agent";
 import type { BrowserHistory } from "@shared/types/browser";
-import type { MarkdownViewMode, PanelExitBehavior, PanelTitleMode } from "@shared/types/panel";
+import type { FileViewMode, PanelExitBehavior, PanelTitleMode } from "@shared/types/panel";
 import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import { getAgentConfig, sanitizeAgentEnv } from "@/config/agents";
@@ -48,8 +48,8 @@ export interface AddTerminalArgs extends AddPanelOptionsBase {
   viewportDpr?: 1 | 2 | 3;
   viewportFit?: boolean;
   devPreviewScrollPosition?: { url: string; scrollY: number };
-  markdownFilePath?: string;
-  markdownViewMode?: MarkdownViewMode;
+  filePath?: string;
+  fileViewMode?: FileViewMode;
   /**
    * Preserved user-initiated focus timestamp from the saved snapshot. The
    * post-hydration focus picker in `useAppHydration` reads this off
@@ -91,8 +91,12 @@ export interface SavedTerminalData {
   viewportDpr?: 1 | 2 | 3;
   viewportFit?: boolean;
   devPreviewScrollPosition?: { url: string; scrollY: number };
+  filePath?: string;
+  /** Untrusted on-disk string — sanitized to FileViewMode at the deserializer boundary. */
+  fileViewMode?: string;
+  /** Legacy pre-file-panel field name for filePath. */
   markdownFilePath?: string;
-  /** Untrusted on-disk string — sanitized to MarkdownViewMode at the deserializer boundary. */
+  /** Legacy pre-file-panel field name for fileViewMode (untrusted on-disk string). */
   markdownViewMode?: string;
   exitBehavior?: PanelExitBehavior;
   agentSessionId?: string;

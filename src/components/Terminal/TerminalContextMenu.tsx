@@ -13,7 +13,7 @@ import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import {
   isBrowserPanel,
   isDevPreviewPanel,
-  isMarkdownPanel,
+  isFilePanel,
   isPtyPanel,
   isReviewPanel,
 } from "@shared/types/panel";
@@ -498,7 +498,7 @@ export function TerminalContextMenu({
   const isBrowser = isBrowserPanel(terminal);
   const isDevPreview = isDevPreviewPanel(terminal);
   const isReview = isReviewPanel(terminal);
-  const isMarkdown = isMarkdownPanel(terminal);
+  const isFile = isFilePanel(terminal);
   const hasPty = terminal.kind ? panelKindHasPty(terminal.kind) : true;
 
   const layoutSection = (
@@ -723,7 +723,7 @@ export function TerminalContextMenu({
     );
   }
 
-  if (isMarkdown) {
+  if (isFile) {
     return (
       <ContextMenu>
         <MenuActionSourceContext.Consumer>
