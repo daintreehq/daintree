@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { m } from "framer-motion";
@@ -6,6 +7,7 @@ import { UI_ANIMATION_DURATION, DRAG_GHOST_OPACITY, DRAG_GHOST_EASING } from "@/
 import type { PanelInstance } from "@shared/types/panel";
 import type { DragData } from "./DndProvider";
 import { DragHandleProvider } from "./DragHandleContext";
+import { useDockPanelDragHandleRegistration } from "@/components/Layout/dockPanelPortalContext";
 
 interface SortableDockItemProps {
   terminal: PanelInstance;
@@ -65,6 +67,20 @@ export function SortableDockItem({
     const overMid = over.rect.left + over.rect.width / 2;
     dropDirection = draggedMid < overMid ? "before" : "after";
   }
+
+  // Publish this dock item's drag handle so the portaled panel body (a React
+  // sibling rendered by DockPanelOffscreenContainer, out of this provider's
+  // subtree) can make its PanelHeader a drag handle too — grid parity (#10990).
+  // Register under every group member id so whichever tab is active resolves the
+  // group's shared handle; fall back to the panel's own id for a single item.
+  // Keyed on the joined id string (a primitive) rather than the array reference,
+  // so a fresh `groupPanelIds` array on an unrelated render doesn't re-fire this.
+  const registerDragHandle = useDockPanelDragHandleRegistration();
+  const dragHandleIdKey = groupPanelIds?.join(",");
+  useEffect(() => {
+    const ids = dragHandleIdKey ? dragHandleIdKey.split(",") : [terminal.id];
+    return registerDragHandle(ids, { listeners, setActivatorNodeRef });
+  }, [registerDragHandle, terminal.id, dragHandleIdKey, listeners, setActivatorNodeRef]);
 
   const style = {
     transform: CSS.Transform.toString(transform),

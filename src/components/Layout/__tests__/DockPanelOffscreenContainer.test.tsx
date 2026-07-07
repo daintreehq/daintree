@@ -32,11 +32,25 @@ vi.mock("@/store/helpPanelStore", () => ({
     selector({ terminalId: null }),
 }));
 
-vi.mock("@/components/Terminal/DockedPanel", () => ({
-  DockedPanel: ({ terminal }: { terminal: PtyPanelData }) => (
-    <div data-testid="docked-panel" data-pid={terminal.id} />
-  ),
-}));
+// Mock the panel body but keep it a REAL consumer of DragHandleContext, so the
+// bridge tests below prove the drag handle actually crosses the createPortal
+// boundary (#10990) rather than asserting against a mocked hook.
+vi.mock("@/components/Terminal/DockedPanel", async () => {
+  const { useDragHandle } = await import("@/components/DragDrop/DragHandleContext");
+  return {
+    DockedPanel: ({ terminal }: { terminal: PtyPanelData }) => {
+      const dragHandle = useDragHandle();
+      return (
+        <div
+          data-testid="docked-panel"
+          data-pid={terminal.id}
+          data-has-listeners={dragHandle?.listeners ? "true" : "false"}
+          data-has-activator={dragHandle?.setActivatorNodeRef ? "true" : "false"}
+        />
+      );
+    },
+  };
+});
 
 vi.mock("@/services/terminal/panelDuplicationService", () => ({
   buildPanelDuplicateOptions: vi.fn(),
@@ -52,7 +66,11 @@ vi.mock("@/components/ui/DockPopoverChildContext", () => ({
 }));
 
 import { DockPanelOffscreenContainer } from "../DockPanelOffscreenContainer";
-import { useDockPanelPortal } from "../dockPanelPortalContext";
+import {
+  useDockPanelPortal,
+  useDockPanelDragHandleRegistration,
+  type DockPanelContextValue,
+} from "../dockPanelPortalContext";
 
 function makePanel(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -86,6 +104,12 @@ function setPanels(panels: PtyPanelData[]) {
 let captured: ((panelId: string, destination: HTMLElement | null) => void) | null = null;
 function Capture() {
   captured = useDockPanelPortal();
+  return null;
+}
+
+let capturedRegister: DockPanelContextValue["registerDragHandle"] | null = null;
+function CaptureRegister() {
+  capturedRegister = useDockPanelDragHandleRegistration();
   return null;
 }
 
@@ -202,5 +226,107 @@ describe("DockPanelOffscreenContainer stable-wrapper relocation (#9927)", () => 
     act(() => captured!("panel-1", target));
     expect(moveBefore).not.toHaveBeenCalled();
     expect(wrapper.parentElement).toBe(target);
+  });
+});
+
+describe("DockPanelOffscreenContainer drag-handle bridge (#10990)", () => {
+  beforeEach(() => {
+    closeDockTerminalMock.mockClear();
+    setPanels([makePanel({ id: "panel-1" })]);
+    capturedRegister = null;
+  });
+
+  function renderWithRegister() {
+    capturedRegister = null;
+    return render(
+      <DockPanelOffscreenContainer>
+        <CaptureRegister />
+      </DockPanelOffscreenContainer>
+    );
+  }
+
+  it("re-provides the registered handle to the active dock panel's portaled body", () => {
+    mockState.activeDockTerminalId = "panel-1";
+    renderWithRegister();
+
+    // Before any registration the portaled body sees the empty handle.
+    const before = document.querySelector('[data-testid="docked-panel"]')!;
+    expect(before.getAttribute("data-has-listeners")).toBe("false");
+    expect(before.getAttribute("data-has-activator")).toBe("false");
+
+    const handle = {
+      listeners: { onPointerDown: vi.fn(), onKeyDown: vi.fn() },
+      setActivatorNodeRef: vi.fn(),
+    };
+    act(() => {
+      capturedRegister!(["panel-1"], handle);
+    });
+
+    // The portaled body now receives the live listeners + keyboard activator —
+    // grid parity across the createPortal boundary.
+    const after = document.querySelector('[data-testid="docked-panel"]')!;
+    expect(after.getAttribute("data-has-listeners")).toBe("true");
+    expect(after.getAttribute("data-has-activator")).toBe("true");
+  });
+
+  it("does NOT provide the handle to a parked (non-active) dock panel", () => {
+    mockState.activeDockTerminalId = null; // no popover open
+    renderWithRegister();
+
+    const handle = {
+      listeners: { onPointerDown: vi.fn() },
+      setActivatorNodeRef: vi.fn(),
+    };
+    act(() => {
+      capturedRegister!(["panel-1"], handle);
+    });
+
+    // Registered, but gated off because the panel is not the active dock panel:
+    // its offscreen header must not become a stray drag/tab target.
+    const panel = document.querySelector('[data-testid="docked-panel"]')!;
+    expect(panel.getAttribute("data-has-listeners")).toBe("false");
+    expect(panel.getAttribute("data-has-activator")).toBe("false");
+  });
+
+  it("resolves a group member id to the group's shared handle when that member is active", () => {
+    // Two panels; only panel-1 is rendered by this container in the single-panel
+    // fixture, so register the group handle under both member ids and make
+    // panel-1 active — it must resolve the shared handle.
+    mockState.activeDockTerminalId = "panel-1";
+    renderWithRegister();
+
+    const groupHandle = {
+      listeners: { onPointerDown: vi.fn(), onKeyDown: vi.fn() },
+      setActivatorNodeRef: vi.fn(),
+    };
+    act(() => {
+      capturedRegister!(["panel-0", "panel-1"], groupHandle);
+    });
+
+    const panel = document.querySelector('[data-testid="docked-panel"]')!;
+    expect(panel.getAttribute("data-has-listeners")).toBe("true");
+  });
+
+  it("a stale disposer does not clear a newer registration for the same id", () => {
+    mockState.activeDockTerminalId = "panel-1";
+    renderWithRegister();
+
+    const first = { listeners: { onPointerDown: vi.fn() }, setActivatorNodeRef: vi.fn() };
+    const second = { listeners: { onPointerDown: vi.fn() }, setActivatorNodeRef: vi.fn() };
+
+    let disposeFirst!: () => void;
+    act(() => {
+      disposeFirst = capturedRegister!(["panel-1"], first);
+    });
+    act(() => {
+      capturedRegister!(["panel-1"], second);
+    });
+    // `second` now owns the id; the first disposer must be a no-op.
+    act(() => {
+      disposeFirst();
+    });
+
+    const panel = document.querySelector('[data-testid="docked-panel"]')!;
+    expect(panel.getAttribute("data-has-listeners")).toBe("true");
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useCallback, useState, useRef } from "react";
+import { useEffect, useLayoutEffect, useCallback, useMemo, useState, useRef } from "react";
 import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
@@ -9,7 +9,21 @@ import { DockedPanel } from "@/components/Terminal/DockedPanel";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { logError } from "@/utils/logger";
 import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
+import {
+  DragHandleProvider,
+  type DragHandleContextValue,
+} from "@/components/DragDrop/DragHandleContext";
 import { DockPanelContext, type DockPanelContextValue } from "./dockPanelPortalContext";
+
+// Stable "no drag handle" value. The portaled dock panel body is ALWAYS wrapped
+// in a DragHandleProvider (so the provider element type never toggles and the
+// xterm-hosting subtree never remounts); parked/inactive panels receive this
+// shared empty value so their PanelHeader renders exactly as before — no
+// listeners, no keyboard activator, no spurious tab stop.
+const EMPTY_DRAG_HANDLE: DragHandleContextValue = {
+  listeners: undefined,
+  setActivatorNodeRef: undefined,
+};
 
 interface DockPanelOffscreenContainerProps {
   children: React.ReactNode;
@@ -26,6 +40,35 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
   // Mirror into state so JSX doesn't read the ref during render (React Compiler).
   // The ref remains the authoritative source; state snapshots it for render.
   const [wrappers, setWrappers] = useState<Map<string, HTMLElement>>(() => new Map());
+
+  // Drag-handle bridge (#10990). SortableDockItem publishes its dnd-kit handle
+  // here (keyed by panel id, or every member id for a group) so the portaled
+  // panel body — a React sibling of the sortable — can consume it. Same ref +
+  // state-snapshot shape as `wrappers` above: the ref is authoritative, state
+  // snapshots it so render never reads the ref. Registration happens once per
+  // dock item mount (dnd-kit's listeners/setActivatorNodeRef are referentially
+  // stable), so this does not re-render on drag frames.
+  const dragHandlesRef = useRef<Map<string, DragHandleContextValue>>(new Map());
+  const [dragHandles, setDragHandles] = useState<Map<string, DragHandleContextValue>>(
+    () => new Map()
+  );
+
+  const registerDragHandle = useCallback((panelIds: string[], handle: DragHandleContextValue) => {
+    for (const id of panelIds) dragHandlesRef.current.set(id, handle);
+    setDragHandles(new Map(dragHandlesRef.current));
+    return () => {
+      let changed = false;
+      for (const id of panelIds) {
+        // Only clear our own entry — a newer registration for the same id
+        // (e.g. a remounted chip) must win over this stale disposer.
+        if (dragHandlesRef.current.get(id) === handle) {
+          dragHandlesRef.current.delete(id);
+          changed = true;
+        }
+      }
+      if (changed) setDragHandles(new Map(dragHandlesRef.current));
+    };
+  }, []);
 
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
@@ -205,9 +248,13 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
     }
   }, []);
 
-  const contextValue: DockPanelContextValue = {
-    moveToDestination,
-  };
+  // Both callbacks are referentially stable, so the context value stays stable
+  // across renders — consumers (SortableDockItem, dock chips) never re-run their
+  // effects just because this container re-rendered.
+  const contextValue = useMemo<DockPanelContextValue>(
+    () => ({ moveToDestination, registerDragHandle }),
+    [moveToDestination, registerDragHandle]
+  );
 
   return (
     <DockPanelContext.Provider value={contextValue}>
@@ -253,6 +300,19 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
         const existingGroup = getPanelGroup(terminal.id);
         const isSinglePanel = !existingGroup || existingGroup.panelIds.length <= 1;
 
+        // Re-provide the dock sortable's drag handle across the portal boundary
+        // (#10990) so this panel's PanelHeader becomes a drag handle, matching
+        // the grid. Gate on the active dock panel: only the one open popover's
+        // header receives live listeners + the keyboard activator ref, so parked
+        // headers never claim a group's shared setActivatorNodeRef and no
+        // offscreen header becomes a stray drag/tab target. The provider is
+        // ALWAYS present (empty value when inactive) so its element type never
+        // toggles — the xterm-hosting DockedPanel subtree is never remounted.
+        const bridgedDragHandle =
+          terminal.id === activeDockTerminalId
+            ? (dragHandles.get(terminal.id) ?? EMPTY_DRAG_HANDLE)
+            : EMPTY_DRAG_HANDLE;
+
         // Wrap the portaled panel body in DockPopoverChildProvider so any
         // Radix overlay opened from inside the docked panel (e.g.
         // TerminalContextMenu via ContentPanel, panel header dropdowns,
@@ -262,27 +322,29 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
         // item — see #8161.
         const content = (
           <DockPopoverChildProvider>
-            <div
-              data-dock-panel-id={terminal.id}
-              className="dock-panel-slot"
-              style={{
-                width: "100%",
-                height: "100%",
-                display: "flex",
-                flexDirection: "column",
-              }}
-            >
-              <DockedPanel
-                terminal={terminal}
-                onPopoverClose={handlePopoverClose}
-                onAddTab={
-                  isSinglePanel && canDuplicatePanelKind(terminal.kind)
-                    ? () => handleAddTabForPanel(terminal)
-                    : undefined
-                }
-                showRestoreControl={isSinglePanel}
-              />
-            </div>
+            <DragHandleProvider value={bridgedDragHandle}>
+              <div
+                data-dock-panel-id={terminal.id}
+                className="dock-panel-slot"
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  display: "flex",
+                  flexDirection: "column",
+                }}
+              >
+                <DockedPanel
+                  terminal={terminal}
+                  onPopoverClose={handlePopoverClose}
+                  onAddTab={
+                    isSinglePanel && canDuplicatePanelKind(terminal.kind)
+                      ? () => handleAddTabForPanel(terminal)
+                      : undefined
+                  }
+                  showRestoreControl={isSinglePanel}
+                />
+              </div>
+            </DragHandleProvider>
           </DockPopoverChildProvider>
         );
 
