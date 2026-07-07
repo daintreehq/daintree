@@ -87,6 +87,17 @@ export class WorkspaceHostPool {
   readonly windowToProject = new Map<number, string>();
   readonly worktreePathToProject = new Map<string, string>();
 
+  /**
+   * Monotonic per-window `loadProject` request sequence — makes the mapping
+   * "last requested wins" instead of "last completion wins". The switch IPC
+   * handler starts the git load concurrently with the view swap, so two rapid
+   * switches (A→B→C) can have loads in flight at once; without this, a slow
+   * cold host for the superseded B could complete after C and flip
+   * `windowToProject` back to B while the window displays C, routing B's
+   * worktree events into C's view.
+   */
+  private windowLoadSeq = new Map<number, number>();
+
   private logLevelOverridesCache: Record<string, string> = readPersistedLogOverrides();
 
   /** Last GitHub fetch-throttle multiplier relayed from main — seeded into
@@ -209,6 +220,10 @@ export class WorkspaceHostPool {
 
   async loadProject(rootPath: string, windowId: number): Promise<void> {
     const normalizedPath = this.normalizeProjectPath(rootPath);
+    const seq = (this.windowLoadSeq.get(windowId) ?? 0) + 1;
+    this.windowLoadSeq.set(windowId, seq);
+    const isStale = () => this.windowLoadSeq.get(windowId) !== seq;
+
     const oldProjectPath = this.windowToProject.get(windowId);
     const isSwitching = oldProjectPath !== undefined && oldProjectPath !== normalizedPath;
 
@@ -218,6 +233,10 @@ export class WorkspaceHostPool {
         () => false,
         () => true
       );
+      // Superseded while waiting on the entry's readiness — the newer request
+      // owns the mapping and all attachment bookkeeping (including disposing a
+      // ready-failed entry, which it detects itself on the same code path).
+      if (isStale()) return;
       if (isReadyFailed) {
         existingEntry.host.dispose();
         this.entries.delete(normalizedPath);
@@ -286,6 +305,26 @@ export class WorkspaceHostPool {
         newEntry.host.dispose();
       }
       throw error;
+    }
+
+    if (isStale()) {
+      // Superseded while the host was spawning. Keep the now-warm host for a
+      // future switch-back, but undo this window's attachment and leave the
+      // mapping to the newer request. Skip the undo when the winning request
+      // landed on this same project — it re-owns the existing attachment
+      // rather than adding its own, so releasing here would strand it.
+      if (
+        this.entries.get(normalizedPath) === newEntry &&
+        this.windowToProject.get(windowId) !== normalizedPath
+      ) {
+        newEntry.windowIds.delete(windowId);
+        newEntry.refCount--;
+        if (newEntry.refCount <= 0) {
+          newEntry.host.send({ type: "background" });
+          this.scheduleDormantCleanup(normalizedPath, newEntry);
+        }
+      }
+      return;
     }
 
     this.windowToProject.set(windowId, normalizedPath);
@@ -357,6 +396,10 @@ export class WorkspaceHostPool {
   }
 
   releaseWindow(windowId: number): void {
+    // Invalidate any in-flight loadProject for this window so a late
+    // completion can't resurrect the mapping after the window released it.
+    this.windowLoadSeq.delete(windowId);
+
     const projectPath = this.windowToProject.get(windowId);
     if (!projectPath) return;
 
@@ -637,5 +680,6 @@ export class WorkspaceHostPool {
     this.entries.clear();
     this.windowToProject.clear();
     this.worktreePathToProject.clear();
+    this.windowLoadSeq.clear();
   }
 }

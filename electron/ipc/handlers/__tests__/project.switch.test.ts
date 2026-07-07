@@ -719,6 +719,182 @@ describe("project:switch worktree-load-status (#8400)", () => {
   });
 });
 
+describe("project:switch concurrent worktree load", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function setup(opts: {
+    switchTo: () => Promise<{ view: unknown; isNew: boolean }>;
+    loadProject?: () => Promise<void>;
+    previousProject?: { id: string; name: string; path: string } | null;
+  }) {
+    const pvm = {
+      switchTo: vi.fn(opts.switchTo),
+      getProjectIdForWebContents: vi.fn(),
+    };
+
+    mockGetWindowForWebContents.mockReturnValue({ id: 7, isDestroyed: () => false });
+
+    const previous =
+      opts.previousProject === undefined
+        ? { id: "proj-old", name: "Old Project", path: "/projects/old" }
+        : opts.previousProject;
+    projectStoreMock.getCurrentProjectId.mockReturnValue(previous?.id ?? null);
+    projectStoreMock.getProjectById.mockImplementation((id: string) => {
+      if (id === "proj-new") {
+        return { id: "proj-new", name: "New Project", path: "/projects/new" };
+      }
+      if (previous && id === previous.id) return previous;
+      return null;
+    });
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+
+    const worktreeService = {
+      loadProject: vi.fn(opts.loadProject ?? (async () => undefined)),
+      attachDirectPort: vi.fn(),
+      getHostForProject: vi.fn(() => null),
+      resumeProject: vi.fn(),
+      pauseProject: vi.fn(),
+      unregisterWindow: vi.fn(),
+    };
+
+    const deps = {
+      mainWindow: { id: 7 } as unknown,
+      projectViewManager: pvm,
+      worktreeService: worktreeService as never,
+    } as unknown as HandlerDependencies;
+
+    registerProjectCrudHandlers(deps);
+
+    const handleMap = new Map<string, (...args: unknown[]) => unknown>();
+    for (const call of (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls) {
+      handleMap.set(call[0] as string, call[1] as (...args: unknown[]) => unknown);
+    }
+
+    const invoke = () =>
+      handleMap.get(CHANNELS.PROJECT_SWITCH)!({ sender: { id: 300 } }, "proj-new");
+
+    return { invoke, pvm, worktreeService };
+  }
+
+  it("starts the worktree git load before the view swap resolves", async () => {
+    let resolveSwap: (v: { view: unknown; isNew: boolean }) => void = () => {};
+    const swapGate = new Promise<{ view: unknown; isNew: boolean }>((resolve) => {
+      resolveSwap = resolve;
+    });
+    const { invoke, worktreeService } = setup({ switchTo: () => swapGate });
+
+    const handlerPromise = invoke();
+
+    // The load must be in flight while the swap still is — running them
+    // serially re-adds the full host-spawn + git-enumeration time (hundreds of
+    // ms on a cold host) to every switch's resolve time.
+    await vi.waitFor(() => expect(worktreeService.loadProject).toHaveBeenCalled());
+    expect(worktreeService.loadProject).toHaveBeenCalledWith("/projects/new", 7);
+    expect(worktreeService.resumeProject).toHaveBeenCalledWith("/projects/new");
+
+    resolveSwap({
+      view: { webContents: { id: 300, isDestroyed: () => false, send: vi.fn() } },
+      isNew: false,
+    });
+    await handlerPromise;
+  });
+
+  it("re-points the worktree mapping at the previous project when the swap fails", async () => {
+    const { invoke, worktreeService } = setup({
+      switchTo: async () => {
+        throw new Error("load timeout");
+      },
+    });
+
+    await expect(invoke()).rejects.toThrow("load timeout");
+
+    // The early load already flipped windowToProject to the failed target while
+    // the previous view stays visible — exactly the cross-project contamination
+    // loadProject exists to prevent. The handler must restore the mapping.
+    await vi.waitFor(() =>
+      expect(worktreeService.loadProject).toHaveBeenCalledWith("/projects/old", 7)
+    );
+  });
+
+  it("releases the window mapping when the swap fails with no previous project", async () => {
+    const { invoke, worktreeService } = setup({
+      switchTo: async () => {
+        throw new Error("load timeout");
+      },
+      previousProject: null,
+    });
+
+    await expect(invoke()).rejects.toThrow("load timeout");
+
+    // First switch from the welcome view: there is nothing to restore, so the
+    // early load's attachment (and windowToProject mapping) must be released —
+    // pausing alone would leave the window routed at the failed target.
+    await vi.waitFor(() => expect(worktreeService.unregisterWindow).toHaveBeenCalledWith(7));
+    // With nothing to restore, the mapping must not be re-loaded anywhere else.
+    expect(worktreeService.loadProject).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the failure restore when a newer switch claimed the window meanwhile", async () => {
+    let rejectSwap: (err: Error) => void = () => {};
+    const failingSwap = new Promise<{ view: unknown; isNew: boolean }>((_resolve, reject) => {
+      rejectSwap = reject;
+    });
+    let call = 0;
+    const { invoke, worktreeService } = setup({
+      switchTo: () => {
+        call++;
+        if (call === 1) return failingSwap;
+        return Promise.resolve({
+          view: { webContents: { id: 300, isDestroyed: () => false, send: vi.fn() } },
+          isNew: false,
+        });
+      },
+    });
+
+    const first = invoke();
+    // Let the first handler reach its awaited swap before the second starts.
+    await vi.waitFor(() => expect(worktreeService.loadProject).toHaveBeenCalledTimes(1));
+
+    // A second switch claims the window (bumps the epoch) and completes.
+    await invoke();
+
+    // Now the first swap fails. Its deferred restore must see the stale epoch
+    // and do nothing — re-loading the old project here would clobber the
+    // mapping the second switch just established.
+    rejectSwap(new Error("load timeout"));
+    await expect(first).rejects.toThrow("load timeout");
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(worktreeService.loadProject).not.toHaveBeenCalledWith("/projects/old", 7);
+    expect(worktreeService.unregisterWindow).not.toHaveBeenCalled();
+  });
+
+  it("does not surface a worktree load failure through a successful swap", async () => {
+    const sendMock = vi.fn();
+    const { invoke } = setup({
+      switchTo: async () => ({
+        view: { webContents: { id: 300, isDestroyed: () => false, send: sendMock } },
+        isNew: false,
+      }),
+      loadProject: async () => {
+        throw new Error("Not a git repository");
+      },
+    });
+
+    // Forward-fail (#8400): the load rejection — even though it now starts
+    // before the swap — must resolve the switch and surface as the targeted
+    // worktree-load-status, not reject the handler.
+    await invoke();
+
+    expect(sendMock).toHaveBeenCalledWith(CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, {
+      projectId: "proj-new",
+      worktreeLoadError: "Not a git repository",
+    });
+  });
+});
+
 describe("project:switch PROJECT_ON_SWITCH notification", () => {
   beforeEach(() => {
     vi.clearAllMocks();

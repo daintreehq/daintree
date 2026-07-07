@@ -165,6 +165,7 @@ export const CHANNELS = {
   APP_VIEW_PAINTED: "app:view-painted",
   APP_VIEW_WARM_PAINTED: "app:view-warm-painted",
   APP_VIEW_REVEALED: "app:view-revealed",
+  APP_VIEW_WARM_ACTIVATED: "app:view-warm-activated",
   APP_VIEW_CACHED: "app:view-cached",
   APP_DISMISS_ROSETTA_WARNING: "app:dismiss-rosetta-warning",
   MENU_ACTION: "menu:action",
