@@ -33,7 +33,12 @@ function normalizeSnapshot(snap: WorktreeSnapshot): WorktreeState {
 function buildDerivedMeta(
   worktree: WorktreeState,
   panelsById: ReturnType<typeof usePanelStore.getState>["panelsById"],
-  panelIds: ReturnType<typeof usePanelStore.getState>["panelIds"],
+  // This worktree's bucket from `panelIdsByWorktreeId` — iterating it instead
+  // of every panel keeps the per-worktree rollup O(own panels), matching
+  // `computePanelStateByWorktree` in sidebarPanelDerivation.ts. Bucket
+  // membership is equivalent to the previous `t.worktreeId === worktree.id`
+  // scan over all panel ids.
+  worktreePanelIds: readonly string[] | undefined,
   isInTrash: (id: string) => boolean,
   worktreeIds: Set<string>
 ): DerivedWorktreeMeta {
@@ -44,10 +49,9 @@ function buildDerivedMeta(
   let hasCompletedAgent = false;
   let hasExitedAgent = false;
 
-  for (const id of panelIds) {
+  for (const id of worktreePanelIds ?? []) {
     const t = panelsById[id];
-    if (!t || t.worktreeId !== worktree.id || !isTerminalVisible(t, isInTrash, worktreeIds))
-      continue;
+    if (!t || !isTerminalVisible(t, isInTrash, worktreeIds)) continue;
     terminalCount++;
     if (!isAgentTerminal(t)) continue;
     if (!isPtyPanel(t)) continue;
@@ -169,7 +173,7 @@ export function getVisibleWorktreesForCycling(
       buildDerivedMeta(
         worktree,
         panelState.panelsById,
-        panelState.panelIds,
+        panelState.panelIdsByWorktreeId[worktree.id],
         panelState.isInTrash,
         validWorktreeIds
       )

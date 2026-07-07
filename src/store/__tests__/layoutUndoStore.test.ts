@@ -385,6 +385,11 @@ describe("layoutUndoStore", () => {
     expect(state.activeDockTerminalId).toBe("t2");
     expect(state.tabGroups.size).toBe(1);
     expect(state.tabGroups.get("g1")?.panelIds).toEqual(["t1"]);
+    // The per-worktree index must follow the restored worktreeIds — sidebar
+    // summaries and worktree cycling read it, and a stale bucket would leave
+    // the terminals attributed to the pre-undo worktree.
+    expect(state.panelIdsByWorktreeId["w1"]).toEqual(["t1", "t2"]);
+    expect(state.panelIdsByWorktreeId["w2"]).toBeUndefined();
   });
 
   it("multi-step undo/redo traverses history correctly", () => {

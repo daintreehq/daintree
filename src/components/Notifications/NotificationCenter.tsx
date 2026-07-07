@@ -432,6 +432,17 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
 
   const totalChronoGroups = chronoSections.reduce((sum, s) => sum + s.groups.length, 0);
 
+  // Prefix sums for each section's starting row index — computed in one pass
+  // instead of re-summing all prior sections per section during render.
+  const chronoSectionOffsets: number[] = [];
+  {
+    let offset = 0;
+    for (const s of chronoSections) {
+      chronoSectionOffsets.push(offset);
+      offset += s.groups.length;
+    }
+  }
+
   const markIdsReadWithUndo = (requestedIds: string[], options: { resetLastClosed: boolean }) => {
     if (requestedIds.length === 0) return;
     // Re-filter against live store state so a rapid second click on a stale
@@ -1097,8 +1108,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                   key={section.key}
                   section={section}
                   indexOffset={
-                    needsAttentionGroups.length +
-                    chronoSections.slice(0, sectionIdx).reduce((sum, s) => sum + s.groups.length, 0)
+                    needsAttentionGroups.length + (chronoSectionOffsets[sectionIdx] ?? 0)
                   }
                   focusedIndex={focusedIndex}
                   setRowRef={setRowRef}

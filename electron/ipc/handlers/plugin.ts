@@ -30,7 +30,10 @@ import {
   fetchWithPrivateHostGuard,
   urlHasCredentials,
 } from "../../utils/pluginDownloadPolicy.js";
-import { isPrivateOrLoopbackHostname, SCOPED_PLUGIN_NAME_PATTERN } from "../../schemas/plugin.js";
+import {
+  isPrivateOrLoopbackHostname,
+  SCOPED_PLUGIN_NAME_PATTERN,
+} from "../../schemas/pluginIdentifiers.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { stableArgsSha256 } from "../../utils/pluginMcpHash.js";
 import { isAuditedHandlerFailure } from "../../utils/pluginAuditMarker.js";

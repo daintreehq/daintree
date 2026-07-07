@@ -92,6 +92,7 @@ beforeEach(() => {
   usePanelStore.setState({
     panelsById: {},
     panelIds: [],
+    panelIdsByWorktreeId: {},
   });
   resetFilterStore();
 });
@@ -183,6 +184,7 @@ describe("getVisibleWorktreesForCycling", () => {
         } as unknown as ReturnType<typeof usePanelStore.getState>["panelsById"][string],
       },
       panelIds: ["term-working"],
+      panelIdsByWorktreeId: { "wt-working": ["term-working"] },
     } as never);
 
     const ids = getVisibleWorktreesForCycling().map((w) => w.id);
@@ -325,6 +327,7 @@ describe("getVisibleWorktreesForCycling", () => {
         },
       } as unknown as ReturnType<typeof usePanelStore.getState>,
       panelIds: ["term-waiting"],
+      panelIdsByWorktreeId: { "wt-bg": ["term-waiting"] },
     } as never);
     const ids = getVisibleWorktreesForCycling().map((w) => w.id);
     expect(ids).not.toContain("wt-bg");
@@ -350,6 +353,7 @@ describe("getVisibleWorktreesForCycling", () => {
         },
       } as unknown as ReturnType<typeof usePanelStore.getState>,
       panelIds: ["term-waiting"],
+      panelIdsByWorktreeId: { "wt-eph": ["term-waiting"] },
     } as never);
     const ids = getVisibleWorktreesForCycling().map((w) => w.id);
     expect(ids).not.toContain("wt-eph");
@@ -412,6 +416,7 @@ describe("getVisibleWorktreesForCycling", () => {
         },
       } as unknown as ReturnType<typeof usePanelStore.getState>,
       panelIds: ["term-plain"],
+      panelIdsByWorktreeId: { "wt-shell": ["term-plain"] },
     } as never);
     const ids = getVisibleWorktreesForCycling().map((w) => w.id);
     expect(ids).not.toContain("wt-shell");

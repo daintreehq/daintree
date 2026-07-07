@@ -1,6 +1,5 @@
 // eager-import-allow: reads/writes the git-operation lock via sync fs
-import { existsSync } from "fs";
-import { join as pathJoin } from "path";
+import { readdirSync } from "fs";
 import type { RepoState } from "../../shared/types/git.js";
 
 /**
@@ -21,25 +20,34 @@ export const OPERATION_SENTINEL_NAMES = [
 ] as const;
 
 /**
+ * List `gitDir`'s entries once so sentinel checks cost a single syscall
+ * instead of one `existsSync` per sentinel — these run in front of every
+ * status poll for every worktree, where the per-poll fast path is otherwise
+ * a handful of async stats.
+ *
+ * Returns null on filesystem errors (e.g. EPERM) so callers fail open — if we
+ * can't determine the state, let the regular polling/git invocations proceed.
+ * Surfacing a permission error here would stall every poll cycle for the
+ * worktree. Sentinel names are matched exactly as git writes them; git never
+ * varies their case.
+ */
+function readGitDirEntries(gitDir: string): Set<string> | null {
+  try {
+    return new Set(readdirSync(gitDir));
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Returns true if any of the rebase/merge/cherry-pick/revert sentinel files
  * exist in `gitDir`. Synchronous so it's safe to call on hot paths (e.g.
  * before each git status poll) without adding an async round-trip.
- *
- * Fails open on filesystem errors (e.g. EPERM) — if we can't determine
- * the state, let the regular polling/git invocations proceed. Surfacing a
- * permission error here would stall every poll cycle for the worktree.
  */
 export function isRepoOperationInProgress(gitDir: string): boolean {
-  for (const name of OPERATION_SENTINEL_NAMES) {
-    try {
-      if (existsSync(pathJoin(gitDir, name))) {
-        return true;
-      }
-    } catch {
-      // Treat unreadable sentinel paths as absent and continue.
-    }
-  }
-  return false;
+  const entries = readGitDirEntries(gitDir);
+  if (!entries) return false;
+  return OPERATION_SENTINEL_NAMES.some((name) => entries.has(name));
 }
 
 /**
@@ -49,41 +57,21 @@ export function isRepoOperationInProgress(gitDir: string): boolean {
  *
  * Order of checks matches the async `detectRepoOperationState`: rebase first
  * (both merge and apply backends), then cherry-pick, revert, merge.
- *
- * Fails open on filesystem errors — a permission error on any sentinel path
- * is treated as absent so the classifier never blocks polling.
  */
 export function getRepoOperationStateSync(gitDir: string): RepoState | undefined {
-  try {
-    if (
-      existsSync(pathJoin(gitDir, "rebase-merge")) ||
-      existsSync(pathJoin(gitDir, "rebase-apply"))
-    ) {
-      return "REBASING";
-    }
-  } catch {
-    // Treat unreadable as absent.
+  const entries = readGitDirEntries(gitDir);
+  if (!entries) return undefined;
+  if (entries.has("rebase-merge") || entries.has("rebase-apply")) {
+    return "REBASING";
   }
-  try {
-    if (existsSync(pathJoin(gitDir, "CHERRY_PICK_HEAD"))) {
-      return "CHERRY_PICKING";
-    }
-  } catch {
-    // Treat unreadable as absent.
+  if (entries.has("CHERRY_PICK_HEAD")) {
+    return "CHERRY_PICKING";
   }
-  try {
-    if (existsSync(pathJoin(gitDir, "REVERT_HEAD"))) {
-      return "REVERTING";
-    }
-  } catch {
-    // Treat unreadable as absent.
+  if (entries.has("REVERT_HEAD")) {
+    return "REVERTING";
   }
-  try {
-    if (existsSync(pathJoin(gitDir, "MERGE_HEAD"))) {
-      return "MERGING";
-    }
-  } catch {
-    // Treat unreadable as absent.
+  if (entries.has("MERGE_HEAD")) {
+    return "MERGING";
   }
   return undefined;
 }

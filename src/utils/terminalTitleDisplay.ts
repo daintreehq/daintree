@@ -85,7 +85,39 @@ interface ObservedTask {
   isIdentityEcho: boolean;
 }
 
+// Bounded memo over the exact fields `computeObservedTask` reads. Title
+// surfaces (tab strips, headers, dock rows) re-derive titles on every
+// panel-store flush — per animation frame during agent output — while the
+// inputs only change on real title/identity transitions. AGENT_REGISTRY is
+// static, so the six fields fully determine the result. FIFO eviction: the
+// live working set is panels × recent titles, far below the cap.
+const OBSERVED_TASK_CACHE_MAX = 500;
+const observedTaskCache = new Map<string, ObservedTask | null>();
+
 function getObservedTask(panel: TitledPanel): ObservedTask | null {
+  // JSON-encoded tuple: field values are OSC/terminal-controlled strings, so
+  // a delimiter-join could collide across positions; JSON escaping cannot.
+  // null stands in for undefined to keep it distinct from an empty string.
+  const key = JSON.stringify([
+    panel.titleMode ?? "default",
+    panel.detectedAgentId ?? null,
+    panel.agentState === "exited",
+    panel.lastObservedTitle ?? null,
+    panel.title,
+    panel.cwd ?? null,
+  ]);
+  const cached = observedTaskCache.get(key);
+  if (cached !== undefined || observedTaskCache.has(key)) return cached ?? null;
+  const value = computeObservedTask(panel);
+  if (observedTaskCache.size >= OBSERVED_TASK_CACHE_MAX) {
+    const oldest = observedTaskCache.keys().next().value;
+    if (oldest !== undefined) observedTaskCache.delete(oldest);
+  }
+  observedTaskCache.set(key, value);
+  return value;
+}
+
+function computeObservedTask(panel: TitledPanel): ObservedTask | null {
   if ((panel.titleMode ?? "default") === "user") return null;
   if (panel.detectedAgentId === undefined || panel.agentState === "exited") return null;
   const cleaned = cleanTaskTitle(panel.lastObservedTitle);

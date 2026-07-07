@@ -15,6 +15,7 @@ import { logError, logWarn } from "@/utils/logger";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { addToWorktreeIndex } from "@/store/slices/panelRegistry/worktreeIndex";
 import type {
   AgentSettings,
   CliAvailability,
@@ -641,6 +642,14 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               const next: Partial<typeof state> = {
                 panelsById: { ...state.panelsById, [gateId]: gatePanel },
                 panelIds: [...state.panelIds, gateId],
+                // The gate panel bypasses `addPanel`, so it must join the
+                // per-worktree index here — sidebar summaries and worktree
+                // cycling derive terminal counts from it.
+                panelIdsByWorktreeId: addToWorktreeIndex(
+                  state.panelIdsByWorktreeId,
+                  gatePanel.worktreeId,
+                  gateId
+                ),
               };
               // Atomic dock activation — same race fix as `addPanel`. The gate
               // panel bypasses `addPanel`, so the activation must be folded

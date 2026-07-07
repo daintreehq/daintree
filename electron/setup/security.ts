@@ -79,6 +79,26 @@ function bigintSafeReplacer(_key: string, value: unknown): unknown {
   return typeof value === "bigint" ? value.toString() : value;
 }
 
+// Sentinel thrown from `sizeGuardReplacer` to abort the measuring stringify
+// the moment a binary/Map/Set value is encountered — the same payload classes
+// `containsBinary` names, detected during the single serialization pass
+// instead of a separate pre-walk over every invoke's arguments.
+const UNRELIABLE_SIZE_SENTINEL = Symbol("unreliable-json-size");
+
+function sizeGuardReplacer(key: string, value: unknown): unknown {
+  if (value !== null && typeof value === "object") {
+    if (
+      ArrayBuffer.isView(value) ||
+      value instanceof ArrayBuffer ||
+      value instanceof Map ||
+      value instanceof Set
+    ) {
+      throw UNRELIABLE_SIZE_SENTINEL;
+    }
+  }
+  return bigintSafeReplacer(key, value);
+}
+
 export function validateIpcInvokeEnvelope(channel: string, args: unknown[]): void {
   if (args.length > MAX_IPC_ARG_COUNT) {
     throw new AppError({
@@ -89,17 +109,23 @@ export function validateIpcInvokeEnvelope(channel: string, args: unknown[]): voi
     });
   }
 
-  // Binary / Map / Set payloads make `JSON.stringify` an unreliable size
-  // estimator. Skip the byte check and let Mojo's 128 MiB ceiling and the
-  // handler-level caps (clipboard PNG, artifact patch) act as the backstop.
-  if (args.some((arg) => containsBinary(arg))) return;
-
   const category = channelToCategory[channel];
   const budget = category !== undefined ? PAYLOAD_BUDGETS[category] : DEFAULT_PAYLOAD_BUDGET;
 
+  // Binary / Map / Set payloads make `JSON.stringify` an unreliable size
+  // estimator: the replacer aborts the measuring pass on the first one (or on
+  // stringify's own failures, e.g. circular refs), skipping the byte check so
+  // Mojo's 128 MiB ceiling and the handler-level caps (clipboard PNG,
+  // artifact patch) act as the backstop. Folding detection into the
+  // serialization keeps this single-traversal on every invoke instead of a
+  // `containsBinary` pre-walk plus a stringify. Unlike the old pre-walk's
+  // depth>32 bail-out (which SKIPPED the byte gate, letting a deeply nested
+  // oversize payload through unmeasured), deep plain objects are now measured
+  // like wide ones always were; past V8's recursion limit stringify throws
+  // and the catch below fails open, same as before.
   let bytes: number;
   try {
-    bytes = Buffer.byteLength(JSON.stringify(args, bigintSafeReplacer), "utf8");
+    bytes = Buffer.byteLength(JSON.stringify(args, sizeGuardReplacer), "utf8");
   } catch {
     return;
   }

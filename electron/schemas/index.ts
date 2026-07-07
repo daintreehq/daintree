@@ -87,12 +87,9 @@ export {
   type GitWorktreeEntry,
 } from "./external.js";
 
-export {
-  getPluginManifestSchema,
-  PanelContributionSchema,
-  PluginCapabilitySchema,
-  SCOPED_PLUGIN_NAME_PATTERN,
-  type PluginManifest,
-  type PanelContribution,
-  type PluginCapability,
-} from "./plugin.js";
+// `./plugin.js` is deliberately NOT re-exported here: its ~96 zod schemas and
+// `semver` import evaluate at module load, and this barrel sits in the eager
+// boot graph of several IPC handlers. Plugin install/validate consumers import
+// `./plugin.js` directly; boot-path identifier helpers live in
+// `./pluginIdentifiers.js`.
+export { SCOPED_PLUGIN_NAME_PATTERN } from "./pluginIdentifiers.js";

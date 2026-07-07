@@ -90,6 +90,52 @@ export function stripAnsi(text: string): string {
   /* eslint-enable no-control-regex */
 }
 
+function countNewlines(text: string): number {
+  let count = 0;
+  let index = -1;
+  while ((index = text.indexOf("\n", index + 1)) !== -1) count++;
+  return count;
+}
+
+/**
+ * True when a raw-text window starting at `offset` falls inside an OSC
+ * payload — the last `ESC ]` before the offset has no BEL/ST terminator
+ * before it. OSC is the only escape class whose payload may span newlines,
+ * so it is the only one that can pull a naive last-N-lines window off the
+ * visible text.
+ */
+function windowStartsInsideOsc(text: string, offset: number): boolean {
+  if (offset <= 0) return false;
+  const esc = text.lastIndexOf("\x1b", offset - 1);
+  if (esc === -1 || text[esc + 1] !== "]") return false;
+  const bel = text.indexOf("\x07", esc);
+  if (bel !== -1 && bel < offset) return false;
+  const st = text.indexOf("\x1b\\", esc);
+  if (st !== -1 && st < offset) return false;
+  return true;
+}
+
+/**
+ * Find the offset of the last `lineCount` lines within `text` without
+ * allocating a per-line array. Equivalent to
+ * `text.split("\n").slice(-lineCount).join("\n")` but returns a single
+ * slice offset, avoiding the intermediate array and segment strings.
+ */
+export function lastLinesOffset(text: string, lineCount: number): number {
+  let startOffset = 0;
+  let searchFrom = text.length;
+  for (let i = 0; i < lineCount; i++) {
+    const nl = text.lastIndexOf("\n", searchFrom - 1);
+    if (nl === -1) {
+      // Fewer than lineCount lines — scan the whole string.
+      return 0;
+    }
+    startOffset = nl + 1;
+    searchFrom = nl;
+  }
+  return startOffset;
+}
+
 /**
  * Universal patterns that work across all agents.
  * Used when agent-specific patterns aren't configured.
@@ -198,27 +244,6 @@ export class AgentPatternDetector {
   }
 
   /**
-   * Find the offset of the last `scanLineCount` lines within `text` without
-   * allocating a per-line array. Equivalent to
-   * `text.split("\n").slice(-scanLineCount).join("\n")` but returns a single
-   * slice offset, avoiding the intermediate array and segment strings.
-   */
-  private lastLinesOffset(text: string): number {
-    let startOffset = 0;
-    let searchFrom = text.length;
-    for (let i = 0; i < this.scanLineCount; i++) {
-      const nl = text.lastIndexOf("\n", searchFrom - 1);
-      if (nl === -1) {
-        // Fewer than scanLineCount lines — scan the whole string.
-        return 0;
-      }
-      startOffset = nl + 1;
-      searchFrom = nl;
-    }
-    return startOffset;
-  }
-
-  /**
    * Detect working state from terminal output.
    *
    * @param output Terminal output. Raw (may include ANSI codes) unless
@@ -237,11 +262,25 @@ export class AgentPatternDetector {
       };
     }
 
-    // Strip ANSI codes for reliable pattern matching (unless already stripped).
-    const cleanOutput = opts?.alreadyStripped ? output : stripAnsi(output);
-
-    // Scan only the last N lines.
-    const textToScan = cleanOutput.slice(this.lastLinesOffset(cleanOutput));
+    // Window to the last N lines BEFORE stripping, so callers feeding the raw
+    // rolling buffer (per chunk / per 30ms scan) only pay for stripping the
+    // lines actually scanned instead of the whole buffer. CSI/SGR sequences
+    // never contain "\n" so the line window matches the stripped text's —
+    // except OSC payloads, whose content MAY embed newlines. When stripping
+    // shrinks the window below the intended line count (newlines were inside
+    // an OSC payload), widen the raw window once and re-window on the
+    // stripped text, restoring the exact "last N stripped lines" semantics.
+    const offset = lastLinesOffset(output, this.scanLineCount);
+    const windowed = output.slice(offset);
+    let textToScan = opts?.alreadyStripped ? windowed : stripAnsi(windowed);
+    if (
+      !opts?.alreadyStripped &&
+      offset > 0 &&
+      (countNewlines(textToScan) < this.scanLineCount - 1 || windowStartsInsideOsc(output, offset))
+    ) {
+      const widened = stripAnsi(output.slice(lastLinesOffset(output, this.scanLineCount * 4)));
+      textToScan = widened.slice(lastLinesOffset(widened, this.scanLineCount));
+    }
 
     return this.matchPatterns(textToScan);
   }

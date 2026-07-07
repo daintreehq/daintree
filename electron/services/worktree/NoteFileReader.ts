@@ -17,6 +17,11 @@ export class NoteFileReader {
   private worktreePath: string;
   private enabled: boolean;
   private filename: string;
+  // Poll-path cache: `read()` runs every full status poll but the note file
+  // rarely changes, so reuse the parsed result while the stat identity
+  // (path, mtime, size) matches and skip the readFile.
+  private cachedKey: string | undefined;
+  private cachedResult: NoteData | undefined;
 
   constructor(
     worktreePath: string,
@@ -33,6 +38,10 @@ export class NoteFileReader {
     if (filename !== undefined) {
       this.filename = filename;
     }
+    // Config changes re-resolve the note path; drop the cache so a stale
+    // (path, mtime, size) key can never serve the previous file's content.
+    this.cachedKey = undefined;
+    this.cachedResult = undefined;
   }
 
   private resolveNotePath(gitDir: string): string | undefined {
@@ -81,20 +90,30 @@ export class NoteFileReader {
       const fileStat = await stat(notePath);
       const timestamp = fileStat.mtimeMs;
 
+      const cacheKey = `${notePath}\n${timestamp}\n${fileStat.size}`;
+      if (cacheKey === this.cachedKey) {
+        return this.cachedResult;
+      }
+
       const content = await readFile(notePath, "utf-8");
       const trimmed = content.trim();
 
-      if (!trimmed) {
-        return undefined;
+      let result: NoteData | undefined;
+      if (trimmed) {
+        const lines = trimmed.split("\n");
+        const lastLine = lines[lines.length - 1].trim();
+        result =
+          lastLine.length > 500
+            ? { content: lastLine.slice(0, 497) + "...", timestamp }
+            : { content: lastLine, timestamp };
       }
 
-      const lines = trimmed.split("\n");
-      const lastLine = lines[lines.length - 1].trim();
-      if (lastLine.length > 500) {
-        return { content: lastLine.slice(0, 497) + "...", timestamp };
-      }
-      return { content: lastLine, timestamp };
+      this.cachedKey = cacheKey;
+      this.cachedResult = result;
+      return result;
     } catch (error) {
+      this.cachedKey = undefined;
+      this.cachedResult = undefined;
       const code = (error as NodeJS.ErrnoException).code;
       if (code && code !== "ENOENT") {
         logWarn("Failed to read AI note file", {

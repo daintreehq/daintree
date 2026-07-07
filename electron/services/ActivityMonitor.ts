@@ -1,5 +1,6 @@
 import {
   AgentPatternDetector,
+  lastLinesOffset,
   stripAnsi,
   type PatternDetectionConfig,
   type PatternDetectionResult,
@@ -75,6 +76,11 @@ const CPU_LOW_THRESHOLD = 3;
 // throttled, with a trailing-edge run so the final chunk before quiet is
 // still scanned. Downstream consumers debounce at 100ms+ scales.
 const PATTERN_SCAN_THROTTLE_MS = 30;
+
+// Line window for the detector-less esc-interrupt fallback in
+// `scanPatternBuffer` — matches the AgentPatternDetector default so both
+// paths scan the same tail.
+const ESC_FALLBACK_SCAN_LINES = 10;
 
 export interface ProcessStateValidator {
   hasActiveChildren(): boolean;
@@ -484,11 +490,17 @@ export class ActivityMonitor {
 
   private scanPatternBuffer(now: number): void {
     this.lastPatternScanAt = now;
-    const bufferText = stripAnsi(this.patternBuf.getText());
+    const rawBuffer = this.patternBuf.getText();
 
-    // Check for boot-complete patterns in the rolling buffer
+    // Boot-complete patterns may sit anywhere in the rolling buffer, so the
+    // transient boot phase strips it in full and reuses the result below. In
+    // the steady state (boot exited — the rest of the session) detection
+    // windows to the last N lines before stripping, so each 30ms scan strips
+    // only those lines instead of the whole 10KB buffer.
+    let fullStripped: string | undefined;
     if (!this.bootDetector.hasExitedBootState) {
-      if (this.bootDetector.check(bufferText, false, 0, Infinity)) {
+      fullStripped = stripAnsi(rawBuffer);
+      if (this.bootDetector.check(fullStripped, false, 0, Infinity)) {
         // Boot detected via pattern in rolling buffer
         this.fireBootComplete(now);
       }
@@ -496,15 +508,26 @@ export class ActivityMonitor {
 
     // Check for working patterns in the rolling buffer
     const patternResult = this.patternDetector
-      ? this.patternDetector.detect(bufferText, { alreadyStripped: true })
+      ? fullStripped !== undefined
+        ? this.patternDetector.detect(fullStripped, { alreadyStripped: true })
+        : this.patternDetector.detect(rawBuffer)
       : undefined;
     if (patternResult) {
       this.lastPatternResult = patternResult;
       this.lastPatternResultAt = now;
     }
+    // Detector-less fallback: scan the same last-N-lines window the pattern
+    // detector uses. A live interrupt hint is re-emitted on every status-line
+    // repaint, so it is always in the tail; one deeper in the buffer is stale
+    // and shouldn't hold "working" for up to 10KB of scrollback.
     const isWorking = patternResult
       ? patternResult.isWorking
-      : this.isEscInterruptFallback(bufferText.toLowerCase());
+      : this.isEscInterruptFallback(
+          (
+            fullStripped ??
+            stripAnsi(rawBuffer.slice(lastLinesOffset(rawBuffer, ESC_FALLBACK_SCAN_LINES)))
+          ).toLowerCase()
+        );
 
     if (
       isWorking &&

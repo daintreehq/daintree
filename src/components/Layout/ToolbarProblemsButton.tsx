@@ -7,7 +7,7 @@ import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
-import { DIAGNOSTICS_DOCK_REGION_ID } from "@/components/Diagnostics/DiagnosticsDock";
+import { DIAGNOSTICS_DOCK_REGION_ID } from "@/components/Diagnostics/regionIds";
 
 const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text";
 

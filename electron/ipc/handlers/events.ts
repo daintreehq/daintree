@@ -24,7 +24,11 @@ const ALLOWED_RENDERER_EVENTS: ReadonlySet<keyof DaintreeEventMap> = new Set(["a
 const EVENT_BUS_BRIDGED_MANIFEST = {
   // Agent lifecycle: emitted on TypedEventBus; relayed here.
   "agent:state-changed": "bus",
-  "agent:state-transition-dropped": "bus",
+  // Diagnostic-only: consumed main-side by the event-inspector buffer; the
+  // renderer never subscribes, so relaying it to every window was pure waste.
+  // Classified "external" to drop it from the relay loop — no producer sends
+  // it on EVENTS_PUSH either, so it has no renderer delivery at all.
+  "agent:state-transition-dropped": "external",
   "agent:all-clear": "bus",
   "agent:detected": "bus",
   "agent:exited": "bus",
@@ -51,7 +55,12 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
 
   // Terminal observability (relayed from TypedEventBus via PtyEventsBridge)
   "terminal:reliability-metric": "bus",
-  "terminal:status": "bus",
+  // Flow-control status reaches the renderer exclusively through the
+  // dedicated project-scoped CHANNELS.TERMINAL_STATUS channel; nothing
+  // subscribes to the bus relay, which fanned every backpressure transition
+  // out to every window. Classified "external" to drop it from the relay
+  // loop — it has no EVENTS_PUSH producer, so no renderer delivery at all.
+  "terminal:status": "external",
 
   // Agent session journaled (relayed from TypedEventBus; emitted by the main
   // close paths and bridged from the pty-host's trash-expiry capture)
