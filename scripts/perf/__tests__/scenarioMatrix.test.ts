@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { allScenarios, assertMatrixCoverage, getScenariosForMode } from "../scenarios";
+import { getConstructedReflowTerminalCount } from "../lib/reflowFixture";
 
 describe("perf scenario matrix", () => {
   it("covers full PERF matrix", () => {
     expect(() => assertMatrixCoverage()).not.toThrow();
-    expect(allScenarios).toHaveLength(41);
+    expect(allScenarios).toHaveLength(44);
+  });
+
+  it("importing the resize/reflow scenario module constructs no terminals", () => {
+    // Lazy-fixture rule: fixture setup happens on first run()/warmup, never
+    // at import. This must run before the PERF-112 execution test below.
+    expect(getConstructedReflowTerminalCount()).toBe(0);
   });
 
   it("returns mode-specific scenario sets", () => {
@@ -98,5 +105,28 @@ describe("perf scenario matrix", () => {
     // 12 background terminals × 30 rounds × ~1.8 KB chunks — if this shrinks,
     // the flood stopped flooding and the degradation signal is meaningless.
     expect(sample.metrics!.floodBytes).toBeGreaterThan(500_000);
+  });
+
+  it("PERF-112 keeps the over-budget reveal flat with respect to backlog size", async () => {
+    const scenario = allScenarios.find((s) => s.id === "PERF-112");
+    expect(scenario).toBeDefined();
+
+    const context = { mode: "ci" as const, now: () => performance.now() };
+    const sample = await scenario!.run(context);
+
+    expect(sample.metrics).toBeDefined();
+    const metrics = sample.metrics!;
+    // Bounded arm parses ~768 KiB inside resize()'s flushSync — must be a real bracket.
+    expect(metrics.revealBlockingMsSmallBacklog).toBeGreaterThan(0);
+    // Over-budget arm resizes on an empty write buffer, then drains ~4 MiB.
+    expect(metrics.drainMsLargeBacklog).toBeGreaterThan(0);
+    // The incident invariant: a 4 MiB backlog must NOT block the reveal like a
+    // flushed one. If the budget gate is bypassed, this ratio jumps ~5x+.
+    expect(metrics.largeToSmallBlockingRatio).toBeLessThan(3);
+    // The drained backlog actually parsed at the new grid (scrollback-capped).
+    expect(metrics.parsedLinesLargeBacklog).toBeGreaterThan(4_000);
+    // Seeded content is deterministic — a checksum drift means the fixture
+    // stopped measuring the same bytes.
+    expect(metrics.backlogChecksum).toBeGreaterThan(0);
   });
 });

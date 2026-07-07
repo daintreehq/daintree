@@ -126,6 +126,22 @@
       "maxMetricValues": { "statusPasses": 3, "gitSpawns": 10 }
     },
 
+    "PERF-110": { "p95Ms": 80, "maxRegressionPct": 50 },
+    "PERF-111": {
+      "p95Ms": 3500,
+      "maxRegressionPct": 50,
+      "maxMetricValues": { "maxStepMs": 150, "settleResizeMs": 5 }
+    },
+    "PERF-112": {
+      "p95Ms": 25,
+      "maxRegressionPct": 50,
+      "maxMetricValues": {
+        "largeToSmallBlockingRatio": 3,
+        "revealBlockingMsLargeBacklog": 30,
+        "drainMsLargeBacklog": 500
+      }
+    },
+
     "PERF-090": {
       "p95Ms": 15000,
       "maxRegressionPct": 50,
