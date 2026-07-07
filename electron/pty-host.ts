@@ -34,6 +34,11 @@ import { MessagePort } from "node:worker_threads";
 import os from "node:os";
 import { PtyManager } from "./services/PtyManager.js";
 import {
+  IdleHeapCompactor,
+  IDLE_HEAP_COMPACT_CHECK_INTERVAL_MS,
+  resolveExposedGc,
+} from "./services/pty/analysis/idleHeapCompactor.js";
+import {
   AnalysisWorkerPool,
   analysisWorkersDisabled,
   defaultAnalysisPoolSize,
@@ -125,6 +130,26 @@ process.on("unhandledRejection", (reason) => {
 });
 
 const ptyManager = new PtyManager();
+
+// Idle heap compaction for this (main) isolate: terminal output churns
+// transient strings through node-pty, forensics slicing, and port batching on
+// every chunk, and the committed-heap slack otherwise lingers for minutes
+// after a burst. Poll-based on a slow unref'd timer — the hot data path is
+// untouched. Worker isolates run their own compactor (analysisWorker.ts).
+const idleHeapCompactor = new IdleHeapCompactor(resolveExposedGc());
+let idleCompactLastTerminalCount = -1;
+const idleHeapCompactTimer = setInterval(() => {
+  const signal = ptyManager.getActivitySignal();
+  idleHeapCompactor.observeActivityAt(signal.latestActivityAt);
+  if (signal.terminalCount !== idleCompactLastTerminalCount) {
+    // Terminal churn (spawn/close) is activity too — closing terminals frees
+    // registry state worth compacting once things settle.
+    idleCompactLastTerminalCount = signal.terminalCount;
+    idleHeapCompactor.noteActivity();
+  }
+  idleHeapCompactor.maybeCompact();
+}, IDLE_HEAP_COMPACT_CHECK_INTERVAL_MS);
+idleHeapCompactTimer.unref?.();
 
 // Analysis worker pool: moves the per-chunk analysis stack (headless xterm
 // mirror + ActivityMonitor) off this thread so the pty-host event loop only

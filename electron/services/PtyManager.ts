@@ -160,6 +160,27 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
+   * Newest input/output/spawn timestamp across all terminals plus the live
+   * terminal count. The pty-host idle heap compactor polls this on a slow
+   * timer instead of hooking the per-chunk data path, so idle detection adds
+   * zero cost to output handling.
+   */
+  getActivitySignal(): { latestActivityAt: number; terminalCount: number } {
+    const terminals = this.registry.getAll();
+    let latest = 0;
+    for (const terminal of terminals) {
+      const info = terminal.getInfo();
+      latest = Math.max(
+        latest,
+        info.lastInputTime || 0,
+        info.lastOutputTime || 0,
+        info.spawnedAt || 0
+      );
+    }
+    return { latestActivityAt: latest, terminalCount: terminals.length };
+  }
+
+  /**
    * Trim a single terminal's scrollback to `targetLines`. Returns false (rather
    * than throwing) when the terminal is unknown — e.g. it was disposed between the
    * governor's `getTerminalBufferSizes()` snapshot and this call — so a stale id in
