@@ -3,7 +3,7 @@ import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationServi
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore, useWorktreeSelectionStore } from "@/store";
-import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
+import { isDockPanel, type DockPanelData } from "@shared/types/panel";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { DockedPanel } from "@/components/Terminal/DockedPanel";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
@@ -32,12 +32,12 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
   const helpTerminalId = useHelpPanelStore((s) => s.terminalId);
   const dockTerminals = usePanelStore(
     useShallow((s) => {
-      const result: PtyPanelData[] = [];
+      const result: DockPanelData[] = [];
       for (const id of s.panelIds) {
         const t = s.panelsById[id];
         if (
           t &&
-          isPtyPanel(t) &&
+          isDockPanel(t) &&
           t.location === "dock" &&
           !s.trashedTerminals.has(t.id) &&
           t.id !== helpTerminalId &&
@@ -75,7 +75,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
 
   // Handler for adding a new tab to a single panel (creates a tab group)
   const handleAddTabForPanel = useCallback(
-    async (panel: PtyPanelData) => {
+    async (panel: DockPanelData) => {
       let groupId: string;
       let createdNewGroup = false;
       let newPanelId: string | null = null;

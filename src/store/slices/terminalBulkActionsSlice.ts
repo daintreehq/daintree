@@ -1,4 +1,5 @@
 import PQueue from "p-queue";
+import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import type { StateCreator } from "zustand";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import type { AgentState } from "@/types";
@@ -281,7 +282,9 @@ export const createTerminalBulkActionsSlice = (
       const gridTerminals = terminals.filter(
         (t) =>
           (t.location === "grid" || t.location === undefined) &&
-          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined) &&
+          // Never bulk-move a kind the dock can't render.
+          panelKindIsDockable(t.kind ?? "terminal")
       );
       gridTerminals.forEach((t) => moveTerminalToDock(t.id));
     },

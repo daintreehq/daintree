@@ -630,6 +630,17 @@ export function isFilePanel(panel: PanelInstance | TerminalInstance): panel is F
 }
 
 /**
+ * Panels that can live in the dock. Type-level twin of the registry's
+ * `dockable` capability (`panelKindIsDockable`) — extend both together when a
+ * new kind gains dock support, along with a chip branch in `ContentDock`.
+ */
+export type DockPanelData = PtyPanelData | FilePanelData;
+
+export function isDockPanel(panel: PanelInstance | TerminalInstance): panel is DockPanelData {
+  return isPtyPanel(panel) || isFilePanel(panel);
+}
+
+/**
  * Legacy interface for backward compatibility with persisted state.
  * New code should use the PanelInstance discriminated union.
  *
