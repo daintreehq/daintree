@@ -4,6 +4,7 @@ import {
   isBrowserPanel,
   isDevPreviewPanel,
   type PanelInstance,
+  type PanelKind,
 } from "@shared/types/panel";
 import type { TabGroupLocation } from "@/types";
 import { generateAgentCommand } from "@shared/types";
@@ -215,6 +216,23 @@ export function buildPanelSnapshotOptions(panel: PanelInstance): AddPanelOptions
   }
 
   return null;
+}
+
+/**
+ * Kinds `buildPanelDuplicateOptions` can actually duplicate. Gates the
+ * "Duplicate panel as new tab" affordance so kinds without a duplicate
+ * recipe (file panels, plugin panels) never show a dead button.
+ */
+export function canDuplicatePanelKind(kind: PanelKind | undefined): boolean {
+  switch (kind ?? "terminal") {
+    case "terminal":
+    case "browser":
+    case "dev-preview":
+    case "review":
+      return true;
+    default:
+      return false;
+  }
 }
 
 /**

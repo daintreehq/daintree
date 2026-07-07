@@ -1,8 +1,9 @@
 import React, { useCallback, useMemo, useEffect, useEffectEvent, useRef } from "react";
+import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store";
 import { getRenderablePanel } from "@/store/slices/panelRegistry/selectors";
-import { isBuiltInPanelKind, isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
@@ -285,7 +286,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
   // plugin kinds). Now that plugin panels render in tab groups (#10512), hide
   // the add-tab affordance for them instead of surfacing a button that throws —
   // mirrors GridPanel's single-panel add-tab gate.
-  const canAddTab = isBuiltInPanelKind(activePanel.kind);
+  const canAddTab = canDuplicatePanelKind(activePanel.kind);
 
   const isFocused = activePanel.id === focusedId;
 

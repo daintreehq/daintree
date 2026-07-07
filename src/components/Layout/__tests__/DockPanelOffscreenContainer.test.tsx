@@ -40,6 +40,7 @@ vi.mock("@/components/Terminal/DockedPanel", () => ({
 
 vi.mock("@/services/terminal/panelDuplicationService", () => ({
   buildPanelDuplicateOptions: vi.fn(),
+  canDuplicatePanelKind: vi.fn(() => true),
 }));
 
 vi.mock("@/utils/logger", () => ({

@@ -19,7 +19,7 @@ import {
   ChevronRight,
   ChevronUp,
   ChevronDown,
-  PanelRight,
+  Grid2x2Plus,
   Pilcrow,
   Search,
   WrapText,
@@ -905,7 +905,7 @@ export function FileViewerModal({
                   className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border"
                   data-testid="file-viewer-open-as-panel"
                 >
-                  <PanelRight className="w-4 h-4" />
+                  <Grid2x2Plus className="w-4 h-4" />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">Open as panel</TooltipContent>
@@ -1016,11 +1016,13 @@ export function FileViewerModal({
                     viewMode="rendered"
                   />
                 ) : (
-                  <>
+                  // min-h-full column: the editor surface stretches to the
+                  // footer even for files shorter than the dialog body.
+                  <div className="flex min-h-full flex-col">
                     {metadata && (
                       <div
                         data-testid="file-viewer-metadata"
-                        className="px-3 py-1 border-b border-daintree-border text-xs text-muted-foreground font-mono"
+                        className="px-3 py-1 border-b border-daintree-border text-xs text-muted-foreground font-mono shrink-0"
                       >
                         {metadata.lineCount} lines · {metadata.sizeLabel} · UTF-8
                       </div>
@@ -1031,9 +1033,9 @@ export function FileViewerModal({
                       filePath={filePath}
                       initialLine={initialLine}
                       wrapLines={markdownFile && markdownWrapLines}
-                      className="min-h-[300px]"
+                      className="min-h-[300px] flex-1"
                     />
-                  </>
+                  </div>
                 ))}
             </>
           )}
