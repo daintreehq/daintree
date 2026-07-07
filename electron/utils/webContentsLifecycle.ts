@@ -93,24 +93,27 @@ export function unthrottleCpuWebContents(wc: Electron.WebContents): Promise<void
 }
 
 /**
- * Compact a cached renderer's V8 heap, main-side over CDP (works even when
- * the renderer is CPU-throttled — the renderer-side `window.gc()` idle
- * callback cannot make that guarantee). `HeapProfiler.collectGarbage` is the
- * DevTools "collect garbage" button: a full last-resort GC that compacts and
- * returns committed-but-free pages, while leaving JIT code, WebGL contexts,
- * and compositor state intact. Do NOT swap in the Memory-domain purges here:
- * both `Memory.forciblyPurgeJavaScriptMemory` and
- * `Memory.simulatePressureNotification` SIGSEGV a CPU-throttled hidden
- * WebContentsView on Electron 42/Chromium 148 (measured: exit code 11,
- * reproducibly, seconds after the command lands). Per-target, so the active
- * view is untouched. Shares the Windows-CI e2e opt-out with the CPU throttle:
- * both ride the same debugger session Playwright owns there.
+ * Purge a cached renderer's reclaimable memory, main-side over CDP (works
+ * even when the renderer is CPU-throttled — the renderer-side `window.gc()`
+ * idle callback cannot make that guarantee). The critical pressure
+ * notification is the same `NotifyMemoryPressure(CRITICAL)` Blink's own
+ * MemoryPurgeManager fires after backgrounding/freeze: it drops Blink
+ * discardable caches (fonts, decoded images, backing stores) and triggers a
+ * V8 memory-pressure GC. `HeapProfiler.collectGarbage` (the DevTools
+ * "collect garbage" button) then compacts and returns the freed pages.
+ * Do NOT add `Memory.forciblyPurgeJavaScriptMemory`: it reproducibly
+ * SIGSEGVs a CPU-throttled hidden WebContentsView on Electron 42/Chromium
+ * 148 (exit code 11 ~instantly; isolated in an A/B probe — the pressure
+ * notification alone is stable). Per-target, so the active view is
+ * untouched. Shares the Windows-CI e2e opt-out with the CPU throttle: both
+ * ride the same debugger session Playwright owns there.
  */
 export async function purgeMemoryWebContents(wc: Electron.WebContents): Promise<void> {
   if (getIsE2EDisableCachedViewCpuThrottle()) return;
   if (wc.isDestroyed()) return;
   try {
     ensureAttached(wc);
+    await wc.debugger.sendCommand("Memory.simulatePressureNotification", { level: "critical" });
     await wc.debugger.sendCommand("HeapProfiler.enable");
     await wc.debugger.sendCommand("HeapProfiler.collectGarbage");
     await wc.debugger.sendCommand("HeapProfiler.disable");
