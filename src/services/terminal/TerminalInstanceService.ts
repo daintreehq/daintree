@@ -44,6 +44,7 @@ import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackControl
 import { DEFAULT_TERMINAL_FONT_FAMILY, onTerminalFontArrivedLate } from "@/config/terminalFont";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { isPtyPanel } from "@shared/types/panel";
+import { applyXtermReflowFastpath } from "@shared/utils/xtermReflowFastpath";
 import { usePanelStore } from "@/store/panelStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
@@ -1653,6 +1654,7 @@ class TerminalInstanceService {
     }
 
     const terminal = new Terminal(terminalOptions);
+    applyXtermReflowFastpath(terminal);
     this.cwdProviders.set(id, getCwd ?? (() => ""));
     // Only the eager core addons are built here. Image/file-link/web-link addons
     // are deferred to ensureDeferredAddons(), called once the terminal is opened

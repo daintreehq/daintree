@@ -2,6 +2,7 @@ import type { Terminal as HeadlessTerminal } from "@xterm/headless";
 import type { SerializeAddon as SerializeAddonInstance } from "@xterm/addon-serialize";
 import * as xtermHeadlessModule from "@xterm/headless";
 import * as serializeAddonModule from "@xterm/addon-serialize";
+import { applyXtermReflowFastpath } from "../../../../shared/utils/xtermReflowFastpath.js";
 
 // This module runs under three loaders: Vite (renderer Worker bundle), vitest,
 // and a plain node worker_thread via tsx (perf harness). xterm ships a
@@ -72,6 +73,7 @@ export class ParseAuthority {
       scrollback: options.scrollback,
       allowProposedApi: true,
     });
+    applyXtermReflowFastpath(this.terminal);
     this.serializeAddon = new SerializeAddon();
     // The serialize addon types against the renderer Terminal but only uses
     // the buffer API both builds share; headless + serialize is the upstream
