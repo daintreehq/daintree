@@ -15,11 +15,16 @@ describe("PatternBuffer", () => {
     expect(buf.getText()).toBe("hello world");
   });
 
-  it("trims to max size keeping tail", () => {
+  it("retains at least the last maxSize chars within the 2x trim slack", () => {
+    // Trimming is amortized: the buffer may hold up to 2x maxSize before a
+    // trim, but the trailing maxSize chars are always present and a trim
+    // always keeps exactly the tail.
     const buf = new PatternBuffer(10);
     buf.update("abcdefghij");
     buf.update("klmno");
-    expect(buf.getText()).toBe("fghijklmno");
+    expect(buf.getText()).toBe("abcdefghijklmno");
+    buf.update("pqrstu");
+    expect(buf.getText()).toBe("lmnopqrstu");
     expect(buf.getText().length).toBe(10);
   });
 

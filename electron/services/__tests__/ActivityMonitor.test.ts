@@ -2135,8 +2135,10 @@ describe("ActivityMonitor", () => {
       monitor.onData("\nesc to interrupt\n");
       vi.advanceTimersByTime(500);
 
-      // Send a large data burst (>2000 chars) that evicts the working indicator from the pattern buffer
-      monitor.onData("x".repeat(3000));
+      // Send a large data burst that evicts the working indicator from the
+      // pattern buffer — must exceed 2x patternBufferSize (the buffer trims
+      // lazily at 2x capacity) so the trim actually fires.
+      monitor.onData("x".repeat(5000));
 
       // Verify the buffer eviction actually happened
       expect(monitor.getLastPatternResult()?.isWorking).toBe(false);

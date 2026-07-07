@@ -1,5 +1,5 @@
 import { CHANNELS } from "../ipc/channels.js";
-import { SCOPED_PLUGIN_NAME_PATTERN } from "../schemas/plugin.js";
+import { SCOPED_PLUGIN_NAME_PATTERN } from "../schemas/pluginIdentifiers.js";
 import { getAppWebContents } from "../window/webContentsRegistry.js";
 import {
   clearPendingDaintreeUrls,

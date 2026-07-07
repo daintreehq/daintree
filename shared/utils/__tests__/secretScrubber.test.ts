@@ -479,6 +479,18 @@ describe("secretScrubber", () => {
         expect(scrubSecrets(input)).toBe(expected);
       });
     }
+
+    // Every pattern must have at least one positive fixture above. The fixtures
+    // assert end-to-end through `scrubSecrets`, so together with this coverage
+    // check they prove the pre-scan probe is sound: a pattern whose `probe`
+    // fragment failed to match its own secrets would return the fixture input
+    // unredacted and fail its `redacts <name>` case.
+    for (const { name, regex } of PATTERNS) {
+      it(`has a positive fixture exercising ${name}`, () => {
+        const stateless = new RegExp(regex.source, regex.flags.replace(/[gy]/g, ""));
+        expect(positive.some(({ input }) => stateless.test(input))).toBe(true);
+      });
+    }
   });
 
   describe("negative cases", () => {

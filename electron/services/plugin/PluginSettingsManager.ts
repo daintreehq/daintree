@@ -1,5 +1,5 @@
 import path from "path";
-import { SCOPED_PLUGIN_NAME_PATTERN } from "../../schemas/plugin.js";
+import { SCOPED_PLUGIN_NAME_PATTERN } from "../../schemas/pluginIdentifiers.js";
 import { PluginSettingsStore } from "../PluginSettingsStore.js";
 import { projectStore } from "../ProjectStore.js";
 import type {
