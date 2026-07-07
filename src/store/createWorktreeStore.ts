@@ -207,6 +207,18 @@ function isConnectivityError(message: string): boolean {
 
 export interface WorktreeViewState {
   worktrees: Map<string, WorktreeSnapshot>;
+  /**
+   * `worktreeId → lastGitStatusCheckedAt` (epoch ms), tracked outside the
+   * snapshot map on purpose: the host advances this stamp on every completed
+   * poll — including polls where nothing user-visible changed — so comparing
+   * it in `snapshotsEqual` forced a new `worktrees` Map identity per poll and
+   * fanned every quiet tick out to every whole-map subscriber. Freshness
+   * consumers (the WorktreeHeader pill, WorktreeCard's revalidate gate) read
+   * this map per-id instead. The `lastGitStatusCheckedAt` field still present
+   * on stored snapshots reflects the last content change, not the last poll —
+   * always read freshness from here.
+   */
+  statusCheckedAt: Map<string, number>;
   manualAssociations: Map<string, ManualIssueAssociation>;
   /**
    * Host-minted `(epoch, seq)` stamp of the most recently applied event.
@@ -351,6 +363,7 @@ export type WorktreeViewStoreApi = StoreApi<WorktreeViewStore>;
 export function createWorktreeStore(): WorktreeViewStoreApi {
   return createStore<WorktreeViewStore>((set, get) => ({
     worktrees: new Map(),
+    statusCheckedAt: new Map(),
     manualAssociations: new Map(),
     version: { epoch: "", seq: 0 },
     tombstones: new Map(),
@@ -392,6 +405,24 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         mergeIssueState(s, prev.worktrees.get(s.id), manual.get(s.id))
       );
 
+      // Rebuild the freshness map from the authoritative snapshot (also prunes
+      // removed ids), keeping the previous identity when every stamp matches
+      // so freshness-only subscribers see no spurious notify.
+      let nextStatusCheckedAt = prev.statusCheckedAt;
+      {
+        const rebuilt = new Map<string, number>();
+        for (const s of merged) {
+          if (s.lastGitStatusCheckedAt !== undefined) {
+            rebuilt.set(s.id, s.lastGitStatusCheckedAt);
+          }
+        }
+        const unchanged =
+          rebuilt.size === prev.statusCheckedAt.size &&
+          [...rebuilt].every(([id, t]) => prev.statusCheckedAt.get(id) === t);
+        if (!unchanged) nextStatusCheckedAt = rebuilt;
+      }
+      const statusCheckedAtChanged = nextStatusCheckedAt !== prev.statusCheckedAt;
+
       // Once hydrated, suppress redundant Map identity churn when every
       // incoming snapshot is value-equal to its existing counterpart. Cold
       // starts always rebuild so `isInitialized` flips correctly even when
@@ -411,6 +442,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
           error: null,
           isReconnecting: false,
           reconnectingAt: null,
+          ...(statusCheckedAtChanged ? { statusCheckedAt: nextStatusCheckedAt } : {}),
           ...(tombstonesChanged ? { tombstones: new Map() } : {}),
           ...(associationsChanged ? { manualAssociations: manual } : {}),
         });
@@ -425,6 +457,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         error: null,
         isReconnecting: false,
         reconnectingAt: null,
+        ...(statusCheckedAtChanged ? { statusCheckedAt: nextStatusCheckedAt } : {}),
         ...(tombstonesChanged ? { tombstones: new Map() } : {}),
         ...(associationsChanged ? { manualAssociations: manual } : {}),
       });
@@ -460,13 +493,36 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       const tombstonesChanged = tombstones !== prevState.tombstones;
 
       const merged = mergeIssueState(state, existing, prevState.manualAssociations.get(state.id));
+
+      // Freshness stamp advances on every completed poll; track it in the
+      // side map so a poll that changed nothing else doesn't churn the
+      // snapshot Map identity below.
+      let statusCheckedAt = prevState.statusCheckedAt;
+      if (
+        merged.lastGitStatusCheckedAt !== undefined &&
+        statusCheckedAt.get(state.id) !== merged.lastGitStatusCheckedAt
+      ) {
+        statusCheckedAt = new Map(statusCheckedAt);
+        statusCheckedAt.set(state.id, merged.lastGitStatusCheckedAt);
+      }
+      const statusCheckedAtChanged = statusCheckedAt !== prevState.statusCheckedAt;
+
       if (existing && snapshotsEqual(existing, merged)) {
-        set({ version, ...(tombstonesChanged ? { tombstones } : {}) });
+        set({
+          version,
+          ...(statusCheckedAtChanged ? { statusCheckedAt } : {}),
+          ...(tombstonesChanged ? { tombstones } : {}),
+        });
         return;
       }
       const next = new Map(prev);
       next.set(state.id, merged);
-      set({ worktrees: next, version, ...(tombstonesChanged ? { tombstones } : {}) });
+      set({
+        worktrees: next,
+        version,
+        ...(statusCheckedAtChanged ? { statusCheckedAt } : {}),
+        ...(tombstonesChanged ? { tombstones } : {}),
+      });
     },
 
     applyIssueNotFound(worktreeId: string, issueNumber: number) {
@@ -532,6 +588,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       tombstones.set(worktreeId, now);
 
       const hadWorktree = prevState.worktrees.has(worktreeId);
+      const hadStatusCheckedAt = prevState.statusCheckedAt.has(worktreeId);
       const hadDeletingId = prevState.deletingIds.has(worktreeId);
       const hadDeleteError = prevState.deleteErrors.has(worktreeId);
       const hadDeleteErrorArgs = prevState.deleteErrorArgs.has(worktreeId);
@@ -541,6 +598,10 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
 
       const nextWorktrees = hadWorktree ? new Map(prevState.worktrees) : prevState.worktrees;
       if (hadWorktree) nextWorktrees.delete(worktreeId);
+      const nextStatusCheckedAt = hadStatusCheckedAt
+        ? new Map(prevState.statusCheckedAt)
+        : prevState.statusCheckedAt;
+      if (hadStatusCheckedAt) nextStatusCheckedAt.delete(worktreeId);
       const nextDeletingIds = hadDeletingId
         ? new Set(prevState.deletingIds)
         : prevState.deletingIds;
@@ -575,6 +636,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
 
       set({
         worktrees: nextWorktrees,
+        statusCheckedAt: nextStatusCheckedAt,
         deletingIds: nextDeletingIds,
         deleteErrors: nextDeleteErrors,
         deleteErrorArgs: nextDeleteErrorArgs,
@@ -1544,8 +1606,11 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.baseAheadCount === b.baseAheadCount &&
     a.baseBehindCount === b.baseBehindCount &&
     a.baseMatchesUpstream === b.baseMatchesUpstream &&
+    // lastGitStatusCheckedAt is deliberately NOT compared (like `timestamp`):
+    // it advances on every completed poll, so comparing it here would force a
+    // new worktrees Map identity per quiet tick. Freshness lives in the
+    // store's `statusCheckedAt` side map instead.
     a.lastFetchedAt === b.lastFetchedAt &&
-    a.lastGitStatusCheckedAt === b.lastGitStatusCheckedAt &&
     a.fetchAuthFailed === b.fetchAuthFailed &&
     a.fetchNetworkFailed === b.fetchNetworkFailed &&
     a.isFetchInFlight === b.isFetchInFlight &&

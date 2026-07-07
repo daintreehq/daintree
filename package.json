@@ -43,6 +43,7 @@
     "watch:main": "node scripts/build-main.mjs --watch",
     "build": "tsc && vite build && npm run build:main",
     "build:e2e": "tsc && vite build && cross-env NODE_ENV=test node scripts/build-main.mjs",
+    "build:e2e:bench": "tsc && cross-env DAINTREE_RENDER_PROBE=1 vite build && cross-env NODE_ENV=test node scripts/build-main.mjs",
     "package": "npm run build && electron-builder",
     "package:mac": "npm run build && electron-builder --mac",
     "package:win": "npm run build && electron-builder --win appx nsis",

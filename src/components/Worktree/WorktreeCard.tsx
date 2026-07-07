@@ -648,13 +648,18 @@ export function WorktreeCard({
     hoverWorktreeIdRef.current = worktree.id;
   }, [worktree.id]);
 
+  // Freshness lives in the store's statusCheckedAt side map, not on the
+  // snapshot — the snapshot field only reflects the last content change (see
+  // createWorktreeStore). Per-id primitive selector: this card re-renders only
+  // when ITS worktree's stamp advances.
+  const lastGitStatusCheckedAt = useWorktreeStore((s) => s.statusCheckedAt.get(worktree.id));
+
   const handleRevalidate = useCallback(() => {
     const id = hoverWorktreeIdRef.current;
     if (
       isActive ||
       !isRevalidationAllowed(id) ||
-      (worktree.lastGitStatusCheckedAt &&
-        Date.now() - worktree.lastGitStatusCheckedAt < REVALIDATE_FRESHNESS_GATE)
+      (lastGitStatusCheckedAt && Date.now() - lastGitStatusCheckedAt < REVALIDATE_FRESHNESS_GATE)
     ) {
       return;
     }
@@ -665,16 +670,16 @@ export function WorktreeCard({
         inFlightRevalidates.delete(id);
       })
       .catch(() => {});
-  }, [isActive, worktree.lastGitStatusCheckedAt]);
+  }, [isActive, lastGitStatusCheckedAt]);
 
   const handlePointerEnter = useCallback(() => {
-    if (isActive || !worktree.lastGitStatusCheckedAt) return;
+    if (isActive || !lastGitStatusCheckedAt) return;
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
     hoverTimerRef.current = setTimeout(() => {
       hoverTimerRef.current = null;
       handleRevalidate();
     }, HOVER_REVALIDATE_DELAY);
-  }, [isActive, worktree.lastGitStatusCheckedAt, handleRevalidate]);
+  }, [isActive, lastGitStatusCheckedAt, handleRevalidate]);
 
   const handlePointerLeave = useCallback(() => {
     if (hoverTimerRef.current) {
@@ -937,7 +942,7 @@ export function WorktreeCard({
                 resourceEndpoint={worktree.resourceStatus?.endpoint}
                 resourceLastCheckedAt={worktree.resourceStatus?.lastCheckedAt}
                 devServerSession={devServerSession}
-                lastGitStatusCheckedAt={worktree.lastGitStatusCheckedAt}
+                lastGitStatusCheckedAt={lastGitStatusCheckedAt}
                 onRevalidateGitStatus={handleRevalidate}
                 onCheckResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
                 onCleanupWorktree={
