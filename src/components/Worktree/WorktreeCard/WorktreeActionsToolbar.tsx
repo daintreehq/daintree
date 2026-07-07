@@ -155,7 +155,7 @@ export function WorktreeActionsToolbar({
           ? "opacity-100"
           : isActive
             ? "opacity-100"
-            : "opacity-50 delay-0 group-hover/card:opacity-100 group-hover/card:delay-[75ms] group-has-[:focus-visible]/card:opacity-100 group-has-[:focus-visible]/card:delay-0 group-has-[[data-state=open]]/card:opacity-100 group-has-[[data-state=open]]/card:delay-0"
+            : "opacity-50 delay-0 group-hover/card:opacity-100 group-hover/card:delay-75 group-has-[:focus-visible]/card:opacity-100 group-has-[:focus-visible]/card:delay-0 group-has-[[data-state=open]]/card:opacity-100 group-has-[[data-state=open]]/card:delay-0"
       )}
     >
       {onCleanupWorktree && (

@@ -659,8 +659,13 @@ describe("animate-skeleton-shimmer CSS contract", () => {
   });
 
   it("hides the ::after sweep under body[data-performance-mode]", () => {
+    // The rule is a selector list shared with the Pulse skeleton shimmer, so
+    // allow the sibling selector between ::after and the declaration block.
     expect(css).toMatch(
-      /body\[data-performance-mode="true"\]\s+\.animate-skeleton-shimmer::after\s*\{[^}]*display:\s*none/
+      /body\[data-performance-mode="true"\]\s+\.animate-skeleton-shimmer::after[^{]*\{[^}]*display:\s*none/
+    );
+    expect(css).toMatch(
+      /body\[data-performance-mode="true"\]\s+\.pulse-skeleton-shimmer::after[^{]*\{[^}]*display:\s*none/
     );
   });
 });
