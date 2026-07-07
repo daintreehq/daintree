@@ -330,7 +330,7 @@ export async function initPerWindowServices(
               }
             }
           } catch (error) {
-            console.warn(`[MAIN] Failed to refresh PTY port for window ${wCtx.windowId}:`, error);
+            console.error(`[MAIN] Failed to refresh PTY port for window ${wCtx.windowId}:`, error);
           }
         }
       }

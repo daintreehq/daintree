@@ -9,8 +9,6 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
-const madeChannels = vi.hoisted(() => [] as Array<{ port1: MockPort; port2: MockPort }>);
-
 function makeMockPort() {
   return {
     close: vi.fn(),
@@ -20,6 +18,8 @@ function makeMockPort() {
 }
 
 type MockPort = ReturnType<typeof makeMockPort>;
+
+const madeChannels = vi.hoisted(() => [] as Array<{ port1: MockPort; port2: MockPort }>);
 
 vi.mock("electron", () => ({
   BrowserWindow: function BrowserWindow() {
@@ -34,7 +34,11 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { distributePortsToView, distributeTerminalWorkerPortToView } from "../portDistribution.js";
+import {
+  distributePortsToView,
+  distributeTerminalWorkerPortToView,
+  releaseTerminalWorkerPort,
+} from "../portDistribution.js";
 import type { WindowContext } from "../WindowRegistry.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import type { BrowserWindow } from "electron";
@@ -89,6 +93,7 @@ describe("distributePortsToView", () => {
 
     distributePortsToView(makeMockWin(), ctx, asWc(wc), asPty(pty));
 
+    expect(madeChannels).toHaveLength(1);
     const { port1, port2 } = madeChannels[0];
     expect(ctx.services.activeRendererPort).toBe(port1);
     expect(ctx.services.activePtyHostPort).toBe(port2);
@@ -177,6 +182,18 @@ describe("distributePortsToView", () => {
     expect(warnSpy).toHaveBeenCalled();
   });
 
+  it("wires and posts the pair without a pty client", () => {
+    const ctx = makeCtx();
+    const wc = makeMockWc();
+
+    expect(() => distributePortsToView(makeMockWin(), ctx, asWc(wc), null)).not.toThrow();
+
+    expect(madeChannels).toHaveLength(1);
+    expect(ctx.services.activeRendererPort).toBe(madeChannels[0].port1);
+    expect(ctx.services.activePtyHostPort).toBe(madeChannels[0].port2);
+    expect(wc.postMessage).toHaveBeenCalledTimes(2);
+  });
+
   it("skips posting to a destroyed WebContents but still wires the pair", () => {
     const ctx = makeCtx();
     const wc = makeMockWc(true);
@@ -258,5 +275,32 @@ describe("distributeTerminalWorkerPortToView", () => {
     expect(port1.close).toHaveBeenCalled();
     expect(port2.close).toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalled();
+  });
+});
+
+describe("releaseTerminalWorkerPort", () => {
+  it("swallows close throws and is idempotent on double release", () => {
+    const ctx = makeCtx();
+    const pty = makeMockPtyClient();
+    const pair = { rendererPort: makeMockPort(), ptyHostPort: makeMockPort() };
+    pair.rendererPort.close.mockImplementation(() => {
+      throw new Error("already closed");
+    });
+    ctx.services.terminalWorkerPorts = new Map([
+      [
+        "term-1",
+        pair as unknown as {
+          rendererPort: Electron.MessagePortMain;
+          ptyHostPort: Electron.MessagePortMain;
+        },
+      ],
+    ]);
+
+    expect(() => releaseTerminalWorkerPort(ctx, asPty(pty), "term-1")).not.toThrow();
+    expect(ctx.services.terminalWorkerPorts?.has("term-1")).toBe(false);
+    expect(pair.ptyHostPort.close).toHaveBeenCalled();
+
+    releaseTerminalWorkerPort(ctx, asPty(pty), "term-1");
+    expect(pty.disconnectTerminalMessagePort).toHaveBeenCalledTimes(1);
   });
 });
