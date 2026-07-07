@@ -2,6 +2,14 @@ import { forwardRef, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
+import {
+  getUiPaletteTransitionDuration,
+  UI_PALETTE_ENTER_DURATION,
+  UI_PALETTE_EXIT_DURATION,
+  UI_ENTER_EASING,
+  UI_EXIT_EASING,
+} from "@/lib/animationUtils";
 
 function getDescriptionSnippet(description: string, maxLength = 60): string {
   const cleaned = description.replace(/\s+/g, " ").trim();
@@ -51,6 +59,13 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
     ref
   ) => {
     const listRef = useRef<HTMLDivElement | null>(null);
+    // Palette-tier presence (150ms enter / 100ms exit) so the menu rises in
+    // and fades out like its sibling overlays instead of popping on every
+    // `/` or `@` keystroke.
+    const { isVisible, shouldRender } = useAnimatedPresence({
+      isOpen,
+      animationDuration: getUiPaletteTransitionDuration("exit"),
+    });
 
     useEffect(() => {
       if (!isOpen) return;
@@ -58,7 +73,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
       selected?.scrollIntoView?.({ block: "nearest" });
     }, [isOpen, selectedIndex, items]);
 
-    if (!isOpen) return null;
+    if (!shouldRender) return null;
 
     const isEmpty = !isLoading && items.length === 0;
 
@@ -67,9 +82,20 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
         ref={ref}
         className={cn(
           "absolute bottom-full mb-0 w-[420px] max-w-[calc(100vw-16px)] overflow-hidden rounded-lg border border-tint/10 bg-surface shadow-[var(--theme-shadow-floating)]",
-          "z-50"
+          "z-50 origin-bottom",
+          "transition-[opacity,translate,scale]",
+          "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:translate-none motion-reduce:scale-none",
+          isVisible
+            ? "opacity-100 translate-y-0 scale-100"
+            : "opacity-0 translate-y-0.5 scale-[0.99]"
         )}
-        style={style}
+        style={{
+          ...style,
+          transitionDuration: isVisible
+            ? `${UI_PALETTE_ENTER_DURATION}ms`
+            : `${UI_PALETTE_EXIT_DURATION}ms`,
+          transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
+        }}
         role={isEmpty ? undefined : "listbox"}
         aria-label={ariaLabel ?? title ?? "Autocomplete"}
         aria-busy={isLoading || isStale || undefined}
