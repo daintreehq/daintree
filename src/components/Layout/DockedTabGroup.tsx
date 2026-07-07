@@ -71,6 +71,7 @@ import {
 import { usePreferencesStore } from "@/store";
 import { UI_ANIMATION_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useDismissableTooltip } from "@/hooks/useDismissableTooltip";
 import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
 
 interface DockedTabGroupProps {
@@ -95,6 +96,18 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         Object.entries(dragHandle.listeners).filter(([name]) => name !== "onKeyDown")
       )
     : undefined;
+
+  // Chip-local hover tooltips (command text, agent state) are force-closed when
+  // the group chip is clicked or dragged, mirroring the toolbar buttons — a
+  // click that opens the preview popover (or a drag) over the chip would
+  // otherwise leave the hover tooltip stranded open.
+  const commandTip = useDismissableTooltip();
+  const stateTip = useDismissableTooltip();
+  const dismissTips = () => {
+    commandTip.dismiss();
+    stateTip.dismiss();
+  };
+
   const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
   const openDockTerminal = usePanelStore((s) => s.openDockTerminal);
   const closeDockTerminal = usePanelStore((s) => s.closeDockTerminal);
@@ -215,8 +228,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   // Auto-close popover when drag starts for any panel in this group
   useDndMonitor({
     onDragStart: ({ active }) => {
-      if (panels.some((p) => p.id === active.id) && isOpen) {
-        closeDockTerminal();
+      if (panels.some((p) => p.id === active.id)) {
+        dismissTips();
+        if (isOpen) closeDockTerminal();
       }
     },
   });
@@ -579,6 +593,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                dismissTips();
                 if (e.detail >= 2) return;
                 if (isOpen) {
                   closeDockTerminal();
@@ -614,8 +629,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               {isActive && commandText && (
                 <>
                   <div className="h-3 w-px bg-border-subtle shrink-0" aria-hidden="true" />
-                  <Tooltip>
-                    <TooltipTrigger asChild>
+                  <Tooltip open={commandTip.open} onOpenChange={commandTip.onOpenChange}>
+                    <TooltipTrigger asChild onPointerEnter={commandTip.onPointerEnter}>
                       <span className="truncate flex-1 min-w-0 text-[11px] text-daintree-text/50 font-mono">
                         {commandText}
                       </span>
@@ -626,8 +641,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               )}
 
               {displayAgentState && StateIcon && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
+                <Tooltip open={stateTip.open} onOpenChange={stateTip.onOpenChange}>
+                  <TooltipTrigger asChild onPointerEnter={stateTip.onPointerEnter}>
                     <div
                       className={cn(
                         "ml-1.5 flex items-center shrink-0",

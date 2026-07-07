@@ -114,6 +114,8 @@ export type { UseUnsavedChangesOptions } from "./useUnsavedChanges";
 
 export { useDebounce } from "./useDebounce";
 
+export { useDismissableTooltip } from "./useDismissableTooltip";
+
 export {
   useDeferredLoading,
   useDohertyGate,
