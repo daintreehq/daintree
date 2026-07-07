@@ -71,7 +71,7 @@ import { isE2EFaultMode } from "../setup/runtimeFlags.js";
 import { activateOpenFileInstaller } from "../setup/openFileInstall.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { registerCommands } from "../services/commands/index.js";
-import { store } from "../store.js";
+import { store, wasStoreFreshAtBoot } from "../store.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
 import {
@@ -153,7 +153,14 @@ export async function initGlobalServices(
   try {
     const migrationRunner = new MigrationRunner(store);
     const currentVersion = migrationRunner.getCurrentVersion();
-    if (currentVersion !== LATEST_SCHEMA_VERSION) {
+    if (currentVersion === 0 && wasStoreFreshAtBoot()) {
+      // Brand-new install: no config.json existed at boot, so there is no
+      // pre-existing data for the chain to transform — store defaults already
+      // match the latest schema. Stamp the version directly instead of
+      // replaying every migration, each of which pays an atomic config write
+      // on the boot-critical path (~100ms for the full chain).
+      store.set("_schemaVersion", LATEST_SCHEMA_VERSION);
+    } else if (currentVersion !== LATEST_SCHEMA_VERSION) {
       console.log(
         `[MAIN] Running store migrations (v${currentVersion} -> v${LATEST_SCHEMA_VERSION})...`
       );
