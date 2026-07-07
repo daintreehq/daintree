@@ -9,7 +9,13 @@ import { PANEL_KIND_BRAND_COLORS } from "../theme/index.js";
  * built-in kind is a one-line change here — every guard and registry helper
  * derives from this array.
  */
-export const BUILT_IN_PANEL_KINDS = ["terminal", "browser", "dev-preview", "review"] as const;
+export const BUILT_IN_PANEL_KINDS = [
+  "terminal",
+  "browser",
+  "dev-preview",
+  "review",
+  "markdown",
+] as const;
 
 /** Built-in panel kinds — derived from `BUILT_IN_PANEL_KINDS` */
 export type BuiltInPanelKind = (typeof BUILT_IN_PANEL_KINDS)[number];
@@ -215,6 +221,24 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     // Review is a reading surface: when the user moves it to the dock or
     // trashes it, send focus back to whatever they were last reading rather
     // than handing focus to the first grid terminal in the worktree.
+    policy: { dockFallbackTarget: "previous-focused" },
+  },
+  markdown: {
+    id: "markdown",
+    name: "Markdown",
+    iconId: "file-text",
+    color: PANEL_KIND_BRAND_COLORS.markdown,
+    hasPty: false,
+    canRestart: false,
+    canConvert: false,
+    usesTerminalUi: false,
+    keepAliveOnProjectSwitch: true,
+    showInPalette: true,
+    searchAliases: ["md", "readme", "docs", "spec", "document", "viewer"],
+    firstRenderRestore: true,
+    lazyImportPath: "src/panels/markdown/MarkdownPane.tsx",
+    // Reading surface like review: focus returns to what the user was last
+    // reading when the panel leaves the grid.
     policy: { dockFallbackTarget: "previous-focused" },
   },
 };

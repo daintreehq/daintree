@@ -7,6 +7,7 @@ import type {
   TabGroup,
   PanelExitBehavior,
   ViewportPresetId,
+  MarkdownViewMode,
 } from "./panel.js";
 import type { CommandOverride } from "./commands.js";
 import type { EditorConfig } from "./editor.js";
@@ -110,6 +111,10 @@ export interface PanelSnapshot {
   viewportFit?: boolean;
   /** Last captured dev-preview scroll position, paired with URL for stale-scroll prevention */
   devPreviewScrollPosition?: { url: string; scrollY: number };
+  /** Absolute path of the file shown in a markdown panel */
+  markdownFilePath?: string;
+  /** Active view mode for a markdown panel */
+  markdownViewMode?: MarkdownViewMode;
   /** Behavior when terminal exits */
   exitBehavior?: PanelExitBehavior;
   /** Captured agent session ID from graceful shutdown (used for session resume) */

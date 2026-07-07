@@ -6,6 +6,7 @@ import type {
   BrowserPanelData,
   DevPreviewPanelData,
   ReviewPanelData,
+  MarkdownPanelData,
 } from "@shared/types/panel";
 import { isBuiltInPanelKind, type BuiltInPanelKind } from "@shared/types/panel";
 import type {
@@ -13,6 +14,7 @@ import type {
   BrowserPanelOptions,
   DevPreviewPanelOptions,
   ReviewPanelOptions,
+  MarkdownPanelOptions,
 } from "@shared/types/addPanelOptions";
 import type { PanelSnapshot } from "@shared/types/project";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -29,6 +31,8 @@ import { serializeDevPreview } from "./dev-preview/serializer";
 import { createDevPreviewDefaults } from "./dev-preview/defaults";
 import { serializeReview } from "./review/serializer";
 import { createReviewDefaults } from "./review/defaults";
+import { serializeMarkdown } from "./markdown/serializer";
+import { createMarkdownDefaults } from "./markdown/defaults";
 
 export interface PanelComponentProps {
   id: string;
@@ -61,6 +65,9 @@ const LazyDevPreviewPane = lazy(() =>
 );
 const LazyReviewPane = lazy(() =>
   import("./review/ReviewPane").then((m) => ({ default: m.ReviewPane }))
+);
+const LazyMarkdownPane = lazy(() =>
+  import("./markdown/MarkdownPane").then((m) => ({ default: m.MarkdownPane }))
 );
 
 // Wrapper providing Suspense fallback for the lazy dynamic import and
@@ -106,6 +113,18 @@ function ReviewPaneWrapper(props: ComponentProps<typeof LazyReviewPane>) {
   );
 }
 
+function MarkdownPaneWrapper(props: ComponentProps<typeof LazyMarkdownPane>) {
+  return (
+    <ErrorBoundary variant="component" componentName="MarkdownPane">
+      <Suspense fallback={<BrowserPaneSkeleton label="Loading markdown panel" />}>
+        <ContentFadeIn className="flex flex-col h-full w-full">
+          <LazyMarkdownPane {...props} />
+        </ContentFadeIn>
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
+
 /**
  * Maps each built-in panel kind to its panel data variant. `createdAt` is
  * intentionally widened on the PTY and dev-preview entries so serializers can
@@ -116,6 +135,7 @@ interface BuiltInPanelMap {
   browser: BrowserPanelData;
   "dev-preview": DevPreviewPanelData & { createdAt?: number };
   review: ReviewPanelData;
+  markdown: MarkdownPanelData;
 }
 
 interface BuiltInPanelOptionsMap {
@@ -123,6 +143,7 @@ interface BuiltInPanelOptionsMap {
   browser: BrowserPanelOptions;
   "dev-preview": DevPreviewPanelOptions;
   review: ReviewPanelOptions;
+  markdown: MarkdownPanelOptions;
 }
 
 type BuiltInSerializeDefaults = {
@@ -137,6 +158,7 @@ const BUILT_IN_SERIALIZE_DEFAULTS = {
   browser: { serialize: serializeBrowser, createDefaults: createBrowserDefaults },
   "dev-preview": { serialize: serializeDevPreview, createDefaults: createDevPreviewDefaults },
   review: { serialize: serializeReview, createDefaults: createReviewDefaults },
+  markdown: { serialize: serializeMarkdown, createDefaults: createMarkdownDefaults },
 } satisfies BuiltInSerializeDefaults;
 
 export function initBuiltInPanelKinds(): void {
@@ -170,6 +192,7 @@ const PANEL_KIND_DEFINITION_REGISTRY: Record<string, PanelKindDefinition> = {
   browser: { ...requirePanelKindConfig("browser"), component: BrowserPaneWrapper },
   "dev-preview": { ...requirePanelKindConfig("dev-preview"), component: DevPreviewPaneWrapper },
   review: { ...requirePanelKindConfig("review"), component: ReviewPaneWrapper },
+  markdown: { ...requirePanelKindConfig("markdown"), component: MarkdownPaneWrapper },
 } satisfies Record<BuiltInPanelKind, PanelKindDefinition>;
 
 /**

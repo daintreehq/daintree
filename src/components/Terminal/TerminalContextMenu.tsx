@@ -10,7 +10,13 @@ import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStor
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 import { actionService } from "@/services/ActionService";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-import { isBrowserPanel, isDevPreviewPanel, isPtyPanel, isReviewPanel } from "@shared/types/panel";
+import {
+  isBrowserPanel,
+  isDevPreviewPanel,
+  isMarkdownPanel,
+  isPtyPanel,
+  isReviewPanel,
+} from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { reportFileLinkFailure } from "@/services/terminal/FileLinksAddon";
 import { useIsHibernated } from "@/hooks/useIsHibernated";
@@ -492,6 +498,7 @@ export function TerminalContextMenu({
   const isBrowser = isBrowserPanel(terminal);
   const isDevPreview = isDevPreviewPanel(terminal);
   const isReview = isReviewPanel(terminal);
+  const isMarkdown = isMarkdownPanel(terminal);
   const hasPty = terminal.kind ? panelKindHasPty(terminal.kind) : true;
 
   const layoutSection = (
@@ -710,6 +717,45 @@ export function TerminalContextMenu({
           <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
             <OctagonX className={ICON_CLASS} aria-hidden="true" />
             Remove review
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    );
+  }
+
+  if (isMarkdown) {
+    return (
+      <ContextMenu>
+        <MenuActionSourceContext.Consumer>
+          {(value) => {
+            sourceRef.current = value ?? "user";
+            return null;
+          }}
+        </MenuActionSourceContext.Consumer>
+        <ContextMenuTrigger asChild>
+          <div className="contents" data-context-trigger={terminalId}>
+            {children}
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
+          {layoutSection}
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => handleAction("rename")}>
+            <Pencil className={ICON_CLASS} aria-hidden="true" />
+            Rename panel
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => handleAction("background")}>
+            <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
+            Send to background
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => handleAction("trash")}>
+            <Trash2 className={ICON_CLASS} aria-hidden="true" />
+            Trash panel
+          </ContextMenuItem>
+          <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
+            <OctagonX className={ICON_CLASS} aria-hidden="true" />
+            Remove panel
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>

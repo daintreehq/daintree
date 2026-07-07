@@ -1,4 +1,5 @@
 import type { BuiltInPanelKind, PanelKind, ViewportPresetId } from "@/types";
+import type { MarkdownViewMode } from "@shared/types/panel";
 import type { AddTerminalArgs, SavedTerminalData } from "@/utils/stateHydration/statePatcher";
 import { VIEWPORT_PRESETS } from "@/panels/dev-preview/viewportPresets";
 
@@ -9,6 +10,11 @@ function sanitizeViewportPreset(value: string | undefined): ViewportPresetId | u
   return value !== undefined && Object.hasOwn(VIEWPORT_PRESETS, value)
     ? (value as ViewportPresetId)
     : undefined;
+}
+
+/** Coerce a persisted markdown view mode, dropping unknown on-disk values. */
+function sanitizeMarkdownViewMode(value: string | undefined): MarkdownViewMode | undefined {
+  return value === "rendered" || value === "source" ? value : undefined;
 }
 
 /**
@@ -44,6 +50,10 @@ const BUILT_IN_DESERIALIZERS = {
     };
   },
   review: null,
+  markdown: (saved) => ({
+    markdownFilePath: saved.markdownFilePath,
+    markdownViewMode: sanitizeMarkdownViewMode(saved.markdownViewMode),
+  }),
 } as const satisfies Record<BuiltInPanelKind, PanelKindDeserializer | null>;
 
 /** Runtime registry seeded from the built-in table, dropping `null` entries. */

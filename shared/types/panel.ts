@@ -569,7 +569,29 @@ export interface ReviewPanelData extends BasePanelData {
   kind: "review";
 }
 
-export type PanelInstance = PtyPanelData | BrowserPanelData | DevPreviewPanelData | ReviewPanelData;
+/** View mode shared by the markdown viewer surfaces (panel + dialog). */
+export type MarkdownViewMode = "rendered" | "source";
+
+/**
+ * Markdown panel — read-only viewer for a markdown file in a grid cell.
+ * `markdownFilePath` is absolute; the effective read root is resolved at
+ * render time (the panel's worktree when the file is inside one, else the
+ * file's parent directory) so worktree renames don't strand the panel.
+ */
+export interface MarkdownPanelData extends BasePanelData {
+  kind: "markdown";
+  /** Absolute path of the markdown file being viewed; absent = picker empty state */
+  markdownFilePath?: string;
+  /** Active view mode. Absent defaults to "rendered". */
+  markdownViewMode?: MarkdownViewMode;
+}
+
+export type PanelInstance =
+  | PtyPanelData
+  | BrowserPanelData
+  | DevPreviewPanelData
+  | ReviewPanelData
+  | MarkdownPanelData;
 
 export function isPtyPanel(panel: PanelInstance | TerminalInstance): panel is PtyPanelData {
   const kind = panel.kind ?? "terminal";
@@ -595,6 +617,14 @@ export function isReviewPanel(panel: PanelInstance | TerminalInstance): panel is
   const kind = panel.kind ?? "terminal";
 
   return kind === "review";
+}
+
+export function isMarkdownPanel(
+  panel: PanelInstance | TerminalInstance
+): panel is MarkdownPanelData {
+  const kind = panel.kind ?? "terminal";
+
+  return kind === "markdown";
 }
 
 /**

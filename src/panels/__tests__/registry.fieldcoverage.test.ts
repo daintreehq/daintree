@@ -1,6 +1,11 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
-import type { BrowserPanelData, BuiltInPanelKind, PanelExitBehavior } from "@shared/types/panel";
+import type {
+  BrowserPanelData,
+  BuiltInPanelKind,
+  MarkdownPanelData,
+  PanelExitBehavior,
+} from "@shared/types/panel";
 import type { BrowserHistory } from "@shared/types/browser";
 import { getDeserializer } from "@/config/panelKindSerialisers";
 import type { SavedTerminalData } from "@/utils/stateHydration/statePatcher";
@@ -188,6 +193,28 @@ const DEV_PREVIEW_FIELD_CLASSIFICATION = {
   lastActiveAt: false,
 } as const satisfies Record<keyof DevPreviewSerializeInput, boolean>;
 
+// ── Markdown field classification ────────────────────────────────────
+
+const MARKDOWN_FIELD_CLASSIFICATION = {
+  // BasePanelData — persisted by the base serialization layer
+  id: false,
+  kind: false,
+  title: false,
+  titleMode: false,
+  location: false,
+  worktreeId: false,
+  isVisible: false,
+  extensionState: false,
+  pluginId: false,
+  // MarkdownPanelData persisted fields
+  markdownFilePath: true,
+  markdownViewMode: true,
+  // BasePanelData carrier-bookkeeping timestamps — written by the base
+  // serialization layer in panelToSnapshot, not per-kind serializers.
+  createdAt: false,
+  lastActiveAt: false,
+} as const satisfies Record<keyof MarkdownPanelData, boolean>;
+
 // ── Built-in kind exhaustiveness ─────────────────────────────────────
 
 const BUILT_IN_KINDS = [
@@ -195,6 +222,7 @@ const BUILT_IN_KINDS = [
   "browser",
   "dev-preview",
   "review",
+  "markdown",
 ] as const satisfies readonly BuiltInPanelKind[];
 
 // Compile-time exhaustiveness pin: if a new BuiltInPanelKind is added and not
@@ -326,6 +354,22 @@ const savedBrowser: SavedTerminalData = {
   browserConsoleOpen: false,
 };
 
+const markdownFixture: MarkdownPanelData = {
+  id: "panel-markdown",
+  title: "Panel",
+  location: "grid",
+  kind: "markdown",
+  markdownFilePath: "/home/project/docs/spec.md",
+  markdownViewMode: "source",
+};
+
+const savedMarkdown: SavedTerminalData = {
+  id: "panel-markdown",
+  kind: "markdown",
+  markdownFilePath: "/home/project/docs/spec.md",
+  markdownViewMode: "source",
+};
+
 const savedDevPreview: SavedTerminalData = {
   id: "panel-dev-preview",
   kind: "dev-preview",
@@ -390,6 +434,14 @@ describe("panel serializer field coverage", () => {
       }
     );
   });
+
+  it("markdown serializer covers every persisted markdown field", () => {
+    const output = getPanelKindConfig("markdown")!.serialize!(markdownFixture) as Record<
+      string,
+      unknown
+    >;
+    assertCovers("markdown serializer", output, persistedKeys(MARKDOWN_FIELD_CLASSIFICATION));
+  });
 });
 
 // ── Deserializer coverage ────────────────────────────────────────────
@@ -431,5 +483,24 @@ describe("panel deserializer field coverage", () => {
     // from BasePanelData is the sole binding, and the worktree path is
     // resolved fresh from the worktree store at render time.
     expect(getDeserializer("review")).toBeUndefined();
+  });
+
+  it("markdown deserializer covers every persisted markdown field", () => {
+    const deserializer = getDeserializer("markdown");
+    expect(deserializer, "markdown deserializer must be registered").toBeDefined();
+    const output = deserializer!(savedMarkdown) as Record<string, unknown>;
+    assertCovers("markdown deserializer", output, persistedKeys(MARKDOWN_FIELD_CLASSIFICATION));
+  });
+
+  it("markdown deserializer drops unknown persisted view modes", () => {
+    const deserializer = getDeserializer("markdown")!;
+    const output = deserializer({
+      id: "panel-markdown",
+      kind: "markdown",
+      markdownFilePath: "/home/project/docs/spec.md",
+      markdownViewMode: "sideways",
+    });
+    expect(output.markdownViewMode).toBeUndefined();
+    expect(output.markdownFilePath).toBe("/home/project/docs/spec.md");
   });
 });

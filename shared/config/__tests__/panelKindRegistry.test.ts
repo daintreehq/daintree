@@ -461,6 +461,7 @@ describe("getFirstRenderSeeds", () => {
     expect([...getFirstRenderSeeds()].sort()).toEqual([
       "src/components/Browser/BrowserPane.tsx",
       "src/components/DevPreview/DevPreviewPane.tsx",
+      "src/panels/markdown/MarkdownPane.tsx",
       "src/panels/review/ReviewPane.tsx",
     ]);
   });
