@@ -187,8 +187,10 @@ This document maps each interactive component role to its canonical Tailwind cla
 | Color/bg/border changes | `transition-colors` | Covers color, background-color, border-color for most interactive states |
 | Width/height changes | `transition-[width]` / `transition-[height]` | Layout-impacting properties should be explicit |
 | Opacity changes | `transition-opacity` | Visual fades only |
-| Transform changes | `transition-transform` | Animations, scale effects |
-| Multiple props | `transition-[color,background-color,transform]` | Explicit is better than `transition-all` — forces all props to interpolate |
+| Transform changes | `transition-transform` | Covers `transform`, `translate`, `scale`, `rotate` — safe for all transform utilities |
+| Multiple props | `transition-[color,background-color,translate]` | Explicit is better than `transition-all` — forces all props to interpolate |
+
+**Tailwind v4 trap:** `translate-*`, `scale-*`, and `rotate-*` utilities emit the individual `translate`/`scale`/`rotate` CSS properties, NOT `transform`. An arbitrary list like `transition-[opacity,transform]` silently skips them (the motion snaps while only the fade runs). In arbitrary lists, name the individual properties you animate (`transition-[opacity,translate,scale]`); only an inline `style={{ transform: ... }}` string is covered by `transform`. Same for reduced-motion neutralizers: `transform-none` does not reset `translate`/`scale` — use `translate-none` / `scale-none`.
 
 ---
 

@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import {
   Moon,
   Layers,
@@ -12,7 +12,9 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
+import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useExitLaggedCount } from "@/hooks/useExitLaggedCount";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store";
@@ -245,138 +247,152 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
     setKillConfirmId(null);
   }, [killConfirmId, removePanel, terminals]);
 
-  if (terminals.length === 0) return null;
-
   const count = terminals.length;
+  // Lagged count keeps the label stable while the pill fades out via the
+  // .dock-status-pill exit transition instead of flashing "(0)".
+  const displayCount = useExitLaggedCount(count);
   const triggerLabel =
-    waitingCount > 0 ? `Background (${count} · ${waitingCount} waiting)` : `Background (${count})`;
+    waitingCount > 0
+      ? `Background (${displayCount} · ${waitingCount} waiting)`
+      : `Background (${displayCount})`;
+
+  useEffect(() => {
+    if (count === 0) {
+      setIsOpen(false);
+      setKillConfirmId(null);
+    }
+  }, [count]);
 
   return (
-    <Popover open={isOpen} onOpenChange={setIsOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="pill"
-          size="sm"
-          className={cn(
-            compact ? "px-1.5 min-w-0" : "px-3",
-            isOpen && "bg-overlay-emphasis border-border-default"
-          )}
-          aria-haspopup="dialog"
-          aria-expanded={isOpen}
-          aria-controls="background-container-popover"
-          aria-label={triggerLabel}
-        >
-          <span className="relative">
-            <Moon className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
-            {compact && count > 0 && (
-              <span
-                className={cn(
-                  "absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-[10px] font-bold tabular-nums shadow-sm",
-                  waitingCount > 0
-                    ? "bg-state-waiting text-daintree-bg"
-                    : "bg-daintree-text/20 text-daintree-text"
-                )}
-              >
-                {count > 9 ? "9+" : count}
-              </span>
+    <span className="dock-status-pill" data-visible={count > 0 ? "true" : "false"}>
+      <Popover open={isOpen} onOpenChange={setIsOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="pill"
+            size="sm"
+            className={cn(
+              compact ? "px-1.5 min-w-0" : "px-3",
+              isOpen && "bg-overlay-emphasis border-border-default"
             )}
-          </span>
-          {!compact && (
-            <span className="font-medium tabular-nums">
-              Background ({count}
-              {waitingCount > 0 && (
-                <>
-                  {" · "}
-                  <span className="text-state-waiting">{waitingCount} waiting</span>
-                </>
+            aria-haspopup="dialog"
+            aria-expanded={isOpen}
+            aria-controls="background-container-popover"
+            aria-label={triggerLabel}
+          >
+            <span className="relative">
+              <Moon className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
+              {compact && displayCount > 0 && (
+                <span
+                  className={cn(
+                    "absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-[10px] font-bold tabular-nums shadow-sm",
+                    waitingCount > 0
+                      ? "bg-state-waiting text-daintree-bg"
+                      : "bg-daintree-text/20 text-daintree-text"
+                  )}
+                >
+                  <AnimatedLabel label={displayCount > 9 ? "9+" : String(displayCount)} />
+                </span>
               )}
-              )
             </span>
-          )}
-        </Button>
-      </PopoverTrigger>
-
-      <PopoverContent
-        id="background-container-popover"
-        role="dialog"
-        aria-label="Backgrounded panels"
-        className="w-96 p-0"
-        side="top"
-        align="end"
-        sideOffset={8}
-        onOpenAutoFocus={(e) => e.preventDefault()}
-        onCloseAutoFocus={(e) => e.preventDefault()}
-        onPointerDownOutside={(e) => {
-          // Keep the popover anchored while the kill confirm dialog is open;
-          // AppDialog is a react-dom portal with no Radix marker on its root,
-          // so we gate on local state rather than a DOM selector.
-          if (killConfirmId !== null) e.preventDefault();
-        }}
-        onInteractOutside={(e) => {
-          if (killConfirmId !== null) e.preventDefault();
-        }}
-        onEscapeKeyDown={(e) => {
-          if (killConfirmId !== null) e.preventDefault();
-        }}
-      >
-        <div className="flex flex-col">
-          <div className="px-3 py-2 border-b border-divider bg-daintree-bg/50 flex justify-between items-center">
-            <span className="text-xs font-medium text-daintree-text/70">Background panels</span>
-            {waitingCount > 0 && (
-              <span className="text-[10px] font-medium text-state-waiting tabular-nums">
-                {waitingCount} waiting
+            {!compact && (
+              <span className="font-medium tabular-nums">
+                Background (<AnimatedLabel label={String(displayCount)} />
+                {waitingCount > 0 && (
+                  <>
+                    {" · "}
+                    <span className="text-state-waiting">
+                      <AnimatedLabel label={String(waitingCount)} /> waiting
+                    </span>
+                  </>
+                )}
+                )
               </span>
             )}
-          </div>
+          </Button>
+        </PopoverTrigger>
 
-          <div className="p-1 flex flex-col gap-1 max-h-[360px] overflow-y-auto">
-            {displayItems.map((item) => {
-              if (item.type === "group") {
+        <PopoverContent
+          id="background-container-popover"
+          role="dialog"
+          aria-label="Backgrounded panels"
+          className="w-96 p-0"
+          side="top"
+          align="end"
+          sideOffset={8}
+          onOpenAutoFocus={(e) => e.preventDefault()}
+          onCloseAutoFocus={(e) => e.preventDefault()}
+          onPointerDownOutside={(e) => {
+            // Keep the popover anchored while the kill confirm dialog is open;
+            // AppDialog is a react-dom portal with no Radix marker on its root,
+            // so we gate on local state rather than a DOM selector.
+            if (killConfirmId !== null) e.preventDefault();
+          }}
+          onInteractOutside={(e) => {
+            if (killConfirmId !== null) e.preventDefault();
+          }}
+          onEscapeKeyDown={(e) => {
+            if (killConfirmId !== null) e.preventDefault();
+          }}
+        >
+          <div className="flex flex-col">
+            <div className="px-3 py-2 border-b border-divider bg-daintree-bg/50 flex justify-between items-center">
+              <span className="text-xs font-medium text-daintree-text/70">Background panels</span>
+              {waitingCount > 0 && (
+                <span className="text-[10px] font-medium text-state-waiting tabular-nums">
+                  {waitingCount} waiting
+                </span>
+              )}
+            </div>
+
+            <div className="p-1 flex flex-col gap-1 max-h-[360px] overflow-y-auto">
+              {displayItems.map((item) => {
+                if (item.type === "group") {
+                  return (
+                    <BackgroundGroupItem
+                      key={item.groupRestoreId}
+                      groupRestoreId={item.groupRestoreId}
+                      groupMetadata={item.groupMetadata}
+                      terminals={item.terminals}
+                      worktreeMap={worktreeMap}
+                      watchedPanels={watchedPanels}
+                      onRestoreGroup={handleRestoreGroup}
+                      onRestoreSingle={handleRestoreSingle}
+                      onWatchToggle={handleWatchToggle}
+                      onKill={(id) => setKillConfirmId(id)}
+                    />
+                  );
+                }
+                const worktreeName = item.terminal.worktreeId
+                  ? worktreeMap.get(item.terminal.worktreeId)?.name
+                  : undefined;
                 return (
-                  <BackgroundGroupItem
-                    key={item.groupRestoreId}
-                    groupRestoreId={item.groupRestoreId}
-                    groupMetadata={item.groupMetadata}
-                    terminals={item.terminals}
-                    worktreeMap={worktreeMap}
-                    watchedPanels={watchedPanels}
-                    onRestoreGroup={handleRestoreGroup}
-                    onRestoreSingle={handleRestoreSingle}
+                  <BackgroundSingleItem
+                    key={item.terminal.id}
+                    terminal={item.terminal}
+                    worktreeName={worktreeName}
+                    isWatched={watchedPanels.has(item.terminal.id)}
+                    onRestore={handleRestoreSingle}
                     onWatchToggle={handleWatchToggle}
                     onKill={(id) => setKillConfirmId(id)}
                   />
                 );
-              }
-              const worktreeName = item.terminal.worktreeId
-                ? worktreeMap.get(item.terminal.worktreeId)?.name
-                : undefined;
-              return (
-                <BackgroundSingleItem
-                  key={item.terminal.id}
-                  terminal={item.terminal}
-                  worktreeName={worktreeName}
-                  isWatched={watchedPanels.has(item.terminal.id)}
-                  onRestore={handleRestoreSingle}
-                  onWatchToggle={handleWatchToggle}
-                  onKill={(id) => setKillConfirmId(id)}
-                />
-              );
-            })}
+              })}
+            </div>
           </div>
-        </div>
-      </PopoverContent>
+        </PopoverContent>
 
-      <ConfirmDialog
-        isOpen={killConfirmId !== null}
-        onClose={() => setKillConfirmId(null)}
-        title={KILL_TERMINAL_TITLE}
-        description={killTerminalDescription(killTarget?.title || undefined)}
-        variant="destructive"
-        confirmLabel={KILL_TERMINAL_CONFIRM_LABEL}
-        onConfirm={handleKillConfirm}
-      />
-    </Popover>
+        <ConfirmDialog
+          isOpen={killConfirmId !== null}
+          onClose={() => setKillConfirmId(null)}
+          title={KILL_TERMINAL_TITLE}
+          description={killTerminalDescription(killTarget?.title || undefined)}
+          variant="destructive"
+          confirmLabel={KILL_TERMINAL_CONFIRM_LABEL}
+          onConfirm={handleKillConfirm}
+        />
+      </Popover>
+    </span>
   );
 }
 

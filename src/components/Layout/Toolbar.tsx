@@ -1440,7 +1440,7 @@ export function Toolbar({
             <div
               data-fullscreen={isFullscreen ? "true" : undefined}
               className={cn(
-                "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-[120ms]",
+                "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
                 isFullscreen ? "w-0" : "w-16"
               )}
             />
@@ -1658,7 +1658,7 @@ export function Toolbar({
               aria-hidden="true"
               data-fullscreen={isFullscreen ? "true" : undefined}
               className={cn(
-                "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-[120ms]",
+                "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
                 isFullscreen && "w-0"
               )}
               style={

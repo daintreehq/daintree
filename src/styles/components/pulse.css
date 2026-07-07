@@ -1,9 +1,18 @@
+/* Compositor-friendly sweep: the ::after overlay rides translateX instead of
+ * animating background-position, which repaints every bone on the main thread
+ * for the whole loading window (same rationale as .animate-skeleton-shimmer
+ * in src/index.css, #4738). Geometry preserves the original look exactly:
+ * the overlay is 7 element-widths wide, tiles the theme gradient at its
+ * authored 2-width period (700% / 3.5 = 200% of the element), and slides two
+ * full periods (4/7 of its width) per cycle — so the loop stays seamless, the
+ * highlight passes twice per 1.8s, and the element is never uncovered while
+ * the ease-in-out dwells at the endpoints. */
 @keyframes pulse-skeleton-shimmer {
   0% {
-    background-position: -200% 0;
+    transform: translateX(0);
   }
   100% {
-    background-position: 200% 0;
+    transform: translateX(calc(400% / 7));
   }
 }
 
@@ -76,6 +85,18 @@
 }
 
 .pulse-skeleton-shimmer {
+  position: relative;
+  overflow: hidden;
+  background: var(--pulse-empty-bg, var(--theme-surface-panel));
+}
+
+.pulse-skeleton-shimmer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -500%;
+  width: 700%;
   background: var(
     --pulse-skeleton-gradient,
     linear-gradient(
@@ -85,8 +106,9 @@
       var(--pulse-empty-bg, var(--theme-surface-panel)) 75%
     )
   );
-  background-size: 200% 100%;
+  background-size: calc(200% / 7) 100%;
   animation: pulse-skeleton-shimmer 1.8s ease-in-out infinite;
+  will-change: transform;
 }
 
 /* WCAG 2.3.3 — kill the sweep AND fall back to a flat surface so the static
@@ -94,7 +116,11 @@
  * query and the Daintree-level "Reduce UI animations" toggle. */
 @variant reduce-motion {
   .pulse-skeleton-shimmer {
-    animation: none;
     background: var(--pulse-empty-bg, var(--theme-surface-panel));
+  }
+
+  .pulse-skeleton-shimmer::after {
+    display: none;
+    will-change: auto;
   }
 }

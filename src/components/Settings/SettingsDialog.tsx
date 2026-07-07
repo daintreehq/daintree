@@ -1402,7 +1402,7 @@ function SearchResults({
             </div>
             <ChevronRight
               className={cn(
-                "w-4 h-4 text-daintree-text/20 shrink-0 transition-[color,transform] duration-150",
+                "w-4 h-4 text-daintree-text/20 shrink-0 transition-[color,translate] duration-150",
                 index === activeIndex
                   ? "text-daintree-text/40 translate-x-0.5"
                   : "group-hover:text-daintree-text/40"

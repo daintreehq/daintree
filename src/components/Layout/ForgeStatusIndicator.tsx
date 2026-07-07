@@ -32,7 +32,7 @@ export function ForgeStatusIndicator({
   return (
     <div
       className={cn(
-        "absolute bottom-0 left-0 right-0 h-[1px] rounded-b-[var(--radius-md)]",
+        "absolute bottom-0 left-0 right-0 h-[1px] rounded-b-[var(--radius-md)] transition-opacity duration-150",
         internalStatus === "idle" && "opacity-0 pointer-events-none",
         internalStatus === "loading" && "overflow-hidden forge-status-loading",
         internalStatus === "success" && "forge-status-success",

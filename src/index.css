@@ -7,6 +7,7 @@
 @import "./styles/components/pulse.css";
 @import "./styles/components/sidebar.css";
 @import "./styles/components/panels.css";
+@import "./styles/components/dock.css";
 
 /* Reduced-motion variant — composes OS-level `prefers-reduced-motion: reduce`
  * with the Daintree "Reduce UI animations" toggle (`body[data-reduce-animations="true"]`).
@@ -1879,6 +1880,13 @@ body,
     transition: none !important;
   }
 
+  /* Grid-rows expand/collapse reveals (filter sections et al.) — height
+   * interpolation is spatial motion; the content still snaps open/closed.
+   * WCAG 2.3.3. */
+  [data-animated-reveal] {
+    transition: none !important;
+  }
+
   *:focus-visible {
     transition: none !important;
   }
@@ -2560,7 +2568,8 @@ body[data-performance-mode="true"] .surface-stale {
 /* The global wildcard above kills the shimmer animation but the ::after
  * pseudo-element still paints its static gradient stripe — hide it.
  */
-body[data-performance-mode="true"] .animate-skeleton-shimmer::after {
+body[data-performance-mode="true"] .animate-skeleton-shimmer::after,
+body[data-performance-mode="true"] .pulse-skeleton-shimmer::after {
   display: none !important;
 }
 

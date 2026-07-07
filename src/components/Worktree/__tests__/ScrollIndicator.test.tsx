@@ -139,10 +139,13 @@ describe("ScrollIndicator", () => {
     expect(screen.getByLabelText("Scroll down, 4 more below")).toBeTruthy();
   });
 
-  it("uses scoped transition-[opacity,transform] instead of bare transition", () => {
+  it("uses scoped transition-[opacity,translate] instead of bare transition", () => {
+    // `translate` (not `transform`) because Tailwind v4 translate-* utilities
+    // emit the individual `translate` property, which a `transform` entry in
+    // the transition list does not cover.
     render(<ScrollIndicator direction="below" count={1} onClick={onClick} />);
     const button = screen.getByRole("button");
-    expect(button.className).toContain("transition-[opacity,transform]");
+    expect(button.className).toContain("transition-[opacity,translate]");
     expect(button.className.split(/\s+/)).not.toContain("transition");
   });
 });

@@ -172,8 +172,8 @@ export function GettingStartedChecklist({
           "rounded-[var(--radius-sm)] border",
           "text-sm text-daintree-text",
           "shadow-[var(--theme-shadow-floating)]",
-          "transition-[transform,opacity,background-color,border-color] duration-200 ease-out",
-          "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
+          "transition-[translate,opacity,background-color,border-color] duration-200 ease-out",
+          "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:translate-none",
           isVisible ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
           allComplete
             ? "bg-surface-panel border-border-default"

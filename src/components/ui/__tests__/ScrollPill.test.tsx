@@ -27,14 +27,17 @@ describe("ScrollPill", () => {
     expect(screen.getByRole("button").getAttribute("type")).toBe("button");
   });
 
-  it("uses scoped transition-[opacity,transform] and not bare transition", () => {
+  it("uses scoped transition-[opacity,translate] and not bare transition", () => {
+    // `translate` (not `transform`) because Tailwind v4 translate-* utilities
+    // emit the individual `translate` property, which a `transform` entry in
+    // the transition list does not cover.
     render(
       <ScrollPill isVisible translateDirection="down">
         hi
       </ScrollPill>
     );
     const button = screen.getByRole("button");
-    expect(button.className).toContain("transition-[opacity,transform]");
+    expect(button.className).toContain("transition-[opacity,translate]");
     expect(button.className.split(/\s+/)).not.toContain("transition");
   });
 

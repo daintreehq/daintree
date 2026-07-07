@@ -231,7 +231,7 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
 
     it("uses Tier 3 panel timing (200ms restore / 120ms collapse), not Tier 1", () => {
       expect(source).toMatch(
-        /transition-\[width\]\s+duration-200\s+data-\[fullscreen=true\]:duration-\[120ms\]/
+        /transition-\[width\]\s+duration-200\s+data-\[fullscreen=true\]:duration-120/
       );
       expect(source).not.toContain("duration-150");
     });
@@ -241,7 +241,7 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     });
 
     it("applies the Tier 3 timing to both the macOS and Windows spacers", () => {
-      const tier3 = /duration-200 data-\[fullscreen=true\]:duration-\[120ms\]/g;
+      const tier3 = /duration-200 data-\[fullscreen=true\]:duration-120/g;
       expect((source.match(tier3) ?? []).length).toBeGreaterThanOrEqual(2);
     });
 

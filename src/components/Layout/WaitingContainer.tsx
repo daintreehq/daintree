@@ -1,8 +1,10 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { ChevronDown, ChevronRight, Layers, OctagonX } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
+import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
+import { useExitLaggedCount } from "@/hooks/useExitLaggedCount";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
@@ -178,113 +180,124 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
     setKillConfirmId(null);
   }, [killConfirmId, removePanel, terminals]);
 
-  if (terminals.length === 0) return null;
-
   const count = terminals.length;
+  // Lagged count keeps the label stable while the pill fades out via the
+  // .dock-status-pill exit transition instead of flashing "(0)".
+  const displayCount = useExitLaggedCount(count);
   const WaitingIcon = STATE_ICONS.waiting;
 
+  useEffect(() => {
+    if (count === 0) {
+      setIsOpen(false);
+      setKillConfirmId(null);
+    }
+  }, [count]);
+
   return (
-    <Popover open={isOpen} onOpenChange={setIsOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="pill"
-          size="sm"
-          className={cn(
-            compact ? "px-1.5 min-w-0" : "px-3",
-            isOpen && "bg-overlay-emphasis border-border-default"
-          )}
-          aria-haspopup="dialog"
-          aria-expanded={isOpen}
-          aria-controls="waiting-container-popover"
-          aria-label={`Waiting (${count})`}
-        >
-          <span className="relative">
-            <WaitingIcon className="w-3.5 h-3.5 text-state-waiting" aria-hidden="true" />
-            {compact && count > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-[10px] font-bold tabular-nums shadow-sm bg-state-waiting text-daintree-bg">
-                {count > 9 ? "9+" : count}
+    <span className="dock-status-pill" data-visible={count > 0 ? "true" : "false"}>
+      <Popover open={isOpen} onOpenChange={setIsOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="pill"
+            size="sm"
+            className={cn(
+              compact ? "px-1.5 min-w-0" : "px-3",
+              isOpen && "bg-overlay-emphasis border-border-default"
+            )}
+            aria-haspopup="dialog"
+            aria-expanded={isOpen}
+            aria-controls="waiting-container-popover"
+            aria-label={`Waiting (${displayCount})`}
+          >
+            <span className="relative">
+              <WaitingIcon className="w-3.5 h-3.5 text-state-waiting" aria-hidden="true" />
+              {compact && displayCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-[10px] font-bold tabular-nums shadow-sm bg-state-waiting text-daintree-bg">
+                  <AnimatedLabel label={displayCount > 9 ? "9+" : String(displayCount)} />
+                </span>
+              )}
+            </span>
+            {!compact && (
+              <span className="font-medium tabular-nums">
+                Waiting (
+                <AnimatedLabel label={String(displayCount)} textClassName="text-state-waiting" />)
               </span>
             )}
-          </span>
-          {!compact && (
-            <span className="font-medium tabular-nums">
-              Waiting (<span className="text-state-waiting">{count}</span>)
-            </span>
-          )}
-        </Button>
-      </PopoverTrigger>
+          </Button>
+        </PopoverTrigger>
 
-      <PopoverContent
-        id="waiting-container-popover"
-        role="dialog"
-        aria-label="Waiting panels"
-        className="w-96 p-0"
-        side="top"
-        align="end"
-        sideOffset={8}
-        onOpenAutoFocus={(e) => e.preventDefault()}
-        onCloseAutoFocus={(e) => e.preventDefault()}
-        onPointerDownOutside={(e) => {
-          if (killConfirmId !== null) e.preventDefault();
-        }}
-        onInteractOutside={(e) => {
-          if (killConfirmId !== null) e.preventDefault();
-        }}
-        onEscapeKeyDown={(e) => {
-          if (killConfirmId !== null) e.preventDefault();
-        }}
-      >
-        <div className="flex flex-col">
-          <div className="px-3 py-2 border-b border-divider bg-daintree-bg/50 flex justify-between items-center">
-            <span className="text-xs font-medium text-daintree-text/70">Waiting for input</span>
-            <span className="text-[10px] font-medium text-state-waiting tabular-nums">
-              {count} {count === 1 ? "agent" : "agents"}
-            </span>
-          </div>
+        <PopoverContent
+          id="waiting-container-popover"
+          role="dialog"
+          aria-label="Waiting panels"
+          className="w-96 p-0"
+          side="top"
+          align="end"
+          sideOffset={8}
+          onOpenAutoFocus={(e) => e.preventDefault()}
+          onCloseAutoFocus={(e) => e.preventDefault()}
+          onPointerDownOutside={(e) => {
+            if (killConfirmId !== null) e.preventDefault();
+          }}
+          onInteractOutside={(e) => {
+            if (killConfirmId !== null) e.preventDefault();
+          }}
+          onEscapeKeyDown={(e) => {
+            if (killConfirmId !== null) e.preventDefault();
+          }}
+        >
+          <div className="flex flex-col">
+            <div className="px-3 py-2 border-b border-divider bg-daintree-bg/50 flex justify-between items-center">
+              <span className="text-xs font-medium text-daintree-text/70">Waiting for input</span>
+              <span className="text-[10px] font-medium text-state-waiting tabular-nums">
+                {count} {count === 1 ? "agent" : "agents"}
+              </span>
+            </div>
 
-          <div className="flex flex-col max-h-[360px] overflow-y-auto">
-            {displayItems.map((item) => {
-              if (item.type === "group") {
+            <div className="flex flex-col max-h-[360px] overflow-y-auto">
+              {displayItems.map((item) => {
+                if (item.type === "group") {
+                  return (
+                    <WaitingGroupItem
+                      key={item.group.id}
+                      group={item.group}
+                      waitingTerminals={item.waitingTerminals}
+                      worktreeMap={worktreeMap}
+                      onActivate={handleActivate}
+                      onKill={(id) => setKillConfirmId(id)}
+                    />
+                  );
+                }
+                const worktreeName = item.terminal.worktreeId
+                  ? worktreeMap.get(item.terminal.worktreeId)?.name
+                  : undefined;
                 return (
-                  <WaitingGroupItem
-                    key={item.group.id}
-                    group={item.group}
-                    waitingTerminals={item.waitingTerminals}
-                    worktreeMap={worktreeMap}
+                  <WaitingSingleItem
+                    key={item.terminal.id}
+                    terminal={item.terminal}
+                    groupId={item.groupId}
+                    worktreeName={worktreeName}
                     onActivate={handleActivate}
                     onKill={(id) => setKillConfirmId(id)}
                   />
                 );
-              }
-              const worktreeName = item.terminal.worktreeId
-                ? worktreeMap.get(item.terminal.worktreeId)?.name
-                : undefined;
-              return (
-                <WaitingSingleItem
-                  key={item.terminal.id}
-                  terminal={item.terminal}
-                  groupId={item.groupId}
-                  worktreeName={worktreeName}
-                  onActivate={handleActivate}
-                  onKill={(id) => setKillConfirmId(id)}
-                />
-              );
-            })}
+              })}
+            </div>
           </div>
-        </div>
-      </PopoverContent>
+        </PopoverContent>
 
-      <ConfirmDialog
-        isOpen={killConfirmId !== null}
-        onClose={() => setKillConfirmId(null)}
-        title={KILL_TERMINAL_TITLE}
-        description={killTerminalDescription(killTarget?.title || undefined)}
-        variant="destructive"
-        confirmLabel={KILL_TERMINAL_CONFIRM_LABEL}
-        onConfirm={handleKillConfirm}
-      />
-    </Popover>
+        <ConfirmDialog
+          isOpen={killConfirmId !== null}
+          onClose={() => setKillConfirmId(null)}
+          title={KILL_TERMINAL_TITLE}
+          description={killTerminalDescription(killTarget?.title || undefined)}
+          variant="destructive"
+          confirmLabel={KILL_TERMINAL_CONFIRM_LABEL}
+          onConfirm={handleKillConfirm}
+        />
+      </Popover>
+    </span>
   );
 }
 

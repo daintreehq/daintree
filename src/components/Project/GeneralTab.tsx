@@ -354,7 +354,7 @@ export function GeneralTab({
                 type="text"
                 value={name}
                 onChange={(e) => onNameChange(e.target.value)}
-                className="w-full bg-transparent border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-placeholder"
+                className="w-full bg-transparent border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition-[border-color,box-shadow] placeholder:text-text-placeholder"
                 placeholder="My Awesome Project"
               />
             </div>
@@ -381,7 +381,7 @@ export function GeneralTab({
                 aria-label={`Set project color to ${PRESET_SWATCHES[i]!.label}`}
                 onClick={() => onColorChange(hex)}
                 className={cn(
-                  "h-7 w-7 rounded-full transition border-2 shrink-0",
+                  "h-7 w-7 rounded-full transition-[border-color,scale,box-shadow] border-2 shrink-0",
                   color === hex
                     ? "border-daintree-text scale-110 shadow-sm"
                     : "border-transparent hover:border-daintree-border hover:scale-105"

@@ -210,9 +210,19 @@ beforeEach(() => {
 });
 
 describe("BackgroundContainer", () => {
-  it("renders nothing when there are no backgrounded terminals", () => {
+  it("stays mounted but hidden when there are no backgrounded terminals", () => {
+    // The pill keeps its DOM node so the .dock-status-pill CSS can run the
+    // display/opacity exit transition; visibility is gated by data-visible.
     const { container } = render(<BackgroundContainer />);
-    expect(container.textContent).toBe("");
+    const pill = container.querySelector(".dock-status-pill");
+    expect(pill).not.toBeNull();
+    expect(pill?.getAttribute("data-visible")).toBe("false");
+  });
+
+  it("marks the pill visible once a terminal is backgrounded", () => {
+    mockTerminals = [makeTerminal({ id: "t1", agentState: "idle" })];
+    const { container } = render(<BackgroundContainer />);
+    expect(container.querySelector(".dock-status-pill")?.getAttribute("data-visible")).toBe("true");
   });
 
   describe("trigger label", () => {

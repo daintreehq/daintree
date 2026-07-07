@@ -1140,7 +1140,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               "shadow-[var(--theme-shadow-floating)]",
               "text-[11px] font-medium text-daintree-text/80",
               "hover:text-daintree-text hover:bg-overlay-raised",
-              "transition-[transform,opacity] motion-reduce:transition-none",
+              "transition-[translate,opacity] motion-reduce:transition-none",
               showJumpPill
                 ? "opacity-100 translate-y-0 pointer-events-auto"
                 : "opacity-0 translate-y-2 pointer-events-none"
