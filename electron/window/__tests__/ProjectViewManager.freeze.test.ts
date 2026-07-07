@@ -685,9 +685,11 @@ describe("ProjectViewManager — cached-view memory purge", () => {
 
     vi.advanceTimersByTime(60_000);
     expect(vi.mocked(purgeMemoryWebContents)).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(purgeMemoryWebContents).mock.calls.every((c) => c[0] === initialWc)).toBe(
-      true
-    );
+    expect(
+      vi
+        .mocked(purgeMemoryWebContents)
+        .mock.calls.every((c) => c[0] === (initialWc as unknown as Electron.WebContents))
+    ).toBe(true);
   });
 
   it("never purges a view that was reactivated before the delay", async () => {
