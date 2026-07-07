@@ -564,8 +564,8 @@ describe("HelpSessionController — endSession (Stop assistant, #10989)", () => 
     // an in-flight MCP call 401s before teardown reaches the host. `?? -1` keeps
     // both operands `number`: a missing (never-called) order fails the guards below.
     const revokeOrder =
-      (window.electron.help.revokeSession as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0] ??
-      -1;
+      (window.electron.help.revokeSession as ReturnType<typeof vi.fn>).mock
+        .invocationCallOrder[0] ?? -1;
     const removeOrder =
       (panelStoreState.removePanel as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0] ?? -1;
     expect(revokeOrder).toBeGreaterThanOrEqual(0);
