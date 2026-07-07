@@ -1,4 +1,7 @@
-import { RESIZE_FLUSH_SYNC_BUDGET_BYTES } from "../../../src/services/terminal/resizeFlushBudget";
+import {
+  exceedsResizeFlushSyncBudget,
+  RESIZE_FLUSH_SYNC_BUDGET_BYTES,
+} from "../../../src/services/terminal/resizeFlushBudget";
 import { createHeadlessTerminal, createRng } from "./workloads";
 
 type HeadlessTerminal = import("@xterm/headless").Terminal;
@@ -292,7 +295,7 @@ export async function runRevealArm(backlog: RevealBacklog, seed: number): Promis
 
     let revealBlockingMs: number;
     let drainMs = 0;
-    if (backlog.text.length <= RESIZE_FLUSH_SYNC_BUDGET_BYTES) {
+    if (!exceedsResizeFlushSyncBudget(backlog.text.length)) {
       const start = performance.now();
       terminal.write(backlog.text);
       terminal.resize(REVEAL_COLS - 1, REVEAL_ROWS);

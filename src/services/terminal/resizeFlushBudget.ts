@@ -20,3 +20,13 @@
  * runner. PERF-112 fails its budget if this gate is bypassed or loosened.
  */
 export const RESIZE_FLUSH_SYNC_BUDGET_BYTES = 1024 * 1024;
+
+/**
+ * The single flush-or-drain decision, shared by
+ * `TerminalResizeController.flushHeldBytesBeforeResize` and the PERF-112
+ * fixture (`runRevealArm`) so the benchmark exercises the same predicate
+ * production runs — a change to the gate moves both or fails PERF-112.
+ */
+export function exceedsResizeFlushSyncBudget(queuedBytes: number): boolean {
+  return queuedBytes > RESIZE_FLUSH_SYNC_BUDGET_BYTES;
+}

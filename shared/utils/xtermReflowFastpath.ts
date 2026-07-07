@@ -109,13 +109,26 @@ function makeCopyCellsFrom(original: BufferLineLike["copyCellsFrom"]) {
     const destData = this._data;
     const srcStart = srcCol * CELL_SIZE;
     const srcEnd = (srcCol + length) * CELL_SIZE;
+    // Same-line overlapping copies are only memmove-equivalent when the
+    // original's iteration direction cannot re-read already-written cells
+    // (reverse for rightward moves, forward for leftward). Both reflow
+    // callers satisfy this; any other combination would SMEAR in the
+    // original, so route it there instead of silently differing.
+    const memmoveSafe =
+      srcData !== destData ||
+      (applyInReverse ? destCol >= srcCol : destCol <= srcCol) ||
+      destCol >= srcCol + length ||
+      srcCol >= destCol + length;
     if (
       !(srcData instanceof Uint32Array) ||
       !(destData instanceof Uint32Array) ||
       srcCol < 0 ||
       destCol < 0 ||
+      srcCol + length > src.length ||
+      destCol + length > this.length ||
       srcEnd > srcData.length ||
       destCol * CELL_SIZE + (srcEnd - srcStart) > destData.length ||
+      !memmoveSafe ||
       !isEmptySparse(src._combined) ||
       !isEmptySparse(src._extendedAttrs)
     ) {

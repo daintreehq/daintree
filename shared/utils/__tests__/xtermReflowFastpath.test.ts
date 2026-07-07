@@ -66,7 +66,7 @@ function snapshot(
     wrapped.push(line?.isWrapped ?? false);
     // Full per-cell attribute dump on a sample of lines keeps runtime sane
     // while still covering colors, widths, and cell-level flags.
-    if (y % 7 === 0 && line) {
+    if (y % 3 === 0 && line) {
       const parts: string[] = [];
       for (let x = 0; x < terminal.cols; x += 1) {
         const cell = line.getCell(x);
@@ -171,9 +171,13 @@ async function runScript(terminal: Terminal): Promise<ScriptResult> {
   terminal.resize(100, 24);
   snapshots.push(snapshot(terminal, markers));
 
-  // Capacity-slack roundtrip: shrink deep, grow back, shrink again.
+  // Capacity-slack roundtrip: snapshot IMMEDIATELY after each grow-back —
+  // a grow that fails to null-fill re-exposed slack cells is only visible
+  // at this instant, before the next shrink hides them again.
   terminal.resize(45, 24);
+  snapshots.push(snapshot(terminal, markers));
   terminal.resize(100, 24);
+  snapshots.push(snapshot(terminal, markers));
   terminal.resize(72, 24);
   await write(terminal, adversarialContent(555, 80));
   snapshots.push(snapshot(terminal, markers));

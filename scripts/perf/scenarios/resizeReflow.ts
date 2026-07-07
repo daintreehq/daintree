@@ -59,6 +59,10 @@ export const resizeReflowScenarios: PerfScenario[] = [
         if (checkpoint.label === "100k") {
           duration100k = reflowMs;
           metrics.reflowLinesPerMs = reflowMs > 0 ? bufferLines / reflowMs : 0;
+          // Cap-churn visibility: the 100k terminal lives AT the scrollback
+          // cap, so shrink/grow cycles trim then settle. This surfaces any
+          // buffer-size drift that would silently change what p95 measures.
+          metrics.bufferLinesAt100k = bufferLines;
         }
       }
 

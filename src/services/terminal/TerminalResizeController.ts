@@ -11,7 +11,7 @@ const RESIZE_DEBOUNCE_MS = 100;
 const RESIZE_LOCK_TTL_MS = 5000;
 const SETTLED_RESIZE_DELAY_MS = 500;
 
-import { RESIZE_FLUSH_SYNC_BUDGET_BYTES } from "./resizeFlushBudget";
+import { exceedsResizeFlushSyncBudget, RESIZE_FLUSH_SYNC_BUDGET_BYTES } from "./resizeFlushBudget";
 
 export { RESIZE_FLUSH_SYNC_BUDGET_BYTES };
 
@@ -526,7 +526,7 @@ export class TerminalResizeController {
    */
   private flushHeldBytesBeforeResize(id: string): boolean {
     const queuedBytes = this.deps.dataBuffer.getQueuedBytes(id);
-    if (queuedBytes > RESIZE_FLUSH_SYNC_BUDGET_BYTES) {
+    if (exceedsResizeFlushSyncBudget(queuedBytes)) {
       logWarn(
         `[TerminalResizeController] ${id}: ${queuedBytes} held ingest bytes exceed the pre-resize flush budget — draining watermarked at the new grid instead`
       );
