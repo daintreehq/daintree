@@ -12,6 +12,8 @@ const projectStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 
 vi.mock("@/clients", () => ({ systemClient: systemClientMock }));
 vi.mock("@/store", () => ({ useProjectStore: projectStoreMock }));
+// file.openPanel pulls the panel store; stub it so its persistence graph stays out.
+vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: vi.fn() } }));
 
 import { registerFileActions } from "../fileActions";
 

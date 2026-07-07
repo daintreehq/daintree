@@ -33,6 +33,9 @@ interface PreferencesState {
   setDiffWrapLines: (value: boolean) => void;
   diffIgnoreWhitespace: boolean;
   setDiffIgnoreWhitespace: (value: boolean) => void;
+  /** Soft-wrap long lines in markdown Source view (panel + file viewer). */
+  markdownWrapLines: boolean;
+  setMarkdownWrapLines: (value: boolean) => void;
   lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>;
   setLastSelectedWorktreeRecipeIdByProject: (
     projectId: string,
@@ -72,6 +75,7 @@ function sanitizePersistedPreferences(
   if (!isDiffViewType(sanitized.diffViewType)) sanitized.diffViewType = "split";
   if (typeof sanitized.diffWrapLines !== "boolean") sanitized.diffWrapLines = false;
   if (typeof sanitized.diffIgnoreWhitespace !== "boolean") sanitized.diffIgnoreWhitespace = false;
+  if (typeof sanitized.markdownWrapLines !== "boolean") sanitized.markdownWrapLines = true;
   if (typeof sanitized.showAgentTaskTitles !== "boolean") sanitized.showAgentTaskTitles = true;
 
   // A truthy non-record value here would otherwise bypass the push-confirm gate.
@@ -112,6 +116,8 @@ export const usePreferencesStore = create<PreferencesState>()(
       setDiffWrapLines: (value) => set({ diffWrapLines: value }),
       diffIgnoreWhitespace: false,
       setDiffIgnoreWhitespace: (value) => set({ diffIgnoreWhitespace: value }),
+      markdownWrapLines: true,
+      setMarkdownWrapLines: (value) => set({ markdownWrapLines: value }),
       lastSelectedWorktreeRecipeIdByProject: {},
       setLastSelectedWorktreeRecipeIdByProject: (projectId, id) =>
         set((state) => ({
@@ -252,5 +258,5 @@ registerPersistedStore({
   storeId: "preferencesStore",
   store: usePreferencesStore,
   persistedStateType:
-    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean> }",
+    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; markdownWrapLines: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean> }",
 });

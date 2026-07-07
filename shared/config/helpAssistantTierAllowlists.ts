@@ -30,7 +30,7 @@ export const WORKBENCH_TIER_TOOLS = [
   // Read is contained to the project + its worktrees inside the action itself
   // (fileActions.ts) — never an arbitrary-path read.
   "file.read",
-  "markdown.openPanel",
+  "file.openPanel",
 
   "copyTree.generate",
 

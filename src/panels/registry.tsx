@@ -6,7 +6,7 @@ import type {
   BrowserPanelData,
   DevPreviewPanelData,
   ReviewPanelData,
-  MarkdownPanelData,
+  FilePanelData,
 } from "@shared/types/panel";
 import { isBuiltInPanelKind, type BuiltInPanelKind } from "@shared/types/panel";
 import type {
@@ -14,7 +14,7 @@ import type {
   BrowserPanelOptions,
   DevPreviewPanelOptions,
   ReviewPanelOptions,
-  MarkdownPanelOptions,
+  FilePanelOptions,
 } from "@shared/types/addPanelOptions";
 import type { PanelSnapshot } from "@shared/types/project";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -31,8 +31,8 @@ import { serializeDevPreview } from "./dev-preview/serializer";
 import { createDevPreviewDefaults } from "./dev-preview/defaults";
 import { serializeReview } from "./review/serializer";
 import { createReviewDefaults } from "./review/defaults";
-import { serializeMarkdown } from "./markdown/serializer";
-import { createMarkdownDefaults } from "./markdown/defaults";
+import { serializeFile } from "./file/serializer";
+import { createFileDefaults } from "./file/defaults";
 
 export interface PanelComponentProps {
   id: string;
@@ -66,9 +66,7 @@ const LazyDevPreviewPane = lazy(() =>
 const LazyReviewPane = lazy(() =>
   import("./review/ReviewPane").then((m) => ({ default: m.ReviewPane }))
 );
-const LazyMarkdownPane = lazy(() =>
-  import("./markdown/MarkdownPane").then((m) => ({ default: m.MarkdownPane }))
-);
+const LazyFilePane = lazy(() => import("./file/FilePane").then((m) => ({ default: m.FilePane })));
 
 // Wrapper providing Suspense fallback for the lazy dynamic import and
 // correct componentName attribution on chunk-load failures. The per-panel
@@ -113,12 +111,12 @@ function ReviewPaneWrapper(props: ComponentProps<typeof LazyReviewPane>) {
   );
 }
 
-function MarkdownPaneWrapper(props: ComponentProps<typeof LazyMarkdownPane>) {
+function FilePaneWrapper(props: ComponentProps<typeof LazyFilePane>) {
   return (
-    <ErrorBoundary variant="component" componentName="MarkdownPane">
-      <Suspense fallback={<BrowserPaneSkeleton label="Loading markdown panel" />}>
+    <ErrorBoundary variant="component" componentName="FilePane">
+      <Suspense fallback={<BrowserPaneSkeleton label="Loading file panel" />}>
         <ContentFadeIn className="flex flex-col h-full w-full">
-          <LazyMarkdownPane {...props} />
+          <LazyFilePane {...props} />
         </ContentFadeIn>
       </Suspense>
     </ErrorBoundary>
@@ -135,7 +133,7 @@ interface BuiltInPanelMap {
   browser: BrowserPanelData;
   "dev-preview": DevPreviewPanelData & { createdAt?: number };
   review: ReviewPanelData;
-  markdown: MarkdownPanelData;
+  file: FilePanelData;
 }
 
 interface BuiltInPanelOptionsMap {
@@ -143,7 +141,7 @@ interface BuiltInPanelOptionsMap {
   browser: BrowserPanelOptions;
   "dev-preview": DevPreviewPanelOptions;
   review: ReviewPanelOptions;
-  markdown: MarkdownPanelOptions;
+  file: FilePanelOptions;
 }
 
 type BuiltInSerializeDefaults = {
@@ -158,7 +156,7 @@ const BUILT_IN_SERIALIZE_DEFAULTS = {
   browser: { serialize: serializeBrowser, createDefaults: createBrowserDefaults },
   "dev-preview": { serialize: serializeDevPreview, createDefaults: createDevPreviewDefaults },
   review: { serialize: serializeReview, createDefaults: createReviewDefaults },
-  markdown: { serialize: serializeMarkdown, createDefaults: createMarkdownDefaults },
+  file: { serialize: serializeFile, createDefaults: createFileDefaults },
 } satisfies BuiltInSerializeDefaults;
 
 export function initBuiltInPanelKinds(): void {
@@ -192,7 +190,7 @@ const PANEL_KIND_DEFINITION_REGISTRY: Record<string, PanelKindDefinition> = {
   browser: { ...requirePanelKindConfig("browser"), component: BrowserPaneWrapper },
   "dev-preview": { ...requirePanelKindConfig("dev-preview"), component: DevPreviewPaneWrapper },
   review: { ...requirePanelKindConfig("review"), component: ReviewPaneWrapper },
-  markdown: { ...requirePanelKindConfig("markdown"), component: MarkdownPaneWrapper },
+  file: { ...requirePanelKindConfig("file"), component: FilePaneWrapper },
 } satisfies Record<BuiltInPanelKind, PanelKindDefinition>;
 
 /**

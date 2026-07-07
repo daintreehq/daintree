@@ -644,4 +644,69 @@ describe("preferencesStore migration", () => {
       expect(state.skipPushConfirmByWorktreePath).toEqual({});
     });
   });
+
+  describe("markdownWrapLines", () => {
+    it("defaults to true on a fresh install", async () => {
+      const store = await loadStore();
+      expect(store.getState().markdownWrapLines).toBe(true);
+    });
+
+    it("defaults to true when hydrating current-version state persisted before the key existed", async () => {
+      setStoredState(
+        {
+          diffViewType: "split",
+          showProjectPulse: true,
+          showDeveloperTools: false,
+          showGridAgentHighlights: false,
+          showDockAgentHighlights: false,
+          dockDensity: "normal",
+          assignWorktreeToSelf: false,
+          reduceAnimations: false,
+          lastSelectedWorktreeRecipeIdByProject: {},
+          skipPushConfirmByWorktreePath: {},
+        },
+        11
+      );
+
+      const store = await loadStore();
+      expect(store.getState().markdownWrapLines).toBe(true);
+    });
+
+    it("normalises a corrupt persisted value to the default without disturbing an explicit false", async () => {
+      setStoredState(
+        {
+          diffViewType: "split",
+          dockDensity: "normal",
+          markdownWrapLines: "yes",
+        },
+        11
+      );
+      let store = await loadStore();
+      expect(store.getState().markdownWrapLines).toBe(true);
+
+      vi.resetModules();
+      _resetPersistedStoreRegistryForTests();
+      setStoredState(
+        {
+          diffViewType: "split",
+          dockDensity: "normal",
+          markdownWrapLines: false,
+        },
+        11
+      );
+      store = await loadStore();
+      expect(store.getState().markdownWrapLines).toBe(false);
+    });
+
+    it("persists toggled values to localStorage", async () => {
+      const store = await loadStore();
+      store.getState().setMarkdownWrapLines(false);
+      await vi.waitFor(() => {
+        const persisted = storageMock.getItem(STORAGE_KEY);
+        expect(persisted).not.toBeNull();
+        const parsed = JSON.parse(persisted!);
+        expect(parsed.state.markdownWrapLines).toBe(false);
+      });
+    });
+  });
 });

@@ -189,7 +189,7 @@ export function MarkdownDocument({
   );
 
   return (
-    <div className={cn("markdown-document prose prose-daintree max-w-none", className)}>
+    <div className={cn("markdown-document prose", className)}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         urlTransform={urlTransform}

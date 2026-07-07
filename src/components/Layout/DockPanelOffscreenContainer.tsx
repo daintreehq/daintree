@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useCallback, useState, useRef } from "react";
+import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore, useWorktreeSelectionStore } from "@/store";
@@ -274,7 +275,11 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
               <DockedPanel
                 terminal={terminal}
                 onPopoverClose={handlePopoverClose}
-                onAddTab={isSinglePanel ? () => handleAddTabForPanel(terminal) : undefined}
+                onAddTab={
+                  isSinglePanel && canDuplicatePanelKind(terminal.kind)
+                    ? () => handleAddTabForPanel(terminal)
+                    : undefined
+                }
                 showRestoreControl={isSinglePanel}
               />
             </div>
