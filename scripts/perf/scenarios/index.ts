@@ -3,6 +3,7 @@ import { startupScenarios } from "./startup";
 import { hydrationSwitchScenarios } from "./hydrationSwitch";
 import { devPreviewScenarios } from "./devPreview";
 import { terminalScenarios } from "./terminal";
+import { agentAnalysisScenarios } from "./agentAnalysis";
 import { ipcScenarios } from "./ipc";
 import { persistenceScenarios } from "./persistence";
 import { soakScenarios } from "./soak";
@@ -16,6 +17,7 @@ export const allScenarios: PerfScenario[] = [
   ...hydrationSwitchScenarios,
   ...devPreviewScenarios,
   ...terminalScenarios,
+  ...agentAnalysisScenarios,
   ...ipcScenarios,
   ...persistenceScenarios,
   ...soakScenarios,
@@ -49,6 +51,7 @@ export function assertMatrixCoverage(): void {
     "PERF-032",
     "PERF-033",
     "PERF-034",
+    "PERF-035",
     "PERF-040",
     "PERF-041",
     "PERF-042",
