@@ -110,7 +110,7 @@ describe("SortableDockItem", () => {
 
   it("registers its drag handle under the panel's own id for a single dock item (#10990)", () => {
     mockState = { isDragging: false };
-    const registerDragHandle = vi.fn(() => vi.fn());
+    const registerDragHandle = vi.fn<DockPanelContextValue["registerDragHandle"]>(() => vi.fn());
     const ctx: DockPanelContextValue = {
       moveToDestination: vi.fn(),
       registerDragHandle,
@@ -131,7 +131,7 @@ describe("SortableDockItem", () => {
 
   it("registers under every group member id for a grouped dock item (#10990)", () => {
     mockState = { isDragging: false };
-    const registerDragHandle = vi.fn(() => vi.fn());
+    const registerDragHandle = vi.fn<DockPanelContextValue["registerDragHandle"]>(() => vi.fn());
     const ctx: DockPanelContextValue = {
       moveToDestination: vi.fn(),
       registerDragHandle,
@@ -155,7 +155,7 @@ describe("SortableDockItem", () => {
   it("disposes its registration on unmount", () => {
     mockState = { isDragging: false };
     const dispose = vi.fn();
-    const registerDragHandle = vi.fn(() => dispose);
+    const registerDragHandle = vi.fn<DockPanelContextValue["registerDragHandle"]>(() => dispose);
     const ctx: DockPanelContextValue = {
       moveToDestination: vi.fn(),
       registerDragHandle,
@@ -180,7 +180,7 @@ describe("SortableDockItem", () => {
     // DockPanelOffscreenContainer on every drag frame app-wide.
     mockState = { isDragging: false };
     const dispose = vi.fn();
-    const registerDragHandle = vi.fn(() => dispose);
+    const registerDragHandle = vi.fn<DockPanelContextValue["registerDragHandle"]>(() => dispose);
     const ctx: DockPanelContextValue = {
       moveToDestination: vi.fn(),
       registerDragHandle,
