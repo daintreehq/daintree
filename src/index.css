@@ -7,6 +7,7 @@
 @import "./styles/components/pulse.css";
 @import "./styles/components/sidebar.css";
 @import "./styles/components/panels.css";
+@import "./styles/components/dock.css";
 
 /* Reduced-motion variant — composes OS-level `prefers-reduced-motion: reduce`
  * with the Daintree "Reduce UI animations" toggle (`body[data-reduce-animations="true"]`).

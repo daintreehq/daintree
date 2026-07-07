@@ -201,9 +201,19 @@ beforeEach(() => {
 });
 
 describe("WaitingContainer", () => {
-  it("renders nothing when there are no waiting terminals", () => {
+  it("stays mounted but hidden when there are no waiting terminals", () => {
+    // The pill keeps its DOM node so the .dock-status-pill CSS can run the
+    // display/opacity exit transition; visibility is gated by data-visible.
     const { container } = render(<WaitingContainer />);
-    expect(container.textContent).toBe("");
+    const pill = container.querySelector(".dock-status-pill");
+    expect(pill).not.toBeNull();
+    expect(pill?.getAttribute("data-visible")).toBe("false");
+  });
+
+  it("marks the pill visible once a terminal is waiting", () => {
+    mockTerminals = [makeTerminal({ id: "t1" })];
+    const { container } = render(<WaitingContainer />);
+    expect(container.querySelector(".dock-status-pill")?.getAttribute("data-visible")).toBe("true");
   });
 
   describe("trigger", () => {
