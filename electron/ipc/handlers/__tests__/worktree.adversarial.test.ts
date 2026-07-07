@@ -86,6 +86,7 @@ vi.mock("../../utils.js", () => {
   return {
     checkRateLimit: checkRateLimitMock,
     waitForRateLimitSlot: waitForRateLimitSlotMock,
+    waitForBurstRateLimitSlot: waitForRateLimitSlotMock,
     typedHandle,
     typedHandleWithContext,
     typedHandleValidated: (
