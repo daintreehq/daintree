@@ -4,7 +4,6 @@ import {
   installOpenDirConsumer,
   drainPendingOpenDirs,
   _resetOpenDirConsumerForTest,
-  type OpenDirHandlerDeps,
 } from "../openDirHandler.js";
 
 // Spy on the environment.ts queue primitives openDirHandler drives. Mocking the
@@ -23,7 +22,11 @@ function makeWindow(destroyed = false): BrowserWindow {
   return { isDestroyed: () => destroyed } as unknown as BrowserWindow;
 }
 
-function makeDeps(): OpenDirHandlerDeps {
+// Untyped return so the vi.fn() mocks keep their MockInstance type (mockReturnValue/
+// mockRejectedValue/toHaveBeenCalledBefore are visible to tsc). The deps object is
+// still structurally checked at the installOpenDirConsumer/drainPendingOpenDirs
+// call sites, which take OpenDirHandlerDeps.
+function makeDeps() {
   return {
     openDirectory: vi
       .fn<(dir: string, win: BrowserWindow) => Promise<void>>()
