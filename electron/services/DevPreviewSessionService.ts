@@ -1,18 +1,13 @@
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
-import {
-  getInvalidCommandMessage,
-  normalizeNextjsDevCommand,
-  normalizeViteDevCommand,
-} from "./DevPreviewCommandNormalizer.js";
-import { guardedReinstall, resetCrashLoopGuard } from "./DevPreviewCrashLoopGuard.js";
-import { classifyDevPreviewExit, processDevPreviewOutput } from "./DevPreviewOutputProcessor.js";
+import { getInvalidCommandMessage } from "./DevPreviewCommandNormalizer.js";
+import { resetCrashLoopGuard } from "./DevPreviewCrashLoopGuard.js";
+import { processDevPreviewOutput } from "./DevPreviewOutputProcessor.js";
 import {
   CACHE_DIRS,
   clearCacheDirs,
   computeDirSize,
-  detectInstallCommand,
   detectPackageManagerInfo,
   statDirMeta,
 } from "./DevPreviewDiskUsage.js";
@@ -22,22 +17,27 @@ import {
   type DevPreviewDiagnosticInput,
   type DevPreviewDiagnosticsRingMap,
 } from "./DevPreviewDiagnosticsRing.js";
-import {
-  allocatePort,
-  releasePort,
-  waitForPortFree,
-  PORT_FREE_TIMEOUT_MS,
-} from "./DevPreviewPortAllocator.js";
+import { releasePort, waitForPortFree, PORT_FREE_TIMEOUT_MS } from "./DevPreviewPortAllocator.js";
 import { waitForServerReady, READINESS_TIMEOUT_MS } from "./DevPreviewReadinessProbe.js";
 import {
   createSessionKey,
-  sanitizeToken,
   cloneEnv,
   envEquals,
   validateEnsureRequest,
   validateSessionRequest,
   validateStopByPanelRequest,
 } from "./DevPreviewRequestValidators.js";
+import {
+  ensureSessionTerminal,
+  spawnSessionTerminal,
+  stopSessionTerminal,
+  waitForRegisteredPortFree,
+  runInstall,
+  handleDevPreviewTerminalExit,
+  clearStartupReplay,
+  isBenignMissingTerminalError,
+  type TerminalControllerDeps,
+} from "./DevPreviewTerminalController.js";
 
 export { normalizeNextjsDevCommand } from "./DevPreviewCommandNormalizer.js";
 export { DIAGNOSTIC_RING_MAX } from "./DevPreviewDiagnosticsRing.js";
@@ -59,8 +59,6 @@ import type {
   DevPreviewDestructivePreviewSizes,
   DevPreviewDestructivePreviewSizesRequest,
 } from "../../shared/types/ipc/devPreview.js";
-import type { DevServerError } from "../../shared/utils/devServerErrors.js";
-import { CRASH_SIGNALS, EXPECTED_TERMINATION_SIGNALS } from "./pty/terminalForensics.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { markPerformance } from "../utils/performance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -103,12 +101,7 @@ const RUNNING_STATES: ReadonlySet<DevPreviewSessionStatus> = new Set([
   "running",
 ]);
 
-const DEFAULT_TIMEOUT_MS = 8000;
 const DEV_PREVIEW_STOP_ESCALATION_MS = 5000;
-const STALE_START_RECOVERY_MS = 10000;
-const STARTUP_REPLAY_DELAY_MS = 1500;
-const REPLAY_HISTORY_MAX_LINES = 300;
-const PTY_SUBMIT_AFTER_SPAWN_MS = 100;
 // Bounds for the `lastOutput` activity hint surfaced in the cross-worktree
 // dashboard. Only the buffer tail is scanned (the last line is all we need) and
 // the result is capped so a single pathological line can't bloat the snapshot.
@@ -362,7 +355,7 @@ export class DevPreviewSessionService {
     }
     this.portWaitAborts.clear();
     for (const session of this.sessions.values()) {
-      this.clearStartupReplay(session);
+      clearStartupReplay(session);
       session.readinessAbort?.abort();
       session.backoffAbort?.abort();
       this.clearCompiling(session);
@@ -373,7 +366,7 @@ export class DevPreviewSessionService {
         this.ptyClient.kill(terminalId, "dev-preview:dispose");
       } catch (err) {
         const message = formatErrorMessage(err, "Failed to kill dev preview terminal");
-        if (!this.isBenignMissingTerminalError(message)) {
+        if (!isBenignMissingTerminalError(message)) {
           console.warn("[DevPreviewSessionService] Failed to kill terminal during dispose:", err);
         }
       }
@@ -1278,247 +1271,28 @@ export class DevPreviewSessionService {
     return next;
   }
 
-  private async ensureSessionTerminal(session: DevPreviewSession): Promise<void> {
-    if (session.terminalId) {
-      const alive = await this.isTerminalAlive(session.terminalId, session.projectId);
-      if (alive) {
-        const terminalId = session.terminalId;
-        this.attachTerminal(session, terminalId);
-        if (!RUNNING_STATES.has(session.status)) {
-          this.updateSession(session, {
-            status: "starting",
-            error: null,
-            url: null,
-            forceKilled: undefined,
-          });
-        }
-
-        if ((session.status === "starting" || session.status === "installing") && !session.url) {
-          await this.replayRecentOutput(terminalId);
-        }
-
-        if (
-          session.status === "starting" &&
-          !session.url &&
-          !session.pendingUrl &&
-          performance.now() - session.updatedAtPerformanceMs >= STALE_START_RECOVERY_MS
-        ) {
-          await this.stopSessionTerminal(session, "stale-start-recovery");
-          await this.spawnSessionTerminal(session);
-        }
-        return;
-      }
-      this.detachTerminal(session);
-      session.readinessAbort?.abort();
-      session.readinessAbort = null;
-      session.pendingUrl = null;
-      session.markerSeen = false;
-      session.needsInstall = false;
-      session.isRunningInstall = false;
-      this.updateSession(session, { terminalId: null, url: null, predictedUrl: null });
-    }
-
-    // A tripped crash-loop guard halts auto-respawn until the user restarts
-    // explicitly. ensure() runs on every remount (dock↔grid, eviction
-    // rehydration) with unchanged config, so without this the pane would
-    // silently respawn a known-broken server on each transition. A config
-    // change clears the guard upstream (resetCrashLoopGuard in ensure()), and
-    // restart() clears it before spawning, so only the automatic path is held.
-    if (session.crashLoopStopped) return;
-
-    await this.spawnSessionTerminal(session);
-  }
-
-  private async replayRecentOutput(terminalId: string): Promise<void> {
-    try {
-      await this.ptyClient.replayHistoryAsync(terminalId, REPLAY_HISTORY_MAX_LINES);
-    } catch (err) {
-      console.warn("[DevPreviewSessionService] replayRecentOutput failed for terminal:", {
-        terminalId,
-        error: formatErrorMessage(err, "Failed to replay terminal history"),
-      });
-    }
-  }
-
-  private guardedReinstall(session: DevPreviewSession): void {
-    guardedReinstall(session, {
+  private get terminalControllerDeps(): TerminalControllerDeps<DevPreviewSession> {
+    return {
+      ptyClient: this.ptyClient,
+      portRegistry: this.portRegistry,
+      terminalToSession: this.terminalToSession,
+      portWaitAborts: this.portWaitAborts,
       isDisposed: () => this.disposed,
-      recordSessionDiagnostic: (target, input) => this.recordSessionDiagnostic(target, input),
-      updateSession: (target, updates) => this.updateSession(target, updates),
-      runInstall: (target) => this.runInstall(target),
-    });
+      recordDiagnostic: (key, generation, input) => this.recordDiagnostic(key, generation, input),
+      recordSessionDiagnostic: (session, input) => this.recordSessionDiagnostic(session, input),
+      updateSession: (session, updates) => this.updateSession(session, updates),
+      clearCompiling: (session) => this.clearCompiling(session),
+      pollServerReadiness: (session, url, signal, generation) =>
+        this.pollServerReadiness(session, url, signal, generation),
+    };
+  }
+
+  private async ensureSessionTerminal(session: DevPreviewSession): Promise<void> {
+    return ensureSessionTerminal(session, this.terminalControllerDeps);
   }
 
   private async spawnSessionTerminal(session: DevPreviewSession): Promise<void> {
-    const terminalId = this.createTerminalId(session);
-    const nextGeneration = session.generation + 1;
-
-    const sessionKey = createSessionKey(session.projectId, session.panelId);
-    const port = await allocatePort(this.portRegistry, sessionKey);
-    // dispose() can fire while allocatePort awaits its net probe. Guard here
-    // so we don't spawn a terminal on a disposed service; roll back the
-    // reservation to avoid a stale portRegistry entry after disposal cleared it.
-    if (this.disposed) {
-      releasePort(this.portRegistry, sessionKey);
-      return;
-    }
-    // Recorded with the generation this spawn is about to become, so the whole
-    // spawn lifecycle (port-allocated → spawned → …) shares one generation.
-    this.recordDiagnostic(sessionKey, nextGeneration, { type: "port-allocated", port });
-    const predictedUrl = `http://localhost:${port}`;
-
-    const spawnEnv: Record<string, string> = { ...session.env, PORT: String(port) };
-
-    // Mark the dev-server spawn time for the crash-loop graduation check. Set
-    // only here (the dev server), never in runInstall — an install is part of
-    // recovery, not a crash, and must not count toward the survival window.
-    session.devSpawnedAt = performance.now();
-
-    session.buffer = "";
-    session.lastErrorKey = null;
-    session.markerSeen = false;
-    session.predictedUrl = predictedUrl;
-    this.clearCompiling(session);
-    this.attachTerminal(session, terminalId);
-    this.updateSession(session, {
-      terminalId,
-      status: "starting",
-      url: null,
-      predictedUrl,
-      error: null,
-      generation: nextGeneration,
-      forceKilled: undefined,
-    });
-
-    try {
-      this.ptyClient.spawn(terminalId, {
-        projectId: session.projectId,
-        kind: "dev-preview",
-        cwd: session.cwd,
-        cols: 80,
-        rows: 30,
-        restore: false,
-        env: spawnEnv,
-        isEphemeral: true,
-      });
-      markPerformance(PERF_MARKS.DEVPREVIEW_TERMINAL_SPAWNED, {
-        panelId: session.panelId,
-        projectId: session.projectId,
-        terminalId,
-      });
-      this.recordSessionDiagnostic(session, { type: "spawned", terminalId, port });
-
-      // predictedUrl is the allocator-derived starting point for the readiness
-      // poller — it's accurate for frameworks that honor env.PORT or the
-      // injected --port flag, but not authoritative. UrlDetector overwrites
-      // state.url when real output reveals a different bind address (e.g. next
-      // dev auto-incrementing past EADDRINUSE on configs without --strictPort).
-      setTimeout(() => {
-        if (this.disposed) return;
-        if (session.generation !== nextGeneration || session.terminalId !== terminalId) return;
-        if (session.status !== "starting" || session.url || session.readinessAbort) return;
-
-        const abort = new AbortController();
-        session.readinessAbort = abort;
-        this.pollServerReadiness(session, predictedUrl, abort.signal, nextGeneration);
-      }, 0);
-    } catch (error) {
-      const message = formatErrorMessage(error, "Failed to start dev server");
-      this.recordSessionDiagnostic(session, {
-        type: "spawn-failed",
-        message: capDiagnosticText(message),
-      });
-      this.detachTerminal(session);
-      this.updateSession(session, {
-        status: "error",
-        url: null,
-        predictedUrl: null,
-        error: { type: "unknown", message: `Failed to start dev server: ${message}` },
-        terminalId: null,
-        isRestarting: false,
-      });
-      return;
-    }
-
-    const trimmedCommand = session.devCommand.trim();
-
-    const submitCommand = (cmd: string) => {
-      setTimeout(() => {
-        try {
-          if (this.ptyClient.hasTerminal(terminalId)) {
-            this.ptyClient.submit(terminalId, cmd);
-          }
-        } catch (err) {
-          console.warn("[DevPreviewSessionService] Failed to submit dev command:", err);
-        }
-      }, PTY_SUBMIT_AFTER_SPAWN_MS);
-    };
-
-    void normalizeNextjsDevCommand(trimmedCommand, session.cwd, session.turbopackEnabled)
-      .then((nextNormalized) => normalizeViteDevCommand(nextNormalized, session.cwd, port))
-      .then((normalizedCommand) => {
-        submitCommand(normalizedCommand);
-      })
-      .catch(() => {
-        submitCommand(trimmedCommand);
-      });
-
-    this.scheduleStartupReplay(session);
-  }
-
-  private clearStartupReplay(session: DevPreviewSession): void {
-    if (session.startupReplayTimer !== null) {
-      clearTimeout(session.startupReplayTimer);
-      session.startupReplayTimer = null;
-    }
-  }
-
-  private scheduleStartupReplay(session: DevPreviewSession): void {
-    this.clearStartupReplay(session);
-    const generation = session.generation;
-    const terminalId = session.terminalId;
-    if (!terminalId) return;
-
-    session.startupReplayTimer = setTimeout(() => {
-      session.startupReplayTimer = null;
-      if (
-        session.generation !== generation ||
-        session.terminalId !== terminalId ||
-        session.status !== "starting" ||
-        session.url ||
-        session.pendingUrl
-      ) {
-        return;
-      }
-      void this.replayRecentOutput(terminalId);
-    }, STARTUP_REPLAY_DELAY_MS);
-  }
-
-  private createTerminalId(session: DevPreviewSession): string {
-    const projectToken = sanitizeToken(session.projectId);
-    const panelToken = sanitizeToken(session.panelId);
-    const timestampToken = Date.now().toString(36);
-    const randomToken = Math.random().toString(36).slice(2, 8);
-    return `dev-preview-${projectToken}-${panelToken}-${timestampToken}-${randomToken}`;
-  }
-
-  private attachTerminal(session: DevPreviewSession, terminalId: string): void {
-    const key = createSessionKey(session.projectId, session.panelId);
-    if (session.terminalId && session.terminalId !== terminalId) {
-      this.clearStartupReplay(session);
-      this.terminalToSession.delete(session.terminalId);
-      this.ptyClient.setIpcDataMirror(session.terminalId, false);
-    }
-    this.terminalToSession.set(terminalId, key);
-    this.ptyClient.setIpcDataMirror(terminalId, true);
-    session.terminalId = terminalId;
-  }
-
-  private detachTerminal(session: DevPreviewSession): void {
-    if (!session.terminalId) return;
-    this.terminalToSession.delete(session.terminalId);
-    this.ptyClient.setIpcDataMirror(session.terminalId, false);
-    session.terminalId = null;
+    return spawnSessionTerminal(session, this.terminalControllerDeps);
   }
 
   private async stopSessionTerminal(
@@ -1526,118 +1300,14 @@ export class DevPreviewSessionService {
     context: string,
     escalationDelayMs?: number
   ): Promise<void> {
-    this.clearStartupReplay(session);
-    session.readinessAbort?.abort();
-    session.readinessAbort = null;
-    // Cancel a pending crash-loop backoff: otherwise the deferred re-install
-    // fires after the terminal is gone (and, on the delete paths, after the
-    // session is removed), spawning an orphan PTY on a stopped session.
-    session.backoffAbort?.abort();
-    session.backoffAbort = null;
-    session.pendingUrl = null;
-    session.markerSeen = false;
-    this.clearCompiling(session);
-    session.needsInstall = false;
-    session.isRunningInstall = false;
-
-    const terminalId = session.terminalId;
-    if (!terminalId) return;
-
-    this.detachTerminal(session);
-    session.buffer = "";
-    session.lastErrorKey = null;
-
-    try {
-      if (escalationDelayMs !== undefined) {
-        this.ptyClient.kill(terminalId, `dev-preview:${context}`, { escalationDelayMs });
-      } else {
-        this.ptyClient.kill(terminalId, `dev-preview:${context}`);
-      }
-    } catch (err) {
-      const message = formatErrorMessage(err, "Failed to kill dev preview terminal");
-      if (!this.isBenignMissingTerminalError(message)) {
-        throw new Error(`Failed to kill terminal (${context}): ${message}`, { cause: err });
-      }
-    }
-
-    const stopped = await this.waitForTerminalGone(terminalId, session.projectId);
-    if (!stopped) {
-      throw new Error(`Timed out waiting for terminal ${terminalId} to stop (${context})`);
-    }
+    return stopSessionTerminal(session, context, this.terminalControllerDeps, escalationDelayMs);
   }
 
-  private isBenignMissingTerminalError(message: string): boolean {
-    const normalized = message.toLowerCase();
-    return (
-      normalized.includes("not found") ||
-      normalized.includes("does not exist") ||
-      normalized.includes("terminal not found") ||
-      normalized.includes("unknown terminal")
-    );
-  }
-
-  /**
-   * Wait for the session's registered port to release before respawning. On
-   * Windows a force-killed dev server can hold the socket in TIME_WAIT, which
-   * would otherwise cause the next spawn to fail with EADDRINUSE on the same
-   * port (allocatePort returns the registered port without re-probing).
-   * Returns true if free (or no port registered); on timeout, releases the
-   * port from the registry so a subsequent allocate picks a fresh candidate
-   * and surfaces an error state.
-   */
   private async waitForRegisteredPortFree(
     session: DevPreviewSession,
     key: string
   ): Promise<boolean> {
-    const port = this.portRegistry.get(key);
-    if (port === undefined) return true;
-    const abort = new AbortController();
-    this.portWaitAborts.add(abort);
-    const free = await waitForPortFree(port, abort.signal).finally(() => {
-      this.portWaitAborts.delete(abort);
-    });
-    if (free) return true;
-    releasePort(this.portRegistry, key);
-    this.recordSessionDiagnostic(session, { type: "port-conflict", port });
-    this.updateSession(session, {
-      status: "error",
-      url: null,
-      predictedUrl: null,
-      error: {
-        type: "port-conflict",
-        message: `Port ${port} did not release within ${PORT_FREE_TIMEOUT_MS / 1000}s. Retry to start again.`,
-        port: String(port),
-      },
-      terminalId: null,
-      isRestarting: false,
-      phaseLabel: undefined,
-    });
-    return false;
-  }
-
-  private async waitForTerminalGone(
-    terminalId: string,
-    projectId: string,
-    timeoutMs = DEFAULT_TIMEOUT_MS
-  ): Promise<boolean> {
-    const deadline = performance.now() + timeoutMs;
-    while (performance.now() < deadline) {
-      const alive = await this.isTerminalAlive(terminalId, projectId);
-      if (!alive) return true;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    return false;
-  }
-
-  private async isTerminalAlive(terminalId: string, projectId: string): Promise<boolean> {
-    try {
-      const terminal = await this.ptyClient.getTerminalAsync(terminalId);
-      if (!terminal || !terminal.hasPty) return false;
-      if (terminal.projectId && terminal.projectId !== projectId) return false;
-      return true;
-    } catch {
-      return false;
-    }
+    return waitForRegisteredPortFree(session, key, this.terminalControllerDeps);
   }
 
   private clearCompiling(session: DevPreviewSession): void {
@@ -1674,14 +1344,6 @@ export class DevPreviewSessionService {
     });
   }
 
-  private classifyExit(
-    exitCode: number,
-    signal: number | undefined,
-    recentOutput: string
-  ): DevServerError | null {
-    return classifyDevPreviewExit(exitCode, signal, recentOutput);
-  }
-
   private handleExit(id: string, exitCode: number, signal?: number): void {
     if (this.disposed) return;
     const sessionKey = this.terminalToSession.get(id);
@@ -1689,169 +1351,11 @@ export class DevPreviewSessionService {
     const session = this.sessions.get(sessionKey);
     if (!session || session.terminalId !== id) return;
 
-    this.clearStartupReplay(session);
-    session.readinessAbort?.abort();
-    session.readinessAbort = null;
-    session.pendingUrl = null;
-    session.markerSeen = false;
-    this.clearCompiling(session);
-
-    this.detachTerminal(session);
-    const recentOutput = session.buffer;
-    session.buffer = "";
-    session.lastErrorKey = null;
-
-    if (session.isRunningInstall) {
-      session.isRunningInstall = false;
-      if (exitCode === 0) {
-        this.recordSessionDiagnostic(session, { type: "install-completed" });
-        void this.spawnSessionTerminal(session);
-        return;
-      }
-      this.recordSessionDiagnostic(session, {
-        type: "install-failed",
-        message: `Dependency installation failed (exit code ${exitCode})`,
-      });
-      this.updateSession(session, {
-        status: "error",
-        url: null,
-        predictedUrl: null,
-        error: {
-          type: "missing-dependencies",
-          message: `Dependency installation failed (exit code ${exitCode})`,
-        },
-        terminalId: null,
-        isRestarting: false,
-        phaseLabel: undefined,
-      });
-      return;
-    }
-
-    this.recordSessionDiagnostic(session, {
-      type: "terminal-exited",
-      exitCode,
-      ...(signal !== undefined ? { signal } : {}),
-    });
-
-    if (session.needsInstall && session.installAttemptedGeneration !== session.generation) {
-      session.needsInstall = false;
-      this.guardedReinstall(session);
-      return;
-    }
-    session.needsInstall = false;
-
-    if (
-      session.status === "starting" ||
-      session.status === "installing" ||
-      session.status === "error"
-    ) {
-      // Expected termination signals during startup/error = clean stop (user interrupted it)
-      if (signal !== undefined && EXPECTED_TERMINATION_SIGNALS.has(signal)) {
-        this.updateSession(session, {
-          status: "stopped",
-          url: null,
-          predictedUrl: null,
-          error: null,
-          terminalId: null,
-          isRestarting: false,
-          phaseLabel: undefined,
-        });
-        return;
-      }
-      const error = this.classifyExit(exitCode, signal, recentOutput) ?? {
-        type: "unknown",
-        message: `Dev server exited with code ${exitCode}`,
-      };
-      this.updateSession(session, {
-        status: "error",
-        url: null,
-        predictedUrl: null,
-        error,
-        terminalId: null,
-        isRestarting: false,
-        phaseLabel: undefined,
-      });
-      return;
-    }
-
-    const crashError =
-      signal !== undefined && CRASH_SIGNALS.has(signal)
-        ? this.classifyExit(exitCode, signal, recentOutput)
-        : null;
-
-    this.updateSession(session, {
-      status: "stopped",
-      url: null,
-      predictedUrl: null,
-      error: crashError,
-      terminalId: null,
-      isRestarting: false,
-      phaseLabel: undefined,
-    });
+    handleDevPreviewTerminalExit(session, exitCode, signal, this.terminalControllerDeps);
   }
 
   private async runInstall(session: DevPreviewSession): Promise<void> {
-    session.installAttemptedGeneration = session.generation;
-    session.isRunningInstall = true;
-
-    const installCommand = detectInstallCommand(session.cwd);
-    this.recordSessionDiagnostic(session, {
-      type: "install-started",
-      command: capDiagnosticText(installCommand),
-    });
-
-    const terminalId = this.createTerminalId(session);
-    session.buffer = "";
-    session.lastErrorKey = null;
-    this.attachTerminal(session, terminalId);
-    this.updateSession(session, {
-      terminalId,
-      status: "installing",
-      error: {
-        type: "missing-dependencies",
-        message: `Running ${installCommand}...`,
-      },
-    });
-
-    try {
-      this.ptyClient.spawn(terminalId, {
-        projectId: session.projectId,
-        kind: "dev-preview",
-        cwd: session.cwd,
-        cols: 80,
-        rows: 30,
-        restore: false,
-        env: session.env,
-        isEphemeral: true,
-      });
-    } catch (error) {
-      session.isRunningInstall = false;
-      const message = formatErrorMessage(error, "Failed to start dependency install");
-      this.recordSessionDiagnostic(session, {
-        type: "install-failed",
-        message: capDiagnosticText(message),
-      });
-      this.detachTerminal(session);
-      this.updateSession(session, {
-        status: "error",
-        url: null,
-        predictedUrl: null,
-        error: { type: "unknown", message: `Failed to start dependency install: ${message}` },
-        terminalId: null,
-        isRestarting: false,
-      });
-      return;
-    }
-
-    setTimeout(() => {
-      try {
-        if (this.ptyClient.hasTerminal(terminalId)) {
-          this.ptyClient.submit(terminalId, installCommand);
-        }
-      } catch (err) {
-        console.warn("[DevPreviewSessionService] Failed to submit install command:", err);
-      }
-    }, PTY_SUBMIT_AFTER_SPAWN_MS);
+    return runInstall(session, this.terminalControllerDeps);
   }
 
   async getDestructivePreviewMeta(
