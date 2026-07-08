@@ -43,7 +43,6 @@ export interface GitStatusPassHost {
   readonly basePollingInterval: number;
   readonly wslInvocation: WslGitInvocation | undefined;
   readonly abortSignal: AbortSignal;
-  readonly lastWatcherEventAt: number;
   readonly prevEmittedIsDetached: boolean;
   readonly prevEmittedHead: string | undefined;
   readonly prevEmittedRepoState: RepoState | undefined;
@@ -230,8 +229,6 @@ export class GitStatusPass {
         this.host.hasInitialStatus &&
         (await this.statPrecheck.shouldSkip(
           gitDir,
-          this.host.branch,
-          this.host.lastWatcherEventAt,
           this.watcherController.currentMode === "recursive"
         ))
       ) {
@@ -476,7 +473,7 @@ export class GitStatusPass {
       // baseline so the next non-forced poll falls through to a full check
       // rather than skipping against a snapshot that predates the failure.
       if (checkSucceeded && gitDir) {
-        await this.statPrecheck.recordFullPass(gitDir, this.host.branch);
+        await this.statPrecheck.recordFullPass(gitDir);
       } else {
         this.statPrecheck.dropBaseline();
       }

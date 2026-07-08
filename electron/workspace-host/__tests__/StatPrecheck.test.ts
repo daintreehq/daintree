@@ -8,9 +8,17 @@ vi.mock("fs/promises", () => ({
 import { readFile, stat } from "fs/promises";
 import { StatPrecheck, type StatPrecheckHost } from "../StatPrecheck.js";
 
-function makeHost(overrides: Partial<StatPrecheckHost> = {}): StatPrecheckHost {
+interface MutableHost {
+  abortSignal: AbortSignal;
+  branch: string | undefined;
+  lastWatcherEventAt: number;
+}
+
+function makeHost(overrides: Partial<MutableHost> = {}): MutableHost & StatPrecheckHost {
   return {
     abortSignal: new AbortController().signal,
+    branch: "main",
+    lastWatcherEventAt: 0,
     ...overrides,
   };
 }
@@ -29,7 +37,7 @@ describe("StatPrecheck", () => {
 
   it("never skips before a baseline has been recorded", async () => {
     const precheck = new StatPrecheck(makeHost());
-    const skip = await precheck.shouldSkip("/repo/.git", "main", 0, true);
+    const skip = await precheck.shouldSkip("/repo/.git", true);
     expect(skip).toBe(false);
   });
 
@@ -37,8 +45,8 @@ describe("StatPrecheck", () => {
     vi.mocked(stat).mockResolvedValue(makeStatResult(1_000));
     const precheck = new StatPrecheck(makeHost());
 
-    await precheck.recordFullPass("/repo/.git", "main");
-    const skip = await precheck.shouldSkip("/repo/.git", "main", 0, true);
+    await precheck.recordFullPass("/repo/.git");
+    const skip = await precheck.shouldSkip("/repo/.git", true);
 
     expect(skip).toBe(true);
   });
@@ -46,21 +54,42 @@ describe("StatPrecheck", () => {
   it("falls through when a stat mtime moved since the baseline", async () => {
     vi.mocked(stat).mockResolvedValue(makeStatResult(1_000));
     const precheck = new StatPrecheck(makeHost());
-    await precheck.recordFullPass("/repo/.git", "main");
+    await precheck.recordFullPass("/repo/.git");
 
     vi.mocked(stat).mockResolvedValue(makeStatResult(2_000));
-    const skip = await precheck.shouldSkip("/repo/.git", "main", 0, true);
+    const skip = await precheck.shouldSkip("/repo/.git", true);
 
     expect(skip).toBe(false);
   });
 
   it("falls through when a watcher event fired after the baseline was captured", async () => {
     vi.mocked(stat).mockResolvedValue(makeStatResult(1_000));
-    const precheck = new StatPrecheck(makeHost());
-    await precheck.recordFullPass("/repo/.git", "main");
+    const host = makeHost();
+    const precheck = new StatPrecheck(host);
+    await precheck.recordFullPass("/repo/.git");
 
-    const afterBaseline = precheck.baselineCapturedAt + 1;
-    const skip = await precheck.shouldSkip("/repo/.git", "main", afterBaseline, true);
+    host.lastWatcherEventAt = precheck.baselineCapturedAt + 1;
+    const skip = await precheck.shouldSkip("/repo/.git", true);
+
+    expect(skip).toBe(false);
+  });
+
+  it("re-reads the host's branch live, not a value snapshotted before the awaits", async () => {
+    // The mtime for refs/heads/<branch> depends on which branch is statted,
+    // so a branch flip changes the resulting baseline unless the host's
+    // current value is read fresh (not captured once up front).
+    vi.mocked(stat).mockImplementation(async (path) => {
+      const p = String(path);
+      if (p.includes("refs/heads/main")) return makeStatResult(1_000);
+      if (p.includes("refs/heads/other")) return makeStatResult(2_000);
+      return makeStatResult(500);
+    });
+    const host = makeHost({ branch: "main" });
+    const precheck = new StatPrecheck(host);
+    await precheck.recordFullPass("/repo/.git");
+
+    host.branch = "other";
+    const skip = await precheck.shouldSkip("/repo/.git", true);
 
     expect(skip).toBe(false);
   });
@@ -68,32 +97,32 @@ describe("StatPrecheck", () => {
   it("is not trustworthy outside recursive coverage once the full-status budget expires", async () => {
     vi.mocked(stat).mockResolvedValue(makeStatResult(1_000));
     const precheck = new StatPrecheck(makeHost());
-    await precheck.recordFullPass("/repo/.git", "main");
+    await precheck.recordFullPass("/repo/.git");
 
     // Within budget the skip still applies without recursive coverage.
-    expect(await precheck.shouldSkip("/repo/.git", "main", 0, false)).toBe(true);
+    expect(await precheck.shouldSkip("/repo/.git", false)).toBe(true);
 
     precheck.fullStatusCapturedAt = Date.now() - 120_001;
-    expect(await precheck.shouldSkip("/repo/.git", "main", 0, false)).toBe(false);
+    expect(await precheck.shouldSkip("/repo/.git", false)).toBe(false);
   });
 
   it("stays trustworthy under recursive coverage even once the full-status budget expires", async () => {
     vi.mocked(stat).mockResolvedValue(makeStatResult(1_000));
     const precheck = new StatPrecheck(makeHost());
-    await precheck.recordFullPass("/repo/.git", "main");
+    await precheck.recordFullPass("/repo/.git");
 
     precheck.fullStatusCapturedAt = Date.now() - 120_001;
-    expect(await precheck.shouldSkip("/repo/.git", "main", 0, true)).toBe(true);
+    expect(await precheck.shouldSkip("/repo/.git", true)).toBe(true);
   });
 
   it("drops the baseline on request so the next check falls through", async () => {
     vi.mocked(stat).mockResolvedValue(makeStatResult(1_000));
     const precheck = new StatPrecheck(makeHost());
-    await precheck.recordFullPass("/repo/.git", "main");
-    expect(await precheck.shouldSkip("/repo/.git", "main", 0, true)).toBe(true);
+    await precheck.recordFullPass("/repo/.git");
+    expect(await precheck.shouldSkip("/repo/.git", true)).toBe(true);
 
     precheck.dropBaseline();
-    expect(await precheck.shouldSkip("/repo/.git", "main", 0, true)).toBe(false);
+    expect(await precheck.shouldSkip("/repo/.git", true)).toBe(false);
   });
 
   it("caches a resolved commondir for the instance lifetime", async () => {

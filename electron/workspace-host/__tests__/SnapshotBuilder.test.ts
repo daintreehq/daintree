@@ -11,8 +11,8 @@ function makeHost(overrides: Partial<SnapshotBuilderHost> = {}): SnapshotBuilder
     isMainWorktree: false,
     gitDir: undefined,
     summary: undefined,
-    modifiedCount: undefined,
-    mood: undefined,
+    modifiedCount: 0,
+    mood: "stable",
     lastActivityTimestamp: null,
     createdAt: undefined,
     aiNote: undefined,
@@ -179,11 +179,19 @@ describe("SnapshotBuilder", () => {
     expect(snapshot.wslGitEligible).toBe("eligible");
   });
 
-  it("reads isFetchInFlight live from the host at build time", () => {
-    const host = makeHost({ isFetchInFlight: true });
-    const snapshot = new SnapshotBuilder(host).build();
+  it("reads isFetchInFlight live from the host at build time, not cached at construction", () => {
+    // Object spread (used by makeHost's `{...overrides}` merge) evaluates
+    // getters eagerly, so a live getter can't be passed as an override —
+    // attach it directly to the already-built host instead.
+    let isFetchInFlight = false;
+    const host = makeHost();
+    Object.defineProperty(host, "isFetchInFlight", { get: () => isFetchInFlight });
+    const builder = new SnapshotBuilder(host);
 
-    expect(snapshot.isFetchInFlight).toBe(true);
+    expect(builder.build().isFetchInFlight).toBeUndefined();
+
+    isFetchInFlight = true;
+    expect(builder.build().isFetchInFlight).toBe(true);
   });
 
   it("suppresses worktreeMode when local and surfaces it otherwise", () => {

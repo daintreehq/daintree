@@ -4,7 +4,7 @@ import type { WslGitInvocation } from "../utils/hardenedGit.js";
 import { getGitDir } from "../utils/gitUtils.js";
 import type { StatPrecheck } from "./StatPrecheck.js";
 
-export interface BaseDivergenceResult {
+interface BaseDivergenceResult {
   baseBranchName: string | null;
   aheadCount: number | null;
   behindCount: number | null;

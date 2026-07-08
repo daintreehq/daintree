@@ -20,8 +20,8 @@ export interface SnapshotBuilderHost {
   readonly isMainWorktree: boolean;
   readonly gitDir: Worktree["gitDir"];
   readonly summary: string | undefined;
-  readonly modifiedCount: number | undefined;
-  readonly mood: WorktreeMood | undefined;
+  readonly modifiedCount: number;
+  readonly mood: WorktreeMood;
   readonly lastActivityTimestamp: number | null;
   readonly createdAt: number | undefined;
   readonly aiNote: string | undefined;

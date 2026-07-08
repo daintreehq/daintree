@@ -176,7 +176,7 @@ function makeHost(overrides: Partial<GitStatusPassHost> = {}): GitStatusPassHost
 
 function makeWatcherController(): WatcherController {
   return {
-    currentMode: "polling",
+    currentMode: "none",
     takePending: vi.fn().mockReturnValue(false),
     update: vi.fn(),
     markPending: vi.fn(),
@@ -198,7 +198,13 @@ function makeNoteReader(): NoteFileReader {
 
 function makePass(hostOverrides: Partial<GitStatusPassHost> = {}) {
   const host = makeHost(hostOverrides);
-  const statPrecheck = new StatPrecheck({ abortSignal: host.abortSignal });
+  const statPrecheck = new StatPrecheck({
+    abortSignal: host.abortSignal,
+    get branch() {
+      return host.branch;
+    },
+    lastWatcherEventAt: 0,
+  });
   const baseDivergence = new BaseDivergence(
     {
       branch: host.branch,
@@ -270,7 +276,7 @@ describe("GitStatusPass", () => {
     expect(host.isUpdating).toBe(false);
   });
 
-  it("runs a full check when there is no gitDir sentinel and no stat baseline yet", async () => {
+  it("runs a full check when getGitDir resolves no git directory", async () => {
     mockGetGitDir.mockResolvedValue(null);
     mockGetWorktreeChangesWithStats.mockResolvedValue({
       changes: [],
@@ -278,6 +284,21 @@ describe("GitStatusPass", () => {
       tracking: null,
     });
     const { pass, host } = makePass();
+
+    await pass.run(false);
+
+    expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+    expect(host.isUpdating).toBe(false);
+  });
+
+  it("runs a full check on the first poll even with a real gitDir, since no stat baseline exists yet", async () => {
+    mockGetGitDir.mockResolvedValue("/test/worktree/.git");
+    mockGetWorktreeChangesWithStats.mockResolvedValue({
+      changes: [],
+      changedFileCount: 0,
+      tracking: null,
+    });
+    const { pass, host } = makePass({ hasInitialStatus: true });
 
     await pass.run(false);
 

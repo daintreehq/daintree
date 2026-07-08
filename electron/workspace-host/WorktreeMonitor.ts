@@ -588,6 +588,12 @@ export class WorktreeMonitor {
       get abortSignal() {
         return monitor._pollAbortController.signal;
       },
+      get branch() {
+        return monitor._branch;
+      },
+      get lastWatcherEventAt() {
+        return monitor.lastWatcherEventAt;
+      },
     };
     this.statPrecheck = new StatPrecheck(statPrecheckHost);
 
@@ -643,9 +649,6 @@ export class WorktreeMonitor {
       },
       get abortSignal() {
         return monitor._pollAbortController.signal;
-      },
-      get lastWatcherEventAt() {
-        return monitor.lastWatcherEventAt;
       },
       get prevEmittedIsDetached() {
         return monitor._prevEmittedIsDetached;

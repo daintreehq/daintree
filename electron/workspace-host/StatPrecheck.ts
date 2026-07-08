@@ -16,7 +16,7 @@ const FULL_STATUS_MAX_AGE_MS = 120_000;
 // match on the next stat pass without forcing a real git check.
 const STAT_ABSENT_SENTINEL = -1;
 
-export interface GitFileStatBaseline {
+interface GitFileStatBaseline {
   index: number;
   head: number;
   refsHead: number;
@@ -25,6 +25,13 @@ export interface GitFileStatBaseline {
 
 export interface StatPrecheckHost {
   readonly abortSignal: AbortSignal;
+  // Live getters, not values snapshotted by the caller: the original inline
+  // implementation read `_branch`/`lastWatcherEventAt` fresh after each
+  // await, so a branch switch or watcher event landing mid-precheck is still
+  // observed. Capturing them once at the `shouldSkip()` call site would miss
+  // events that fire during `resolveCommonDirAsync`/`buildStatBaseline`.
+  readonly branch: string | undefined;
+  readonly lastWatcherEventAt: number;
 }
 
 /**
@@ -160,12 +167,7 @@ export class StatPrecheck {
    * last full pass — past that, pure working-tree edits on an
    * unwatched/git-only worktree would stay invisible indefinitely.
    */
-  async shouldSkip(
-    gitDir: string,
-    branch: string | undefined,
-    lastWatcherEventAt: number,
-    recursivelyWatched: boolean
-  ): Promise<boolean> {
+  async shouldSkip(gitDir: string, recursivelyWatched: boolean): Promise<boolean> {
     const skipTrustworthy = recursivelyWatched || this.isFullStatusRecent();
     if (this.baseline === null || !skipTrustworthy) return false;
 
@@ -173,10 +175,15 @@ export class StatPrecheck {
     const checkStartedAt = Date.now();
     try {
       const commonDir = await this.resolveCommonDirAsync(gitDir);
-      const fresh = await this.buildStatBaseline(gitDir, commonDir, branch);
+      // `branch`/`lastWatcherEventAt` read live from the host — see the
+      // interface comment. A branch switch or watcher event landing during
+      // the awaits above/below must still be observed here, exactly as the
+      // pre-split inline code re-read `this._branch`/`this.lastWatcherEventAt`
+      // fresh at each point rather than snapshotting them once.
+      const fresh = await this.buildStatBaseline(gitDir, commonDir, this.host.branch);
       if (
         fresh !== null &&
-        lastWatcherEventAt <= baselineAt &&
+        this.host.lastWatcherEventAt <= baselineAt &&
         this.baselinesMatch(this.baseline, fresh)
       ) {
         this.baselineAt = checkStartedAt;
@@ -197,11 +204,11 @@ export class StatPrecheck {
    * Callers must only invoke this when the full pass actually succeeded —
    * see `dropBaseline()` for the failure path.
    */
-  async recordFullPass(gitDir: string, branch: string | undefined): Promise<void> {
+  async recordFullPass(gitDir: string): Promise<void> {
     this.fullStatusAt = Date.now();
     try {
       const commonDir = await this.resolveCommonDirAsync(gitDir);
-      const fresh = await this.buildStatBaseline(gitDir, commonDir, branch);
+      const fresh = await this.buildStatBaseline(gitDir, commonDir, this.host.branch);
       if (fresh !== null) {
         this.baseline = fresh;
         this.baselineAt = Date.now();
