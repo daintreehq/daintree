@@ -1,5 +1,6 @@
 export { useAppBoot } from "./useAppBoot";
 export type { SafeBootResult } from "./useAppBoot";
+export { useE2EBridges } from "./useE2EBridges";
 export { useAppHydration } from "./useAppHydration";
 export { useShortcutHints } from "./useShortcutHints";
 export { usePanelStoreBootstrap } from "./usePanelStoreBootstrap";
