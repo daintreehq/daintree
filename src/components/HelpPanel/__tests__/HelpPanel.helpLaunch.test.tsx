@@ -573,9 +573,6 @@ beforeEach(() => {
             expiresAt: Date.now() + 900_000,
           }),
         },
-        git: {
-          snapshotGet: vi.fn().mockResolvedValue(null),
-        },
         project: {
           getSettings: vi.fn().mockResolvedValue({}),
           saveSettings: vi.fn().mockResolvedValue(undefined),

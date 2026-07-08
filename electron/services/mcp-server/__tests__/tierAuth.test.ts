@@ -512,8 +512,6 @@ describe("help-session tier policy (#10640)", () => {
   const HIGH_BLAST_RADIUS_TOOLS = [
     "git.commit",
     "git.push",
-    "git.snapshotRevert",
-    "git.snapshotDelete",
     "worktree.delete",
     "forge.assignIssue",
   ];

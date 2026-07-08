@@ -182,10 +182,6 @@ export const BUILT_IN_ACTION_IDS = [
   "git.pullRebase",
   "git.markSafeDirectory",
   "git.getStagingStatus",
-  "git.snapshotGet",
-  "git.snapshotList",
-  "git.snapshotRevert",
-  "git.snapshotDelete",
 
   // -- preferencesActions --
   "preferences.showProjectPulse.set",

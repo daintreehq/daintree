@@ -61,8 +61,6 @@ export const WORKBENCH_TIER_TOOLS = [
   "git.getFileDiff",
   "git.listCommits",
   "git.getStagingStatus",
-  "git.snapshotGet",
-  "git.snapshotList",
 
   "forge.getRepoStats",
   "forge.listIssues",
@@ -166,8 +164,6 @@ export const SYSTEM_TIER_ADDONS = [
   "git.unstageAll",
   "git.commit",
   "git.push",
-  "git.snapshotRevert",
-  "git.snapshotDelete",
 
   "forge.openIssues",
   "forge.openPRs",

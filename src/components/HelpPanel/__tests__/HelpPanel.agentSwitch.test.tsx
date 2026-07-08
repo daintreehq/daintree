@@ -41,7 +41,6 @@ const { controllerSpies, helpPanelState, panelStoreState } = vi.hoisted(() => ({
 
 const snapshot = {
   showResumeBanner: false,
-  preflightSnapshot: null,
   tierMismatch: null,
   isApprovingTier: false,
   assistantVersionTooOld: null,
@@ -80,12 +79,10 @@ vi.mock("@/controllers/HelpSessionController", () => ({
     syncInputs = vi.fn();
     handleTerminalPanelMissing = vi.fn();
     handleAgentExited = vi.fn();
-    maybeRunPreflightSnapshot = vi.fn(() => undefined);
     selectAgent = (...args: unknown[]) => controllerSpies.selectAgent(...args);
     newSession = (...args: unknown[]) => controllerSpies.newSession(...args);
     runAnyway = vi.fn();
     dismissResumeBanner = vi.fn();
-    dismissPreflightSnapshot = vi.fn();
     dismissTierMismatch = vi.fn();
     approveTierOnce = vi.fn();
     alwaysAllowTier = vi.fn();

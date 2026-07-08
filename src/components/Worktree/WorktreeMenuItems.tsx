@@ -45,7 +45,6 @@ import {
   SquareTerminal,
   Square,
   Trash2,
-  Undo2,
   Zap,
 } from "lucide-react";
 import { Folders, Workflow } from "@/components/icons";
@@ -128,9 +127,6 @@ export interface WorktreeMenuItemsProps {
   onClearHistory: () => void;
   onOpenPanelPalette?: () => void;
   onDeleteWorktree?: () => void;
-  onRevertAgentChanges?: () => void;
-  onDeleteSnapshot?: () => void;
-  hasSnapshot?: boolean;
   hasResourceConfig?: boolean;
   worktreeMode?: string;
   resourceEnvironmentKeys?: string[];
@@ -186,9 +182,6 @@ export function WorktreeMenuItems({
   onClearHistory,
   onOpenPanelPalette,
   onDeleteWorktree,
-  onRevertAgentChanges,
-  onDeleteSnapshot,
-  hasSnapshot,
   hasResourceConfig,
   worktreeMode,
   resourceEnvironmentKeys,
@@ -469,20 +462,6 @@ export function WorktreeMenuItems({
         <C.Item onSelect={onCompareDiff}>
           <GitCompare className="w-3.5 h-3.5 mr-2" />
           Compare Worktrees…
-        </C.Item>
-      )}
-
-      {onRevertAgentChanges && hasSnapshot && (
-        <C.Item onSelect={onRevertAgentChanges}>
-          <Undo2 className="w-3.5 h-3.5 mr-2" />
-          Revert Agent Changes
-        </C.Item>
-      )}
-
-      {onDeleteSnapshot && hasSnapshot && (
-        <C.Item onSelect={onDeleteSnapshot}>
-          <Trash2 className="w-3.5 h-3.5 mr-2" />
-          Delete snapshot
         </C.Item>
       )}
 

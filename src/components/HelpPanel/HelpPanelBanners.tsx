@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, Clock, History, ShieldAlert, ShieldCheck, X } from "lucide-react";
+import { AlertCircle, Clock, ShieldAlert, ShieldCheck, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { SnapshotInfo } from "@shared/types/ipc/git";
 import type {
   ActiveGrantState,
   GrantEndReason,
@@ -187,7 +186,6 @@ const LAUNCH_ERROR_CTAS: Record<LaunchErrorKind, LaunchErrorCta[]> = {
 
 interface HelpPanelBannersProps {
   showResumeBanner: boolean;
-  preflightSnapshot: SnapshotInfo | null;
   tierMismatch: TierMismatchState | null;
   launchError: LaunchErrorState | null;
   sessionRevoked: SessionRevokedState | null;
@@ -196,7 +194,6 @@ interface HelpPanelBannersProps {
   grantEnded: GrantEndedState | null;
   isRevokingGrant: boolean;
   onDismissResume: () => void;
-  onDismissSnapshot: () => void;
   onDismissTierMismatch: () => void;
   onApproveOnce: () => void;
   onAlwaysAllow: () => void;
@@ -213,7 +210,6 @@ interface HelpPanelBannersProps {
 
 export function HelpPanelBanners({
   showResumeBanner,
-  preflightSnapshot,
   tierMismatch,
   launchError,
   sessionRevoked,
@@ -222,7 +218,6 @@ export function HelpPanelBanners({
   grantEnded,
   isRevokingGrant,
   onDismissResume,
-  onDismissSnapshot,
   onDismissTierMismatch,
   onApproveOnce,
   onAlwaysAllow,
@@ -254,34 +249,6 @@ export function HelpPanelBanners({
             type="button"
             onClick={onDismissResume}
             aria-label="Dismiss resume notice"
-            className="text-daintree-text/50 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
-          >
-            <X className="w-3 h-3" />
-          </button>
-        </div>
-      )}
-      {preflightSnapshot && (
-        <div
-          role="status"
-          aria-live="polite"
-          className={cn(
-            "flex items-start gap-2 px-3 py-2 mx-3 mt-3 mb-1",
-            "rounded-[var(--radius-md)] bg-overlay-subtle border border-daintree-border",
-            "text-xs text-daintree-text/80"
-          )}
-          data-testid="help-snapshot-banner"
-        >
-          <History
-            className="w-3.5 h-3.5 shrink-0 mt-0.5 text-daintree-text/60"
-            aria-hidden="true"
-          />
-          <span className="flex-1 select-text">
-            Saved a snapshot of this worktree before any changes.
-          </span>
-          <button
-            type="button"
-            onClick={onDismissSnapshot}
-            aria-label="Dismiss snapshot notice"
             className="text-daintree-text/50 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
           >
             <X className="w-3 h-3" />

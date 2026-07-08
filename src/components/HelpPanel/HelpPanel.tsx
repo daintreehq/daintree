@@ -157,7 +157,6 @@ export function HelpPanel({
   // on unrelated dep changes while the async launch settles).
   const prevPreferredAgentIdRef = useRef<string | null>(null);
   const [visibilityEpoch, setVisibilityEpoch] = useState(0);
-  const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
 
   // useState lazy initializer guarantees a single instantiation across
   // renders and StrictMode double-mount, and unlike a ref it doesn't trip
@@ -617,19 +616,6 @@ export function HelpPanel({
     showAgentSwitchConfirm,
   ]);
 
-  // Auto-snapshot pre-flight: when the project's MCP tier is `system`, take
-  // a pre-flight snapshot once per session and surface a Tier-1 banner.
-  useEffect(() => {
-    if (!terminalId || !terminal) return;
-    const worktreeId = terminal.worktreeId ?? activeWorktreeId;
-    return controller.maybeRunPreflightSnapshot({
-      terminalId,
-      terminalExists: true,
-      projectId: currentProject?.id ?? null,
-      worktreeId,
-    });
-  }, [controller, terminalId, terminal, currentProject?.id, activeWorktreeId]);
-
   // Register the panel root with the macro-focus store so the assistant
   // participates in cross-region cycling.
   useEffect(() => {
@@ -966,7 +952,6 @@ export function HelpPanel({
   }, [controller, resumableAgentId]);
 
   const dismissResume = useCallback(() => controller.dismissResumeBanner(), [controller]);
-  const dismissSnapshot = useCallback(() => controller.dismissPreflightSnapshot(), [controller]);
   const dismissTierMismatch = useCallback(() => controller.dismissTierMismatch(), [controller]);
   const approveTierOnce = useCallback(() => controller.approveTierOnce(), [controller]);
   const alwaysAllowTier = useCallback(() => controller.alwaysAllowTier(), [controller]);
@@ -1091,7 +1076,6 @@ export function HelpPanel({
             position is behaviorally identical for them. */}
         <HelpPanelBanners
           showResumeBanner={session.showResumeBanner}
-          preflightSnapshot={session.preflightSnapshot}
           tierMismatch={session.tierMismatch}
           launchError={session.launchError}
           sessionRevoked={session.sessionRevoked}
@@ -1100,7 +1084,6 @@ export function HelpPanel({
           grantEnded={session.grantEnded}
           isRevokingGrant={session.isRevokingGrant}
           onDismissResume={dismissResume}
-          onDismissSnapshot={dismissSnapshot}
           onDismissTierMismatch={dismissTierMismatch}
           onApproveOnce={approveTierOnce}
           onAlwaysAllow={alwaysAllowTier}
