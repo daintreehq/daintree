@@ -335,12 +335,12 @@ describe("TopologyWatcher", () => {
   describe("dark state (#9908)", () => {
     function darkEventCount(): number {
       return host.sendEvent.mock.calls.filter(
-        ([e]: [{ type?: string }]) => e?.type === "topology-watcher-dark"
+        (call: any[]) => (call[0] as { type?: string })?.type === "topology-watcher-dark"
       ).length;
     }
     function recoveredEventCount(): number {
       return host.sendEvent.mock.calls.filter(
-        ([e]: [{ type?: string }]) => e?.type === "topology-watcher-recovered"
+        (call: any[]) => (call[0] as { type?: string })?.type === "topology-watcher-recovered"
       ).length;
     }
 
