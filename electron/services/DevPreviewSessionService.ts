@@ -733,6 +733,33 @@ export class DevPreviewSessionService {
     return this.getSessionState(request.projectId, request.panelId);
   }
 
+  /**
+   * Shared happy-path for stopByPanel/stopByProject/stopByWorktree: record the
+   * stop, kill the terminal, mark the session stopped, and remove it from the
+   * live maps. Callers differ only in error handling (whether to also surface
+   * an error state, what log fields to include, and whether to collect/rethrow
+   * failures), so that stays at each call site.
+   */
+  private async stopAndRemoveSession(
+    session: DevPreviewSession,
+    context: "panel-closed" | "project-hibernated" | "worktree-delete"
+  ): Promise<void> {
+    const key = createSessionKey(session.projectId, session.panelId);
+    this.recordSessionDiagnostic(session, { type: "stop-requested", context });
+    await this.stopSessionTerminal(session, context);
+    this.updateSession(session, {
+      status: "stopped",
+      url: null,
+      predictedUrl: null,
+      error: null,
+      terminalId: null,
+      isRestarting: false,
+    });
+    this.sessions.delete(key);
+    releasePort(this.portRegistry, key);
+    this.restoreWorktreeMapping(session.worktreeId, key);
+  }
+
   async stopByPanel(request: DevPreviewStopByPanelRequest): Promise<void> {
     validateStopByPanelRequest(request);
     const targets = [...this.sessions.values()].filter(
@@ -744,22 +771,7 @@ export class DevPreviewSessionService {
         const key = createSessionKey(session.projectId, session.panelId);
         await this.runLocked(key, async () => {
           try {
-            this.recordSessionDiagnostic(session, {
-              type: "stop-requested",
-              context: "panel-closed",
-            });
-            await this.stopSessionTerminal(session, "panel-closed");
-            this.updateSession(session, {
-              status: "stopped",
-              url: null,
-              predictedUrl: null,
-              error: null,
-              terminalId: null,
-              isRestarting: false,
-            });
-            this.sessions.delete(key);
-            releasePort(this.portRegistry, key);
-            this.restoreWorktreeMapping(session.worktreeId, key);
+            await this.stopAndRemoveSession(session, "panel-closed");
           } catch (err) {
             const message = formatErrorMessage(err, "Failed to stop dev preview");
             this.updateSession(session, {
@@ -791,22 +803,7 @@ export class DevPreviewSessionService {
       targets.map(async ([key, session]) => {
         await this.runLocked(key, async () => {
           try {
-            this.recordSessionDiagnostic(session, {
-              type: "stop-requested",
-              context: "project-hibernated",
-            });
-            await this.stopSessionTerminal(session, "project-hibernated");
-            this.updateSession(session, {
-              status: "stopped",
-              url: null,
-              predictedUrl: null,
-              error: null,
-              terminalId: null,
-              isRestarting: false,
-            });
-            this.sessions.delete(key);
-            releasePort(this.portRegistry, key);
-            this.restoreWorktreeMapping(session.worktreeId, key);
+            await this.stopAndRemoveSession(session, "project-hibernated");
           } catch (err) {
             const message = formatErrorMessage(err, "Failed to stop dev preview");
             console.warn("[DevPreviewSessionService] stopByProject failed for session", {
@@ -920,22 +917,7 @@ export class DevPreviewSessionService {
       targets.map(async ([key, session]) => {
         await this.runLocked(key, async () => {
           try {
-            this.recordSessionDiagnostic(session, {
-              type: "stop-requested",
-              context: "worktree-delete",
-            });
-            await this.stopSessionTerminal(session, "worktree-delete");
-            this.updateSession(session, {
-              status: "stopped",
-              url: null,
-              predictedUrl: null,
-              error: null,
-              terminalId: null,
-              isRestarting: false,
-            });
-            this.sessions.delete(key);
-            releasePort(this.portRegistry, key);
-            this.restoreWorktreeMapping(session.worktreeId, key);
+            await this.stopAndRemoveSession(session, "worktree-delete");
           } catch (err) {
             const message = formatErrorMessage(err, "Failed to stop dev preview");
             console.warn("[DevPreviewSessionService] stopByWorktree failed for session", {
