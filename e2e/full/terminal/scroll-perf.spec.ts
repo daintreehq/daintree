@@ -524,8 +524,11 @@ async function installEchoProbe(page: any, panelId: string): Promise<void> {
       return probe.sent.length;
     };
     probe.resetLine = () => {
-      // Enter is observed via onData (probe.sent resets there); just drop any
-      // input-dropped rounds still pending so they can't linger forever.
+      // Driven via the terminal bridge (not a keyboard Enter): write "\r" to
+      // the PTY and reset the accumulated-line state in the same task, so the
+      // probe can never desynchronize from the cat line it validates against.
+      (window as any).electron?.terminal?.write?.(id, "\r");
+      probe.sent = "";
       probe.pending = probe.pending.filter((r: any) => r.tInput !== null);
     };
     probe.snapshot = () => probe.rounds;
@@ -958,7 +961,6 @@ perfDescribe("Perf: TUI scroll under load (PERF-125..127)", () => {
           )) as number;
           await page.keyboard.press(ch);
           if (len >= 20) {
-            await page.keyboard.press("Enter");
             await page.evaluate(() => (window as any).__DAINTREE_ECHO_PROBE__.resetLine());
           }
         };
@@ -1003,6 +1005,23 @@ perfDescribe("Perf: TUI scroll under load (PERF-125..127)", () => {
             p.dispose();
             return rounds;
           })) as EchoRound[];
+          const unconfirmed = echoRounds.filter((r) => r.tPaint === null);
+          if (unconfirmed.length > 0) {
+            const bufferTail = (await page.evaluate((id: string) => {
+              const read = (window as any).__daintreeReadTerminalBuffer;
+              const text = typeof read === "function" ? (read(id) as string) : "";
+              return text
+                .split("\n")
+                .filter((l: string) => l.trim().length > 0)
+                .slice(-6);
+            }, echoId)) as string[];
+            console.log(
+              `[scroll-perf] unconfirmed echo rounds:`,
+              JSON.stringify(unconfirmed),
+              `bystander tail:`,
+              JSON.stringify(bufferTail)
+            );
+          }
         }
 
         const snapshot = (await page.evaluate(() => {
