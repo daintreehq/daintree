@@ -27,7 +27,6 @@ import { usePluginAgents } from "./hooks/usePluginAgents";
 import { usePluginKeybindings } from "./hooks/usePluginKeybindings";
 import { usePluginMcpConsentBridge } from "./hooks/usePluginMcpConsentBridge";
 import { usePluginCapabilityConsentBridge } from "./hooks/usePluginCapabilityConsentBridge";
-import { useUpdateListener } from "./hooks/useUpdateListener";
 import { useMainProcessToastListener } from "./hooks/useMainProcessToastListener";
 
 import { useActionPalette } from "./hooks/useActionPalette";
@@ -42,26 +41,13 @@ import { useMcpAnomalyStats } from "./hooks/useMcpAnomalyStats";
 import { usePluginBridge } from "./hooks/usePluginBridge";
 import { usePluginPromptBridge } from "./hooks/usePluginPromptBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
-import { notifyViewPainted, removeStartupSkeleton } from "./utils/removeStartupSkeleton";
-import { useAppBoot } from "./hooks/app/useAppBoot";
-import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
+import { notifyViewPainted } from "./utils/removeStartupSkeleton";
 import {
-  useAppHydration,
-  useShortcutHints,
   usePanelStoreBootstrap,
   useSemanticWorkerLifecycle,
   useCloudSyncWarning,
   useRosettaWarning,
   useAccessibilityAnnouncements,
-  useGettingStartedChecklist,
-  useOrchestrationMilestones,
-  useAgentWaitingNudge,
-  useForgeEnableRecommendation,
-  useFocusOnActivateIntent,
-  useBackgroundWindowResize,
-  useClearSwitchBusyStateOnReveal,
-  usePluginDeepLink,
-  useNotificationHistoryPruning,
   useUnloadCleanup,
   useHomeDir,
   usePerformanceMonitors,
@@ -87,49 +73,32 @@ import { AccessibilityAnnouncer } from "./components/Accessibility/Accessibility
 import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { TooltipProvider } from "./components/ui/tooltip";
-import { primeRadix } from "./components/ui/radix-loader";
 import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "./lib/animationUtils";
 import { useE2EBridges } from "./hooks/app/useE2EBridges";
 import { useModalResetKeys } from "./hooks/app/useModalResetKeys";
+import { useAppBootstrap } from "./hooks/app/useAppBootstrap";
 
 import {
-  loadJetbrainsMono500,
-  loadJetbrainsMono600,
-  preloadFileViewerModal,
   LazyWelcomeScreen,
   preloadSettingsDialog,
   LazySettingsDialog,
-  preloadWorktreePalette,
   LazyWorktreePalette,
-  preloadWorktreeOverviewModal,
   LazyWorktreeOverviewModal,
-  preloadQuickCreatePalette,
   LazyQuickCreatePalette,
-  preloadCrossWorktreeDiff,
   LazyCrossWorktreeDiff,
-  preloadNewTerminalPalette,
   LazyNewTerminalPalette,
-  preloadSendToAgentPalette,
   LazySendToAgentPalette,
-  preloadPanelPalette,
   LazyPanelPalette,
-  preloadActionPalette,
   LazyActionPalette,
-  preloadQuickSwitcher,
   LazyQuickSwitcher,
-  preloadProjectSwitcherPalette,
   LazyProjectSwitcherPalette,
   LazyGitInitDialog,
   LazyCloneRepoDialog,
   LazyCreateProjectFolderDialog,
-  preloadThemePalette,
   LazyThemePalette,
   LazyResumeSessionsPalette,
-  preloadLogLevelPalette,
   LazyLogLevelPalette,
-  preloadShortcutReferenceDialog,
   LazyShortcutReferenceDialog,
-  preloadPluginManagerView,
   LazyPluginManagerView,
   LazyOnboardingFlow,
   LazyGettingStartedChecklist,
@@ -162,7 +131,6 @@ import {
   useWorktreeSelectionStore,
   useProjectStore,
   usePaletteStore,
-  useNotificationSettingsStore,
   usePreferencesStore,
   usePluginManagerStore,
 } from "./store";
@@ -180,7 +148,7 @@ import { voiceRecordingService } from "./services/VoiceRecordingService";
 import { useRenderProfiler } from "./utils/renderProfiler";
 import { logError } from "./utils/logger";
 
-import { SidebarContent, preloadNewWorktreeDialog, E2EFaultInjector } from "./components/Sidebar";
+import { SidebarContent, E2EFaultInjector } from "./components/Sidebar";
 import { ensureHydrationBootstrap } from "./utils/stateHydration/bootstrapGuard";
 
 // Kick the hydration-bootstrap IPC pair (keybinding overrides + user-agent
@@ -347,35 +315,16 @@ function AppInner() {
 
   usePerformanceMonitors();
 
-  // Batched cold-start payload — replaces the legacy fan-out of
-  // crash-recovery:get-pending + crash-recovery:get-config + app:hydrate +
-  // terminal-config:get into a single IPC round-trip (#8620). The IPC is fired
-  // at module-eval time and read here via `use()` (#8820); a boot failure
-  // resolves to `{ ok: false }` so the app still renders its cold-start chrome.
-  const safeBoot = useAppBoot();
-  const bootResult = safeBoot.ok ? safeBoot.result : null;
-
-  // Crash recovery gate — must resolve before hydration runs
   const {
-    state: crashState,
-    resolve: resolveCrash,
-    updateConfig: updateCrashConfig,
-  } = useCrashRecoveryGate(bootResult);
-
-  const crashResolved = crashState.status !== "loading" && crashState.status !== "pending";
-
-  // When crash recovery was pending at boot, the resolve path (`restoreBackup`
-  // or `resetToFresh` in CrashRecoveryService) mutates `store.appState` after
-  // `bootResult` was captured. Passing the stale prefetched payload would
-  // hydrate from the pre-resolution terminal list and skip the one-shot
-  // `consumePanelFilter` the restore path queued. Force the live IPC path in
-  // that case so hydration reads the post-resolution store.
-  const hadPendingCrash = bootResult?.crashPending != null;
-  // App lifecycle hooks
-  const { isStateLoaded } = useAppHydration(crashResolved, hadPendingCrash ? null : bootResult);
-  useEffect(() => {
-    if (isStateLoaded) removeStartupSkeleton();
-  }, [isStateLoaded]);
+    bootResult,
+    crashState,
+    resolveCrash,
+    updateCrashConfig,
+    crashResolved,
+    isStateLoaded,
+    pluginDeepLink,
+    gettingStarted,
+  } = useAppBootstrap();
 
   const {
     gitPushResetKey,
@@ -391,115 +340,6 @@ function AppInner() {
     fileViewerResetKey,
     diffViewerResetKey,
   } = useModalResetKeys();
-  // Cross-project focus intent receiver. Subscribes unconditionally so the
-  // listener is registered before `notifyViewPainted` fires, then defers the
-  // local `agent.focusNextWaiting` dispatch until hydration completes (the
-  // paint signal arrives before panel state is loaded — a direct dispatch
-  // would silently no-op against an empty panelStore).
-  useFocusOnActivateIntent(isStateLoaded);
-  // Background window-resize receiver — keeps PTY geometry tracking the
-  // window while this project view is detached (#10415).
-  useBackgroundWindowResize();
-  // Clears the stale switch busy flags when this cached view is reactivated, so
-  // a view that switched away never resurfaces a stuck ProjectSwitcher spinner
-  // on return (#10736).
-  useClearSwitchBusyStateOnReveal();
-  // `daintree://` deep-link receiver (#9559). Surfaces the intent once hydration
-  // settles; the effect below opens the Plugin Manager, which consumes it.
-  const pluginDeepLink = usePluginDeepLink(isStateLoaded);
-  useEffect(() => {
-    if (!pluginDeepLink.intent) return;
-    // Opening the manager also closes Settings via the open-transition effect
-    // above, so the two surfaces don't stack when the deep link arrives.
-    usePluginManagerStore.getState().open();
-  }, [pluginDeepLink.intent]);
-  // The skeleton is z-index 9999 and intercepts pointer events. The crash
-  // recovery dialog is rendered before hydration completes, so without this
-  // the dialog would be visible but unclickable until hydration finishes
-  // (which it can't, since the user must resolve the crash first).
-  useEffect(() => {
-    if (crashState.status === "pending" || crashState.status === "failed") {
-      removeStartupSkeleton();
-    }
-  }, [crashState.status]);
-  useEffect(() => {
-    void useNotificationSettingsStore.getState().hydrate();
-    // Subscribe to OS DND transitions before hydrate resolves so a transition
-    // mid-hydration cannot be missed. Push events from main are tolerant of
-    // an `undefined` namespace at preload (renderer harness in tests).
-    const unsubscribe = window.electron?.osDnd?.onStateChanged?.((payload) => {
-      useNotificationSettingsStore.getState().setOsDndActive(payload.osDndActive);
-    });
-    return () => unsubscribe?.();
-  }, []);
-  // Defers the post-hydration housekeeping IPC reads (shortcut-hint counts,
-  // milestones, forge-recommendation plugin/remotes probes) out of the
-  // synchronous isStateLoaded effect flush: their sends would otherwise land
-  // on main ahead of the loaded-frame paint and compete with the
-  // deferred-services drain. The flag flips from the background-priority task
-  // below, so the gated hooks hydrate at idle; each reconciles current store
-  // state on attach, so nothing observable is lost in the gap.
-  const [idleHousekeepingReady, setIdleHousekeepingReady] = useState(false);
-  useShortcutHints(isStateLoaded && idleHousekeepingReady);
-  const gettingStarted = useGettingStartedChecklist(isStateLoaded);
-  const onboardingOverlayActive = gettingStarted.visible || gettingStarted.showCelebration;
-  useUpdateListener(onboardingOverlayActive);
-  useOrchestrationMilestones(isStateLoaded && idleHousekeepingReady);
-  useAgentWaitingNudge(isStateLoaded);
-  useForgeEnableRecommendation(isStateLoaded && idleHousekeepingReady);
-  useNotificationHistoryPruning();
-
-  useEffect(() => {
-    if (!isStateLoaded) return;
-
-    const controller = new AbortController();
-
-    const execute = () => {
-      if (controller.signal.aborted) return;
-      setIdleHousekeepingReady(true);
-      void preloadSettingsDialog();
-      void preloadNewWorktreeDialog();
-      void preloadActionPalette();
-      void preloadQuickSwitcher();
-      preloadProjectSwitcherPalette().catch(() => {});
-      void preloadWorktreePalette();
-      void preloadNewTerminalPalette();
-      void preloadPanelPalette();
-      void preloadThemePalette();
-      void preloadSendToAgentPalette();
-      void preloadQuickCreatePalette();
-      void preloadLogLevelPalette();
-      void preloadPluginManagerView();
-      void preloadWorktreeOverviewModal();
-      void preloadShortcutReferenceDialog();
-      void preloadCrossWorktreeDiff();
-      loadJetbrainsMono500().catch(() => {});
-      loadJetbrainsMono600().catch(() => {});
-      // Warm the FileViewerModal/DiffViewer chunk split out of the eager
-      // closure (#8626). It is reached through a lazy boundary in
-      // `Worktree/FileDiffModal.tsx`, so an explicit post-paint prefetch keeps
-      // it snappy on first use.
-      preloadFileViewerModal().catch(() => {});
-      // Warm the shared Radix overlay primitives chunk (`radix-deferred`) so the
-      // ProjectSwitcherPalette popover and context menus are ready on first
-      // interaction in a freshly loaded project view. Otherwise this chunk is
-      // only demand-loaded on the first pointer/focus gesture (#10752). Each
-      // WebContentsView has its own module cache, so this fires per view.
-      primeRadix().catch(() => {});
-    };
-
-    if (typeof scheduler !== "undefined" && typeof scheduler.postTask === "function") {
-      void scheduler
-        .postTask(execute, { priority: "background", signal: controller.signal })
-        .catch(() => {});
-    } else {
-      const id = requestIdleCallback(execute, { timeout: 5000 });
-      const cancel = () => cancelIdleCallback(id);
-      controller.signal.addEventListener("abort", cancel, { once: true });
-    }
-
-    return () => controller.abort();
-  }, [isStateLoaded]);
 
   const handlePreloadSettings = useCallback(() => {
     void preloadSettingsDialog();
