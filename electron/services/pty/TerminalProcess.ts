@@ -26,6 +26,7 @@ import {
   DEFAULT_SCROLLBACK,
 } from "./types.js";
 import { WriteQueue } from "./WriteQueue.js";
+import { AgentOutputForwarder } from "./AgentOutputForwarder.js";
 import { events } from "../events.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import { destroyPty, type PooledPtyDataHandoff, type PtyPool } from "../PtyPool.js";
@@ -107,11 +108,6 @@ import {
   AGENT_OUTPUT_ACTIVITY_LINE_COUNT,
   AgentActivityTemperature,
 } from "./AgentActivityTemperature.js";
-
-// Coalescing window for host→main agent:output forwarding. Pending output is
-// flushed synchronously before any agent state transition (and on exit) so
-// turn-outcome classification still sees the tail in order.
-const AGENT_OUTPUT_FLUSH_INTERVAL_MS = 50;
 
 // Floor between agent-output content comparisons (noteAgentOutputActivity).
 // Each comparison costs two full viewport extractions from the headless mirror
@@ -202,9 +198,7 @@ export class TerminalProcess {
   private lastAgentOutputNoteAt = Number.NEGATIVE_INFINITY;
   private agentOutputNoteTimer: NodeJS.Timeout | null = null;
 
-  private pendingAgentOutput = "";
-  private pendingAgentOutputAgentId: string | null = null;
-  private agentOutputFlushTimer: NodeJS.Timeout | null = null;
+  private agentOutputForwarder!: AgentOutputForwarder;
 
   private readonly terminalInfo: TerminalInfo;
 
@@ -436,6 +430,14 @@ export class TerminalProcess {
       },
       get disposed() {
         return self.lifecycle.isDisposed;
+      },
+    });
+    this.agentOutputForwarder = new AgentOutputForwarder({
+      get terminalId() {
+        return self.id;
+      },
+      get traceId() {
+        return self.terminalInfo.traceId;
       },
     });
     this.writeQueue = new WriteQueue({
@@ -2005,44 +2007,11 @@ export class TerminalProcess {
   }
 
   private queueAgentOutput(agentId: string, data: string): void {
-    if (this.pendingAgentOutputAgentId !== null && this.pendingAgentOutputAgentId !== agentId) {
-      this.flushAgentOutput();
-    }
-    this.pendingAgentOutputAgentId = agentId;
-    this.pendingAgentOutput += data;
-
-    if (this.pendingAgentOutput.length >= OUTPUT_BUFFER_SIZE) {
-      this.flushAgentOutput();
-      return;
-    }
-    if (this.agentOutputFlushTimer) {
-      return;
-    }
-    this.agentOutputFlushTimer = setTimeout(() => {
-      this.agentOutputFlushTimer = null;
-      this.flushAgentOutput();
-    }, AGENT_OUTPUT_FLUSH_INTERVAL_MS);
+    this.agentOutputForwarder.queue(agentId, data);
   }
 
   private flushAgentOutput(): void {
-    if (this.agentOutputFlushTimer) {
-      clearTimeout(this.agentOutputFlushTimer);
-      this.agentOutputFlushTimer = null;
-    }
-    if (!this.pendingAgentOutput || this.pendingAgentOutputAgentId === null) {
-      return;
-    }
-    const agentId = this.pendingAgentOutputAgentId;
-    const data = this.pendingAgentOutput;
-    this.pendingAgentOutput = "";
-    this.pendingAgentOutputAgentId = null;
-    events.emit("agent:output", {
-      agentId,
-      data,
-      timestamp: Date.now(),
-      traceId: this.terminalInfo.traceId,
-      terminalId: this.id,
-    });
+    this.agentOutputForwarder.flush();
   }
 
   private setupPtyHandlers(ptyProcess: pty.IPty, dataHandoff?: PooledPtyDataHandoff): void {
