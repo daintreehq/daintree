@@ -10,8 +10,6 @@ import {
   PostCompleteHook,
   TerminalLink,
   isWebGLEligibleTier,
-  WRITE_BURST_DECAY_MS,
-  GRID_RESIZE_COALESCE_MS,
 } from "./types";
 import { tallyScrollbackRestoreStates } from "./scrollbackRestoreAggregate";
 import {
@@ -36,6 +34,7 @@ import { TerminalReconciliationWatchdog } from "./TerminalReconciliationWatchdog
 import { TerminalWriteController } from "./TerminalWriteController";
 import { TerminalSettleWaiterRegistry } from "./TerminalSettleWaiterRegistry";
 import { TerminalBurstController } from "./TerminalBurstController";
+import { TerminalResizePassScheduler } from "./TerminalResizePassScheduler";
 import { reportFileLinkFailure } from "./FileLinksAddon";
 import {
   installTerminalBoundListeners,
@@ -49,7 +48,6 @@ import { applyXtermReflowFastpath } from "@shared/utils/xtermReflowFastpath";
 import { usePanelStore } from "@/store/panelStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
-import { yieldToScheduler } from "@/lib/schedulerYield";
 import { PaintFabricCompositor } from "./paintFabric/PaintFabricCompositor";
 import type { PaintSurface } from "./paintFabric/PaintSurfaceRegistry";
 import { createRoundRobinPlacement } from "./paintFabric/placementPolicies";
@@ -87,13 +85,6 @@ const WEBGL_HIDE_DWELL_MS = 500;
 // Poll interval while the worker-ingest engage barrier waits for the normal
 // pipeline (ingest queue + pending xterm writes) to quiesce (#10960).
 const WORKER_INGEST_DRAIN_POLL_MS = 10;
-
-// Terminals resized per task inside `runResizePass`, yielding to the scheduler
-// between chunks. xterm.js 6.0 reflows the whole scrollback on a
-// column-changing resize (~15-40ms each), so one-per-task keeps every task
-// under the ~50ms long-task threshold and lets paint + input run between
-// terminals instead of freezing the renderer for the whole batch.
-const RESIZE_PASS_CHUNK_SIZE = 1;
 
 function canAutoInitializeTerminalIngest(): boolean {
   return (
@@ -137,6 +128,7 @@ class TerminalInstanceService {
   private writeController: TerminalWriteController;
   private settleWaiters: TerminalSettleWaiterRegistry;
   private burstController: TerminalBurstController;
+  private resizePassScheduler: TerminalResizePassScheduler;
   private unsubTierChanged: (() => void) | null = null;
   // Live worker-parse ingest (issue #10960), gated by
   // DAINTREE_PAINT_FABRIC_WORKER_INGEST. One controller per terminal that has
@@ -177,6 +169,12 @@ class TerminalInstanceService {
     this.burstController = new TerminalBurstController({
       getInstance: (id) => this.instances.get(id),
       applyRendererPolicy: (id, tier) => this.rendererPolicy.applyRendererPolicy(id, tier),
+    });
+
+    this.resizePassScheduler = new TerminalResizePassScheduler({
+      getInstance: (id) => this.instances.get(id),
+      isResizeLocked: (id) => this.resizeController.isResizeLocked(id),
+      resize: (id, width, height) => this.resizeController.resize(id, width, height),
     });
 
     this.writeController = new TerminalWriteController({
@@ -2336,164 +2334,28 @@ class TerminalInstanceService {
   }
 
   /**
-   * Resize a set of panels in a single read-all / write-all pass (#8597).
-   *
-   * The previous grid-fit batch chained one `fit()` per requestAnimationFrame,
-   * which (a) spread the visual settle across N frames and (b) interleaved
-   * `fitAddon.fit()`'s `getComputedStyle` read with the per-panel xterm write
-   * for every panel — classic layout thrash. Here we phase the work: phase 1
-   * reads `getBoundingClientRect()` for every eligible panel up front (cheap
-   * thanks to per-panel `contain: layout style`), phase 2 calls
-   * `resizeController.resize()` for each collected rect. `resize()` computes
-   * cols/rows from cached cell metrics without touching the DOM, so the write
-   * phase performs no further layout reads. The whole pass completes in a
-   * single task.
-   *
-   * Eligibility guards mirror the per-panel checks the old chained-fit loop
-   * relied on: instance must exist, host element must be connected and
-   * visible (xterm's `fit()` path checks `checkVisibility()`, but `resize()`
-   * does not, so we apply it here), and the panel must not be resize-locked.
-   * Caller is responsible for the `isDragging` guard since the React ref
-   * holding that state is owned by the grid hook.
-   *
-   * Private — this is the synchronous primitive. Callers outside this service
-   * must go through {@link runResizePass} (chunked, cancellable) or
-   * {@link scheduleBatchResize} (coalesced) so a survivor reflow never freezes
-   * the renderer in one task. `executeResizePass` invokes this one id at a time.
-   */
-  private batchResize(ids: string[]): void {
-    if (ids.length === 0) return;
-
-    type Pending = { id: string; width: number; height: number };
-    const seen = new Set<string>();
-    const pending: Pending[] = [];
-
-    for (const id of ids) {
-      if (seen.has(id)) continue;
-      seen.add(id);
-
-      const managed = this.instances.get(id);
-      if (!managed) continue;
-      if (!managed.hostElement.isConnected) continue;
-      if (!managed.hostElement.checkVisibility()) continue;
-      if (this.resizeController.isResizeLocked(id)) continue;
-
-      const rect = managed.hostElement.getBoundingClientRect();
-      if (rect.width < 50 || rect.height < 50) continue;
-
-      pending.push({ id, width: rect.width, height: rect.height });
-    }
-
-    for (const { id, width, height } of pending) {
-      this.resizeController.resize(id, width, height);
-    }
-  }
-
-  private gridResizeTimer: number | undefined;
-  private readonly gridResizePendingIds = new Set<string>();
-  private resizePassAbort: AbortController | undefined;
-
-  /**
-   * Coalesced variant of `batchResize`. A burst of grid open/close events each
-   * union their ids and reset a trailing-edge timer; the actual resize runs
-   * once the burst settles, on the next frame — so it never lands on the
-   * synchronous open/close path the user is waiting on.
+   * Coalesced batch resize for a burst of grid open/close events — runs on
+   * the next frame once the burst settles. See
+   * {@link TerminalResizePassScheduler.scheduleBatchResize}.
    */
   scheduleBatchResize(ids: string[]): void {
-    if (ids.length === 0) return;
-    for (const id of ids) this.gridResizePendingIds.add(id);
-    if (this.gridResizeTimer !== undefined) {
-      clearTimeout(this.gridResizeTimer);
-    }
-    this.gridResizeTimer = window.setTimeout(() => {
-      this.gridResizeTimer = undefined;
-      const pendingIds = [...this.gridResizePendingIds];
-      this.gridResizePendingIds.clear();
-      requestAnimationFrame(() => this.runResizePass(pendingIds));
-    }, GRID_RESIZE_COALESCE_MS);
+    this.resizePassScheduler.scheduleBatchResize(ids);
   }
 
   /**
-   * Resize a set of panels as a chunked, cancellable pass instead of one
-   * synchronous loop. Closing or opening a panel resizes every surviving
-   * xterm; in xterm.js 6.0 a column-changing resize reflows the entire
-   * scrollback (O(scrollback)), so resizing ~15 terminals in a single
-   * synchronous loop freezes the renderer for hundreds of ms — the
-   * "app stops responding" the user feels on Cmd+W.
-   *
-   * This runs `RESIZE_PASS_CHUNK_SIZE` terminal(s) per task and yields to the
-   * scheduler between chunks (see {@link yieldToScheduler}), so paint and
-   * input stay live while the survivors settle progressively. The focused
-   * panel resizes first so the pane the user is looking at settles in the
-   * first frame; far corners of a large grid settle a beat later, unnoticed.
-   *
-   * Each new pass aborts any in-flight one: once a newer pass starts, the
-   * survivor set the old one was resizing is already stale, so its remaining
-   * reflows are cancelled. The trailing-edge debounce in
-   * {@link scheduleBatchResize} coalesces a close/open burst before a pass
-   * starts; this abort handles the case where a burst arrives once a pass is
-   * already running. Fire-and-forget — callers never await it.
+   * Chunked, cancellable resize pass across a set of panels — see
+   * {@link TerminalResizePassScheduler.runResizePass}.
    */
   runResizePass(ids: string[]): void {
-    if (ids.length === 0) return;
-    // A newer pass supersedes any in-flight one — its survivor set is stale.
-    this.resizePassAbort?.abort();
-    const controller = new AbortController();
-    this.resizePassAbort = controller;
-    const run = () => this.executeResizePass(ids, controller);
-    const task =
-      typeof scheduler !== "undefined" && typeof scheduler.postTask === "function"
-        ? scheduler.postTask(run, { priority: "user-visible", signal: controller.signal })
-        : run();
-    void task.catch((error) => {
-      if (error instanceof Error && error.name === "AbortError") return;
-      logError("terminal resize pass failed", error);
-    });
+    this.resizePassScheduler.runResizePass(ids);
   }
 
   /**
-   * Abort any in-flight chunked resize pass without starting a new one. The
-   * paint-fabric compositor uses this to give a multi-surface fabric the same
-   * pass-supersession semantics the single service has: one logical pass spans
-   * every surface, so starting a new pass must cancel stale chunked work on
-   * surfaces that have no ids in the new pass (they'd otherwise keep reflowing
-   * a survivor set that is already stale).
+   * Abort any in-flight chunked resize pass without starting a new one — see
+   * {@link TerminalResizePassScheduler.cancelActiveResizePass}.
    */
   cancelActiveResizePass(): void {
-    this.resizePassAbort?.abort();
-    this.resizePassAbort = undefined;
-  }
-
-  private async executeResizePass(ids: string[], controller: AbortController): Promise<void> {
-    const { signal } = controller;
-    try {
-      const ordered = this.orderFocusedFirst([...new Set(ids)]);
-      for (let i = 0; i < ordered.length; i += RESIZE_PASS_CHUNK_SIZE) {
-        if (signal.aborted) return;
-        // batchResize re-applies every eligibility guard (instance exists,
-        // connected, visible, not resize-locked) and reads fresh geometry —
-        // correct here because layout has settled across the yields.
-        this.batchResize(ordered.slice(i, i + RESIZE_PASS_CHUNK_SIZE));
-        if (i + RESIZE_PASS_CHUNK_SIZE < ordered.length) {
-          await yieldToScheduler();
-        }
-      }
-    } finally {
-      if (this.resizePassAbort === controller) {
-        this.resizePassAbort = undefined;
-      }
-    }
-  }
-
-  /**
-   * Order the resize set so the focused panel settles first. The user's eye
-   * is on the focused pane; resizing it in the first chunk makes the pass
-   * feel instant even though total work is unchanged.
-   */
-  private orderFocusedFirst(ids: string[]): string[] {
-    const focusedId = usePanelStore.getState().focusedId;
-    if (!focusedId || !ids.includes(focusedId)) return ids;
-    return [focusedId, ...ids.filter((id) => id !== focusedId)];
+    this.resizePassScheduler.cancelActiveResizePass();
   }
 
   scrollToBottom(id: string): void {
@@ -3487,10 +3349,7 @@ class TerminalInstanceService {
     this.unsubTierChanged = null;
     this.unsubWorkerIngestEngaged?.();
     this.unsubWorkerIngestEngaged = null;
-    // Abort any in-flight chunked resize pass so its yielded continuation
-    // doesn't resume against a torn-down service.
-    this.resizePassAbort?.abort();
-    this.resizePassAbort = undefined;
+    this.resizePassScheduler.dispose();
     this.reflowController.dispose();
     this.reconciliationWatchdog.dispose();
     this.instances.forEach((_, id) => this.destroy(id));
